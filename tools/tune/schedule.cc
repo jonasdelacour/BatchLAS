@@ -173,15 +173,59 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
     return plan;
 }
 
+const std::map<std::string, std::vector<std::string>>& op_dependencies() {
+    static const std::map<std::string, std::vector<std::string>> deps{
+        {"trmm", {"gemm"}},
+        {"symm", {"gemm"}},
+        {"getrf", {"gemm", "trsm"}},
+        {"getrs", {"trsm"}},
+        {"geqrf", {"gemm"}},
+        {"ormqr", {"gemm", "trmm"}},
+        {"getri", {"trsm", "getrf"}},
+        {"posv", {"potrf", "trsm"}},
+        {"gesv", {"getrf", "getrs"}},
+        {"orgqr", {"ormqr"}},
+        {"syev", {"gemm", "trmm", "syr2k", "geqrf", "ormqr"}},
+        {"gesvd", {"gemm", "trmm", "syr2k"}},
+    };
+    return deps;
+}
+
+const std::vector<std::string>& canonical_op_order() {
+    static const std::vector<std::string> order{"gemm",  "trsm",  "syr2k", "gemv",  "spmm", "trmm",  "symm",
+                                                "syrk",  "potrf", "getrf", "getrs", "geqrf", "ormqr", "getri",
+                                                "posv",  "gesv",  "orgqr", "syev",  "gesvd"};
+    return order;
+}
+
+std::vector<std::string> all_ops(std::vector<std::string> registered) {
+    const auto& c = canonical_op_order();
+    auto rank = [&](const std::string& op) { return std::find(c.begin(), c.end(), op) - c.begin(); };
+    std::stable_sort(registered.begin(), registered.end(),
+                     [&](const std::string& a, const std::string& b) { return rank(a) < rank(b); });
+    return registered;
+}
+
 std::vector<std::string> op_order(std::vector<std::string> ops) {
-    const auto posv = std::find(ops.begin(), ops.end(), "posv");
-    std::ptrdiff_t last = -1;
-    for (std::size_t i = 0; i < ops.size(); ++i)
-        if (ops[i] == "potrf" || ops[i] == "trsm") last = std::ptrdiff_t(i);
-    if (posv == ops.end() || posv - ops.begin() > last) return ops;
-    ops.erase(posv);
-    ops.insert(ops.begin() + last, "posv");
-    return ops;
+    const auto& deps = op_dependencies();
+    std::vector<std::string> out;
+    std::vector<bool> done(ops.size(), false);
+    auto emitted = [&](const std::string& op) { return std::find(out.begin(), out.end(), op) != out.end(); };
+    auto present = [&](const std::string& op) { return std::find(ops.begin(), ops.end(), op) != ops.end(); };
+    while (out.size() < ops.size()) {
+        std::size_t pick = ops.size();
+        for (std::size_t i = 0; i < ops.size() && pick == ops.size(); ++i) {
+            if (done[i]) continue;
+            const auto it = deps.find(ops[i]);
+            if (it == deps.end() || std::all_of(it->second.begin(), it->second.end(),
+                                                [&](const std::string& d) { return !present(d) || emitted(d); }))
+                pick = i;
+        }
+        if (pick == ops.size()) pick = std::size_t(std::find(done.begin(), done.end(), false) - done.begin());
+        done[pick] = true;
+        out.push_back(ops[pick]);
+    }
+    return out;
 }
 
 std::string budget_warning(double est_s, double budget_h) {
@@ -389,6 +433,39 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
     }
     r.verdict = "ok";
     return r;
+}
+
+std::vector<DominanceLoss> dominance_losses(const CellRecord& r, double bytes, double ratio) {
+    std::vector<DominanceLoss> out;
+    if (r.ranked.empty()) return out;
+    const std::string& winner = r.ranked.front();
+    double best = NAN;
+    for (const CandResult& c : r.cands)
+        if (c.cand == winner) best = c.median_ms;
+    if (!(best > 0)) return out;
+    for (const CandResult& c : r.cands)
+        if (c.status == "eliminated" && std::isfinite(c.median_ms) && c.median_ms > ratio * best)
+            out.push_back({c.cand, winner, r.key, bytes});
+    return out;
+}
+
+// `big` lies beyond `small`: equal non-integer keys and batch, and either larger along `refine_key`
+// with every other key equal, or every other integer key >= with more bytes. Batch never carries a
+// loss: a one-group-per-matrix kernel that starves at small batch catches up.
+bool beyond(const CellKey& small, double small_bytes, const CellKey& big, double big_bytes, const std::string& refine_key) {
+    if (small.size() != big.size()) return false;
+    bool all_ge = true, refine_only = true, refine_larger = false;
+    for (std::size_t i = 0; i < small.size(); ++i) {
+        const KV &s = small[i], &b = big[i];
+        if (s.name != b.name) return false;
+        if (s.value == b.value) continue;
+        if (!is_int(s.value) || !is_int(b.value) || s.name == "batch") return false;
+        const bool ge = std::stoll(b.value) >= std::stoll(s.value);
+        all_ge = all_ge && ge;
+        if (s.name == refine_key) refine_larger = ge;
+        else refine_only = false;
+    }
+    return (refine_only && refine_larger) || (all_ge && big_bytes > small_bytes);
 }
 
 }  // namespace batchlas::tune

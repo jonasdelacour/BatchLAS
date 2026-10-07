@@ -204,6 +204,19 @@ void ArmErrors::note(const std::string& arm, bool confirmed) {
     streak_[arm] = confirmed ? streak_[arm] + 1 : 0;
 }
 
+bool ArmErrors::dropped(const std::string& arm) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = alone_streak_.find(arm);
+    return it != alone_streak_.end() && it->second >= kDropAfterErrors;
+}
+
+bool ArmErrors::note_alone(const std::string& arm, bool error) {
+    std::lock_guard<std::mutex> lock(mu_);
+    int& n = alone_streak_[arm];
+    n = error ? n + 1 : 0;
+    return n == kDropAfterErrors;
+}
+
 namespace {
 
 bool is_error(const ArmOutcome& a) { return a.status == "error"; }
@@ -254,11 +267,20 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
     if (!pool.empty()) b = race_pool(pool, errs, attempt, restart, fresh);
     // Errors may depend on the shape, so a benched arm is still raced in every cell, alone.
     for (const std::string& a : alone) {
+        b.alone.push_back(a);
+        if (errs.dropped(a)) {
+            b.arms.push_back({a, "error", "dropped after " + std::to_string(kDropAfterErrors) + " consecutive errors", {}, {}, 0, 0});
+            continue;
+        }
         ArmBatch f = fresh({a});
         const auto it = std::find_if(f.arms.begin(), f.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; });
         if (it != f.arms.end()) b.arms.push_back(std::move(*it));
         else b.arms.push_back({a, "error", "child: " + f.error, {}, {}, 0, 0});
-        b.alone.push_back(a);
+        if (errs.note_alone(a, is_error(b.arms.back()))) {
+            std::printf("arm %s dropped after %d consecutive errors in fresh children: not run again for this op and dtype\n",
+                        a.c_str(), kDropAfterErrors);
+            std::fflush(stdout);
+        }
     }
     b.fallback = b.fallback || pool.empty();  // nothing ran on the worker
     std::stable_sort(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x, const ArmOutcome& y) {

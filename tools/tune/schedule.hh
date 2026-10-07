@@ -47,7 +47,11 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     double per_cell_overhead_s,
                                     const std::map<CellKey, std::vector<std::string>>* runnable = nullptr);
 
-// potrf and trsm before posv; otherwise input order.
+// op -> the ops whose tables its timings read. evidence: docs/design/tiered-tuning.md#engine-op-order-over-all-19-ops
+const std::map<std::string, std::vector<std::string>>& op_dependencies();
+const std::vector<std::string>& canonical_op_order();  // the order `all` starts from
+std::vector<std::string> all_ops(std::vector<std::string> registered);  // canonical order, unknown ones last
+// Stable topological sort: an op follows every dependency in the list; input order breaks ties.
 std::vector<std::string> op_order(std::vector<std::string> ops);
 
 // Empty when the estimate (lattice and refinement) fits the budget (or there is none); the lattice runs either way.
@@ -83,6 +87,16 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
 
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);
+
+// evidence: docs/design/tiered-tuning.md#engine-dominance-carry-forward
+inline constexpr double kDominanceRatio = 10.0;
+struct DominanceLoss {
+    std::string arm, winner;
+    CellKey key;
+    double bytes = 0;
+};
+std::vector<DominanceLoss> dominance_losses(const CellRecord& r, double bytes, double ratio = kDominanceRatio);
+bool beyond(const CellKey& small, double small_bytes, const CellKey& big, double big_bytes, const std::string& refine_key);
 
 // Refinement cells per lattice cell: this ledger's refined / round-0 records at `tier` (<= cap_factor), else cap_factor x 0.5.
 double refine_ratio_estimate(const Ledger& l, Tier tier, double cap_factor, bool* from_history = nullptr);

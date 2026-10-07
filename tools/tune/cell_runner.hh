@@ -167,16 +167,18 @@ private:
         a.status = status;
         a.reason = why;
     }
-    // Every call goes through here: a refused pin is "skipped", anything else "error".
+    // Every call goes through here: a refused pin is "skipped", anything else "error". The pin is
+    // strict: `vendor` is also a class word, which would otherwise time Auto under vendor's name.
     template <class F>
     bool guarded(ArmOutcome& a, F&& f) {
         if (a.status != "ok") return false;
         try {
-            select::ScopedPin<Choice> pin(op_, a.arm);
+            select::ScopedPin<Choice> pin(op_, a.arm, select::StrictPin{});
             f();
             return true;
         } catch (const std::invalid_argument& e) {
-            fail(a, "skipped", std::string("pin refused: ") + e.what());
+            const bool strict = std::string_view(e.what()).find("(strict)") != std::string_view::npos;
+            fail(a, "skipped", std::string(strict ? "pin refused (strict): " : "pin refused: ") + e.what());
         } catch (const std::exception& e) {
             fail(a, "error", e.what());
         }

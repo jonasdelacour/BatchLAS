@@ -1174,9 +1174,12 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         die(e.what());
     }
-    if (o.op == "all")
+    if (o.op == "all") {
         for (const OpSpec* s : all_specs()) o.ops.push_back(s->op());
-    else o.ops = csv_list(o.op);
+        o.ops = all_ops(o.ops);
+    } else {
+        o.ops = csv_list(o.op);
+    }
     if (o.ops.empty()) die("no op given (--list)");
     for (const std::string& op : o.ops)
         if (!find_spec(op)) die("unknown op '" + op + "' (--list)");
@@ -1195,7 +1198,7 @@ int main(int argc, char** argv) {
             try {
                 (void)s->candidates(d);
             } catch (const std::invalid_argument& e) {
-                die(e.what());
+                if (!tiered || o.ops.size() == 1) die(e.what());  // a multi-op run skips the pair (run_tiered)
             }
         }
         std::ifstream f(o.repo + "/" + s->spec_file());

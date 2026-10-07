@@ -5,6 +5,8 @@
 // BatchLAS path the tuner is ranking. Without LAPACKE (no host backend) they return false and the
 // caller reports a NaN residual, so a values-only arm is `bad`, never silently passed.
 
+#include "residuals.hh"  // sample_indices
+
 #include <algorithm>
 #include <complex>
 #include <cstdint>
@@ -48,14 +50,6 @@ bool host_singular_values(int m, int n, std::vector<D>& a, std::vector<double>& 
     (void)a;
     return false;
 #endif
-}
-
-// Up to `cap` indices of [0, n), always the first and the last (gemm_spec.cc's column sample).
-inline std::vector<int> sample_indices(int n, int cap) {
-    std::vector<int> out;
-    for (int i = 0; i < std::min(n, cap); ++i)
-        out.push_back(n <= cap ? i : int(std::int64_t(i) * (n - 1) / (cap - 1)));
-    return out;
 }
 
 }  // namespace batchlas::tune

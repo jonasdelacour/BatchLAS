@@ -115,8 +115,8 @@ Across cells:
   them. The estimate is printed (and shown in the UI). `--budget
   <h>` stops refinement when the budget is spent; the starting lattice always completes.
 - **Op order follows dependencies.** potrf and trsm are tuned before posv, whose cta and blocked
-  times depend on their choices (@ref tune_tool_readme, section Specs). Other compositions found in
-  sub-project 2 are added to the same ordering.
+  times depend on their choices (@ref tune_tool_readme, section Specs). The full map over all 19
+  ops is in "Engine: op order over all 19 ops".
 
 ## Engine: the ledger and table generation
 
@@ -752,6 +752,93 @@ which is about 33 single-GPU minutes of useless re-races. Control edits:
 - `src/extensions/potrf_lpanel.cc` on the potrf float preview ledger: 21 measure, 22
   `partial:lpanel` and 47 current, every uplo=U cell among them (`lpanel` cannot run on Upper).
   Before the rule it was 21 measure, 69 partial and 0 current.
+
+## Engine: readiness for a deep run over all 19 ops
+
+> **Status:** as built 2026-10-08, after every op got a spec. The problems come from the spec
+> writers' preview runs on threadripper02 (sm_120).
+
+**Strict pins.** `vendor` is both the vendor family's spelling and a routing class word, and a
+class word that cannot serve the shape falls back to Auto with a warning. A tuner arm pinned to
+`vendor` where `can_run` refuses it therefore timed Auto and credited the time to the vendor
+(seen on spmm cdouble N/N nrhs=1 and on gesvd). The tuner's pin is now strict
+(`select::ScopedPin(op, word, select::StrictPin{})`, used only in `cell_runner.hh`): a class word
+that nothing in its class can serve throws `std::invalid_argument`, as a spelling does, and
+`vendor` must resolve to the candidate spelled `vendor`. The arm is `skipped`, reason
+`pin refused (strict): ...`. Library callers and `BATCHLAS_<OP>_ROUTE` keep the fallback. spmm's
+spec-level workaround is gone; gesvd's stays, because there `can_run` admits a shape whose vendor
+call faults the device (known defect 15), which no pin rule can see.
+
+**Gross losers.** After every round, from the first on and whatever `min_reps` says, the race
+eliminates an arm whose median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
+`race.hh`). It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
+(`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
+cells, and before this rule each of its timed rounds cost minutes.
+
+## Engine: dominance carry-forward
+
+An arm eliminated at more than 10x the winner's median (`kDominanceRatio`, `schedule.hh`) is not
+timed at cells *beyond* that cell in the same run, op and dtype. Beyond means: the same value of
+every non-integer key and of `batch`, and either larger along the op's `refine_key()` with every
+other key equal, or every other integer key at least as large with more `bytes()` (geqrf's
+`aspect`, ormqr's `k`). Batch never carries a loss: a one-work-group-per-matrix kernel that starves
+at small batch catches up at large batch. The arm is recorded `skipped`, reason
+`dominated:<key of the losing cell>`, and the progress stream gets
+`{"ev":"dominated",<op, dtype, key>,"cand":c,"winner":w,"at":"<key>"}`.
+
+The hold assumes the arm it lost to is still in the race. If that winner does not run at the new
+cell (`skipped`, `bad` or `error`), the cell is raced again with every arm. Without this, syev's
+vendor, 10x behind `cta` at n <= 32, would never be timed above 32, where `cta` cannot run and the
+vendor may win. Holds live in memory for one run only, and the ledger's `skipped` status keeps the
+arm's hash out of the staleness check, like any arm that could not run.
+
+The case it exists for is geqrf: a float tall n=1024 aspect=256 cell (m = 262144, batch 2) hit the
+1800 s worker timeout in a preview run. Where a smaller neighbour along n or aspect has already
+lost to the vendor arm by more than 10x, the large cell does not time it. The worker takes each
+GPU's share of a round in ascending per-item footprint, so on one GPU the smaller cell runs first;
+across GPUs, or a smaller cell measured in a later round, the hold applies only from the next cell
+on.
+
+## Engine: repeat crashers are dropped
+
+An arm benched for confirmed worker errors (two consecutive cells in which the worker and the fresh
+child both reported `error`) races alone in a fresh child per cell. If it then errors in 5
+consecutive such cells (`kDropAfterErrors`, `worker.hh`), it is dropped for the rest of that op and
+dtype in this run: `error`, reason `dropped after 5 consecutive errors`, not run. One clean cell
+resets the count. The case is the cdouble gemv vendor, which segfaults inside cuBLASLt on every
+shape on sm_120 (known defect 13) and cost two worker crashes and a retry per cell, about +3 h on a
+deep gemv cdouble run.
+
+## Engine: op order over all 19 ops
+
+A multi-op run measures op by op in a stable topological order of `op_dependencies()`
+(`schedule.cc`): an op follows every op whose table its timings depend on through a public entry
+point, and input order breaks ties. `all` starts from every registered spec in the canonical order,
+which gives
+
+gemm, trsm, syr2k, gemv, spmm, trmm, symm, syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv,
+gesv, orgqr, syev, gesvd.
+
+| op | after |
+| --- | --- |
+| trmm, symm | gemm (`expand` calls the public gemm) |
+| getrf | gemm, trsm |
+| getrs | trsm |
+| geqrf | gemm |
+| ormqr | gemm, trmm |
+| getri | trsm, getrf |
+| posv | potrf, trsm |
+| gesv | getrf, getrs |
+| orgqr | ormqr |
+| syev | gemm, trmm, syr2k, geqrf, ormqr |
+| gesvd | gemm, trmm, syr2k |
+
+A dependency not in the run holds nothing back. The hashes still do not follow a dependency's
+table: retuning gemm changes trmm's `expand` times without staling trmm's cells.
+
+In a multi-op run, an (op, dtype) pair the spec refuses (symm, syrk and syr2k are real-only) is
+skipped with one printed `== note: skipping <op> <dtype>: ...` line. A single-op run still refuses
+it.
 
 ## Tiered tuning: open risks
 

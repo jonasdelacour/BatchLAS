@@ -372,6 +372,7 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         const auto& d = b.deps.at("expand");
         for (const char* g : {"src/sycl/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
             EXPECT_NE(std::find(d.begin(), d.end(), g), d.end()) << op << " " << g;
+    }
     for (const char* f : {"cta", "cta_fused", "jacobi", "blocked", "two_stage"}) EXPECT_TRUE(block("syev").family.count(f)) << f;
     for (const char* f : {"jacobi", "cta", "blocked"}) EXPECT_TRUE(block("gesvd").family.count(f)) << f;
     EXPECT_TRUE(block("spmm").family.count("direct"));
@@ -881,18 +882,41 @@ TEST(TuneRace, AnArmAloneOrBeatenByDefaultStillRunsMinReps) {
     EXPECT_TRUE(race_over(RaceVerdict::cap, 1, params(Tier::preview)));
 }
 
-TEST(TuneRace, SingleRoundNeverEliminates) {
+TEST(TuneRace, SingleRoundNeverEliminatesBelowTheGrossLoserRatio) {
     for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
         const auto& p = params(t);
-        const auto r = run_race(p, [&](int) { return std::pair(1.0, 10.0); });
+        const auto r = run_race(p, [&](int) { return std::pair(1.0, 3.9); });
         EXPECT_EQ(r.rounds, p.min_reps) << to_string(t);
         EXPECT_FALSE(r.s.alive[1]) << to_string(t);
         RaceState s;
         s.cands = {"a", "b"};
-        s.ms = {{1.0}, {10.0}};
+        s.ms = {{1.0}, {3.9}};
         s.alive = {true, true};
         EXPECT_EQ(race_step(s, p), RaceVerdict::more);
         EXPECT_TRUE(s.alive[1]);
+    }
+}
+
+TEST(TuneRace, GrossLoserDiesAfterTheFirstRoundInEveryTier) {
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
+        const auto& p = params(t);
+        RaceState s;
+        s.cands = {"a", "b", "c"};
+        s.ms = {{1.0}, {4.1}, {3.9}};
+        s.alive = {true, true, true};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t) << ": c is under the ratio and stays";
+        EXPECT_EQ(s.alive, (std::vector<bool>{true, false, true})) << to_string(t);
+        EXPECT_EQ(race_ranking(s, {"a", "b", "c"}), (std::vector<std::string>{"a", "c", "b"}));
+        RaceState later;  // the median paired ratio decides: one slow round among three is no gross loss
+        later.cands = {"a", "b"};
+        later.ms = {{1.0, 1.0, 1.0}, {1.5, 9.0, 1.5}};
+        later.alive = {true, true};
+        (void)race_step(later, p);
+        EXPECT_TRUE(later.alive[1] || p.min_reps <= 3) << to_string(t);
+        later.ms = {{1.0, 1.0, 1.0}, {4.5, 1.5, 4.5}};
+        later.alive = {true, true};
+        (void)race_step(later, p);
+        EXPECT_FALSE(later.alive[1]) << to_string(t) << ": median paired ratio 4.5";
     }
 }
 
@@ -2162,6 +2186,28 @@ TEST(TuneSchedule, PosvAfterPotrfAndTrsm) {
     EXPECT_EQ(op_order({"gemm", "posv"}), (V{"gemm", "posv"}));
 }
 
+TEST(TuneSchedule, AllNineteenOpsFollowTheirDependencies) {
+    using V = std::vector<std::string>;
+    const V want{"gemm", "trsm", "syr2k", "gemv", "spmm", "trmm", "symm", "syrk", "potrf", "getrf",
+                 "getrs", "geqrf", "ormqr", "getri", "posv", "gesv", "orgqr", "syev", "gesvd"};
+    V shuffled = want;
+    std::reverse(shuffled.begin(), shuffled.end());
+    std::rotate(shuffled.begin(), shuffled.begin() + 7, shuffled.end());
+    EXPECT_EQ(op_order(all_ops(shuffled)), want) << "`all` in any registration order";
+    EXPECT_EQ(canonical_op_order(), want);
+    for (const V& in : {shuffled, want, V(want.rbegin(), want.rend())}) {
+        const V out = op_order(in);
+        ASSERT_TRUE(out.size() == in.size() && std::is_permutation(out.begin(), out.end(), in.begin()));
+        for (const auto& [op, deps] : op_dependencies())
+            for (const std::string& d : deps)
+                EXPECT_LT(std::find(out.begin(), out.end(), d), std::find(out.begin(), out.end(), op)) << d << " before " << op;
+    }
+    EXPECT_EQ(op_order({"syev", "orgqr", "ormqr", "trmm", "gemm"}), (V{"gemm", "trmm", "ormqr", "syev", "orgqr"}));
+    EXPECT_EQ(op_order({"gesv", "spmm", "getrs", "getrf"}), (V{"spmm", "getrs", "getrf", "gesv"}))
+        << "input order breaks ties; a missing dependency (trsm, gemm) does not hold anything back";
+    EXPECT_EQ(all_ops({"zeta", "posv", "gemm", "alpha"}), (V{"gemm", "posv", "zeta", "alpha"}));
+}
+
 TEST(TuneSchedule, BudgetBelowLatticeWarnsAndStillPlansTheLattice) {
     const std::vector<AxisSpec> axes{{"n", true, {"8", "16", "32", "64", "128", "256", "512"}}, {"batch", false, {"1024"}}};
     const auto lattice = tier_lattice(axes, Tier::preview);
@@ -2787,6 +2833,43 @@ TEST(TuneWorker, AllBenchedArmsAreAFallbackAndMarkedAlone) {
     ASSERT_EQ(b.arms.size(), 2u);
 }
 
+TEST(TuneWorker, ABenchedArmErringInFiveFreshCellsIsDropped) {
+    ArmErrors errs;
+    for (int i = 0; i < 2; ++i) errs.note("b", true);
+    int b_runs = 0;
+    bool b_errors = true;
+    auto attempt = [](const std::vector<std::string>& arms) {
+        WorkerTry t{true, false, "", {}};
+        for (const std::string& a : arms) t.arms.push_back(arm(a, "ok", {1.0}));
+        return t;
+    };
+    auto fresh = [&](const std::vector<std::string>& arms) {
+        ArmBatch b;
+        for (const std::string& a : arms) {
+            b_runs += a == "b";
+            b.arms.push_back(a == "b" && b_errors ? arm("b", "error") : arm(a, "ok", {2.0}));
+        }
+        return b;
+    };
+    for (int i = 0; i < kDropAfterErrors - 1; ++i) race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    b_errors = false;
+    race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);  // one clean cell resets the streak
+    b_errors = true;
+    for (int i = 0; i < kDropAfterErrors - 1; ++i) race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_FALSE(errs.dropped("b")) << "4 errors, a clean cell, 4 errors: not consecutive";
+    race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_TRUE(errs.dropped("b"));
+    EXPECT_FALSE(errs.dropped("a"));
+    const int runs = b_runs;
+    const ArmBatch b = race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_EQ(b_runs, runs) << "a dropped arm is not run";
+    ASSERT_EQ(b.arms.size(), 2u);
+    EXPECT_EQ(b.arms[0].status, "ok");
+    EXPECT_EQ(b.arms[1].status, "error");
+    EXPECT_EQ(b.arms[1].reason, "dropped after 5 consecutive errors");
+    EXPECT_EQ(b.alone, (std::vector<std::string>{"b"})) << "kept out of the audit's worker side";
+}
+
 TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
@@ -2965,4 +3048,156 @@ TEST(TuneTieredDriver, ArmsRacedAloneStayOutOfTheAuditsWarmSide) {
     EXPECT_EQ(m.fresh_keys, (std::vector<std::string>{"n=1"}));
     const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
     EXPECT_EQ(l.runs.back().worker_mode.at("fakeop.float"), "worker");
+}
+
+// ---- deep-run readiness: dominance carry-forward, refused dtype pairs ----------------------------
+
+TEST(TuneSchedule, BeyondFollowsTheRefineKeyOrGrowingWorkButNeverBatch) {
+    const auto k = [](std::vector<std::pair<std::string, std::string>> kv) {
+        CellKey key;
+        for (auto& [n, v] : kv) key.push_back({n, v});
+        return key;
+    };
+    const CellKey tall = k({{"form", "tall"}, {"n", "32"}, {"aspect", "4"}});
+    EXPECT_TRUE(beyond(tall, 10, k({{"form", "tall"}, {"n", "64"}, {"aspect", "4"}}), 20, "n"));
+    EXPECT_TRUE(beyond(tall, 10, k({{"form", "tall"}, {"n", "64"}, {"aspect", "4"}}), 5, "n"))
+        << "along the refine key alone, whatever bytes() says";
+    EXPECT_TRUE(beyond(tall, 10, k({{"form", "tall"}, {"n", "32"}, {"aspect", "8"}}), 20, "n")) << "more work along aspect";
+    EXPECT_FALSE(beyond(tall, 10, k({{"form", "tall"}, {"n", "32"}, {"aspect", "8"}}), 10, "n")) << "not more bytes";
+    EXPECT_FALSE(beyond(tall, 10, k({{"form", "tall"}, {"n", "16"}, {"aspect", "64"}}), 40, "n")) << "smaller along n";
+    EXPECT_FALSE(beyond(tall, 10, k({{"form", "sq"}, {"n", "64"}, {"aspect", "4"}}), 20, "n")) << "another exact key";
+    EXPECT_FALSE(beyond(tall, 10, tall, 10, "n")) << "the cell itself";
+    const CellKey b = k({{"uplo", "L"}, {"n", "64"}, {"batch", "128"}});
+    EXPECT_FALSE(beyond(b, 10, k({{"uplo", "L"}, {"n", "64"}, {"batch", "8192"}}), 640, "n"));
+    EXPECT_FALSE(beyond(b, 10, k({{"uplo", "L"}, {"n", "128"}, {"batch", "8192"}}), 2560, "n"))
+        << "batch must agree: a starved one-group-per-matrix kernel catches up at large batch";
+    EXPECT_TRUE(beyond(b, 10, k({{"uplo", "L"}, {"n", "128"}, {"batch", "128"}}), 40, "n"));
+}
+
+TEST(TuneSchedule, DominanceLossesNeedTenTimesTheWinner) {
+    CellRecord r;
+    r.key = {{"n", "8"}};
+    r.ranked = {"b", "c", "a", "d"};
+    auto cand = [](const char* c, const char* st, double ms) {
+        CandResult x;
+        x.cand = c, x.status = st, x.median_ms = ms;
+        return x;
+    };
+    r.cands = {cand("a", "eliminated", 10.5), cand("b", "ok", 1.0), cand("c", "eliminated", 9.9), cand("d", "bad", 50)};
+    const auto l = dominance_losses(r, 123);
+    ASSERT_EQ(l.size(), 1u);
+    EXPECT_EQ(l[0].arm, "a");
+    EXPECT_EQ(l[0].winner, "b");
+    EXPECT_EQ(l[0].key, r.key);
+    EXPECT_DOUBLE_EQ(l[0].bytes, 123);
+}
+
+namespace {
+
+// a loses to b by `factor` while b runs (n < 64); b cannot run at n >= 64.
+class DomMeasurer : public FakeMeasurer {
+public:
+    double factor = 20;
+    std::vector<std::pair<std::string, std::vector<std::string>>> calls;
+    ArmBatch measure(const CellJob& j) override {
+        calls.emplace_back(key_arg(j.key), j.arms);
+        const bool b_runs = key_int(j.key, "n") < 64;
+        ArmBatch out;
+        for (const std::string& a : j.arms)
+            out.arms.push_back(a == "b" ? (b_runs ? arm("b", "ok", {1.0, 1.0}) : arm("b", "skipped"))
+                                        : arm("a", b_runs ? "eliminated" : "ok", {factor}));
+        return out;
+    }
+};
+
+}  // namespace
+
+TEST(TuneTieredDriver, AnArmLosingTenfoldIsNotTimedBeyondUntilItsWinnerStopsRunning) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    DomMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    using V = std::vector<std::string>;
+    ASSERT_GE(m.calls.size(), 5u);
+    EXPECT_EQ(m.calls[0].first, "n=1");
+    EXPECT_EQ(sorted(m.calls[0].second), (V{"a", "b"}));
+    EXPECT_EQ(m.calls[1], (std::pair<std::string, V>{"n=4", {"b"}}));
+    EXPECT_EQ(m.calls[2], (std::pair<std::string, V>{"n=16", {"b"}}));
+    EXPECT_EQ(m.calls[3], (std::pair<std::string, V>{"n=64", {"b"}}));
+    EXPECT_EQ(m.calls[4].first, "n=64") << "b did not run at n=64: the cell is raced again in full";
+    EXPECT_EQ(sorted(m.calls[4].second), (V{"a", "b"}));
+    for (const auto& [key, arms] : m.calls)
+        if (key != "n=1" && key != "n=64") EXPECT_EQ(arms, (V{"b"})) << key;
+    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    bool seen4 = false;
+    for (const CellRecord& c : l.cells) {
+        if (key_arg(c.key) == "n=4") {
+            seen4 = true;
+            ASSERT_EQ(c.cands.size(), 2u);
+            EXPECT_EQ(c.cands[0].cand, "a");
+            EXPECT_EQ(c.cands[0].status, "skipped");
+            EXPECT_EQ(c.cands[0].reason, "dominated:n=1");
+            EXPECT_EQ(c.ranked, (V{"b"}));
+        }
+        if (key_arg(c.key) == "n=64") EXPECT_EQ(c.ranked, (V{"a"}));
+    }
+    EXPECT_TRUE(seen4);
+    const std::string ev = read_file(events);
+    EXPECT_NE(ev.find("\"ev\": \"dominated\", \"op\": \"fakeop\", \"dtype\": \"float\", \"n\": 4, \"cand\": \"a\", "
+                      "\"winner\": \"b\", \"at\": \"n=1\""),
+              std::string::npos)
+        << ev;
+
+    TempDir ledger2;
+    o = fake_opts(repo, ledger2, Tier::preview);
+    DomMeasurer close;
+    close.factor = 9.5;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &close), 0);
+    for (const auto& [key, arms] : close.calls) EXPECT_EQ(sorted(arms), (V{"a", "b"})) << key << ": 9.5x carries nothing";
+}
+
+namespace {
+
+class FakeRealSpec : public FakeSpec {
+public:
+    std::string op() const override { return "fakereal"; }
+    std::vector<std::string> candidates(const std::string& d) const override {
+        if (d != "float") throw std::invalid_argument("fakereal is real-only: no '" + d + "' (float)");
+        return {"a", "b"};
+    }
+};
+const FakeRealSpec kFakeReal;
+
+}  // namespace
+
+TEST(TuneTieredDriver, AMultiOpRunSkipsTheDtypesASpecRefusesWithOneNote) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    if (!find_spec("fakereal")) register_spec(&kFakeReal);
+    o.ops = {"fakeop", "fakereal"};
+    o.dtypes = {"float", "cfloat"};
+    FakeMeasurer m;
+    ::testing::internal::CaptureStdout();
+    int rc = -1;
+    std::string thrown;
+    try {
+        rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    } catch (const std::exception& e) {
+        thrown = e.what();
+    }
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << thrown << "\n" << out;
+    const std::string note = "== note: skipping fakereal cfloat: fakereal is real-only: no 'cfloat' (float)\n";
+    EXPECT_NE(out.find(note), std::string::npos) << out;
+    EXPECT_EQ(out.find("== note: skipping", out.find(note) + 1), std::string::npos) << "one note: " << out;
+    for (const char* dt : {"float", "cfloat"})
+        EXPECT_FALSE(read_ledger(ledger_dir(ledger.str(), "fakeop", dt, "sm_fake")).cells.empty()) << dt;
+    EXPECT_FALSE(read_ledger(ledger_dir(ledger.str(), "fakereal", "float", "sm_fake")).cells.empty());
+    EXPECT_FALSE(fs::exists(ledger_dir(ledger.str(), "fakereal", "cfloat", "sm_fake")));
+    o.ops = {"fakereal"};
+    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake"}, &m), std::invalid_argument) << "a single-op run still refuses";
 }

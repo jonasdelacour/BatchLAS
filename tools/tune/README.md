@@ -74,7 +74,7 @@ neither mode, the tuner stops and asks.
 
 | flag | default | meaning |
 |---|---|---|
-| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all`; tiered runs take potrf and trsm before posv. Gate and custom runs take one op |
+| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all` (every registered spec); tiered runs take the ops in dependency order ("Op order" below) and skip, with one note, a dtype a spec refuses. Gate and custom runs take one op |
 | `--tier` | none | `preview`, `coarse` or `deep`; see "Tiered mode" |
 | `--plan` | off | print the starting lattice's cells, skips with reasons and the time estimate, then exit; no GPU |
 | `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate with refinement exceeds H) |
@@ -109,6 +109,10 @@ The tier parameters, the ledger and the record rules are in docs/design/tiered-t
 ("Engine: tiers and the per-cell algorithm", "Engine: the ledger and table generation"). Here,
 what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 
+- **Op order.** A stable topological sort over `op_dependencies()` (`schedule.cc`), input order
+  breaking ties; `all` starts from the canonical order gemm, trsm, syr2k, gemv, spmm, trmm, symm,
+  syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd
+  (docs/design/tiered-tuning.md, "Engine: op order over all 19 ops").
 - **Rounds, breadth-first.** Round 0 is the tier's starting lattice (`tier_lattice` of the op's
   axes; gemm's demand-driven grid is subsampled by key hash) for every op and dtype, in op order.
   Then refinement rounds (`refine_all_axes`, the tier's mode and margin) over every cell the
@@ -144,7 +148,18 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   runs `min_reps` rounds). Every raced candidate is then verified as in the custom protocol, the
   eliminated too: one that passes keeps the median of its rounds (status `eliminated`, ranked
   after the survivors), one that fails is `bad` and left out of the row. The nearest finished cell's winner is
-  raced first. Each candidate's median, min and max go into a ledger `cell` record.
+  raced first. Each candidate's median, min and max go into a ledger `cell` record. From the first
+  round on, whatever `min_reps` says, an arm whose median paired ratio to the leader exceeds 4.0 is
+  eliminated (a gross loser).
+- **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`)
+  pin that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of
+  timing Auto under the vendor's name.
+- **Dominance carry-forward.** An arm eliminated at more than 10x the winner's median is not timed,
+  for the rest of the run, at cells of the same op and dtype beyond that cell: equal non-integer
+  keys and batch, and larger along `refine_key()` (all else equal) or every other integer key >= with
+  more bytes. It is recorded `skipped`, reason `dominated:<key>`. If the arm it lost to does not run
+  at the new cell, the cell is raced again with every arm
+  (docs/design/tiered-tuning.md, "Engine: dominance carry-forward").
 - **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up kernel at start),
   fed its share of a round in ascending per-item footprint (bytes / batch) and restarted before a
   cell smaller than one it has run. Between cells the guard checks for foreign compute processes
@@ -155,7 +170,8 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   whose `error` the fresh child reproduced in two consecutive cells is the candidate's own error: for
   the rest of the run that op and dtype race it alone in a fresh child per cell, the other candidates
   on the worker (all of them benched: the cell is a fallback). Arms raced alone are left out of the
-  audit's worker side. In a fresh child a failed
+  audit's worker side. A benched arm that errors in 5 consecutive fresh-child cells is dropped for
+  the rest of that op and dtype: `error`, reason `dropped after 5 consecutive errors`, not run. In a fresh child a failed
   child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
   or `skipped` candidate writes no record, so the next run measures the cell again.
 - **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again
@@ -180,6 +196,7 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
   `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
+  `{"ev":"dominated",<op, dtype, key fields>,"cand":c,"winner":w,"at":"<key of the losing cell>"}`,
   `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
   `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`, `{"ev":"done"}`.
 
@@ -315,7 +332,8 @@ syev and gesvd check values-only results against host LAPACKE (`host_reference.h
 it when the host backend is built, and without it those arms are `bad`). gesvd has no batch key:
 each cell runs at a batch derived from m and n (a power of two in [128, 16384] with
 m n batch <= 2^24), and its grid drops the cells no call keys (Hermitian non-square, square thin).
-Two vendor refusals live in the specs because the library would not report them as a refused pin:
-gesvd's values-only non-square vendor call faults the device (known defect 15), and a spmm `vendor`
-pin that `can_run` refuses falls back to Auto under the class word (known defect 17).
+One vendor refusal lives in a spec because the library would not report it as a refused pin:
+gesvd's values-only non-square vendor call faults the device (known defect 15) although `can_run`
+admits it. spmm's `vendor` arm needs none: where `can_run` refuses it (known defect 17), the strict
+pin refuses it too.
 spmm tunes the GPU tables only; its cpu tables stay transcribed.

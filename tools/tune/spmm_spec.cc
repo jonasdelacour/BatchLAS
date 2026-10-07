@@ -95,17 +95,9 @@ struct SpmmProblem {
         (void)MV::copy(q, Cv, C0v);
         q.wait();
     }
-    // A `vendor` pin that can_run refuses falls back to Auto (a class word, not an error), so its
-    // times would be direct's under vendor's name. These are spmm.cc's two CUDA vendor terms.
-    // evidence: docs/design/known-defects.md#17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
+    // A `vendor` pin that can_run refuses (spmm.cc's CUDA vendor terms) is refused by the tuner's
+    // strict pin. evidence: docs/design/known-defects.md#17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
     std::size_t workspace() {
-        constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
-        constexpr bool zz = std::is_same_v<T, std::complex<double>>;
-        const bool nn = ta == Transpose::NoTrans && tb == Transpose::NoTrans;
-        std::string src;
-        if (kBackend == Backend::CUDA && select::detail::pin_text("spmm", &src) == std::optional<std::string>("vendor") &&
-            ((cx && tb == Transpose::ConjTrans && br == 1) || (zz && nn && nrhs == 1)))
-            throw std::invalid_argument("spmm vendor: can_run refuses this shape (known defect 17)");
         return spmm_buffer_size<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
     }
     void clear_info() {}
