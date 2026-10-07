@@ -300,3 +300,11 @@ trsm's choices (plan §2 "Coupling"), which the hash does not follow yet. trsm's
 kernels (not the vendor TU); its `uplo` and `diag` are hidden grid axes fixed at L and N (not table
 keys, plan §1.2), its `trans=T` times ConjTrans for a complex scalar, and trsm has no workspace,
 so a pin is probed by one untimed run instead of a sizing call.
+syev and gesvd check values-only results against host LAPACKE (`host_reference.hh`; the impl links
+it when the host backend is built, and without it those arms are `bad`). gesvd has no batch key:
+each cell runs at a batch derived from m and n (a power of two in [128, 16384] with
+m n batch <= 2^24), and its grid drops the cells no call keys (Hermitian non-square, square thin).
+Two vendor refusals live in the specs because the library would not report them as a refused pin:
+gesvd's values-only non-square vendor call faults the device (known defect 15), and a spmm `vendor`
+pin that `can_run` refuses falls back to Auto under the class word (known defect 17).
+spmm tunes the GPU tables only; its cpu tables stay transcribed.

@@ -14,8 +14,18 @@ add_executable(batchlas_tune_impl
     potrf_spec.cc
     posv_spec.cc
     trsm_spec.cc
-    gemm_spec.cc)
+    gemm_spec.cc
+    syev_spec.cc
+    gesvd_spec.cc
+    spmm_spec.cc)
 batchlas_configure_binary_target(batchlas_tune_impl)
+# syev and gesvd check eigen- and singular values against host LAPACKE (host_reference.hh);
+# libbatchlas_backends links it PRIVATE, so a direct caller asks for it itself (as the benchmarks do).
+if(BATCHLAS_HAS_HOST_BACKEND)
+    target_link_libraries(batchlas_tune_impl PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+    target_include_directories(batchlas_tune_impl SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
+    target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_HAVE_LAPACKE=1)
+endif()
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
