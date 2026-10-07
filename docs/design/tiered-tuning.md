@@ -159,6 +159,12 @@ stays byte-reproducible, and `--check` keeps re-deriving every table.
 - The op-level `kernels=<hash>` header stays as it is, for the configure-time staleness check. The
   per-family hashes go in a new `family_kernels=` header word.
 
+**Record vocabulary.** A candidate's `status` is `ok`, `skipped`, `bad`, `error` or `eliminated`
+(raced and dropped by the race). An eliminated candidate carries the median of the reps it did
+time, which the table prints; one with no median is left out of its row. A record is *stale* when
+the winner's hash differs or its family is gone, *partly stale* when another candidate's hash
+differs or a current family was never timed; an empty ranking has no winner to go stale.
+
 Results merge by device key (sm_89, sm_120), and the host is recorded. A deep sm_89 run on one 4090
 box counts for every 4090.
 

@@ -867,7 +867,7 @@ def read_ledger(path):
                     led.runs.append(rec)
                 elif kind == "cell":
                     led.cells.append(read_cell(rec))
-            except (json.JSONDecodeError, KeyError, ValueError) as e:
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError, AttributeError) as e:
                 where = f"{path}/{name}:{no}: {e}"
                 if pos + 1 != len(lines):
                     raise SystemExit(where)
@@ -961,22 +961,25 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
         entries = []
         for name in c["ranked"]:
             res = next((r for r in c["cands"] if r["cand"] == name), None)
+            # An eliminated candidate with no median cannot print a time: left out of the row.
             if res and res["status"] in LEDGER_STATUS_TIMED and res["median"] and res["median"] > 0:
                 entries.append((name, float(res["median"])))
         if entries:
             cand_rows.append((key_tuple(keyspec, key), c["tier"], entries))
     cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
+    def near(a, b, stride):
+        return all(a[i] == b[i] for i in exact_pos) and all(
+            abs(lattice_index(lattice[i], a[i]) - lattice_index(lattice[i], b[i])) < stride for i in log_pos)
+
     kept = {}
     for tier in LEDGER_TIERS:
-        higher = [(k, t) for k, (t, _) in kept.items()]
+        # Measured rows are bracketed by kept higher rows; a transcribed row by any measured row,
+        # kept or dropped, since a dropped preview row still says the region was measured.
+        against = [k for k, t, _ in cand_rows if t != "transcribed"] if tier == "transcribed" else list(kept)
         for key, t, entries in cand_rows:
             if t != tier or key in kept:
                 continue
-            stride = LEDGER_STRIDE[tier]
-            near = any(all(hk[i] == key[i] for i in exact_pos) and all(
-                abs(lattice_index(lattice[i], hk[i]) - lattice_index(lattice[i], key[i])) < stride for i in log_pos)
-                for hk, _ in higher)
-            if not near:
+            if not any(near(hk, key, LEDGER_STRIDE[tier]) for hk in against):
                 kept[key] = (tier, entries)
     return kept
 
@@ -1710,6 +1713,13 @@ def self_test_ledger():
         if got3.get("n=1024") != "transcribed" or "n=16" in got3 or got3.get("n=32") != "coarse" or "tiers=" not in text3 \
                 or "transcribed:1" not in text3:
             bad.append(f"self-test: ledger_transcribed_rows_survive_away_from_measured -> {got3}")
+        # a transcribed row is dropped near a measured row even when that row was itself dropped
+        led3 = build({r1: [run_line(r1, "2026-10-01", "deep"), cell(r1, "deep", 64)],
+                      r3: [run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 32)]}, os.path.join(d, "c"))
+        text4, _ = ledger_text(spec, "float", "sm_0", read_ledger(led3), led3, old)
+        got4 = row_tiers(text4)
+        if got4 != {"n=64": "deep", "n=1024": "transcribed"}:
+            bad.append(f"self-test: ledger_transcribed_dropped_near_dropped_preview -> {got4}")
         # --check re-derives byte for byte
         out = os.path.join(d, "out")
         os.makedirs(out)
