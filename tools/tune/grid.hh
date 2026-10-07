@@ -18,6 +18,7 @@ struct AxisSpec {
     std::string name;
     bool log;
     std::vector<std::string> values;
+    double weight = 1;  // distance weight of a log axis ("order:log:2")
 };
 
 std::uint64_t fnv1a64(std::string_view s);

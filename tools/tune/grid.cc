@@ -14,14 +14,18 @@ std::uint64_t fnv1a64(std::string_view s) {
 std::vector<AxisSpec> axis_specs(const std::vector<std::string>& key_names,
                                  const std::vector<std::pair<std::string, std::vector<std::string>>>& axes) {
     std::map<std::string, bool> log;
+    std::map<std::string, double> weight;
     for (const std::string& kn : key_names) {
-        const auto c = kn.find(':');
-        if (c != std::string::npos) log[kn.substr(0, c)] = kn.compare(c + 1, 3, "log") == 0;
+        const auto part = split_fields(kn, ':');
+        if (part.size() < 2) continue;
+        log[part[0]] = part[1] == "log";
+        if (part.size() > 2 && part[1] == "log") weight[part[0]] = std::stod(part[2]);
     }
     std::vector<AxisSpec> out;
     for (const auto& [name, values] : axes) {
         const auto it = log.find(name);
-        out.push_back({name, it != log.end() && it->second, values});
+        const auto w = weight.find(name);
+        out.push_back({name, it != log.end() && it->second, values, w != weight.end() ? w->second : 1.0});
     }
     return out;
 }

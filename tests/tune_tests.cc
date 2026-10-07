@@ -4,6 +4,7 @@
 
 #include "../tools/tune/grid.hh"
 #include "../tools/tune/race.hh"
+#include "../tools/tune/replay_core.hh"
 #include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
 
@@ -720,4 +721,157 @@ TEST(TuneGrid, MidpointWithoutWinnerIsReportedStalled) {
     ASSERT_EQ(r.stalled.size(), 1u);
     EXPECT_NE(r.stalled[0].find("batch=1024 has no winner"), std::string::npos);
     EXPECT_NE(r.stalled[0].find("batch=128 (a)"), std::string::npos);
+}
+
+namespace {
+
+// A raw sweep in the schema-1 layout (tools/tune/README.md "Raw JSONL"): keys "mode:exact n:log:2",
+// two passes of 16 reps, a hidden `uplo` field the table does not key on.
+struct SynCell {
+    int n;
+    std::map<std::string, double> ms;  // candidate -> time; absent = error in every pass
+    int round = 0;
+    std::string status = "ok";
+};
+
+std::string write_raw(const std::string& name, const std::vector<SynCell>& cells) {
+    const std::string path = (scratch("replay") / name).string();
+    std::ofstream f(path);
+    f << Json().str("kind", "meta").integer("schema", 1).str("keys", "mode:exact n:log:2")
+             .str("candidates", "a|b|c").integer("passes", 2).integer("reps", 16).line();
+    for (const SynCell& c : cells) {
+        auto base = [&](const char* kind) {
+            return Json().str("kind", kind).str("mode", "x").integer("n", c.n).str("uplo", "L");
+        };
+        for (const char* cand : {"a", "b", "c"}) {
+            const bool ok = c.ms.count(cand) != 0;
+            for (int pass = 1; pass <= 2; ++pass) {
+                std::vector<double> v;
+                for (int rep = 0; rep < 16; ++rep) {
+                    const double t = ok ? c.ms.at(cand) * (1 + 0.001 * ((rep * 7 + pass * 3) % 5)) : 0;
+                    v.push_back(t);
+                    if (ok && c.status == "ok")
+                        f << base("rep").integer("pass", pass).integer("attempt", 0).str("cand", cand).integer("rep", rep).num("ms", t).line();
+                }
+                f << base("pass").integer("pass", pass).integer("attempt", 0).str("cand", cand).str("status", ok ? "ok" : "error")
+                         .str("reason", "").num("median_ms", ok ? median(v) : NAN).line();
+            }
+        }
+        f << base("cell").integer("round", c.round).str("status", c.status).integer("final_attempt", c.status == "ok" ? 0 : -1).line();
+    }
+    return path;
+}
+
+std::vector<SynCell> flip_cells() {  // a wins up to n=8, b from n=16
+    std::vector<SynCell> v;
+    for (int n : {1, 2, 4, 8, 16, 32, 64, 128}) v.push_back({n, {{"a", n <= 8 ? 1.0 : 1.5}, {"b", n <= 8 ? 1.5 : 1.0}}});
+    return v;
+}
+
+}  // namespace
+
+TEST(TuneReplay, LoaderKeepsTableKeysAndOnlyOkCells) {
+    auto cells = flip_cells();
+    cells.push_back({256, {}, 0, "skipped"});
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("loader.jsonl", cells), &meta);
+    ASSERT_EQ(rc.size(), 8u);
+    EXPECT_EQ(key_arg(rc.front().key), "mode=x,n=1");
+    ASSERT_EQ(rc.front().cands.size(), 2u);
+    EXPECT_EQ(rc.front().rounds[0].size(), 32u);
+    EXPECT_NEAR(rc.front().exhaustive.at("b"), 1.5, 0.01);
+    ASSERT_EQ(meta.axes.size(), 2u);
+    EXPECT_EQ(meta.axes[1].values.size(), 9u);  // the skipped round-0 cell stays on the lattice
+    EXPECT_EQ(meta.axes[1].values.back(), "256");
+    EXPECT_EQ(meta.axes[1].weight, 2.0);
+    EXPECT_FALSE(meta.axes[0].log);
+}
+
+TEST(TuneReplay, ExhaustiveTierReproducesTheConverterRanking) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("exhaustive.jsonl", {{1, {{"a", 1.0}, {"b", 1.5}}}, {2, {{"a", 1.5}, {"b", 1.0}}},
+                                                               {3, {{"a", 1.2}, {"b", 1.0}, {"c", 3.0}}}}), &meta);
+    TierParams p = params(Tier::deep);
+    p.confidence = 1.0;
+    p.min_reps = p.max_reps = 32;
+    const ReplayReport r = replay(rc, meta.axes, Tier::deep, p);
+    EXPECT_EQ(r.cells, 3u);
+    EXPECT_EQ(r.cells_measured, 3u);
+    EXPECT_EQ(r.reps_fraction, 1.0);
+    EXPECT_EQ(r.race_misrank, 0.0);
+    EXPECT_EQ(r.table_misrank, 0.0);
+    EXPECT_EQ(r.refine_unavailable, 0u) << "no integer between n=1 and n=2";
+}
+
+TEST(TuneReplay, BisectionDropsMidpointsThatAreNotInTheRawFile) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("bisect.jsonl", {{1, {{"a", 1.0}, {"b", 1.5}}}, {16, {{"a", 1.5}, {"b", 1.0}}}}), &meta);
+    const ReplayReport r = replay(rc, meta.axes, Tier::deep);
+    EXPECT_EQ(r.cells_measured, 2u);
+    EXPECT_GT(r.refine_unavailable, 0u);
+    EXPECT_LT(r.reps_fraction, 1.0) << "a 50% gap is eliminated before the cap";
+}
+
+TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("flip.jsonl", flip_cells()), &meta);
+    const ReplayReport u = replay(rc, meta.axes, Tier::ultra);  // measures n = 1, 16, 128
+    EXPECT_EQ(u.cells_measured, 3u);
+    EXPECT_EQ(u.race_misrank, 0.0);
+    EXPECT_DOUBLE_EQ(u.table_misrank, 1.0 / 8);  // n=8 reads n=16's winner b; n=4 ties and reads n=1
+    EXPECT_FALSE(u.worst.empty());
+    EXPECT_EQ(replay(rc, meta.axes, Tier::deep).table_misrank, 0.0);
+    const ReplayReport c = replay(rc, meta.axes, Tier::coarse);  // n = 1,4,16,64,128, then bisects to 8
+    EXPECT_EQ(c.cells_measured, 6u);
+    EXPECT_EQ(c.table_misrank, 0.0);
+    EXPECT_GT(c.refine_unavailable, 0u);
+}
+
+TEST(TuneReplay, UnrunnableNearestWinnerIsAMisrank) {
+    auto make = [](bool c_at_2) {
+        std::map<std::string, double> two{{"a", 2.0}, {"b", 3.0}};
+        if (c_at_2) two["c"] = 1.0;
+        return std::vector<SynCell>{{1, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {2, two},
+                                    {4, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {8, {{"a", 1.0}, {"b", 3.0}, {"c", 5.0}}},
+                                    {16, {{"a", 1.0}, {"b", 3.0}, {"c", 5.0}}}};
+    };
+    ReplayMeta meta;
+    auto rc = load_replay(write_raw("unrunnable.jsonl", make(false)), &meta);
+    EXPECT_DOUBLE_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 1.0 / 5);  // n=2 reads n=1's c
+    rc = load_replay(write_raw("runnable.jsonl", make(true)), &meta);
+    EXPECT_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 0.0);
+}
+
+namespace {
+
+// The row nearest_row picks among `rows`, each spelled (s, t, n, b).
+std::size_t pick(const std::vector<std::vector<std::string>>& rows, const std::vector<std::string>& key) {
+    const auto axes = axis_specs({"s:exact", "t:exact", "n:log:2", "b:log"},
+                                 {{"s", {}}, {"t", {}}, {"n", {}}, {"b", {}}});
+    auto to_key = [&](const std::vector<std::string>& v) {
+        CellKey k;
+        for (std::size_t i = 0; i < v.size(); ++i) k.push_back({axes[i].name, v[i]});
+        return k;
+    };
+    std::vector<CellKey> r;
+    for (const auto& row : rows) r.push_back(to_key(row));
+    return nearest_row(r, to_key(key), axes);
+}
+
+}  // namespace
+
+// Hand-computed against nearest() in scripts/sweep_to_table.py.
+TEST(TuneReplay, NearestRowMatchesTheConverterRule) {
+    // n weighs 2: for key n=8,b=8 row 0 costs 2*1+1 = 3 and row 1 costs 0+2 = 2.
+    EXPECT_EQ(pick({{"L", "N", "4", "4"}, {"L", "N", "8", "2"}}, {"L", "N", "8", "8"}), 1u);
+    // Exact keys drop from the right: no t=X row, so the pool is the s=L rows. n=4 is 0 away from row 0; n=7
+    // costs 2*log2(7/4) = 1.6 from row 0 and 2*log2(8/7) = 0.38 from row 1.
+    const std::vector<std::vector<std::string>> rows{{"L", "N", "4", "1"}, {"L", "T", "8", "1"}, {"R", "N", "8", "1"}};
+    EXPECT_EQ(pick(rows, {"L", "X", "4", "1"}), 0u);
+    EXPECT_EQ(pick(rows, {"L", "X", "7", "1"}), 1u);
+    // Geometric midpoint tie (n=4 is 2 octaves from 1 and from 16): the smaller log key wins.
+    EXPECT_EQ(pick({{"L", "N", "16", "1"}, {"L", "N", "1", "1"}}, {"L", "N", "4", "1"}), 1u);
+    // No s=Z row: the pool is every row; an identical-log tie goes to the earlier row in (exact strings,
+    // log integers) order, not to the caller's order.
+    EXPECT_EQ(pick({{"R", "N", "4", "1"}, {"L", "N", "4", "1"}}, {"Z", "N", "4", "1"}), 1u);
 }

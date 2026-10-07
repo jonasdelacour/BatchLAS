@@ -263,6 +263,38 @@ The engine changes which kernel ships for every shape, so its tests follow the a
   writes pass `tuned_tables_tests` and `--check`. A coarse run of trsm float on sm_120 agrees with
   the existing deep table within the replay's misranking bound.
 
+## Engine: replay results on the trsm data
+
+`tune_replay` (`tools/tune/replay.cc`, host-only) replays the race and the bisection of a tier against
+the exhaustive trsm sweeps: 4452 float cells and 4098 double cells, each with every rep of every
+candidate that was `ok` in both passes of the final attempt (threadripper02, sm_120, data from
+2026-10-05). The two passes are interleaved (p1r0, p2r0, p1r1, ...). The starting lattice is the
+tier's, cut down to cells the raw file holds; bisection proposes midpoints on every log axis, and a
+midpoint the raw file lacks is counted (`refine_unavailable`) and dropped. `race_misrank` is over the
+cells the replay measured, `table_misrank` over all cells: the nearest measured cell is picked by a
+port of `nearest()` in `scripts/sweep_to_table.py`, and its winner counts as a misrank when it is more
+than 3% slower than the exhaustive best at the cell, or cannot run there. `reps_fraction` is the
+candidate-reps the replay timed over those in the file. The tier values are the ones in the tier table
+above, unchanged.
+
+| Tier | dtype | cells measured / cells | reps_fraction | race_misrank | table_misrank | Bound |
+| --- | --- | --- | --- | --- | --- | --- |
+| deep | float | 4417 / 4452 | 0.2375 | 0.113% | 0.157% | 0.2%: met |
+| deep | double | 4095 / 4098 | 0.2248 | 0.024% | 0.024% | 0.2%: met |
+| coarse | float | 810 / 4452 | 0.0279 | 0.123% | 9.05% | 1%: race met, table missed |
+| coarse | double | 711 / 4098 | 0.0272 | 0% | 11.47% | 1%: race met, table missed |
+| ultra | float | 132 / 4452 | 0.0031 | 0% | 19.50% | 5%: race met, table missed |
+| ultra | double | 124 / 4098 | 0.0030 | 0% | 14.98% | 5%: race met, table missed |
+
+Racing is not the problem: every tier meets its race bound, and deep saves 76-78% of the reps while
+meeting both bounds. The table bound fails for ultra and coarse because of the lattice, not the
+statistic. Changing confidence, min and max reps moves `table_misrank` by under one point (coarse at
+0.98 confidence and 6 to 12 reps: 9.05% and 11.47%). A lattice with stride 1 and no bisection (ultra
+stride 1) still misranks 14.3% and 16.2% of the cells. The likely cause, not isolated here, is that the raw
+files hold the 1.1-ratio refinement points along `order`, which sit where the winner flips. Coarse at stride 1 reaches 6.4% on both
+dtypes, and ultra at stride 2 reaches 11.5% and 10.8%. No allowed parameter setting meets the ultra
+5% or the coarse 1% table bound, so the tier values stay as above and the bound is open.
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps
