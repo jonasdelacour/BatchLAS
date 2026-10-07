@@ -494,7 +494,7 @@ cannot reach the defect no matter what it is set to.
 on threadripper02 (RTX PRO 6000 Blackwell, sm_120) by
 `GeqrfTest.BlockedIgnoresAGarbageWorkspace` (`tests/geqrf_tests.cc`): a 64 x 64 blocked
 `geqrf` whose caller workspace is filled with `0xff` bytes (every float a NaN) returns NaN for
-all four scalar types when the trailing update runs through `sycl_gemm::gemm_custom` (since P3.4, any native gemm choice; `launch_direct` is behind the `direct` choice).
+all four scalar types when the trailing update runs through a native gemm choice (`sycl_gemm::gemm_custom` before P3.4, deleted since; `launch_direct` is behind the `direct` choice).
 
 **The mechanism.** The blocked driver's `W1 = V^H A22` and `W2 = T^H W1` are `beta = 0` GEMMs
 into scratch carved from the workspace. `LinearEpilogue::apply`
@@ -650,7 +650,7 @@ mirror itself interacts with [defect 14](#defect-14-the-hermitian-drivers-read-t
 absent from `include/batchlas/blas/linalg-ops.hh`. The composition `geqrf` +
 `triangular_mask_into` + `orgqr` returned \f$QR \ne A\f$ once an earlier `linalg::qr` test had
 run in the same process, and passed when run alone. The original header note read "repro:
-tests/linalg_layer_tests.cc, 4x". AGENTS.md section 9 describes it as "an unexplained cross-Queue
+tests/linalg_layer_tests.cc, 4x". docs/developer/agent-guide.md section 9 describes it as "an unexplained cross-Queue
 wrong-answer defect".
 
 Related: the `linalg::` value-returning wrappers free their scratch while kernels may still be

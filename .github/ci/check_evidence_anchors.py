@@ -52,7 +52,7 @@ TEXT_SUFFIXES = (
     ".cu", ".md", ".py", ".sh", ".cmake", ".in", ".txt", ".yml", ".yaml",
     ".json", ".toml", ".cfg",
 )
-TEXT_NAMES = ("CMakeLists.txt", "AGENTS.md", "Makefile")
+TEXT_NAMES = ("CMakeLists.txt", "Makefile")
 
 MAX_BYTES = 4 * 1024 * 1024
 

@@ -130,7 +130,7 @@ as `fma.rn.ftz.f32`.
 The 4090 numbers in this directory were all taken with self-built dpcpp-cuda, which is
 why this never appeared there. Fix: `-ffp-model=precise` for IntelLLVM in
 `cmake/BatchLASOptions.cmake`. `-fdenormal-fp-math=ieee` alone also restores inlining
-but leaves reassoc/afn on, which section 11 of AGENTS.md rules out.
+but leaves reassoc/afn on, which section 11 of docs/developer/agent-guide.md rules out.
 
 ### cfloat spmm under the precise fp model
 
@@ -983,7 +983,7 @@ Batch 128 wins in every probed cell, and smaller batches were not timed. Below o
 the composition also beats cuBLAS (float n8..24 nrhs 16/64 1.41-3.47, cfloat
 1.36-3.51), but the tiny tier is as fast or faster at every one of those cells and is first in the
 walk, so the clause stops at 32. The cfloat cells at 1.04-1.07 sit inside the 5% band,
-where AGENTS.md section 10 asks for 14-16 reps. They were reproduced in 3 multi-arm
+where docs/developer/agent-guide.md section 10 asks for 14-16 reps. They were reproduced in 3 multi-arm
 and 5 two-arm passes, so they are ties or small wins, not losses.
 
 **Fused tier (`native:cta`), vendor-present window.** The trsm fix does not touch this

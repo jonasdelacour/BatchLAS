@@ -19,7 +19,7 @@
 #   * One compiler, one CUDA, one architecture. No icpx, no upstream clang, no
 #     CUDA other than 13.2, no sm_ other than 89. A change that only breaks on
 #     another sm_ or another DPC++ passes.
-#   * No AMD and no Intel GPU. The ROCm and oneMKL code paths are compiled by
+#   * No AMD and no Intel GPU. The ROCm code paths are compiled by
 #     nobody, here or on the workstation - they are text until somebody with the
 #     hardware builds them.
 #   * No macOS, no Windows, no 32-bit, no non-x86 host.
@@ -171,16 +171,17 @@ jobs:
         # was written.
         run: python3 .github/ci/check_evidence_anchors.py
       - name: The Markdown location rule still discriminates
-        # Same self-test-first reason. Pins a root plan file, a nested docs/,
-        # a docs/ lookalike and a non-root AGENTS.md as flagged, and README.md
-        # anywhere plus .github/ as allowed.
+        # Same self-test-first reason. Pins a root plan file, any root
+        # Markdown (README.md and AGENTS.md included), a nested docs/ and a
+        # docs/ lookalike as flagged, and a directory README.md,
+        # .claude/CLAUDE.md and .github/ as allowed.
         run: python3 .github/ci/check_markdown_locations.py --self-test
       - name: No Markdown outside docs/
         # Plans and result write-ups used to pile up as root *.md files that the
         # site never published and no check ever read, so their numbers were
         # quoted from memory. The documentation site under docs/ is the one
-        # place that material goes; README.md, root AGENTS.md/CLAUDE.md/
-        # LICENSE.md and .github/ are the only exemptions. Python only, so it
+        # place that material goes; a non-root README.md, .claude/CLAUDE.md
+        # and .github/ are the only exemptions. Python only, so it
         # lives in this job rather than needing Doxygen.
         run: python3 .github/ci/check_markdown_locations.py
 
@@ -688,7 +689,7 @@ jobs:
 # unless a multi-GB cache entry is restored onto that same disk. That build takes
 # tens of minutes on 20 cores WITH a warm cache.
 #
-# And what it would produce is the CPU-only build AGENTS.md explicitly warns is
+# And what it would produce is the CPU-only build the agent guide explicitly warns is
 # the wrong path: the apt package ships no CUDA adapter, so it can never catch a
 # CUDA-backend compile error - the backend most of this code targets.
 #

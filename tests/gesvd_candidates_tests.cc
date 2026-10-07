@@ -558,7 +558,7 @@ TYPED_TEST(GesvdCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     }
 }
 
-// AGENTS.md §8.5: a saturating batch of identical items through every family that keeps state in
+// docs/developer/agent-guide.md §8.5: a saturating batch of identical items through every family that keeps state in
 // local memory; every item's result is bit-identical to item 0's.
 TYPED_TEST(GesvdCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
     using T = typename TestFixture::T;

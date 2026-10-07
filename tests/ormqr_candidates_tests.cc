@@ -432,7 +432,7 @@ TYPED_TEST(OrmqrCandidates, PinnedRunIsTheDirectKernelBitForBit) {
         }
 }
 
-// §8.1 / AGENTS.md §8.5: batch 1024 of one matrix, every item bit-identical to item 0.
+// §8.1 / docs/developer/agent-guide.md §8.5: batch 1024 of one matrix, every item bit-identical to item 0.
 TYPED_TEST(OrmqrCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
     using T = typename TestFixture::T;
     for (const C& c : om::candidates<T>())

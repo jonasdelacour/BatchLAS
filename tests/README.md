@@ -109,7 +109,7 @@ type lists come from `backend_types<Config>` (every compiled backend × `float`,
 1. skip if `BATCHLAS_TEST_BACKEND` filters the backend out;
 2. skip if `BATCHLAS_TEST_FLOAT_TYPE` filters the scalar type out;
 3. build `this->ctx`, a `std::shared_ptr<Queue>` **pinned to the config's
-   backend** — a GPU queue for CUDA/ROCm/MKL, `Device("cpu")` for NETLIB — so a
+   backend** — a GPU queue for CUDA/ROCm, `Device("cpu")` for NETLIB — so a
    test body can call `syev(*this->ctx, ...)` without naming the backend and
    still exercise the queue-dispatch path callers use. A missing GPU, a
    `sycl::exception` with `errc::runtime` / `errc::feature_not_supported`, or a
@@ -136,7 +136,7 @@ BATCHLAS_TEST_FLOAT_TYPE=float ./build/tests/steqr_tests   # skip double/complex
 
 | variable | accepted values (case-insensitive) | runs |
 |---|---|---|
-| `BATCHLAS_TEST_BACKEND` | `CUDA`, `ROCM`, `MKL`, `NETLIB` | only that backend's instantiations |
+| `BATCHLAS_TEST_BACKEND` | `CUDA`, `ROCM`, `NETLIB` | only that backend's instantiations |
 | `BATCHLAS_TEST_FLOAT_TYPE` | `float` | `float` and `std::complex<float>` |
 | | `double` | `double` and `std::complex<double>` |
 | | `complex` | both complex types |
@@ -171,7 +171,7 @@ Two rules cover most of it:
    sweeps). `batch` only multiplies that work. Cover them separately — large
    `n` at small batch, large batch at small `n`. Their product is where cost
    explodes for no added coverage. (A shared-local-memory kernel still needs one
-   saturating-batch case at small `n`; see `AGENTS.md` §8.)
+   saturating-batch case at small `n`; see `docs/developer/agent-guide.md` §8.)
 
 2. **Watch the reference solve.** A test that builds `Matrix::Zeros(n, n, batch)`
    and runs `syev` / `ritz_values` / `netlib_ref_eigs_dense` over it pays

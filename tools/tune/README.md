@@ -86,7 +86,7 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 
 `--devices 1,2,3` runs one child per GPU at a time, shards cells round-robin, and keeps both passes
 of a cell on the same GPU. Each GPU is held under an exclusive flock for the whole run, so two
-tuners never share a device. **This departs from AGENTS.md §10's one-measuring-process-per-box rule**
+tuners never share a device. **This departs from docs/developer/agent-guide.md §10's one-measuring-process-per-box rule**
 in the same way as the potrf and posv seed sweeps did (`benchmarks/results/routing/README.md`): use
 one device when the box is shared or when a verdict hinges on a few percent. Children get
 `CUDA_DEVICE_ORDER=PCI_BUS_ID` and `CUDA_VISIBLE_DEVICES=<gpu>`, so indices match nvidia-smi.
@@ -100,8 +100,8 @@ Before each child: no compute process on the GPU and utilization at most `--util
 wait up to `--guard-wait` and then stop. After each child: a compute process on the GPU discards
 that child's numbers and the child is retried. Any process with a context counts, including one
 whose kernels run elsewhere, and an entry nvidia-smi cannot show (`[N/A]`) counts as foreign.
-At start the tuner warns when a listed GPU drives a display (AGENTS.md §13) or when any other GPU
-on the box has compute processes (AGENTS.md §10). Without nvidia-smi the tuner stops; `--no-guard`
+At start the tuner warns when a listed GPU drives a display (docs/developer/agent-guide.md §13) or when any other GPU
+on the box has compute processes (docs/developer/agent-guide.md §10). Without nvidia-smi the tuner stops; `--no-guard`
 measures without the guard.
 
 `--allow-idle-foreign` is for a shared box where another user holds idle contexts on every GPU

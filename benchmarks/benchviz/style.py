@@ -1,4 +1,4 @@
-"""The house figure style: plotting/stylesheet.py, as used for the PASC'24
+"""The house figure style (ported from the deleted plotting/stylesheet.py), as used for the PASC'24
 dualization paper and the MSc thesis.
 
 Figures are drawn large (20 x 10 in, 30 pt) and scaled down by LaTeX, which
@@ -22,7 +22,7 @@ FONTSIZE = 30
 PANEL = (20, 10)          # one line-plot panel
 MAP_PANEL = (10, 10)      # one 2D-map panel
 
-# stylesheet.py's colour dictionary, in its order.
+# The house colour dictionary, in its order.
 CD = ["#1f77b4", "#e377c2", "#0D9276", "#8c564b", "#7570b3", "#d95f02", "#e7298a", "#66a61e", "#8931EF"]
 MARKERS = ["o", "^", "s", "*", "D"]
 MARKER_SCALES = [1.1, 1.25, 1.0, 1.5, 1.0]

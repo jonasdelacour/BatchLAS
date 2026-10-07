@@ -52,7 +52,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(BATCHLAS_BUILD_TESTS "Build BatchLAS tests" ${BATCHLAS_IS_TOP_LEVEL})
 option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
 option(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS "Build device_blas_* benchmark targets" OFF)
-option(BATCHLAS_BUILD_EXAMPLES "Build BatchLAS examples" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 # Tri-state on purpose. This used to be option(... OFF), and
 # BatchLASDetectSYCL.cmake then force-promoted it to ON in PARENT_SCOPE whenever
@@ -60,35 +59,6 @@ option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 # so -DBATCHLAS_ENABLE_CUDA=OFF was silently ignored while CMakeCache.txt kept
 # reporting OFF forever. AUTO is the honest spelling of the old behaviour; ON now
 # means "require it" and errors out instead of quietly configuring for sm_50.
-#
-# Migrate the legacy entry first. Every build directory configured before this
-# change holds BATCHLAS_ENABLE_CUDA:BOOL=OFF -- that was the option() default,
-# and it was never written back even on a CUDA box, because the promotion to ON
-# happened in a normal variable. Left alone, the set() below would not touch an
-# existing entry, so re-configuring such a tree would normalise that stale OFF
-# into a genuine "no CUDA backend": no cuBLAS/cuSOLVER, no error, no warning,
-# and a CMakeCache.txt reading exactly what it read before. The cache *type* is
-# the discriminator: only option() writes BOOL here, while -DBATCHLAS_ENABLE_CUDA=...
-# on a fresh configure lands as UNINITIALIZED and becomes STRING below, so this
-# runs exactly once per build tree.
-get_property(_batchlas_cuda_cache_type CACHE BATCHLAS_ENABLE_CUDA PROPERTY TYPE)
-if(_batchlas_cuda_cache_type STREQUAL "BOOL")
-    set(_batchlas_cuda_legacy "${BATCHLAS_ENABLE_CUDA}")
-    if(_batchlas_cuda_legacy)
-        set(_batchlas_cuda_migrated "ON")
-    else()
-        set(_batchlas_cuda_migrated "AUTO")
-    endif()
-    set(BATCHLAS_ENABLE_CUDA "${_batchlas_cuda_migrated}" CACHE STRING
-        "CUDA backend: AUTO (enable when the SYCL runtime exposes a CUDA device), ON (require it), OFF"
-        FORCE)
-    message(STATUS
-        "Migrated the pre-tri-state BATCHLAS_ENABLE_CUDA:BOOL=${_batchlas_cuda_legacy} cache entry to "
-        "${_batchlas_cuda_migrated}; pass -DBATCHLAS_ENABLE_CUDA=OFF to keep the CUDA backend off")
-    unset(_batchlas_cuda_migrated)
-    unset(_batchlas_cuda_legacy)
-endif()
-unset(_batchlas_cuda_cache_type)
 set(BATCHLAS_ENABLE_CUDA "AUTO" CACHE STRING
     "CUDA backend: AUTO (enable when the SYCL runtime exposes a CUDA device), ON (require it), OFF")
 set_property(CACHE BATCHLAS_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
@@ -96,11 +66,9 @@ option(BATCHLAS_DISABLE_CUDA_FTZ "Disable flush-to-zero (FTZ) for CUDA device co
 option(BATCHLAS_CUDA_DEVICE_LINE_INFO
     "Pass --generate-line-info to the NVPTX backend in Debug/RelWithDebInfo builds (useful for ncu/nsight, has been observed to fail CUDA JIT program builds)"
     OFF)
-option(BATCHLAS_ENABLE_OPENMP "Enable OpenMP support" OFF)
 option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
 option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
-option(BATCHLAS_ENABLE_MKL "Enable oneMKL backend" OFF)
 option(BATCHLAS_ENABLE_CPU_TESTS "Enable tests/benchmarks requiring CPU SYCL kernel compilation" ON)
 option(BATCHLAS_KEEP_CUDA_INTERMEDIATES "Preserve CUDA and SYCL CUDA device compilation intermediates for PTX/SASS analysis" OFF)
 option(BATCHLAS_SANITIZER_FRIENDLY_DEBUG "Use more unwind-friendly debug flags for sanitizer runs (may slow down builds/runs)" OFF)
@@ -148,7 +116,6 @@ option(BATCHLAS_ALLOW_UNSAFE_ENV
 
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
-set(BATCHLAS_TUNING_PROFILE "" CACHE FILEPATH "Optional tuning profile JSON to generate compile-time tuning constants")
 set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
 set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA")
 set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
@@ -214,7 +181,6 @@ endif()
 option(BATCHLAS_NATIVE_CPU_DISABLE_VECZ "Disable vecz for native_cpu backend (workaround for clang crash)" ON)
 
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
-set(BATCHLAS_HAS_MKL_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
 set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
 set(BATCHLAS_HAS_CPU_TARGET FALSE)
@@ -235,13 +201,13 @@ set(BATCHLAS_ENABLE_SYCL ON)
 # yet and the family flags keep their existing derivation, so this step is
 # bit-identical; the decoupling itself is S2/S3.
 option(BATCHLAS_ENABLE_VENDOR_BLAS
-    "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib)"
+    "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, netlib)"
     ON)
 
 set(BATCHLAS_VENDOR_LIBRARIES
     CUBLAS CUSOLVER CUSPARSE
     ROCBLAS ROCSOLVER ROCSPARSE
-    LAPACKE CBLAS ONEMKL)
+    LAPACKE CBLAS)
 
 foreach(_batchlas_lib ${BATCHLAS_VENDOR_LIBRARIES})
     option(BATCHLAS_ENABLE_${_batchlas_lib}

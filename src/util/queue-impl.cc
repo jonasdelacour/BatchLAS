@@ -78,7 +78,7 @@ bool Queue::backend_available(batchlas::Backend backend) {
     switch (backend) {
         case Backend::CUDA:   return BATCHLAS_HAS_CUDA_BACKEND;
         case Backend::ROCM:   return BATCHLAS_HAS_ROCM_BACKEND;
-        case Backend::MKL:    return BATCHLAS_HAS_MKL_BACKEND;
+        case Backend::MKL:    return false;
         case Backend::NETLIB: return BATCHLAS_HAS_HOST_BACKEND;
         // AUTO is a request, not a backend; MAGMA and SYCL have no dispatch
         // targets, so claiming they are available would be a lie that only

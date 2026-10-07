@@ -6,7 +6,7 @@
 # Plain ctest (no --resource-spec-file) ignores RESOURCE_GROUPS, and the launcher is
 # a pass-through without an allocation, so it runs exactly as before.
 # Included from the top-level CMakeLists.txt so tests/ and python/ both see it.
-# evidence: AGENTS.md section 8 (Testing Policy)
+# evidence: docs/developer/agent-guide.md section 8 (Testing Policy)
 include_guard(GLOBAL)
 
 set(BATCHLAS_TEST_GPUS "auto" CACHE STRING

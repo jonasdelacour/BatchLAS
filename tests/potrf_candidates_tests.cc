@@ -181,7 +181,7 @@ void expect_factored(const Prob<T>& p, const std::vector<int32_t>& info, const s
     }
 }
 
-// cuSOLVER's Upper potrf writes the strictly lower triangle (AGENTS.md §8 rule 4); the
+// cuSOLVER's Upper potrf writes the strictly lower triangle (docs/developer/agent-guide.md §8 rule 4); the
 // ld padding and the inter-item gap must still survive it.
 bool clobbers_other(const C& c, Uplo uplo) { return std::holds_alternative<pc::Vendor>(c) && uplo == Uplo::Upper; }
 

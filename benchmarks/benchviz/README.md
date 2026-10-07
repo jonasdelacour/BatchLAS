@@ -247,7 +247,8 @@ The trsm map needs a `trsm_benchmark` built after `BM_TRSM` started reading its 
 right-hand-side count. An older binary ignores it and times n × n, so `benchviz info` must not report
 the build as behind.
 
-The style is the house style of `plotting/stylesheet.py`:
+The style is the house style, defined in `style.py` (the source of truth since the old
+`plotting/stylesheet.py` it was ported from was deleted):
 - LaTeX Computer Modern, drawn at 20 × 10 in with 30 pt text and scaled down by `\includegraphics`.
 - A full box around every panel, ticks pointing in, and a light full grid.
 - Dotted connectors with markers in the order ○ △ □ ★ ◇, and the stylesheet's colour order.

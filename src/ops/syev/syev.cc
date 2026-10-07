@@ -32,7 +32,7 @@ template <class T>
 using Real = typename base_type<T>::type;
 
 // The sub-group solvers' own ceiling (syev_cta.cc, syev_cta_fused.cc, syev_jacobi_cta.cc all
-// throw above it): one matrix per 32-lane partition, the CTA invariant of AGENTS.md §11.
+// throw above it): one matrix per 32-lane partition, the CTA invariant of docs/developer/agent-guide.md §11.
 inline constexpr std::int64_t kSmallMaxN = 32;
 
 template <class T>

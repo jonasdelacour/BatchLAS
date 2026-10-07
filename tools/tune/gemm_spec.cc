@@ -1,6 +1,6 @@
 // gemm for the tuner (flat-kernel-selection-phase3-plan.md §1.3, §3): random A, B and C0 in
 // [-1, 1) (complex parts both), alpha with an imaginary part and beta = 1, so the epilogue reads C
-// (AGENTS.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
+// (docs/developer/agent-guide.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
 // max(1, --ld-pad) (an odd ld fails every aligned leg, as the parent-ld panel updates do);
 // layout=packed cells are contiguous with the allocator's aligned bases. Verification is the
 // componentwise error |C - Cref| / (|alpha| |op(A)| |op(B)| + |beta| |C0|) against a double /

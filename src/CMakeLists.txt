@@ -456,12 +456,6 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
     target_link_libraries(${_batchlas_backends_rocm_lib} PRIVATE ${BATCHLAS_ROCM_LINK_LIBRARIES})
 endif()
 
-#if(BATCHLAS_HAS_MKL_BACKEND)
- #   list(APPEND BATCHLAS_LINK_LIBRARIES
-        #batchlas::mkl
-#  )
-#endif()
-
 # In monolithic mode `batchlas` is the SHARED library itself, already fully
 # configured above. In split mode it is the INTERFACE facade over the 14
 # components, and it is the facade that carries the --no-as-needed mitigation.

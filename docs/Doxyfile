@@ -78,7 +78,7 @@ WARN_LOGFILE           = $(BATCHLAS_DOCS_OUT)/doxygen-warnings.log
 # section pages in docs/pages/ own the hierarchy through \subpage.
 INPUT                  = docs/pages/index.md \
                          docs/pages \
-                         README.md \
+                         .github/README.md \
                          docs \
                          examples/consumer/README.md \
                          python/examples/README.md \

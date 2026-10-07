@@ -1128,9 +1128,6 @@ inline py::list available_backends() {
 #if BATCHLAS_HAS_ROCM_BACKEND
     backends.append("rocm");
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-    backends.append("mkl");
-#endif
 #if BATCHLAS_HAS_HOST_BACKEND
     backends.append("netlib");
 #endif
@@ -1142,7 +1139,6 @@ inline py::dict compiled_features() {
     features["has_host_backend"] = static_cast<bool>(BATCHLAS_HAS_HOST_BACKEND);
     features["has_cuda_backend"] = static_cast<bool>(BATCHLAS_HAS_CUDA_BACKEND);
     features["has_rocm_backend"] = static_cast<bool>(BATCHLAS_HAS_ROCM_BACKEND);
-    features["has_mkl_backend"] = static_cast<bool>(BATCHLAS_HAS_MKL_BACKEND);
     features["has_cpu_target"] = static_cast<bool>(BATCHLAS_HAS_CPU_TARGET);
     features["has_gpu_backend"] = static_cast<bool>(BATCHLAS_HAS_GPU_BACKEND);
     features["backends"] = available_backends();

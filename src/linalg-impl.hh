@@ -30,10 +30,7 @@
 #if BATCHLAS_HAS_LAPACKE
     #include <lapacke.h>
 #endif
-// "oneMKL supplies cblas.h" is a statement about the LIBRARY, which is what
-// BATCHLAS_HAS_ONEMKL now says; the old spelling used the MKL device-family
-// flag to mean it.
-#if BATCHLAS_HAS_CBLAS && !BATCHLAS_HAS_ONEMKL
+#if BATCHLAS_HAS_CBLAS
     #include <cblas.h>
 #endif
 
@@ -43,13 +40,6 @@
     #include <rocblas/rocblas.h>
     #include <rocsparse/rocsparse.h>
     #include <rocsolver/rocsolver.h>
-#endif
-
-#if BATCHLAS_HAS_MKL_BACKEND
-    #include <oneapi/mkl/blas.hpp>
-    #include <oneapi/mkl/lapack.hpp>
-    #include <oneapi/mkl/types.hpp>
-    #include <oneapi/mkl/spblas.hpp>
 #endif
 
 #include <batchlas/blas/linalg.hh>
@@ -115,11 +105,6 @@ namespace batchlas{
             );
         } else
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return side == Side::Left ? oneapi::mkl::side::left : oneapi::mkl::side::right;
-        } else
-#endif
         {
             static_assert(always_false<B>::value, "Unsupported backend for Side conversion");
         }
@@ -144,11 +129,6 @@ namespace batchlas{
             return static_cast<char>(
                 job == JobType::EigenVectors ? 'V' : 'N'
             );
-        } else
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return job == JobType::EigenVectors ? oneapi::mkl::job::vec : oneapi::mkl::job::novec;
         } else
 #endif
         {
@@ -184,11 +164,6 @@ namespace batchlas{
             );
         } else
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return diag == Diag::NonUnit ? oneapi::mkl::diag::nonunit : oneapi::mkl::diag::unit;
-        } else
-#endif
         {
             static_assert(always_false<B>::value, "Unsupported backend for Diag conversion");
         }
@@ -220,11 +195,6 @@ namespace batchlas{
             return static_cast<lapack_int>(
                 layout == Layout::RowMajor ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR
             );
-        } else
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return layout == Layout::RowMajor ? oneapi::mkl::layout::row_major : oneapi::mkl::layout::col_major;
         } else
 #endif
         {
@@ -267,11 +237,6 @@ namespace batchlas{
             return static_cast<char>(
                 uplo == Uplo::Upper ? 'U' : 'L'
             );
-        } else
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return uplo == Uplo::Upper ? oneapi::mkl::uplo::upper : oneapi::mkl::uplo::lower;
         } else
 #endif
         {
@@ -328,11 +293,6 @@ namespace batchlas{
             return static_cast<char>(
                 trans == Transpose::NoTrans ? 'N' : trans == Transpose::ConjTrans ? 'C' : 'T'
             );
-        } else
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        if constexpr (B == BackendLibrary::MKL) {
-            return trans == Transpose::NoTrans ? oneapi::mkl::transpose::nontrans : oneapi::mkl::transpose::trans;
         } else
 #endif
         {

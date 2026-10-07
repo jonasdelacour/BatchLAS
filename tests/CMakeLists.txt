@@ -15,7 +15,7 @@ if(NOT GTest_FOUND)
 endif()
 
 # Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
-# any -j: syev_cta_tests has a concurrency wrong-answer flake (AGENTS.md section 8).
+# any -j: syev_cta_tests has a concurrency wrong-answer flake (docs/developer/agent-guide.md section 8).
 set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
 set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 

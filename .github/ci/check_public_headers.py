@@ -28,7 +28,7 @@ HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp")
 QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 # Generated headers live in <build>/include and are installed alongside; they
 # are never reachable from the source tree, so do not try to resolve them.
-GENERATED = re.compile(r"^batchlas/(backend_config\.h|device_limits\.hh|tuning_params\.hh)$")
+GENERATED = re.compile(r"^batchlas/(backend_config\.h|device_limits\.hh)$")
 
 
 def main(argv):

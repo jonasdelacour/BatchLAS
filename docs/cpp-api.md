@@ -104,7 +104,7 @@ Build options:
 | `BATCHLAS_ENABLE_CUDA` | cuBLAS/cuSOLVER backend: `AUTO` (default — on when the SYCL runtime exposes a CUDA device), `ON` (configure fails when it does not), `OFF` |
 | `BATCHLAS_NVIDIA_ARCH` | target architecture, e.g. `sm_89`; the build detects the local GPU, so pass this only when cross-building |
 | `BATCHLAS_ENABLE_NETLIB` | host BLAS/LAPACK backend, `ON` by default |
-| `BATCHLAS_ENABLE_MKL`, `BATCHLAS_ENABLE_ROCM` | the oneMKL and ROCm backends, both `OFF` by default |
+| `BATCHLAS_ENABLE_ROCM` | the ROCm backend, `OFF` by default |
 | `BATCHLAS_BUILD_TESTS` | on by default for a top-level build; `OFF` when you only want the library |
 | `BATCHLAS_BUILD_BENCHMARKS`, `BATCHLAS_BUILD_PYTHON` | off by default |
 | `BATCHLAS_ALLOW_UNSAFE_ENV` | whether the environment may disable a safety check at runtime, `OFF` by default; see [Configuration](#configuration) |
@@ -183,8 +183,7 @@ target_compile_options(my_app PRIVATE "SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}")
 target_link_options(my_app    PRIVATE "SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}")
 ```
 
-`find_package(BatchLAS)` pulls in `OpenMP` when the install was built with it,
-and `MKL` when the MKL backend is on. CUDA and LAPACK are linked privately into
+`find_package(BatchLAS)` pulls in no third-party package. CUDA and LAPACK are linked privately into
 the component libraries, so a CPU-only machine can `find_package` a CUDA-enabled
 install. Ask for the package whole — `find_package(BatchLAS CONFIG REQUIRED)`
 with no `COMPONENTS`.

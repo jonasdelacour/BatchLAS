@@ -545,7 +545,7 @@ never touches.
 Some OpenBLAS builds ship a CPU-dispatch kernel that computes `dgemm` wrongly on the machine
 auto-detection picks it for. The known case is OpenBLAS 0.3.20's Cooperlake kernel on recent Intel
 parts, off by O(1)-O(100) at some sizes while `sgemm` is fine; everything layered on top silently
-inherits the garbage (see the Known Pitfalls in `AGENTS.md`).
+inherits the garbage (see the Known Pitfalls in `docs/developer/agent-guide.md`).
 
 `cmake/BatchLASBlasHealthCheck.cmake` detects this at configure time and records the
 `OPENBLAS_CORETYPE` that repairs it, but a configure-time answer is stale by construction: an

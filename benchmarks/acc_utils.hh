@@ -36,21 +36,6 @@
 #define BATCHLAS_ACC_ROCM_ALL_TYPES(name, sizes)
 #endif
 
-#if BATCHLAS_HAS_MKL_BACKEND
-#define BATCHLAS_ACC_MKL(name, sizes) \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<float, batchlas::Backend::MKL>), sizes); \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<double, batchlas::Backend::MKL>), sizes);
-
-#define BATCHLAS_ACC_MKL_ALL_TYPES(name, sizes) \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<float, batchlas::Backend::MKL>), sizes); \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<double, batchlas::Backend::MKL>), sizes); \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<std::complex<float>, batchlas::Backend::MKL>), sizes); \
-    MINI_ACC_BENCHMARK_REGISTER_SIZES((name<std::complex<double>, batchlas::Backend::MKL>), sizes);
-#else
-#define BATCHLAS_ACC_MKL(name, sizes)
-#define BATCHLAS_ACC_MKL_ALL_TYPES(name, sizes)
-#endif
-
 #if BATCHLAS_HAS_HOST_BACKEND
 #define BATCHLAS_ACC_NETLIB(name, sizes) \
     MINI_ACC_BENCHMARK_REGISTER_SIZES((name<float, batchlas::Backend::NETLIB>), sizes##Netlib); \

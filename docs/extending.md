@@ -98,7 +98,7 @@ Every step below is required; each has a check that fails if it is skipped.
 6. **Tests**: `tests/<op>_candidates_tests.cc` pins every candidate with `select::ScopedPin` on shapes
    that straddle its `can_run` limits in both directions, checks that `can_run` agrees with what the
    driver accepts, runs each candidate with a workspace of exactly `<op>_buffer_size` bytes in a
-   poisoned arena, and asserts that a bad pin throws. AGENTS.md §8 applies in full.
+   poisoned arena, and asserts that a bad pin throws. docs/developer/agent-guide.md §8 applies in full.
 7. **Docs**: put `@ingroup selection_ops` on the op's `choice.hh` declarations; the measurements
    behind its families go on `docs/perf/<op>.md` (add the op to `PERF_PAGE` in
    `docs/tools/gen_db_pages.py` if its page has another name). The generated @ref selection_tables

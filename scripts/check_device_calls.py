@@ -199,7 +199,7 @@ def check(libs, cuobjdump, verbose):
             top = sorted(set(callees), key=callees.count, reverse=True)[:3]
             print(f"  {len(callees):6d} {lib} {name[:110]} -> {', '.join(top)}")
         print("Likely cause: an icpx build without -ffp-model=precise "
-              "(see AGENTS.md Known Pitfalls).")
+              "(see docs/developer/agent-guide.md Known Pitfalls).")
     return status
 
 

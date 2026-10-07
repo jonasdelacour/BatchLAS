@@ -64,9 +64,6 @@ inline std::string device_blas_backend_tags() {
 #if BATCHLAS_HAS_ROCM_BACKEND
     tags += ", batchlas::Backend::ROCM";
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-    tags += ", batchlas::Backend::MKL";
-#endif
 #if BATCHLAS_HAS_HOST_BACKEND
     tags += ", batchlas::Backend::NETLIB";
 #endif

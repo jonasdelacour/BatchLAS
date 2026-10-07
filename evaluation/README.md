@@ -82,10 +82,6 @@ You can then plot a heatmap of log10(relative error) vs log10(condition number).
 - Example (CUDA, float, STEQR_CTA):
 	- `./build/benchmarks/steqr_accuracy --impl=steqr_cta --backend=CUDA --type=float --n=32 --samples=20000 --batch=256 --log10-cond-min=0 --log10-cond-max=12 --output=output/accuracy/steqr_accuracy.csv`
 
-### Plot the heatmap
-
-- `python3 plotting/steqr_accuracy_heatmap.py --csv output/accuracy/steqr_accuracy.csv --output output/plots/steqr_accuracy_heatmap.png`
-
 ### Notes
 
 - The sampler always uses NETLIB double for the reference solve, so the host backend must be enabled.

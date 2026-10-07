@@ -1032,7 +1032,7 @@ should come back as its own change with n ≤ 32 numbers attached. A rebase trap
 `syev_cta_max_n_for_vectors` rejected any value above 32, so after a clean rebase `Auto` still
 could not route above 32 and the branch appeared to do nothing. Benchmark through the forced
 provider. Under flat selection the same cap is `kSmallMaxN = 32` in the small families'
-`can_run` (`src/ops/syev/syev.cc`), and the tables have no small-family entry above 32. This is now listed among the measured dead ends in `AGENTS.md`.
+`can_run` (`src/ops/syev/syev.cc`), and the tables have no small-family entry above 32. This is now listed among the measured dead ends in `docs/developer/agent-guide.md`.
 
 ### syev: harness unblockers (WP0)
 
@@ -1170,7 +1170,7 @@ out unrelated processes, including the session driving the work.
 
 ### syev: open debt, the single-read panel symv
 
-**Plan WP5 (B1), the largest item.** It is still open and is quoted in `AGENTS.md` as "the open
+**Plan WP5 (B1), the largest item.** It is still open and is quoted in `docs/developer/agent-guide.md` as "the open
 2.7x". The `latrd` panel is 35–71% of every blocked solve. Counters on `LatrdLowerPanel`, one
 panel, ib = 32, j₀ = 0, as a multiple of ideal traffic:
 
@@ -1305,7 +1305,7 @@ family per cell, but the syev tables are still the untimed transcription until i
 | the float small-n rule applied to complex | Jacobi is 4–6× off the pace at n ≥ 20 in complex | [complex small n](#syev-complex-small-n-kernels) |
 | a batch floor on the values-only rule | sent n = 1024 at batch 254 to the vendor at 2.75× | [values routing](#syev-eigenvalues-only-routing) |
 | split `latrd_grid_min_n` per mode | same crossover in both modes | [latrd gate](#syev-latrd-grid-gate-confirmed-in-eigenvector-mode) |
-| block Jacobi as a speed path (C1/WP8) | later measured 2–11× slower; accuracy-only opt-in (`AGENTS.md` dead ends; the design was in the uncommitted `JACOBI_EIGENSOLVER_PLAN.md`). The plan's case, now refuted: syev then ran at 1.65–2.1 TFLOP/s (about 3.5% of the ~47 TFLOP/s SGEMM sustains), so a ~10× flop premium (8–10 sweeps × ~4n³) would break even at 17–21 TFLOP/s; `gesvdj_cta` beat the tridiagonalising CTA path 4.1× at n = 16 and 23× at n = 8 | - |
+| block Jacobi as a speed path (C1/WP8) | later measured 2–11× slower; accuracy-only opt-in (`docs/developer/agent-guide.md` dead ends; the design was in the uncommitted `JACOBI_EIGENSOLVER_PLAN.md`). The plan's case, now refuted: syev then ran at 1.65–2.1 TFLOP/s (about 3.5% of the ~47 TFLOP/s SGEMM sustains), so a ~10× flop premium (8–10 sweeps × ~4n³) would break even at 17–21 TFLOP/s; `gesvdj_cta` beat the tridiagonalising CTA path 4.1× at n = 16 and 23× at n = 8 | - |
 | C5 spectral divide and conquer | its cluster-parallelism argument does not apply at saturating batch | plan, not measured |
 | C6 real embedding of the Hermitian problem | 2× the flops and 2× the memory | plan, not measured |
 

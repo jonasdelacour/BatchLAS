@@ -26,7 +26,7 @@ the runner exist, and what to do when it misbehaves.
 | No type declared in the consumer's global namespace | hosted | No build can see this defect; a text scan is the only cheap oracle. |
 | No C++ source over the 18% comment-density ceiling | hosted | `check_comment_density.py`, self-test first. Doxygen doc comments in `include/batchlas/` are exempt; see [Writing API documentation](developer/documentation.md#writing-api-documentation). |
 | Every `evidence:` pointer resolves, and every cited heading slug is unique across `docs/` | hosted | `check_evidence_anchors.py`, self-test first. |
-| No Markdown outside `docs/` | hosted | `check_markdown_locations.py`, self-test first. `README.md` anywhere, root `AGENTS.md`/`CLAUDE.md`/`LICENSE.md` and `.github/` are exempt. |
+| No Markdown outside `docs/` | hosted | `check_markdown_locations.py`, self-test first. A non-root `README.md`, `.claude/CLAUDE.md` and `.github/` (which holds the project README) are exempt; nothing at the root is. |
 | Nothing under an LFS path committed as raw content | hosted | `check_lfs_pointers.py`, self-test first. |
 | Documentation site builds with zero Doxygen warnings | hosted | `docs` job: pinned Doxygen 1.18.0 (sha256-checked), `BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh`, which also checks every cited anchor is live in the generated site. Site uploaded as the `docs-html` artifact on every run. |
 | Documentation site published | hosted, **push to `main` only** | `docs-deploy` job, GitHub Pages. Needs Pages enabled once in the repository settings; see [The docs jobs](#the-docs-jobs). |
@@ -40,7 +40,6 @@ the runner exist, and what to do when it misbehaves.
 | **Not covered** | Why |
 | --- | --- |
 | AMD / ROCm | No AMD hardware and no ROCm toolchain on the runner. Those code paths are compiled by nobody. |
-| oneMKL backend, Intel GPU | Same: not built, not run. |
 | CPU-only / `icpx` builds | The runner has a CUDA DPC++ only. A break that shows up solely without a GPU backend passes CI. There is deliberately **no hosted compile job**; see [Why there is no hosted compile job](#why-there-is-no-hosted-compile-job). |
 | macOS, Windows | No attempt made. |
 | Python bindings | `dev-tests` sets `BATCHLAS_BUILD_PYTHON=OFF`. `python/` is neither built nor tested by CI. |
@@ -205,7 +204,7 @@ So under the default `BATCHLAS_ENABLE_CUDA=AUTO`, a naively installed runner
 detects no GPU, prints `No specific GPU architectures detected, using default
 JIT compilation`, and then **configures, compiles, links, installs and passes
 `ctest` on a CPU-only library that never emitted a line of NVPTX**. This is the
-pitfall AGENTS.md names in its TL;DR as the single most common way to get a
+pitfall docs/developer/agent-guide.md names in its TL;DR as the single most common way to get a
 working build that quietly does the wrong thing, and a runner service is the
 most likely place in this project to hit it.
 
@@ -269,7 +268,7 @@ three of these are already in `ci.yml`, and none should be removed:
    `AUTO`. `ON` means "require it": the configure aborts with a `FATAL_ERROR`
    naming the missing `[cuda:gpu]` entry instead of degrading quietly.
 3. Grep the configure log for `Using SYCL targets: … nvidia_gpu_sm_89`.
-   AGENTS.md names that exact line as the tell; `Using SYCL targets:
+   docs/developer/agent-guide.md names that exact line as the tell; `Using SYCL targets:
    spir64_x86_64` means you are about to test a CPU-only build, whatever GPUs
    are in the box.
 
@@ -460,7 +459,7 @@ resulting object). There is no host-only mode in this build system.
 
 So a hosted job would pay several GB of oneAPI apt, a real device pass over 95
 TUs, and ~15 single-threaded per-`.so` device links, on the runner with the
-fewest cores — to produce the CPU-only build AGENTS.md warns against, which can
+fewest cores — to produce the CPU-only build docs/developer/agent-guide.md warns against, which can
 never catch a CUDA-backend compile error. What would change the answer: a second
 self-hosted machine, or a prebuilt container image with the toolchain and a warm
 ccache baked in.

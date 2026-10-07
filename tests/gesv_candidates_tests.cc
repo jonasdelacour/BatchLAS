@@ -140,7 +140,7 @@ double tol(int n) {
     return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
 }
 
-// The GPU arms pack 1-based int32 pivots into the int64 span (AGENTS.md §9).
+// The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
 template <typename T>
 int32_t piv32(const Sys<T>& p, int it, int i) {
     return reinterpret_cast<const int32_t*>(p.piv.data())[size_t(it) * p.n + i];

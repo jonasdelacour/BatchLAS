@@ -95,7 +95,7 @@ Options parse_args(int argc, char** argv) {
                       << "Options:\n"
                       << "  --impl all|ortho_all|eig_all|ortho_chol2|ortho_cholesky|ortho_shiftchol3|ortho_householder|ortho_cgs2|ortho_svqb|ortho_svqb2|syev|steqr|steqr_cta|stedc\n"
                       << "  --scheme pg|exp\n"
-                      << "  --backend CUDA|ROCM|MKL|NETLIB\n"
+                      << "  --backend CUDA|ROCM|NETLIB\n"
                       << "  --type float|double\n"
                       << "  --n N\n"
                       << "  --batch B\n"
@@ -334,15 +334,6 @@ int run_selected(const Options& opt) {
         return run_accuracy<Backend::ROCM, double>(opt);
 #else
         std::cerr << "ROCM backend not available in this build\n";
-        return 1;
-#endif
-    }
-    if (opt.backend == "MKL") {
-#if BATCHLAS_HAS_MKL_BACKEND
-        if (opt.dtype == "float") return run_accuracy<Backend::MKL, float>(opt);
-        return run_accuracy<Backend::MKL, double>(opt);
-#else
-        std::cerr << "MKL backend not available in this build\n";
         return 1;
 #endif
     }

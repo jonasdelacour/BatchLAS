@@ -74,10 +74,6 @@ Event syr2k(Queue& ctx,
         Uplo, \
         Transpose);
 
-#if BATCHLAS_HAS_MKL_BACKEND
-BATCHLAS_FOR_EACH_REAL_TYPE_1(SYR2K_INSTANTIATE, Backend::MKL)
-#endif
-
 #undef SYR2K_INSTANTIATE
 
 } // namespace batchlas

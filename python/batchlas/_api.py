@@ -39,13 +39,13 @@ def _normalize_backend(backend: str | None, device: str | None = None) -> str:
     preferred: list[str]
     normalized_device = None if device is None else str(device).lower()
     if normalized_device == "cpu":
-        preferred = ["netlib", "mkl"]
+        preferred = ["netlib"]
     elif normalized_device == "gpu":
         preferred = ["cuda", "rocm"]
     elif normalized_device == "accelerator":
-        preferred = ["cuda", "rocm", "mkl"]
+        preferred = ["cuda", "rocm"]
     else:
-        preferred = ["cuda", "rocm", "mkl", "netlib"]
+        preferred = ["cuda", "rocm", "netlib"]
     for candidate in preferred:
         if candidate in available:
             return candidate

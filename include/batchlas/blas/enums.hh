@@ -111,7 +111,7 @@ namespace batchlas {
         AUTO,    ///< A request, not a backend: the Queue resolves it from its device on first query.
         CUDA,    ///< NVIDIA GPU: cuBLAS / cuSOLVER / cuSPARSE and the native SYCL kernels.
         ROCM,    ///< AMD GPU: rocBLAS / rocSOLVER / rocSPARSE and the native SYCL kernels.
-        MKL,     ///< Intel GPU through oneMKL.
+        MKL,     ///< Reserved; no dispatch target, never available.
         MAGMA,   ///< Reserved; no dispatch target, never available.
         SYCL,    ///< Reserved; no dispatch target, never available.
         NETLIB   ///< Host CBLAS / LAPACKE; the fallback for any device.
