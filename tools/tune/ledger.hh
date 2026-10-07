@@ -33,6 +33,8 @@ struct CellRecord {
 
 struct RunMeta {
     std::string run_id, host, device, device_name, batchlas, argv, date;
+    std::string keys;        // the op's '# keys:' spec text, e.g. "uplo:exact n:log:3 batch:log"
+    std::string candidates;  // '|'-joined spellings in candidate order (the tie order)
     Tier tier = Tier::deep;
     std::map<std::string, std::string> worker_mode;
 };

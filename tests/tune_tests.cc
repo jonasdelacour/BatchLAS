@@ -362,6 +362,73 @@ TEST(TuneConverter, TunerJsonlRoundTripsThroughSweepToTable) {
     EXPECT_NE(table.find("uplo=L n=512 batch=8192 | " + first + " 14.10 | vendor 13.74\n"), std::string::npos) << table;
 }
 
+// A ledger written by LedgerWriter becomes a table: deep and coarse rows kept, a preview row
+// inside the deep bracket dropped, the header carries the C++ family hashes (the Python port of
+// the kernel-block manifest rule must agree with family_hashes), and --check re-derives it.
+TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
+    const std::string py = BATCHLAS_TUNE_PYTHON;
+    if (py.empty()) GTEST_SKIP() << "no python3";
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const KernelBlock block = kernel_block_from_file(repo, "tools/tune/posv_spec.cc");
+    const std::vector<std::string> cands{"tiny", "cta", "blocked"};
+    const auto fh = family_hashes(repo, block, cands);
+    const fs::path d = scratch("ledger");
+    fs::remove_all(d / "out");
+    const std::string dir = ledger_dir((d / "ledger").string(), "posv", "float", "sm_999");
+    fs::remove_all(dir);
+    const std::string keys = "uplo:exact n:log:3 nrhs:log batch:log";
+    auto write = [&](Tier tier, const std::string& id, const std::string& date, const std::vector<int>& ns) {
+        RunMeta m;
+        m.run_id = id;
+        m.host = "box";
+        m.device = "sm_999";
+        m.batchlas = "abc12345";
+        m.date = date;
+        m.tier = tier;
+        m.keys = keys;
+        m.candidates = "tiny|cta|blocked";
+        LedgerWriter w(dir, m);
+        for (int n : ns) {
+            CellRecord c;
+            c.key = {{"uplo", "L"}, {"n", std::to_string(n)}, {"nrhs", "1"}, {"batch", "128"}};
+            c.date = date;
+            for (const auto& name : cands) {
+                CandResult r;
+                r.cand = name;
+                r.hash = fh.at(name);
+                r.status = name == "blocked" ? "skipped" : "ok";
+                if (r.status == "ok") r.median_ms = name == "cta" ? 0.5 : 1.25, r.lo = r.median_ms, r.hi = r.median_ms, r.reps = 8;
+                c.cands.push_back(r);
+            }
+            c.ranked = {"cta", "tiny"};
+            w.cell(c);
+        }
+    };
+    write(Tier::deep, "20261001T000000-box-1", "2026-10-01", {64});
+    write(Tier::preview, "20261002T000000-box-2", "2026-10-02", {8, 16, 32, 128, 512});
+    const std::string conv = repo + "/scripts/sweep_to_table.py";
+    ASSERT_EQ(run("'" + py + "' '" + conv + "' --ledger '" + dir + "' --out '" + (d / "out").string() + "'")
+                  .rfind("FAILED", 0), std::string::npos);
+    const std::string table = read_file(d / "out/posv.float.sm_999.txt");
+    std::string fam;
+    for (const auto& name : cands) fam += (fam.empty() ? "" : ",") + name + ":" + fh.at(name);
+    EXPECT_NE(table.find("device=sm_999 batchlas=abc12345 kernels="), std::string::npos) << table;
+    EXPECT_NE(table.find(" family_kernels=" + fam + " date=2026-10-02\n"), std::string::npos) << table;
+    EXPECT_NE(table.find(" tiers=deep:1,coarse:0,preview:3,custom:0,transcribed:0\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("n=8 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("n=512 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("n=16 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    for (const char* gone : {"n=32 ", "n=128 "})
+        EXPECT_EQ(table.find(gone), std::string::npos) << gone << " sits next to the deep row and is dropped:\n" << table;
+    const std::string chk = run("'" + py + "' '" + conv + "' --self-test");
+    EXPECT_NE(chk.find("--self-test: OK"), std::string::npos) << chk;
+    EXPECT_EQ(run("cd '" + repo + "' && '" + py + "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as s; "
+                  "b = s.parse_kernel_block(open('tools/tune/posv_spec.cc').read()); "
+                  "print(','.join(f + ':' + h for f, h in s.family_hashes(s.REPO, b, ['tiny', 'cta', 'blocked']).items()))\""),
+              fam);
+}
+
 // rank() in C++ and in the converter on random times, ties straddled on both sides of 3%.
 TEST(TuneConverter, RankAgreesWithTheConverterOnRandomTimes) {
     const std::string py = BATCHLAS_TUNE_PYTHON;
@@ -1439,6 +1506,8 @@ TEST(TuneLedger, WriterRoundTripsEveryField) {
     m.argv = "--tier coarse --ops trsm";
     m.date = "2026-10-07";
     m.tier = Tier::preview;
+    m.keys = "uplo:exact n:log:3 batch:log";
+    m.candidates = "tiny|lpanel:panel=8|vendor";
     m.worker_mode = {{"mode", "jit"}, {"warm", "0.2"}};
     CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.25), cres("vendor", "v1", "eliminated"),
                              cres("tiny", "t1", "error")},
@@ -1462,6 +1531,8 @@ TEST(TuneLedger, WriterRoundTripsEveryField) {
     EXPECT_EQ(r.batchlas, m.batchlas);
     EXPECT_EQ(r.argv, m.argv);
     EXPECT_EQ(r.date, m.date);
+    EXPECT_EQ(r.keys, m.keys);
+    EXPECT_EQ(r.candidates, m.candidates);
     EXPECT_EQ(r.tier, Tier::preview);
     EXPECT_EQ(r.worker_mode, m.worker_mode);
     ASSERT_EQ(l.cells.size(), 1u);

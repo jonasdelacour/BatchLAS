@@ -39,7 +39,7 @@ std::string run_line(const RunMeta& m) {
     Json j;
     j.str("kind", "run").str("run_id", m.run_id).str("host", m.host).str("device", m.device)
         .str("device_name", m.device_name).str("batchlas", m.batchlas).str("argv", m.argv).str("date", m.date)
-        .str("tier", to_string(m.tier));
+        .str("tier", to_string(m.tier)).str("keys", m.keys).str("candidates", m.candidates);
     for (const auto& [k, v] : m.worker_mode) j.str("wm." + k, v);
     return j.line();
 }
@@ -76,6 +76,8 @@ RunMeta parse_run(const Record& r) {
     m.batchlas = r.get("batchlas");
     m.argv = r.get("argv");
     m.date = r.get("date");
+    m.keys = r.get("keys");
+    m.candidates = r.get("candidates");
     m.tier = need_tier(r);
     for (const auto& [k, v] : r.s)
         if (k.rfind("wm.", 0) == 0) m.worker_mode[k.substr(3)] = v;
