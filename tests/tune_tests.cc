@@ -3,12 +3,14 @@
 // the round trip through scripts/sweep_to_table.py --tuner. No GPU.
 
 #include "../tools/tune/grid.hh"
+#include "../tools/tune/ledger.hh"
 #include "../tools/tune/race.hh"
 #include "../tools/tune/replay_core.hh"
 #include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1107,4 +1109,319 @@ TEST(TuneGrid, IndexModeSeesAFlipInsideAStrideFourBracket) {
     o.margin = 0.05, o.gap = &close;
     o.mode = RefineMode::geometric;
     EXPECT_EQ(key_arg(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.at(0)), "mode=x,n=4") << "geometric midpoint of 1 and 16";
+}
+
+// ---- Ledger (tools/tune/ledger.cc) ----------------------------------------------------------
+
+namespace {
+
+const std::map<std::string, std::string> kHashes{{"lpanel", "h1"}, {"vendor", "v1"}};
+
+struct TempDir {
+    fs::path path;
+    TempDir() {
+        static int n = 0;
+        path = fs::temp_directory_path() / ("batchlas_ledger_" + std::to_string(::getpid()) + "_" + std::to_string(n++));
+        fs::remove_all(path);
+        fs::create_directories(path);
+    }
+    ~TempDir() { fs::remove_all(path); }
+    std::string str() const { return path.string(); }
+};
+
+CandResult cres(const std::string& cand, const std::string& hash, const std::string& status = "ok", double ms = 1.0) {
+    CandResult c;
+    c.cand = cand;
+    c.hash = hash;
+    c.status = status;
+    if (status == "ok") c.median_ms = ms, c.lo = ms * 0.9, c.hi = ms * 1.1, c.reps = 8;
+    return c;
+}
+
+CellRecord cell_rec(std::vector<CandResult> cands, std::vector<std::string> ranked, int n = 64) {
+    CellRecord r;
+    r.key = {{"n", std::to_string(n)}, {"batch", "1024"}};
+    r.cands = std::move(cands);
+    r.ranked = std::move(ranked);
+    return r;
+}
+
+// Writes one run file holding `r` at `tier`/`date`; run ids are distinct per call.
+void write_run(const TempDir& d, Tier tier, const std::string& date, const CellRecord& r, const std::string& id) {
+    RunMeta m;
+    m.run_id = id;
+    m.tier = tier;
+    m.date = date;
+    LedgerWriter w(d.str(), m);
+    CellRecord c = r;
+    c.date = date;
+    w.cell(c);
+}
+
+CellRecord two_family_cell() {
+    return cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)},
+                    {"lpanel:panel=8", "vendor"});
+}
+
+std::string append_to(const fs::path& p, const std::string& text) {
+    std::ofstream(p, std::ios::app) << text;
+    return p.string();
+}
+
+}  // namespace
+
+TEST(TuneLedger, CoarseNeverDisplacesCurrentDeep) {
+    TempDir d;
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    write_run(d, Tier::coarse, "2026-10-05", two_family_cell(), "20261005T000000-b-2");
+    const Ledger l = read_ledger(d.str());
+    ASSERT_EQ(l.cells.size(), 2u);
+    const auto best = best_records(l, kHashes);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->tier, Tier::deep);
+    EXPECT_EQ(best.begin()->second->run_id, "20261001T000000-a-1");
+}
+
+TEST(TuneLedger, CoarseDisplacesStaleDeep) {
+    TempDir d;
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    write_run(d, Tier::coarse, "2026-10-05", two_family_cell(), "20261005T000000-b-2");
+    auto changed = kHashes;
+    changed["lpanel"] = "h2";  // the deep winner's family changed
+    const Ledger l = read_ledger(d.str());
+    EXPECT_EQ(freshness(l.cells[0], changed), Freshness::stale);
+    // The coarse record shares the stale hash for lpanel, so rewrite it against the new hash.
+    TempDir d2;
+    write_run(d2, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    write_run(d2, Tier::coarse, "2026-10-05",
+              cell_rec({cres("lpanel:panel=8", "h2", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)}, {"lpanel:panel=8", "vendor"}),
+              "20261005T000000-b-2");
+    const Ledger l2 = read_ledger(d2.str());
+    const auto best = best_records(l2, changed);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->tier, Tier::coarse);
+}
+
+TEST(TuneLedger, PartlyStaleKeepsItsTier) {
+    TempDir d;
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    write_run(d, Tier::coarse, "2026-10-05",
+              cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v2", "ok", 2.0)}, {"lpanel:panel=8", "vendor"}),
+              "20261005T000000-b-2");
+    auto now = kHashes;
+    now["vendor"] = "v2";  // the deep record's runner-up changed
+    const Ledger l = read_ledger(d.str());
+    const CellRecord& deep = l.cells[0].tier == Tier::deep ? l.cells[0] : l.cells[1];
+    EXPECT_EQ(freshness(deep, now), Freshness::partly_stale);
+    EXPECT_EQ(stale_candidates(deep, now), std::vector<std::string>{"vendor"});
+    const auto best = best_records(l, now);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->tier, Tier::deep) << "partly stale still counts at its tier";
+}
+
+TEST(TuneLedger, AddedFamilyIsPartlyStale) {
+    const CellRecord r = two_family_cell();
+    auto now = kHashes;
+    now["wide"] = "w1";
+    EXPECT_EQ(freshness(r, kHashes), Freshness::current);
+    EXPECT_EQ(freshness(r, now), Freshness::partly_stale);
+    EXPECT_EQ(stale_candidates(r, now), std::vector<std::string>{"wide"});
+    CellRecord empty = cell_rec({cres("lpanel:panel=8", "h1", "bad"), cres("vendor", "v1", "bad")}, {});
+    EXPECT_EQ(freshness(empty, kHashes), Freshness::current);
+    EXPECT_EQ(freshness(empty, now), Freshness::partly_stale);
+}
+
+TEST(TuneLedger, RemovedWinnerIsStale) {
+    const CellRecord r = two_family_cell();
+    std::map<std::string, std::string> now{{"vendor", "v1"}};  // lpanel is gone
+    EXPECT_EQ(freshness(r, now), Freshness::stale);
+    std::map<std::string, std::string> no_runner{{"lpanel", "h1"}};  // only the runner-up is gone
+    EXPECT_EQ(freshness(r, no_runner), Freshness::partly_stale);
+}
+
+TEST(TuneLedger, TruncatedLastLineIsSkippedWithAWarning) {
+    TempDir d;
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    CellRecord second = two_family_cell();
+    second.key = {{"n", "128"}, {"batch", "1024"}};
+    RunMeta m;
+    m.run_id = "20261001T000000-a-1";
+    {
+        LedgerWriter w(d.str(), m);  // reopen in append mode: adds a second run line, then a cell
+        w.cell(second);
+    }
+    std::string text = [&] { std::ifstream in(f); std::stringstream s; s << in.rdbuf(); return s.str(); }();
+    ASSERT_EQ(text.back(), '\n');
+    text.resize(text.size() - 25);  // kill mid-write: the last cell line loses its tail
+    { std::ofstream out(f, std::ios::trunc); out << text; }
+    const Ledger l = read_ledger(d.str());
+    ASSERT_EQ(l.cells.size(), 1u) << "only the intact cell survives";
+    EXPECT_EQ(key_arg(l.cells[0].key), "n=64,batch=1024");
+    ASSERT_EQ(l.warnings.size(), 1u);
+    EXPECT_NE(l.warnings[0].find("truncated"), std::string::npos);
+}
+
+TEST(TuneLedger, MalformedMiddleLineThrows) {
+    TempDir d;
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    append_to(d.path / "20261001T000000-a-1.jsonl", "{\"kind\": \"cell\", \"oops\n");
+    append_to(d.path / "20261001T000000-a-1.jsonl", two_family_cell().ranked.empty() ? "" : "{\"kind\": \"audit\"}\n");
+    EXPECT_THROW(read_ledger(d.str()), std::runtime_error);
+}
+
+TEST(TuneLedger, EmptyRankingIsARecordNotARerun) {
+    TempDir d;
+    write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("lpanel:panel=8", "h1", "bad"), cres("vendor", "v1", "skipped")}, {}),
+              "20261001T000000-a-1");
+    const Ledger l = read_ledger(d.str());
+    const auto best = best_records(l, kHashes);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_TRUE(best.begin()->second->ranked.empty());
+    EXPECT_EQ(best.begin()->second->cands.size(), 2u);
+}
+
+TEST(TuneLedger, TwoRunFilesUnion) {
+    TempDir d;
+    // Box A: deep on n=64 (older), coarse on n=128. Box B: coarse on n=64 (newer), coarse on n=128 (newer).
+    write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-boxa-1");
+    write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("lpanel:panel=8", "h1"), cres("vendor", "v1", "ok", 2)}, {"lpanel:panel=8", "vendor"}, 128),
+              "20261001T000001-boxa-1");
+    write_run(d, Tier::coarse, "2026-10-06", two_family_cell(), "20261006T000000-boxb-9");
+    write_run(d, Tier::coarse, "2026-10-06", cell_rec({cres("lpanel:panel=8", "h1"), cres("vendor", "v1", "ok", 0.5)}, {"vendor", "lpanel:panel=8"}, 128),
+              "20261006T000001-boxb-9");
+    const Ledger l = read_ledger(d.str());
+    EXPECT_EQ(l.runs.size(), 4u);
+    const auto best = best_records(l, kHashes);
+    ASSERT_EQ(best.size(), 2u);
+    for (const auto& [k, r] : best) {
+        if (key_int(k, "n") == 64) EXPECT_EQ(r->tier, Tier::deep);
+        else {
+            EXPECT_EQ(r->run_id, "20261006T000001-boxb-9") << "same tier: the newer date wins";
+            EXPECT_EQ(r->ranked.front(), "vendor");
+        }
+    }
+}
+
+TEST(TuneLedger, EqualTierAndDateTakesTheLargerRunId) {
+    TempDir d;
+    write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("vendor", "v1")}, {"vendor"}), "20261001T000000-a-1");
+    write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("vendor", "v1")}, {"vendor"}), "20261001T000000-a-2");
+    const Ledger l = read_ledger(d.str());
+    const auto best = best_records(l, {{"vendor", "v1"}});
+    EXPECT_EQ(best.begin()->second->run_id, "20261001T000000-a-2");
+}
+
+TEST(TuneLedger, WriterRoundTripsEveryField) {
+    TempDir d;
+    RunMeta m;
+    m.run_id = make_run_id();
+    m.host = "h \"q\"";
+    m.device = "sm_89";
+    m.device_name = "RTX 4090";
+    m.batchlas = "abc1234-dirty";
+    m.argv = "--tier coarse --ops trsm";
+    m.date = "2026-10-07";
+    m.tier = Tier::preview;
+    m.worker_mode = {{"mode", "jit"}, {"warm", "0.2"}};
+    CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.25), cres("vendor", "v1", "eliminated"),
+                             cres("tiny", "t1", "error")},
+                            {"lpanel:panel=8"});
+    c.key = {{"uplo", "L"}, {"n", "64"}};
+    c.round = 3;
+    c.cands[2].reason = "cuda error, \"bad\"\nline";
+    c.cands[0].reps = 12;
+    {
+        LedgerWriter w(ledger_dir(d.str(), "trsm", "float", "sm_89"), m);
+        w.cell(c);
+        w.audit(c.key, "pass", 1.5, 1.4);
+    }
+    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    ASSERT_EQ(l.runs.size(), 1u);
+    const RunMeta& r = l.runs[0];
+    EXPECT_EQ(r.run_id, m.run_id);
+    EXPECT_EQ(r.host, m.host);
+    EXPECT_EQ(r.device, m.device);
+    EXPECT_EQ(r.device_name, m.device_name);
+    EXPECT_EQ(r.batchlas, m.batchlas);
+    EXPECT_EQ(r.argv, m.argv);
+    EXPECT_EQ(r.date, m.date);
+    EXPECT_EQ(r.tier, Tier::preview);
+    EXPECT_EQ(r.worker_mode, m.worker_mode);
+    ASSERT_EQ(l.cells.size(), 1u);
+    const CellRecord& g = l.cells[0];
+    EXPECT_EQ(g.run_id, m.run_id);
+    EXPECT_EQ(g.tier, Tier::preview) << "the writer stamps its own tier";
+    EXPECT_EQ(g.key, c.key);
+    EXPECT_EQ(g.round, 3);
+    EXPECT_EQ(g.date, c.date);
+    EXPECT_EQ(g.ranked, c.ranked);
+    ASSERT_EQ(g.cands.size(), 3u);
+    for (std::size_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(g.cands[i].cand, c.cands[i].cand);
+        EXPECT_EQ(g.cands[i].hash, c.cands[i].hash);
+        EXPECT_EQ(g.cands[i].status, c.cands[i].status);
+        EXPECT_EQ(g.cands[i].reason, c.cands[i].reason);
+        EXPECT_EQ(g.cands[i].reps, c.cands[i].reps);
+        for (auto [a, b] : {std::pair(g.cands[i].median_ms, c.cands[i].median_ms), std::pair(g.cands[i].lo, c.cands[i].lo),
+                            std::pair(g.cands[i].hi, c.cands[i].hi)})
+            EXPECT_TRUE((std::isnan(a) && std::isnan(b)) || a == b);
+    }
+    EXPECT_EQ(make_run_id().find('-'), 15u) << "yyyymmddThhmmss";
+}
+
+TEST(TuneLedger, ImportSchema1BuildsADeepRunFromPassRecords) {
+    TempDir d;
+    const std::string raw = (d.path / "raw.jsonl").string();
+    {
+        std::ofstream o(raw);
+        o << Json().str("kind", "meta").integer("schema", 1).str("op", "trsm").str("dtype", "float").str("device", "sm_89")
+                 .str("device_name", "RTX").str("batchlas", "abc").str("kernels", "k1").str("date", "2026-09-01")
+                 .str("keys", "n:log:3 batch:log").str("candidates", "cta|vendor|blocked:nb=8").integer("passes", 2).line();
+        const CellKey k{{"n", "16"}, {"batch", "256"}};
+        auto pass = [&](int attempt, int p, const char* cand, const char* st, double ms, int reps) {
+            o << Json().str("kind", "pass").key(k).integer("pass", p).integer("attempt", attempt).str("cand", cand)
+                     .str("status", st).str("reason", "").num("median_ms", ms).integer("reps", reps).line();
+        };
+        o << Json().str("kind", "rep").key(k).integer("pass", 1).integer("attempt", 0).str("cand", "cta").num("ms", 9).line();
+        pass(0, 1, "cta", "ok", 9.0, 5); pass(0, 2, "cta", "ok", 9.0, 5);
+        pass(1, 1, "cta", "ok", 1.0, 5); pass(1, 2, "cta", "ok", 1.2, 6);
+        pass(1, 1, "vendor", "ok", 2.0, 5); pass(1, 2, "vendor", "error", 0, 0);
+        o << Json().str("kind", "cell").key(k).integer("round", 2).str("status", "ok").str("reason", "").integer("final_attempt", 1)
+                 .str("ranked", "cta").line();
+        const CellKey k2{{"n", "32"}, {"batch", "256"}};
+        o << Json().str("kind", "cell").key(k2).integer("round", 0).str("status", "skipped").str("reason", "over cap")
+                 .integer("final_attempt", -1).str("ranked", "").line();
+    }
+    const std::map<std::string, std::string> now{{"cta", "c9"}, {"vendor", "v9"}, {"blocked", "b9"}};
+    import_schema1(raw, d.str(), now, "k1");
+    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    ASSERT_EQ(l.runs.size(), 1u);
+    EXPECT_EQ(l.runs[0].tier, Tier::deep);
+    ASSERT_EQ(l.cells.size(), 2u);
+    const CellRecord* a = l.cells[0].round == 2 ? &l.cells[0] : &l.cells[1];
+    const CellRecord* b = a == &l.cells[0] ? &l.cells[1] : &l.cells[0];
+    EXPECT_EQ(key_arg(a->key), "n=16,batch=256") << "table keys only, in meta order";
+    EXPECT_EQ(a->tier, Tier::deep);
+    EXPECT_EQ(a->date, "2026-09-01");
+    EXPECT_EQ(a->ranked, std::vector<std::string>{"cta"});
+    ASSERT_EQ(a->cands.size(), 3u);
+    EXPECT_EQ(a->cands[0].status, "ok");
+    EXPECT_DOUBLE_EQ(a->cands[0].median_ms, 1.1);
+    EXPECT_DOUBLE_EQ(a->cands[0].lo, 1.0);
+    EXPECT_DOUBLE_EQ(a->cands[0].hi, 1.2);
+    EXPECT_EQ(a->cands[0].reps, 11);
+    EXPECT_EQ(a->cands[0].hash, "c9") << "raw kernels equals the current op hash";
+    EXPECT_EQ(a->cands[1].status, "error") << "one pass failed";
+    EXPECT_EQ(a->cands[2].status, "skipped") << "never timed";
+    EXPECT_EQ(a->cands[2].hash, "b9");
+    EXPECT_TRUE(b->ranked.empty());
+    EXPECT_EQ(b->cands[0].status, "skipped");
+    EXPECT_EQ(b->cands[0].reason, "over cap");
+    EXPECT_EQ(freshness(*a, now), Freshness::current);
+    const std::string other = d.str() + "/other";
+    import_schema1(raw, other, now, "k2");
+    const Ledger legacy = read_ledger(ledger_dir(other, "trsm", "float", "sm_89"));
+    EXPECT_EQ(legacy.cells[0].cands[0].hash, "legacy:k1");
+    EXPECT_EQ(freshness(legacy.cells[0], now), Freshness::stale);
 }
