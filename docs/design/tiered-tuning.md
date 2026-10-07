@@ -1,7 +1,7 @@
 # Tiered tuning {#design_tiered_tuning}
 
 > **Covers:** the redesign of how BatchLAS fills its tuned tables and tuning constants: user-chosen
-> tiers (ultra / coarse / deep), measurements that skip work which cannot change a table, a per-cell
+> tiers (preview / coarse / deep), measurements that skip work which cannot change a table, a per-cell
 > result ledger in which a cheaper run never overwrites a better one, and a tuning tab in benchviz.
 > **Status:** design, approved in conversation on 2026-10-07; not implemented. Sub-project 1 (the
 > engine) is specified in full here; sub-projects 2 and 3 are specified at the interface level and
@@ -34,7 +34,8 @@ These were decided with the maintainer on 2026-10-07.
 | Question | Decision |
 | --- | --- |
 | Main purpose | Initial fill of every table for a machine; incremental retune and exploration are secondary |
-| Speed versus rigor | The user picks a tier per run: **ultra** (under 30 min), **coarse** (2-4 h), **deep** (8-12 h), each a budget for one GPU. More GPUs shard the work. Every tier avoids measurements that cannot change a table. |
+| Speed versus rigor | The user picks a tier per run: **preview** (sparse, fills gaps only), **coarse** (the full lattice, fewer reps) or **deep**. Budgets are per-op estimates that `--plan` prints; for trsm on sm_120 the replay gives about 1.2 (preview), 2.5 (coarse) and 3.8 (deep) GPU-h for float. More GPUs shard the work. Every tier avoids measurements that cannot change a table. |
+| Grid reduction | Sparse grids misrank 4-13% of cells with up to about 2x tail loss in the replay, so the lattice is not thinned in coarse or deep. **Preview** is the only sparse tier (every 2nd point, bisection in index space plus a runner-up margin) and fills gaps only. |
 | A cheaper run must not degrade a better one | **Higher fidelity wins per cell.** A table row comes from the highest-tier result whose kernel hashes are still current. A lower tier fills gaps and replaces stale results, never current ones. |
 | Op scope | All 19 routed ops, plus the `tuning_params.hh` constants under the same tiers, ledger and UI. Their header is generated, no longer hand-ported. |
 | Result store | In the repository, under Git LFS (`benchmarks/results/tuning/`), so precedence holds across machines and clones |
@@ -55,19 +56,19 @@ progress protocol are frozen.
 
 ## Engine: tiers and the per-cell algorithm
 
-A tier is a named set of parameters. The algorithm is the same in every tier, so ultra results are
+A tier is a named set of parameters. The algorithm is the same in every tier, so preview results are
 valid low-fidelity data, not a different kind of number.
 
-| Parameter | ultra | coarse | deep |
+| Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | every 4th point of each `choice.hh` axis (ends kept) | every 2nd point | the full lattice |
-| Bisection between disagreeing neighbours | off | until hi/lo < 1.25 | until hi/lo < 1.1 (today's rule) |
+| Starting lattice | every 2nd point of each `choice.hh` axis (ends kept) | the full lattice | the full lattice |
+| Bisection between neighbours | in index space of the axis, until adjacent, then geometric to hi/lo < 1.1; also when a runner-up is within 10% | geometric, until hi/lo < 1.1 | geometric, until hi/lo < 1.1 |
 | Race: min / max reps per candidate | 3 / 6 | 4 / 12 | 6 / 16 |
-| Elimination confidence | loose | medium | today's level, plus a confirmation round in reversed order |
+| Elimination confidence | 0.80 | 0.90 | 0.98, plus a confirmation round in reversed order |
 | Fresh-process audit sample | 2% of cells | 2% | 10% |
 
 The 3% tie margin is the same in every tier, because it is the ranking rule the converter and
-`rank()` share. The lattices nest (ultra ⊂ coarse ⊂ deep), so results from different tiers land on
+`rank()` share. The lattices nest (preview ⊂ coarse ⊂ deep), so results from different tiers land on
 the same cells. An op whose grid is not a lattice (gemm's demand-driven shapes, `grid()` override)
 is subsampled in the same proportions by a stable hash of the cell key, so the subsets also nest.
 
@@ -132,7 +133,7 @@ plus its own files. `cmake/BatchLASTunedStaleness.cmake`, `.github/ci/check_tune
 the driver compute it the same way. The posv coupling becomes explicit: posv's families list the
 potrf and trsm families they call.
 
-**Which record counts.** Precedence is deep > coarse > ultra > transcribed.
+**Which record counts.** Precedence is deep > coarse > preview > custom > transcribed.
 
 - A `cell` record is *current* when every candidate's hash matches the source tree.
 - It is *partly stale* when only some changed, or when the candidate list gained a family the
@@ -151,7 +152,7 @@ stays byte-reproducible, and `--check` keeps re-deriving every table.
   sit inside a region a deep run already resolved.
 - Transcribed rows survive only where nothing measured covers them.
 - The header reports the tier mix and the hashes:
-  `source=ledger:<dir> tiers=deep:812,coarse:120,ultra:0,transcribed:0 family_kernels=<family>:<hash>,...`.
+  `source=ledger:<dir> tiers=deep:812,coarse:120,preview:0,transcribed:0 family_kernels=<family>:<hash>,...`.
 - Each row ends in a tier comment (`# deep`). Both table parsers (`src/select/select.cc` and
   `sweep_to_table.py`) already strip a trailing `#` comment from a row, so neither changes.
   Provenance is then readable from `tuned/` without the UI.
@@ -197,9 +198,9 @@ carve-out question.
 
 ## Engine: driver interface
 
-- `batchlas_tune <op>[,<op>...|all] --tier ultra|coarse|deep --dtype ... --devices ...` replaces the
+- `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep --dtype ... --devices ...` replaces the
   protocol flags (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`). Those stay as
-  expert overrides, and a run that uses them is recorded with tier `custom`, ranked below ultra.
+  expert overrides, and a run that uses them is recorded with tier `custom`, ranked below preview.
 - `--plan` prints the cells, the skipped cells with their reasons, and the time estimate, then exits
   without measuring. benchviz calls it for the estimate before launching.
 - `--budget <h>` caps refinement time.
@@ -249,7 +250,7 @@ The engine changes which kernel ships for every shape, so its tests follow the a
   reps, with no GPU. It reports reps saved, cells saved, and the misranking rate: the fraction of
   cells where the chosen candidate is more than 3% slower than the exhaustive best. The elimination
   statistic and the tier numbers above are fixed only after this replay. Acceptance: deep misranks
-  at most 0.2% of cells, coarse misranks at most 1% of cells, ultra at most 5%, all by more than 3%.
+  at most 0.2% of cells, coarse misranks at most 1% of cells, preview at most 5%, all by more than 3%.
 - **Unit tests without a GPU.** Precedence (a coarse record never displaces a current deep one; a
   stale deep one is displaced), the gap-fill rule (a coarse row inside a deep bracket is never
   emitted), partly-stale re-race selection, lattice nesting, and `--check` reproducibility. Each has
@@ -259,7 +260,7 @@ The engine changes which kernel ships for every shape, so its tests follow the a
   as a tie), straddles the tie margin in both directions.
 - **Audit guard.** A test pins a candidate whose feasibility differs between fresh and warm
   processes (an SLM-heavy launch ordered after a larger one) and checks that the audit flags it.
-- **End-to-end.** An ultra run of potrf on one GPU finishes under its budget, and the tables it
+- **End-to-end.** A preview run of potrf on one GPU finishes within the `--plan` estimate, and the tables it
   writes pass `tuned_tables_tests` and `--check`. A coarse run of trsm float on sm_120 agrees with
   the existing deep table within the replay's misranking bound.
 
@@ -274,17 +275,21 @@ midpoint the raw file lacks is counted (`refine_unavailable`) and dropped. `race
 cells the replay measured, `table_misrank` over all cells: the nearest measured cell is picked by a
 port of `nearest()` in `scripts/sweep_to_table.py`, and its pick counts as a misrank when it is more
 than 3% slower than the exhaustive best at the cell. Like `select::choose`, the pick is the first entry of that row's ranking (survivors, then the eliminated) that can run at the cell; a cell where no entry can run counts as a misrank and as `unrunnable`. `reps_fraction` is the
-candidate-reps the replay timed over those in the file. The tier values are the ones in the tier table
-above, unchanged.
+candidate-reps the replay timed over those in the file. The table below is the acceptance run at the
+tier values in the tier table above (the bounds apply to both misranks; `tune_replay` prints the verdict):
 
-| Tier | dtype | cells measured / cells | reps_fraction | race_misrank | table_misrank | Bound |
-| --- | --- | --- | --- | --- | --- | --- |
-| deep | float | 4417 / 4452 | 0.2375 | 0.113% | 0.157% | 0.2%: met |
-| deep | double | 4095 / 4098 | 0.2248 | 0.024% | 0.024% | 0.2%: met |
-| coarse | float | 810 / 4452 | 0.0279 | 0.123% | 8.33% | 1%: race met, table missed |
-| coarse | double | 711 / 4098 | 0.0272 | 0% | 9.83% | 1%: race met, table missed |
-| ultra | float | 132 / 4452 | 0.0031 | 0% | 19.50% | 5%: race met, table missed |
-| ultra | double | 124 / 4098 | 0.0030 | 0% | 14.20% | 5%: race met, table missed |
+| tier | dtype | measured/cells | reps | GPU-h | race % | table % | lattice % | mean | p99 | max | tw | bound | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| preview | float | 2818/4452 | 0.0730 | 1.17 | 0.25 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 | 5.0% | PASS |
+| preview | double | 2363/4098 | 0.0703 | 2.22 | 0.00 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 | 5.0% | PASS |
+| coarse | float | 4413/4452 | 0.1583 | 2.53 | 0.11 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 1.0% | PASS |
+| coarse | double | 4094/4098 | 0.1518 | 4.78 | 0.02 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 1.0% | PASS |
+| deep | float | 4417/4452 | 0.2375 | 3.80 | 0.11 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0.2% | PASS |
+| deep | double | 4095/4098 | 0.2248 | 7.08 | 0.02 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0.2% | PASS |
+
+The sections below record how these values were chosen. Rows named preview in those experiment tables use
+the preview race parameters (3/6 reps, confidence 0.80) with the stride and bisection stated in the row,
+not the final preview tier.
 
 Racing is not the problem: every tier meets its race bound, deep saves 76-78% of the reps, and
 changing confidence or reps moves `table_misrank` by under one point. The table bound is set by the
@@ -300,18 +305,18 @@ lattice stride and the bisection ratio.
 
 | config | dtype | cells_measured | reps_fraction | est_gpu_h | table_misrank % | table_misrank_lattice % | mean_loss | p99_loss | max_loss | time_weighted_loss | unrunnable |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ultra default | float | 132 | 0.0031 | 0.05 | 19.50 | 17.76 | 0.0819 | 1.283 | 2.40 | 0.0592 | 0 |
-| ultra default | double | 124 | 0.0030 | 0.10 | 14.20 | 11.06 | 0.0581 | 0.999 | 2.84 | 0.0190 | 0 |
-| ultra stride 2 | float | 616 | 0.0150 | 0.24 | 11.48 | 8.91 | 0.0297 | 0.614 | 1.61 | 0.0205 | 0 |
-| ultra stride 2 | double | 585 | 0.0150 | 0.47 | 10.49 | 5.62 | 0.0367 | 0.770 | 1.92 | 0.0110 | 0 |
-| ultra stride 1, no refine | float | 3480 | 0.0867 | 1.39 | 6.36 | 0.17 | 0.0110 | 0.239 | 0.77 | 0.0031 | 0 |
-| ultra stride 1, no refine | double | 3219 | 0.0853 | 2.69 | 6.05 | 0.00 | 0.0209 | 0.601 | 2.08 | 0.0080 | 0 |
-| ultra stride 1, refine 1.25 | float | 4021 | 0.1005 | 1.61 | 2.52 | 0.17 | 0.0035 | 0.115 | 0.77 | 0.0025 | 0 |
-| ultra stride 1, refine 1.25 | double | 3725 | 0.0991 | 3.12 | 1.42 | 0.00 | 0.0037 | 0.052 | 2.08 | 0.0027 | 0 |
-| ultra stride 1, refine 1.1 | float | 4390 | 0.1074 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 | 0 |
-| ultra stride 1, refine 1.1 | double | 4088 | 0.1062 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 | 0 |
-| ultra stride 2, refine 1.25 | float | 820 | 0.0193 | 0.31 | 7.88 | 5.86 | 0.0192 | 0.542 | 1.86 | 0.0104 | 0 |
-| ultra stride 2, refine 1.25 | double | 712 | 0.0189 | 0.60 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 | 0 |
+| preview default | float | 132 | 0.0031 | 0.05 | 19.50 | 17.76 | 0.0819 | 1.283 | 2.40 | 0.0592 | 0 |
+| preview default | double | 124 | 0.0030 | 0.10 | 14.20 | 11.06 | 0.0581 | 0.999 | 2.84 | 0.0190 | 0 |
+| preview stride 2 | float | 616 | 0.0150 | 0.24 | 11.48 | 8.91 | 0.0297 | 0.614 | 1.61 | 0.0205 | 0 |
+| preview stride 2 | double | 585 | 0.0150 | 0.47 | 10.49 | 5.62 | 0.0367 | 0.770 | 1.92 | 0.0110 | 0 |
+| preview stride 1, no refine | float | 3480 | 0.0867 | 1.39 | 6.36 | 0.17 | 0.0110 | 0.239 | 0.77 | 0.0031 | 0 |
+| preview stride 1, no refine | double | 3219 | 0.0853 | 2.69 | 6.05 | 0.00 | 0.0209 | 0.601 | 2.08 | 0.0080 | 0 |
+| preview stride 1, refine 1.25 | float | 4021 | 0.1005 | 1.61 | 2.52 | 0.17 | 0.0035 | 0.115 | 0.77 | 0.0025 | 0 |
+| preview stride 1, refine 1.25 | double | 3725 | 0.0991 | 3.12 | 1.42 | 0.00 | 0.0037 | 0.052 | 2.08 | 0.0027 | 0 |
+| preview stride 1, refine 1.1 | float | 4390 | 0.1074 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 | 0 |
+| preview stride 1, refine 1.1 | double | 4088 | 0.1062 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 | 0 |
+| preview stride 2, refine 1.25 | float | 820 | 0.0193 | 0.31 | 7.88 | 5.86 | 0.0192 | 0.542 | 1.86 | 0.0104 | 0 |
+| preview stride 2, refine 1.25 | double | 712 | 0.0189 | 0.60 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 | 0 |
 | coarse default | float | 810 | 0.0279 | 0.45 | 8.33 | 6.38 | 0.0210 | 0.599 | 1.86 | 0.0119 | 0 |
 | coarse default | double | 711 | 0.0272 | 0.86 | 9.83 | 4.38 | 0.0375 | 0.790 | 1.95 | 0.0083 | 0 |
 | coarse stride 1, refine 1.25 | float | 4025 | 0.1476 | 2.36 | 2.54 | 0.06 | 0.0036 | 0.118 | 0.77 | 0.0024 | 0 |
@@ -325,12 +330,12 @@ lattice stride and the bisection ratio.
 
 Reading it: with the fallback, `unrunnable` is 0 in every row, so the earlier unrunnable choices were
 cells where the first entry could not run and the next one could. The full lattice is what matters:
-at stride 1 with the ultra race parameters, bisecting to 1.1 gives 0.29% and 0.02% for 1.72 and 3.35
+at stride 1 with the preview race parameters, bisecting to 1.1 gives 0.29% and 0.02% for 1.72 and 3.35
 GPU-h, against 0.11% and 0.05% for 2.53 and 4.78 GPU-h with the coarse race parameters; bisecting to
 1.25 gives 2.5% and 1.4%, and no bisection 6.4% and 6.1%. The sparse rows (stride 2 and 4) stay at 8 to
 20% whatever the ratio, because the replay drops the `q` and `batch` midpoints the raw file lacks; it
 cannot say what bisection on those axes would buy. The mean and time-weighted losses are small in every
-row (at most 8.2% and 5.9%, both ultra default float), but the p99 loss of the sparse rows is 0.5 to
+row (at most 8.2% and 5.9%, both preview default float), but the p99 loss of the sparse rows is 0.5 to
 1.3, so they are right on average and badly wrong at a few percent of shapes.
 
 ## Engine: replay of shrunken trsm grids
@@ -340,15 +345,15 @@ k-th value and the last of one axis in the starting lattice, and `--axis-keep na
 the listed values; the other axes stay full. The raw files hold the same axes for both dtypes
 (`--print-axes`): order 1 2 4 8 12 16 24 32 48 64 96 128 192 256 384 512 768 1024 (log, weight 2), q 1 2 4
 8 16 32 64 128 256 512 1024 4096 (log), batch 128 512 2048 8192 32768 (log), plus side L R and trans N T.
-Every row uses the ultra race parameters, stride 1 and bisection to 1.1. Bisection refills only where
+Every row uses the preview race parameters, stride 1 and bisection to 1.1. Bisection refills only where
 the raw file has points, which is `order` (the raw sweep refined only along it), so shrinking `order`
 is partly repaired while shrinking `q` or `batch` is not. The metrics are over all raw cells, so a cell
 at a dropped value pays for the dropped measurement. Same machine and data as above; est_gpu_h as above.
 
 | config | dtype | measured | est_gpu_h | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline (ultra s1 r1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
-| baseline (ultra s1 r1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
+| baseline (preview s1 r1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
+| baseline (preview s1 r1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
 | batch stride 2 | float | 2920 | 1.14 | 4.27 | 3.39 | 0.0162 | 0.615 | 1.86 | 0.0080 |
 | batch stride 2 | double | 2546 | 2.10 | 4.76 | 3.76 | 0.0250 | 0.757 | 2.36 | 0.0069 |
 | batch keep 8192:32768 | float | 1356 | 0.54 | 11.32 | 10.11 | 0.0263 | 0.540 | 0.93 | 0.0188 |
@@ -391,7 +396,7 @@ measured neighbours at positions i < j of the axis's full value list with j - i 
 at (i + j) / 2, so every proposal is on the `choice.hh` lattice; adjacent neighbours fall back to the
 geometric midpoint at the tier's ratio. `--refine-margin m` also refines a bracket whose two winners
 agree when, at either end, the runner-up's raced median is within m of the winner's (the replay passes
-this per-cell gap in `RefineOpts::gap`). Exact axes are never bisected. Every row uses the ultra race
+this per-cell gap in `RefineOpts::gap`). Exact axes are never bisected. Every row uses the preview race
 parameters, bisection ratio 1.1 and the full axes; `s2` and `s4` are the starting lattice stride on every
 log axis. Same machine, data and metrics as above.
 

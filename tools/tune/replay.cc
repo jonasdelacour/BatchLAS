@@ -1,5 +1,5 @@
 // tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, no GPU.
-//   tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]
+//   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 
 #include "replay_core.hh"
@@ -19,7 +19,8 @@ int main(int argc, char** argv) {
     std::optional<double> refine;
     double gpu_h = 0;
     bool print_axes = false;
-    RefineOpts ro;
+    std::optional<std::string> mode;
+    std::optional<double> margin;
     std::vector<std::pair<std::string, std::pair<std::string, bool>>> shrink;  // axis, spec, keep
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -35,8 +36,8 @@ int main(int argc, char** argv) {
         else if (a == "--confidence") confidence = std::stod(next());
         else if (a == "--min-reps") min_reps = std::stoi(next());
         else if (a == "--max-reps") max_reps = std::stoi(next());
-        else if (a == "--refine-mode") ro.mode = next() == "index" ? RefineMode::index : RefineMode::geometric;
-        else if (a == "--refine-margin") ro.margin = std::stod(next());
+        else if (a == "--refine-mode") mode = next();
+        else if (a == "--refine-margin") margin = std::stod(next());
         else if (a == "--print-axes") print_axes = true;
         else if (a == "--axis-keep" || a == "--axis-stride") {
             const std::string v = next();
@@ -57,7 +58,7 @@ int main(int argc, char** argv) {
     }
     const auto tier = parse_tier(tier_name);
     if (raw.empty() || !tier || *tier == Tier::transcribed || *tier == Tier::custom) {
-        std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] "
+        std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] "
                              "[--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]\n");
         return 2;
     }
@@ -67,6 +68,8 @@ int main(int argc, char** argv) {
     if (max_reps) p.max_reps = *max_reps;
     if (stride) p.stride = *stride;
     if (refine) p.refine_ratio = *refine;
+    if (mode) p.refine_mode = *mode == "index" ? RefineMode::index : RefineMode::geometric;
+    if (margin) p.refine_margin = *margin;
     try {
         ReplayMeta meta;
         const auto cells = load_replay(raw, &meta);
@@ -79,7 +82,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         for (const auto& [name, sv] : shrink) shrink_axis(meta.axes, name, sv.first, sv.second);
-        ReplayReport r = replay(cells, meta.axes, *tier, p, 0.03, ro);
+        ReplayReport r = replay(cells, meta.axes, *tier, p);
         r.est_gpu_h = r.reps_fraction * gpu_h;
         std::string worst;
         for (const std::string& w : r.worst) worst += (worst.empty() ? "" : "; ") + w;
@@ -92,6 +95,8 @@ int main(int argc, char** argv) {
         j.num("table_misrank_lattice", r.table_misrank_lattice).num("mean_loss", r.mean_loss).num("p95_loss", r.p95_loss);
         j.num("p99_loss", r.p99_loss).num("max_loss", r.max_loss).num("time_weighted_loss", r.time_weighted_loss);
         j.integer("unrunnable", static_cast<std::int64_t>(r.unrunnable)).num("est_gpu_h", r.est_gpu_h);
+        const double bound = *tier == Tier::deep ? 0.002 : *tier == Tier::coarse ? 0.01 : 0.05;  // spec "Engine: testing and acceptance"
+        j.num("bound", bound).str("verdict", r.race_misrank <= bound && r.table_misrank <= bound ? "PASS" : "FAIL");
         j.integer("refine_unavailable", static_cast<std::int64_t>(r.refine_unavailable)).str("worst", worst);
         std::fputs(j.line().c_str(), stdout);
     } catch (const std::exception& e) {

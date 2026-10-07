@@ -209,7 +209,7 @@ std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, co
 }
 
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier, const TierParams& p,
-                    double tie, const RefineOpts& ro) {
+                    double tie) {
     ReplayReport rep;
     rep.cells = cells.size();
     std::map<CellKey, std::size_t> at;
@@ -225,7 +225,7 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
 
     std::map<CellKey, std::vector<std::string>> ranked;
     std::map<CellKey, double> gap;
-    RefineOpts opts = ro;
+    RefineOpts opts{p.refine_mode, p.refine_margin};
     opts.gap = &gap;
     auto measure = [&](const CellKey& key) {
         const ReplayCell& c = cells[at.at(key)];

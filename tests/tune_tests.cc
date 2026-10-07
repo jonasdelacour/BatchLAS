@@ -530,7 +530,7 @@ TEST(TuneRace, TwoPercentSlowerIsKeptAsATie) {
 }
 
 TEST(TuneRace, SingleRoundNeverEliminates) {
-    for (Tier t : {Tier::ultra, Tier::coarse, Tier::deep}) {
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
         const auto& p = params(t);
         const auto r = run_race(p, [&](int) { return std::pair(1.0, 10.0); });
         EXPECT_EQ(r.rounds, p.min_reps) << to_string(t);
@@ -561,16 +561,16 @@ TEST(TuneRace, NaNRoundsAreUnpaired) {
     s.cands = {"a", "b"};
     s.alive = {true, true};
     s.ms = {{1, 1, 1, 1}, {nan, 2, nan, 2}};
-    EXPECT_EQ(race_step(s, params(Tier::ultra)), RaceVerdict::more);  // 2 pairs < min_reps 3
+    EXPECT_EQ(race_step(s, params(Tier::preview)), RaceVerdict::more);  // 2 pairs < min_reps 3
     EXPECT_TRUE(s.alive[1]);
     s.ms = {{1, 1, 1, 1, 1}, {nan, 2, nan, 2, 2}};
-    EXPECT_EQ(race_step(s, params(Tier::ultra)), RaceVerdict::winner);  // 3 pairs
+    EXPECT_EQ(race_step(s, params(Tier::preview)), RaceVerdict::winner);  // 3 pairs
     EXPECT_FALSE(s.alive[1]);
 }
 
 TEST(TuneRace, AllNaNRoundsNeverTie) {
     const auto nan = std::numeric_limits<double>::quiet_NaN();
-    const auto& p = params(Tier::ultra);
+    const auto& p = params(Tier::preview);
     RaceState s;
     s.cands = {"a", "b"};
     s.alive = {true, true};
@@ -598,18 +598,22 @@ TEST(TuneRace, RankingPutsSurvivorsBeforeTheEliminated) {
 
 TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     EXPECT_LT(tier_rank(Tier::coarse), tier_rank(Tier::deep));
-    EXPECT_LT(tier_rank(Tier::ultra), tier_rank(Tier::coarse));
-    EXPECT_LT(tier_rank(Tier::custom), tier_rank(Tier::ultra));
+    EXPECT_LT(tier_rank(Tier::preview), tier_rank(Tier::coarse));
+    EXPECT_LT(tier_rank(Tier::custom), tier_rank(Tier::preview));
     EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::custom));
-    for (Tier t : {Tier::transcribed, Tier::custom, Tier::ultra, Tier::coarse, Tier::deep})
+    for (Tier t : {Tier::transcribed, Tier::custom, Tier::preview, Tier::coarse, Tier::deep})
         EXPECT_EQ(parse_tier(to_string(t)), t);
     EXPECT_FALSE(parse_tier("fast").has_value());
-    EXPECT_EQ(params(Tier::ultra).stride, 4);
-    EXPECT_EQ(params(Tier::coarse).stride, 2);
+    EXPECT_EQ(params(Tier::preview).stride, 2);
+    EXPECT_EQ(params(Tier::coarse).stride, 1);
     EXPECT_EQ(params(Tier::deep).stride, 1);
-    EXPECT_EQ(params(Tier::ultra).refine_ratio, 0.0);
-    EXPECT_EQ(params(Tier::coarse).refine_ratio, 1.25);
-    EXPECT_EQ(params(Tier::deep).refine_ratio, 1.1);
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) EXPECT_EQ(params(t).refine_ratio, 1.1);
+    EXPECT_EQ(params(Tier::preview).refine_mode, RefineMode::index);
+    EXPECT_EQ(params(Tier::preview).refine_margin, 0.10);
+    EXPECT_EQ(params(Tier::coarse).refine_mode, RefineMode::geometric);
+    EXPECT_EQ(params(Tier::deep).refine_margin, 0.0);
+    EXPECT_EQ(params(Tier::preview).max_reps, 6);
+    EXPECT_EQ(params(Tier::coarse).confidence, 0.90);
     EXPECT_TRUE(params(Tier::deep).alternate_reverse);
     EXPECT_FALSE(params(Tier::coarse).alternate_reverse);
 }
@@ -643,18 +647,18 @@ TEST(TuneGrid, LatticesNestAcrossTiers) {
     ASSERT_EQ(axes.size(), 5u);
     EXPECT_FALSE(axes[0].log);
     EXPECT_TRUE(axes[2].log);
-    const auto u = arg_set(tier_lattice(axes, Tier::ultra));
+    const auto u = arg_set(tier_lattice(axes, Tier::preview));
     const auto c = arg_set(tier_lattice(axes, Tier::coarse));
     const auto d = arg_set(tier_lattice(axes, Tier::deep));
     EXPECT_EQ(d.size(), 2u * 2 * 18 * 12 * 5);
     EXPECT_TRUE(std::includes(c.begin(), c.end(), u.begin(), u.end()));
     EXPECT_TRUE(std::includes(d.begin(), d.end(), c.begin(), c.end()));
     EXPECT_LT(u.size(), c.size());
-    EXPECT_LT(c.size(), d.size());
+    EXPECT_EQ(c, d) << "coarse keeps the full lattice and differs from deep in reps and audit only";
 }
 
 TEST(TuneGrid, EndsAreAlwaysKept) {
-    const auto u = tier_lattice(trsm_axes(), Tier::ultra);
+    const auto u = tier_lattice(trsm_axes(), Tier::preview);
     bool n_end = false, b_end = false;
     for (const auto& k : u) {
         n_end |= *key_get(k, "order") == "1024";
@@ -666,7 +670,7 @@ TEST(TuneGrid, EndsAreAlwaysKept) {
 
 TEST(TuneGrid, ExactAxesAreNeverSubsampled) {
     std::set<std::string> sides, trans;
-    for (const auto& k : tier_lattice(trsm_axes(), Tier::ultra)) {
+    for (const auto& k : tier_lattice(trsm_axes(), Tier::preview)) {
         sides.insert(*key_get(k, "side"));
         trans.insert(*key_get(k, "trans"));
     }
@@ -679,13 +683,13 @@ TEST(TuneGrid, HashSubsampleNests) {
     for (int m = 1; m <= 47; ++m)
         for (int n = 1; n <= 32; ++n) g.push_back({{"m", std::to_string(m)}, {"n", std::to_string(n)}});
     ASSERT_EQ(g.size(), 1504u);
-    const auto u = arg_set(tier_subsample(g, Tier::ultra));
+    const auto u = arg_set(tier_subsample(g, Tier::preview));
     const auto c = arg_set(tier_subsample(g, Tier::coarse));
     const auto d = arg_set(tier_subsample(g, Tier::deep));
     EXPECT_EQ(d.size(), g.size());
     EXPECT_TRUE(std::includes(c.begin(), c.end(), u.begin(), u.end()));
-    EXPECT_NEAR(double(u.size()), 1504 / 4.0, 1504 / 4.0 * 0.1);
-    EXPECT_NEAR(double(c.size()), 1504 / 2.0, 1504 / 2.0 * 0.1);
+    EXPECT_NEAR(double(u.size()), 1504 / 2.0, 1504 / 2.0 * 0.1);
+    EXPECT_EQ(c.size(), g.size());
 }
 
 TEST(TuneGrid, BisectsBatchToo) {
@@ -770,6 +774,17 @@ std::vector<SynCell> flip_cells() {  // a wins up to n=8, b from n=16
 
 }  // namespace
 
+namespace {
+
+// The pre-decision ultra protocol: every 4th point, no bisection. The synthetic cases below depend on it.
+TierParams sparse() {
+    TierParams p = params(Tier::preview);
+    p.stride = 4, p.refine_ratio = 0, p.refine_mode = RefineMode::geometric, p.refine_margin = 0;
+    return p;
+}
+
+}  // namespace
+
 TEST(TuneReplay, LoaderKeepsTableKeysAndOnlyOkCells) {
     auto cells = flip_cells();
     cells.push_back({256, {}, 0, "skipped"});
@@ -818,13 +833,13 @@ TEST(TuneReplay, ShrinkingAnAxisShrinksTheLatticeAndCostsTheDroppedCells) {
     auto axes = meta.axes;
     shrink_axis(axes, "n", "2", false);  // 1,4,16,64,128
     EXPECT_EQ(axes[1].values, (std::vector<std::string>{"1", "4", "16", "64", "128"}));
-    EXPECT_EQ(replay(rc, axes, Tier::ultra, [] { auto p = params(Tier::ultra); p.stride = 1; return p; }()).cells_measured, 5u);
+    EXPECT_EQ(replay(rc, axes, Tier::preview, [] { auto p = sparse(); p.stride = 1; return p; }()).cells_measured, 5u);
     axes = meta.axes;
     shrink_axis(axes, "n", "1:8", true);
     EXPECT_EQ(axes[1].values.size(), 2u);
-    TierParams p = params(Tier::ultra);
+    TierParams p = sparse();
     p.stride = 1;
-    const ReplayReport r = replay(rc, axes, Tier::ultra, p);
+    const ReplayReport r = replay(rc, axes, Tier::preview, p);
     EXPECT_EQ(r.cells_measured, 2u);
     EXPECT_GT(r.table_misrank, 0.0) << "n=16 and up read n=8, which loses there";
     EXPECT_THROW(shrink_axis(axes, "n", "3", true), std::invalid_argument);
@@ -835,7 +850,7 @@ TEST(TuneReplay, ShrinkingAnAxisShrinksTheLatticeAndCostsTheDroppedCells) {
 TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     ReplayMeta meta;
     const auto rc = load_replay(write_raw("flip.jsonl", flip_cells()), &meta);
-    const ReplayReport u = replay(rc, meta.axes, Tier::ultra);  // measures n = 1, 16, 128
+    const ReplayReport u = replay(rc, meta.axes, Tier::preview, sparse());  // measures n = 1, 16, 128
     EXPECT_EQ(u.cells_measured, 3u);
     EXPECT_EQ(u.race_misrank, 0.0);
     EXPECT_DOUBLE_EQ(u.table_misrank, 1.0 / 8);  // n=8 reads n=16's winner b; n=4 ties and reads n=1
@@ -848,10 +863,21 @@ TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     EXPECT_DOUBLE_EQ(u.table_misrank_lattice, 1.0 / 8);
     EXPECT_EQ(u.unrunnable, 0u);
     EXPECT_EQ(replay(rc, meta.axes, Tier::deep).table_misrank, 0.0);
-    const ReplayReport c = replay(rc, meta.axes, Tier::coarse);  // n = 1,4,16,64,128, then bisects to 8
+    TierParams every2 = sparse();
+    every2.stride = 2, every2.refine_ratio = 1.25;
+    const ReplayReport c = replay(rc, meta.axes, Tier::coarse, every2);  // n = 1,4,16,64,128, then bisects to 8
     EXPECT_EQ(c.cells_measured, 6u);
     EXPECT_EQ(c.table_misrank, 0.0);
     EXPECT_GT(c.refine_unavailable, 0u);
+}
+
+TEST(TuneReplay, TierDefaultsDriveTheLatticeAndTheRefinementMode) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("defaults.jsonl", flip_cells()), &meta);
+    const ReplayReport p = replay(rc, meta.axes, Tier::preview);  // n = 1,4,16,64,128 + index bisection to 8
+    EXPECT_EQ(p.cells_measured, 6u);
+    EXPECT_EQ(p.table_misrank, 0.0);
+    EXPECT_EQ(replay(rc, meta.axes, Tier::coarse).cells_measured, 8u);
 }
 
 TEST(TuneReplay, UnrunnableNearestWinnerFallsBackToTheNextEntry) {
@@ -864,13 +890,13 @@ TEST(TuneReplay, UnrunnableNearestWinnerFallsBackToTheNextEntry) {
     };
     ReplayMeta meta;
     auto rc = load_replay(write_raw("unrunnable.jsonl", make(false)), &meta);
-    const ReplayReport r = replay(rc, meta.axes, Tier::ultra);
+    const ReplayReport r = replay(rc, meta.axes, Tier::preview, sparse());
     // n=2 reads n=1's row (c, a, b): c cannot run, so the selector falls back to a (2.0 against a best of 2.0)
     EXPECT_EQ(r.table_misrank, 0.0);
     EXPECT_EQ(r.unrunnable, 0u);
     EXPECT_EQ(r.max_loss, 0.0);
     rc = load_replay(write_raw("runnable.jsonl", make(true)), &meta);
-    EXPECT_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 0.0);
+    EXPECT_EQ(replay(rc, meta.axes, Tier::preview, sparse()).table_misrank, 0.0);
 }
 
 TEST(TuneReplay, FallbackCanLoseAndNoRunnableEntryIsUnrunnable) {
@@ -879,13 +905,13 @@ TEST(TuneReplay, FallbackCanLoseAndNoRunnableEntryIsUnrunnable) {
     auto rc = load_replay(write_raw("fallback.jsonl", {{1, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {2, {{"a", 3.0}, {"b", 1.0}}},
                                                        {4, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {8, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}},
                                                        {16, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}}), &meta);
-    const ReplayReport r = replay(rc, meta.axes, Tier::ultra);  // measures n=1 and n=16; n=2 reads n=1
+    const ReplayReport r = replay(rc, meta.axes, Tier::preview, sparse());  // measures n=1 and n=16; n=2 reads n=1
     EXPECT_EQ(r.unrunnable, 0u);
     EXPECT_DOUBLE_EQ(r.table_misrank, 1.0 / 5);
     EXPECT_NEAR(r.max_loss, 2.0, 0.02);
     // The measured rows list only a; the cells that run only b have no runnable entry.
     rc = load_replay(write_raw("noentry.jsonl", {{1, {{"a", 1.0}}}, {2, {{"b", 1.0}}}, {4, {{"b", 1.0}}}, {8, {{"b", 1.0}}}, {16, {{"a", 1.0}}}}), &meta);
-    const ReplayReport u = replay(rc, meta.axes, Tier::ultra);
+    const ReplayReport u = replay(rc, meta.axes, Tier::preview, sparse());
     EXPECT_EQ(u.unrunnable, 3u);
     EXPECT_DOUBLE_EQ(u.table_misrank, 3.0 / 5);
 }

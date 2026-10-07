@@ -36,7 +36,6 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t);
 
 // index mode bisects in AxisSpec::values (adjacent: geometric); margin > 0 also refines agreeing brackets
 // whose runner-up gap (time / winner time - 1) is <= margin at either end.
-enum class RefineMode { geometric, index };
 struct RefineOpts {
     RefineMode mode = RefineMode::geometric;
     double margin = 0;
