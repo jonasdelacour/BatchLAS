@@ -363,9 +363,8 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
     }
 
     if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy)) {
-        // can_use_matrix_register_fast_path already checks register_matrix_workspace_supported_v<T>.
-        // Allocate full GemmWorkspace if it fits (to allow aligned-nn-large fallback at runtime),
-        // otherwise allocate only the smaller RegisterMatrixWorkspace.
+        // Size for GemmWorkspace when it fits: the call may still take the aligned-NN path at run time.
+        // The predicate already requires register_matrix_workspace_supported_v<T>, so the else arm is safe.
         if constexpr (detail::subgroup::gemm_workspace_supported_v<T>) {
             return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
         } else {
@@ -404,9 +403,8 @@ inline constexpr void dispatch_gemm(const Exec& exec,
             detail::subgroup::gemm(exec, a, operand, transform);
             return;
         }
-        // For 3D nd_item launches without a fast path, multiple work-groups would
-        // independently iterate over all output cells in the generic fallback, causing
-        // data races. Restrict the generic fallback to the primary work-group only.
+        // 3-D launch, no fast path: only tile-group (0, 0) runs the generic loop, else the groups race.
+        // evidence: docs/design/device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback
         if constexpr (std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
             if (detail::subgroup::matrix_tile_group_row(exec) == 0 &&
                 detail::subgroup::matrix_tile_group_col(exec) == 0) {
@@ -421,6 +419,29 @@ inline constexpr void dispatch_gemm(const Exec& exec,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief General matrix-matrix product \f$ C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B) + \beta\,C \f$.
+///
+/// With \f$\mathrm{op}(A)\f$ m x k and \f$\mathrm{op}(B)\f$ k x n, `C` is m x n.
+/// Path selection, first eligible wins: the aligned NN kernel (`float`, a
+/// workspace, 256 work-items, m a multiple of 128, n of 64 and k of 32,
+/// 4-element-aligned `A` and `B`), the register-tiled kernel (`float`, a
+/// workspace, 256 work-items, m >= 4, n >= 8, k >= 32), the sub-group kernel
+/// (`float`, sub-group size admitted by the policy, m >= 8 and n, k at least
+/// the sub-group size), then the generic group reduction. The first three need
+/// an `nd_item` executor.
+/// @tparam TransAV  op() applied to `A`
+/// @tparam TransBV  op() applied to `B`
+/// @tparam Group    `sycl::group`, `sycl::sub_group`, `sycl::nd_item<1>` or `sycl::nd_item<3>`; every work-item must call
+/// @param group      executor. With `nd_item<3>`, work-group ids 1 and 2 tile the output, and without a fast path only tile-group (0, 0) computes.
+/// @param a          single matrix, m x k (NoTrans) or k x m
+/// @param operand    `B`, `C` (m x n, must not alias `A` or `B`), `alpha`, `beta`
+/// @param workspace  local memory of gemm_workspace_elements() elements, or `nullptr`
+/// @pre `C` holds finite values even when `beta == 0`; conforming shapes (checked by `assert` only).
+/// @note On the generic path each `C` element is written by the group leader; barrier before other work-items read `C`.
+/// @see @ref design_device_group_blas
 template <Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -429,6 +450,7 @@ inline constexpr void gemm(const Group& group,
     detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As gemm(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Transpose TransAV = Transpose::NoTrans,
           Transpose TransBV = Transpose::NoTrans,
@@ -441,6 +463,17 @@ inline constexpr void gemm(const Group& group,
     detail::dispatch_gemm<GeneralMatrixTransformTag<TransAV, TransBV>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that gemm() can use for this launch and shape.
+///
+/// Allocate it as a `sycl::local_accessor<T, 1>` and pass its pointer; when the
+/// result is 0 pass `nullptr`. Use the same template arguments as the call.
+/// @param launch           description of the launch the call runs in
+/// @param row_extent       m, rows of `C`
+/// @param col_extent       n, columns of `C`
+/// @param contract_extent  k
+/// @param aligned_a        the caller guarantees `A` meets the aligned NN kernel's 4-element alignment
+/// @param aligned_b        the same for `B`
+/// @return element count, or 0 when no staged path applies
 template <typename T, Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans>
 inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -452,6 +485,14 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
         launch, row_extent, col_extent, contract_extent, aligned_a, aligned_b);
 }
 
+/// @brief Local memory, in elements of `T`, that gemm() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param row_extent rows of `C`
+/// @param col_extent columns of `C`
+/// @param contract_extent contraction length k
+/// @param aligned_a the caller guarantees `A` meets the aligned kernel's 4-element alignment
+/// @param aligned_b the same for `B`
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Transpose TransAV = Transpose::NoTrans,
@@ -466,6 +507,7 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
         launch, row_extent, col_extent, contract_extent, aligned_a, aligned_b);
 }
 
+/// @brief As gemm(), with the operands passed separately instead of in an operand struct.
 template <Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -477,6 +519,7 @@ inline constexpr void gemm(const Group& group,
     gemm<TransAV, TransBV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief As gemm(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Transpose TransAV = Transpose::NoTrans,
           Transpose TransBV = Transpose::NoTrans,
@@ -491,5 +534,7 @@ inline constexpr void gemm(const Group& group,
                            T* workspace = nullptr) {
     gemm<Policy, TransAV, TransBV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

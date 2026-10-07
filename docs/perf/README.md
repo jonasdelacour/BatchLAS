@@ -1,4 +1,4 @@
-# Routing and performance evidence
+# Routing and performance evidence {#perf_evidence}
 
 Every native kernel in BatchLAS competes with a vendor library, and the choice between them
 is a **measured window**, not a preference. Since flat selection
@@ -24,6 +24,14 @@ conservative. Most of the obvious moves in here have already been made and measu
 | [gemv.md](gemv.md) | `gemv` | **yes** — one `complex<double>` transposed window |
 | [spmm.md](spmm.md) | `spmm` | **yes** — the `NoTrans` gather; the transposed scatter stays vendor-first |
 | [steqr.md](steqr.md) | `steqr_cta` (also the fused small-n `syev` and the `stedc` leaves) | n/a — no vendor arm; records the lockstep flat solver, the full-warp partition, the interleaved Q tile (measured negative), the tuned work-group multiplier, the real-float small-n `syev` boundary (measured, kept on Jacobi to n = 8) and the cumulative lockstep result |
+| [syev.md](syev.md) | `syev` (tiers: Jacobi CTA, fused CTA, blocked, two-stage; vendor) | **yes** — native small-n and blocked windows per type; see its routing sections |
+| [syevx.md](syevx.md) | `syevx` (selected eigenpairs: Direct, DirectSubset, Filtered, LOBPCG, stebz/stein) | n/a — no vendor arm for the selected-range solve; records the tier crossovers |
+| [stedc.md](stedc.md) | `stedc` (divide and conquer, merge kernels) | n/a — no vendor arm; records the merge profile and tuning |
+| [sytrd.md](sytrd.md) | `sytrd_blocked` + `latrd`, `sytrd_sy2sb`, `sytrd_sb2st_hh` and its Q2 back-transform | n/a — internal reductions under `syev`, no vendor arm of their own |
+| [ortho.md](ortho.md) | `ortho` (the Gram product and the algorithm rules) | n/a — no table of its own; the Gram product goes through `syrk` (real, small `k`) or `gemm`, and host devices force Householder |
+| [iluk.md](iluk.md) | `iluk` (ILU(k) numeric phase and apply) | n/a — no vendor arm; host vs device numeric path chosen on batch size inside `src/extensions/iluk.cc` |
+| [tuning.md](tuning.md) | the `tuning_params.hh` constants and `BATCHLAS_TUNE_*` overrides | n/a — kernel parameters, not a routing choice |
+| [gesvd.md](gesvd.md) | `gesvd` | **yes** — `jacobi` for real general max(m,n) <= 32 and complex general input up to its ceiling, `blocked` above for real general input, `cta` for square Hermitian input to n = 32 (transcribed tables) |
 
 ## Two rules these pages are written to
 
@@ -124,3 +132,26 @@ file before the commit rather than after. The fix is `git lfs install` then
   build currently does and does not do.
 - [../design/known-defects.md](../design/known-defects.md) — located, unfixed, with line
   numbers.
+
+## All evidence pages
+
+@subpage md_docs_2perf_2dispatch "Dispatch"
+@subpage perf_gemm "GEMM"
+@subpage perf_gemv "GEMV"
+@subpage md_docs_2perf_2level3 "Level 3 (symm, hemm, syrk, herk, syr2k, her2k, trmm)"
+@subpage perf_trsm "TRSM"
+@subpage md_docs_2perf_2potrf "Cholesky (potrf, posv)"
+@subpage perf_lu "LU (getrf, getrs, getri, gesv)"
+@subpage md_docs_2perf_2qr "QR (geqrf, orgqr, ormqr)"
+@subpage md_docs_2perf_2spmm "SpMM"
+@subpage perf_syev "syev"
+@subpage perf_syevx "syevx"
+@subpage perf_steqr "steqr"
+@subpage perf_stedc "stedc"
+@subpage perf_sytrd "sytrd (tridiagonal and band reduction)"
+@subpage perf_ortho "ortho"
+@subpage perf_iluk "ILU(k)"
+@subpage perf_gesvd "gesvd"
+@subpage md_docs_2perf_2small-n-baseline "Small-n factorization baseline"
+@subpage perf_tuning "Tuning constants"
+@subpage md_docs_2perf_2blackwell "Blackwell (sm_120) retune"

@@ -153,7 +153,7 @@ void append_static_rows(std::ostringstream& out) {
     // `native` means a kernel is LINKED in this build, not that traffic reaches
     // it; the `reached` rows answer that. Float is reported because tile-route
     // availability is per (backend, scalar).
-    // evidence: docs/perf/dispatch.md#the-coverage-instrument
+    // evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
     using namespace batchlas::select;
     const bool tiles_f32 = level3_tile_route_available<B, float>;
     const Entry entries[] = {

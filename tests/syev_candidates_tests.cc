@@ -371,7 +371,7 @@ TYPED_TEST(SyevCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // uplo's other triangle holds a large finite poison: every candidate must ignore it. Three
-// drivers read it (docs/design/known-defects.md#14-the-hermitian-drivers-read-the-unreferenced-triangle); they are listed and
+// drivers read it (docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle); they are listed and
 // skipped here, the rest are held to it. The pins reach the drivers whatever Auto picks.
 bool reads_other_triangle(const C& c, int n, Uplo u) {
     if (std::holds_alternative<sy::Cta>(c)) return u == Uplo::Upper;

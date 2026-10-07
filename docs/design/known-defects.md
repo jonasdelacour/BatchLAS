@@ -1,5 +1,12 @@
 # Known defects, located and not fixed
 
+> **Covers:** defects located to a line and left in the tree, unverified candidates, and the
+> recurring "guard that cannot fail" failure mode.
+> **Status:** current; re-checked against the tree on 2026-09-15, 2026-09-30 and 2026-10-06
+> (after flat kernel selection replaced the route layer). Referenced as
+> `@ref md_docs_2design_2known-defects`; the page has no label of its own because that id is
+> already cited.
+
 Everything on this page is **in the tree today**. Each entry was found during the
 vendor-independence campaign, located to a line, and left alone on purpose — because fixing it
 was outside the work package that found it, because the fix is a route change that needs its own
@@ -17,6 +24,15 @@ stale. #8 and #9 are **closed** — the phase 5 rip deleted the route they descr
 is in the tree, but no run has confirmed it, and in this repository an unwatched guard is not a
 verified one. Neither is "in the tree today" in the sense the paragraph above means.
 
+**Citing an entry from code.** A heading that starts with a number (`## 11. ...`) gets a Doxygen
+id with an `autotoc_md` prefix, so its GitHub slug is not a live anchor on the site and
+`check_doc_anchors.py` rejects an `evidence:` pointer to it. An entry that code cites therefore
+starts with distinctive text instead (`## Defect 11: ...`, `## Known defects: ...`). Entries 1, 3,
+11, 12 and 14 are cited and carry the `Defect N:` form (renamed 2026-10-06, every pointer updated
+in the same change); the other entries keep their numbered headings until something needs to cite
+them. Line citations below were refreshed on 2026-10-06 where the code
+still exists; citations into deleted files are marked as such.
+
 The superseded root documents these were filed in are preserved at the git tag
 `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-independence:WP7_FILED_DEFECTS.md`).
 
@@ -24,12 +40,12 @@ The superseded root documents these were filed in are preserved at the git tag
 
 | # | site | what is wrong | severity today |
 |---|---|---|---|
-| 1 | `src/extensions/ortho.cc:218-224` | the transposed arm builds a view whose extents and `ld` do not describe the memory, against a vector of the wrong length | latent — a shape check routes it to the vendor |
+| 1 | `src/extensions/ortho.cc:189-191` | the transposed arm builds a view whose extents and `ld` do not describe the memory, against a vector of the wrong length | latent — a shape check routes it to the vendor |
 | 2 | `src/extra/cond.cc:48,54,131` | reaches into `dispatch::detail` and demands the **vendor** `syev` instead of calling the public one | throws in a vendor-free build |
-| 3 | `src/extensions/lanczos.cc:107-111` | the level-3 call carries two right-hand-side columns and one is consumed | 2x work, right answer |
+| 3 | `src/extensions/lanczos.cc:112-117` | the level-3 call carries two right-hand-side columns and one is consumed | 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:30-31,62-63` | `ConjTrans` maps to the conjugating enum for **real** scalars | inferred wrong answers on AMD; unobservable here |
-| 5 | `src/backends/netlib_lapack.cc:508,520,537,549` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
-| 6 | `src/backends/netlib_lapack.cc:1389` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
+| 5 | `src/backends/netlib_lapack.cc:484,496,513,525` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
+| 6 | `src/backends/netlib_lapack.cc:1250` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh:51` (deleted in P3.3) | ~~the heterogeneous-batch rejection has no writer~~ | **not a defect — the field IS written; entry closed 2026-09-15** |
 | 8 | `src/backends/syrk_custom_dispatch.cc` | ~~a forced native `syrk` lands on a route that writes both triangles~~ | **closed in the phase 5 rip: `native` is the tile kernel** |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` | ~~a forced native `syr2k` throws a cuBLASDx message it did not ask for~~ | **closed in the phase 5 rip** |
@@ -41,10 +57,12 @@ The superseded root documents these were filed in are preserved at the git tag
 | 15 | cuSOLVER `gesvdjBatched` | values-only, non-square input faults with `CUDA_ERROR_ILLEGAL_ADDRESS` | pinned vendor only; Auto never sends the shape there |
 | 16 | `ormqr_blocked`'s sub-kernels | batch > 65535 exceeds the grid's dimension-2 limit and throws | throws under Auto at batch > 65535 |
 | 17 | cuSPARSE spmm, operands off their natural alignment | silently mis-handled; not modelled in `can_run` | an explicit R3 waiver; tests skip misaligned cases unless pinned native |
+| — | `sytrd_cta` / `syev_cta` Lower ([below](#known-defects-the-cta-sytrd-lower-path)) | the CTA SYTRD Lower path was reported wrong; both CTA paths run Upper and mirror Lower input | worked around; not reproduced |
+| — | `linalg::qr` ([below](#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process)) | the composed QR returns \f$QR \ne A\f$ after an earlier call in the same process | wrapper withheld; cause not located |
 
-## 1. `ortho`'s transposed arm builds a view that does not describe the memory
+## Defect 1: `ortho`'s transposed arm builds a view that does not describe the memory
 
-`src/extensions/ortho.cc:218-224`, inside the CGS lambda:
+`src/extensions/ortho.cc:189-191`, inside the CGS lambda (was `:218-224` when filed):
 
 ```cpp
 auto A_i = transA == Transpose::NoTrans
@@ -55,11 +73,11 @@ auto A_next = A(Slice(), i);
 ```
 
 Under `transA = Trans` or `ConjTrans`, `is_A_trans` is true and `inv_trans` is `NoTrans`
-(`:118-120`). Three things then disagree:
+(`:122-123`). Three things then disagree:
 
 * `A_i` is declared `i` rows by `m` columns with `ld = m`. The leading dimension of a view onto
   the first `i` rows of a column-major `A` is `A.ld()`, not `m`.
-* the call at `:227` is `gemv(A_i, A_next, C, {.transA = NoTrans})`, so `x` must have length
+* the call at `:198` is `gemv(A_i, A_next, C, {.transA = inv_trans})`, i.e. `NoTrans` on this arm, so `x` must have length
   `A_i.cols() == m`.
 * `A_next = A(Slice(), i)` is **column** `i`, of length `A.rows()`. On the transposed arm the
   vectors being orthogonalised are the *rows* of `A`, so `A.rows()` is the vector **count**.
@@ -106,19 +124,19 @@ work packages that found it; the fix is to call the public `syev` and let its se
 The workspace query has to move with the call — `syev_vendor_buffer_size_or_throw` throws in the
 same build, so half a fix is no fix.
 
-## 3. `lanczos` issues a two-column multiply and consumes one column
+## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
-`src/extensions/lanczos.cc:107-111`:
+`src/extensions/lanczos.cc:112-117` (was `:107-111` when filed):
 
 ```cpp
 auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size);
 ...
-spmm<B>(ctx, A, padded_vector, padded_output, ...);              // :110, sparse arm
-gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{}); // :112, dense arm
+spmm<B>(ctx, A, padded_vector, padded_output, ...);              // :115, sparse arm
+gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{}); // :117, dense arm
 ```
 
-`padded_output` is likewise two columns wide (`:53`), and the kernel that consumes it reads one:
-`local_v_next = Span(v_next_ptr + bid*2*n, n)` (`:127`) is column 0 only. Both arms — sparse and
+`padded_output` is likewise two columns wide (`:56`), and the kernel that consumes it reads one:
+`local_v_next = Span(v_next_ptr + bid*2*n, n)` (`:132`) is column 0 only. Both arms — sparse and
 dense — do twice the level-3 work the iteration needs. The answer is right; the second column is
 computed against whatever occupies the next basis slot and then discarded.
 
@@ -164,7 +182,7 @@ suite is what exposed the cuSPARSE version.
 
 ## 5. netlib `trsm` reads `B` when `alpha == 0`
 
-`src/backends/netlib_lapack.cc:508`, `:520`, `:537`, `:549` — all four arms of the host solve:
+`src/backends/netlib_lapack.cc:484`, `:496`, `:513`, `:525` — all four arms of the host solve:
 
 ```cpp
 T x = alpha * Bb.at(i, j, 0) - sum;
@@ -175,7 +193,7 @@ zero without reading it in that case, and the reason matters here: callers hand 
 `BumpAllocator` allocation that is **not zeroed**, and `0 * NaN` is `NaN`, so an operand that
 should have dropped out of the arithmetic poisons the result instead.
 
-**Why it was left.** The identical defect in `spmm` (`netlib_lapack.cc:248,272` — `A` read at
+**Why it was left.** The identical defect in `spmm` (`netlib_lapack.cc:228,252` — `A` read at
 `alpha == 0`, `C` read at `beta == 0`) was fixed by the work package that owns `spmm`; `trsm`'s
 belongs to `trsm` and was out of that package's scope. The native `trsm` bodies already make the
 guarantee. See [`../perf/spmm.md`](../perf/spmm.md) for the fixed sibling.
@@ -187,7 +205,7 @@ something that survives multiplication by zero.
 
 ## 6. netlib `getri` ignores the leading dimension
 
-`src/backends/netlib_lapack.cc:1389`:
+`src/backends/netlib_lapack.cc:1250`:
 
 ```cpp
 std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
@@ -196,14 +214,15 @@ std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
 Both views are copied as `n*n` contiguous elements. Neither `Ab.ld()` nor `Cb.ld()` is consulted,
 so any padded leading dimension gives a wrong answer (and, if `C` is the tighter of the two, a
 write past its last column). Pre-existing, recorded in [`../perf/lu.md`](../perf/lu.md), not
-fixed. The correct form is the per-column `std::copy_n` already used 400 lines above at `:995`.
+fixed. The correct form is the per-column `std::copy_n` already used above at `:841`.
 
 ## 7. CLOSED — `trsm`'s heterogeneous-batch rejection *can* fire
 
 **Closed 2026-09-15, by reading the file.** This entry claimed that `trsm_op_shape` never writes
 `heterogeneous_batch`, so `route_trsm.hh:43`'s `if (s.heterogeneous_batch) return false;` could
-never be reached with a true value. That is false in the working tree. `src/backends/trsm_route.hh:51`,
-inside `trsm_op_shape`, reads:
+never be reached with a true value. That was false in the tree of 2026-09-15.
+`src/backends/trsm_route.hh:51` (line 40 after the 2026-09-30 comment pass; the file is deleted
+since P3.3), inside `trsm_op_shape`, read:
 
 ```cpp
 // supports() refuses a heterogeneous batch; without this the field keeps
@@ -324,7 +343,7 @@ citation**.
 
 ### Provenance: the grid rewrite, not the small-n campaign
 
-The original filing said "**not caused by the small-n campaign (P0-P7)** — no `sytrd`, `latrd`,
+The original filing said "<b>not caused by the small-n campaign (P0-P7)</b> — no `sytrd`, `latrd`,
 `syr2k`, `her2k` or `steqr` source was modified by it". That sentence is **kept, but restated**,
 because the diagnosis moved the defect from "somewhere, possibly routing" to a specific pair of
 loops in a specific source file, and a blanket "no `latrd` source was modified" now reads as a
@@ -469,7 +488,7 @@ The real remediation is a case that forces `G` **down** at a large `n` — the a
 above — because that is the only knob that inflates `chunk`. `BATCHLAS_LATRD_GRID_WG` alone
 cannot reach the defect no matter what it is set to.
 
-## 11. Native gemm reads C at beta zero
+## Defect 11: native gemm reads C at beta zero
 
 **Status: located, worked around in `geqrf_blocked`, not fixed in `gemm`.** Found 2026-09-30
 on threadripper02 (RTX PRO 6000 Blackwell, sm_120) by
@@ -495,7 +514,7 @@ for both (the test then passes for all four types), and dropped it because `gemm
 belongs to `gemm`. The epilogue branch needs a gemm timing A/B before it ships. When it lands,
 delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
 
-## 12. Vendor potrf and trsm accept a heterogeneous batch
+## Defect 12: vendor potrf and trsm accept a heterogeneous batch
 
 potrf's `can_run(Vendor)` is `d.has_vendor` with no heterogeneity term (the native families
 carry `!A.is_heterogeneous()`), and `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes
@@ -547,7 +566,7 @@ into it nor the cuBLASLt log (algo 13, workspace 0 in both) separated the two. R
   `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. getrf_tests passes with it.
 - **gemv open:** `ortho_tests` still crashes in `gemv_vendor` for complex<double>, as on the parent.
 
-## 14. The Hermitian drivers read the unreferenced triangle
+## Defect 14: the Hermitian drivers read the unreferenced triangle
 
 Located during the phase 5 gesvd and syev migrations; the drivers were not changed by either.
 With large finite poison in the triangle the caller did not name:
@@ -605,6 +624,42 @@ Measured on threadripper02 (cuSPARSE from HPC SDK 26.5 / CUDA 13.2) by calling
   property of the pointers, not of the selection key, and modelling it would move routing, so
   `can_run` does not carry it; `spmm_tests` skips misaligned cases unless pinned native.
 
+## Known defects: the CTA SYTRD Lower path
+
+**Status: located, worked around on both CTA paths, not reproduced.** The `syev_cta` driver
+(`src/extensions/syev_cta.cc`, the `uplo_eff` note in the real and complex drivers) carried this
+note, verbatim: "The CTA SYTRD/SYEV pipeline currently exhibits severe correctness issues
+specifically for the Uplo::Lower path. Until the lower-path kernel is fixed, we run the
+(known-good) Uplo::Upper pipeline. To preserve the public API contract when callers only
+initialize the lower triangle, we first explicitly symmetrize: A_upper := conj(A_lower)."
+
+No test, commit or failure mode was recorded with it. The fused kernel (`syev_cta_fused.cc`) also
+always runs the Upper reduction and symmetrises Lower input while loading its tile, so neither CTA
+path reaches the Lower `sytrd_cta` kernel today. Whether that kernel is still wrong, and how, is
+unverified.
+
+**What would settle it.** Pin the Lower reduction (bypass the `uplo_eff` mirror) on graded input
+with complex data and a poisoned upper triangle, compare against the Upper pipeline item by item,
+and either fix the kernel and drop the mirror or record the failure mode here. Note that the
+mirror itself interacts with [defect 14](#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle):
+`syev_cta` with Upper reads the lower triangle.
+
+## linalg::qr returns a wrong QR after an earlier call in the process
+
+**Status: observed, cause not located; the wrapper is withheld.** `linalg::qr` is deliberately
+absent from `include/batchlas/blas/linalg-ops.hh`. The composition `geqrf` +
+`triangular_mask_into` + `orgqr` returned \f$QR \ne A\f$ once an earlier `linalg::qr` test had
+run in the same process, and passed when run alone. The original header note read "repro:
+tests/linalg_layer_tests.cc, 4x". AGENTS.md section 9 describes it as "an unexplained cross-Queue
+wrong-answer defect".
+
+Related: the `linalg::` value-returning wrappers free their scratch while kernels may still be
+enqueued, and the workspace arena belongs to the `Queue` (see
+@ref design_runtime_internals), so state that outlives one call is the first suspect.
+
+**What fixing it needs.** Locate the cross-Queue state (arena reuse, a static, or a stale event)
+with the two-call repro, then add the wrapper with that repro as its guard.
+
 ## One filed claim that did not survive re-checking
 
 [`../perf/lu.md`](../perf/lu.md) records "a latent vendor gate defect: `cublas.cc`'s `getrs` sits
@@ -618,6 +673,115 @@ phase 5 the constant is `src/select/vendor.hh:28` and requires cuSOLVER as well,
 configuration now claims no factorization vendor at all. Marked
 `unverified` rather than deleted: the stated mismatch could not be reproduced, but the entry may
 be describing an earlier `getrs` that did call cuSOLVER.
+
+## Known defects: unverified candidates from the documentation pass
+
+Observations made while migrating the design notes into `docs/` (2026-09-30 and 2026-10-06).
+Each is located to a line but **not confirmed by a test**; none is numbered above until it is.
+Whoever confirms or refutes one moves it into the table or into the section above.
+
+- **`gesvdj_cta`'s global rescale ignores columns 32..63 on the C=64 rung** (reported by the gesvd
+  migration). The `nmax`/`nmin` reductions read `Nrm_local[base_n + lane]` only for `lane < CC`
+  (`src/extensions/gesvdj_cta.cc:354`), so on the 64-column rung the upper half of the columns does
+  not influence `beta`. Correctness is unaffected (`beta` is a power of two, and the scaling is
+  undone exactly), but the overflow/underflow headroom for graded input with 33 to 64 columns is
+  narrower than the design claims. Design record:
+  [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling). What would
+  settle it: graded 33..64-column input whose largest column norm sits in columns 32..63, near the
+  overflow threshold, compared against the n <= 32 behaviour.
+- **The recursive `stedc` driver may merge from unset leaf eigenvectors under `NoEigenVectors`**
+  (reported by the tridiagonal migration). `stedc_impl` forwards the caller's `jobz` to the leaf
+  `steqr_dispatch` (`src/extensions/stedc.cc:535`), while the merges always consume the leaf
+  eigenvectors; the level-synchronous driver ignores `jobz` (`:640`). A direct
+  `stedc(..., JobType::NoEigenVectors, ...)` with `StedcAlgorithm::Recursive` could therefore merge
+  from vectors that were never written. `syev` does not reach this, as far as the reporter could
+  see. What would settle it: that direct call, compared against the eigenvalues-only reference,
+  with the eigenvector buffer poisoned beforehand. The trap is also recorded on the stedc page,
+  [stedc: eigenvalues-only still builds eigenvectors](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors),
+  and at the recursive leaf in `src/extensions/stedc.cc`.
+- **`compute_optimal_wg_size`'s power-of-two rounding assumes a 32-bit `long`** (reported by the
+  dispatch/device header pass). For REDUCTION and SCAN it rounds with
+  `size_t(1) << (31 - __builtin_clzl(base_wg_size))` (`include/batchlas/util/kernel-heuristics.hh:103`,
+  `:108`). On LP64 `__builtin_clzl` counts leading zeros of a 64-bit value, so for a base of 256 the
+  shift count is 31 - 55 = -24: undefined behaviour (x86 masks it to 40, giving \f$2^{40}\f$, which
+  the later `problem_size` and `MAX_WORK_GROUP_SIZE` clamps cut down). The result is
+  min(problem_size, device max), not a power of two. Callers: `src/matrix.cc:387` (REDUCTION, `rows`)
+  and `:487` (SCAN, `rows + 1`). Not checked: whether those kernels assume a power-of-two
+  work-group. Fix: `63 - __builtin_clzl` or `std::bit_floor`. The same header's doc comments record
+  unused parameters (`batch_size` and `memory_per_problem` of `compute_optimal_wg_size`,
+  `max_wg_size_for_kernel` of `compute_batched_nd_range_sizes`).
+- **The generic (MKL-instantiated) `trmm` recursion reads the whole square of `A`** (reported by
+  the level-3 comment pass). Its base case at n <= 256 is a plain `gemm` on the diagonal block
+  with `beta = 1`, so it reads the unreferenced triangle and the stored diagonal under `Diag::Unit`,
+  and accumulates into `C` instead of overwriting it. Full note and what would settle it:
+  [the trmm generic recursion](../perf/level3.md#trmm-the-generic-recursion-reads-the-whole-square-of-a)
+  (`src/extensions/trmm.cc:22-26`).
+- **Matrix and vector container defects** (reported by the matrix header pass). Five located,
+  unfixed defects in `matrix.hh` / `src/matrix.cc` are listed under
+  [Matrix model: open debts](matrix-model.md#matrix-model-open-debts): an undefined
+  `MatrixView::transpose`, packed-only addressing and identical items in `fill_triangular_random` /
+  `fill_tridiag_toeplitz`, `fill_random` writing padding, a no-op slice assert in
+  `KernelMatrixView`, and a length assert in `fill_diagonal(ctx, Span, k)` that can fire for
+  `k != 0`.
+- **Three environment-parser defects** (reported by the core header pass), recorded under
+  [environment parser defects](environment.md#environment-parser-defects-recorded-not-fixed):
+  `BATCHLAS_SYEVX_SOFT_LOCK` is inverted (`=off` and an empty export read as on),
+  `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` reads an unparseable value as 0 and widens the blocked-gebrd
+  path to every n, and `BATCHLAS_TUNE_STEDC_MERGE_VARIANT` is cast to the enum with no range check.
+- **Device group BLAS: the 3-D tile-group race in `gemm`, `symm` and `trmm`** (reported by the
+  device header pass; read from the dispatch code, not reproduced). With a `sycl::nd_item<3>`
+  executor, group dimensions 1 and 2 index output tiles, but only the tiled kernels read them.
+  `gemm`, `syrk` and `syr2k` guard their generic fallback to tile-group (0, 0), yet `gemm`'s
+  non-register sub-group path runs before that guard and covers the whole output per work-group,
+  and `symm` / `trmm` have no guard at all. Every tile-group then writes all of `C`: benign at
+  `beta == 0`, wrong at `beta != 0` or for an in-place `trmm`. Full write-up and what would settle
+  it: [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
+- **`francis_sweep` is declared and never defined** (reported by the eigen header pass).
+  `include/batchlas/blas/extensions.hh` declares it `BATCHLAS_API`, but nothing in `src/` defines
+  or instantiates it, so a call compiles and fails at link time. The declaration carries a
+  `@warning`; the fix is to delete it or implement it.
+- **`tridiagonal_solver` assumes `Q.ld() == n`** (same pass). Its rotation update addresses `Q`
+  with stride `n` (`Q[k*m+l]`, `src/extensions/tridiag_solver.cc:29`) while the identity fill uses
+  `Q.ld()`, so a padded `Q` gets a wrong answer; it also caps QR steps at six per eigenvalue with no
+  convergence report. Nothing in `src/` calls it; the API doc states `@pre Q.ld() == n`.
+- **`UnifiedVector`'s move assignment leaks the destination's allocation** (reported by the
+  matrix header pass). `operator=(UnifiedVector&&)` (`include/batchlas/util/sycl-vector.hh`)
+  overwrites `data_` without freeing the previous allocation, so moving into a non-empty
+  `UnifiedVector`, `Matrix` or `Vector` leaks USM shared memory. The header carries a `@trap`;
+  the record is under [Matrix model: open debts](matrix-model.md#matrix-model-open-debts).
+- **Kernel selection throws outside the error hierarchy** (reported by the error-model pass).
+  `src/select/` throws plain `std::invalid_argument` (an unparseable or unservable pin) and
+  `std::runtime_error` (no runnable kernel, a bad tuned table), and `batchlas::NoRouteError`
+  derives from `std::runtime_error` only, so `catch (const batchlas::exception&)` misses all of
+  them. Separately, `gesv` and `posv` throw `batchlas::internal_error` for an empty or
+  heterogeneous batch (`throw_if_unservable` in `src/ops/gesv/gesv.cc` and
+  `src/ops/posv/posv.cc`), which by meaning is `invalid_argument` or `unsupported`. Reclassifying
+  either is a behaviour change for callers that catch the current type. Full table:
+  [kernel selection throws outside the hierarchy](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
+- **`internal/sytrd_blocked.hh` declares a second, undefined `sytrd_blocked` template**
+  (reported by the factorization header pass, confirmed by the eigen review). It takes
+  `Span<std::byte> ws` by value with no default `block_size`
+  (`include/batchlas/internal/sytrd_blocked.hh:46-53`), while `blas/extensions.hh:1059-1066`
+  declares, and `src/extensions/sytrd_blocked.cc:915` defines, the `const Span<std::byte>&`
+  overload with a default. These are two distinct function templates, not a redeclaration, so a
+  translation unit that sees only the internal header and calls it fails at link time. Fix: make
+  the internal declaration match (or drop it). Related header hygiene from the same passes, not
+  defects: `sytrd_band_reduction_single_step` and its `_buffer_size` are declared twice each in
+  `extensions.hh` with identical signatures, and `OrmqCtaFactorization` (`extensions.hh:989`) is
+  referenced by no entry point, test or source file.
+
+### Known defects: fixed while documenting
+
+- **`miniacc --help` used to terminate its host.** `miniacc::ParseCommandLine`'s `--help` arm
+  called `std::exit(0)`, from a header that is installed (`cmake/BatchLASPackaging.cmake` installs
+  `include/batchlas` except `minibench*.hh` and `bench_structured.hh`). `exit()` runs no
+  destructors for live automatic objects in the caller's frames, so a consumer that parses an
+  argv containing `--help`, or embeds the harness, could not stop it. It now sets
+  `CliOptions::help_requested` and `MiniAccMain` returns 0
+  (`include/batchlas/util/miniacc.hh`).
+- **Superseded, not applied:** a proposed ledger item that `trsm_op_shape` never set `s.backend`
+  (so every trsm coverage row read `Backend::AUTO`) described `src/backends/trsm_route.hh`, which
+  P3.3 deleted. Coverage rows now come from `src/select/coverage.hh`.
 
 ## The recurring failure mode: guards that cannot fail
 

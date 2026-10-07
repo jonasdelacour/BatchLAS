@@ -7,22 +7,14 @@
 // TileM / TileN (an odd stride defeats the 16-byte alignment the LDS.128 form
 // needs), and B is staged [k][n] so a thread's 8 B values are contiguous.
 //
-// Four things beyond that are load-bearing, each measured:
-//
-//   * Register prefetch into a double-buffered shared tile, one barrier per
-//     slab. The prefetch registers are clang ext_vector values, NOT a struct:
-//     a struct copy global -> shared is folded into a memcpy that LLVM sinks
-//     to the store, which silently turns the prefetch back into a stall.
-//   * The lane swizzle. An LDS.128 costs 4 shared wavefronts when its address
-//     depends on BOTH lane bits 0 and 1, and 2 otherwise, so m takes lane bit
-//     0 and n takes lane bit 1. Each warp owns a 64 (m) x 32 (n) sub-tile.
-//   * An L2::128B fetch hint on the B loads. A thread reads 32 bytes of each
-//     B column per slab; without the hint DRAM sees 32-byte requests strided
-//     by ldb, and the memory-bound shapes run at 0.8x of the vendor.
-//   * The launch bound (two work-groups per CU, a 128-register cap) is a
-//     guard: the kernel compiles to 127 today, and one register more drops
-//     it to one group per SM. Three per CU spills and runs ~9x slower.
-//
+// Four more things are load-bearing, and each fails silently if undone:
+//   * prefetch registers are clang ext_vector values, NOT a struct (LLVM turns a
+//     struct copy into a memcpy sunk to the store: no prefetch at all);
+//   * the lane swizzle: m takes lane bit 0, n lane bit 1 (an LDS.128 whose address
+//     depends on both bits costs twice the wavefronts); warp sub-tile 64 x 32;
+//   * the L2::128B fetch hint on the B loads;
+//   * the launch bound, two groups per CU (128-register cap), is a guard: the
+//     kernel fits at 127, one register more is one group per SM, 3/CU spills.
 // evidence: docs/perf/gemm.md#the-128x128-float-kernel
 
 #include "accessors.hh"

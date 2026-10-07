@@ -1,67 +1,93 @@
 # SPMM: the native batched CSR kernel and the three vendor defects it found (WP8)
 
-Batched CSR `spmm` had no native kernel, no route table and no measurement in this repository before WP8. It now has one native
-route with three kernel bodies, a `preferred()` window that takes the `transA == NoTrans` gather away from cuSPARSE in **every**
-build, and a measured refusal for the transposed arm. Hardware for every number below: one RTX 4090 (device 1, 128 SMs, 72 MB L2,
-1008 GB/s DRAM roof), CUDA backend, SYCL in-order queue.
+> **Covers:** batched CSR `spmm`: the `direct` and `vendor` families, the measured gather window the `tuned/spmm.*` tables
+> transcribe, the transposed refusal, and the vendor defects the suite found.
+> **Status:** current. The measurements are WP8's, taken against the route-era router; selection is flat (@ref design_flat_selection).
+> **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda.
+
+Batched CSR `spmm` had no native kernel, no routing and no measurement in this repository before WP8. It now has one native
+family (`direct`) with three kernel bodies, tuned tables (`tuned/spmm.*`) whose rows rank `direct` first for the `transA == NoTrans`
+gather, taking it away from cuSPARSE in **every** build, and a measured refusal for the transposed arm (its rows rank `vendor`
+first). Hardware for every number below: one RTX 4090 (device 1, 128 SMs, 72 MB L2, 1008 GB/s DRAM roof), CUDA backend, SYCL
+in-order queue. The measurements were taken in WP8 against the route-era router; the tables transcribe the window they produced.
 
 ## What ships
 
+### SpMM: choices (flat selection, phase 5)
+
+spmm decides in `src/ops/spmm/spmm.cc` over the two families of `src/ops/spmm/choice.hh`, in tie-break order
+([flat-kernel-selection.md, Phase 5, spmm](../design/flat-kernel-selection.md#phase-5-spmm)):
+
+| spelling | implementation | `can_run` (correctness only) |
+|---|---|---|
+| `direct` | `sycl_spmm::spmm_native_csr` (the three bodies below; the body, column block and pair load are derived inside) | CSR, the body for this `transA` compiled, `one_spmm()` (the old builder's extent, batch, `ld` and offset-stride checks), no heterogeneous B or C, batch >= 1; no GPU gate |
+| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, minus three known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B or `complex<double>` N/N with one column (known-defects #13) |
+
+Which one runs is the first runnable entry of the nearest row of `tuned/spmm.<dtype>.<device>.txt`, keyed
+`transA:exact transB:exact m:log nrhs:log batch:log` (ConjTrans folds to `T`, `spmm.cc:33-39`; no `nnz` key, for the reason
+given under [supports(), and what is deliberately not in it](#supports-and-what-is-deliberately-not-in-it)). The last resort is
+`vendor`, then `direct`. `BATCHLAS_SPMM_ROUTE` takes `auto`, `native`, `vendor` or the spelling `direct`; a misspelling, or a
+spelling `can_run` refuses for the call, throws.
+
 ### Route arms
 
-`kSpmmOrder` (`include/batchlas/blas/dispatch/route_spmm.hh:33-36`) has exactly two entries:
+The two families, and what is behind each:
 
-| Origin | Algorithm | bodies behind it |
+| spelling | bodies behind it |
+|---|---|
+| `direct` | three, in `src/sycl/spmm_native.cc`: the `NoTrans` gather (body 1), and the scale + atomic scatter pair (bodies 0 and 2) that together serve `Trans`/`ConjTrans` |
+| `vendor` | `cusparseSpMM` / rocSPARSE / netlib |
+
+Body selection is in the launcher, on `transA`, deliberately below the selection vocabulary: `direct` has no fields, so no
+spelling names a body (the decomposition-not-algorithm rule `gemv` already uses). `transA` *is* in the coverage `variant_key`
+(`src/select/coverage.cc:39-45`), so gather-vs-scatter stays separable in `scripts/route_diff.sh`; scale-vs-scatter does not.
+
+**Before flat selection** the same two arms were the route-era `{Native, Direct}` and `{Vendor, Auto}` entries of a
+`RouteTable` order, and the environment pin went through a shared `origin[:algorithm]` grammar in which a misspelling was
+**silent**: the unparsed text was discarded and every decision went to the vendor with no message (reproduced deliberately, see
+[Measurement harness and hygiene](#measurement-harness-and-hygiene)). Flat selection makes that a throw. The mechanism is
+described in [flat-kernel-selection.md](../design/flat-kernel-selection.md).
+
+### SpMM: the preferred window, as implemented
+
+The window is now data: every row of `tuned/spmm.<dtype>.<device>.txt` on sm_89, sm_120 and `cpu` is **transcribed** from the
+route-era predicate at `424a45bc` (untimed; provenance in `tuned/README.md`) and ranks
+
+| rows | float, double, complex\<double\> | complex\<float\> |
 |---|---|---|
-| `Native` | `Direct` | three, in `src/sycl/spmm_native.cc`: the `NoTrans` gather (body 1), and the scale + atomic scatter pair (bodies 0 and 2) that together serve `Trans`/`ConjTrans` |
-| `Vendor` | `Auto` | `cusparseSpMM` / rocSPARSE / netlib |
+| `transA=N transB=N` | `direct`, then `vendor` | `direct`, then `vendor` |
+| `transA=N transB=T` | `direct`, then `vendor` | `vendor`, then `direct` |
+| `transA=T`, either `transB` | `vendor`, then `direct` | `vendor`, then `direct` |
 
-Body selection is in the launcher, on `transA` (`spmm_native.cc:386-417`, under the note at `:560-565`), deliberately below the
-routing vocabulary — the decomposition-not-algorithm rule `gemv` already uses, so no `Algorithm` enumerator,
-`to_string(Algorithm)` case or `parse_algorithm_word` case ships. `transA` *is* in `variant_key`, so gather-vs-scatter stays
-separable in `scripts/route_diff.sh`; scale-vs-scatter does not.
+identically at all 125 `(m, nrhs, batch)` cells of each block (`m` 1..65536, `nrhs` 1..64, `batch` 1..16384). That is the measured
+clause: `direct` first for the `transA == NoTrans` gather, except `complex<float>` with a transposed B. The table rows are pinned by
+`SpmmTranscribedTable.RowsHoldTheOldPreference` (`tests/spmm_candidates_tests.cc:874`), which reads them on every device key at
+on-grid and off-grid sizes.
 
-The env variable is `BATCHLAS_SPMM_ROUTE`, read through the shared `origin[:algorithm]` grammar
-(`route_env.hh:50-70`): `native:direct`, `native`, `direct`, `vendor`, `auto`. A misspelling is **silent** —
-`ParsedRouteEnv::unparsed` is discarded and every decision goes to the vendor with no message; reproduced deliberately, see
-[Measurement harness and hygiene](#measurement-harness-and-hygiene).
-
-### The preferred window, as implemented
-
-`route_spmm.hh:65-75`, stripped of its ~140 lines of evidence comments:
-
-```cpp
-static bool preferred(Route r, const SpmmShape& s) {
-    if (!is_native(r) || r.algo != Algorithm::Direct) return false;   // :66
-    if (s.format != MatrixFormat::CSR) return false;                  // :67
-    if (s.transA != Transpose::NoTrans) return false;                 // :69
-    if constexpr (std::is_same_v<T, std::complex<float>>) {           // :71
-        if (s.transB != Transpose::NoTrans) return false;             // :72
-    }
-    return true;                                                      // :74
-}
-```
-
-**No batch term, no extent term, no `is_gpu` term, no `nnz`/density term** — each absence is a measured decision. The exploration
-notes label this clause "recommended"; it is what shipped, verbatim, including the small-batch caveat's closure in favour of no
-floor. `preferred()` is consulted by `automatic()`'s **first** walk, which runs regardless of `vendor_available`, so it moves the
-default in a vendor-present build too. Route census after the flip: **65 moved decisions, every one `spmm`, every one `vendor:auto`
-→ `native:direct`, every one `transA = 0`; zero non-`spmm` decisions moved and none disappeared** (4,107 → 4,217 distinct
-decisions). The per-type split *is* the clause, read back out of the library: `complex<float>` moves at `transB = NoTrans` only, the
-other three types move at all three `transB` spellings, and nothing at all moves at `transA != NoTrans`.
+**No batch term, no extent term, no `is_gpu` term, no `nnz`/density term** — each absence is a measured decision, and each shows
+in the table as a ranking that is constant along that axis. The exploration notes label this clause "recommended"; it is what
+shipped, including the small-batch caveat's closure in favour of no floor. The route-era clause also moved the default in a
+vendor-present build, as the table does today. Route census after the WP8 flip: **65 moved decisions, every one `spmm`, every one
+`vendor:auto` → `native:direct`, every one `transA = 0`; zero non-`spmm` decisions moved and none disappeared** (4,107 → 4,217
+distinct decisions). The per-type split *is* the clause, read back out of the library: `complex<float>` moves at `transB = NoTrans`
+only, the other three types move at all three `transB` spellings, and nothing at all moves at `transA != NoTrans`. (Coverage now
+records those decisions as `direct` and `vendor`.)
 
 **That number is not readable off `route_diff.sh compare`.** The raw before/after capture diff shows **65 removed and 175 added
 `reached` lines**, of which **110 additions are fabricated pure-layer shapes recorded with `backend = AUTO`** by this pass's new
-`route_vocabulary_tests` cases. `compare` applies no `backend != AUTO` filter, so it turns a clean 65-decision move into 240 lines
+`route_vocabulary_tests` cases (that suite is deleted). `compare` applies no `backend != AUTO` filter, so it turns a clean 65-decision move into 240 lines
 of apparent churn; `experiments/sparse_spmm/route_census.py` keys on the decision tuple and splits `AUTO` from real backends first.
 `VENDOR_FREE_BASELINE.md` files that as arguably a **fifth defect of the coverage instrument**.
 
 ### supports(), and what is deliberately not in it
 
-`route_spmm.hh:42-61`. Correctness gates only: CSR format (`:198`); no heterogeneous *dense* batch (`:211` — a CSR view is never
-heterogeneous in the `active_rows_` sense, and per-item `nnz` variation is handled exactly through the row offsets); no negative
-extent, no empty batch (`:217`); then the capability flag for the body that would actually run (`:250-251`). Three absences are WP8
-deliverables:
+The heading names the route-era `supports()`; its terms are now `direct`'s `can_run` (`src/ops/spmm/spmm.cc:71-84`). Correctness
+gates only: CSR format (`:76`); the capability flag for the body that would actually run, gather or scatter by `transA`
+(`:79-80`); `one_spmm()` (`:44-59`), the route-era shape builder's checks (extents and batch sizes agree, positive `ld`s, an
+offset stride of at least `m + 1`); no heterogeneous *dense* batch (`:81-82` — a CSR view is never heterogeneous in the
+`active_rows_` sense, and per-item `nnz` variation is handled exactly through the row offsets); no empty batch (`:82`). `vendor`'s
+`can_run` (`:85-92`) adds the vendor library and refuses three known-bad shapes (netlib with a transpose, and the two cuSPARSE
+cases of known-defects #13). Three absences from `direct`'s terms are WP8 deliverables:
 
 * **No `is_gpu` gate.** Every body is a plain loop — zero local memory, no group or sub-group collective, no required sub-group
   size. `build-novendor` has `BATCHLAS_HAS_HOST_BACKEND 1` with `BATCHLAS_HAS_LAPACKE` and `BATCHLAS_HAS_CBLAS` both 0, so
@@ -69,14 +95,17 @@ deliverables:
 * **No transpose refusal.** All nine `(transA, transB)` spellings are served. Refusing `transB` would foreclose the caller-side
   layout lever: handing the dense block as `transB = Trans` collapses the gather's `op(B)` touch from `nrhs` 32-byte sectors per
   nonzero to `ceil(nrhs*sizeof(T)/32)`.
-* **No `nnz` field on `SpmmShape`** (`route_spmm.hh:30-31`). `MatrixView::nnz()` is the per-item *capacity* (the batch maximum);
-  the honest per-item `nnz(b)` reads `row_offsets`, device memory the same builder touches from `spmm_buffer_size`, where a read is
-  a segfault rather than a wrong route. This single constraint kills both rejected wider clauses below.
+* **No `nnz` key** (`key_names` in `choice.hh:26-27`; the route-era `SpmmShape` had no `nnz` field for the same reason).
+  `MatrixView::nnz()` is the per-item *capacity* (the batch maximum); the honest per-item `nnz(b)` reads `row_offsets`, device
+  memory that `key_of` would touch from `spmm_buffer_size` too, where a read is a segfault rather than a wrong choice
+  (`spmm.cc:6-7`: nothing on the selection path may read device memory). This single constraint kills both rejected wider
+  clauses below.
 
-Zero workspace: `spmm_native_csr` takes no `Span<std::byte>`, so query and call agree by construction. `spmm_buffer_size` folds a
-named `kSpmmNativeDirectNeed = 0` through the usual `max(native, vendor)` and gates its consistency check on `native_fired`, never
-on `native_need != 0` — the need is exactly zero on every shape, so the `!= 0` spelling would throw on every call the route table
-had just accepted.
+Zero workspace: `spmm_native_csr` takes no `Span<std::byte>`, and `direct`'s workspace is exactly 0 (`spmm.cc:114-120`, rule R5).
+`spmm_buffer_size` runs the same choice as the call, so a `direct`-chosen call never asks the vendor sizer (which builds a plan
+that walks the CSR row offsets from the host). The route-era facade sized `max(native, vendor)` and had to gate its consistency
+check on a `native_fired` flag, never on `native_need != 0`: the need is exactly zero on every shape, so the `!= 0` spelling would
+have thrown on every call the router had just accepted.
 
 ## Measurement harness and hygiene
 
@@ -100,10 +129,11 @@ clock. Named cells are `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) la
   whichever row runs first, and a CALL-counted warm-up cannot price it uniformly — 250 calls is 40 ms on a cheap cell and 13.5 s of
   dead time on the 54 ms `cdouble, m=4096, nrhs=50, b=512` cell. Hence a wall-clock budget (`BATCHLAS_SPMM_WARM_MS`, default 400
   ms/row); with it a fresh process's first row reads 0.161916 ms at rel_sd 0.0018, converged.
-* **The route pin is proved, not asserted.** Same cell (float, m=1024, 3 nnz/row, nrhs=2, b=512), three processes: `vendor` →
-  0.162654 ms, coverage says `vendor:auto`; `native:direct` → 0.011745 ms, coverage says `native:direct` (13.8x apart); `bogus_typo`
-  → 0.162707 ms, coverage says **`vendor:auto`**. The typo is indistinguishable from `vendor`. Cross-arm `chk` (L1 norm of batch
-  item 0 of C) is 2211 for all three.
+* **The route pin is proved, not asserted.** Same cell (float, m=1024, 3 nnz/row, nrhs=2, b=512), three processes under the
+  route-era pin grammar: `vendor` → 0.162654 ms, coverage says `vendor:auto`; `native:direct` → 0.011745 ms, coverage says
+  `native:direct` (13.8x apart); `bogus_typo` → 0.162707 ms, coverage says **`vendor:auto`**. The typo was indistinguishable from
+  `vendor`. Cross-arm `chk` (L1 norm of batch item 0 of C) is 2211 for all three. Today the pins are `vendor` and `direct`
+  (coverage `vendor` and `direct`), and both `native:direct` and `bogus_typo` throw.
 * **The filter that manufactured a win.** An rel_sd-only admission rule silently deleted the single most important negative result
   in the sweep: `(cfloat, tA=0, tB=1, banded, m=2048, nnz/row=16, nrhs=25, b=128)` measures **1.934 / 1.872** across two passes —
   reproducing to 3 % — but its pass-2 rel_sd is 0.033. With that row gone the unconditional gather clause "passed" at worst 1.019.
@@ -112,8 +142,8 @@ clock. Named cells are `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) la
 * **`BATCHLAS_SPMM_ROUTE=vendor` is not the control it looks like.** Run over `spmm_tests` it gives 276 passed / **92 FAILED**,
   all `Backend::NETLIB` (the same pinned run on `Backend::CUDA` is 184/184), because 92 is precisely the old unpinned *skip* count
   and a vendor pin converts those refusals into failures. The clause provably does not participate: `BATCHLAS_COVERAGE_OUT` on that
-  run shows **144 `spmm` `reached` rows, all `vendor:auto`** — a forced route returns before `preferred()` is ever consulted
-  (`VENDOR_FREE_BASELINE.md`, "turns 92 skips into 92 FAILURES").
+  run shows **144 `spmm` `reached` rows, all `vendor:auto`** — a pin bypasses the window (then `preferred()`, now the table row)
+  entirely (`VENDOR_FREE_BASELINE.md`, "turns 92 skips into 92 FAILURES").
 * Every sweep ran twice in independent processes, one route per process, device 1 pinned by the runner, route read off
   `BATCHLAS_COVERAGE_OUT`. 7,536 timed rows over 9 sweeps (6,512 main + 1,024 small-batch).
 
@@ -144,7 +174,7 @@ on cross-pass reproduction alone; 9 dropped as noisy *and* non-reproducing):
 
 The 468 rows the shipped clause does **not** move contain 170 measured non-winners, so the refusals are bracketed rather than
 untested. The two `nrhs`-narrowed variants **pass their own grid and were still rejected**: their boundary rides on the banded
-column pattern, which `SpmmShape` cannot see and cannot acquire (it would have to read `col_indices` on the device). A clause whose
+column pattern, which the selection key cannot see and cannot acquire (it would have to read `col_indices` on the device). A clause whose
 true axis the shape cannot express is fitted, not measured. Refusing the family whole costs at most 2 % on the scattered pattern,
 and 7 cells against the best *passing* alternative (183 − 176; 10 against the unconditional clause, which fails).
 
@@ -252,7 +282,8 @@ across two sweeps ~90 min apart, the harness's own self-check: float 0.458 / 0.4
 
 ### The batch axis has no floor
 
-`preferred()` is consulted on every call while the acceptance gate is stated at batch >= 128. That mismatch was a real outstanding
+The window applies at every batch (the table ranks `direct` first at every `batch` rung, 1 to 16384) while the acceptance gate is
+stated at batch >= 128. That mismatch was a real outstanding
 caveat, closed by a separate sweep (`run_smallbatch.sh`, `sb1`, `sb2`, `smallbatch.txt`): 5 shape families x 4 types x 2 patterns x
 2 betas x both `transB` x batch {1,2,4,8,16,32,64,128}, twice, one route per process — 1,024 timed rows, 256 cells present and
 chk-agreeing in both passes, 210 admitted. Under the shipped clause, worst of two passes:
@@ -274,9 +305,10 @@ all** — `complex<float>`, m=4096, 16 nnz/row, nrhs=50, scattered, `transB=NoTr
 unsaturated launch/occupancy artefact rather than a structural loss. The median admitted row saves the caller 18.1 µs per call.
 
 **That row is the bracketing evidence for having no floor**, because it sits *inside* the gate. A floor must be justified by a
-measured non-winner on the wrong side of it, and this grid contains none at any rung for any type the clause admits.
-`RouteSpmm.PreferredHasNoBatchFloor` in `tests/route_vocabulary_tests.cc` pins the absence so that adding `s.batch >= N` goes red
-with a message saying where to look.
+measured non-winner on the wrong side of it, and this grid contains none at any rung for any type the clause admits. The
+route-era `RouteSpmm.PreferredHasNoBatchFloor` pinned the absence in the predicate; today
+`SpmmTranscribedTable.RowsHoldTheOldPreference` asserts the same ranking at batch 1, 300 and 100000, so a table regenerated with
+a batch floor goes red.
 
 **Honesty label**: below batch ~64 the timed region is launch latency plus the vendor's unhoistable per-call host chain — on the
 cheapest family (`sbL`, lanczos) the native per-call floor is ~2.9-3.4 µs against the vendor's 13.3-16.6 µs. That ~2.9 µs is a
@@ -302,8 +334,9 @@ median 1.030, worst **3.011**.
 | `... AND nrhs <= 2 AND type != cdouble` | 111 | PASSES | 1.023 | **rejected anyway** — see below |
 | `... AND nrhs <= 4 AND type != cdouble` | 150 | FAILS 1/150 | 1.101 | double m=2048 nnz/row=16 nrhs=4 b=512, p1=1.101 p2=1.101 |
 
-Every refuting cell in that table is on the **scattered** pattern (`pat=1`), the worst one included. `route_spmm.hh:69-73` and
-`VENDOR_INDEPENDENCE_PLAN.md`'s negative-results list both label the 3.011 cell "banded"; that is a mislabel — `verdict.txt` gives
+Every refuting cell in that table is on the **scattered** pattern (`pat=1`), the worst one included. The route-era predicate's
+comment (`route_spmm.hh:69-73`, deleted) and `VENDOR_INDEPENDENCE_PLAN.md`'s negative-results list both labelled the 3.011 cell
+"banded"; that is a mislabel — `verdict.txt` gives
 it `pat=1`, its row in `pass{1,2}/joined.csv` carries the tag `lobpcg_ta1`, and that sweep passes pattern 1 explicitly
 (`run_all.sh:34`, `LOBPCG_ARGS="... 0 0 1"`; `spmm_benchmark.cc:31-143` fixes `kBanded = 0` / `kRandom = 1`, and `:99` says so in
 words). The gather arm's refuting cell *is* banded (`pat=0`), which is presumably where the label came from.
@@ -322,12 +355,13 @@ express (`bnd_scatter_a`, m=1024, batch=512, scattered, pass 1):
 `complex<double>` at 16 nnz/row is at or over the gate at `nrhs = 1` **once `m` grows**: at m=2048 it is 1.098/1.101 at b=512 and
 1.130/1.132 at b=1024 (`scl1`/`scl2`, both passes), against 0.390 for the same type at 3 nnz/row and the same width. At the
 table's own m=1024 the 16-nnz/row cell is 1.043 — inside the gate, and still 2.7x the 3-nnz/row cell beside it, which is the point:
-the axis that separates them is `nnz/row`, not `nrhs`. `SpmmShape` carries no `nnz` field and cannot acquire one, so **no predicate
-expressible in the routing shape separates the cdouble win from the cdouble loss**. The one clause that passes needs an explicit
+the axis that separates them is `nnz/row`, not `nrhs`. The selection key carries no `nnz` and cannot acquire one (see above), so
+**no table row on the shipped keys separates the cdouble win from the cdouble loss**. The one clause that passes needs an explicit
 type exclusion, moves 111 cells of a decomposition with **zero in-tree C++ callers today**, and is fitted to an invisible axis.
 
-The scatter stays **supported** — `BATCHLAS_SPMM_ROUTE=native` still reaches it and the vendor-free build still routes it.
-Un-preferred is not unsupported.
+The scatter stays **runnable** — `direct`'s `can_run` admits every `transA`, so `BATCHLAS_SPMM_ROUTE=direct` (or `native`) still
+reaches it, and in a vendor-free build `vendor` fails `can_run` and the `transA=T` rows' second entry, `direct`, runs. Ranked
+second is not refused.
 
 ## Negative results
 
@@ -349,10 +383,11 @@ Un-preferred is not unsupported.
    have been the cheap fix.
 7. **The `cfloat` gather margin is ~3 %, not the 2x the median suggests** — 0.910 to 1.078 across the whole batch ladder on the
    largest LOBPCG family, against a saturated worst-of-two of 0.968.
-8. **Reversing `kSpmmOrder` does not send admitted shapes back to cuSPARSE.** Written into the header as a claim, then applied,
-   rebuilt and run: exactly one case goes red (`RouteSpmm.OrderIsExactlyTwoEntries`), structurally rather than through any decision,
-   because `preferred()` is false for `{Vendor, Auto}` and the first walk skips that entry wherever it sits. The mistake this array
-   *can* make — a `preferred()` true for the vendor entry — is pinned by `RouteSpmm.PreferredIsFalseForEveryOtherRouteAndFormat`.
+8. **Reversing the route-era order array did not send admitted shapes back to cuSPARSE** (route era; the array is deleted).
+   Written into the header as a claim, then applied, rebuilt and run: exactly one case went red (`RouteSpmm.OrderIsExactlyTwoEntries`),
+   structurally rather than through any decision, because the window answered false for the vendor entry and the first walk skipped
+   it wherever it sat. Under flat selection the candidate order is only the tie-break (`choice.hh:19-20`); the ranking lives in each
+   table row, which `SpmmTranscribedTable.RowsHoldTheOldPreference` pins entry by entry.
 9. **The suite-count burn-down is the wrong instrument for this op.** Vendor-free `ctest -LE slow` went 34/56 → 35/57 and the
    joining suite is `spmm_tests` itself; the 22 failing names are byte-identical to the post-WP7 set. The metric that moved is the
    per-op `NoRouteError` census: `spmm` **2 → 0**, every other op unchanged digit for digit. Vendor-present, `spmm_tests` is 282
@@ -364,7 +399,26 @@ Un-preferred is not unsupported.
    `lanczos_tests` — which *does* consume the moved gather — was re-run under `BATCHLAS_SPMM_ROUTE=vendor` and produced the same
    two failing cases (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`), so it is pre-existing and not WP8's.
 
-## Correctness findings
+## SpMM: the kernel contract
+
+What `src/sycl/spmm_native.hh` used to state in full above its declarations (moved 2026-09-30; the header keeps a one-line list of the
+traps). The operation is \f$C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B) + \beta C\f$ with `A` batched CSR (one strided slab per item) and `B`,
+`C` dense column-major; three kernel bodies sit behind the one `direct` family and are picked on `transA`.
+
+* **CSR indexing** (`src/matrix.cc`): row offsets are **item-local**, indexed `b*offset_stride()`; values and column indices are indexed
+  `b*matrix_stride()`. `A.nnz()` is the batch-maximum **capacity**, not a count, so the only legal bound on the nonzero loop is
+  `row_offsets[ro+i+1]` — slots above an item's own nnz are uninitialised. Getting this wrong is correct at batch 1 and wrong at batch 2. The
+  same capacity-vs-count confusion is the cuSPARSE defect in [Three vendor defects, found here and fixed](#three-vendor-defects-found-here-and-fixed).
+* **`beta == 0` must not read `C`**: callers pass never-zeroed `BumpAllocator` memory, so an unconditional `beta*C_old` returns NaN. Dually,
+  `alpha == 0` leaves `A` and `B` unread but still requires `C = beta*C` (deliberately *not* reference `?GEMV`'s `alpha == 0 && beta == 1`
+  quick return).
+* **No `__restrict__` on any pointer, and no body materialises a pointer array**: LOBPCG passes `X`, `P`, `R` as element-disjoint slices of one
+  buffer, which alias at the object level.
+* **The transposed arm scatters through global atomics**: summation order varies run to run, so no test may compare two runs bitwise, and its
+  FP64 instantiations carry an `atomic64` device requirement the FP32 ones do not.
+* **`B` and `C` carry their own `ld` and batch stride**; the bodies read them from the view and never derive them as `ld*cols`.
+
+## SpMM: correctness findings
 
 ### Three vendor defects, found here and fixed
 
@@ -431,9 +485,9 @@ form of the transposed over-read had no twin at all. Four rules this produced:
 Two further deliberate properties: the tolerance denominator is a backward-error scale (sum of `|a|*|b|` over the contributions to
 that element, floored at 1), never `|expected|`, because the transposed path is an atomic scatter and is **not** bitwise
 reproducible run to run; and a transposed case whose backend *throws* is SKIPPED, not failed — disabled when the pin names
-**native** (`tests/spmm_tests.cc:339-343`: `pin_text` containing `native`, or equal to `direct`/`cta`/`blocked`), so pinned-route
-break runs cannot be silently skipped past. Note the narrowness, which is itself a finding: the file's own header comment at `:92`
-still says "disabled when `BATCHLAS_SPMM_ROUTE` is set", and keying it that way is what **turned 92 pre-existing `Backend::NETLIB`
+**native** (`tests/spmm_tests.cc:366-373`: `pin_text` containing `native`, or equal to `direct`/`cta`/`blocked`), so pinned-route
+break runs cannot be silently skipped past. Note the narrowness, which is itself a finding: the file's header comment once said
+"disabled when `BATCHLAS_SPMM_ROUTE` is set" (removed since, see Open debts), and keying it that way is what **turned 92 pre-existing `Backend::NETLIB`
 skips into 92 failures** under `BATCHLAS_SPMM_ROUTE=vendor` — netlib hard-throws on any transpose, so a vendor pin must leave the
 skip armed. A wrong answer is never skipped, and a vendor returning a *status code* instead of throwing is not covered by the skip
 at all: `cusparse.cc` checks no cuSPARSE status, so
@@ -450,24 +504,25 @@ at all: `cusparse.cc` checks no cuSPARSE status, so
 
 ## Open debts
 
-* **The transposed scatter is vendor-first and has no route** — 169 of 458 saturated cells lose, no shape-expressible clause
-  recovers a window, and it has **zero in-tree C++ callers**, so nothing exercises it in anger.
+* **The transposed scatter is vendor-first and no table row ranks it first** — 169 of 458 saturated cells lose, no clause on the
+  shipped keys recovers a window, and it has **zero in-tree C++ callers**, so nothing exercises it in anger.
+* **The tables are transcribed, not timed.** Every `tuned/spmm.*` row is the WP8 clause evaluated per grid cell (`direct -` /
+  `vendor -`, no times), on sm_89, sm_120 and `cpu` alike. The grid above was measured on sm_89 only; the sm_120 and CPU rows are
+  the same clause carried over, not measurements. The phase-4 retune would replace them with timed rows.
 * **The `cfloat` gather margin is ~3 %, not 2x.** The clause admits the tightest cell in the campaign (1.078 at batch 4, 0.910-0.978
   elsewhere on its ladder). A kernel change costing 5 % on `complex<float>` turns admitted cells into losses with no test noticing.
 * **The `nrhs >= 16` narrowing is left on the table.** It passes `verdict.txt` at worst 0.968 and would move 183 cells instead of
-  176; refused only because its axis is the column pattern. If `SpmmShape` ever gains an honest pattern or `nnz` signal, both this
-  and the scatter's `nrhs <= 2 && !cdouble` clause are re-arguable.
+  176; refused only because its axis is the column pattern. If the selection key ever gains an honest pattern or `nnz` signal, both
+  this and the scatter's `nrhs <= 2 && !cdouble` clause are re-arguable.
 * **The `kNCmax` register-block mechanism for the `cfloat` loss is a hypothesis, not a profile.** The non-monotonicity (nrhs=32 at
   1.157-1.159 vs nrhs=25 at 1.714-1.731) is consistent with it and nothing more.
-* **Three in-tree comments are stale or wrong, and all three are the kind a reader trusts.** (a)
-  `src/dispatch/entry_points/sparse.cc:59-110`'s route-neutrality comment states that `preferred()` "is false for every route, every
-  type and every shape (route_spmm.hh:65)" and derives byte-identical vendor routing from that; the shipped `preferred()` is not
-  all-false, the code is still correct, but the justification no longer holds and the line reference now points into a block that
-  says the opposite. (b) is **closed**: the comment saying the transposed refusal-skip was "DISABLED when `BATCHLAS_SPMM_ROUTE` is set" no longer
-  exists — the comment pass removed it, and the skip at `tests/spmm_tests.cc:339-353` tests for a **native** pin, which is the
-  correct form. (The loose wording is what turned 92 NETLIB skips into 92 failures; read it at
-  `git show perf-evidence/vendor-independence:tests/spmm_tests.cc` line 27.)
-  (c) `route_spmm.hh:69-73` (and the plan's negative-results list) call the worst transposed cell "banded"; `verdict.txt` and the
+* ~~**Three in-tree comments are stale or wrong.**~~ All three are **closed**. (a) The route-neutrality comment in
+  `src/dispatch/entry_points/sparse.cc`, which claimed `preferred()` was all-false, was deleted with that file in phase 5. (b) The
+  comment saying the transposed refusal-skip was "DISABLED when `BATCHLAS_SPMM_ROUTE` is set" no longer exists — the comment pass
+  removed it, and the skip at `tests/spmm_tests.cc:366-373` tests for a **native** pin (`native` in the text, or `direct`, `cta`
+  or `blocked`), which is the correct form. (The loose wording is what turned 92 NETLIB skips into 92 failures; read it at
+  `git show perf-evidence/vendor-independence:tests/spmm_tests.cc` line 27.) (c) `route_spmm.hh:69-73`, which called the worst
+  transposed cell "banded", is deleted; the plan's negative-results list (archived) still says so, and `verdict.txt` and the
   sweep's own arguments make it `pat=1`, scattered.
 * **Coverage blindness, known and accepted**: `variant_key` packs only `uplo/side/diag/transA/transB` and `shape_class` buckets
   `max(m,n,k)` and batch by power of two, so a CSR and a Dense `spmm` at the same extents would collapse into one first-writer-wins

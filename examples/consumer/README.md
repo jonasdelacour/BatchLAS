@@ -1,4 +1,4 @@
-# Consuming BatchLAS from an outside CMake project
+# Consuming BatchLAS from an outside CMake project {#consumer_example}
 
 A standalone project — its own `cmake_minimum_required`, its own `project()`,
 `find_package(BatchLAS CONFIG REQUIRED)` and nothing else — that runs a batched

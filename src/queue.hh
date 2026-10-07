@@ -17,35 +17,22 @@
 #include <utility>
 #include <vector>
 
-// Quoted, and it has to stay quoted. src/util/ is a PRIVATE directory that is
-// never installed and is not on any -I line; it holds the only headers left in
-// the tree spelled `util/...`, reached exclusively by quoted relative includes.
-// The public tree moved to include/batchlas/util/ (spelled <batchlas/util/...>)
-// precisely so that no angle-form <util/...> exists anywhere. Do not add
-// -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
+// Quoted on purpose: src/util/ is private and on no -I line. Never convert to <> or add -I src.
+// evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 #include "util/internal-api.hh"
 #include "util/kernel-trace.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 
-// Inline definitions in this private header still have to reach consumers that
-// only ever see the declaration in the installed public header, so they must be
-// emitted into libbatchlas rather than dropped as unreferenced. `used` does that;
-// plain `inline` does not (verified: nothing in-tree calls them, so without this
-// the symbol is absent from every object file). Not applied in the SYCL device
-// pass, which has no business emitting host-only queue plumbing.
+// `used` so these inline definitions are emitted for consumers; plain `inline` drops them (verified).
 #ifdef __SYCL_DEVICE_ONLY__
 #define BATCHLAS_QUEUE_EXPORTED_INLINE inline
 #else
 #define BATCHLAS_QUEUE_EXPORTED_INLINE [[gnu::used]] inline
 #endif
 
-// CUDA __launch_bounds__, spelled as SYCL kernel attributes, for use inside a
-// kernel's attribute list: [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(T, B)]].
-// NVPTX only. Everywhere else it expands to nothing (an empty attribute-list entry
-// is legal): the values were tuned on NVIDIA, and on SPIR-V the attributes emit
-// KernelAttributesINTEL, which icpx 2026.0's CPU AOT compiler rejects ("unsupported
-// capability 5892"), failing the link of any spir64_x86_64 build.
+// [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(T, B)]]. NVPTX only: on SPIR-V the
+// attributes break the icpx CPU AOT link. evidence: docs/design/runtime-internals.md#runtime-internals-queue-thread-ownership-and-the-last-event-holder
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
 #define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks) \
     intel::max_work_group_size(1, 1, max_threads), intel::min_work_groups_per_cu(min_blocks)
@@ -53,16 +40,9 @@
 #define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks)
 #endif
 
-// A Queue is single-threaded by contract; the reasoning is on struct Queue in
-// util/sycl-device-queue.hh. This is the whole enforcement: record the thread that
-// built the queue, and compare against it on the paths that mutate state shared
-// across a queue's calls. The check is a TLS load and a word compare, on paths
-// that are about to talk to a device driver.
-//
-// Deliberately not a mutex. The arena below is a bump allocator whose cursor
-// rewinds on release, so serialising the calls would still interleave two threads'
-// leases within one block and still corrupt them -- a lock would hide the design
-// constraint rather than satisfy it.
+// The whole single-thread enforcement: owner thread id vs caller. Deliberately NOT a mutex:
+// serialised calls would still interleave two threads' leases in the arena.
+// evidence: docs/design/runtime-internals.md#runtime-internals-queue-thread-ownership-and-the-last-event-holder
 [[noreturn]] inline void batchlas_throw_queue_wrong_thread(const char* what) {
     throw batchlas::api_misuse(
         std::string("BatchLAS: ") + what +
@@ -73,17 +53,8 @@
         "with Queue::attach_to_current_thread() while no other thread is using it.");
 }
 
-// Everything from here to the end of the file is namespace batchlas. QueueImpl
-// and EventImpl are DEFINED below, and they are declared in
-// <batchlas/util/sycl-device-queue.hh>, which now declares them inside batchlas;
-// defining them at global scope would define two unrelated types and leave
-// Queue::impl_ pointing at an incomplete one. The same goes for the out-of-line
-// Queue members near the bottom. This header is private and never installed, so
-// the compatibility shim in the public header does not reach it at all.
-//
-// batchlas_throw_queue_wrong_thread above stays at global scope on purpose: its
-// name already carries the prefix, nothing outside this header calls it, and the
-// call in QueueThreadOwner::check below still finds it by ordinary lookup.
+// Must be namespace batchlas to the end of file (defines types declared there); the throw helper
+// above stays global on purpose. evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions
 namespace batchlas {
 
 struct QueueThreadOwner {
@@ -97,29 +68,14 @@ struct QueueThreadOwner {
 };
 
 inline bool batchlas_queue_profiling_enabled() {
-    // Keep profiling opt-in to avoid overhead in non-benchmark runs.
-    // Kernel trace implies profiling; benchmarks can enable profiling without tracing.
-    // settings().diagnostics.profiling is the OR of BATCHLAS_QUEUE_PROFILING and
-    // BATCHLAS_BENCH_PROFILING -- two names, one field, folded in settings.cc.
-    // Reading it here rather than the environment is what puts these two knobs
-    // under configure() and under ScopedEnvVar's reload, like every other knob.
+    // Opt-in; kernel trace implies it. Read from settings(), never getenv, so configure() applies.
     return batchlas_kernel_trace::enabled() ||
            batchlas::settings().diagnostics.profiling;
 }
 
-// Per-queue scratch memory. See util/workspace.hh for the caller-facing rules.
-//
-// Blocks are never reallocated or moved, only appended to, because a lease that
-// is still live must keep its pointer: an inner borrow that does not fit in the
-// current block opens a new one rather than growing the old one. Released bytes
-// are rewound, not freed, so the steady state is one allocation per distinct
-// high-water mark rather than one per call.
-//
-// The rewind is what makes release order matter, so the order is enforced here
-// rather than left to the caller's discipline: see release(). Documenting the
-// invariant was not enough, because WorkspaceLease::release() exists precisely
-// so that a caller can hand bytes back early, and doing that to anything but the
-// innermost lease used to re-serve memory a live lease was still pointing at.
+// Per-queue scratch. Blocks are append-only (a live lease keeps its pointer); released bytes are
+// rewound, so release ORDER matters and is enforced in release().
+// evidence: docs/design/runtime-internals.md#runtime-internals-the-per-queue-workspace-arena
 struct WorkspaceArena {
     struct Block {
         std::byte* ptr = nullptr;
@@ -130,12 +86,7 @@ struct WorkspaceArena {
     size_t cur_block_ = 0;   // block currently being carved from
     size_t cur_offset_ = 0;  // bytes used within it
 
-    // Records the thread that constructed the owning QueueImpl, since the arena is
-    // a member of it. Checked where bytes are handed out and where blocks are
-    // freed -- see acquire() and trim(). Not checked in release(): every release
-    // comes from a lease, every lease comes from an acquire that was already
-    // checked, and ~WorkspaceLease is noexcept, so a throw there would terminate
-    // instead of diagnosing.
+    // Checked in acquire() and trim(), NOT in release(): ~WorkspaceLease is noexcept.
     QueueThreadOwner owner_;
 
     // Matches BumpAllocator's alignment rule so that a lease can be handed
@@ -157,15 +108,7 @@ struct WorkspaceArena {
         std::uint64_t seq;   // identifies this loan among the outstanding ones
     };
 
-    // One entry per outstanding loan, innermost last. It exists so release() can
-    // tell "this is the innermost loan" from "this loan has live leases stacked
-    // on top of it"; a sequence number alone cannot answer the second question
-    // once more than one loan has been returned out of order.
-    //
-    // std::vector rather than a fixed array because nesting depth is a property
-    // of the call graph, not of this file. It keeps its capacity between calls,
-    // so after the first few leases the LIFO path is a push_back/pop_back into a
-    // warm buffer and allocates nothing.
+    // Outstanding loans, innermost last: a seq alone cannot tell "innermost" from "has live leases above".
     struct LiveLoan {
         std::uint64_t seq;
         size_t block;
@@ -175,17 +118,10 @@ struct WorkspaceArena {
     std::vector<LiveLoan> live_;
     std::uint64_t next_seq_ = 0;
 
-    // An entry that has been returned is only kept while something above it is
-    // still live -- release() pops it the moment it reaches the top -- so a
-    // non-empty stack always means at least one lease is genuinely outstanding.
+    // Returned entries are popped on reaching the top, so non-empty means a lease is truly live.
     bool has_outstanding_loans() const { return !live_.empty(); }
 
-    // Would releasing `seq` right now move the cursor, i.e. make bytes
-    // re-servable to the next borrow? WorkspaceLease::release asks before it
-    // releases, because that -- and only that -- is when an out-of-order queue
-    // has to be drained: bytes that merely change state from live to `returned`
-    // are not handed to anyone until the loans above them come back, and that
-    // later release does its own drain.
+    // Would releasing `seq` make bytes re-servable? Only then must an out-of-order queue drain.
     bool release_reclaims(std::uint64_t seq) const {
         return !live_.empty() && live_.back().seq == seq;
     }
@@ -226,23 +162,9 @@ struct WorkspaceArena {
         return record_loan(p, bytes, cur_block_, size_t{0});
     }
 
-    // Hand back the bytes of the loan identified by `seq`.
-    //
-    // Only the innermost outstanding loan may move the cursor. Rewinding for any
-    // other one would re-serve memory that a lease above it still points at, and
-    // the next borrow would silently alias it -- a wrong answer rather than a
-    // diagnosable failure. An out-of-order return is therefore recorded in place
-    // and its bytes are reclaimed later, when the loans stacked on top of it come
-    // back. That leaves the arena holding more than it needs to for a while,
-    // which is a cost, not a correctness problem.
-    //
-    // `diagnose_out_of_order` is false for the one caller that knows it is about
-    // to return out of order and has no way not to: WorkspaceLease's
-    // move-assignment, where the right-hand lease is necessarily acquired before
-    // the left-hand one is released. Asserting there would abort perfectly legal
-    // code (`ws = q.workspace(n);`) in every non-NDEBUG build. Everywhere else
-    // the assert is the point -- an out-of-order return from a scope-bound lease
-    // means the scopes are not nested the way the caller thinks they are.
+    // Only the INNERMOST loan may move the cursor; rewinding for another would let the next borrow
+    // alias a live lease. Out-of-order returns are marked and reclaimed later. `diagnose_out_of_order`
+    // is false only for WorkspaceLease move-assignment (`ws = q.workspace(n);` is legal).
     void release(size_t block, size_t offset, std::uint64_t seq, bool diagnose_out_of_order = true) {
         if (!live_.empty() && live_.back().seq == seq) {
             live_.pop_back();
@@ -272,15 +194,8 @@ struct WorkspaceArena {
         }
     }
 
-    // Return the arena's memory to the runtime. Refuses while any lease is
-    // outstanding -- the blocks are what those leases point at -- and reports
-    // that back rather than trimming partially.
-    //
-    // Drains the queue first, for the same reason ~QueueImpl does: a released
-    // lease only says the *caller* is finished with the bytes, not that the
-    // kernels it enqueued over them have finished reading them. Freeing shared
-    // USM out from under work still in flight is a use-after-free that usually
-    // only shows up under load.
+    // Refuses (no partial trim) while any lease is live. Drains first: a released lease does not
+    // mean its kernels have finished reading the bytes.
     bool trim(sycl::queue& q) {
         owner_.check("Queue::trim_workspace()");
         if (has_outstanding_loans()) return false;
@@ -321,20 +236,11 @@ struct QueueImpl : public sycl::queue{
     using sycl::queue::queue;
 
     ~QueueImpl() {
-        // A live lease at this point is a dangling one: WorkspaceLease holds a
-        // Queue*, so releasing it after the arena is gone would hand a stale
-        // block/offset to whatever arena the Queue has next. Scope-bound leases
-        // make this impossible for ~Queue, but Queue's move-assignment also runs
-        // ~QueueImpl (it replaces impl_), and nothing about that spelling forces
-        // the leases to be gone first. Assert rather than defend: a Queue moved
-        // out from under a live lease is a bug in the caller, and silently
-        // draining and freeing here would only hide it.
+        // A live lease here dangles (Queue move-assignment also runs this). Assert, do not defend.
         assert(!arena_.has_outstanding_loans() &&
                "QueueImpl destroyed (or its Queue move-assigned) while a workspace lease is live");
 
-        // The arena's blocks may still be referenced by enqueued-but-unfinished
-        // kernels. Freeing shared USM out from under them is a use-after-free
-        // that usually only shows up under load, so drain first.
+        // Drain first: freeing USM under in-flight kernels is a use-after-free.
         if (!arena_.blocks_.empty()) {
             try {
                 wait();
@@ -344,20 +250,8 @@ struct QueueImpl : public sycl::queue{
         }
     }
 
-    // Tracks the last event submitted to this queue via the wrappers below.
-    // Used to implement a cheap get_event() for in-order queues.
-    //
-    // A guarded holder rather than a bare std::optional<sycl::event> because the
-    // unsynchronised optional is a race in its own right, independent of the
-    // arena: two threads submitting on one Queue tear it and abort inside the SYCL
-    // runtime with UR_RESULT_ERROR_INVALID_EVENT, even when both callers supply
-    // their own workspace and the arena is never touched. Putting the check on the
-    // member means every path that reads or writes it is covered -- the submit
-    // wrappers here, and Queue::enqueue/get_event/create_event_after_external_work
-    // in util/queue-impl.cc -- without each one having to remember to ask.
-    //
-    // The interface is the subset of std::optional those callers use, so their
-    // spellings are unchanged.
+    // Last submitted event (cheap in-order get_event()). Thread-guarded: a bare optional tears
+    // under two submitting threads even with no arena use. evidence: docs/design/runtime-internals.md#runtime-internals-queue-thread-ownership-and-the-last-event-holder
     class LastEvent {
     public:
         LastEvent& operator=(sycl::event e) {
@@ -408,11 +302,7 @@ struct QueueImpl : public sycl::queue{
         return new_it->second;
     }
 
-    // Exported for the same reason kernel-trace.hh's globals are: this is a
-    // vague-linkage inline static that the linker folds across TUs, and a test
-    // including this private header compiles WITHOUT hidden visibility. Hiding
-    // the library's copy gives the process two SYCL device caches, which is a
-    // duplicated-state bug no undefined reference ever points at.
+    // Exported so the vague-linkage fold yields ONE device cache per process, not one per library.
     inline static BATCHLAS_INTERNAL_API const auto device_arrays = std::array{ 
                 sycl::device::get_devices(sycl::info::device_type::cpu), 
                 sycl::device::get_devices(sycl::info::device_type::gpu), 
@@ -555,13 +445,7 @@ struct EventImpl : public sycl::event{
     EventImpl(sycl::event&& event) : sycl::event(event) {}
 };
 
-// ---------------------------------------------------------------------------
-// The public entry points that need QueueImpl/EventImpl to be complete types.
-// Declared in util/sycl-device-queue.hh and batchlas/sycl_interop.hh, which
-// consumers get; defined here, because this is the only place those types are
-// defined. See BATCHLAS_QUEUE_EXPORTED_INLINE at the top for why they carry that
-// spelling instead of plain `inline`.
-// ---------------------------------------------------------------------------
+// Public members that need QueueImpl/EventImpl complete; hence BATCHLAS_QUEUE_EXPORTED_INLINE.
 
 BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
     // A lease released on the new thread would rewind an arena the old thread is
@@ -587,11 +471,7 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
             return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_hip>(*impl_));
 #endif
         default:
-            // Every other backend deliberately returns nullptr rather than
-            // something the caller cannot treat as an unowned stream pointer:
-            // Level Zero's queue interop is a variant of two handle types, OpenCL's
-            // retains the handle and makes the caller release it, and the host
-            // backend has no stream at all. See the declaration.
+            // Deliberately nullptr elsewhere: no other backend yields an unowned stream pointer.
             return nullptr;
     }
 }

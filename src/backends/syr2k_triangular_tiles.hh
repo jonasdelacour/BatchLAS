@@ -1,54 +1,12 @@
 #pragma once
 
-// A 128x128x8 register-tiled SYR2K that visits only the half of C the caller
-// asked for, and fuses both of its rank-k products into one pass.
-//
-// C = alpha*A*B^T + alpha*B*A^T + beta*C is symmetric and the caller names one
-// triangle, so decomposing it into two batched GEMMs aimed at C is wrong twice
-// over: each GEMM writes the whole n x n, clobbering the half that belongs to
-// the caller, and the pair streams C through memory three times -- written with
-// beta, read back, written again -- for an output that is touched once here.
-//
-// The grid is indexed over the triangular tile set, so a tile lying outside the
-// requested triangle is never launched. A tile on the diagonal is the only one
-// computed in full, and its epilogue drops the elements in the unreferenced
-// half: BLAS forbids writing them, and with beta != 0 it forbids reading them
-// too, so the diagonal tile also gives up the 128-bit store form and goes one
-// element at a time.
-//
-// Both products land in the same accumulators:
-//
+// A 128x128x8 register-tiled SYR2K over the triangular tile set, fusing both
+// rank-k products into the same accumulators:
 //     accum += A[bi] * B[bj]^T   and   accum += B[bi] * A[bj]^T
-//
-// which needs four staged tiles per k step instead of two, and pays for them
-// with twice the arithmetic -- 8 x LDS.128 against 128 FFMA, the same 16:1
-// ratio a plain GEMM tile reaches. The four 128x8 tiles are 16 KB of shared
-// memory, well inside what lets two blocks share an SM.
-//
-// The two products are issued one after the other rather than interleaved, so
-// that only one pair of 8-wide fragments is live at a time on top of the 64
-// accumulators. Holding both pairs at once fits in a thread, but not inside the
-// register budget that leaves room for a second block on the SM, and the
-// occupancy that costs is worth 1.53x: 5.11 ms against 3.34 at n = 512 batch
-// 512.
-//
-// The inner loop and shared-memory layout are those of
-// src/sycl/gemm/register_128x128.hh, and for the same reasons: an aligned
-// shared stride so the fragment loads become LDS.128, operands staged [k][row]
-// so a thread's 8 values are contiguous, and the 8x8 thread tile split into two
-// 4-wide bands so an LDS.128 is bank-conflict free. Staging follows the
-// transpose mode:
-//
-//   NoTrans  A and B are n x k, so a column is contiguous in the output row
-//            index and every tile stages with one vector load per thread.
-//   Trans    A and B are k x n, so the contiguous direction is k and the tiles
-//            stage transposed, four consecutive k per thread scattered into
-//            shared.
-//
-// On the diagonal the two row offsets coincide, so the bj-side fragments are
-// the bi-side ones and the kernel aliases the pointers rather than staging the
-// same rows twice. on_diagonal is uniform across the block, so this costs no
-// divergence.
+// Products are issued sequentially, not interleaved, to keep one fragment pair
+// live (occupancy). Diagonal tiles alias the bj-side tiles to the bi-side ones
+// (block-uniform, no divergence) and mask their epilogue.
+// evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
 #include "triangular_tiles.hh"
 

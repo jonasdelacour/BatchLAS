@@ -1,10 +1,11 @@
 #pragma once
 
-// Flat kernel selection: one choose() per op over measured per-device tables.
-// Spec: docs/design/flat-kernel-selection.md §4-§5. Everything here is generic over a
-// choice std::variant whose alternatives are family structs (§4.2). State that a test and
-// the library must share (pins, table cache, trace depth) lives in select.cc behind
-// BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
+/// @file
+/// @brief Flat kernel selection: one choose() per op over measured per-device tables.
+/// Spec: docs/design/flat-kernel-selection.md §4-§5. Everything here is generic over a choice
+/// std::variant whose alternatives are family structs (§4.2). @ingroup selection
+// State that a test and the library must share (pins, table cache, trace depth) lives in select.cc
+// behind BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
 #include "coverage.hh"
 #include "vendor.hh"
@@ -33,31 +34,36 @@
 #include <vector>
 
 namespace batchlas::select {
+/// @addtogroup selection
+/// @{
 
 // ---- device facts (§5.1) ---------------------------------------------------------------
 
+/// The device facts a `can_run` predicate and the table lookup read (§5.1).
 struct Device {
-    std::string key;     // table key: "sm_120", "gfx90a", "intel", "cpu"
-    std::string family;  // "sm", "gfx", "intel", "cpu": borrowing stays in a family first
-    int arch_number = 0; // 120, 89, 90 (gfx90a), 0 for cpu
+    std::string key;     ///< table key: "sm_120", "gfx90a", "intel", "cpu"
+    std::string family;  ///< "sm", "gfx", "intel", "cpu": borrowing stays in a family first
+    int arch_number = 0; ///< 120, 89, 90 (gfx90a), 0 for cpu
     bool is_gpu = false;
     bool has_sg32 = false;
-    bool has_vendor = false;  // the asking op's library group (OpSpec::vendor) is compiled in
-    std::int64_t slm_budget = 0;
-    int max_wg = 0;
+    bool has_vendor = false;  ///< the asking op's library group (OpSpec::vendor) is compiled in
+    std::int64_t slm_budget = 0;  ///< LOCAL_MEM_SIZE less a 4 KiB reserve, bytes
+    int max_wg = 0;  ///< MAX_WORK_GROUP_SIZE
 };
 
-// Key, family and arch only; the capability fields stay default. Tables and tests use it.
+/// Key, family and arch only; the capability fields stay default. Tables and tests use it.
 BATCHLAS_API Device device_from_key(std::string_view key);
 
-// Memoized per (device, backend, has_vendor).
+/// The facts of @p dev for backend @p b; memoized per (device, backend, has_vendor).
 BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor);
 
+/// The facts of @p q's device, with Device::has_vendor answering for the library group @p vendor.
 template <Backend B>
 const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
     return describe(q.device(), B, has_library<B>(vendor));
 }
 
+/// The dtype token of a table file name: float, double, cfloat or cdouble.
 template <class T>
 constexpr std::string_view dtype_name() {
     if constexpr (std::is_same_v<T, float>) return "float";
@@ -71,12 +77,14 @@ constexpr std::string_view dtype_name() {
 
 // ---- families and spelling (§4.2, §5.2) -----------------------------------------------
 
+/// A string literal as a template argument: the name of a NoFields family.
 template <std::size_t N>
 struct FamilyName {
     char s[N]{};
     constexpr FamilyName(const char (&a)[N]) { std::copy_n(a, N, s); }
 };
-// `struct Cta : NoFields<"cta"> {};` -- generic code builds field-less families as A{}.
+/// Base of a family with no knobs: `struct Cta : NoFields<"cta"> {};`.
+/// Generic code builds such families as `A{}`.
 template <FamilyName L>
 struct NoFields {
     static constexpr std::string_view name{L.s, sizeof(L.s) - 1};
@@ -85,7 +93,7 @@ struct NoFields {
     bool operator==(const NoFields&) const = default;
 };
 
-// Every alternative of a field-less choice variant, in declaration (= tie-break) order.
+/// Every alternative of a field-less choice variant, in declaration (= tie-break) order.
 template <class Choice>
 constexpr auto all_of() {
     return [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -93,7 +101,7 @@ constexpr auto all_of() {
     }(std::make_index_sequence<std::variant_size_v<Choice>>{});
 }
 
-// std::visit over a choice with one lambda per family.
+/// std::visit over a choice with one lambda per family.
 template <class... F>
 struct overloaded : F... { using F::operator()...; };
 template <class... F>
@@ -128,12 +136,13 @@ inline bool parse_int(std::string_view t, int& out) {
 
 }  // namespace detail
 
+/// The family name of @p c, e.g. "lpanel" for `lpanel:panel=8`.
 template <class Choice>
 std::string_view family_of(const Choice& c) {
     return std::visit([](const auto& a) { return std::decay_t<decltype(a)>::name; }, c);
 }
 
-// Output spelling, always the long form: family[:field=value]...
+/// Output spelling, always the long form: family[:field=value]...
 template <class Choice>
 std::string to_string(const Choice& c) {
     return std::visit([](const auto& a) {
@@ -150,7 +159,8 @@ std::string to_string(const Choice& c) {
     }, c);
 }
 
-// Accepts the long form and positional shorthand ("lpanel:8"); exact case, no whitespace.
+/// Accepts the long form and positional shorthand ("lpanel:8"); exact case, no whitespace.
+/// @return the choice, or nullopt with the reason in `*err` (when non-null).
 template <class Choice>
 std::optional<Choice> parse(std::string_view text, std::string* err = nullptr) {
     const auto tok = detail::split(text, ':');
@@ -198,13 +208,15 @@ std::optional<Choice> parse(std::string_view text, std::string* err = nullptr) {
 
 // ---- op-supplied rules ------------------------------------------------------------------
 
+/// What an op adds to the generic walk: its last-resort order.
 struct Rules {
-    // Families in generality order (§5.5); the rest follow in candidate-list order.
+    /// Families in generality order (§5.5); the rest follow in candidate-list order.
     std::span<const std::string_view> last_resort{};
 };
 
 // ---- keys and tables (§5.4) -------------------------------------------------------------
 
+/// One field of a lookup key, value as text; a Key lists the fields an op's table keys name.
 struct KeyField {
     std::string name;
     std::string value;
@@ -213,33 +225,37 @@ struct KeyField {
 };
 using Key = std::vector<KeyField>;
 
+/// One entry of a table's `# keys:` line.
 struct TableKey {
     std::string name;
-    bool log = false;     // false: ":exact", compared as text
-    double weight = 1.0;  // ":log:<w>": this key's share of the distance
+    bool log = false;     ///< false: ":exact", compared as text
+    double weight = 1.0;  ///< ":log:<w>": this key's share of the distance
 };
 
+/// One ranked candidate of a row: its spelling and milliseconds per call for the whole batch.
 struct TableEntry {
     std::string spelling;
     double ms = 0.0;
 };
 
+/// One measured (or transcribed) shape and every candidate ranked there, fastest first.
 struct TableRow {
-    std::vector<std::string> keys;  // in Table::keys order
-    std::vector<double> log2_keys;  // log2 of each :log key, 0 for :exact
+    std::vector<std::string> keys;  ///< in Table::keys order
+    std::vector<double> log2_keys;  ///< log2 of each :log key, 0 for :exact
     std::vector<TableEntry> ranked;
     int line = 0;
-    // False for a transcribed row ("<spelling> -" entries, every ms 0): ranked, never timed.
-    // Untimed rows need a source=transcribed:<sha> header; such a table may also hold timed rows.
+    /// False for a transcribed row ("<spelling> -" entries, every ms 0): ranked, never timed.
+    /// Untimed rows need a `source=transcribed:<sha>` header; such a table may also hold timed rows.
     bool timed = true;
 };
 
+/// One parsed `tuned/<op>.<dtype>.<device>.txt` file.
 struct Table {
-    std::string file;  // basename, e.g. "potrf.float.sm_120.txt"
+    std::string file;  ///< basename, e.g. "potrf.float.sm_120.txt"
     std::string op, dtype, device, family;
     int arch_number = 0;
-    std::string source;  // the header's source= value, e.g. "transcribed:2b46acab"
-    bool is_override = false;
+    std::string source;  ///< the header's source= value, e.g. "transcribed:2b46acab"
+    bool is_override = false;  ///< read from BATCHLAS_TUNED_DIR
     std::vector<TableKey> keys;
     std::vector<TableRow> rows;
     // nearest() results by key text, as row indices (copies may share it); set by parse_table.
@@ -247,25 +263,27 @@ struct Table {
     struct Memo;
     std::shared_ptr<Memo> memo;
 
-    // Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
-    // dropped from the right until some row matches, possibly all of them), then min
-    // sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
-    // Throws if `key` lacks a table key.
+    /// Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
+    /// dropped from the right until some row matches, possibly all of them), then min
+    /// sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
+    /// @throws std::invalid_argument if @p key lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
-// Throws std::runtime_error("<file>:<line>: <reason>").
+/// Parses one table file. @throws std::runtime_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
 
+/// A `tuned/*.txt` file compiled into the library: its basename and text.
 struct EmbeddedTable {
     std::string_view name;
     std::string_view text;
 };
-BATCHLAS_API std::span<const EmbeddedTable> embedded_tables();  // generated from tuned/*.txt
+BATCHLAS_API std::span<const EmbeddedTable> embedded_tables();  ///< generated from tuned/*.txt
 
-// §5.5: own key; same family at-or-below by nearest arch, then above; then sm, gfx, intel,
-// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR, parsed once per (op, dtype, dir).
+/// §5.5: own key; same family at-or-below by nearest arch, then above; then sm, gfx, intel,
+/// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR, parsed once per (op, dtype, dir).
+/// A CPU device gets only its own table.
 BATCHLAS_API std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::string_view dtype,
                                                               const Device& d);
 
@@ -395,8 +413,8 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 
 // ---- pins (§5.3) ------------------------------------------------------------------------
 
-// Wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer pin on exit.
-// Takes a choice, or any pin word ("auto", "native", "vendor", a spelling).
+/// RAII pin for @p op: wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer
+/// pin on exit. Takes a choice, or any pin word ("auto", "native", "vendor", a spelling).
 template <class Choice>
 class ScopedPin {
 public:
@@ -412,6 +430,9 @@ private:
 
 // ---- the selection algorithm (§5.4) -----------------------------------------------------
 
+/// The only selection algorithm: the pin, else the first candidate passing @p can_run in the nearest
+/// row of each table in borrow order, else the first runnable candidate in @p rules' last-resort order.
+/// @throws std::invalid_argument for a bad pin (R6); std::runtime_error when nothing can run.
 template <class Choice, std::size_t N, class CanRun>
 Choice choose(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
               const std::array<Choice, N>& candidates, CanRun&& can_run, const Rules& rules = {}) {
@@ -424,8 +445,8 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
 
 // ---- trace and coverage (§5.6) ----------------------------------------------------------
 
-// The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).
 namespace detail {
+/// The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).
 struct NativeFacts {
     bool existed = true;
     int supported = -1;
@@ -433,7 +454,7 @@ struct NativeFacts {
 }  // namespace detail
 using detail::NativeFacts;
 
-// Over the op's candidates: any non-vendor compiled, and any of those passing can_run.
+/// Over the op's candidates: any non-vendor compiled, and any of those passing can_run.
 template <class Choice, std::size_t N, class CanRun>
 NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_run) {
     NativeFacts f{false, 0};
@@ -445,10 +466,10 @@ NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_r
     return f;
 }
 
-// Prints the last choose() decision for `op` under BATCHLAS_SELECT_TRACE=1, indents nested
-// scopes, and records the coverage row. The shape is required: with coverage on and trace
-// off no decision is noted, so scalar, backend and uplo can come from nowhere else.
-// `fields` are the key fields the line shows (posv: n, nrhs, batch); empty prints n and batch.
+/// Prints the last choose() decision for `op` under BATCHLAS_SELECT_TRACE=1, indents nested
+/// scopes, and records the coverage row. The shape is required: with coverage on and trace
+/// off no decision is noted, so scalar, backend and uplo can come from nowhere else.
+/// `fields` are the key fields the line shows (posv: n, nrhs, batch); empty prints n and batch.
 class TraceScope {
 public:
     template <class Choice>
@@ -469,26 +490,26 @@ private:
 
 // ---- an op's whole selection path (§4.3) -------------------------------------------------
 
-inline constexpr std::array<std::string_view, 2> kBlockedThenVendor{"blocked", "vendor"};
+inline constexpr std::array<std::string_view, 2> kBlockedThenVendor{"blocked", "vendor"};  ///< default last resort
 
-// What an op's choice.hh declares once: its name, the library its Vendor family calls (one
-// gate for can_run, the launch arm and the NoRouteError), and its last-resort order.
+/// What an op's choice.hh declares once: its name, the library its Vendor family calls (one
+/// gate for can_run, the launch arm and the NoRouteError), and its last-resort order.
 struct OpSpec {
     Op op;
-    Lib vendor = Lib::none;
+    Lib vendor = Lib::none;  ///< Lib::none: the op has no vendor family
     Rules rules{kBlockedThenVendor};
-    constexpr std::string_view name() const { return op_name(op); }
+    constexpr std::string_view name() const { return op_name(op); }  ///< table, pin and trace name
 };
 
-// The Vendor arm of an op without its library: record the miss and throw NoRouteError.
+/// The Vendor arm of an op without its library: record the miss and throw NoRouteError.
 template <Backend B, class T>
 [[noreturn]] void no_vendor(const OpSpec& op) {
     throw_no_vendor_route<T>(op.op, B, library_name<B>(op.vendor));
 }
 
-// choose(), with "nothing runnable" in a build without the op's library reported as
-// NoRouteError plus a coverage `miss` row (the vendor-free burn-down reads them).
-// can_run(choice, device) is the op's R3 predicate.
+/// choose(), with "nothing runnable" in a build without the op's library reported as
+/// NoRouteError plus a coverage `miss` row (the vendor-free burn-down reads them).
+/// can_run(choice, device) is the op's R3 predicate. `<op>_buffer_size` calls this (R5).
 template <Backend B, class T, class Choice, std::size_t N, class CanRun>
 Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
@@ -509,9 +530,9 @@ Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<C
     return pick<B, T>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
 }
 
-// A public entry point after validation: pick, open the trace/coverage scope (the shape's
-// scalar and backend are filled here; `trace_fields` as for TraceScope), then launch(choice)
-// inside it, so children nest under this line.
+/// A public entry point after validation: pick, open the trace/coverage scope (the shape's
+/// scalar and backend are filled here; `trace_fields` as for TraceScope), then launch(choice)
+/// inside it, so children nest under this line. @return whatever @p launch returns.
 template <Backend B, class T, class Choice, std::size_t N, class CanRun, class Launch>
 decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
                    CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
@@ -525,8 +546,8 @@ decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<
     return launch(c);
 }
 
-// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
-// pending work (the multi-launch drivers need one).
+/// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
+/// pending work (the multi-launch drivers need one).
 template <class F>
 decltype(auto) on_in_order_queue(Queue& q, F&& f) {
     if (q.in_order()) return f(q);
@@ -535,6 +556,8 @@ decltype(auto) on_in_order_queue(Queue& q, F&& f) {
     in_order.enqueue(dep);
     return f(in_order);
 }
+
+/// @}
 
 namespace testing {
 // Replace the embedded tables with {file name, text} pairs; caches are dropped.

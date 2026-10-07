@@ -3,7 +3,7 @@
 // Tests call sycl_potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
 // multiply-back residual computed here: a vendor reference is inert in a vendor-free
 // build. Pinned-facade cases use ScopedPin; potrf_candidates_tests covers every pin.
-// evidence: docs/perf/potrf.md#correctness-findings
+// evidence: docs/perf/potrf.md#potrf-correctness-findings
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/linalg.hh>
@@ -295,7 +295,7 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     std::vector<int> sizes = {1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 63, 64, 65};
     // 108..111 straddle the 48 KB launch hole. They MUST stay after the smaller sizes:
     // the attribute is sticky per CUfunction, so any earlier launch above 48 KB masks it.
-    // evidence: docs/perf/potrf.md#the-48-kb-launch-hole
+    // evidence: docs/perf/potrf.md#potrf-the-48-kb-launch-hole
     for (int n : {108, 109, 110, 111}) sizes.push_back(n);
     sizes.push_back(cap - 1);
     sizes.push_back(cap);

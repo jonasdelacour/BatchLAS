@@ -14,6 +14,15 @@
 #include <utility>
 #include <vector>
 
+/// @file
+/// @brief miniacc: a header-only accuracy-benchmark harness (register cases, sample, summarise, CSV).
+///
+/// Registered with MINI_ACC_BENCHMARK(fn); a program built with MINI_ACC_MAIN()
+/// parses `--samples`, `--seed`, `--log10-cond`, `--csv`, `--benchmark_filter`,
+/// `--backend`, `--type` and positional argument lists. Installed because it is
+/// under include/batchlas; not a stable interface.
+/// @ingroup internal_helpers
+
 // Helpers to generate unique variable names in macros.
 #define MINI_ACC_CONCAT_INNER(x, y) x##y
 #define MINI_ACC_CONCAT(x, y) MINI_ACC_CONCAT_INNER(x, y)
@@ -32,6 +41,8 @@ constexpr const char* kColorReset = "\033[0m";
 constexpr const char* kColorHeader = "\033[1;36m";
 constexpr const char* kColorName = "\033[1m";
 
+/// @brief Run-wide settings parsed from the command line.
+/// @ingroup internal_helpers
 struct Config {
     size_t samples = 1024;
     unsigned int seed = 1234u;
@@ -129,6 +140,8 @@ inline std::vector<double> dedup_nearly_equal(const std::vector<double>& input,
     return out;
 }
 
+/// @brief Per-case context handed to a benchmark: its arguments, the run settings, and the sample sink.
+/// @ingroup internal_helpers
 class State {
 public:
     State(std::vector<double> args,
@@ -188,6 +201,8 @@ private:
 
 using BenchFunc = std::function<void(State&)>;
 
+/// @brief A registered case: name, function, and its argument lists (Args, ArgRange, ArgsProduct).
+/// @ingroup internal_helpers
 struct Benchmark {
     std::string name;
     BenchFunc func;
@@ -640,16 +655,9 @@ struct CliOptions {
     std::vector<std::string> backends;
     std::vector<std::string> types;
 
-    // `--help` was seen: usage has been printed and there is nothing to run.
-    //
-    // This flag exists because the --help arm used to call std::exit(0) instead,
-    // and this is an INSTALLED public header (cmake/BatchLASPackaging.cmake
-    // installs include/batchlas wholesale; only minibench*.hh and
-    // bench_structured.hh are EXCLUDEd, miniacc.hh is not). A library header
-    // must never terminate its host process: exit() runs no destructors for any
-    // live automatic object in the caller's frames, and a consumer that parses
-    // an argv containing "--help" for its own reasons -- or that embeds this
-    // harness in a larger program -- has no way to stop it.
+    /// `--help` was seen: usage has been printed and there is nothing to run.
+    /// MiniAccMain() turns it into exit status 0.
+    // A flag, never std::exit: this installed header must not terminate its host process.
     bool help_requested = false;
 };
 
@@ -684,9 +692,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             std::cout << "  --backend=LIST       comma separated backends to run\n";
             std::cout << "  --type=LIST          comma separated floating point types\n";
             std::cout << "  ARGS can be scalars, comma lists or start:end:num ranges\n";
-            // Return, do not exit. Nothing after --help can matter, and the
-            // combination expansion below is pure work, so the parse stops here
-            // and MiniAccMain turns the flag into a 0 exit status.
+            // Return, do not exit; MiniAccMain turns the flag into exit status 0.
             opt.help_requested = true;
             return opt;
         } else {
@@ -713,11 +719,12 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
     return opt;
 }
 
+/// @brief Parses the command line and runs every registered case that matches; the body of MINI_ACC_MAIN().
+/// @return 0, including after `--help`
+/// @ingroup internal_helpers
 inline int MiniAccMain(int argc, char** argv) {
     const CliOptions opts = ParseCommandLine(argc, argv);
-    // The one place that decides what --help means for the PROCESS. It is a
-    // main(), so returning 0 here is the same observable behaviour the old
-    // std::exit(0) had -- minus terminating anyone who is not a main().
+    // The one place that decides what --help means for the PROCESS.
     if (opts.help_requested) return 0;
     return RunRegisteredBenchmarks(opts.cfg,
                                    opts.csv_file,

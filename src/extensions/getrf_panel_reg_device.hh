@@ -1,6 +1,6 @@
 #pragma once
 
-// P4's register-resident GETRF panel leaf: one work-group per m x ncols panel, item `tid`
+// The register-resident GETRF panel leaf: one work-group per m x ncols panel, item `tid`
 // owning row `tid` of a compile-time `D rA[NB]`, pivoting by LAZY RELABEL. Same contract
 // as getf2_panel_device. THREE SPELLINGS ARE SILENT WRONG ANSWERS OR SILENT SPILLS: the
 // `j` loop's COMPILE-TIME bound with `continue` (never `break`); publishing the pivot row

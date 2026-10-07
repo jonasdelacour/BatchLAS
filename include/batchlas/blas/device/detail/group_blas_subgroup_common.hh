@@ -133,8 +133,8 @@ struct ComplexRank2kAccumTile {
 template <typename T>
 struct RegisterMatrixWorkspace {
     // clang-format off
-    // Array dimensions use max(1,...) to avoid zero-length arrays on AMD SYCL targets.
-    // If MaxSubgroups==0 the kernel must not be launched for this type (insufficient local memory).
+    // Extents clamp to 1 (no zero-length arrays); a budget of 0 sub-groups means never launch for T.
+    // evidence: docs/design/device-group-blas.md#device-group-blas-register-and-local-memory-caveats
     static constexpr int kMaxSubgroups = kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup<T> > 0 ? kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup<T> : 1;
     T lhs[kMaxSubgroups][kRegisterMatrixLhsStages][kRegisterMatrixSubgroupTileM * kRegisterMatrixTileAStride];
     T rhs[kRegisterMatrixRhsStages][kRegisterMatrixTileK * kRegisterMatrixTileBStride];

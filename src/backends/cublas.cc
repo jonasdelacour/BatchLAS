@@ -169,11 +169,9 @@ namespace batchlas {
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    // There is no batched or strided-batched ?hemm in cuBLAS -- only the single
-    // cublasChemm/cublasZhemm -- so a batch of them is a host loop over kernel
-    // launches. Expanding the Hermitian triangle into scratch turns the whole
-    // batch into one strided-batched GEMM instead, which is the same trade TRMM
-    // makes above for the same reason.
+    // cuBLAS has no batched ?hemm, so a batch is a host loop over launches. Expanding the
+    // Hermitian triangle into scratch turns it into one strided-batched GEMM (trmm's and
+    // symm's `expand` families make the same trade). Not table-selected: a fixed rule.
     template <Backend Back, ComplexScalar T>
     Event hemm_vendor(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -188,9 +186,8 @@ namespace batchlas {
 
         const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
 
-        // Unlike cublas?trmm, cublas?hemm is quick enough that a per-batch loop
-        // over it beats the expansion on a launch-bound call, so the shape has
-        // to be worth the extra kernel before the scratch is worth allocating.
+        // The loop beats the expansion on a launch-bound call, so the shape must earn the extra kernel.
+        // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
         const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
         if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes) &&
             detail::expansion_preferred(std::max({m, n, k}), A.batch_size())) {
@@ -248,29 +245,15 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    // BATCHLAS_EXPAND_ROUTE pins the route, as it does for the mirrored
-    // expansion in triangular_expand.hh, so a test can reach whichever one the
-    // shape would not have picked. Returns -1 when it is unset.
-    // One definition, in ../expansion_budget.hh, because sytrd_blocked.cc has to
-    // predict this route before calling her2k and a second parse here could
-    // drift from it silently.
+    // BATCHLAS_EXPAND_ROUTE (-1 when unset). One definition, in ../expansion_budget.hh, which
+    // sytrd_blocked.cc also reads to predict her2k's route; a second parse here would drift.
     inline int rankk_route_pin() {
         return ::batchlas::backend::detail::expansion_route_pin();
     }
 
-    // Where a GEMM over the whole n x n product beats a per-batch loop over
-    // cublas?herk. The GEMM computes both triangles and keeps one, so it starts
-    // from twice a rank-k update's arithmetic and only wins where the loop is
-    // launch-bound. Measured on sm_89 in complex64 over n in 32..1024 x batch
-    // in 1..256, as loop time over GEMM-route time: 1.6x to 72x for batch >= 4
-    // at n <= 512, a wash from n = 640 to 768, and 0.82x-0.93x from n = 896 up,
-    // where one cublas?herk already saturates the device on its own. batch <= 2
-    // is a wash or a loss at every n.
-    //
-    // Note that this is a conjunction where the mirrored expansion's threshold
-    // is a disjunction: that one has no large-n ceiling because expanding an
-    // operand costs a bandwidth-bound kernel and then does exactly the vendor's
-    // work, so it never pays twice for the arithmetic.
+    // GEMM over the whole n x n product vs the per-item cublas?herk loop. A conjunction, unlike
+    // the expansion's disjunction: the GEMM pays twice the arithmetic, so it needs an n ceiling.
+    // evidence: docs/perf/level3.md#herk-and-her2k-the-gemm-plus-fold-crossovers
     inline bool herk_gemm_preferred(int n, int batch) {
         const int pin = rankk_route_pin();
         if (pin >= 0) {
@@ -279,10 +262,7 @@ namespace batchlas {
         return batch >= 4 && n <= 768;
     }
 
-    // HER2K's is a far better trade and the crossover moves accordingly; the
-    // threshold and its measurements now live in ../expansion_budget.hh, next to
-    // the size ceiling, so that sytrd_blocked.cc can evaluate the same
-    // conjunction this function is one half of before it decides to call her2k.
+    // her2k's crossover lives in ../expansion_budget.hh so sytrd_blocked.cc can evaluate it too.
     using ::batchlas::backend::detail::her2k_gemm_preferred;
 
     // Fold a dense rank-k product into the referenced triangle of a Hermitian
@@ -353,11 +333,8 @@ namespace batchlas {
         return ctx.get_event();
     }
 
-    // cuBLAS has no batched or strided-batched ?herk -- only the single
-    // cublasCherk/cublasZherk -- so a batch of them is a host loop over kernel
-    // launches. The alternative is one strided-batched GEMM over the whole
-    // n x n product plus the fold above, which computes twice the arithmetic a
-    // rank-k update needs but in two launches rather than one per batch item.
+    // cuBLAS has no batched ?herk: the alternative to a per-item loop is one strided-batched
+    // GEMM over the whole n x n product plus the fold above. Not table-selected: a fixed rule.
     template <Backend Back, ComplexScalar T>
     Event herk_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,

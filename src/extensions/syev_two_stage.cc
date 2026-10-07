@@ -163,32 +163,12 @@ Event syev_two_stage(Queue& ctx,
                                  1,
                                  std::max(0, n - 1));
 
-    // Stage 2. BOTH modes use the Householder chase.
-    //
-    // This used to read "eigenvalues-only keeps the cheaper Givens chase". The
-    // Givens chase is not cheaper -- it is ~5x more expensive on this GPU, and
-    // the belief that it was is why eigenvalues-only, which does strictly less
-    // work than eigenvector mode, measured 3.7-4x SLOWER than it at n=1024.
-    //
-    // The reason is occupancy, not arithmetic. Both chases are sequential per
-    // matrix and parallel only over the batch, but sytrd_sb2st_hh was given a
-    // 256-thread 2D lane mapping (sytrd_sb2st_hh.cc:103-106) while the Givens
-    // path still runs one 32-lane sub-group per matrix
-    // (sytrd_sb2st_cta.cc:391-394), with a mostly-serial `lid == 0` spine in the
-    // kd > 32 fallback (sytrd_sb2st.cc:588-707). That is 8x fewer lanes per
-    // matrix, and at batch 1 it is 32 threads on a 128-SM device.
-    //
-    // Measured, RTX 4090, float, n=1024, kd=32: Givens chase ~366 ms vs
-    // Householder chase 67.5 ms, the latter essentially flat to batch 128.
-    //
-    // The cost of the switch is memory: eigenvalues-only now also allocates the
-    // stage-2 reflectors V and their tau, which it discards. That is the same
-    // workspace the eigenvector path has always allocated, and the buffer-size
-    // query below is updated in lockstep.
-    //
-    // Only the *phase* chain stays eigenvector-only: it converts eigenvectors of
-    // the tridiagonal built from |e| back to those of the signed one, and the
-    // eigenvalues of the two are identical (a diagonal +-1 similarity).
+    // Stage 2. BOTH modes use the Householder chase: the Givens chase is ~5x slower
+    // on this GPU (occupancy, not arithmetic), so values mode also allocates the
+    // stage-2 V/tau and discards them; the buffer-size query matches.
+    // evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
+    // Only the *phase* chain stays eigenvector-only: it maps eigenvectors of the
+    // |e| tridiagonal back to the signed one, whose eigenvalues are identical.
     const bool use_givens = !want_eigvecs && two_stage_use_givens_chase_for_values();
     const auto sb2st_sched = use_givens ? std::vector<internal::Sb2stHhRefl>{}
                                         : internal::build_sb2st_hh_schedule(n, kd);
@@ -267,12 +247,10 @@ Event syev_two_stage(Queue& ctx,
 
     if (!want_eigvecs) {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stebz_evals");
-        // Eigenvalues only: the tridiagonal solve is stebz's bisection, which
-        // records nothing today -- its three loop exits (tolerance met, budget
-        // exhausted, midpoint stopped advancing) are indistinguishable after the
-        // fact. Report 0 rather than leaving the span untouched: an unwritten span
-        // is worse than a conservative one, because the caller cannot tell the two
-        // apart. See `deferred` in the work package: stebz needs a flag of its own.
+        // Eigenvalues only: stebz bisection records no status (its three loop exits are
+        // indistinguishable afterwards). Report 0 rather than leave the span unwritten:
+        // the caller cannot tell an unwritten span from a conservative one.
+        // evidence: docs/perf/syev.md#syev-open-debt-stebz-reports-no-convergence-status
         detail::info_clear(ctx, info, batch);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
         StebzParams<Real> bp;
@@ -293,10 +271,8 @@ Event syev_two_stage(Queue& ctx,
     // ---- Eigenvector path -------------------------------------------------
     //
     // Stage 2 ran the Householder chase, so Q2 exists and kd was NOT clamped to
-    // 1. The back-transform is Z := Q1 (Q2 Z). That ordering costs ~4n^3;
-    // forming (Q1 Q2) explicitly first would be ~5.3n^3 (it needs Q1
-    // materialised) and is only worth it if the extra work can be overlapped
-    // with stedc, which the in-order queue does not currently allow.
+    // 1. The back-transform is Z := Q1 (Q2 Z), ~4n^3; forming Q1 Q2 first costs more.
+    // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
     const int32_t p1 = std::max<int32_t>(0, n - kd);
 
     auto z_real_span = pool.allocate<Real>(ctx,

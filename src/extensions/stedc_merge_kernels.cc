@@ -53,14 +53,10 @@ void stedc_merge_fused(Queue& ctx,
                     return;
                 }
 
-                // Root solve: initialize each column j of Q_bid with eigenvalues(:, bid)
-                // and run the secular solver in-place on column k so that
-                // `apply_shift_to_poles` updates Q_bid(:, k) directly. A previous
-                // "fast path" stored the poles in a private `T d_priv[128]` array
-                // and copied back to Q_bid after the solve; that path produced a
-                // bimodal orthogonality distribution (float STEDC n<=64) versus the
-                // baseline 3-kernel path, while the in-place variant below matches
-                // baseline exactly.
+                // Root solve IN PLACE on column k of Q_bid (poles in every column), so
+                // apply_shift_to_poles updates Q_bid(:, k) directly. Keep it in place: a
+                // private-array copy of the poles broke orthogonality.
+                // evidence: docs/perf/stedc.md#stedc-the-rejected-private-pole-fast-path
                 {
                     for (int k = tid; k < dd * dd; k += bdim) {
                         const int i = k % dd;

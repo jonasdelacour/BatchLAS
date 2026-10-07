@@ -1,28 +1,10 @@
 #pragma once
 
-// The heterogeneous-batch GEMM loop, extracted from cublas.cc so it is not
-// vendor-only.
-//
-// WHY. A heterogeneous batch is one whose members differ in shape, so no
-// strided-batched call can serve it -- every backend has to walk the batch.
-// That loop lived inside gemm_heterogeneous_vendor_impl (src/backends/cublas.cc),
-// a cuBLAS-gated TU, and it carries semantics that are NOT about the vendor at
-// all:
-//
-//   * batch members with m == 0 or n == 0 are SKIPPED, not launched;
-//   * a member with k == 0 is not a GEMM but a scale: C := beta * C;
-//   * if nothing launched, the caller still gets a valid Event.
-//
-// So in a vendor-free build those three behaviours simply did not exist, which
-// is why all 17 remaining vendor-free gemm_tests failures are heterogeneous
-// batch. Hoisting the loop is what lets the vendor-free facade reuse it
-// verbatim instead of growing a second, subtly different copy -- and this
-// codebase has already paid twice for restating one behaviour in two places.
-//
-// The per-item TERMINAL is a parameter. That is the whole design: the loop, the
-// skips and the k == 0 substitution are backend-independent; only what runs on
-// one homogeneous batch item differs. cublas.cc passes gemm_vendor_impl; the
-// vendor-free facade passes the public gemm.
+// The heterogeneous-batch GEMM loop, shared by every backend and the vendor-free
+// facade; only the per-item terminal is a parameter. Its semantics are not the
+// vendor's: m == 0 or n == 0 members are skipped, a k == 0 member is C := beta*C,
+// and an all-skipped batch still returns a valid Event.
+// evidence: docs/perf/gemm.md#gemm-the-heterogeneous-batch-loop
 
 #include "gemm_variant.hh"
 
@@ -35,11 +17,7 @@
 
 namespace batchlas::backend::detail {
 
-// `launch_item` is invoked as
-//     launch_item(A.batch_item(i), B.batch_item(i), C.batch_item(i))
-// and must return an Event. Everything else -- validation, the skips, the
-// scale, the empty-batch Event -- is fixed here so it cannot diverge per
-// backend.
+// launch_item(A.batch_item(i), B.batch_item(i), C.batch_item(i)) -> Event.
 template <typename T, typename LaunchItem>
 Event gemm_heterogeneous_loop(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& A,
@@ -63,10 +41,7 @@ Event gemm_heterogeneous_loop(Queue& ctx,
             continue;
         }
         if (k == 0) {
-            // Not a degenerate GEMM -- a different operation. With k == 0 the
-            // product contributes nothing, so the defined result is C := beta*C.
-            // scale() is pure SYCL (src/matrix.cc), which is why this branch
-            // needs no vendor at all.
+            // k == 0 is not a GEMM: the defined result is C := beta*C.
             last_event = scale(ctx, beta, C.batch_item(batch_index));
             launched = true;
             continue;

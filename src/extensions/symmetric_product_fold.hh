@@ -1,20 +1,10 @@
 #pragma once
 
-// SYRK and SYR2K name one triangle of C; the other half is the caller's storage
-// and must come out of the call exactly as it went in.
-//
-// The generic fallbacks in this directory (used by the backends that have no
-// native ?syrk/?syr2k here -- MKL) decompose the routine into GEMM, and a GEMM
-// computes the *whole* symmetric product. It therefore cannot be aimed at C: it
-// would write both triangles. The same reasoning as the CUDA HERK path in
-// src/backends/cublas.cc ("The GEMM cannot be pointed at C ... HERK owns only one
-// of them"). So the product goes to scratch and only the named triangle is folded
-// back into C:
-//
+// Fold a full GEMM product into the uplo triangle of C only:
 //     C(i, j) := product(i, j) + beta * C(i, j)   for (i, j) in the uplo triangle
-//
-// with beta == 0 meaning "C is not read", as in BLAS -- so an uninitialised or
-// poisoned C cannot turn the result into NaN.
+// The other half is the caller's and must come out unchanged; beta == 0 means C
+// is not read, so a poisoned C cannot produce NaN.
+// evidence: docs/perf/level3.md#level-3-generic-syrk-and-syr2k-fallbacks-fold-one-triangle
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/kernel-heuristics.hh>

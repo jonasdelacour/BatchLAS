@@ -13,7 +13,15 @@ So this resolves each one. A reference names a file, optionally with a
 `#anchor`; the file must exist, and the anchor must match the GitHub slug of
 some heading in it. The slug rules are GitHub's: lowercase, drop everything
 that is not a letter, digit, space, hyphen or underscore, then spaces to
-hyphens, with `-1`, `-2` ... appended to repeats in document order.
+hyphens, with `-1`, `-2` ... appended to repeats in document order. A heading
+with an explicit Doxygen id (`## Title {#my-id}`) is addressed by that id.
+
+The pages are also published as the Doxygen site, whose GITHUB id style gives
+a heading the same id only if its slug is unique across ALL of docs/: Doxygen
+numbers repeats site-wide (`what-ships-5`), GitHub per page. So a cited anchor
+must also be site-unique, or the pointer is live on GitHub and dead on the
+site. docs/tools/check_doc_anchors.py proves the same thing end to end against
+Doxygen's output; this is the cheap version that needs no Doxygen.
 
 Usage:
     python3 .github/ci/check_evidence_anchors.py [repo-root]
@@ -55,6 +63,7 @@ SELF = os.path.relpath(os.path.abspath(__file__), REPO)
 
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+EXPLICIT_ID = re.compile(r"\s*\{#([A-Za-z0-9_-]+)\}\s*$")
 
 
 def slugify(text):
@@ -68,9 +77,9 @@ def slugify(text):
     return text.strip().replace(" ", "-")
 
 
-def heading_anchors(path):
-    """Every anchor a GitHub-rendered view of `path` would expose."""
-    anchors = set()
+def heading_slugs(path):
+    """Each heading's (anchor, base slug, explicit) in document order."""
+    out = []
     seen = {}
     fence = None
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -87,24 +96,54 @@ def heading_anchors(path):
             match = HEADING.match(line)
             if not match:
                 continue
-            base = slugify(match.group(2))
+            title = match.group(2)
+            explicit = EXPLICIT_ID.search(title)
+            if explicit:
+                out.append((explicit.group(1), explicit.group(1), True))
+                continue
+            base = slugify(title)
             if not base:
                 continue
             count = seen.get(base, 0)
             seen[base] = count + 1
-            anchors.add(base if count == 0 else "%s-%d" % (base, count))
-    return anchors
+            out.append((base if count == 0 else "%s-%d" % (base, count), base, False))
+    return out
+
+
+def heading_anchors(path):
+    """Every anchor a GitHub-rendered view of `path` would expose."""
+    return {anchor for anchor, _, _ in heading_slugs(path)}
+
+
+def site_slug_owners(root):
+    """Base slug -> set of docs/ pages carrying a heading with that slug."""
+    owners = {}
+    docs = os.path.join(root, "docs")
+    for dirpath, dirnames, filenames in os.walk(docs):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in sorted(filenames):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, root)
+            for _, base, _ in heading_slugs(path):
+                owners.setdefault(base, set()).add(rel)
+    return owners
 
 
 def is_text(name):
     return name.endswith(TEXT_SUFFIXES) or name in TEXT_NAMES
 
 
-def check(root):
-    findings = []
-    refs = 0
-    anchor_cache = {}
+def collect_references(root):
+    """Every non-template pointer -> list of "file:line" sites citing it."""
+    sites = {}
+    for rel, lineno, target in iter_references(root):
+        sites.setdefault(target, []).append("%s:%d" % (rel, lineno))
+    return sites
 
+
+def iter_references(root):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for name in sorted(filenames):
@@ -126,18 +165,41 @@ def check(root):
                     target = target.rstrip(".,;:")
                     if PLACEHOLDER.search(target):
                         continue
-                    refs += 1
-                    doc, _, anchor = target.partition("#")
-                    doc_path = os.path.join(root, doc)
-                    if not os.path.isfile(doc_path):
-                        findings.append((rel, lineno, target, "no such file"))
-                        continue
-                    if not anchor:
-                        continue
-                    if doc not in anchor_cache:
-                        anchor_cache[doc] = heading_anchors(doc_path)
-                    if anchor not in anchor_cache[doc]:
-                        findings.append((rel, lineno, target, "no heading in %s has that anchor" % doc))
+                    yield rel, lineno, target
+
+
+def check(root):
+    findings = []
+    refs = 0
+    anchor_cache = {}
+    owners = None
+
+    for rel, lineno, target in iter_references(root):
+        refs += 1
+        doc, _, anchor = target.partition("#")
+        doc_path = os.path.join(root, doc)
+        if not os.path.isfile(doc_path):
+            findings.append((rel, lineno, target, "no such file"))
+            continue
+        if not anchor:
+            continue
+        if doc not in anchor_cache:
+            anchor_cache[doc] = heading_slugs(doc_path)
+        match = [h for h in anchor_cache[doc] if h[0] == anchor]
+        if not match:
+            findings.append((rel, lineno, target, "no heading in %s has that anchor" % doc))
+            continue
+        _, base, explicit = match[0]
+        if explicit or not doc.endswith(".md"):
+            continue
+        if owners is None:
+            owners = site_slug_owners(root)
+        others = sorted(owners.get(base, set()) - {doc})
+        if anchor != base or others:
+            where = ", ".join(others) if others else "this page"
+            findings.append((rel, lineno, target,
+                             "heading slug `%s` repeats in %s, so the Doxygen site numbers it "
+                             "differently; rename the heading or give it a {#id}" % (base, where)))
     return refs, findings
 
 
@@ -147,9 +209,18 @@ SELF_TEST_DOC = """# A page
 
 ## The work-group A/B
 
+## What ships
+
+## Pinned heading {#pinned-id}
+
 ```
 ### Inside a fence
 ```
+"""
+
+SELF_TEST_OTHER = """# Another page
+
+## What ships
 """
 
 SELF_TEST_SRC = """// good: evidence: docs/perf/p.md#the-launch-shape-64-work-items-not-128
@@ -159,6 +230,8 @@ SELF_TEST_SRC = """// good: evidence: docs/perf/p.md#the-launch-shape-64-work-it
 // bad anchor: evidence: docs/perf/p.md#the-tiny-tier-launch-shape
 // bad file: evidence: docs/perf/missing.md#a-page
 // fenced heading is not an anchor: evidence: docs/perf/p.md#inside-a-fence
+// explicit id: evidence: docs/perf/p.md#pinned-id
+// slug repeats on another page: evidence: docs/perf/p.md#what-ships
 """
 
 
@@ -174,6 +247,8 @@ def self_test():
         os.makedirs(os.path.join(root, "src"))
         with open(os.path.join(root, "docs", "perf", "p.md"), "w") as fh:
             fh.write(SELF_TEST_DOC)
+        with open(os.path.join(root, "docs", "perf", "q.md"), "w") as fh:
+            fh.write(SELF_TEST_OTHER)
         with open(os.path.join(root, "src", "a.cc"), "w") as fh:
             fh.write(SELF_TEST_SRC)
         refs, findings = check(root)
@@ -182,16 +257,17 @@ def self_test():
             "docs/perf/missing.md#a-page",
             "docs/perf/p.md#the-tiny-tier-launch-shape",
             "docs/perf/p.md#inside-a-fence",
+            "docs/perf/p.md#what-ships",
         ])
-        if refs != 6:
-            print("check_evidence_anchors --self-test: FAILED, counted %d references, expected 6" % refs)
+        if refs != 8:
+            print("check_evidence_anchors --self-test: FAILED, counted %d references, expected 8" % refs)
             return 1
         if got != want:
             print("check_evidence_anchors --self-test: FAILED")
             print("  flagged:  %s" % got)
             print("  expected: %s" % want)
             return 1
-    print("check_evidence_anchors --self-test: ok, 6 references, 3 plants caught, 3 good ones passed")
+    print("check_evidence_anchors --self-test: ok, 8 references, 4 plants caught, 4 good ones passed")
     return 0
 
 

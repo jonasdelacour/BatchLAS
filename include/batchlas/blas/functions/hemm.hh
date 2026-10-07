@@ -18,9 +18,8 @@ using hemm = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    T, T, Side, Uplo);
 
-// backend::hemm_vendor's signature. NOT an alias for sig::hemm: the vendor
-// parameter order can differ from the public one -- trsm's alpha moves to
-// the end -- so each is spelled out from the definition it describes.
+// Spelled out, not aliased to sig::hemm: a vendor parameter order may differ
+// from the public one (trsm's alpha is last).
 template <typename T>
 using hemm_vendor = Event(Queue&,
                           const MatrixView<T, MatrixFormat::Dense>&,
@@ -33,14 +32,45 @@ using hemm_vendor = Event(Queue&,
 }  // namespace sig
 
 
-// C = alpha * A * B + beta * C (Side::Left) or alpha * B * A + beta * C
-// (Side::Right), with A Hermitian: only the triangle named by `uplo` is read,
-// the opposite one is taken to be its conjugate transpose, and the imaginary
-// part of the diagonal is taken to be zero whatever is stored there.
-//
-// Constrained to complex scalars, which is the whole of the difference from
-// symm -- for a real matrix "Hermitian" and "symmetric" are the same statement,
-// and BLAS has no ?hemm for real types.
+/// @brief Batched Hermitian matrix-matrix multiply.
+///
+/// For every batch item computes
+/// \f[ C := \alpha A B + \beta C \quad (\texttt{Side::Left}), \qquad
+///     C := \alpha B A + \beta C \quad (\texttt{Side::Right}) \f]
+/// with `A` Hermitian. Only the triangle of `A` named by `uplo` is read; the
+/// other is taken to be its conjugate transpose, and the imaginary part of the
+/// diagonal is taken to be zero whatever is stored there. `B` and `C` are m x n;
+/// `A` is m x m (Left) or n x n (Right).
+///
+/// Constrained to complex `T`: for a real matrix Hermitian and symmetric are the
+/// same statement, and the real spelling is symm. Also callable as
+/// `hemm(ctx, A, B, C, HemmOptions<T>{...})`, with owning `Matrix` arguments,
+/// and without `Ba` (taken from `ctx.backend()`).
+///
+/// Not table-selected. On `Backend::CUDA` the cuBLAS backend chooses by a fixed rule between
+/// expanding `A` into scratch plus one strided-batched gemm and a per-item `cublas?hemm` loop
+/// (the loop also serves a scratch that does not fit); `BATCHLAS_EXPAND_ROUTE` = `expand` |
+/// `loop` pins it. The host backend runs the per-item `cblas_?hemm` loop.
+///
+/// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T   `std::complex<float>` or `std::complex<double>`
+/// @param ctx    queue the work is enqueued on
+/// @param A      batch of Hermitian matrices; only the `uplo` triangle is read
+/// @param B      batch of m x n matrices; not modified
+/// @param C      batch of m x n matrices; input scaled by `beta`, overwritten with the result
+/// @param alpha  scale of the product
+/// @param beta   scale of the input `C`
+/// @param side   whether `A` multiplies from the left or the right
+/// @param uplo   which triangle of `A` holds the data
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre All operands have the same batch size and conforming shapes per item.
+/// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
+///         backend checks inside its deferred host task and throws std::runtime_error there)
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS
+///         for `Ba`: hemm has no native implementation.
+/// @note Not instantiated for `Backend::ROCM` (rocBLAS has no wrapper here).
+/// @see symm, HemmOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
+/// @ingroup blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event hemm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -56,14 +86,13 @@ BATCHLAS_API Event hemm(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for hemm.
-//
-// DECLARATION ONLY. The public `hemm<Back, T>` used to be DEFINED inside each
-// vendor TU, so dropping a vendor library dropped the public entry point along
-// with the vendor path. WP0 S5 moves that definition to
-// src/ops/level3/level3.cc; what stays behind is the vendor
-// implementation, named as such. Each vendor wrapper TU defines this primary
-// template for its own Backend value and instantiates it there.
+// DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
+// the public hemm is defined in src/ops/level3/level3.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of hemm (cuBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::hemm calls it. Same arguments and semantics.
+/// @ingroup dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event hemm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -78,10 +107,8 @@ BATCHLAS_API Event hemm_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(hemm)
 

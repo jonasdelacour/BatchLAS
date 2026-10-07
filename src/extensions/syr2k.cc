@@ -49,10 +49,8 @@ Event syr2k(Queue& ctx,
 
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
 
-    // As in syrk.cc: the two gemms compute the whole symmetric product, so they
-    // cannot be aimed at C -- that wrote both triangles and ignored `uplo`, which
-    // was an unnamed parameter here. Product to scratch, named triangle folded
-    // back. See symmetric_product_fold.hh.
+    // Never GEMM straight into C (writes both triangles): scratch, then fold.
+    // evidence: docs/perf/level3.md#level-3-generic-syrk-and-syr2k-fallbacks-fold-one-triangle
     auto product = Matrix<T, MatrixFormat::Dense>::Zeros(C.rows(), C.cols(), C.batch_size());
     auto product_view = product.view();
     gemm<Ba>(ctx, A, B, product_view,

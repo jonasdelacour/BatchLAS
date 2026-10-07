@@ -1,20 +1,10 @@
 // stein: eigenvectors of a batch of symmetric tridiagonal matrices by inverse
 // iteration, given eigenvalues (from `stebz`).
 //
-// Companion to stebz for SYEVX Tier 1 (SYEVX_PLAN.md §8). Two phases:
-//
-//   1. One work-item per wanted eigenvector solves (T - lambda*I) x = b a few
-//      times from a pseudo-random start, using a tridiagonal LU factorization
-//      with partial pivoting (LAPACK dgttrf/dgttrs). The factorization depends on
-//      lambda, so it is per-vector and inherently serial in n -- hence one
-//      work-item rather than one work-group per vector. This is affordable
-//      because for medium n the tridiagonal stage is far off the critical path
-//      (SYEVX_PLAN.md §4).
-//
-//   2. Vectors whose eigenvalues form a cluster are reorthogonalized against each
-//      other by modified Gram-Schmidt. Inverse iteration alone does not deliver
-//      orthogonality on clusters; this is the price bisection pays relative to
-//      MRRR, and it costs O(n*k^2) only within clusters.
+// Phase 1: one work-item per vector (a serial tridiagonal LU per shift). Phase 2:
+// modified Gram-Schmidt within clusters of close eigenvalues.
+// evidence: docs/perf/syevx.md#syevx-tier-1-stebz-and-stein
+// evidence: docs/design/syevx.md#syevx-for-batches-of-medium-matrices
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -302,23 +292,10 @@ Event stein(Queue& ctx,
                 const int64_t kb = (raw < 0) ? int64_t(0) : ((raw > k) ? k : raw);
 
                 // Walk the (ascending) eigenvalues; a gap wider than gap_tol
-                // starts a new cluster. Only within-cluster pairs need work.
-                //
-                // The walk stops at kb, not k. Past kb the entries of w are stale
-                // workspace, so a monotone-looking tail joins the last real
-                // eigenvalue into one arbitrarily large bogus cluster and phase 2
-                // degenerates into an O(n*k^2) barrier-synchronized pass over
-                // columns phase 1 already knows are zero.
-                //
-                // This bound is a COST and hygiene bound, not a correctness one, and
-                // the distinction is worth stating because SYEVX_RANGE_PLAN.md 2.4
-                // gets it wrong. The modified Gram-Schmidt below writes only column
-                // j while reading columns i < j, and cluster_start is derived only
-                // from w(0..j); so for every j < kb the result depends solely on
-                // valid data, and nothing past kb can flow back into a valid column.
-                // What actually protects the valid prefix is phase 1's kb bound (it
-                // keeps garbage shifts out of inverse iteration) -- verified by
-                // reverting each bound separately.
+                // starts a new cluster. Stopping at kb, not k, is a COST bound (a
+                // stale tail forms one bogus cluster); phase 1's kb bound is the
+                // one that protects correctness.
+                // evidence: docs/design/syevx-range-selection.md#syevx-range-steins-per-item-count-bound
                 int64_t cluster_start = 0;
                 for (int64_t j = 0; j < kb; ++j) {
                     if (j > 0 && (w(j, bid) - w(j - 1, bid)) > gap_tol) {

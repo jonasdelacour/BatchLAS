@@ -17,6 +17,40 @@ BatchLAS is a SYCL-first batched linear algebra library with optional vendor bac
 - The repository includes active work on dense factorizations, spectral routines, orthogonalization, sparse eigensolvers, and performance benchmarking.
 - Recommended development entry points are the CMake presets in `CMakePresets.json`.
 
+## Documentation
+
+The full documentation is a Doxygen site built from this repository: the API
+reference generated from `include/`, plus every page under `docs/`. Build it
+with Doxygen 1.18 or newer:
+
+```bash
+sh scripts/build_docs.sh                  # writes build/docs/html/index.html
+# or, from a configured tree:
+cmake -S . -B build -DBATCHLAS_BUILD_DOCS=ON
+cmake --build build --target batchlas_docs
+```
+
+Either way the site lands in `build/docs/html/index.html` (the script takes
+another output directory as its argument; set `DOXYGEN=/path/to/doxygen` if it is
+not on `PATH`). Every page is also plain Markdown and reads fine on GitHub.
+
+`docs/` is more than a manual: it is the project's database of measurements,
+design decisions and their rationale, which code comments cite as
+`evidence: docs/<page>.md#<anchor>` instead of carrying lab notes inline.
+
+| directory | what lives there |
+| --- | --- |
+| `docs/guide/` | how to use a feature |
+| `docs/design/` | design decisions and architecture records, including [known defects](docs/design/known-defects.md) |
+| `docs/algorithms/` | the mathematics and derivations behind the kernels |
+| `docs/perf/` | the evidence layer: routing windows, measured grids, rejected alternatives ([index](docs/perf/README.md)) |
+| `docs/developer/` | process and tooling, including [the documentation conventions](docs/developer/documentation.md) |
+
+The site also generates a *Results database* page over the raw grids in
+`benchmarks/results/` and an *Evidence index* of every code comment that cites a
+page. The C++ calling conventions are in [docs/cpp-api.md](docs/cpp-api.md) and
+running the tests is covered in [tests/README.md](tests/README.md).
+
 ## Using the C++ API
 
 The backend comes from the `Queue`, options are structs with defaults, and
@@ -57,7 +91,7 @@ See **[docs/cpp-api.md](docs/cpp-api.md)** for the data-layout and memory
 contract, the full conventions, and the workspace-lifetime caveat on
 out-of-order queues; **[docs/extending.md](docs/extending.md)** covers adding
 entry points to the library itself. A complete, buildable external consumer
-lives in [`examples/consumer/`](examples/consumer/).
+lives in [`examples/consumer/`](examples/consumer/README.md).
 
 ## Performance
 
@@ -70,20 +104,21 @@ the path `Auto` takes.
 Two measurements that are committed in this repository, with their conditions,
 rather than a headline number:
 
-- **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (grid recorded in the
-  header comments of `git show 526601e6^:include/batchlas/blas/functions/syev.hh`; the
-  routing it justified ships as the `tuned/syev.float.*.txt` rows; measured 2026-08-07, µs per matrix, median
-  of 5, harness-default block size, one process on the device): at
-  `n = 320, batch = 819` BatchLAS's blocked solver runs at 67.8 µs
-  vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585` it is 195.3 vs
-  400.6 (**2.1x**). The vendor wins at large `n` — an earlier sweep in the same
-  header has it 1.65x ahead at `n = 2048`, on a row the header itself flags as
-  not saturated — and `Auto` routes there accordingly. That header revision carries
-  the full grids, including the corrections that superseded earlier ones.
+- **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (measured
+  2026-08-07, µs per matrix, median of 5, harness-default block size, one
+  process on the device): at `n = 320, batch = 819` BatchLAS's blocked solver
+  runs at 67.8 µs vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585`
+  it is 195.3 vs 400.6 (**2.1x**). The vendor wins at large `n` — an earlier
+  sweep has it 1.65x ahead at `n = 2048`, on a row flagged as not saturated —
+  and `Auto` routes there accordingly (the routing it justified ships as the
+  `tuned/syev.float.*.txt` rows). The full grids, including the
+  corrections that superseded earlier ones, are on the
+  [syev evidence page](docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
 - **`gesvd` vs `cusolverDnXgesvdjBatched`, float, RTX 4090**
   (`benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`): at `n = 8, batch = 16384`
   BatchLAS's one-sided Jacobi SVD is 0.0064 µs/matrix vs 0.339 µs/matrix; at
-  `n = 32, batch = 16384` it is 0.468 vs 0.768.
+  `n = 32, batch = 16384` it is 0.468 vs 0.768. Conditions and the rest of the
+  grid are on the [gesvd evidence page](docs/perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix).
 
 Both of those are single-machine numbers from the "Tested platforms" table below,
 at large batch. Ratios measured on an *unsaturated* device are mostly overhead
@@ -141,7 +176,9 @@ See `python/examples/README.md` for the index, the array/batching conventions, a
 - `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
 - `scripts/`: benchmark campaign helpers and result-processing scripts
 - `playground/`: notebooks and exploratory scripts for algorithm work
-- `docs/`: the C++ API reference (`docs/cpp-api.md`) and design documentation
+- `docs/`: the documentation site's pages — the C++ API guide (`docs/cpp-api.md`),
+  user guides, design records, algorithm notes and the performance evidence
+  (see [Documentation](#documentation)); `docs/Doxyfile` and `docs/theme/` build it
 - `examples/`: a minimal external CMake consumer
 - `experiments/`, `plotting/`, `evaluation/`: research scaffolding; not part of
   the build and not installed
@@ -374,7 +411,7 @@ The extension module is built with pybind11 and linked against the installed or 
 ## Consuming BatchLAS from CMake
 
 A complete, buildable example of everything in this section lives in
-[`examples/consumer/`](examples/consumer/) — start from that rather than from the
+[`examples/consumer/`](examples/consumer/README.md) — start from that rather than from the
 snippets below.
 
 ### The short version
@@ -503,7 +540,16 @@ ls <prefix>/include/blas
 ## Development Notes
 
 - The top-level `batchlas` target is an interface facade over split component libraries.
-- The repository includes implementation notes for ongoing work in the root markdown files and under `docs/`.
+- Each op's entry point, choices and launchers live in `src/ops/<op>/`; the shared
+  selection machinery (table lookup, vendor availability, trace and coverage) is in
+  `src/select/`, and the per-device tables it reads are in `tuned/`. The design is
+  [docs/design/flat-kernel-selection.md](docs/design/flat-kernel-selection.md).
+- Implementation notes, measurements and design rationale live in the documentation
+  site, not in root markdown files: `docs/perf/` for routing windows and measured
+  grids, `docs/design/` for design decisions and known defects, `docs/algorithms/`
+  for the mathematics, `docs/developer/` for process and tooling, and
+  [docs/extending.md](docs/extending.md) for adding entry points. `AGENTS.md` is
+  the working guide for the build, testing and measurement rules.
 - `playground/` contains exploratory notebooks and scripts used during algorithm development.
 
 ## License

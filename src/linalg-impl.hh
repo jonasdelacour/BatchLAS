@@ -7,18 +7,8 @@
 #include <type_traits>
 #include <memory>
 
-// WP0 S2: these includes are keyed on the LIBRARY axis, not the device family.
-//
-// They used to be guarded by BATCHLAS_HAS_<FAMILY>_BACKEND, which conflated two
-// questions: "can a queue target this device family" and "is this vendor's math
-// library installed". A CUDA SYCL device with no CUDA math libraries is a
-// perfectly coherent configuration -- it is exactly the configuration vendor
-// independence is aiming at -- but under the old guard it would still have tried
-// to include <cublas_v2.h>.
-//
-// cuda_runtime.h is deliberately kept on the family flag: it is the CUDA
-// *runtime*, needed for streams and device queries by anything targeting an
-// NVIDIA device, and it is not a math library.
+// Math-library includes are keyed on the LIBRARY axis, never the device family; the CUDA runtime
+// stays on the family flag. evidence: docs/design/vendor-independence.md#vendor-independence-headers-keyed-on-the-library-axis
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>
     #include <cuda_runtime_api.h>
@@ -715,19 +705,9 @@ namespace batchlas{
         }
     }
 
-    // Same dispatch, but hands back what the routine returned.
-    //
-    // A sibling rather than a change of return type on call_backend_nh above:
-    // that one is also used for the CBLAS calls (cblas_sgemm and friends), which
-    // return void, and `return void_expr;` is fine but `auto` deduced from four
-    // different branches is not -- one of them being void makes the whole thing
-    // ill-formed the moment a caller tries to use the result. Keeping the two
-    // apart means the void users cannot be broken by a change made for LAPACKE.
-    //
-    // The reason this exists at all: every LAPACKE routine reports failure only
-    // through its return value, and netlib's potrf/getrf/getri discarded it, so
-    // a singular batch item was indistinguishable from a factorised one (issue
-    // #73). See src/backends/netlib_lapack.cc.
+    // Same dispatch, returning the routine's result (LAPACKE's info). A sibling, not a change to
+    // call_backend_nh, whose void CBLAS users would break an `auto` return.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract
     template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend_nh_r(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
         if constexpr (std::is_same_v<T,float>) {
@@ -743,23 +723,9 @@ namespace batchlas{
 
     namespace detail {
 
-    // Where a factorisation should write its per-item LAPACK status.
-    //
-    // Every backend already allocates this array because the vendor call demands
-    // somewhere to write; before issue #73 it was pool scratch that nobody read.
-    // Now the caller may supply it: their span is USM, so the vendor writes it in
-    // place and there is no copy back.
-    //
-    // An empty (or too-short) caller span falls back to the pool, which is what
-    // preserves today's behaviour exactly for the ~all call sites that pass
-    // nothing. Note the direction: supplying a span only ever *removes* a pool
-    // draw, never adds one, so *_buffer_size stays correct in both modes -- a
-    // workspace sized without `info` is never too small for a call made with it.
-    //
-    // Short spans are silently ignored here rather than rejected; the public
-    // deducing overloads reject them up front (detail::require_info_span in
-    // blas/options.hh), and this layer is the library's own inner-loop spelling,
-    // which must not pay a throw path per call.
+    // Per-item status target: the caller's span, else pool scratch (short spans silently ignored).
+    // A span only REMOVES a pool draw, so *_buffer_size stays correct in both modes.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract
     inline Span<int32_t> info_target(Queue& ctx, BumpAllocator& pool,
                                      Span<int32_t> info_out, size_t count) {
         if (info_out.size() >= count) return info_out;
@@ -914,10 +880,7 @@ namespace batchlas{
         };
 #endif
 
-// These two are keyed on the LIBRARIES, not the device family: cublasComputeType_t
-// comes from cublas_v2.h, and the handle triple needs cuBLAS, cuSPARSE and
-// cuSOLVER all three. Under BATCHLAS_HAS_CUDA_BACKEND alone -- which after S1/S2
-// can be true with any of those absent -- naming those types does not compile.
+// Keyed on the LIBRARIES: these types do not exist under BATCHLAS_HAS_CUDA_BACKEND alone.
 #if BATCHLAS_HAS_CUBLAS
 
         template <typename T>
@@ -1000,13 +963,8 @@ namespace batchlas{
             }
         };
 #elif BATCHLAS_HAS_CUDA_BACKEND
-        // A CUDA device with one or more of its math libraries absent. There are
-        // no vendor handles to own, but the type must still be COMPLETE: a
-        // *native* translation unit declares one. src/extensions/ortho.cc:104
-        // has `static LinalgHandle<B> handle;` with B deduced from the queue, and
-        // the primary template is declared without a definition
-        // (linalg-impl.hh:79), so leaving this out makes an ortho build fail on
-        // an incomplete type -- in a file that calls no vendor code at all.
+        // CUDA without all math libraries: no handles, but the type must be COMPLETE (native TUs such
+        // as ortho.cc declare one). evidence: docs/design/vendor-independence.md#vendor-independence-headers-keyed-on-the-library-axis
         template <>
         struct LinalgHandle<Backend::CUDA> {
             void setStream(const Queue&) {}

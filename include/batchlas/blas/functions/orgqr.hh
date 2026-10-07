@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched formation of Q from geqrf reflectors (orgqr/ungqr) and its workspace query.
+/// @ingroup qr
+
 #include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
@@ -25,35 +29,28 @@ using orgqr_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Span<T>);
 
-// backend::orgqr_vendor's signature, spelled out from the definition rather than
-// aliased to sig::orgqr: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using orgqr_vendor = Event(Queue&,
                            const MatrixView<T, MatrixFormat::Dense>&,
                            Span<T>,
                            Span<std::byte>);
 
-// backend::orgqr_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::orgqr_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using orgqr_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&,
                                         Span<T>);
 }  // namespace sig
 
-// Validation for the POSITIONAL entry point, which had none.
-//
-// Runs in the facade ahead of the shape builder, for the same reason as
-// geqrf_validate_params and potrf_validate_params (potrf.hh:66-84).
-//
-// SCOPE IS DELIBERATELY MINIMAL. In particular this does NOT check `n <= m`,
-// although the native family's can_run (src/ops/orgqr/orgqr.cc) does. Q's columns live in R^m, so
-// n > m is meaningless -- but every backend in this tree currently accepts such a
-// view and hands it to a vendor, and turning that into a throw is a user-visible
-// behaviour change that belongs in its own commit with its own test
-// (potrf.hh:59-65). In can_run the same condition merely routes the view to
-// the vendor, which is what happens today. It also does not check tau's length:
-// options.hh:731-732 already does require_span_at_least on the arena spellings.
+/// @brief Validates the arguments of the positional orgqr() entry point.
+///
+/// Checks only non-negative extents. `n <= m` is not checked: an n > m view is
+/// served by the vendor kernel, the only one whose `can_run` admits it
+/// (src/ops/orgqr/orgqr.cc). The length of `tau` is checked by the option overloads.
+/// @throws batchlas::invalid_argument on negative extents
+/// @ingroup qr
+// Deliberately no n <= m check: rejecting such a view is a user-visible behaviour change.
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
@@ -64,12 +61,37 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 
+/// @brief Batched formation of the first n columns of Q from geqrf() output.
+///
+/// As LAPACK `?orgqr` / `?ungqr` with \f$ k = n \f$: A holds, below its
+/// diagonal, the reflectors written by geqrf() on an m x n matrix, and on
+/// return A holds the m x n matrix
+/// \f$ Q = H_1 H_2 \cdots H_n \f$ restricted to its first n columns, with
+/// orthonormal columns (\f$ Q^H Q = I \f$).
+///
+/// Asynchronous: A is readable after the returned event is waited on.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx        queue the kernels are enqueued on
+/// @param A          batch of m x n geqrf() outputs, m >= n; overwritten with Q
+/// @param tau        reflector scalars from geqrf(), `n * batch` elements
+/// @param workspace  device-accessible scratch of at least orgqr_buffer_size() bytes
+/// @return event of the last enqueued kernel
+/// @pre `A.cols() <= A.rows()`; not checked by any overload
+/// @pre `tau.size() >= min(m, n) * batch` (checked by the option overloads only)
+/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::NoRouteError if no native kernel can run the shape (the
+///         blocked kernel needs a GPU queue, a homogeneous batch and n <= m)
+///         and the vendor library was not built in
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API Event orgqr(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau,
                          Span<std::byte> workspace);
 
+/// @brief Workspace, in bytes, that orgqr() needs for this shape on this queue.
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -80,13 +102,10 @@ BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for orgqr.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `orgqr` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/ops/orgqr/orgqr.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of orgqr(); called by the public orgqr(), not by users.
+/// @ingroup dispatch
+// Declaration only: the public orgqr lives in src/ops/orgqr/orgqr.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event orgqr_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -94,6 +113,8 @@ BATCHLAS_API Event orgqr_vendor(Queue& ctx,
                                 Span<std::byte> workspace);
 
 
+/// @brief Workspace query of the vendor arm of orgqr().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t orgqr_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -103,11 +124,7 @@ BATCHLAS_API size_t orgqr_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(orgqr)
 BATCHLAS_ACCEPT_OWNING(orgqr_buffer_size)
 

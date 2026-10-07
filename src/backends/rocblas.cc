@@ -227,14 +227,7 @@ namespace batchlas {
         const auto [m, n, k] = backend::shape::validate_product<std::invalid_argument>("TRMM", A, Bmat, C, side);
         static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
 
-        // ROCm 6.3 changed rocblas_[sdcz]trmm to the 14-arg out-of-place form:
-        //   ..., A, lda, B, ldb, C, ldc   (B=input, C=output)
-        // The old 16-arg variant (with a duplicate output pair) was removed.
-        //
-        // The rocblas_float_complex / rocblas_double_complex casts the two
-        // complex arms used to spell out by hand are what ptr_convert already
-        // emits for BackendLibrary::ROCBLAS (linalg-impl.hh), so all four arms
-        // are the same call.
+        // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
@@ -252,18 +245,8 @@ namespace batchlas {
 
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
-    // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
-    // header edit rather than one edit per backend TU.
-    //
-    // Every row names a `backend::`-qualified `_vendor` symbol, hence
-    // BATCHLAS_INSTANTIATE_BACKEND_OP rather than the plain _OP: WP0b moved the
-    // public gemm/gemv/trsm/trmm/syrk/syr2k definitions out of every vendor TU
-    // and into src/ops/, so instantiating a public op
-    // here would collide with the one defined there. The alias itself still
-    // lives in `sig` (not `backend::sig`) -- only the function is qualified --
-    // and sig::trsm_vendor is deliberately NOT an alias of sig::trsm, because
-    // the vendor order puts alpha last.
+    // ONLY `backend::*_vendor` rows (public ops live in src/ops/). sig::trsm_vendor is
+    // NOT sig::trsm: alpha last. evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define ROCBLAS_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \

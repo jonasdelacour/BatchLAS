@@ -1,15 +1,20 @@
-# Tuned selection tables
+# Tuned selection tables {#tuned_tables_readme}
 
 One file per (op, dtype, device): `<op>.<dtype>.<device>.txt`, e.g. `potrf.float.sm_120.txt`.
 Each row is a measured shape and the ranked list of every candidate timed there, fastest first
 after the 3% tie rule. The library embeds these files at build time and `select::choose` picks
 the first runnable entry of the nearest row. Format, lookup and borrowing rules:
-`docs/design/flat-kernel-selection.md` §5.4-§5.5.
+[the flat kernel selection design](../docs/design/flat-kernel-selection.md), §5.4-§5.5.
+The docs site regenerates a per-op summary of every file here on each build (families, keys,
+provenance and which family ranks first where): the "Kernel selection tables" page,
+@ref selection_tables. The tuner that writes them is described in
+[tools/tune/README.md](../tools/tune/README.md).
 
 These files are plain git, not LFS, so that table changes stay readable in diffs.
 
 ## What is here
 
+The inventory below is as of 2026-10-06; the generated selection-tables page is always current.
 Every op ships a table for every dtype it instantiates (float, double, cfloat, cdouble; symm, syrk
 and syr2k are real-only) on sm_89 and sm_120, and spmm also on the CPU, so none of these devices
 borrows (R8); any other device borrows and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
@@ -147,7 +152,7 @@ serve packed NON-multiple shapes, which run the predicated leg the old router ne
 double 304^3 b64: `wide:m=64:n=64:k=16`, was Tiled16). Both are untimed and pending the retune.
 
 Tuned tables (header `source=tuner:<raw jsonl>` and a real `kernels=<hash>`) come from
-`tools/tune/batchlas_tune` (usage, protocol and raw schema: `tools/tune/README.md`). The tuner writes
+`tools/tune/batchlas_tune` (usage, protocol and raw schema: [tools/tune/README.md](../tools/tune/README.md)). The tuner writes
 raw JSONL and calls `python3 scripts/sweep_to_table.py --tuner <jsonl> --out tuned`, so rows are
 formatted by the same code as the converted tables; `--check` re-derives a tuned table from its raw
 file when that file is present, and a tuned table replaces the converted one for its

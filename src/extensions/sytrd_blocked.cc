@@ -36,9 +36,8 @@ namespace {
 // ---------------------------------------------------------------------------
 
 // Returns true when BATCHLAS_SYTRD_IMPL=device, false otherwise (legacy default).
-// Latched, unlike its twin latrd_impl() one file over, which is deliberately
-// re-read. The asymmetry is pre-existing and is preserved: the static below
-// still pins the first answer for the process.
+// Latched, unlike its twin latrd_impl() which is re-read; the asymmetry is preserved.
+// evidence: docs/perf/sytrd.md#sytrd-the-latrd-implementation-selector
 inline bool use_device_sytrd() {
     static const bool result = []() {
         const char* v = batchlas::settings().selection.sytrd_impl.get();
@@ -54,14 +53,8 @@ enum class SytrdTrailingUpdateMode {
 };
 
 // Override for the trailing update; unset means the per-backend default below.
-// Kept in both directions so a regression can be bisected against either route
-// without a rebuild.
-//
-// "syr2k" and "her2k" are the real and complex spellings of the same Rank2k
-// route -- one name each, because the value a bisect wants to pin is the route,
-// not the primitive. Anything unrecognised falls through to Default silently,
-// so a run pinned with a typo is a default-against-default A/B; that is why
-// both spellings are accepted rather than only the one this file used to call.
+// "syr2k" and "her2k" both select Rank2k mode. Anything unrecognised silently
+// means Default, so a typo'd pin is a default-against-default A/B.
 inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     const char* v = batchlas::settings().selection.sytrd_trailing_update.get();
     if (!v) return SytrdTrailingUpdateMode::Default;
@@ -771,13 +764,9 @@ Event sytrd_blocked_impl(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
 
     const int k = n - 1;
-    // TRI-STATE, and the one knob that makes env.hh's "an unset variable is
-    // neither truthy nor falsy" contract load-bearing: forced on, forced off, and
-    // "let the tuned default decide" are three different answers below. The field
-    // is a std::optional<bool> for exactly that reason -- a plain bool would
-    // silently collapse the third state onto the tuned default. An engaged
-    // optional came from env_truthy or env_falsy in settings.cc; a value that is
-    // neither (a typo) is nullopt, which is what this site computed before.
+    // TRI-STATE: forced on, forced off, and "let the tuned default decide" differ, so
+    // the field is std::optional<bool>; a plain bool would collapse the third state.
+    // A value neither truthy nor falsy (a typo) is nullopt.
     const auto& fuse_env = batchlas::settings().selection.sytrd_fuse_panel_update;
     const bool fuse_override_on  = fuse_env.has_value() && *fuse_env;
     const bool fuse_override_off = fuse_env.has_value() && !*fuse_env;
@@ -785,46 +774,14 @@ Event sytrd_blocked_impl(Queue& ctx,
         ? ((B == Backend::CUDA) && (n == 256))
         : tuning::sytrd_fuse_panel_update_for_n(n);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
-    // A22 -= V W^H + W V^H is one syr2k, and syr2k touches only the triangle
-    // the panel loop goes on to read. Measured on RTX 4090 / sm_89, float,
-    // against the two full n2 x n2 GEMMs it replaces:
-    //
-    //   the update alone, over the shapes the panel loop produces, is 3.4-3.6x
-    //   faster;
-    //   end to end, n=512 batch=1024 went 264/253/248 ms -> 228/227/232 at
-    //   nb=16/24/32, and n=256 batch=2048 went 34.3/34.6/37.0 -> 27.0/30.6/34.0.
-    //
-    // CUDA and float only, and that is not conservatism: syrk/syr2k reach a
-    // batched kernel only through the custom float route. Everything else falls
-    // to syr2k_vendor_impl, which is a host loop issuing one cublasXsyr2k per
-    // batch member -- in double that measured 7.8x *slower* than the GEMM pair
-    // at n=256 batch=1024, i.e. the whole win inverts.
-    //
-    // complex<float> is admitted too, because her2k is a different function
-    // with a different backend route, not syr2k with a conjugate. Its fast route
-    // (cublas.cc:644-665) is one batched gemm_vendor into scratch followed by
-    // accumulate_hermitian<TwoSided=true>, which is *half* the arithmetic of the
-    // two GEMMs it replaces rather than twice it: alpha*A*B^H and
-    // conj(alpha)*B*A^H are conjugate transposes of one another, so the fold
-    // manufactures the second term from the first. Worth chasing because vendor
-    // GEMM is 34.6% of the cfloat solve at n=256 and 14.4% at n=512, and the
-    // trailing update is roughly half of that.
-    //
-    // OPEN: the crossover behind her2k_gemm_preferred (cublas.cc:415-428) was
-    // swept over square rank-k shapes. The panel loop issues a *narrow* one --
-    // k = ib = nb in {16,24,32} against n2 up to 480 -- where the GEMM is near
-    // bandwidth-bound and the fold adds an n2^2*batch write plus read the two
-    // direct GEMMs never pay. The halved arithmetic may not survive that. Awaits
-    // an A/B of her2k against the GEMM pair at n2 in {224,480}, k in {16,24,32},
-    // cfloat, before this is trusted beyond the shapes it was measured at.
-    //
-    // complex<double> is deliberately left out: it would reach the same fast
-    // route, but its scratch is 16 bytes per element, halving the headroom in
-    // the fit check below, and none of it has been measured. Admit it when it
-    // has been -- guessing is how the 7.8x inversion above got written down.
-    // `B == Backend::CUDA` here meant "the syr2k tile kernel is wired on this
-    // route", not anything about NVIDIA. Asked properly, so a vendor-free build
-    // -- same Backend::CUDA, tile TU absent -- gets the right answer.
+    // A22 -= V W^H + W V^H as one triangle-only syr2k (float) or her2k (complex<float>),
+    // instead of two full n2 x n2 GEMMs. Only where a batched kernel exists: every other
+    // type falls to a per-item host loop that measured 7.8x slower than the GEMM pair
+    // (double). complex<double> is deliberately left out: unmeasured, half the fit
+    // headroom. Asked as a library question, not `B == Backend::CUDA`, so a vendor-free
+    // build (same backend, tile TU absent) gets the right answer.
+    // evidence: docs/perf/sytrd.md#sytrd-the-rank-2k-trailing-update-in-the-blocked-reduction
+    // evidence: docs/perf/syev.md#syev-her2k-trailing-update-for-complex-float-wp3
     constexpr bool rank2k_trailing_update_supported =
         select::level3_tile_route_available<B, T> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
@@ -870,42 +827,12 @@ Event sytrd_blocked_impl(Queue& ctx,
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
                         if constexpr (internal::is_complex<T>::value) {
-                            // her2k's fast route needs an n2 x n2 x batch scratch
-                            // expansion; when that does not fit it drops to a host
-                            // loop over cublasCher2k (cublas.cc:676-691), which is
-                            // structurally the same route measured 7.8x slower
-                            // than the GEMM pair above. So ask the backend's own
-                            // predicate first and keep the GEMM pair as the answer
-                            // when it says no -- a call site that guessed here
-                            // would reinstate that inversion silently.
-                            //
-                            // Per panel, not hoisted: n2 shrinks every iteration,
-                            // so an early panel can fail to fit while later ones
-                            // fit, and taking the GEMM pair for just those panels
-                            // is the correct behaviour.
-                            //
-                            // It fits with room at every shape syev routes to
-                            // blocked. expanded_ld<complex<float>>(n2) rounds n2 up
-                            // to a multiple of 2, so the scratch is
-                            // ~n2^2*batch*8 bytes against a GLOBAL_MEM_SIZE/4
-                            // budget, ~6.0 GiB on a 24 GiB 4090: n=448 batch=585
-                            // (the old cfloat blocked/vendor crossover, now a row of
-                            // tuned/syev.cfloat.<device>.txt)
-                            // needs 0.75 GiB and n=512 batch=1024 needs 1.76 GiB,
-                            // i.e. >=3.4x headroom. The ceiling is crossed around
-                            // n2^2*batch > 8.0e8 elements -- forced blocked at
-                            // n=1024 batch=1024 (7.51 GiB) or n=2048 batch=256
-                            // (7.75 GiB) -- which is outside the routed region but
-                            // reachable by pinning the provider, and is exactly
-                            // where an unguarded call would invert.
-                            //
-                            // The lease is taken per panel inside her2k_vendor and
-                            // released before the next one, so the peak is one
-                            // panel's scratch, not the loop's sum. On an
-                            // out-of-order Queue that route also drains the device
-                            // between its GEMM and its fold (cublas.cc:661-663),
-                            // once per panel; the benchmarks all build in-order
-                            // queues and never see it.
+                            // her2k's fast route needs an n2 x n2 x batch scratch;
+                            // when it does not fit, it drops to a host loop that
+                            // inverts the win. Ask the backend's own predicate and
+                            // keep the GEMM pair when it says no. Per panel, not
+                            // hoisted: n2 shrinks every iteration.
+                            // evidence: docs/perf/sytrd.md#sytrd-her2k-scratch-fit-headroom
                             const std::size_t her2k_scratch_bytes =
                                 backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
                             if (backend::detail::her2k_takes_gemm_route(ctx, n2, batch, her2k_scratch_bytes)) {
@@ -921,35 +848,12 @@ Event sytrd_blocked_impl(Queue& ctx,
                             (void)syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                             rank2k_issued = true;
                         }
-                        // No symmetrize: nothing downstream reads A's upper
-                        // triangle, so leaving it stale is not observable.
-                        // Checked across every reader, not assumed --
-                        //   latrd_lower_panel, all three variants: the symmetric
-                        //     matvec is the only place tempted to cross the
-                        //     diagonal, and all three split it at c == r, taking
-                        //     Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r. The
-                        //     device variant reaches it through
-                        //     device::hemv<Uplo::Lower>, which mirrors the same
-                        //     way. The fused trailing update guards with
-                        //     `if (r < c) continue` (legacy, grid) or
-                        //     device::her2k<Uplo::Lower>.
-                        //   restore_tridiag_lower: reads the diagonal, and only
-                        //     writes the superdiagonal.
-                        // The GEMM pair happened to leave a valid upper triangle
-                        // as a side effect; that was never a contract anything
-                        // depended on.
-                        //
-                        // her2k additionally forces imag(diag) = 0 on the block it
-                        // writes (cublas.cc:492), which the GEMM pair does not --
-                        // it leaves whatever roundoff accumulated there. That is
-                        // the correct value for a Hermitian operand and it is
-                        // unobservable downstream: syev_blocked.cc:217 takes
-                        // D(i,b).real(), and the n2 <= 128 device path above
-                        // already does the same through device::her2k. It does
-                        // mean cfloat results move in the last bits against the
-                        // GEMM pair -- latrd's hemv consumes the diagonal -- so
-                        // expect drift, not bitwise equality, when A/B-ing the
-                        // two routes.
+                        // No symmetrize: no reader touches A's upper triangle (audited:
+                        // every latrd variant splits the matvec at c == r and the fused
+                        // update skips r < c; restore_tridiag_lower reads the diagonal).
+                        // her2k also zeroes imag(diag), so cfloat drifts in the last bits
+                        // against the GEMM pair: expect drift, not bitwise equality.
+                        // evidence: docs/perf/sytrd.md#sytrd-no-symmetrize-after-the-rank-2k-update
                     }
                 }
                 if (!rank2k_issued) {

@@ -22,10 +22,9 @@ Event trmm(Queue& ctx,
     constexpr auto recursion_stop_size = 256;
     auto n = A.rows();
 
-    //Implement recursive TRMM algorithm here
-    //If the size of A is less than recursion_stop_size, use a simple kernel
+    // Base case is a plain GEMM on the full block (beta = 1): looks wrong, unverified.
+    // evidence: docs/perf/level3.md#trmm-the-generic-recursion-reads-the-whole-square-of-a
     if (n <= recursion_stop_size) {
-        //A.triangularize(ctx, uplo, diag).wait();
         if (side == Side::Left) {
             return gemm<Ba>(ctx, A, B, C, {.alpha = alpha, .beta = T(1.0), .transA = transA});
         } else {
@@ -41,7 +40,6 @@ Event trmm(Queue& ctx,
     // ----+----  or  ----+-----   depending on uplo (Lower, Upper)
     // A21 | A22       0  | A22
     
-    // Create sub-matrices for the recursive calls
     auto A11 = A({0, mid_row}, {0, mid_col});
     auto A12 = A({0, mid_row}, {mid_col, SliceEnd()});
     auto A21 = A({mid_row, SliceEnd()}, {0, mid_col});
@@ -53,10 +51,7 @@ Event trmm(Queue& ctx,
     // -+-   -+-
     //  B2   C2
     
-    // If side is right, we need to partition B and C into two column-blocks:
-    // B1 | B2
-    // 
-    // C1 | C2
+    // If side is right, B and C split into column blocks B1 | B2, C1 | C2.
 
     auto C1 = side == Side::Left ? C({0, mid_row}, Slice()) : C(Slice(), {0, mid_col});
     auto C2 = side == Side::Left ? C({mid_row, SliceEnd()}, Slice()) : C(Slice(), {mid_col, SliceEnd()});
@@ -67,9 +62,7 @@ Event trmm(Queue& ctx,
     bool is_transposed = (transA  == Transpose::ConjTrans) || (transA == Transpose::Trans);
     bool is_ll_or_ur = (uplo == Uplo::Lower && side == Side::Left) || (uplo == Uplo::Upper && side == Side::Right);
     
-    // Call trmm recursively on the sub-matrices
-    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-    // is already ordered after this one and the Event carries nothing the caller needs.
+    // (void) on an Event: deliberate; out-of-order queues are waited on below.
     (void)trmm<Ba>(ctx,
              A22,
              B2,

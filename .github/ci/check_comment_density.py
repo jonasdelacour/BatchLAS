@@ -41,6 +41,24 @@ neither the numerator nor the denominator.
 Comment markers inside string literals, character literals and raw strings do
 not open a comment. `1'000'000` is not a character literal.
 
+THE PUBLIC-API EXEMPTION
+------------------------
+In the installed public headers -- everything under include/batchlas/, plus
+include/batchlas.hh -- a comment-only line that belongs to a Doxygen doc
+comment is excluded from BOTH counts and reported as `doc` in --all. A doc
+comment is `/// ...`, `//! ...`, or a block opened by `/**` or `/*!`. A `/***`
+banner, an empty `/**/` and a `////` rule are ordinary comments. A line that
+mixes a doc comment with a plain one counts as a plain comment line.
+
+The exemption exists because API documentation is the header's interface, not
+prose about it: a declaration plus its contract reads 60-80% "comment" and
+cannot be fixed by deletion. It covers the CONTRACT only -- @brief, @param,
+@return, preconditions (@pre), @throws, complexity. Rationale, measurements
+and design history belong in docs/ (see docs/developer/documentation.md),
+and wrapping them in `///` does not make them API documentation; review
+rejects that even though this counter cannot see it. The same doc comments in
+src/, tests/ or benchmarks/ count normally: those are not published by Doxygen.
+
 USAGE
 -----
     python3 .github/ci/check_comment_density.py                 # src include tests benchmarks
@@ -71,6 +89,10 @@ WAIVER_LIST_LIMIT = 12
 BAND_FLOOR = 12.0          # reported for context only; never enforced
 WAIVERS = os.path.join(".github", "ci", "comment_density_waivers.txt")
 
+# Installed public headers: the only files whose Doxygen doc comments are exempt.
+API_HEADER_DIR = "include/batchlas/"
+API_HEADER_ROOT = "include/batchlas.hh"
+
 SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp",
             ".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh")
 
@@ -90,23 +112,61 @@ IDENT = re.compile(r'[A-Za-z0-9_]')
 # the counter
 # --------------------------------------------------------------------------
 
+def is_api_header(rel):
+    """True for the installed public headers, whose Doxygen docs are exempt."""
+    rel = rel.replace(os.sep, "/")
+    return rel.startswith(API_HEADER_DIR) or rel == API_HEADER_ROOT
+
+
+def opens_doc_block(line, i):
+    """`/**` or `/*!` at line[i], but not a `/***` banner or an empty `/**/`."""
+    if line.startswith("/*!", i):
+        return True
+    return (line.startswith("/**", i) and not line.startswith("/***", i)
+            and not line.startswith("/**/", i))
+
+
+def opens_doc_line(line, i):
+    """`///` or `//!` at line[i], but not a `////` rule."""
+    if line.startswith("//!", i):
+        return True
+    return line.startswith("///", i) and not line.startswith("////", i)
+
+
 def classify(text):
     """Return (comment_lines, non_blank_lines, comment_flags).
 
     comment_flags[i] is True when line i (0-based) is a comment-only line.
+    Doxygen doc comments count like any other comment here; see
+    classify_detail() for the public-header exemption.
+    """
+    c, nb, flags, _doc = classify_detail(text, exempt_doc=False)
+    return c, nb, flags
+
+
+def classify_detail(text, exempt_doc):
+    """Return (comment_lines, non_blank_lines, comment_flags, doc_lines).
+
+    doc_lines counts comment-only lines whose every comment is a Doxygen doc
+    comment. With exempt_doc they are removed from BOTH counts and their flag
+    is False; without it they are ordinary comment lines and doc_lines is 0.
     """
     lines = text.splitlines()
     flags = [False] * len(lines)
     comment_lines = 0
     non_blank = 0
+    doc_lines = 0
 
     state = "normal"       # normal | block | raw | line_cont | str_cont
     raw_delim = ""
     str_quote = ""
+    in_doc = False         # the open block / continued // comment is a doc comment
 
     for idx, line in enumerate(lines):
         has_code = False
         has_comment = False
+        has_doc = False
+        has_plain = False
         i = 0
         n = len(line)
 
@@ -116,11 +176,13 @@ def classify(text):
             if state == "block":
                 if line.startswith("*/", i):
                     has_comment = True
+                    has_doc, has_plain = has_doc or in_doc, has_plain or not in_doc
                     state = "normal"
                     i += 2
                 else:
                     if not c.isspace():
                         has_comment = True
+                        has_doc, has_plain = has_doc or in_doc, has_plain or not in_doc
                     i += 1
                 continue
 
@@ -162,12 +224,15 @@ def classify(text):
                 # A // comment continued by a trailing backslash.
                 if line.strip():
                     has_comment = True
+                    has_doc, has_plain = has_doc or in_doc, has_plain or not in_doc
                 i = n
                 continue
 
             # --- state == "normal" -------------------------------------
             if line.startswith("//", i):
                 has_comment = True
+                in_doc = opens_doc_line(line, i)
+                has_doc, has_plain = has_doc or in_doc, has_plain or not in_doc
                 if line.rstrip().endswith("\\"):
                     state = "line_cont"
                 i = n
@@ -175,6 +240,8 @@ def classify(text):
 
             if line.startswith("/*", i):
                 has_comment = True
+                in_doc = opens_doc_block(line, i)
+                has_doc, has_plain = has_doc or in_doc, has_plain or not in_doc
                 state = "block"
                 i += 2
                 continue
@@ -222,12 +289,15 @@ def classify(text):
 
         if not line.strip():
             continue                      # blank: in neither count
+        if exempt_doc and has_comment and not has_code and has_doc and not has_plain:
+            doc_lines += 1                # public API doc: in neither count
+            continue
         non_blank += 1
         if has_comment and not has_code:
             comment_lines += 1
             flags[idx] = True
 
-    return comment_lines, non_blank, flags
+    return comment_lines, non_blank, flags, doc_lines
 
 
 def density(comment_lines, non_blank):
@@ -429,6 +499,43 @@ SELF_TEST_CASES = [
     ("blank_in_block", "/* one\n\n   two */\nint a = 1;\nint b = 2;\nint c = 3;\n",
      40.0, "a whitespace-only line inside a block comment is blank, not a comment"),
     ("empty", "", 0.0, "an empty file is 0%, not a division by zero"),
+    ("doc_in_plain", "/// brief\n//! more\n/** a\n * b */\nint a = 1;\n",
+     80.0, "plain classify() counts doc comments like any other comment"),
+]
+
+# The public-API exemption, armed in both directions: the same text must be
+# exempt under include/batchlas/ and counted everywhere else, and every
+# near-miss spelling (banner, empty block, rule) must count even in a header.
+# (name, path, text, expected density, expected doc lines, why)
+API_DOC_TEXT = ("/// @brief Solve.\n/// @param n order\n//! @return info\n"
+                "/** @pre n > 0\n *  @throws Error\n */\nint solve(int n);\n"
+                "// trap: n is not checked here\nint other(int n);\n")
+API_DOC_CASES = [
+    ("api_header", "include/batchlas/blas/x.hh", API_DOC_TEXT, 33.33, 6,
+     "doc lines leave both counts; the plain `// trap` line still counts (1/3)"),
+    ("api_root", "include/batchlas.hh", API_DOC_TEXT, 33.33, 6,
+     "the umbrella header is a public header too"),
+    ("api_in_src", "src/blas/x.cc", API_DOC_TEXT, 77.78, 0,
+     "the same doc comments in src/ count: 7/9"),
+    ("api_in_tests", "tests/include/batchlas/x.hh", API_DOC_TEXT, 77.78, 0,
+     "only the top-level include/batchlas/ is exempt, not a lookalike path"),
+    ("api_other_inc", "include/other/x.hh", API_DOC_TEXT, 77.78, 0,
+     "include/ outside batchlas/ is not installed API"),
+    ("api_banner", "include/batchlas/x.hh",
+     "/*****************\n * section\n *****************/\nint a = 1;\n", 75.0, 0,
+     "a /*** banner in a public header is an ordinary comment"),
+    ("api_empty_block", "include/batchlas/x.hh",
+     "/**/\n// plain\nint a = 1;\n", 66.67, 0,
+     "an empty /**/ is not a doc comment and does not open one"),
+    ("api_rule", "include/batchlas/x.hh",
+     "//////////////////\n/// doc\nint a = 1;\n", 50.0, 1,
+     "a //// rule counts; the /// line under it is exempt (1/2)"),
+    ("api_mixed", "include/batchlas/x.hh",
+     "/** doc */ // plain\nint a = 1;\n", 50.0, 0,
+     "a line mixing a doc and a plain comment counts as a comment line"),
+    ("api_continued", "include/batchlas/x.hh",
+     "/// doc \\\n   continued\nint a = 1;\n", 0.0, 2,
+     "a backslash-continued /// stays a doc comment on its next line"),
 ]
 
 CEILING_CASES = [
@@ -486,6 +593,13 @@ def self_test():
         bad += 0 if ok else 1
         print("  %-4s %-16s expected %6.2f%%  observed %6.2f%%  (%d/%d)  %s"
               % ("ok" if ok else "FAIL", name, expect, got, got_c, got_n, why))
+    for name, rel, text, expect, expect_doc, why in API_DOC_CASES:
+        got_c, got_n, _, got_doc = classify_detail(text, is_api_header(rel))
+        got = density(got_c, got_n)
+        ok = abs(got - expect) < 0.05 and got_doc == expect_doc
+        bad += 0 if ok else 1
+        print("  %-4s %-16s expected %6.2f%% doc %d  observed %6.2f%% doc %d  (%s)  %s"
+              % ("ok" if ok else "FAIL", name, expect, expect_doc, got, got_doc, rel, why))
     for d, expect_fail, why in CEILING_CASES:
         got_fail = d > DEFAULT_CEILING + 1e-9
         ok = got_fail == expect_fail
@@ -518,7 +632,7 @@ def self_test():
         print("  %-4s %-16s %d/%-4d says %r  %s"
               % ("ok" if ok else "FAIL", name, c, nb, got[:96], why))
     print("check_comment_density self-test: %d case(s), %d failure(s)"
-          % (len(SELF_TEST_CASES) + len(CEILING_CASES) + len(ARITH_CASES)
+          % (len(SELF_TEST_CASES) + len(API_DOC_CASES) + len(CEILING_CASES) + len(ARITH_CASES)
              + len(REMEDY_CASES), bad))
     return 1 if bad else 0
 
@@ -532,7 +646,7 @@ def main(argv=None):
                     help="directories or files to scan (default: %s)" % " ".join(DEFAULT_DIRS))
     ap.add_argument("--root", default=REPO, help="repository root")
     ap.add_argument("--ceiling", type=float, default=DEFAULT_CEILING,
-                    help="maximum comment%% (default %.0f)" % DEFAULT_CEILING)
+                    help="maximum comment%%%% (default %.0f)" % DEFAULT_CEILING)
     ap.add_argument("--show-waivers", action="store_true",
                     help="list every waived file with its reason, however many "
                          "there are (the default collapses a long list to a count)")
@@ -560,6 +674,7 @@ def main(argv=None):
     waivers, errors = load_waivers(root)
 
     rows = []
+    doc_by_file = {}
     for rel in files:
         try:
             with open(os.path.join(root, rel), "r", encoding="utf-8", errors="replace") as fh:
@@ -567,8 +682,9 @@ def main(argv=None):
         except OSError as exc:
             errors.append("%s: error: cannot read (%s)" % (rel, exc))
             continue
-        c, nb, flags = classify(text)
+        c, nb, flags, doc = classify_detail(text, is_api_header(rel))
         rows.append((rel, c, nb, density(c, nb), text, flags))
+        doc_by_file[rel] = doc
 
     ceiling = args.ceiling
     offenders = []
@@ -610,10 +726,13 @@ def main(argv=None):
                               % (WAIVERS, lineno, pat, " ".join(DEFAULT_DIRS)))
 
     if args.all:
-        print("== every scanned file, densest first")
+        print("== every scanned file, densest first "
+              "(doc = exempt public-API doc-comment lines, in neither count)")
         for rel, c, nb, d, _t, _f in sorted(rows, key=lambda r: (-r[3], r[0])):
             mark = " " if d <= ceiling else ("W" if match_waiver(rel, waivers) else "!")
-            print("  %s %6.2f%%  %4d/%-5d %s" % (mark, d, c, nb, rel))
+            doc = doc_by_file.get(rel, 0)
+            print("  %s %6.2f%%  %4d/%-5d %s%s"
+                  % (mark, d, c, nb, rel, ("  doc %d" % doc) if doc else ""))
         print()
 
     if waived:
@@ -670,9 +789,11 @@ def main(argv=None):
     total_nb = sum(r[2] for r in rows)
     total_c = sum(r[1] for r in rows)
     print("check_comment_density: %d file(s), repo density %.2f%% (%d/%d), "
-          "%d over ceiling, %d waived, %d waiver(s) now free to delete"
+          "%d over ceiling, %d waived, %d waiver(s) now free to delete, "
+          "%d public-API doc line(s) exempt"
           % (len(rows), density(total_c, total_nb), total_c, total_nb,
-             len(offenders), len(waived), len(waived_clear)))
+             len(offenders), len(waived), len(waived_clear),
+             sum(doc_by_file.values())))
     if (offenders or waived) and not args.fix_suggest:
         print("  re-run with --fix-suggest to see which blocks to move "
               "(offenders and waived burn-down candidates alike).")

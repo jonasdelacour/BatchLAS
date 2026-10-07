@@ -499,7 +499,7 @@ TYPED_TEST(GemvCoverageTest, TransposePaddedStrided) {
 }
 
 // ConjTrans is the live production path (ortho.cc); on the real types it must equal Trans.
-// evidence: docs/perf/gemv.md#correctness-findings
+// evidence: docs/perf/gemv.md#gemv-correctness-findings
 TYPED_TEST(GemvCoverageTest, ConjTransposePaddedStrided) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -735,8 +735,8 @@ TYPED_TEST(GemvCoverageTest, AlphaZeroBetaOneLeavesYUntouched) {
 }
 
 // Body 4, the segmented NoTrans body, runs instead of body 1 when out_len <= 16 on a
-// sub-group-32 device. That choice is INVISIBLE to the route table -- both read
-// {Native, Direct} -- so only a test red for one body and green for the other says which
+// sub-group-32 device. That choice is INVISIBLE to selection -- both read
+// `direct` -- so only a test red for one body and green for the other says which
 // ran. These walk W = gemv_seg_width(m) at m = 1, 4, 10 and 16.
 // evidence: docs/perf/gemv.md#the-body-4-gate
 

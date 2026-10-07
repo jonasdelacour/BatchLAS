@@ -1,12 +1,12 @@
 #pragma once
 
-// GESV: solve A X = B by LU with partial pivoting, as one op.
-//
-// NO VENDOR ARM ANYWHERE -- no vendor ships a batched gesv -- so there is no
-// `gesv_vendor` here and the composition `getrf; getrs` is the fallback every other
-// op gets from the vendor. SEMANTICS ARE EXACTLY THAT COMPOSITION, as a contract:
-// A comes back holding L and U, `pivots` the same 1-based interchange list getrf
-// writes, `info` getrf's per-item status. evidence: docs/perf/lu.md#the-fused-gesv-tier
+/// @file
+/// @brief Batched general linear solve (gesv) by LU with partial pivoting.
+/// @ingroup factorizations
+
+// No vendor ships a batched gesv, so there is no gesv_vendor; the fallback is the
+// routed composition getrf; getrs, and the documented contract is exactly that.
+// evidence: docs/perf/lu.md#the-fused-gesv-tier
 
 #include <batchlas/export.hh>
 #include <cstdint>
@@ -36,9 +36,14 @@ using gesv_buffer_size = size_t(Queue&,
                                 const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
-// IT CHECKS MORE THAN getrs_validate_params DOES, structurally: getrs lets a
-// non-conforming pair through to the vendor, which is a routing decision and not an
-// acceptance. gesv has no vendor, so those shapes would name the wrong cause.
+/// @brief Validates the arguments of gesv() and gesv_buffer_size().
+///
+/// Checks non-negative extents, a square A, `B.rows() == A.rows()` and equal
+/// batch sizes.
+/// @throws batchlas::invalid_argument if any check fails
+/// @ingroup factorizations
+// Stricter than getrs_validate_params on purpose: getrs routes a non-conforming
+// pair to the vendor, but gesv has none, so it would report the wrong cause.
 template <typename T>
 inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B) {
@@ -66,8 +71,32 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-// A -> its LU factors, B -> X, `pivots` -> n * batch 1-based entries. An EMPTY
-// `info` span means "not requested", as potrf's does.
+/// @brief Batched solve of \f$ A X = B \f$ by LU with partial pivoting.
+///
+/// Semantically getrf() followed by getrs() with `Transpose::NoTrans`: on return
+/// A holds L and U as getrf() leaves them, @p pivots the same packed 1-based
+/// interchange list getrf() writes (so the factors can be reused with getrs()
+/// or getri()), B holds X and @p info carries getrf's per-item status. No
+/// vendor library call sits behind this op; it is served by a native fused
+/// tier or by the routed getrf + getrs composition.
+///
+/// Asynchronous: A, B, @p pivots and @p info are readable after the returned
+/// event is waited on.
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx         queue the kernels are enqueued on
+/// @param A           batch of n x n matrices; overwritten with L and U
+/// @param B           batch of n x nrhs right-hand sides; overwritten with X
+/// @param pivots      pivot output, `n * batch` entries in getrf()'s format
+/// @param work_space  device-accessible scratch of at least gesv_buffer_size() bytes
+/// @param info        per-item status as for getrf(): 0 on success, i > 0 if
+///                    U(i,i) is exactly zero (that item's X is meaningless).
+///                    Empty span = not requested.
+/// @return event of the last enqueued kernel
+/// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
+/// @throws batchlas::workspace_error if the composed getrf + getrs route is
+///         chosen and @p work_space is shorter than its getrf leg needs
+/// @ingroup factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event gesv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -76,12 +105,19 @@ BATCHLAS_API Event gesv(Queue& ctx,
                         Span<std::byte> work_space,
                         Span<int32_t> info);
 
+/// @brief Workspace, in bytes, that gesv() needs for these operands on this queue.
+///
+/// Takes the same operands as the call, so both resolve the same route.
+/// @throws batchlas::invalid_argument if gesv_validate_params() rejects the operands
+/// @ingroup factorizations
 template <Backend Back, typename T>
 BATCHLAS_API size_t gesv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                      const MatrixView<T, MatrixFormat::Dense>& B);
 
-// `info` cannot be defaulted: the sig:: aliases are function TYPES.
+/// @brief gesv() without per-item status (`info` not requested).
+/// @ingroup factorizations
+// Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend Back, typename T>
 inline Event gesv(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,

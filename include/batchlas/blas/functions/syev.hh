@@ -40,17 +40,44 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 }  // namespace sig
 
 
-// `info` is the per-item convergence status: one int32 per batch item, 0 when the
-// item converged and > 0 LAPACK-like (the number of off-diagonal elements that
-// failed to converge, or 1 where the tier that ran tracks only the fact of
-// failure). syev is exactly the routine where LAPACK returns info > 0, and until
-// now a non-converged item at batch 16384 was invisible -- the call returned,
-// ctx.wait() returned, and the caller read eigenvalues that were simply wrong for
-// that item with nothing anywhere saying so.
-//
-// An EMPTY span means "not requested" and costs nothing: `info` is the CALLER's
-// USM, written in place by whichever kernel already knows the answer, so no tier
-// needs workspace for it and syev_buffer_size is the same either way.
+/**
+ * @brief Eigenvalues, and optionally eigenvectors, of a batch of symmetric/Hermitian
+ *        matrices (LAPACK `?syev` / `?heev`).
+ *
+ * Computes \f$ A = Q \Lambda Q^H \f$ for every batch item from its `uplo` triangle.
+ * The kernel family is the first entry of the nearest row of the device's tuned table
+ * (`tuned/syev.<dtype>.<device>.txt`) that can run the call: on a GPU queue a native
+ * tier (the n <= 32 sub-group solvers `cta`, `cta_fused` and `jacobi`, which need
+ * sub-group size 32; `blocked` or `two_stage` at any n), otherwise `vendor`, the
+ * solver library. Pin a family with `BATCHLAS_SYEV_ROUTE` (e.g. `two_stage`, `vendor`).
+ * Asynchronous: returns once the work is enqueued.
+ *
+ * @tparam B  backend (NETLIB always runs the vendor LAPACKE path)
+ * @tparam T  float, double, std::complex<float> or std::complex<double>
+ * @param ctx         queue the work is enqueued on
+ * @param descrA      batch of n x n matrices; with `JobType::EigenVectors` overwritten by
+ *                    the orthonormal eigenvectors (column j pairs with eigenvalue j),
+ *                    otherwise its contents are destroyed
+ * @param eigenvalues n real eigenvalues per batch item, packed, ascending
+ * @param jobtype     `EigenVectors` or `NoEigenVectors`
+ * @param uplo        which triangle of `descrA` holds the matrix
+ * @param workspace   at least syev_buffer_size() bytes for the same arguments
+ * @param info        per-item convergence status: 0 converged, > 0 LAPACK-like (the
+ *                    number of off-diagonals that failed to converge, or 1 where the tier
+ *                    only tracks failure). An EMPTY span means "not requested" and costs
+ *                    nothing; syev_buffer_size() is the same either way.
+ * @return event of the last enqueued kernel
+ * @throws batchlas::invalid_argument if `descrA` is not square
+ * @throws batchlas::workspace_error if the workspace span is smaller than the chosen kernel needs
+ * @throws batchlas::NoRouteError when no native kernel can run (e.g. a CPU queue) in a
+ *         build without the solver library
+ * @throws std::invalid_argument if `BATCHLAS_SYEV_ROUTE` names a family that is not
+ *         compiled or cannot run this call (the words `native` and `vendor` instead
+ *         fall back to the tuned choice with a warning)
+ * @see @ref selection_tables (which family ranks first where), @ref perf_syev,
+ *      @ref md_docs_2cpp-api (convergence status)
+ * @ingroup eigen
+ */
 template <Backend B, typename T>
 BATCHLAS_API Event syev(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
@@ -60,16 +87,13 @@ BATCHLAS_API Event syev(Queue& ctx,
                         Span<std::byte> workspace,
                         Span<int32_t> info);
 
-// Old-arity forwarder rather than a defaulted trailing parameter, mirroring
-// potrf.hh:110.
-//
-// What forces the shape is sig::syev above: it is a function *type*, and function
-// types cannot carry default arguments, so `info` has to be spelled out there
-// whichever way the declaration is written (src/util/template-instantiations.hh).
-// Leaving the declaration default-free too keeps the two parameter-for-parameter
-// identical, which is the invariant BATCHLAS_INSTANTIATE reads; this inline
-// overload is then what keeps every existing six-argument call site -- the
-// SyevOptions spellings in blas/options.hh among them -- compiling unchanged.
+// Old-arity forwarder, not a defaulted `info`: sig::syev is a function TYPE and cannot
+// carry a default, and BATCHLAS_INSTANTIATE needs alias and declaration identical.
+// evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
+/**
+ * @brief syev() without the convergence status (`info` empty).
+ * @ingroup eigen
+ */
 template <Backend B, typename T>
 inline Event syev(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -80,6 +104,13 @@ inline Event syev(Queue& ctx,
     return syev<B, T>(ctx, descrA, eigenvalues, jobtype, uplo, workspace, Span<int32_t>{});
 }
 
+/**
+ * @brief Workspace, in bytes, that syev() needs for the same arguments.
+ *
+ * Makes the same kernel choice as the call, so the size is for the tier that will
+ * run. `info` does not affect it.
+ * @ingroup eigen
+ */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -91,18 +122,15 @@ BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Implemented by backend wrapper TUs (e.g. cuSOLVER / rocSOLVER / LAPACKE).
-// `info_out` is the caller's per-item status span, or empty. Every vendor already
-// allocates this array because the vendor call demands somewhere to write; before
-// this it was pool scratch that nobody read.
-//
-// Defaulted rather than forwarded, unlike the public `syev` above. A default
-// argument is a property of the declaration and not of the function type, so
-// sig::syev_vendor still names the full seven-parameter signature and the
-// explicit instantiations in the vendor TUs still match. That default is what
-// keeps the six-argument call sites in src/extra/norm.cc, src/extra/cond.cc and
-// src/extensions/syevx_lobpcg.cc compiling with no extra overload -- none of them
-// is public API, so none needs a forwarder of its own.
+// Defined per backend TU (cuSOLVER / rocSOLVER / LAPACKE). `info_out` is DEFAULTED, unlike
+// syev's forwarder: a default is not part of the function type, so sig::syev_vendor still
+// matches and six-argument callers (norm.cc, cond.cc, syevx_lobpcg.cc) need no forwarder.
+// evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
+/**
+ * @brief The vendor solver's syev (cuSOLVER, rocSOLVER or a LAPACKE loop), as syev()'s
+ *        `vendor` family calls it; same contract as syev(), with `info_out` as `info`.
+ * @ingroup dispatch
+ */
 template <Backend B, typename T>
 BATCHLAS_API Event syev_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -112,6 +140,7 @@ BATCHLAS_API Event syev_vendor(Queue& ctx,
                                Span<std::byte> workspace,
                                Span<int32_t> info_out = Span<int32_t>());
 
+/** @brief Workspace, in bytes, for backend::syev_vendor(). @ingroup dispatch */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& descrA,

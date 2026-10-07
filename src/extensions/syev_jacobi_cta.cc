@@ -23,30 +23,12 @@ template <typename T, size_t P, bool ComputeVectors, bool Upper>
 class SyevJacobiCTAKernel;
 
 // ---------------------------------------------------------------------------
-// Tier-A Jacobi eigensolver: partition-resident cyclic two-sided Jacobi.
-//
-// One SubGroupPartition<P> owns one problem; A and (optionally) Z live in local
-// memory for the whole solve, so a full eigendecomposition is a single kernel
-// launch with no global-memory traffic beyond the initial load and final store.
-//
-// This is an accuracy-oriented alternative to the sytrd_cta -> steqr_cta ->
-// ormqx_cta pipeline. With the *relative* off-diagonal threshold used below,
-// Jacobi's eigenvalue error is governed by the condition number of the
-// column-equilibrated matrix rather than that of the (tridiagonalized) matrix
-// itself, so graded / badly scaled inputs come out with small relative error
-// where a tridiagonalizing method loses the small eigenvalues entirely.
-//
-// The guarantee is proved for symmetric positive definite input; indefinite
-// matrices are handled correctly but do not inherit the relative-accuracy bound.
-//
-// References:
-// - Demmel & Veselic, "Jacobi's Method is More Accurate than QR",
-//   SIAM J. Matrix Anal. Appl. 13(4), 1992.  (accuracy theorem, relative
-//   stopping criterion)
-// - Drmac & Veselic, LAPACK Working Notes 169/170.  (threshold form, backward
-//   error, convergence test)
-// - Golub & Van Loan, Matrix Computations, Alg. 8.5.1.  (2x2 rotation formulas)
-// - See JACOBI_EIGENSOLVER_PLAN.md for the full design rationale.
+// Tier-A Jacobi eigensolver: partition-resident cyclic two-sided Jacobi. One
+// SubGroupPartition<P> owns one problem; A and (optionally) Z stay in local memory
+// for the whole solve. Accuracy-oriented: with the RELATIVE off-diagonal threshold
+// below, graded input keeps small relative eigenvalue error (proved for SPD input).
+// evidence: docs/perf/syev.md#syev-the-jacobi-kernel-design-and-its-accuracy-argument
+// evidence: docs/perf/syev.md#syev-the-2026-08-03-small-n-bake-off
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -102,16 +84,10 @@ inline T partition_reduce_sum_j(const Group& g, T v) {
     return v;
 }
 
-// Round-robin ("chess tournament" / circle method) pairing.
-//
-// For an even m, round t in [0, m-2] produces m/2 disjoint pairs, and the m-1
-// rounds together cover all m(m-1)/2 index pairs exactly once. Index 0 is held
-// fixed and the remaining m-1 indices rotate.
-//
-// This schedule is a permutation of a serial sweep into disjoint (hence
-// commuting) pivot pairs, so by the weak-equivalence theorem of Hari &
-// Begovic Kovac (ETNA 46, 2017, Thm 2.11) it produces the same matrix as the
-// cyclic-by-rows ordering after each full sweep and inherits its convergence.
+// Round-robin ("circle method") pairing: for even m, round t in [0, m-2] gives m/2
+// disjoint pairs, and the m-1 rounds cover every pair once. Index 0 is fixed and
+// the rest rotate. Weakly equivalent to cyclic-by-rows (Hari & Begovic Kovac 2017),
+// so it inherits that ordering's convergence.
 inline void round_robin_pair(int32_t m, int32_t t, int32_t k, int32_t& p, int32_t& q) {
     const int32_t ring = m - 1;
     if (k == 0) {
@@ -155,13 +131,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         // CTA path assumes warp-sized sub-groups on NVIDIA.
         const int32_t sg_size = 32;
 
-        // Local-memory leading dimension is padded to P+1.
-        //
-        // This matters a great deal. The row-update phase has lane == column, so
-        // lane i touches address (row + i*LD). With LD == P == 32 every lane in a
-        // warp lands in the same 32-bit bank and the access serializes 32 ways;
-        // padding to 33 makes consecutive lanes differ by 33 == 1 (mod 32) and
-        // the access becomes conflict-free.
+        // LD padded to P+1: the row-update phase has lane == column, and LD == 32 puts
+        // every lane in one bank (32-way serialization).
         constexpr int32_t LD = static_cast<int32_t>(P) + 1;
         constexpr std::size_t kTileElems = static_cast<std::size_t>(LD) * P;
 
@@ -207,21 +178,16 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * kTileElems), cgh);
         auto Z_local = sycl::local_accessor<T, 1>(
             sycl::range<1>(ComputeVectors ? (probs_per_wg * kTileElems) : 1), cgh);
-        // The rotation cosine/sine pair is stored as one vector so the update
-        // loops issue a single LDS load instead of two. These are broadcast
-        // reads (every lane in a partition reads the same slot), but they are
-        // still LDS *instructions*, and before packing they outnumbered the
-        // actual matrix accesses in the inner loop.
+        // (c, s) packed into one vector: one LDS load instead of two in the update loops.
         auto Rcs_local = sycl::local_accessor<sycl::vec<Real, 2>, 1>(
             sycl::range<1>(probs_per_wg * kRotSlots), cgh);
         // The diagonal phase is identically 1 for real types, so it is neither
         // stored nor loaded there.
         auto Rd_local = sycl::local_accessor<T, 1>(
             sycl::range<1>(kNeedPhase ? (probs_per_wg * kRotSlots) : 1), cgh);
-        // Round-robin pivot pairs, precomputed once per work-group and shared by
-        // every problem in it, with the two indices packed into one 16-bit slot.
-        // Computing them inline costs three integer modulos per pair per lane per
-        // phase, which dominated the inner loops.
+        // Round-robin pivot pairs, precomputed once per work-group and shared by every
+        // problem in it, both indices packed into one 16-bit slot (inline modulos
+        // dominated the inner loops).
         auto Pair_local = sycl::local_accessor<int16_t, 1>(sycl::range<1>(kPairSlots), cgh);
 
         const int32_t nn = n;
@@ -231,19 +197,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const bool do_sort = params.sort;
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
-        // Relative off-diagonal threshold. A rotation is applied only when
-        //     |a_pq| > tol * sqrt(|a_pp| * |a_qq|)
-        // (Demmel & Veselic; LAWN 169 Remark 2.2). Using the classical absolute
-        // test |a_pq| <= tol * max|a_kl| instead would forfeit the entire
-        // relative-accuracy advantage that motivates this kernel.
+        // Relative off-diagonal threshold: rotate only when |a_pq| > tol*sqrt(|a_pp a_qq|).
+        // The classical absolute test would forfeit the relative accuracy.
         const Real tol = params.tol_multiplier
                        * static_cast<Real>(nn)
                        * std::numeric_limits<Real>::epsilon();
-        // Only ever treat truly denormal/zero off-diagonals as unconditionally
-        // converged. This is a guard against churn when a diagonal entry passes
-        // through zero on an indefinite matrix (which makes the relative
-        // threshold demand |a_pq| == 0 exactly); it sits far below any magnitude
-        // that affects the accuracy bound.
+        // Only denormal/zero off-diagonals count as unconditionally converged: guards
+        // against churn when a diagonal passes through zero on indefinite input.
         const Real tiny = std::numeric_limits<Real>::min();
         // Above this magnitude tau*tau would overflow, so use the asymptotic
         // branch t ~ 1/(2*tau) instead.
@@ -325,12 +285,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 // ---- Sweeps ----
-                //
-                // The loop had no convergence record at all: it either broke on a
-                // zero-rotation sweep or ran out of max_sweeps, and afterwards the
-                // two were indistinguishable. `converged` is that missing bit --
-                // unlike gesvdj_cta this kernel terminates on ONE clean sweep, so
-                // `rot_count == 0` is the whole predicate.
+                // This kernel terminates on ONE clean sweep, so `rot_count == 0` is the
+                // whole convergence predicate (unlike gesvdj_cta).
                 bool converged = false;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                     int32_t rot_count = 0;

@@ -107,13 +107,10 @@ inline int gemv_seg_trans_min_items(int cu, int w) {
     return (w >= 8 ? 16 : 64) * c;
 }
 
-// Bodies 3 and 5 are one route, so BATCHLAS_GEMV_ROUTE cannot separate them.
-// Never latch this in a function-local static: a value cached there makes a
-// later change invisible, and the test then passes green on the default arm.
-// Reading settings() per call keeps that property -- the snapshot is re-read by
-// detail::reload_settings(), so a ScopedEnvVar around the A/B is still seen --
-// but a static here would defeat it again exactly as a cached read did.
-//   BATCHLAS_GEMV_SEGT = off | auto (default) | 2|4|8 (force body 5 at that W)
+// BATCHLAS_GEMV_SEGT = off | auto (default) | 2|4|8 (force body 5 at that W);
+// bodies 3 and 5 share a route. Read settings() per call, NEVER latch in a static:
+// a latched value makes the A/B measure the default arm twice.
+// evidence: docs/perf/gemv.md#the-sub-route-gates
 enum class SegTMode { kAuto, kOff, kForce2, kForce4, kForce8 };
 
 inline SegTMode gemv_segt_mode() {
@@ -167,7 +164,7 @@ inline bool gemv_quick_return(int m, int n, T alpha, T beta) {
     return m == 0 || n == 0 || (alpha == T(0) && beta == T(1));
 }
 
-// BODY 1 -- {Native, Direct}, transA == NoTrans, one work-item per output row:
+// BODY 1 -- `direct`, transA == NoTrans, one work-item per output row:
 //   y_i = alpha * sum_j A[i + j*ld] * x[j*xinc] + beta * y[i*yinc]
 // Coalesced ONLY FOR out_len >= 32, since out_len*batch is the only parallel
 // extent; body 4 covers shorter outputs where a 32-lane sub-group exists.
@@ -251,7 +248,7 @@ Event gemv_direct_notrans(Queue& ctx,
     return ctx.get_event();
 }
 
-// BODY 4 -- {Native, Direct}, transA == NoTrans, SHORT OUTPUT. W lanes per
+// BODY 4 -- `direct`, transA == NoTrans, SHORT OUTPUT. W lanes per
 // output, one sub-group per batch item: lane l takes i = l % m, jsub = l / m, so
 // lanes l and l+m fold at stride m. THE FOLD IS CLOSED -- lane i draws only from
 // lanes i + m*t, t < W, all below m*W <= 32 -- so lanes at or above m*W may shift
@@ -358,7 +355,7 @@ Event gemv_seg_notrans(Queue& ctx,
     return ctx.get_event();
 }
 
-// BODY 2 -- {Native, Direct}, transA != NoTrans.  THE PORTABLE ARM.
+// BODY 2 -- `direct`, transA != NoTrans.  THE PORTABLE ARM.
 //   y_j = alpha * sum_i conj?(A[i + j*ld]) * x[i*xinc] + beta * y[j*yinc]
 // Lanes read `ld` apart and are not coalesced; body 3 is the GPU shape.
 template <typename T>
@@ -441,7 +438,7 @@ Event gemv_direct_trans(Queue& ctx,
     return ctx.get_event();
 }
 
-// BODY 3 -- {Native, CTA}, transA != NoTrans, GPU with an ENUMERATED sub-group
+// BODY 3 -- `cta`, transA != NoTrans, GPU with an ENUMERATED sub-group
 // size of 32. One 32-lane sub-group per output element, folded through sg_sum,
 // lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM, and has to be: a
 // shuffle reached by only some lanes of a sub-group is UB.
@@ -466,7 +463,7 @@ Event gemv_cta_trans(Queue& ctx,
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     const int wg = gemv_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/5);
-    // supports(CTA) has already established a 32-lane sub-group, so this cannot
+    // can_run(cta) has already established a 32-lane sub-group, so this cannot
     // fire; the alternative to the guard is a division by zero, not a fallback.
     const int sgs_per_wg = (wg / kSg) > 0 ? (wg / kSg) : 1;
     const int64_t groups = (items + sgs_per_wg - 1) / sgs_per_wg;
@@ -541,7 +538,7 @@ Event gemv_cta_trans(Queue& ctx,
     return ctx.get_event();
 }
 
-// BODY 5 -- {Native, CTA}, transA != NoTrans, GPU with an ENUMERATED sub-group
+// BODY 5 -- `cta`, transA != NoTrans, GPU with an ENUMERATED sub-group
 // size of 32, SHORT REDUCTION. W outputs per sub-group, L = 32/W lanes each:
 // s = lane % L, o = lane / L -- body 4's mapping TRANSPOSED, because lanes must
 // vary fastest along the contiguous index, which under Trans is the reduction.
@@ -676,7 +673,7 @@ Event gemv_seg_trans(Queue& ctx,
 }  // namespace
 
 // TEST-ONLY. Which CTA kernel a (queue, red_len) resolves to: 1 = body 3, W >= 2
-// = body 5 at that W. {Native, CTA} names two kernels, so the resolved route
+// = body 5 at that W. `cta` names two kernels, so the trace or coverage spelling
 // column cannot tell them apart and a break against body 5 can look green.
 template <typename T>
 int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch) {
@@ -735,7 +732,7 @@ Event gemv_native_cta(Queue& ctx,
     }
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
 
-    // BODY 5 vs BODY 3 is a device-and-shape choice, not a route: `native:cta` does
+    // BODY 5 vs BODY 3 is a device-and-shape choice, not a family: a `cta` pin does
     // not identify which kernel ran (gemv_seg_trans_width_debug does).
     if constexpr (kGemvSegTransEmit<T>) {
         const int w = gemv_seg_trans_width<T>(

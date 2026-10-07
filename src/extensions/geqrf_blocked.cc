@@ -55,7 +55,7 @@ inline int geqrf_blocked_nb(int m, int n) {
     return std::max(1, std::min(geqrf_nb_for_type<T>(), k));
 }
 
-// WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#the-register-leaf-ab
+// WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#qr-the-register-leaf-ab
 inline GeqrfPanelLeaf geqrf_panel_leaf_from_env() {
     const char* s = batchlas::settings().selection.geqrf_leaf.get();
     if (s != nullptr && std::strcmp(s, "reg") == 0) return GeqrfPanelLeaf::Register;
@@ -113,7 +113,7 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 // geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
 // shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
 // reporting false here sends every such shape back to the vendor.
-// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
+// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#qr-route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
@@ -203,7 +203,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     BumpAllocator pool(workspace);
     auto ws = geqrf_blocked_layout<T>(ctx, pool, m, n, nb, batch);
     // W1/W2 are beta = 0 GEMM outputs, but the native GEMM epilogues still read C (0 * NaN
-    // from a dirty arena is NaN). Remove once that is fixed. evidence: docs/design/known-defects.md#11-native-gemm-reads-c-at-beta-zero
+    // from a dirty arena is NaN). Remove once that is fixed. evidence: docs/design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero
     if (n - nb > 0) {
         ctx->memset(ws.w1.data(), 0, ws.w1.size() * sizeof(T));
         ctx->memset(ws.w2.data(), 0, ws.w2.size() * sizeof(T));
@@ -231,7 +231,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         const int n2 = n - j2;          // trailing columns; ZERO on the last panel
 
         // PER PANEL and a POLICY request: panels shrink as j0 advances, so a tall first panel
-        // keeps today's leaf. Gating on `fits` here measures 0.38-0.93x at mp >= 144; any other
+        // keeps the non-register leaf. Gating on `fits` alone loses above the policy height; any other
         // forced leaf throws. evidence: docs/perf/qr.md#the-panel-height-window
         const GeqrfPanelLeaf leaf_here =
             (panel_leaf == GeqrfPanelLeaf::Register &&

@@ -1,5 +1,13 @@
 # Vendor-free status: where it stands and what is left
 
+> **Covers:** what the vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) can and cannot do,
+> the milestones M1/M2, and the remaining work.
+> **Status:** current status board; the counts are the last recorded runs (end of WP8) and the
+> per-op table is a snapshot of 2026-10-06. Selection is flat kernel selection
+> (@ref design_flat_selection); the live list of every op's families and tables is
+> @ref selection_tables. Anything below that names `RouteTable`, `preferred()`, `supports()` or
+> `automatic()` describes the deleted route layer and is kept as history.
+
 BatchLAS is meant to build, link, load, run and perform without cuBLAS, cuSOLVER, cuSPARSE,
 rocBLAS, rocSOLVER, rocSPARSE, oneMKL or netlib LAPACK — while still *using* any of them when
 they are present and genuinely faster. Work packages WP0–WP8 delivered the dispatch machinery
@@ -11,7 +19,7 @@ missing kernels and unrouted host paths rather than an unknown.
 
 This page is the status board. It does not carry per-op performance evidence — that lives in
 [`../perf/`](../perf/README.md), one page per op, and every ratio quoted here links there. How
-dispatch itself works is [`vendor-independence.md`](vendor-independence.md); located, unfixed
+the vendor seam itself works is [`vendor-independence.md`](vendor-independence.md); located, unfixed
 bugs are [`known-defects.md`](known-defects.md).
 
 ## The two build configurations
@@ -56,7 +64,7 @@ native families' `can_run` requires `d.is_gpu` for `geqrf`, `orgqr`, `ormqr`, `g
 `can_run.hh`; before flat selection the same clause sat in each op's `supports()`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
 queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did. gemm is a
-partial third: its native `can_run` (`src/ops/gemm/gemm.cc`, P3.4) accepts `is_gpu || !has_vendor_blas`, so a host
+partial third: its native `can_run` (`src/ops/gemm/gemm.cc`, P3.4) accepts `is_gpu || !has_vendor`, so a host
 queue with no host BLAS still runs the native kernels, as the old merely-supported fallback did, while a host
 queue with one keeps the vendor.
 
@@ -97,7 +105,8 @@ Every public dense op and `spmm` now has a native SYCL kernel. What differs is w
 table ranks it first in a **vendor-present** build. Vendor-free, the vendor entry cannot run, so
 the first runnable native entry of the row runs (flat selection R4; `can_run` is correctness only).
 Every op below selects in `src/ops/<op>/<op>.cc` over `tuned/<op>.<dtype>.<device>.txt`; "transcribed"
-means the rows reproduce the deleted `preferred()` window (`tuned/README.md`).
+means the rows reproduce the deleted `preferred()` window (@ref tuned_tables_readme). This table is a
+snapshot of 2026-10-06; @ref selection_tables is regenerated from the tree on every docs build.
 
 | op | native families | native-first rows, vendor-present (tables) |
 |---|---|---|
@@ -115,9 +124,9 @@ means the rows reproduce the deleted `preferred()` window (`tuned/README.md`).
 | `gesv` | `tiny`, `blocked` (no vendor family) | always native |
 | `spmm` | `direct` | transcribed: CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` |
 | `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage` | transcribed from the old CUDA grid (pattern in flat-kernel-selection.md §12, Phase 5, syev) |
-| `gesvd` | `jacobi`, `cta`, `blocked` | transcribed: the wide-band rule (real 33..64 is `blocked\|vendor\|jacobi`) |
+| `gesvd` | `jacobi`, `cta`, `blocked` | transcribed: the wide-band rule (real 33..64 is `blocked\|vendor\|jacobi`; [evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)) |
 
-Two families sit outside this table and must not be read from it:
+Ops without a `choice.hh` sit outside this table and must not be read from it. On 2026-10-06:
 
 * **`symm`, `syrk`, `syr2k`, `trmm` have no table.** Their thresholds are hand-rolled
   `if`-chains, guarded `Back == Backend::CUDA && std::is_same_v<T, float>`
@@ -184,9 +193,9 @@ And these are vendor-first because **no decision was taken**, which is a differe
    nothing else.
 2. **`syev`, 87 — the largest single entry, and part of it is a routing-vocabulary defect rather
    than a missing kernel.** Four call sites reach into `dispatch::detail` and demand the
-   *vendor* `syev` instead of calling the public one, so they throw vendor-free by construction
-   regardless of what `syev`'s three native tiers support: `src/extra/cond.cc:54`,
-   `src/extra/norm.cc:46`, `src/extensions/syevx_lobpcg.cc:540` and `:1101`. The recorded
+   *vendor* `syev` (`syev_vendor_or_throw`) instead of calling the public one, so they throw
+   vendor-free by construction regardless of what `syev`'s native tiers support: `src/extra/cond.cc:54`,
+   `src/extra/norm.cc:46`, `src/extensions/syevx_lobpcg.cc:524` and `:1076` (line numbers 2026-10-06). The recorded
    measurement attributes 6 of `cond_tests`' 30 vendor-free failures to the `cond.cc` one. The
    fix is to call the public `syev` and let its selection decide (known-defects #2).
 3. **`hemm` 12, `herk` 16, `her2k` 12 — no native arm exists.** The facade is vendor-or-throw for
@@ -260,17 +269,22 @@ effort.
 
 ### Known wrong, deliberately deferred
 
-Preserved rather than fixed in passing, because each is a route change that needs its own
-measurement:
+Preserved rather than fixed in passing, because each was a route change that needed its own
+measurement. All but the last entry have since been closed or withdrawn; each says by what:
 
-* **`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.** `{Native, Auto}` passes
-  `syrk_use_cuda_custom`, fails every arm inside `syrk_cuda_custom`, and lands on the
-  `DiagFullGemm` fallback — **which writes both triangles**, clobbering the one the caller did
-  not name. **No test in the tree sets `BATCHLAS_SYRK_ROUTE`.**
-* **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**; the throw is
-  not guarded by `forced`.
-* **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
-  large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
+* ~~**`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.**~~ Closed (known-defects #8): in the
+  route era `{Native, Auto}` fell through `syrk_cuda_custom` to the `DiagFullGemm` fallback, which
+  wrote both triangles. Phase 5 deleted `DiagFullGemm`, and the level-3 flat-selection wave (#147)
+  deleted the hand-written dispatcher: `native` now takes the first runnable non-vendor family of
+  the `tuned/syrk.<dtype>.<device>.txt` row, which is `gram` or `triangular` (the tile kernels,
+  `src/ops/syrk/choice.hh:18-20`), never a both-triangles gemm.
+* ~~**`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for.**~~ Closed
+  (known-defects #9): the dispatcher and cuBLASDx are deleted, and `cublasdx` is an unknown
+  family, so a pin of it throws as a bad spelling.
+* ~~**`symm` has no `expansion_fits()` ceiling**~~ Closed by the level-3 flat-selection wave:
+  `expand`'s `can_run` calls `backend::detail::expansion_fits` (`src/ops/symm/symm.cc:52-55`), so
+  an expansion that does not fit is not runnable and Auto moves on to the next entry of the row
+  (or throws `NoRouteError` vendor-free).
 * ~~**`trsm`'s heterogeneous-batch correctness gate can never fire.**~~ Withdrawn: the field was
   written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
   the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while
@@ -278,11 +292,13 @@ measurement:
 * ~~**`resolve_ormqr_route` is called with two arguments**~~ Resolved in P5 (`docs/perf/qr.md`
   #12): `resolve_ormqr_route` and `route_ormqr.hh` are deleted, and the flat selection in
   `src/ops/ormqr/ormqr.cc` reads the real vendor availability (`can_run`'s
-  `d.has_vendor_solver`). Before P5 it took `vendor_available = true` (`ormqr.hh:209`) and got
+  `d.has_vendor`, then named `has_vendor_solver`). Before P5 it took `vendor_available = true` (`ormqr.hh:209`) and got
   away with it only because its `preferred()` was native-first. Do not inherit the omission.
-* **`cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`**, so a
-  cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in
-  `vendor_available.hh`.
+* ~~**`cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`**, so a
+  cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link.~~ Resolved:
+  `factorization_vendor_available` (now `src/select/vendor.hh`) requires cuBLAS **and** cuSOLVER on
+  CUDA, so that configure claims no factorization vendor at all
+  ([the vendor gate history](vendor-independence.md#the-vendor-gate-history-of-the-per-library-predicates)).
 * Three call-site defects located and left alone by decision, with their reasoning, in
   [`known-defects.md`](known-defects.md): `ortho.cc`'s transposed `gemv` view, the `syev`
   resolver bypasses above, and `lanczos.cc`'s two-column `gemm` whose second column is
@@ -300,9 +316,9 @@ establish as a win, and each is the obvious next idea.
 | complex Gram tiles (`herk`) | loses to the GEMM-plus-Hermitian-fold everywhere; a complex multiply is four real ones, so `herk` is compute bound where real `syrk` is bandwidth bound |
 | `syr2k` for the `sytrd_blocked` trailing update in `double` | 7.7× slower in the regime that matters; it wins only where the batch is small enough that per-item launch cost amortises. The route stays CUDA + float |
 | the cooperative TRSM solve (W work-items per solve) | passes the register gate at order 128 in fewer registers than the shipped kernel needs at order 32 — and still measures 0.39× at order 64. The traffic model missed the serial recurrence |
-| transcribing the level-3 gate thresholds into `RouteTable::preferred` (the "split-tu" WP1 design) | the live thresholds are **gate-only**, so a faithful transcription sends `129 <= n <= 383` to a route that writes both triangles |
-| taking "the first merely supported route" unconditionally in `automatic()` | inverts GEMM's default for small shapes, because the order arrays list natives first |
-| a compile-time coverage gate | `resolve_route` is an inline function template; a TU compiled without the macro interposes its uninstrumented copy by weak-symbol resolution and recording silently stops. `cmake/BatchLASOptions.cmake:109` records that the option was deliberately never added |
+| (route era) transcribing the level-3 gate thresholds into `RouteTable::preferred` (the "split-tu" WP1 design); the same trap applies to a table seeded from them | the live thresholds are **gate-only**, so a faithful transcription sends `129 <= n <= 383` to a route that writes both triangles |
+| (route era) taking "the first merely supported route" unconditionally in `automatic()` | inverts GEMM's default for small shapes, because the order arrays list natives first |
+| a compile-time coverage gate | the route-era `resolve_route` was an inline function template; a TU compiled without the macro interposes its uninstrumented copy by weak-symbol resolution and recording silently stops. `cmake/BatchLASOptions.cmake:141` records that the option was deliberately never added |
 | `potrf`'s fold-free trailing update | measured 11% cheaper **and wrong** |
 
 ## How to re-derive this page

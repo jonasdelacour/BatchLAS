@@ -47,7 +47,7 @@ inline int getrs_fused_nb(int n) {
 inline int getrs_fused_blk_ld(int nb) { return nb + 1; }
 
 // The register gate: a launch ABORT, not a slowdown. What binds is resident::sm89_fits --
-// registers per sub-partition, not the per-block 65,536 this file used to divide into.
+// registers per sub-partition, not the per-block 65,536.
 // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 // The table is per (type, body, width) rather than a max over them, and is measured with
 // scripts/register_probe.sh -- re-run it if ptxas moves a cell by more than the margin.
@@ -148,14 +148,8 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
     while (wg < n / 2 && wg < 1024) wg *= 2;
     if (wg < 64) wg = 64;
 
-    // MARGIN RESTORATION: the per-block spelling this replaces handed out widths whose
-    // ceil(warps / 4) usage sat AT 16,384 (double NoTrans nrhs 5..8 at 928 lanes, cdouble
-    // Trans nrhs 3..4 at 992), so a drift inside kGetrsFusedRegMargin itself turned a legal
-    // launch into CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES. By the same arithmetic -- NOT by a
-    // launch anyone has run -- cdouble Trans nrhs 5..8 computes over it (672 lanes at the
-    // probed 86 registers is 6 x 32 x 88 = 16,896), but that cell is UNREACHABLE: the 672-lane
-    // width needs n >= 1025, and getrs_fused_dispatch throws invalid_argument on n * nrhs past
-    // the resident-RHS capacity long before it. Seven cells narrow, the widest by 96 lanes.
+    // Per SUB-PARTITION, never `65536 / regs`: that spelling leaves zero margin at some
+    // widths. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
     int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
     if (cap < 32) cap = 32;
@@ -169,7 +163,7 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
 // The 48 KB launch hole, carried verbatim from potrf_cta.cc so the two agree: a dynamic
 // local-memory request in (49152 - static_shared, 49152] fails at enqueue with
 // CUDA_ERROR_INVALID_VALUE, and is STICKY PER CUfunction, so a larger earlier launch
-// hides it from a warm test suite. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t kGetrsHoleLo    = 47104;
 constexpr std::size_t kGetrsHoleHi    = 49664;
 constexpr std::size_t kGetrsHolePadTo = 49920;
@@ -856,7 +850,7 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
 
     // The floor division above can round the implied request BACK DOWN INTO the band,
     // where the pad raises it again and the launch is refused; the exact repair is the
-    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#correctness-findings
+    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
     if (getrs_fused_slm(elems, kGetrsFusedNbMax, sizeof(D)) > slm_budget_bytes) {
         if (kGetrsHoleLo <= blk_bytes) return 0;
         return (kGetrsHoleLo - blk_bytes) / sizeof(D);
