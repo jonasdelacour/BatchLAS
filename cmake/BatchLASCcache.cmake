@@ -1,95 +1,104 @@
-# Compilation caching.
+# Compilation caching (ccache), on by default when ccache is found.
 #
-# ccache does cache -fsycl fat objects — including the nvptx64 and native_cpu
-# device images — and it reproduces them byte for byte. A cached TU costs 0.02 s
-# instead of ~15 s. Two settings decide whether that is a win or a loss, and
-# neither of them is ccache's default, which is why this file generates a
-# launcher wrapper rather than just pointing CMAKE_CXX_COMPILER_LAUNCHER at
-# ccache:
-#
-#   depend_mode  In its default preprocessor mode ccache runs an extra full
-#                preprocess to compute the hash. Under -fsycl the driver
-#                preprocesses once per compilation phase, so a cache MISS costs
-#                +52 % (14.9 s -> 22.7 s on stedc.cc). That makes a cold build —
-#                a fresh clone, a new worktree, a rebase — materially slower than
-#                no ccache at all. Depend mode hashes the compiler's own -MD
-#                depfile instead, so a miss is free. CMake always emits -MD, for
-#                both the Makefile and Ninja generators.
-#
-#   base_dir +   Without these, ccache hashes absolute paths, so a build in one
-#   hash_dir     worktree never hits the cache populated by another. That is the
-#                whole explanation for a cache that shows 0 hits after hundreds
-#                of compiles. With them, a brand-new worktree builds from cache.
-#
-# What this does NOT speed up: the dev loop. Editing a .cc is a miss by
-# definition (15.2 s either way), and editing a header misses every dependent.
-# The payoff is switching branches, reverting an experiment, `make clean` in the
-# same tree, and configuring a new worktree at an already-built commit. Do not
-# count it towards any edit-build-test number. Note also that the launcher only
-# wraps compiles -- CMAKE_CXX_COMPILER_LAUNCHER does not apply to link steps, and
-# links are ~213 s of a 214 s all-cache-hits rebuild, so that is the floor.
-#
-# Two caveats worth knowing before you debug:
-#
-#   Stale hits are possible, though rare. If you add a header that *shadows* an
-#   existing one earlier on the -I path, ccache's manifest-based header tracking
-#   returns the old object. This is not a depend-mode bug -- default mode gets it
-#   equally wrong. It surfaces as a wrong test result, so if you have just added
-#   a header and something inexplicable fails, `ccache -C` before believing it.
-#
-#   hash_dir=false means a restored object carries the DW_AT_comp_dir of
-#   whichever tree first compiled it. The code is identical (a hit requires
-#   identical source), but if that tree has since been deleted the debugger will
-#   fail to find sources. Set BATCHLAS_CCACHE_SHARE_ACROSS_TREES=OFF if you are
-#   doing source-level debugging and would rather have paths than cache hits.
+# ccache reproduces -fsycl fat objects (nvptx64 and native_cpu images included)
+# byte for byte. The settings it needs are not its defaults, so they reach it as
+# environment variables through a generated wrapper (a developer's ccache.conf is
+# not ours to edit):
+#   CCACHE_DEPEND      hash the -MD depfile; preprocessor mode re-preprocesses
+#                      every -fsycl phase and makes a miss ~50% slower.
+#   CCACHE_BASEDIR +   hash paths relative to the base, so a second checkout or
+#   CCACHE_NOHASHDIR   worktree hits the entries of the first.
+#   CCACHE_SLOPPINESS  a fresh checkout's headers are all "just modified".
+# Compiles only: device links and test links are not cached.
+# Traps: a header added that SHADOWS one later on the -I path can return a stale
+# object (`ccache -C`); NOHASHDIR keeps the first tree's DW_AT_comp_dir, so set
+# BATCHLAS_CCACHE_SHARE_ACROSS_TREES=OFF for source-level debugging.
+# evidence: AGENTS.md section 7 (Build Performance)
 
 option(BATCHLAS_USE_CCACHE "Cache C++ compilations with ccache when it is available" ON)
 option(BATCHLAS_CCACHE_SHARE_ACROSS_TREES
     "Let separate checkouts/worktrees share cache entries (see DW_AT_comp_dir caveat)" ON)
-set(BATCHLAS_CCACHE_BASEDIR "$ENV{HOME}" CACHE PATH
-    "Paths below this are hashed relative, so sibling checkouts share cache entries")
 set(BATCHLAS_CCACHE_MAXSIZE "20G" CACHE STRING "ccache size limit")
 
+# Deepest common parent of the source and binary trees. "/" would make every path
+# relative to a cwd that differs between trees, so that falls back to $HOME.
+function(_batchlas_ccache_common_parent out_var)
+    file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" _a)
+    file(TO_CMAKE_PATH "${CMAKE_BINARY_DIR}" _b)
+    string(REPLACE "/" ";" _a_parts "${_a}")
+    string(REPLACE "/" ";" _b_parts "${_b}")
+    set(_common "")
+    set(_i 0)
+    list(LENGTH _a_parts _a_len)
+    list(LENGTH _b_parts _b_len)
+    while(_i LESS _a_len AND _i LESS _b_len)
+        list(GET _a_parts ${_i} _pa)
+        list(GET _b_parts ${_i} _pb)
+        if(NOT _pa STREQUAL _pb)
+            break()
+        endif()
+        if(NOT _pa STREQUAL "")
+            string(APPEND _common "/${_pa}")
+        endif()
+        math(EXPR _i "${_i} + 1")
+    endwhile()
+    if(_common STREQUAL "")
+        set(_common "$ENV{HOME}")
+    endif()
+    set(${out_var} "${_common}" PARENT_SCOPE)
+endfunction()
+
+_batchlas_ccache_common_parent(_batchlas_ccache_default_base)
+set(BATCHLAS_CCACHE_BASEDIR "${_batchlas_ccache_default_base}" CACHE PATH
+    "Paths below this are hashed relative, so sibling checkouts share cache entries")
+
+set(_batchlas_ccache_launcher "${CMAKE_BINARY_DIR}/batchlas-ccache")
+set(_batchlas_owns_launcher OFF)
+if(CMAKE_CXX_COMPILER_LAUNCHER STREQUAL _batchlas_ccache_launcher)
+    set(_batchlas_owns_launcher ON)
+endif()
+
 if(NOT BATCHLAS_USE_CCACHE)
+    if(_batchlas_owns_launcher)
+        unset(CMAKE_CXX_COMPILER_LAUNCHER CACHE)
+        unset(CMAKE_CXX_COMPILER_LAUNCHER)
+    endif()
     return()
 endif()
 
-# Only when BatchLAS is the top-level project. Everything below writes global
-# state - a generated script in the binary dir and a CACHE ... FORCE write to
-# CMAKE_CXX_COMPILER_LAUNCHER - and under add_subdirectory()/FetchContent that
-# would silently reroute the *consuming* project's compiler through our wrapper.
-# This file runs before BatchLASOptions.cmake, so BATCHLAS_IS_TOP_LEVEL does not
-# exist yet; compare the directories directly.
+# Under add_subdirectory()/FetchContent a cached launcher would reroute the
+# CONSUMING project's compiler. BATCHLAS_IS_TOP_LEVEL does not exist yet here.
 if(NOT CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     message(STATUS "BatchLAS is a subproject: leaving CMAKE_CXX_COMPILER_LAUNCHER to the parent project")
     return()
 endif()
 
-if(CMAKE_CXX_COMPILER_LAUNCHER)
+if(CMAKE_CXX_COMPILER_LAUNCHER AND NOT _batchlas_owns_launcher)
     message(STATUS "CMAKE_CXX_COMPILER_LAUNCHER already set - leaving it alone: ${CMAKE_CXX_COMPILER_LAUNCHER}")
     return()
 endif()
 
-find_program(BATCHLAS_CCACHE_PROGRAM ccache)
+find_program(BATCHLAS_CCACHE_PROGRAM ccache HINTS "$ENV{HOME}/.local/bin")
 if(NOT BATCHLAS_CCACHE_PROGRAM)
-    message(STATUS "ccache not found - compilations will not be cached")
+    if(_batchlas_owns_launcher)
+        unset(CMAKE_CXX_COMPILER_LAUNCHER CACHE)
+        unset(CMAKE_CXX_COMPILER_LAUNCHER)
+    endif()
+    message(STATUS "ccache not found - compilations will not be cached "
+                   "(install: static binary from https://github.com/ccache/ccache/releases into ~/.local/bin)")
     return()
 endif()
 
-# The settings above have to reach ccache as environment variables, because a
-# developer's ~/.config/ccache/ccache.conf is not ours to edit and a build that
-# silently falls back to preprocessor mode is slower than no cache at all. A
-# generated wrapper is the only way to guarantee they are set for every compile.
-set(_batchlas_ccache_launcher "${CMAKE_BINARY_DIR}/batchlas-ccache")
 set(_batchlas_ccache_env
-    "export CCACHE_DEPEND=1\nexport CCACHE_MAXSIZE=${BATCHLAS_CCACHE_MAXSIZE}\n")
+    "export CCACHE_DEPEND=1\nexport CCACHE_MAXSIZE=${BATCHLAS_CCACHE_MAXSIZE}\n"
+    "export CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros,pch_defines,locale\n")
 if(BATCHLAS_CCACHE_SHARE_ACROSS_TREES)
-    string(APPEND _batchlas_ccache_env
+    list(APPEND _batchlas_ccache_env
         "export CCACHE_BASEDIR=${BATCHLAS_CCACHE_BASEDIR}\nexport CCACHE_NOHASHDIR=1\n")
 endif()
+string(REPLACE ";" "" _batchlas_ccache_env "${_batchlas_ccache_env}")
 
-# Written via a staging directory and file(COPY ... FILE_PERMISSIONS) rather than
-# file(CHMOD), which needs CMake 3.19 while this project declares 3.14.
+# file(COPY ... FILE_PERMISSIONS), not file(CHMOD): the latter needs CMake 3.19.
 file(WRITE "${CMAKE_BINARY_DIR}/CMakeFiles/batchlas-ccache-stage/batchlas-ccache"
     "#!/bin/sh\n"
     "# Generated by cmake/BatchLASCcache.cmake - do not edit.\n"

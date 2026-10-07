@@ -17,6 +17,8 @@ add_subdirectory(src)
 
 if(BATCHLAS_BUILD_TESTS)
     enable_testing()
+    # Before tests/ and python/: both register GPU tests with its helpers.
+    include(tests/cmake/BatchLASTestGpus.cmake)
     add_subdirectory(tests)
 endif()
 

@@ -278,10 +278,12 @@ Useful presets currently provided:
 - `benchmarks`: benchmark build with tuning support enabled
 - `cuda`: optional CUDA-enabled build when the environment supports it
 - `dev-gpu` / `dev-gpu-tests`: fast iteration; drops the `native_cpu` SYCL
-  target (`BATCHLAS_CPU_TARGET=none`), which takes about 30% off every compile
-  and every device link. **GPU coverage only**: roughly half of every typed test
+  target (`BATCHLAS_CPU_TARGET=none`), which took 13-25% off a cold build of
+  the default target on one 4-GPU box. **GPU coverage only**: roughly half of every typed test
   suite is not instantiated, and `ctest` still reports green. Use `dev-tests` or
-  `cuda` for the pre-push gate.
+  `cuda` for the pre-push gate, plus a vendor-free tree
+  (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) at that final gate only. When `sycl-ls`
+  lists `[cuda:gpu]`, `scripts/ctest_gpus.sh` runs one test per GPU slot (`tests/README.md`).
 
 ### Manual Configuration
 
@@ -324,9 +326,16 @@ Common CMake options:
 - `BATCHLAS_TEST_TARGET_SET`: choose `all` or `smoke`
 - `BATCHLAS_AMD_ARCH`: override ROCm target architecture
 - `BATCHLAS_NVIDIA_ARCH`: override CUDA target architecture
-- `BATCHLAS_USE_CCACHE`: cache compilations with ccache when available (default `ON`)
+- `BATCHLAS_USE_CCACHE`: cache compilations with ccache when available on `PATH` or in
+  `~/.local/bin` (default `ON`; a `CMAKE_CXX_COMPILER_LAUNCHER` you set yourself wins)
 - `BATCHLAS_CCACHE_SHARE_ACROSS_TREES`: let sibling checkouts and worktrees share
   cache entries (default `ON`; turn off for source-level debugging)
+- `BATCHLAS_CCACHE_BASEDIR`: ccache base directory (default: the deepest common
+  parent of the source and build directories, or `$HOME` if that is `/`)
+- `BATCHLAS_TEST_GPUS`: GPUs written to `<build>/ctest_resources.json` for
+  `scripts/ctest_gpus.sh` (`auto` = `nvidia-smi --list-gpus`, a count, or `0` to
+  disable; needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error)
+- `BATCHLAS_TEST_GPU_SLOTS`: concurrent GPU tests per device under `scripts/ctest_gpus.sh`
 - `BATCHLAS_SYCL_LINK_JOBS`: parallelism for the SYCL device link (default `4`, `1` disables)
 
 ## Test

@@ -79,10 +79,12 @@ if(BATCHLAS_BUILD_TESTS)
     if(BATCHLAS_PYTEST_RESULT EQUAL 0)
         add_test(
             NAME batchlas_python_build_import
-            COMMAND "${CMAKE_COMMAND}" -E env
+            COMMAND ${BATCHLAS_TEST_GPU_LAUNCHER} "${CMAKE_COMMAND}" -E env
                 "PYTHONPATH=${CMAKE_BINARY_DIR}/python"
                 "${Python_EXECUTABLE}" -m pytest
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests"
         )
+        # Runs cuda/gpu kernels: one GPU slot under scripts/ctest_gpus.sh.
+        batchlas_test_needs_gpu(batchlas_python_build_import)
     endif()
 endif()

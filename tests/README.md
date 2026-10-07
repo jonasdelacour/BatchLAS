@@ -22,6 +22,39 @@ they move as binaries are added, so treat them as a sanity check, not a gate.
 (`syev_tests`, `syevx_tests`, `syev_cta_tests`, ...). Anchor it with `^...$`
 when you mean one.
 
+## Running on every GPU at once
+
+For anything wider than one binary, use `scripts/ctest_gpus.sh` with the same
+arguments you would give ctest:
+
+```bash
+scripts/ctest_gpus.sh -LE slow                    # build/ by default
+scripts/ctest_gpus.sh --test-dir build-vf -L eig  # another tree
+```
+
+Configure writes `<build>/ctest_resources.json` (one entry per
+`nvidia-smi --list-gpus` device, `BATCHLAS_TEST_GPU_SLOTS` slots each, default
+2). Every GPU test carries `RESOURCE_GROUPS gpus:1`, and `tests/ctest_gpu_env.sh`
+restricts it to its slot's GPU through `CUDA_VISIBLE_DEVICES`. A pre-set
+`CUDA_VISIBLE_DEVICES` list is indexed instead, and `ctest_gpus.sh` trims the
+spec and `-j` to its length (`CUDA_VISIBLE_DEVICES=1 scripts/ctest_gpus.sh ...`
+runs on GPU 1 only). `-DBATCHLAS_TEST_GPUS=<n>` overrides the count, `=0` turns
+it off. Only a tree whose configure-time `sycl-ls` lists `[cuda:gpu]` gets a
+spec: the isolation is `CUDA_VISIBLE_DEVICES`, so a Level Zero or HIP tree runs
+plain serial `ctest`. `syev_cta_tests` and
+`consumer_package_tests` are `RUN_SERIAL`. Plain `ctest` without
+`--resource-spec-file` ignores the resource groups. Keep the
+serial run for a `GTEST_OUTPUT=xml:<dir>/` gate (docs/ci.md): a route-pinned
+rerun writes the same file name as its twin, and in parallel they can overlap.
+
+On threadripper02 (4x RTX PRO 6000), `-LE slow` took 469 s serial with one GPU
+visible, 126 s at 1 slot per GPU and 78 s at 2, with the same failing names in
+every mode. This is the only box it was validated on. On the 2x RTX 4090 box
+(125 GB, zero swap, two OOM kills under concurrency, `docs/ci.md`) keep the full
+gate serial until it has been measured there. Also seen on threadripper02 only,
+cause unknown: a process that sees all four GPUs runs several times slower than
+one that sees one, so set `CUDA_VISIBLE_DEVICES` when running a binary by hand.
+
 ## Labels
 
 Component labels, one per binary (see `CMakeLists.txt`):
