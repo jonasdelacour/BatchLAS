@@ -17,6 +17,21 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 
 ## Usage
 
+The normal workflow is tiered: plan, run, inspect, then write tables from the ledger.
+
+    batchlas_tune potrf --tier preview --dtype float,double --devices 1 --plan   # cells, skips, estimate; no GPU
+    batchlas_tune potrf --tier preview --dtype float,double --devices 1          # measure into the ledger
+    batchlas_tune --status                                                       # what each ledger holds
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out tuned   # source=ledger: tables
+
+A rerun measures only what is missing, stale or below the requested tier: a repeated preview run
+plans every cell `skip:current` and exits in seconds, and a kernel edit re-races only the cells
+whose families changed (`partial:<family>`). The `--plan` estimate is the sum over GPUs, so divide
+by the number of `--devices`; on threadripper02 it ran 1.3x to 1.8x high (docs/design/tiered-tuning.md,
+"Engine: end-to-end validation on sm_120"). `sweep_to_table.py --ledger ... --assume-current` is a
+diagnostic that judges records by their stored hashes (an imported raw sweep round-trips to the
+shipped table); never write `tuned/` with it.
+
 Two modes. A **tiered** run (`--tier preview|coarse|deep`, docs/design/tiered-tuning.md) records
 per-cell results in the ledger and skips cells the ledger already holds. A **custom** run is the
 expert two-pass protocol below; any protocol flag (`--reps`, `--warm`, `--passes`, `--remeasure`,

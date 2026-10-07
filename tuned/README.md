@@ -160,6 +160,18 @@ file when that file is present, and a tuned table replaces the converted one for
 configure step recompute each op's kernel hash from the source list in `tools/tune/<op>_spec.cc`
 and warn, never fail, on a table whose `kernels=` differs or says `unknown`.
 
+Ledger tables (header `source=ledger:<dir>`) come from tiered runs (`batchlas_tune --tier
+preview|coarse|deep`, design: [tiered tuning](../docs/design/tiered-tuning.md)). Each run appends
+per-cell records to a ledger directory `<op>.<dtype>.<device>/`, and
+`python3 scripts/sweep_to_table.py --ledger <dir or root> --out <dir>` writes the table: per cell
+the best current record (deep > coarse > preview > custom), each row ending in `# <tier>`, the
+header carrying `tiers=` row counts and `family_kernels=<family>:<hash>,...` (the per-family
+kernel hashes that decide which records are stale). Records whose winner's family hash changed
+are dropped, and `--check` re-derives the table from the ledger its `source=` names. No shipped
+table is ledger-sourced yet: the engine was validated on 2026-10-07 (design page, "Engine:
+end-to-end validation on sm_120") and the switch needs coarse or deep runs and a maintainer
+decision.
+
 The two tuner tables are `trsm.{float,double}.sm_120.txt`, from
 `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` (provenance in the README there). The
 tuner was stopped during cfloat, so cfloat and cdouble stay transcribed.

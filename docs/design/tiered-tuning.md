@@ -3,9 +3,12 @@
 > **Covers:** the redesign of how BatchLAS fills its tuned tables and tuning constants: user-chosen
 > tiers (preview / coarse / deep), measurements that skip work which cannot change a table, a per-cell
 > result ledger in which a cheaper run never overwrites a better one, and a tuning tab in benchviz.
-> **Status:** design, approved in conversation on 2026-10-07; not implemented. Sub-project 1 (the
-> engine) is specified in full here; sub-projects 2 and 3 are specified at the interface level and
-> get their own design pass. Machine facts refer to the RTX 4090 box (sm_89) and threadripper02
+> **Status:** design approved in conversation on 2026-10-07. Sub-project 1 (the engine) is
+> implemented on branch `worktree-tiered-tuning-spec` and validated end to end on threadripper02
+> (sm_120) on 2026-10-07: raw import round trip, preview potrf (4 dtypes), coarse trsm float on 4
+> GPUs scored against the exhaustive sweep, resume and staleness ("Engine: end-to-end validation on
+> sm_120"). No shipped table comes from it yet. Sub-projects 2 and 3 are specified at the interface
+> level and get their own design pass. Machine facts refer to the RTX 4090 box (sm_89) and threadripper02
 > (sm_120). The current tuner is described in @ref tune_tool_readme and
 > @ref design_flat_selection §6.
 
@@ -647,6 +650,85 @@ There were no worker restarts and 2 audits. The estimate is high by about 2x (45
 wall), mostly from the no-history default (cap x 0.5 = 1.5 refinement cells per lattice cell against
 the 1.0 measured). The next run's history ratio replaces it. The first version (both ends, cap 1.0)
 measured 90 + 79 = 169 cells in 205 s.
+
+## Engine: end-to-end validation on sm_120
+
+> **Status:** measured 2026-10-07 on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120), all GPUs idle,
+> one measuring process at a time. Ledgers and tables went to a scratch directory, not to `tuned/`
+> or `benchmarks/results/`: the imported trsm data predates kernel edits, and a preview run must not
+> replace the converted potrf tables. Shipping ledger tables needs coarse or deep runs and a
+> maintainer decision.
+
+**Import round trip.** `batchlas_tune --import-raw` of `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`
+writes deep runs whose hashes are `legacy:c923160f` (the kernels changed since), so an ordinary
+`sweep_to_table.py --ledger` writes an empty table: every record is stale. The diagnostic
+`--assume-current` judges records by their stored hashes instead. With it, the generated tables equal
+the shipped `tuned/trsm.{float,double}.sm_120.txt` in every row: 4452 and 4098 rows, 0 rows missing
+or extra, **0 ranking differences**, and also 0 time differences. Two importer/generator bugs
+turned up and are fixed (`e3ca37f9`). A tiered trsm cell's key carries the hidden grid axes `uplo`
+and `diag`, so the generator refused every coarse record. And an import keyed by the table keys
+alone could never match a tiered cell. The importer now keys by the spec's grid axes, and the
+generator projects through the op's `tuner_key`, which refuses a varied hidden axis.
+
+**Preview, potrf, 4 dtypes, GPU 1** (`--tier preview --dtype float,double,cfloat,cdouble`):
+
+| dtype | planned cells (measure + skip:cap) | lattice measured | refinement planned / measured | audits (all ok) |
+|---|---|---|---|---|
+| float | 108 (90 + 18) | 90 | ~135 / 83 | 7 |
+| double | 108 (88 + 20) | 88 | ~132 / 152 | 11 |
+| cfloat | 108 (88 + 20) | 88 | ~132 / 78 | 8 |
+| cdouble | 108 (82 + 26) | 82 | ~123 / 93 | 8 |
+
+That is 754 cells in 906 s wall for the whole run, against a plan estimate of 1593 s (1.76x high).
+There were 0 worker restarts, 0 audit mismatches and no refinement cap hit. The four tables (173,
+240, 166 and 175 rows, all `# preview`) pass the converter's ports of the loader rules (keys,
+candidates, timed/untimed rows) and re-derive byte for byte from their ledgers.
+
+**Coarse, trsm float, GPUs 0-3, scored against the exhaustive sweep.** The plan put 3480 lattice cells
+(840 `skip:cap`) at 1.48 h, or 2.22 h with refinement. That estimate is summed over GPUs, so about 33 min
+of wall time on 4 GPUs. The run measured 3480 lattice and 2661 refinement cells (22 rounds; the cap was
+3480) in **1529 s wall**. That is 1.3x under the per-GPU estimate, and 1.7 GPU-hours at most,
+against the 16 GPU-hours of the exhaustive sweep. All 127 audits were ok, and there were 0 restarts.
+Scoring: for each of the 4452 raw cells, take the coarse table's nearest row (`nearest()`), then its first
+entry the raw file ran at that cell, and count a misrank when that entry is more than 3% slower than
+the raw best. The reference is the raw file's mean of pass medians per candidate, the replay's
+`exhaustive`.
+
+| table | misrank | mean loss | p99 loss | max loss | misranked at a cell the run measured |
+|---|---|---|---|---|---|
+| coarse ledger (6141 rows) | 26 / 4452 = 0.58% | 0.08% | 2.5% | 12.6% | 21 of 26 |
+| shipped table (control) | 0 | 0.07% | 2.5% | 3.0% | — |
+
+That is below the replay's 1.50% noise floor. The floor scores pass 1 against pass 2, while this
+reference averages both, so the two are not the same measure. The kernels changed between the sweep
+and this run, and the run is a new sample. So the 0.58% is data, not a pass/fail verdict. The worst
+cells are `blocked` against `vendor` near order 100-180 (up to 12.6%), and 21 of the 26 are cells the
+coarse run timed itself: the race and the two-day-old sweep disagree there, rather than the gap fill
+being wrong.
+
+**Resume.** Rerunning the preview potrf float command: `--plan` shows 90 `skip:current` and 18
+`skip:cap` (0 to measure), and the run exits in 1.3 s without writing a run file.
+
+**Staleness.** One comment line appended to `src/sycl/trsm_sg_left.cc` (family `sg_left`), then
+`--tier coarse --plan`:
+
+| cells | count | why |
+|---|---|---|
+| measure (full) | 711 | `sg_left` was the stored winner, so the record is stale |
+| `partial:sg_left`, order <= 32 | 1157 | re-race `sg_left` plus the stored winner and runner-up |
+| `partial:sg_left`, order > 32 | 1612 | `sg_left` was `skipped` (pin refused) and is re-raced anyway |
+| current | 0 | |
+
+The edit was reverted, with an empty `git diff` and the same md5 as HEAD. A control edit to
+`src/extensions/potrf_lpanel.cc` gave the same shape on the potrf float preview ledger: 21 measure,
+69 `partial:lpanel` and 0 current, uplo=U cells included, where `lpanel` cannot run. No cell stays
+current because every record lists every candidate with its family hash, `skipped` ones included,
+and a changed family makes a record partly stale whatever that candidate's status was. This is
+conservative: an edit might change what can run. But it costs about 33 single-GPU minutes of
+needless re-races on trsm after an sg_left-only edit. The open refinement is to re-probe, not
+re-race, a changed family that was `skipped`, so it gets a fresh hash and status when it is still
+refused. Separately, `can_run` (`src/ops/trsm/trsm.cc`) is in no hashed source list, so a
+runnability change stales nothing.
 
 ## Tiered tuning: open risks
 
