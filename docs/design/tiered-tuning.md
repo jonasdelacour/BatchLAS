@@ -349,24 +349,23 @@ switches it off) the race uses only the pass-1 reps, in rep order, and every mis
 against the pass-2 median per candidate. Deep's reversed confirmation round cannot be modelled by this, so
 deep is raced like coarse with its own reps and confidence.
 
-Pass 1 and pass 2 disagree by more than 3% on about 1.5% of the cells (float; 1.3% double), so even an oracle that
-times every raw cell and picks from all 16 pass-1 reps, with no elimination, scores 1.59% and 1.29% table misrank
+Pass 1 and pass 2 disagree by more than 3% on about 1.5% of the cells (float; 1.15% double), so even an oracle that
+times every cell of the raw file (no lattice, no bisection, whatever grid shrinking is asked for) and picks from all 16 pass-1 reps, with no elimination, scores 1.50% (float) and 1.15% (double) misrank
 against the pass-2 reference. That is the noise floor of the reference, and no tuner can score below it. The
 bounds measure what the tuner loses, so the verdict is the excess over the floor (`excess` = tier `table %` minus
 `floor %`; the race excess is checked against the same bound and is in the JSON line): preview 5%, coarse 1%, deep 0.2%.
 
 | tier | dtype | measured/cells | est_gpu_h | table % | floor % | excess | bound | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| preview | float | 2934/4452 | 0.570 | 4.47 | 1.59 | 2.88 | 5.0% | PASS |
-| preview | double | 2364/4098 | 0.499 | 5.37 | 1.29 | 4.08 | 5.0% | PASS |
-| coarse | float | 4427/4452 | 0.856 | 1.55 | 1.59 | -0.04 | 1.0% | PASS |
-| coarse | double | 4066/4098 | 0.811 | 1.27 | 1.29 | -0.02 | 1.0% | PASS |
-| deep | float | 4426/4452 | 0.861 | 1.59 | 1.59 | 0.00 | 0.2% | PASS |
-| deep | double | 4068/4098 | 0.824 | 1.22 | 1.29 | -0.07 | 0.2% | PASS |
+| preview | float | 2934/4452 | 0.570 | 4.47 | 1.50 | 2.96 | 5.0% | PASS |
+| preview | double | 2364/4098 | 0.499 | 5.37 | 1.15 | 4.22 | 5.0% | PASS |
+| coarse | float | 4427/4452 | 0.856 | 1.55 | 1.50 | 0.04 | 1.0% | PASS |
+| coarse | double | 4066/4098 | 0.811 | 1.27 | 1.15 | 0.12 | 1.0% | PASS |
+| deep | float | 4426/4452 | 0.861 | 1.59 | 1.50 | 0.09 | 0.2% | PASS |
+| deep | double | 4068/4098 | 0.824 | 1.22 | 1.15 | 0.07 | 0.2% | PASS |
 
-Preview loses 2.9 and 4.1 points over the oracle; coarse and deep lose nothing measurable (the excess is within
-0.1 points of zero, and negative where the race happens to beat the single oracle pass). Preview double is the one row
-close to its bound.
+Preview loses 3.0 and 4.2 points over the oracle; coarse and deep lose 0.04 to 0.12 points, which is under their 1% and
+0.2% bounds. Preview double is the one row close to its bound.
 
 Without holdout, the race and the reference share the same reps, which flatters the result (same-sample
 table, same tier values):

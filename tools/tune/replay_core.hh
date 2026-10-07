@@ -56,6 +56,7 @@ struct ReplayOpts {
     bool holdout = false;
     double verify_s = 0.05;        // residual check of one candidate in a cell
     double cell_overhead_s = 0;    // per cell; 0 = persistent worker
+    bool all_cells = false;        // race every cell of the file: no lattice, no bisection (the oracle)
     std::vector<std::string> order;  // tie order (meta.candidates); empty = first appearance in the cells
 };
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t,
@@ -70,7 +71,7 @@ void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std
 // Port of nearest() in scripts/sweep_to_table.py (exact-key prefix, weighted log2 distance, ties as there).
 std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes);
 
-// Holdout noise floor: the no-elimination oracle over every raw cell, scored on the same pass-2 reference.
+// Holdout noise floor: the no-elimination oracle (run with ReplayOpts::all_cells) on the same pass-2 reference.
 TierParams oracle_params();
 void apply_floor(ReplayReport& r, const ReplayReport& oracle);
 

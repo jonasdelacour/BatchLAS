@@ -271,8 +271,12 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     };
 
     std::vector<CellKey> todo;
-    for (const CellKey& k : lattice(axes, p.stride))
-        if (at.count(k)) todo.push_back(k);
+    if (o.all_cells) {
+        for (const ReplayCell& c : cells) todo.push_back(c.key);
+    } else {
+        for (const CellKey& k : lattice(axes, p.stride))
+            if (at.count(k)) todo.push_back(k);
+    }
     std::set<CellKey> unavailable;
     while (!todo.empty()) {
         for (const CellKey& k : todo) measure(k);
@@ -339,7 +343,7 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
 
 TierParams oracle_params() {
     TierParams p = params(Tier::deep);
-    p.stride = 1, p.confidence = 1.0, p.min_reps = p.max_reps = 16, p.refine_ratio = 1.1;
+    p.stride = 1, p.confidence = 1.0, p.min_reps = p.max_reps = 16, p.refine_ratio = 0;
     p.refine_mode = RefineMode::geometric, p.refine_margin = 0;
     return p;
 }

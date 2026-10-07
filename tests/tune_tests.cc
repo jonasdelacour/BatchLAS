@@ -956,7 +956,9 @@ TEST(TuneReplay, NoiseFloorIsTheNoEliminationOracleAndExcessIsTheDifference) {
     const auto axes = axis_specs({"mode:exact", "n:log:2"}, {{"mode", {"x"}}, {"n", {"1"}}});
     ReplayOpts hold;
     hold.holdout = true;
-    const ReplayReport floor = replay(rc, axes, Tier::deep, o, 0.03, hold);
+    ReplayOpts all = hold;
+    all.all_cells = true;
+    const ReplayReport floor = replay(rc, axes, Tier::deep, o, 0.03, all);
     EXPECT_NEAR(floor.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "every pass-1 rep of every candidate, no elimination";
     EXPECT_EQ(floor.race_misrank, 1.0) << "pass 1 prefers a, the pass-2 reference prefers b: unavoidable";
     ReplayReport r = replay(rc, axes, Tier::deep, params(Tier::deep), 0.03, hold);
@@ -965,6 +967,25 @@ TEST(TuneReplay, NoiseFloorIsTheNoEliminationOracleAndExcessIsTheDifference) {
     EXPECT_DOUBLE_EQ(r.excess_race, r.race_misrank - floor.race_misrank);
     EXPECT_DOUBLE_EQ(r.excess_table, r.table_misrank - floor.table_misrank);
     EXPECT_EQ(r.excess_race, 0.0) << "the race cannot lose more than the oracle here";
+}
+
+TEST(TuneReplay, NoiseFloorRacesEveryRawCellAndIgnoresGridShrinking) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("floor_all.jsonl", flip_cells()), &meta);
+    ReplayOpts all;
+    all.holdout = true;
+    all.all_cells = true;
+    const ReplayReport full = replay(rc, meta.axes, Tier::deep, oracle_params(), 0.03, all);
+    EXPECT_EQ(full.cells_measured, 8u) << "every cell, with no lattice walk and no bisection";
+    auto shrunk = meta.axes;
+    shrink_axis(shrunk, "n", "4", false);
+    const ReplayReport cut = replay(rc, shrunk, Tier::deep, oracle_params(), 0.03, all);
+    EXPECT_EQ(cut.cells_measured, 8u);
+    EXPECT_EQ(cut.table_misrank, full.table_misrank);
+    EXPECT_EQ(cut.race_misrank, full.race_misrank);
+    ReplayOpts walk;
+    walk.holdout = true;
+    EXPECT_LT(replay(rc, shrunk, Tier::deep, oracle_params(), 0.03, walk).cells_measured, 8u) << "the lattice walk is what the flag removes";
 }
 
 TEST(TuneReplay, TierDefaultsDriveTheLatticeAndTheRefinementMode) {

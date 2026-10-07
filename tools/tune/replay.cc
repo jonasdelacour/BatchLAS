@@ -89,9 +89,14 @@ int main(int argc, char** argv) {
             return 0;
         }
         ro.order = meta.candidates;
+        const auto raw_axes = meta.axes;
         for (const auto& [name, sv] : shrink) shrink_axis(meta.axes, name, sv.first, sv.second);
         ReplayReport r = replay(cells, meta.axes, *tier, p, 0.03, ro);
-        if (ro.holdout) apply_floor(r, replay(cells, meta.axes, *tier, oracle_params(), 0.03, ro));
+        if (ro.holdout) {
+            ReplayOpts all = ro;
+            all.all_cells = true;
+            apply_floor(r, replay(cells, raw_axes, *tier, oracle_params(), 0.03, all));
+        }
         std::string worst;
         for (const std::string& w : r.worst) worst += (worst.empty() ? "" : "; ") + w;
         Json j;
