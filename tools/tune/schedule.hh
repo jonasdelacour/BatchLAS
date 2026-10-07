@@ -7,6 +7,7 @@
 #include "tier.hh"
 #include "tune_core.hh"
 
+#include <cmath>
 #include <functional>
 #include <map>
 #include <string>
@@ -59,6 +60,21 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
 // skip:single: `only` ranked untimed, every other candidate skipped.
 CellRecord single_record(const CellKey& key, int round, const std::string& only, const std::vector<std::string>& order,
                          const std::map<std::string, std::string>& family_hash);
+
+// `arms`, the nearest record's winner first (as estimate_ms picks the nearest): the race's seed order.
+std::vector<std::string> seed_order(const std::map<CellKey, CellRecord>& done, const CellKey& key,
+                                    const std::vector<std::string>& arms);
+
+bool audit_pick(const std::string& run_id, const CellKey& key, double fraction);
+
+// verdict ok | mismatch:feasibility | mismatch:winner (beyond the tie in the fresh run) | inconclusive.
+struct AuditResult {
+    std::string verdict;
+    double fresh_ms = NAN, warm_ms = NAN;
+    bool mismatch() const { return verdict.rfind("mismatch", 0) == 0; }
+};
+AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
+                          const std::vector<std::string>& order, double tie = 0.03);
 
 // runner-up time / winner time - 1 (the preview refinement margin); +inf without a timed runner-up.
 double runner_up_gap(const CellRecord& r);

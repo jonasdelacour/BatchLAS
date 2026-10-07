@@ -60,6 +60,8 @@ the ledger as tier `custom`, ranked below preview. With neither, the tuner stops
 | `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table |
 | `--device-key sm_NN` | nvidia-smi compute capability of the first `--devices` GPU | the device `--plan` reads the ledger for |
 | `--cell-overhead-s` | 0.49 | per-child start-up in the estimate (measured on threadripper02) |
+| `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
+| `--audit-fraction F` | the tier's (preview, coarse 0.02; deep 0.10) | share of worker cells re-raced in a fresh child |
 | `--status` | | the op x dtype x device matrix: runs, cells, tier mix of each cell's best record, stale and partly stale counts, newest run and its age, the table's source, tier mix and date. No GPU |
 | `--import-raw F` | | a schema-1 raw sweep into the ledger as a deep run; op, dtype and device from its meta |
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
@@ -99,12 +101,25 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   found at most one runnable candidate is `skip:single`: recorded with that candidate ranked,
   untimed, which the converter writes as an untimed row (`<spelling> - # <tier>`).
   A probe result comes from an earlier child of the same cell (its `skipped` arms).
-- **Measuring.** Until the persistent worker exists, a cell is one fresh `--cell --mode time`
-  child: one pass of the tier's `max_reps` reps after a `warm_topup_s` warm-up per candidate,
-  verified as in the custom protocol. Each candidate's median, min and max of its reps go into a
-  ledger `cell` record, ranked with the 3% tie rule. A failed child is retried once, then every arm
-  is run alone, as below; a child failure that leaves no `ok`, `bad` or `skipped` candidate writes no
-  record, so the next run measures the cell again.
+- **Measuring.** A cell is raced (`--mode race`, `run_race` in `cell_runner.hh`): a
+  `warm_topup_s` warm-up per live candidate, interleaved, then rounds of one timed run per live
+  candidate (order rotated, every other round reversed in deep), `race_step` after each round, until
+  a winner, a tie or `max_reps` rounds. Survivors are verified as in the custom protocol; an
+  eliminated candidate keeps the median of its rounds (status `eliminated`, ranked after the
+  survivors) and is verified only when no survivor passes. The nearest finished cell's winner is
+  raced first. Each candidate's median, min and max go into a ledger `cell` record.
+- **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up at start), fed its
+  cells on stdin in the scheduler's ascending-bytes order. Between cells the guard checks for foreign
+  compute processes (the worker excepted); utilization is checked only before a worker starts. A
+  worker that exits or exceeds `--cell-timeout` is restarted and the cell retried once; a second
+  failure races the cell in a fresh child (progress `worker_restart`). In a fresh child a failed
+  child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
+  or `skipped` candidate writes no record, so the next run measures the cell again.
+- **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again
+  in a fresh child. A candidate feasible (`ok`/`eliminated`) in one and not the other, or a different
+  winner whose worker winner is more than 3% slower in the fresh run, is a mismatch: the ledger gets
+  an `audit` record either way, and on a mismatch the run line is rewritten with
+  `wm.<op>.<dtype>: fresh` and the rest of that op and dtype runs in fresh children.
 - **Ledger.** One run file per (op, dtype) under `--ledger`, opened at the first record. Its `run`
   record always carries the op's full key spec and candidate list, whatever `--grid` narrowed.
 - **Estimate.** Per cell: 0.49 s child start-up (`--cell-overhead-s`) plus, per candidate,
@@ -112,9 +127,10 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   and 0.05 s of verification. `--plan` prints it for the starting lattice; refinement comes on top.
 - **Progress events** (`--progress-fd`): `{"ev":"plan","cells":N,"est_s":S}`,
   `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
-  `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`, `{"ev":"done"}`. The race's
-  `eliminated`, the audit's `audit` and the worker's `worker_restart` arrive with the persistent
-  worker.
+  `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
+  `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
+  `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
+  `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`, `{"ev":"done"}`.
 
 ## Protocol (§6.3) and where it lives
 

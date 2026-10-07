@@ -2,7 +2,7 @@
 // §6). Linking libbatchlas enumerates devices during static init, which retains a CUDA primary
 // context on every visible GPU, so the driver must never see a GPU: for driver modes this hides
 // them all (CUDA_VISIBLE_DEVICES="") and passes the caller's value on in BATCHLAS_TUNE_PARENT_CVD,
-// which the driver checks --devices against. Children (--cell, --info) pass through untouched.
+// which the driver checks --devices against. Children (--cell, --worker, --info) pass through untouched.
 // Deliberately links nothing but libc and libstdc++.
 
 #include <cerrno>
@@ -24,7 +24,8 @@ int main(int argc, char** argv) {
     self[len] = '\0';
     std::string impl(self);
     impl = impl.substr(0, impl.rfind('/') + 1) + "batchlas_tune_impl";
-    const bool child = argc > 1 && (!std::strcmp(argv[1], "--cell") || !std::strcmp(argv[1], "--info"));
+    const bool child = argc > 1 && (!std::strcmp(argv[1], "--cell") || !std::strcmp(argv[1], "--worker") ||
+                                    !std::strcmp(argv[1], "--info"));
     if (!child) {
         if (const char* v = std::getenv("CUDA_VISIBLE_DEVICES")) ::setenv("BATCHLAS_TUNE_PARENT_CVD", v, 1);
         else ::unsetenv("BATCHLAS_TUNE_PARENT_CVD");

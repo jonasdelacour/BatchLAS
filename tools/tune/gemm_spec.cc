@@ -241,6 +241,7 @@ public:
             GemmProblem<T> p(*q, trans_of(get("ta", "N"), kComplex), trans_of(get("tb", "N"), kComplex),
                              int(key_int(req.key, "m")), int(key_int(req.key, "n")), int(key_int(req.key, "k")),
                              int(key_int(req.key, "batch")), packed ? 0 : std::max(1, req.ld_pad));
+            if (req.mode == "race") return run_race<G::GemmChoice>("gemm", p, req, Tol<T>::v);
             return run_arms<G::GemmChoice>("gemm", p, req, Tol<T>::v);
         });
     }

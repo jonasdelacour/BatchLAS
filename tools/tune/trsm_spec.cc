@@ -181,6 +181,7 @@ public:
             const Diag diag = get("diag", "N") == "U" ? Diag::Unit : Diag::NonUnit;
             TrsmProblem<T> p(*q, side, uplo, trans, diag, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
+            if (req.mode == "race") return run_race<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
             return run_arms<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
         });
     }

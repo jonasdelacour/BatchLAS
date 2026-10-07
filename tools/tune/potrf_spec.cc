@@ -108,6 +108,7 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PotrfProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad, uplo);
+            if (req.mode == "race") return run_race<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
             return run_arms<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
         });
     }

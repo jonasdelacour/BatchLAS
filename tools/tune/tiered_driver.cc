@@ -131,6 +131,8 @@ struct Job {
     std::map<CellKey, std::vector<std::string>> runnable;
     std::set<CellKey> planned;  // never planned twice in a run: a skip:cap midpoint would come back forever
     std::unique_ptr<LedgerWriter> writer;
+    RunMeta meta;
+    bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     PlanSpec plan_spec() const {
         return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); }};
     }
@@ -158,6 +160,7 @@ private:
     void measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
     void record(Job& j, const CellRecord& r, Tier tier);
+    void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
     void refine(Job& j);
 };
@@ -244,7 +247,8 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         // Always the full lists: table generation derives the current families from the newest run.
         m.keys = join(j.spec->key_names(), " ");
         m.candidates = join(j.cands, "|");
-        m.worker_mode[j.spec->op() + "." + j.dtype] = "fresh";
+        m.worker_mode[j.spec->op() + "." + j.dtype] = m_ && m_->persistent() ? "worker" : "fresh";
+        j.meta = m;
         j.writer = std::make_unique<LedgerWriter>(j.dir, m);
     }
     CellRecord c = r;
@@ -253,10 +257,46 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     j.mine[c.key] = c;
 }
 
+// A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
+void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
+    const ArmBatch f = m_->measure_fresh(job);
+    const AuditResult a = audit_compare(warm.arms, f.arms, j.cands);
+    const std::string od = j.spec->op() + "." + j.dtype;
+    bool flipped = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (j.writer) j.writer->audit(job.key, a.verdict, a.fresh_ms, a.warm_ms);
+        if (a.mismatch() && !j.fresh) {
+            j.fresh = flipped = true;
+            j.meta.worker_mode[od] = "fresh";
+            if (j.writer) j.writer->update_run(j.meta);
+        }
+    }
+    std::printf("[gpu%d] %s %s audit: %s%s\n", job.gpu, od.c_str(), key_text(job.key).c_str(), a.verdict.c_str(),
+                flipped ? " -> fresh children for the rest of this run" : "");
+    std::fflush(stdout);
+    emit(Json().str("ev", "audit").str("op", j.spec->op()).str("dtype", j.dtype).key(job.key).str("verdict", a.verdict)
+             .num("fresh_ms", a.fresh_ms).num("warm_ms", a.warm_ms).boolean("fresh", flipped));
+}
+
 void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const std::string& op = j.spec->op();
     emit(Json().str("ev", "cell_start").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu));
-    ArmBatch b = m_->measure(gpu, *j.spec, j.dtype, c.key, c.arms, params(c.tier));
+    CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier)};
+    bool worker = false;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        job.arms = seed_order(j.mine, c.key, c.arms);
+        worker = m_->persistent() && !j.fresh;
+    }
+    ArmBatch b = worker ? m_->measure(job) : m_->measure_fresh(job);
+    if (b.worker_restarts > 0)
+        emit(Json().str("ev", "worker_restart").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
+                 .integer("restarts", b.worker_restarts).boolean("fallback", b.fallback));
+    for (const ArmOutcome& a : b.arms)
+        if (a.status == "eliminated")
+            emit(Json().str("ev", "eliminated").str("op", op).str("dtype", j.dtype).key(c.key).str("cand", a.arm)
+                     .integer("round", static_cast<std::int64_t>(a.ms.size())));
     for (const std::string& a : c.arms)
         if (std::none_of(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; }))
             b.arms.push_back({a, "error", "child: " + b.error, {}, {}, 0, 0});
@@ -290,6 +330,8 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     std::fflush(stdout);
     emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key)
              .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)));
+    const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(c.tier).audit_fraction;
+    if (worker && !b.fallback && b.error.empty() && audit_pick(run_id_, c.key, fraction)) audit(j, job, b);
 }
 
 void TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted) {
@@ -307,6 +349,7 @@ void TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int 
                 id_.device.c_str(), round, to_string(o_.tier).c_str(), todo.size(), plan.size());
     std::fflush(stdout);
     // Round-robin keeps each GPU's share in ascending bytes (the carve-out order, schedule.hh).
+    if (!todo.empty()) m_->begin_round();
     std::vector<std::thread> workers;
     for (std::size_t g = 0; g < o_.devices.size(); ++g)
         workers.emplace_back([&, g] {

@@ -19,6 +19,7 @@ struct TieredOpts {
     std::vector<int> devices;
     Tier tier = Tier::preview;
     double budget_h = 0, cap_gib = 4, overhead_s = kChildOverheadS;
+    double audit_fraction = -1;  // < 0: the tier's
     bool plan = false;
     int progress_fd = -1;
     std::string repo, ledger_root, out, argv;
@@ -29,19 +30,35 @@ struct RunIdentity {
     std::string device, device_name;
 };
 
+// One cell to race. `arms` are in seed order: the nearest finished cell's winner first.
+struct CellJob {
+    int gpu = 0;
+    const OpSpec* spec = nullptr;
+    std::string dtype;
+    CellKey key;
+    std::vector<std::string> arms;
+    Tier tier = Tier::preview;
+    TierParams p{};
+};
+
 // One outcome per requested arm; `error` names a child failure that hit every arm.
 struct ArmBatch {
     std::vector<ArmOutcome> arms;
     std::string error;
+    int worker_restarts = 0;  // the worker died on this cell and was restarted
+    bool fallback = false;    // ... and the cell ran in a fresh child after all
 };
 
-// THE SEAM Task 8 replaces: today one fresh `--cell --mode time` child per cell, one pass of
-// max_reps reps after a warm_topup_s warm-up per arm; then the persistent worker's `--mode race`.
+// The GPU seam: measure() is the default path, the persistent worker when persistent();
+// measure_fresh() is one fresh `--cell --mode race` child (the audit, and an op and dtype marked fresh).
 class CellMeasurer {
 public:
     virtual ~CellMeasurer() = default;
-    virtual ArmBatch measure(int gpu, const OpSpec& spec, const std::string& dtype, const CellKey& key,
-                             const std::vector<std::string>& arms, const TierParams& p) = 0;
+    virtual ArmBatch measure(const CellJob& j) = 0;
+    virtual ArmBatch measure_fresh(const CellJob& j) { return measure(j); }
+    virtual bool persistent() const { return false; }
+    // A round's cells come in ascending bytes; the next round starts small again, so a worker restarts.
+    virtual void begin_round() {}
 };
 
 // `m` may be null only with o.plan, which prints the starting lattice's plan and touches no GPU.

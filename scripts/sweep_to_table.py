@@ -863,8 +863,8 @@ def read_ledger(path):
             try:
                 rec = json.loads(line)
                 kind = rec.get("kind")
-                if kind == "run":
-                    led.runs.append(rec)
+                if kind == "run":  # a repeated run id (a worker-mode update) replaces the earlier line
+                    led.runs = [r for r in led.runs if r.get("run_id") != rec.get("run_id")] + [rec]
                 elif kind == "cell":
                     led.cells.append(read_cell(rec))
             except (json.JSONDecodeError, KeyError, ValueError, TypeError, AttributeError) as e:

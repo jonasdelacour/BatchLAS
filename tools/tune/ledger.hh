@@ -51,6 +51,7 @@ public:
     void cell(const CellRecord& r);
     void cell(const CellRecord& r, Tier tier);  // a partial re-race keeps its stored record's tier
     void audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms);
+    void update_run(const RunMeta& meta);  // a later run line with the same run id; readers keep the last
 
 private:
     void put(const std::string& line);
@@ -66,6 +67,7 @@ struct Ledger {
 };
 
 // Union of <dir>/*.jsonl except *.reps.jsonl; a malformed last line warns, an earlier one throws.
+// A repeated run line (update_run) replaces the earlier one with its run id.
 Ledger read_ledger(const std::string& dir);
 
 enum class Freshness { current, partly_stale, stale };

@@ -6,10 +6,13 @@
 //   batchlas_tune potrf --dtype float --devices 1 --reps 16 --raw benchmarks/results/tuning   (custom)
 //   batchlas_tune potrf --devices 1 --gate --old-csv old.csv --gate-csv gate.csv
 //
-// ONE CELL PER PROCESS. The driver never runs a kernel itself: it forks and execs this binary
-// in --cell mode once per (cell, pass), because the SLM carve-out attribute is sticky per
-// CUfunction and an earlier, larger launch in the same process changes what a later one does
-// (benchmarks/factor_bench.cc header). Candidates are interleaved inside that child.
+// THE DRIVER NEVER RUNS A KERNEL. The custom protocol forks and execs this binary in --cell mode
+// once per (cell, pass), because the SLM carve-out attribute is sticky per CUfunction and an
+// earlier, larger launch in the same process changes what a later one does
+// (benchmarks/factor_bench.cc header). A tiered run keeps one --worker per GPU instead, fed its
+// cells in ascending bytes and audited against fresh --cell --mode race children
+// (docs/design/tiered-tuning.md#engine-persistent-workers-and-the-carve-out-audit); --no-worker
+// races every cell in a fresh child. Candidates are interleaved inside the process either way.
 //
 // MULTI-GPU (--devices 1,2,3) runs one child per GPU at a time, each GPU held under a flock for
 // the whole run, cells sharded round-robin and both passes of a cell kept on one GPU. This
@@ -29,6 +32,7 @@
 #include "spec.hh"
 #include "tiered_driver.hh"
 #include "tune_core.hh"
+#include "worker.hh"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -46,6 +50,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -83,6 +88,8 @@ struct Opts {
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
     bool allow_idle_foreign = false;
+    bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
+    double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
     std::map<std::string, std::vector<std::string>> grid;
     bool gate = false;
@@ -205,21 +212,70 @@ int child_main(const std::vector<std::string>& a) {
         else if (a[i] == "--warm") req.warm_s = std::stod(val());
         else if (a[i] == "--reverse") req.reverse = true;
         else if (a[i] == "--ld-pad") req.ld_pad = std::stoi(val());
+        else if (a[i] == "--tier") req.tier = val();
+        else if (a[i] == "--min-reps") req.min_reps = std::stoi(val());
+        else if (a[i] == "--max-reps") req.max_reps = std::stoi(val());
+        else if (a[i] == "--confidence") req.confidence = std::stod(val());
+        else if (a[i] == "--alternate-reverse") req.alternate_reverse = true;
+        else if (a[i] == "--seed-order") req.seed_order = split(val(), ',');
         else if (a[i] == "--result") result = val();
         else die("--cell: unknown argument " + a[i]);
     }
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
     std::ofstream out(result);
-    for (const ArmOutcome& o : spec->run_cell(req)) {
-        out << Json().str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
-                   .num("median_ms", median(o.ms)).num("residual", o.residual).integer("info_nonzero", o.info_nonzero)
-                   .integer("reps", static_cast<std::int64_t>(o.ms.size())).line();
-        for (std::size_t r = 0; r < o.ms.size(); ++r)
-            out << Json().str("kind", "rep").str("arm", o.arm).integer("rep", static_cast<std::int64_t>(r))
-                       .integer("slot", o.slot[r]).num("ms", o.ms[r]).line();
-    }
+    out << outcome_text(spec->run_cell(req));
     return out ? 0 : 1;
+}
+
+// Clock warm-up at worker start: a gemm loop near 64 MiB, the vendor arm when this build has one.
+void worker_warm(double seconds) {
+    const OpSpec* gemm = find_spec("gemm");
+    if (!gemm || seconds <= 0) return;
+    CellRequest r;
+    r.dtype = "float";
+    double best = INFINITY;
+    for (const CellKey& k : gemm->grid("float", {}))
+        if (const double d = std::abs(std::log(gemm->bytes("float", k) / double(64 << 20))); d < best) best = d, r.key = k;
+    const auto cands = gemm->candidates("float");
+    r.arms = {std::find(cands.begin(), cands.end(), "vendor") != cands.end() ? "vendor" : cands.front()};
+    r.mode = "time";
+    r.reps = 1;
+    r.warm_s = seconds;
+    try {
+        (void)gemm->run_cell(r);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "batchlas_tune --worker: warm-up failed: %s\n", e.what());
+    }
+}
+
+// One request line per cell on stdin, its records and a "done" line on the saved stdout (worker.hh).
+// Library output goes to stderr (the driver's log), so stray prints never reach the record stream.
+int worker_main(const std::vector<std::string>& a) {
+    double warm_s = 3;
+    for (std::size_t i = 1; i < a.size(); ++i) {
+        if (a[i] == "--warm-s" && i + 1 < a.size()) warm_s = std::stod(a[++i]);
+        else die("--worker: unknown argument " + a[i]);
+    }
+    const int out = ::dup(1);
+    if (out < 0 || ::dup2(2, 1) < 0) die("--worker: cannot redirect stdout");
+    worker_warm(warm_s);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
+        std::string err;
+        const auto req = parse_request(line, &err);
+        if (!req) die("--worker: bad request (" + err + "): " + line);
+        const OpSpec* spec = find_spec(req->first);
+        if (!spec) die("--worker: unknown op " + req->first);
+        const std::string text = outcome_text(spec->run_cell(req->second)) + Json().str("kind", "done").line();
+        for (std::size_t done = 0; done < text.size();) {
+            const ssize_t n = ::write(out, text.data() + done, text.size() - done);
+            if (n <= 0) return 1;
+            done += static_cast<std::size_t>(n);
+        }
+    }
+    return 0;
 }
 
 int info_main(const std::string& result) {
@@ -230,6 +286,28 @@ int info_main(const std::string& result) {
 }
 
 // ---- the driver --------------------------------------------------------------------------
+
+// The live worker per GPU: our own compute process, so the guard does not count it as foreign.
+std::mutex g_worker_mu;
+std::map<int, long> g_worker_pid;
+
+void set_worker_pid(int gpu, long pid) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    if (pid > 0) g_worker_pid[gpu] = pid;
+    else g_worker_pid.erase(gpu);
+}
+
+long worker_pid(int gpu) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    const auto it = g_worker_pid.find(gpu);
+    return it == g_worker_pid.end() ? -1 : it->second;
+}
+
+struct WorkerOut {
+    bool ok = false, guard = false;
+    std::string error;
+    std::vector<ArmOutcome> arms;
+};
 
 struct Cell {
     CellKey key;
@@ -263,10 +341,11 @@ public:
         fs::remove(g_tmp, ec);  // only once empty
     }
 
-    // reps/warm < 0: the --reps/--warm options.
+    // reps/warm < 0: the --reps/--warm options; `extra` arguments go to the child as they are.
     ChildOut child(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                    const std::vector<std::string>& arms, const std::string& mode, bool reverse,
-                   const std::string& coverage = "", int reps = -1, double warm = -1) {
+                   const std::string& coverage = "", int reps = -1, double warm = -1,
+                   const std::vector<std::string>& extra = {}) {
         const std::vector<std::string> tolerated = guard(gpu);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
@@ -276,6 +355,7 @@ public:
                                       "--warm", fmt(warm < 0 ? o_.warm : warm, "%g"), "--ld-pad", std::to_string(o_.ld_pad),
                                       "--result", res};
         if (reverse) argv.push_back("--reverse");
+        argv.insert(argv.end(), extra.begin(), extra.end());
         std::vector<std::pair<std::string, std::string>> env{{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"},
                                                              {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}};
         if (!coverage.empty()) env.push_back({"BATCHLAS_COVERAGE_OUT", coverage});
@@ -310,8 +390,9 @@ public:
     // child() once more after a failure: a transient crash or a foreign process must not sink a cell.
     ChildOut child_retry(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                          const std::vector<std::string>& arms, const std::string& mode, bool reverse,
-                         const std::string& coverage = "", int reps = -1, double warm = -1) {
-        ChildOut c = child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm);
+                         const std::string& coverage = "", int reps = -1, double warm = -1,
+                         const std::vector<std::string>& extra = {}) {
+        ChildOut c = child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
         if (c.ok) return c;
         std::printf("[gpu%d] %s %s %s: retrying after %s\n", gpu, spec_.op().c_str(), key_text(key).c_str(),
                     mode.c_str(), c.error.c_str());
@@ -319,7 +400,7 @@ public:
         if (raw_.is_open())
             write(Json().str("kind", "retry").str("op", spec_.op()).str("dtype", dtype).key(key).str("mode", mode)
                       .str("error", c.error).line());
-        return child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm);
+        return child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
     }
 
     // The spelling a binary's Auto picks at a cell, from its coverage `reached` row.
@@ -355,8 +436,8 @@ public:
         *device = device_;
         return name;
     }
-    ArmBatch arms_once(int gpu, const std::string& dtype, const CellKey& key, const std::vector<std::string>& arms,
-                       int reps, double warm);
+    ArmBatch race_fresh(const CellJob& j);
+    WorkerOut race_worker(WorkerProcess& w, const CellJob& j);
 
 private:
     const Opts& o_;
@@ -368,6 +449,8 @@ private:
     std::vector<std::string> cands_;
 
     std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
+    CellRequest race_request(const CellJob& j) const;
+    std::vector<std::string> race_args(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
     std::vector<std::string> guard(int gpu);
@@ -391,8 +474,10 @@ AppScan Driver::apps(int gpu) {
     if (rc == std::string::npos || out.substr(rc) != "rc=0")
         die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi (--no-guard measures without the guard)");
     out.resize(rc);
-    const AppScan scan = scan_compute_apps(out, long(::getpid()));
+    AppScan scan = scan_compute_apps(out, long(::getpid()));
     if (scan.self) die("the driver holds a CUDA context on GPU " + std::to_string(gpu) + ": start it via the launcher");
+    const std::string w = std::to_string(worker_pid(gpu));
+    scan.foreign.erase(std::remove(scan.foreign.begin(), scan.foreign.end(), w), scan.foreign.end());
     return scan;
 }
 
@@ -511,36 +596,104 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
     return p;
 }
 
-// The tiered seam (tiered_driver.hh CellMeasurer): one `time` child, one pass. Arms that crash a
-// child even alone are `error`; the rest are timed without them, as in timed().
-ArmBatch Driver::arms_once(int gpu, const std::string& dtype, const CellKey& key, const std::vector<std::string>& arms,
-                           int reps, double warm) {
-    ChildOut ch = child_retry(gpu, self_, dtype, key, arms, "time", false, "", reps, warm);
+CellRequest Driver::race_request(const CellJob& j) const {
+    CellRequest r;
+    r.dtype = j.dtype;
+    r.key = j.key;
+    r.arms = j.arms;
+    r.mode = "race";
+    r.warm_s = j.p.warm_topup_s;
+    r.ld_pad = o_.ld_pad;
+    r.tier = to_string(j.tier);
+    r.min_reps = j.p.min_reps;
+    r.max_reps = j.p.max_reps;
+    r.confidence = j.p.confidence;
+    r.alternate_reverse = j.p.alternate_reverse;
+    r.seed_order = j.arms;
+    return r;
+}
+
+std::vector<std::string> Driver::race_args(const CellJob& j) const {
+    std::vector<std::string> a{"--tier", to_string(j.tier), "--min-reps", std::to_string(j.p.min_reps), "--max-reps",
+                               std::to_string(j.p.max_reps), "--confidence", fmt(j.p.confidence, "%.17g"),
+                               "--seed-order", join(j.arms, ",")};
+    if (j.p.alternate_reverse) a.push_back("--alternate-reverse");
+    return a;
+}
+
+// One fresh `--cell --mode race` child (the audit, --no-worker, the worker's fallback). Arms that
+// crash a child even alone are `error`; the rest race without them.
+ArmBatch Driver::race_fresh(const CellJob& j) {
+    const auto extra = race_args(j);
+    const double warm = j.p.warm_topup_s;
+    ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, warm, extra);
     std::map<std::string, std::string> alone;
     if (!ch.ok && !ch.guard) {
         std::vector<std::string> keep;
-        for (const auto& a : arms) {
-            const ChildOut one = child(gpu, self_, dtype, key, {a}, "jit", false);
+        for (const auto& a : j.arms) {
+            const ChildOut one = child(j.gpu, self_, j.dtype, j.key, {a}, "jit", false);
             if (one.ok) keep.push_back(a);
             else alone[a] = one.error;
         }
-        if (!alone.empty() && !keep.empty()) ch = child(gpu, self_, dtype, key, keep, "time", false, "", reps, warm);
+        if (!alone.empty() && !keep.empty()) ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, warm, extra);
     }
     std::map<std::string, ArmOutcome> got;
-    for (const Record& r : ch.records) {
-        ArmOutcome& o = got[r.get("arm")];
-        o.arm = r.get("arm");
-        if (r.get("kind") == "rep") o.ms.push_back(r.number("ms"));
-        else o.status = r.get("status"), o.reason = r.get("reason");
-    }
+    for (ArmOutcome& o : outcomes_from_records(ch.records)) got[o.arm] = std::move(o);
     ArmBatch b;
     if (!ch.ok) b.error = ch.error;
-    for (const auto& a : arms) {
+    for (const auto& a : j.arms) {
         if (alone.count(a)) b.arms.push_back({a, "error", "crashed alone: " + alone[a], {}, {}, 0, 0});
         else if (got.count(a) && !got[a].status.empty()) b.arms.push_back(got[a]);
         else b.arms.push_back({a, "error", "child: " + ch.error, {}, {}, 0, 0});
     }
     return b;
+}
+
+// One cell on the GPU's worker, started here when it is not running. Between cells the guard
+// checks for foreign compute processes only: utilization would count the worker's own last cell.
+WorkerOut Driver::race_worker(WorkerProcess& w, const CellJob& j) {
+    WorkerOut r;
+    if (!w.alive()) {
+        guard(j.gpu);
+        const std::string log = tmp_ + "/worker" + std::to_string(j.gpu) + "_" + std::to_string(counter_++) + ".log";
+        if (!w.start({self_, "--worker", "--warm-s", "3"},
+                     {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(j.gpu)}}, log))
+            die("cannot start the worker for GPU " + std::to_string(j.gpu));
+        set_worker_pid(j.gpu, long(w.pid()));
+    }
+    std::vector<std::string> tolerated;
+    for (double waited = 0; o_.guard; waited += 1) {
+        const GuardCheck g = guard_before(apps(j.gpu), 0, o_.util_ceiling, o_.allow_idle_foreign);
+        if (g.refuse.empty()) {
+            tolerated = g.tolerated;
+            break;
+        }
+        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + g.refuse + "); refusing to measure");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::vector<Record> recs;
+    WorkerProcess::Got got = WorkerProcess::Got::eof;
+    if (w.send(request_line(spec_.op(), race_request(j)))) got = w.receive(o_.cell_timeout, &recs);
+    if (got != WorkerProcess::Got::done) {
+        r.error = std::string(got == WorkerProcess::Got::timeout ? "worker timeout" : "worker exited") + ": " +
+                  tail(w.log());
+        return r;
+    }
+    if (const auto fresh = o_.guard ? guard_new_foreign(apps(j.gpu), tolerated) : std::vector<std::string>{};
+        !fresh.empty()) {
+        r.guard = true;
+        r.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(j.gpu) +
+                  " during the cell; numbers discarded";
+        return r;
+    }
+    r.arms = outcomes_from_records(recs);
+    for (const std::string& a : j.arms)
+        if (std::none_of(r.arms.begin(), r.arms.end(), [&](const ArmOutcome& o) { return o.arm == a && !o.status.empty(); })) {
+            r.error = "worker: no outcome for " + a;
+            return r;
+        }
+    r.ok = true;
+    return r;
 }
 
 void Driver::run_shard(int gpu, const std::vector<Cell*>& cells) {
@@ -794,20 +947,62 @@ std::vector<int> lock_devices(const Opts& o) {
     return fds;
 }
 
-// One Driver per op; each measure() is one fresh child (tiered_driver.hh: the seam Task 8 replaces).
-class ChildMeasurer : public CellMeasurer {
+// The tiered seam (tiered_driver.hh CellMeasurer): one Driver per op, one persistent worker per GPU
+// shared by every op. A worker that dies or times out is restarted and the cell retried once; then
+// the cell races in a fresh child.
+class TieredMeasurer : public CellMeasurer {
 public:
-    ChildMeasurer(const Opts& o, const std::vector<std::string>& ops) {
+    TieredMeasurer(const Opts& o, const std::vector<std::string>& ops) : o_(o) {
         for (const std::string& op : ops) drivers_[op] = std::make_unique<Driver>(o, *find_spec(op));
+        for (int gpu : o.devices) workers_[gpu] = std::make_unique<WorkerProcess>();
+    }
+    ~TieredMeasurer() override {
+        for (auto& [gpu, w] : workers_) stop(gpu);
     }
     Driver& first() { return *drivers_.begin()->second; }
-    ArmBatch measure(int gpu, const OpSpec& spec, const std::string& dtype, const CellKey& key,
-                     const std::vector<std::string>& arms, const TierParams& p) override {
-        return drivers_.at(spec.op())->arms_once(gpu, dtype, key, arms, p.max_reps, p.warm_topup_s);
+    bool persistent() const override { return o_.worker; }
+    // Fresh workers per round: a refinement round starts below the last round's largest cell.
+    void begin_round() override {
+        for (auto& [gpu, w] : workers_) stop(gpu);
+    }
+    ArmBatch measure_fresh(const CellJob& j) override { return drivers_.at(j.spec->op())->race_fresh(j); }
+    ArmBatch measure(const CellJob& j) override {
+        if (!o_.worker) return measure_fresh(j);
+        Driver& d = *drivers_.at(j.spec->op());
+        WorkerProcess& w = *workers_.at(j.gpu);
+        int restarts = 0;
+        std::string why;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            WorkerOut r = d.race_worker(w, j);
+            if (r.ok) {
+                ArmBatch b{std::move(r.arms), "", restarts, false};
+                return b;
+            }
+            why = r.error;
+            if (!r.guard) {
+                stop(j.gpu);
+                ++restarts;
+            }
+            std::printf("[gpu%d] %s %s: worker %s after %s\n", j.gpu, j.spec->op().c_str(), key_text(j.key).c_str(),
+                        attempt == 0 ? "retrying the cell" : "failed again, racing the cell in a fresh child",
+                        why.c_str());
+            std::fflush(stdout);
+        }
+        ArmBatch b = measure_fresh(j);
+        b.worker_restarts = restarts;
+        b.fallback = true;
+        return b;
     }
 
 private:
+    const Opts& o_;
     std::map<std::string, std::unique_ptr<Driver>> drivers_;
+    std::map<int, std::unique_ptr<WorkerProcess>> workers_;
+
+    void stop(int gpu) {
+        workers_.at(gpu)->stop();
+        set_worker_pid(gpu, -1);
+    }
 };
 
 // --plan names the device from nvidia-smi's compute capability (no CUDA context), as select.cc does.
@@ -826,7 +1021,7 @@ void usage() {
         "       batchlas_tune <op>[,..] --tier T --plan [--devices N | --device-key sm_NN]   plan and estimate, no GPU\n"
         "       batchlas_tune --status | --import-raw RAW.jsonl | --list\n"
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
-        "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49\n"
+        "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --cell-timeout 1800 --no-guard --guard-wait 300\n"
@@ -859,6 +1054,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.budget_h = o.budget_h;
     t.cap_gib = o.cap_gib;
     t.overhead_s = o.overhead_s;
+    t.audit_fraction = o.audit_fraction;
     t.plan = o.plan;
     t.progress_fd = o.progress_fd;
     t.repo = o.repo;
@@ -878,6 +1074,7 @@ int main(int argc, char** argv) {
         return a.empty() ? 2 : 0;
     }
     if (a[0] == "--cell") return child_main(a);
+    if (a[0] == "--worker") return worker_main(a);
     if (a[0] == "--info") return info_main(a.size() > 2 ? a[2] : "/dev/stdout");
     Opts o;
     o.argv.assign(argv, argv + argc);
@@ -921,6 +1118,8 @@ int main(int argc, char** argv) {
         else if (f == "--import-raw") o.import_raw = val();
         else if (f == "--device-key") o.device_key = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
+        else if (f == "--no-worker") o.worker = false;
+        else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
         else if (f == "--cap-gib") o.cap_gib = std::stod(val());
         else if (f == "--cell-timeout") o.cell_timeout = std::stod(val());
         else if (f == "--no-guard") o.guard = false;
@@ -1000,7 +1199,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "batchlas_tune: warning: %s is set and reaches the op's children\n", *e);
     const auto locks = lock_devices(o);
     if (tiered) {
-        ChildMeasurer m(o, o.ops);
+        TieredMeasurer m(o, o.ops);
         RunIdentity id;
         id.device_name = m.first().start(&id.device);
         try {

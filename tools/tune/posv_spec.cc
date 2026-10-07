@@ -119,6 +119,7 @@ public:
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PosvProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                              int(key_int(req.key, "batch")), req.ld_pad, uplo);
+            if (req.mode == "race") return run_race<S::PosvChoice>("posv", p, req, Tol<T>::v);
             return run_arms<S::PosvChoice>("posv", p, req, Tol<T>::v);
         });
     }

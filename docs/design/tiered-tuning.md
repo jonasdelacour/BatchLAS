@@ -201,6 +201,23 @@ shift the L1/SLM split, which changes timing. Two defences:
    and the winner. A mismatch marks that op and dtype *fresh-process only* in the ledger, and its
    remaining cells run one process per cell. The verdict is shown in the status matrix.
 
+**As built** (Task 8). Ascending order holds per measuring round: the driver restarts every worker
+at the start of each round, because a refinement round starts below the previous round's largest
+cell. Between cells the guard checks only for foreign compute processes (the worker's own last
+cell would trip the utilization check); utilization is checked before a worker starts. The audit
+picks a cell when `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, writes an `audit`
+ledger record for every audited cell, and on a mismatch appends a second `run` line with
+`wm.<op>.<dtype>: fresh` (readers keep the last `run` line of a run id).
+
+**No carve-out mismatch found** (threadripper02, GPU 1, 2026-10-07; `tune_race_gpu_tests`). For
+each of potrf float (n=128, then n=110), potrf double (n=96, then n=78), posv float (n=128, then
+n=110, nrhs=1) and trsm float (Left, NoTrans, order=q=128, then 104), all at batch 512, a worker
+raced the larger cell, then the smaller one at or just below the 48 KB hole, and a fresh child
+raced the smaller one. Every candidate's feasibility agreed. This is expected: potrf pads requests
+out of the hole and its kernels carry no static shared (docs/perf/potrf.md#potrf-the-48-kb-launch-hole).
+The test stays as the guard; the mismatch path itself is tested with injected verdicts in
+`tune_tests`.
+
 The first task of the implementation plan measures the real per-child overhead (process start,
 SYCL and CUDA init, libbatchlas static init, JIT cache load) on both boxes. If it is small next to a
 raced cell, the worker is dropped and the engine keeps one process per cell, which removes the

@@ -1,5 +1,7 @@
 #include "schedule.hh"
 
+#include "grid.hh"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -227,7 +229,7 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
         c.hash = hash_of(a.arm);
         c.status = kStatuses.count(a.status) ? a.status : "error";
         c.reason = a.reason;
-        if (c.status == "ok" && !a.ms.empty()) {
+        if ((c.status == "ok" || c.status == "eliminated") && !a.ms.empty()) {
             c.median_ms = median(a.ms);
             c.lo = *std::min_element(a.ms.begin(), a.ms.end());
             c.hi = *std::max_element(a.ms.begin(), a.ms.end());
@@ -239,15 +241,21 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
     r.key = key;
     r.round = round;
     std::map<std::string, double> times;
+    std::vector<std::pair<double, std::size_t>> dropped;  // eliminated: (median, position in order)
     for (const std::string& s : order) {
         const auto it = by.find(s);
         if (it == by.end()) continue;
-        if (raced.count(s) && it->second.status == "ok" && std::isfinite(it->second.median_ms)) times[s] = it->second.median_ms;
+        const bool timed = raced.count(s) && std::isfinite(it->second.median_ms);
+        if (timed && it->second.status == "ok") times[s] = it->second.median_ms;
+        if (timed && it->second.status == "eliminated") dropped.emplace_back(it->second.median_ms, &s - order.data());
         r.cands.push_back(it->second);
         by.erase(it);
     }
     for (auto& [s, c] : by) r.cands.push_back(c);  // arms outside the current list (none from the driver)
     if (!times.empty()) r.ranked = rank(times, order, kTie);
+    // race_ranking: the survivors, then the eliminated by median.
+    std::sort(dropped.begin(), dropped.end());
+    for (const auto& d : dropped) r.ranked.push_back(order[d.second]);
     // Carried-over candidates keep their stored order below every re-raced one: their stored times
     // come from another session, so they never outrank a fresh measurement.
     if (stored)
@@ -285,6 +293,96 @@ double runner_up_gap(const CellRecord& r) {
     };
     const double a = ms(r.ranked[0]), b = ms(r.ranked[1]);
     return std::isfinite(a) && std::isfinite(b) && a > 0 ? b / a - 1 : inf;
+}
+
+std::vector<std::string> seed_order(const std::map<CellKey, CellRecord>& done, const CellKey& key,
+                                    const std::vector<std::string>& arms) {
+    auto logs = [](const CellKey& k, std::string* sig) {
+        std::vector<double> v;
+        for (const KV& kv : k) {
+            const bool num = is_int(kv.value);
+            v.push_back(num ? std::log(std::max(std::stod(kv.value), 1.0)) : 0);
+            *sig += kv.name + "=" + (num ? std::string("#") : kv.value) + ",";
+        }
+        return v;
+    };
+    std::string want;
+    const std::vector<double> at = logs(key, &want);
+    std::string winner;
+    double best = std::numeric_limits<double>::infinity();
+    for (const auto& [k, r] : done) {
+        std::string sig;
+        const std::vector<double> l = logs(k, &sig);
+        if (sig != want || r.ranked.empty() || k == key) continue;
+        double d = 0;
+        for (std::size_t i = 0; i < at.size(); ++i) d += std::abs(at[i] - l[i]);
+        if (d < best) best = d, winner = r.ranked.front();
+    }
+    std::vector<std::string> out;
+    if (std::find(arms.begin(), arms.end(), winner) != arms.end()) out.push_back(winner);
+    for (const std::string& a : arms)
+        if (a != winner) out.push_back(a);
+    return out;
+}
+
+bool audit_pick(const std::string& run_id, const CellKey& key, double fraction) {
+    return double(fnv1a64(run_id + key_arg(key)) % 1000) < fraction * 1000;
+}
+
+namespace {
+
+bool feasible(const std::string& status) { return status == "ok" || status == "eliminated"; }
+
+// rank()'s winner among the survivors, else the fastest eliminated arm; "" when nothing was timed.
+std::string winner_of(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& order, double tie) {
+    std::map<std::string, double> ok;
+    std::string fallback;
+    double best = std::numeric_limits<double>::infinity();
+    for (const ArmOutcome& a : arms) {
+        const double m = median(a.ms);
+        if (!std::isfinite(m)) continue;
+        if (a.status == "ok") ok[a.arm] = m;
+        else if (a.status == "eliminated" && m < best) best = m, fallback = a.arm;
+    }
+    return ok.empty() ? fallback : rank(ok, order, tie).front();
+}
+
+double median_of(const std::vector<ArmOutcome>& arms, const std::string& arm) {
+    for (const ArmOutcome& a : arms)
+        if (a.arm == arm) return median(a.ms);
+    return NAN;
+}
+
+}  // namespace
+
+AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
+                          const std::vector<std::string>& order, double tie) {
+    AuditResult r;
+    const std::string ww = winner_of(warm, order, tie), fw = winner_of(fresh, order, tie);
+    r.warm_ms = median_of(warm, ww);
+    r.fresh_ms = median_of(fresh, fw);
+    if (std::none_of(fresh.begin(), fresh.end(), [](const ArmOutcome& a) {
+            return feasible(a.status) || a.status == "bad" || a.status == "skipped";
+        })) {
+        r.verdict = "inconclusive";
+        return r;
+    }
+    std::vector<std::string> differ;
+    for (const ArmOutcome& w : warm)
+        for (const ArmOutcome& f : fresh)
+            if (w.arm == f.arm && feasible(w.status) != feasible(f.status))
+                differ.push_back(w.arm + " " + w.status + "/" + f.status);
+    if (!differ.empty()) {
+        r.verdict = "mismatch:feasibility " + join(differ, ",");
+        return r;
+    }
+    const double ww_fresh = median_of(fresh, ww);
+    if (ww != fw && !(std::isfinite(ww_fresh) && ww_fresh <= r.fresh_ms * (1 + tie))) {
+        r.verdict = "mismatch:winner " + ww + "/" + fw;
+        return r;
+    }
+    r.verdict = "ok";
+    return r;
 }
 
 }  // namespace batchlas::tune

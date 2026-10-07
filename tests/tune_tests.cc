@@ -10,6 +10,7 @@
 #include "../tools/tune/tiered_driver.hh"
 #include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
+#include "../tools/tune/worker.hh"
 
 #include <gtest/gtest.h>
 #include <fcntl.h>
@@ -1897,10 +1898,11 @@ public:
     std::vector<std::string> keys;
     int max_reps = 0;
     bool fail = false;  // every child times out
-    ArmBatch measure(int, const OpSpec&, const std::string&, const CellKey& key, const std::vector<std::string>& arms,
-                     const TierParams& p) override {
+    ArmBatch measure(const CellJob& j) override {
+        const CellKey& key = j.key;
+        const std::vector<std::string>& arms = j.arms;
         keys.push_back(key_arg(key));
-        max_reps = p.max_reps;
+        max_reps = j.p.max_reps;
         ArmBatch b;
         if (fail) return {{}, "timeout"};
         const bool small = key_int(key, "n") <= 10;
@@ -2013,4 +2015,246 @@ TEST(TuneTieredDriver, TransientChildFailureWritesNoRecord) {
     FakeMeasurer m;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     EXPECT_EQ(m.keys.size(), 8u) << "the next run measures every cell";
+}
+
+// ---- Task 8: race records, the worker wire format, the fresh-process audit --------------------
+
+TEST(TuneSchedule, EliminatedArmsKeepTheirMedianAndRankAfterSurvivors) {
+    const std::vector<std::string> order{"a", "b", "c"};
+    const CellRecord r = record_from_arms(nkey(64), 0,
+                                          {arm("a", "eliminated", {3.0, 3.2, 3.1}), arm("b", "ok", {1.0, 1.0, 1.1}),
+                                           arm("c", "eliminated", {2.0, 2.1, 2.2})},
+                                          order, {});
+    EXPECT_EQ(r.ranked, (std::vector<std::string>{"b", "c", "a"}));
+    ASSERT_EQ(r.cands.size(), 3u);
+    EXPECT_EQ(r.cands[0].status, "eliminated");
+    EXPECT_DOUBLE_EQ(r.cands[0].median_ms, 3.1) << "the ledger needs the eliminated median";
+    EXPECT_EQ(r.cands[0].reps, 3);
+    const CellRecord bad = record_from_arms(nkey(64), 0, {arm("a", "eliminated", {3.0}), arm("b", "bad", {1.0})}, order, {});
+    EXPECT_EQ(bad.ranked, (std::vector<std::string>{"a"})) << "a bad survivor drops out; the next arm wins";
+}
+
+TEST(TuneSchedule, SeedOrderPutsTheNearestWinnerFirst) {
+    std::map<CellKey, CellRecord> done;
+    done[nkey(16)] = cell_rec({}, {"c", "a"}, 16);
+    done[nkey(512)] = cell_rec({}, {"b"}, 512);
+    done[nkey(16)].key = nkey(16);
+    done[nkey(512)].key = nkey(512);
+    EXPECT_EQ(seed_order(done, nkey(32), {"a", "b", "c"}), (std::vector<std::string>{"c", "a", "b"}));
+    EXPECT_EQ(seed_order(done, nkey(400), {"a", "b", "c"}), (std::vector<std::string>{"b", "a", "c"}));
+    EXPECT_EQ(seed_order({}, nkey(32), {"a", "b"}), (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(seed_order(done, nkey(32), {"a", "b"}), (std::vector<std::string>{"a", "b"})) << "winner not raced here";
+}
+
+TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
+    const std::vector<std::string> order{"a", "b", "c"};
+    const std::vector<ArmOutcome> warm{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "skipped")};
+    EXPECT_EQ(audit_compare(warm, warm, order).verdict, "ok");
+    const AuditResult same = audit_compare(warm, {arm("a", "ok", {1.1}), arm("b", "ok", {2.0}), arm("c", "skipped")}, order);
+    EXPECT_EQ(same.verdict, "ok") << "eliminated and ok are both feasible";
+    EXPECT_DOUBLE_EQ(same.warm_ms, 1.0);
+    EXPECT_DOUBLE_EQ(same.fresh_ms, 1.1);
+    const AuditResult feas = audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "error"), arm("c", "skipped")}, order);
+    EXPECT_TRUE(feas.mismatch()) << feas.verdict;
+    EXPECT_NE(feas.verdict.find("b eliminated/error"), std::string::npos) << feas.verdict;
+    EXPECT_TRUE(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "ok", {0.5})}, order)
+                    .mismatch()) << "a candidate the warm worker refused runs in a fresh process";
+    const std::vector<ArmOutcome> warm_b{arm("a", "eliminated", {2.0}), arm("b", "ok", {1.0}), arm("c", "skipped")};
+    EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.02}), arm("c", "skipped")}, order).verdict, "ok")
+        << "winners differ (a by tie order), but the worker's winner b is within the tie in the fresh run";
+    EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.04}), arm("c", "skipped")}, order).verdict,
+              "mismatch:winner b/a");
+    const AuditResult win = audit_compare(warm, {arm("a", "eliminated", {1.2}), arm("b", "ok", {1.0}), arm("c", "skipped")}, order);
+    EXPECT_EQ(win.verdict, "mismatch:winner a/b");
+    EXPECT_EQ(audit_compare(warm, {arm("a", "error"), arm("b", "error"), arm("c", "error")}, order).verdict, "inconclusive");
+}
+
+TEST(TuneSchedule, AuditPickIsAStableHashFraction) {
+    int picked = 0;
+    for (int n = 1; n <= 2000; ++n) picked += audit_pick("run1", nkey(n), 0.10);
+    EXPECT_GT(picked, 140);
+    EXPECT_LT(picked, 260);
+    EXPECT_EQ(audit_pick("run1", nkey(7), 0.10), audit_pick("run1", nkey(7), 0.10));
+    EXPECT_FALSE(audit_pick("run1", nkey(7), 0.0));
+    EXPECT_TRUE(audit_pick("run1", nkey(7), 1.0));
+}
+
+TEST(TuneLedger, UpdatedRunLineReplacesTheEarlierOne) {
+    TempDir d;
+    RunMeta m;
+    m.run_id = "r1";
+    m.tier = Tier::preview;
+    m.worker_mode["potrf.float"] = "worker";
+    {
+        LedgerWriter w(d.str(), m);
+        w.cell(cell_rec({cres("a", "1")}, {"a"}));
+        m.worker_mode["potrf.float"] = "fresh";
+        w.update_run(m);
+        w.audit(nkey(64), "mismatch:winner a/b", 1.0, 2.0);
+    }
+    const Ledger l = read_ledger(d.str());
+    ASSERT_EQ(l.runs.size(), 1u);
+    EXPECT_EQ(l.runs[0].worker_mode.at("potrf.float"), "fresh");
+    EXPECT_EQ(l.cells.size(), 1u);
+}
+
+TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
+    CellRequest r;
+    r.dtype = "cfloat";
+    r.key = nkey(32);
+    r.arms = {"cta", "lpanel:panel=8"};
+    r.mode = "race";
+    r.warm_s = 0.2;
+    r.ld_pad = 3;
+    r.tier = "deep";
+    r.min_reps = 6;
+    r.max_reps = 16;
+    r.confidence = 0.98;
+    r.alternate_reverse = true;
+    r.seed_order = {"lpanel:panel=8"};
+    const auto got = parse_request(request_line("potrf", r));
+    ASSERT_TRUE(got);
+    EXPECT_EQ(got->first, "potrf");
+    const CellRequest& g = got->second;
+    EXPECT_EQ(g.dtype, "cfloat");
+    EXPECT_EQ(g.key, r.key);
+    EXPECT_EQ(g.arms, r.arms);
+    EXPECT_EQ(g.mode, "race");
+    EXPECT_DOUBLE_EQ(g.warm_s, 0.2);
+    EXPECT_EQ(g.ld_pad, 3);
+    EXPECT_EQ(g.tier, "deep");
+    EXPECT_EQ(g.min_reps, 6);
+    EXPECT_EQ(g.max_reps, 16);
+    EXPECT_DOUBLE_EQ(g.confidence, 0.98);
+    EXPECT_TRUE(g.alternate_reverse);
+    EXPECT_EQ(g.seed_order, r.seed_order);
+    EXPECT_FALSE(parse_request("{\"op\": \"potrf\"}"));
+    EXPECT_FALSE(parse_request("not json"));
+
+    ArmOutcome a = arm("cta", "eliminated", {1.5, 1.25});
+    a.slot = {1, 0};
+    a.reason = "round 2";
+    std::vector<Record> recs;
+    for (const std::string& line : split(outcome_text({a, arm("tiny", "skipped")}), '\n')) recs.push_back(*parse_record(line));
+    const auto back = outcomes_from_records(recs);
+    ASSERT_EQ(back.size(), 2u);
+    EXPECT_EQ(back[0].arm, "cta");
+    EXPECT_EQ(back[0].status, "eliminated");
+    EXPECT_EQ(back[0].reason, "round 2");
+    EXPECT_EQ(back[0].ms, a.ms);
+    EXPECT_EQ(back[0].slot, a.slot);
+    EXPECT_EQ(back[1].status, "skipped");
+}
+
+TEST(TuneWorker, ProcessReturnsRecordsUntilDoneThenEofAndTimesOut) {
+    WorkerProcess w;
+    ASSERT_TRUE(w.start({"/bin/sh", "-c",
+                         "read l; echo noise; echo '{\"kind\": \"arm\", \"arm\": \"x\"}'; echo '{\"kind\": \"done\"}'; "
+                         "read l; exit 0"},
+                        {}, ""));
+    ASSERT_TRUE(w.send("{}\n"));
+    std::vector<Record> got;
+    EXPECT_EQ(w.receive(10, &got), WorkerProcess::Got::done);
+    ASSERT_EQ(got.size(), 1u);
+    EXPECT_EQ(got[0].get("arm"), "x");
+    ASSERT_TRUE(w.send("{}\n"));
+    got.clear();
+    EXPECT_EQ(w.receive(10, &got), WorkerProcess::Got::eof) << "the worker exited before answering";
+    w.stop();
+    EXPECT_FALSE(w.alive());
+    ASSERT_TRUE(w.start({"/bin/sh", "-c", "exec sleep 30"}, {}, ""));
+    EXPECT_EQ(w.receive(0.2, &got), WorkerProcess::Got::timeout);
+    w.stop();
+}
+
+namespace {
+
+// A persistent measurer whose fresh child disagrees on feasibility at every cell above n=4.
+class AuditMeasurer : public FakeMeasurer {
+public:
+    bool disagree = true;
+    int restart_at = -1;  // the worker restarts on the cell with this n
+    std::vector<std::string> fresh_keys, worker_keys;
+    std::vector<std::size_t> round_starts;  // worker_keys.size() at each begin_round()
+    bool persistent() const override { return true; }
+    void begin_round() override { round_starts.push_back(worker_keys.size()); }
+    ArmBatch measure(const CellJob& j) override {
+        worker_keys.push_back(key_arg(j.key));
+        ArmBatch b = FakeMeasurer::measure(j);
+        const std::string slower = key_int(j.key, "n") <= 10 ? "a" : "b";
+        for (ArmOutcome& a : b.arms)
+            if (a.arm == slower) a.status = "eliminated";
+        b.worker_restarts = key_int(j.key, "n") == restart_at;
+        return b;
+    }
+    ArmBatch measure_fresh(const CellJob& j) override {
+        fresh_keys.push_back(key_arg(j.key));
+        ArmBatch b = FakeMeasurer::measure(j);
+        for (ArmOutcome& a : b.arms)
+            if (disagree && key_int(j.key, "n") > 4 && a.arm == "a") a.status = "error";
+        return b;
+    }
+};
+
+std::size_t count_of(const std::string& hay, const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t p = 0; (p = hay.find(needle, p)) != std::string::npos; ++p) ++n;
+    return n;
+}
+
+}  // namespace
+
+TEST(TuneTieredDriver, AuditMismatchSendsTheRestOfTheOpDtypeToFreshChildren) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.audit_fraction = 1.0;
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    AuditMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    // Lattice n=1,4,16,64: 1 and 4 agree; 16 is the first mismatch; 64 and every refinement cell run fresh only.
+    ASSERT_GE(m.worker_keys.size(), 3u);
+    EXPECT_EQ(std::vector<std::string>(m.worker_keys.begin(), m.worker_keys.begin() + 3), (std::vector<std::string>{"n=1", "n=4", "n=16"}));
+    EXPECT_EQ(m.worker_keys.size(), 3u) << "no worker measurement after the mismatch";
+    ASSERT_GE(m.fresh_keys.size(), 4u);
+    EXPECT_EQ(std::vector<std::string>(m.fresh_keys.begin(), m.fresh_keys.begin() + 4),
+              (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
+    const std::string dir = ledger_dir(ledger.str(), "fakeop", "float", "sm_fake");
+    const Ledger l = read_ledger(dir);
+    ASSERT_EQ(l.runs.size(), 1u);
+    EXPECT_EQ(l.runs[0].worker_mode.at("fakeop.float"), "fresh");
+    std::string text;
+    for (const auto& e : fs::directory_iterator(dir)) text += read_file(e.path());
+    EXPECT_EQ(count_of(text, "\"kind\": \"audit\""), 3u) << text;
+    EXPECT_EQ(count_of(text, "\"verdict\": \"ok\""), 2u);
+    EXPECT_NE(text.find("\"wm.fakeop.float\": \"worker\""), std::string::npos) << "the run starts on the worker";
+    const std::string ev = read_file(events);
+    EXPECT_EQ(count_of(ev, "\"ev\": \"audit\""), 3u) << ev;
+    EXPECT_NE(ev.find("\"cand\": \"a\", \"round\": 3"), std::string::npos) << ev;
+    EXPECT_EQ(count_of(ev, "\"ev\": \"eliminated\""), m.worker_keys.size()) << "fresh-only cells here race nothing out" << ev;
+}
+
+TEST(TuneTieredDriver, AuditMatchKeepsTheWorkerAndReportsRestarts) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.audit_fraction = 1.0;
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    AuditMeasurer m;
+    m.disagree = false;
+    m.restart_at = 16;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    EXPECT_EQ(m.worker_keys.size(), 8u);
+    EXPECT_EQ(m.fresh_keys, m.worker_keys) << "every cell audited, none moved to fresh children";
+    // Lattice, then index bisection 8, then 11, 9, 10 one round each: a fresh worker every round.
+    EXPECT_EQ(m.round_starts, (std::vector<std::size_t>{0, 4, 5, 6, 7}));
+    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    EXPECT_EQ(l.runs.at(0).worker_mode.at("fakeop.float"), "worker");
+    const std::string ev = read_file(events);
+    EXPECT_EQ(count_of(ev, "\"ev\": \"worker_restart\""), 1u) << ev;
+    EXPECT_NE(ev.find("\"restarts\": 1"), std::string::npos) << ev;
 }

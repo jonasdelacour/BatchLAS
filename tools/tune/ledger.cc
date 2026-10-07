@@ -184,6 +184,11 @@ void LedgerWriter::audit(const CellKey& key, const std::string& verdict, double 
             .num("fresh_ms", fresh_ms).num("warm_ms", warm_ms).line());
 }
 
+void LedgerWriter::update_run(const RunMeta& meta) {
+    meta_ = meta;
+    put(run_line(meta_));
+}
+
 Ledger read_ledger(const std::string& dir) {
     Ledger l;
     std::vector<std::string> files;
@@ -205,8 +210,12 @@ Ledger read_ledger(const std::string& dir) {
                 const auto rec = parse_record(lines[i].second, &err);
                 if (!rec) throw std::runtime_error(err);
                 const std::string kind = rec->get("kind");
-                if (kind == "run") l.runs.push_back(parse_run(*rec));
-                else if (kind == "cell") l.cells.push_back(parse_cell(*rec));
+                if (kind == "run") {
+                    RunMeta m = parse_run(*rec);
+                    const auto same = std::find_if(l.runs.begin(), l.runs.end(), [&](const RunMeta& x) { return x.run_id == m.run_id; });
+                    if (same == l.runs.end()) l.runs.push_back(std::move(m));
+                    else *same = std::move(m);
+                } else if (kind == "cell") l.cells.push_back(parse_cell(*rec));
             } catch (const std::exception& e) {
                 const std::string where = path + ":" + std::to_string(lines[i].first) + ": " + e.what();
                 if (i + 1 != lines.size()) throw std::runtime_error(where);
