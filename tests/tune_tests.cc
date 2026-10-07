@@ -1789,6 +1789,9 @@ TEST(TuneLedger, ImportSchema1KeysCellsByTheGridAxesLikeTheDriver) {
     for (const CellRecord& c : l.cells) keys.insert(key_arg(c.key));
     EXPECT_EQ(keys, (std::set<std::string>{"uplo=U,n=16,batch=256", "uplo=L,n=32,batch=256"}))
         << "every axis in axis order; a missing fixed axis takes its only value";
+    auto with_side = axes;
+    with_side.push_back({"side", {"L", "R"}});  // not fixed: a record without it has no key
+    EXPECT_THROW(import_schema1(raw, d.str() + "/side", now, "k1", Tier::deep, with_side), std::runtime_error);
 }
 
 TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
