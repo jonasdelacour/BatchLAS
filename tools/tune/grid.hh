@@ -33,9 +33,9 @@ std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t);
 // For grids that are not lattices: keep a cell when fnv1a64(key_arg(cell)) % stride == 0.
 std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t);
 
-// New cells to measure: per log axis and per line (cells equal in every other key), the midpoints
-// between neighbours whose winners (ranked.front()) differ. Empty ranking = no winner; ratio 0 = off.
-std::vector<CellKey> refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
+// RefineRound::next = new cells to measure: per log axis and per line (cells equal in every other key), the midpoints
+// between neighbours whose winners (ranked.front()) differ; stalled = midpoint exists without a winner. Ratio 0 = off.
+RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
                                      const std::vector<AxisSpec>& axes, double ratio);
 
 }  // namespace batchlas::tune

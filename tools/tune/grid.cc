@@ -58,9 +58,9 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
     return out;
 }
 
-std::vector<CellKey> refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
+RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
                                      const std::vector<AxisSpec>& axes, double ratio) {
-    std::vector<CellKey> out;
+    RefineRound out;
     if (ratio <= 0) return out;
     std::set<CellKey> seen;
     for (const AxisSpec& a : axes) {
@@ -77,11 +77,20 @@ std::vector<CellKey> refine_all_axes(const std::map<CellKey, std::vector<std::st
             lines[rest].push_back({key_int(cell, a.name), rk.front()});
             sample.emplace(rest, cell);
         }
-        for (auto& [rest, pts] : lines)
+        for (auto& [rest, pts] : lines) {
+            std::sort(pts.begin(), pts.end(), [](const LinePoint& x, const LinePoint& y) { return x.n < y.n; });
             for (std::int64_t mid : refine_midpoints(pts, ratio)) {
                 CellKey k = key_with(sample[rest], a.name, std::to_string(mid));
-                if (!ranked.count(k) && seen.insert(k).second) out.push_back(std::move(k));
+                if (!ranked.count(k)) {
+                    if (seen.insert(k).second) out.next.push_back(std::move(k));
+                    continue;
+                }
+                const auto hi = std::find_if(pts.begin(), pts.end(), [&](const LinePoint& p) { return p.n > mid; });
+                out.stalled.push_back(key_text(rest) + ": edge between " + a.name + "=" + std::to_string((hi - 1)->n) +
+                                      " (" + (hi - 1)->winner + ") and " + std::to_string(hi->n) + " (" + hi->winner +
+                                      ") stays wide: " + a.name + "=" + std::to_string(mid) + " has no winner");
             }
+        }
     }
     return out;
 }

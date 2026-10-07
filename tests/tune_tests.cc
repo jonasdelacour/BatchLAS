@@ -690,15 +690,34 @@ TEST(TuneGrid, HashSubsampleNests) {
 TEST(TuneGrid, BisectsBatchToo) {
     const std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}},
                                                              {batch_cell(8192), {"b", "a"}}};
-    const auto next = refine_all_axes(ranked, kBatchAxes, 1.1);
+    const auto next = refine_all_axes(ranked, kBatchAxes, 1.1).next;
     ASSERT_EQ(next.size(), 1u);
     EXPECT_EQ(key_arg(next[0]), "uplo=L,n=64,batch=1024");
-    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 0).empty());
+    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 0).next.empty());
 }
 
 TEST(TuneGrid, AgreeingNeighboursAddNothing) {
-    std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}}, {batch_cell(8192), {"a", "b"}}};
-    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 1.1).empty());
-    ranked[batch_cell(128)] = {};  // no winner: never triggers bisection
-    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 1.1).empty());
+    const std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}}, {batch_cell(8192), {"a", "b"}}};
+    const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
+    EXPECT_TRUE(r.next.empty());
+    EXPECT_TRUE(r.stalled.empty());
+}
+
+TEST(TuneGrid, EmptyRankedCellIsSkippedInItsLine) {
+    const std::map<CellKey, std::vector<std::string>> ranked{
+        {batch_cell(128), {}}, {batch_cell(512), {"a"}}, {batch_cell(8192), {"b"}}};
+    const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
+    ASSERT_EQ(r.next.size(), 1u);
+    EXPECT_EQ(key_arg(r.next[0]), "uplo=L,n=64,batch=2048");
+    EXPECT_TRUE(r.stalled.empty());
+}
+
+TEST(TuneGrid, MidpointWithoutWinnerIsReportedStalled) {
+    const std::map<CellKey, std::vector<std::string>> ranked{
+        {batch_cell(128), {"a"}}, {batch_cell(1024), {}}, {batch_cell(8192), {"b"}}};
+    const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
+    EXPECT_TRUE(r.next.empty());
+    ASSERT_EQ(r.stalled.size(), 1u);
+    EXPECT_NE(r.stalled[0].find("batch=1024 has no winner"), std::string::npos);
+    EXPECT_NE(r.stalled[0].find("batch=128 (a)"), std::string::npos);
 }
