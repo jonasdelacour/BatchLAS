@@ -834,7 +834,7 @@ TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     EXPECT_GT(c.refine_unavailable, 0u);
 }
 
-TEST(TuneReplay, UnrunnableNearestWinnerIsAMisrank) {
+TEST(TuneReplay, UnrunnableNearestWinnerFallsBackToTheNextEntry) {
     auto make = [](bool c_at_2) {
         std::map<std::string, double> two{{"a", 2.0}, {"b", 3.0}};
         if (c_at_2) two["c"] = 1.0;
@@ -845,11 +845,29 @@ TEST(TuneReplay, UnrunnableNearestWinnerIsAMisrank) {
     ReplayMeta meta;
     auto rc = load_replay(write_raw("unrunnable.jsonl", make(false)), &meta);
     const ReplayReport r = replay(rc, meta.axes, Tier::ultra);
-    EXPECT_DOUBLE_EQ(r.table_misrank, 1.0 / 5);  // n=2 reads n=1's c
-    EXPECT_EQ(r.unrunnable, 1u);
-    EXPECT_EQ(r.max_loss, 0.0) << "an unrunnable winner is not a finite loss";
+    // n=2 reads n=1's row (c, a, b): c cannot run, so the selector falls back to a (2.0 against a best of 2.0)
+    EXPECT_EQ(r.table_misrank, 0.0);
+    EXPECT_EQ(r.unrunnable, 0u);
+    EXPECT_EQ(r.max_loss, 0.0);
     rc = load_replay(write_raw("runnable.jsonl", make(true)), &meta);
     EXPECT_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 0.0);
+}
+
+TEST(TuneReplay, FallbackCanLoseAndNoRunnableEntryIsUnrunnable) {
+    ReplayMeta meta;
+    // n=1 ranks c, a, b. At n=2 c cannot run and a is 3x slower than b: the fallback picks a, a misrank.
+    auto rc = load_replay(write_raw("fallback.jsonl", {{1, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {2, {{"a", 3.0}, {"b", 1.0}}},
+                                                       {4, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}, {8, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}},
+                                                       {16, {{"a", 2.0}, {"b", 3.0}, {"c", 1.0}}}}), &meta);
+    const ReplayReport r = replay(rc, meta.axes, Tier::ultra);  // measures n=1 and n=16; n=2 reads n=1
+    EXPECT_EQ(r.unrunnable, 0u);
+    EXPECT_DOUBLE_EQ(r.table_misrank, 1.0 / 5);
+    EXPECT_NEAR(r.max_loss, 2.0, 0.02);
+    // The measured rows list only a; the cells that run only b have no runnable entry.
+    rc = load_replay(write_raw("noentry.jsonl", {{1, {{"a", 1.0}}}, {2, {{"b", 1.0}}}, {4, {{"b", 1.0}}}, {8, {{"b", 1.0}}}, {16, {{"a", 1.0}}}}), &meta);
+    const ReplayReport u = replay(rc, meta.axes, Tier::ultra);
+    EXPECT_EQ(u.unrunnable, 3u);
+    EXPECT_DOUBLE_EQ(u.table_misrank, 3.0 / 5);
 }
 
 namespace {

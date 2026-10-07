@@ -258,11 +258,12 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     if (!rows.empty()) {
         const NearestIndex nearest(rows, axes);
         for (const ReplayCell& c : cells) {
-            const std::string& winner = ranked.at(rows[nearest.find(c.key)]).front();
-            const auto it = c.exhaustive.find(winner);
-            const bool runs = it != c.exhaustive.end();
-            const double ratio = runs ? it->second / best_time(c) : std::numeric_limits<double>::infinity();
-            if (runs) losses.push_back(ratio - 1), sum_chosen += it->second, sum_best += best_time(c);
+            const auto& row = ranked.at(rows[nearest.find(c.key)]);
+            const auto pick = std::find_if(row.begin(), row.end(), [&](const std::string& n) { return c.exhaustive.count(n) != 0; });
+            const bool runs = pick != row.end();
+            const std::string& winner = runs ? *pick : row.front();
+            const double ratio = runs ? c.exhaustive.at(winner) / best_time(c) : std::numeric_limits<double>::infinity();
+            if (runs) losses.push_back(ratio - 1), sum_chosen += c.exhaustive.at(winner), sum_best += best_time(c);
             else ++rep.unrunnable;
             if (ratio > kMisrank) ++table_bad, note("table", c, winner, ratio);
             if (c.round == 0) ++lattice_cells, lattice_bad += ratio > kMisrank;
