@@ -212,12 +212,15 @@ the 4090 box was not measured.
 | (c) `time`, 6 float arms, reps 3, warm 0.2 | 1.802 | 1.809 |
 
 (a) and (b) are equal to the millisecond, and the kernel time summed over (a)'s reps is 0.02 ms, so
-the 0.49 s is entirely process start, SYCL and CUDA init, library static init, JIT-cache load and
-the verification launches. Start-up is therefore about 0.49 s per child with a 1% spread.
+the 0.49 s is process start, SYCL and CUDA init, library static init, JIT-cache load and the
+verification launches. Time-to-first-kernel was not instrumented, so this start-up figure is derived
+(wall time minus in-child kernel time), not read from a timestamp. It is also a lower bound: the JIT
+cache was warm, so the old driver's cold `jit` child is not represented. The 20 children of (a) range
+0.477-0.503 s (about 5%).
 (c) adds 1.31 s of in-child work: 6 candidates x 0.2 s warm-up = 1.2 s, and the 18 timed reps sum to
 0.7 ms. At this cell size the rep time is negligible and a raced cell is its warm-up top-up.
 
-The brief's rule compares the overhead with the measuring time of a raced preview cell. With the
+All ratios below were measured at this one small cell (n=16) only. The brief's rule compares the overhead with the measuring time of a raced preview cell. With the
 preview race at 4 live candidates the work is about 4 x 0.2 s = 0.8 s plus verification, so the
 child overhead of 0.49 s is about 60% of it; against (c)'s measured 1.31 s it is 37%. Both exceed
 25%, and the cell is small only in rep time: a larger cell adds rep seconds, but the warm-up
@@ -225,11 +228,12 @@ dominates the old trsm data too (see "where the old tuner's time went"), so the 
 below the threshold at median cell size.
 
 Context from that section: the old driver ran three children per cell (one `jit` child, then two
-`time` passes). That is 3 x 0.49 s = 1.5 s of pure start-up per cell, 6.4 ks (1.8 GPU-h) for
-~4400 cells, against 16 GPU-h in total for the old trsm float run. A tiered run with one child per
-measured cell still pays 0.49 s x 4400 = 2.2 ks (0.60 GPU-h), as much as the whole preview estimate
-for trsm float (0.570 GPU-h, which assumes `--cell-overhead-s` = 0), so a per-cell process roughly
-doubles the preview cost. A persistent worker removes it.
+`time` passes). That is 3 x 0.49 s = 1.5 s of pure start-up per cell, 6.4 ks (1.8 GPU-h) for the
+~4400 cells of the full lattice (the coarse and deep measured-cell counts in the replay tables),
+against 16 GPU-h in total for the old trsm float run. A preview run measures 2934 cells on trsm float,
+so one child per cell pays 0.49 s x 2934 = 1.43 ks (0.40 GPU-h). The preview estimate of 0.570 GPU-h
+assumes `--cell-overhead-s` = 0, so a per-cell process adds about 70% to it. A persistent worker
+removes that.
 
 Decision: WORKER=yes. The per-child overhead (0.49 s median) is 37-60% of a raced preview cell's
 measuring time, above the 25% threshold. Task 8 runs.
