@@ -260,6 +260,17 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     for (const std::string& a : c.arms)
         if (std::none_of(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; }))
             b.arms.push_back({a, "error", "child: " + b.error, {}, {}, 0, 0});
+    // A child failure with no definitive arm is not a result: no record, so the next run measures the cell.
+    if (!b.error.empty() && std::none_of(b.arms.begin(), b.arms.end(), [](const ArmOutcome& a) {
+            return a.status == "ok" || a.status == "bad" || a.status == "skipped";
+        })) {
+        std::printf("[gpu%d] %s %s %s r%d ERROR %s (not recorded)\n", gpu, op.c_str(), j.dtype.c_str(),
+                    key_text(c.key).c_str(), round, b.error.c_str());
+        std::fflush(stdout);
+        emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key).str("ranked", "")
+                 .str("tier", to_string(c.tier)).str("error", b.error));
+        return;
+    }
     CellRecord r = record_from_arms(c.key, round, b.arms, j.cands, j.fh, c.stored);
     {
         std::lock_guard<std::mutex> lock(mu_);

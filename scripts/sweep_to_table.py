@@ -964,6 +964,9 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
             # An eliminated candidate with no median cannot print a time: left out of the row.
             if res and res["status"] in LEDGER_STATUS_TIMED and res["median"] and res["median"] > 0:
                 entries.append((name, float(res["median"])))
+        # A ranking with no time at all (a single runnable candidate, probed, never timed) is an untimed row.
+        if not entries and c["ranked"]:
+            entries = [(name, None) for name in c["ranked"]]
         if entries:
             cand_rows.append((key_tuple(keyspec, key), c["tier"], entries))
     cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
@@ -989,7 +992,10 @@ def read_old_transcribed(path):
     if not path or not os.path.exists(path):
         return []
     with open(path) as f:
-        _, _, parsed = parse_table(f.read())
+        # An untimed row tagged with a measured tier (a single-candidate cell) is the ledger's, not transcribed.
+        measured = set(LEDGER_TIERS) - {"transcribed"}
+        text = "".join(l for l in f if l.startswith("#") or "#" not in l or l.rsplit("#", 1)[1].strip() not in measured)
+    _, _, parsed = parse_table(text)
     return [(k, [(c, None) for c, _ in ranked]) for k, ranked in parsed if all(ms is None for _, ms in ranked)]
 
 
@@ -1720,6 +1726,27 @@ def self_test_ledger():
         got4 = row_tiers(text4)
         if got4 != {"n=64": "deep", "n=1024": "transcribed"}:
             bad.append(f"self-test: ledger_transcribed_dropped_near_dropped_preview -> {got4}")
+        # a single runnable candidate, ranked but untimed, is an untimed row that --check and the loader rules accept
+        single = cell(r4, "deep", 64, ranked=("cta",))
+        single["m1"] = None
+        single["key"] = "uplo=U,n=64,nrhs=1,batch=128"  # an exact key no measured row of led2 shares
+        led5 = build({r4: [run_line(r4, "2026-10-04", "deep"), single]}, os.path.join(d, "e"))
+        text5, _ = derive(led5, d)
+        rows5 = [r for r in text5.splitlines() if not r.startswith("#")]
+        if rows5 != ["uplo=U n=64 nrhs=1 batch=128 | cta - # deep"]:
+            bad.append(f"self-test: ledger_single_candidate_is_an_untimed_row -> {rows5}")
+        header5, _, parsed5 = parse_table(text5)
+        path5 = os.path.join(d, "e", "posv.float.sm_0.txt")
+        with open(path5, "w") as f:
+            f.write(text5)
+        failures5 = row_kind_problems(header5, parsed5)
+        check_ledger("posv.float.sm_0.txt", dict(header5, source=LEDGER + led5), text5, parsed5, path5, failures5)
+        if failures5:
+            bad.append(f"self-test: ledger_single_candidate_row_passes_check -> {failures5}")
+        # once that record is gone, its untimed row does not come back as a transcribed one
+        got6 = row_tiers(ledger_text(spec, "float", "sm_0", read_ledger(led2), led2, path5)[0])
+        if got6 != {"n=256": "preview"}:
+            bad.append(f"self-test: ledger_untimed_measured_row_is_not_transcribed -> {got6}")
         # --check re-derives byte for byte
         out = os.path.join(d, "out")
         os.makedirs(out)

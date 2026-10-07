@@ -139,9 +139,13 @@ potrf and trsm families they call.
 - It is *partly stale* when only some changed, or when the candidate list gained a family the
   record never raced. The next run of any tier re-races just those
   candidates against the stored winner and runner-up, at the stored record's tier, and appends a
-  merged record. Editing one kernel therefore keeps every deep cell deep, and costs a fraction of a
-  retune.
-- It is *stale* when the stored winner's hash changed or the winner's family was removed. The cell is re-raced at the record's tier.
+  merged record. The re-raced candidates are ranked by their new times; the unchanged ones keep their
+  stored times and order below them. Editing one kernel therefore keeps every deep cell deep, and
+  costs a fraction of a retune.
+- It is *stale* when the stored winner's hash changed or the winner's family was removed. The cell
+  is re-measured at the running tier, like a cell with no record.
+- A record in which every candidate is `error` (a failed child, not a result) counts as no record;
+  the driver does not write one when a child fails without any `ok`, `bad` or `skipped` candidate.
 
 **Table generation.** `scripts/sweep_to_table.py --ledger <file>` replaces `--tuner`. Its output
 stays byte-reproducible, and `--check` keeps re-deriving every table.

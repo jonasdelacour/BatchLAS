@@ -87,6 +87,22 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     return s;
 }
 
+bool all_error(const CellRecord& r) {
+    return !r.cands.empty() &&
+           std::all_of(r.cands.begin(), r.cands.end(), [](const CandResult& c) { return c.status == "error"; });
+}
+
+// best_records without all-`error` records (a failed child, not a result): such a cell counts as missing.
+std::map<CellKey, const CellRecord*> usable_best(const Ledger& l, const std::map<std::string, std::string>& family_hash) {
+    Ledger kept;
+    std::vector<const CellRecord*> orig;
+    for (const CellRecord& r : l.cells)
+        if (!all_error(r)) kept.cells.push_back(r), orig.push_back(&r);
+    std::map<CellKey, const CellRecord*> out;
+    for (const auto& [k, p] : best_records(kept, family_hash)) out[k] = orig[std::size_t(p - kept.cells.data())];
+    return out;
+}
+
 }  // namespace
 
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand, double bytes) {
@@ -104,13 +120,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     double per_cell_overhead_s,
                                     const std::map<CellKey, std::vector<std::string>>* runnable) {
     const TimeIndex idx(l);
-    const auto best = best_records(l, family_hash);
-    std::map<CellKey, Tier> top_stale;  // a stale record is re-raced at its own tier when nothing replaced it
-    for (const CellRecord& r : l.cells) {
-        if (freshness(r, family_hash) != Freshness::stale) continue;
-        const auto [it, fresh] = top_stale.try_emplace(r.key, r.tier);
-        if (!fresh && tier_rank(r.tier) > tier_rank(it->second)) it->second = r.tier;
-    }
+    const auto best = usable_best(l, family_hash);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::pair<double, PlannedCell>> out;
     for (const CellKey& key : cells) {
@@ -166,9 +176,6 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
             c.tier = rec.tier;
             c.stored = &rec;
         } else {
-            if (b == best.end())
-                if (const auto st = top_stale.find(key); st != top_stale.end() && tier_rank(st->second) > tier_rank(tier))
-                    c.tier = st->second;
             c.arms = live;
         }
         c.est_s = estimate_with(idx, key, c.arms, bytes, params(c.tier), per_cell_overhead_s);
@@ -209,6 +216,8 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
         return it == family_hash.end() ? std::string() : it->second;
     };
     std::map<std::string, CandResult> by;
+    std::set<std::string> raced;
+    for (const ArmOutcome& a : arms) raced.insert(a.arm);
     if (stored)
         for (const CandResult& c : stored->cands)
             if (std::find(order.begin(), order.end(), c.cand) != order.end() && hash_of(c.cand) == c.hash) by[c.cand] = c;
@@ -233,12 +242,18 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
     for (const std::string& s : order) {
         const auto it = by.find(s);
         if (it == by.end()) continue;
-        if (it->second.status == "ok" && std::isfinite(it->second.median_ms)) times[s] = it->second.median_ms;
+        if (raced.count(s) && it->second.status == "ok" && std::isfinite(it->second.median_ms)) times[s] = it->second.median_ms;
         r.cands.push_back(it->second);
         by.erase(it);
     }
     for (auto& [s, c] : by) r.cands.push_back(c);  // arms outside the current list (none from the driver)
     if (!times.empty()) r.ranked = rank(times, order, kTie);
+    // Carried-over candidates keep their stored order below every re-raced one: their stored times
+    // come from another session, so they never outrank a fresh measurement.
+    if (stored)
+        for (const std::string& s : stored->ranked)
+            if (!raced.count(s) && std::any_of(r.cands.begin(), r.cands.end(), [&](const CandResult& c) { return c.cand == s; }))
+                r.ranked.push_back(s);
     return r;
 }
 

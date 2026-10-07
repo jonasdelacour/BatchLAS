@@ -93,15 +93,18 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
   the changed or added families plus its stored winner and runner-up, at the stored record's
-  tier, and appends the merged record (`partial:<families>`); a stale record with nothing to
-  replace it is re-raced in full at the higher of its tier and the run's. A cell whose probe found
-  at most one runnable candidate is `skip:single`: recorded with that candidate ranked, untimed.
+  tier, and appends the merged record (`partial:<families>`; re-raced candidates ranked by their
+  new times, the unchanged ones below them in stored order). A stale record, or one where every
+  candidate is `error`, counts as missing: measured in full at the run's tier. A cell whose probe
+  found at most one runnable candidate is `skip:single`: recorded with that candidate ranked,
+  untimed, which the converter writes as an untimed row (`<spelling> - # <tier>`).
   A probe result comes from an earlier child of the same cell (its `skipped` arms).
 - **Measuring.** Until the persistent worker exists, a cell is one fresh `--cell --mode time`
   child: one pass of the tier's `max_reps` reps after a `warm_topup_s` warm-up per candidate,
   verified as in the custom protocol. Each candidate's median, min and max of its reps go into a
   ledger `cell` record, ranked with the 3% tie rule. A failed child is retried once, then every arm
-  is run alone, as below.
+  is run alone, as below; a child failure that leaves no `ok`, `bad` or `skipped` candidate writes no
+  record, so the next run measures the cell again.
 - **Ledger.** One run file per (op, dtype) under `--ledger`, opened at the first record. Its `run`
   record always carries the op's full key spec and candidate list, whatever `--grid` narrowed.
 - **Estimate.** Per cell: 0.49 s child start-up (`--cell-overhead-s`) plus, per candidate,

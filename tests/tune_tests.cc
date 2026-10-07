@@ -1727,11 +1727,11 @@ TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
 
     l.cells[0].tier = Tier::deep;
     auto changed = kHashes;
-    changed["lpanel"] = "h2";  // the winner's family changed: stale, re-raced in full at the record's tier
+    changed["lpanel"] = "h2";  // the winner's family changed: stale, re-measured in full at the running tier like a missing cell
     plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, changed, 4, 0);
     EXPECT_EQ(plan[0].reason, "");
     EXPECT_EQ(plan[0].arms, kTwo);
-    EXPECT_EQ(plan[0].tier, Tier::deep);
+    EXPECT_EQ(plan[0].tier, Tier::coarse);
 }
 
 TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
@@ -1753,7 +1753,7 @@ TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
     ASSERT_EQ(plan[0].stored, &l.cells[0]);
 
     const CellRecord merged = record_from_arms(nkey(64), 3,
-                                               {arm("lpanel:panel=8", "ok", {1.1, 1.0, 1.2}), arm("lpanel:panel=16", "ok", {1.6}),
+                                               {arm("lpanel:panel=8", "ok", {1.1, 1.0, 1.2}), arm("lpanel:panel=16", "ok", {2.5}),
                                                 arm("wide:m=1", "ok", {0.5, 0.6}), arm("cta", "bad")},
                                                cands, now, plan[0].stored);
     EXPECT_EQ(merged.round, 3);
@@ -1770,7 +1770,8 @@ TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
     EXPECT_EQ(merged.cands[4].status, "bad");
     EXPECT_EQ(merged.cands[4].hash, "c2");
     EXPECT_TRUE(std::isnan(merged.cands[4].median_ms));
-    EXPECT_EQ(merged.ranked, (std::vector<std::string>{"wide:m=1", "lpanel:panel=8", "lpanel:panel=16", "vendor"}));
+    EXPECT_EQ(merged.ranked, (std::vector<std::string>{"wide:m=1", "lpanel:panel=8", "lpanel:panel=16", "vendor"}))
+        << "the stored vendor (2.0) stays below the re-raced runner-up (2.5)";
     EXPECT_EQ(freshness(merged, now), Freshness::current);
 }
 
@@ -1895,11 +1896,13 @@ class FakeMeasurer : public CellMeasurer {
 public:
     std::vector<std::string> keys;
     int max_reps = 0;
+    bool fail = false;  // every child times out
     ArmBatch measure(int, const OpSpec&, const std::string&, const CellKey& key, const std::vector<std::string>& arms,
                      const TierParams& p) override {
         keys.push_back(key_arg(key));
         max_reps = p.max_reps;
         ArmBatch b;
+        if (fail) return {{}, "timeout"};
         const bool small = key_int(key, "n") <= 10;
         for (const std::string& a : arms) {
             const double t = a == "a" ? 1.0 : small ? 0.5 : 2.0;
@@ -1985,4 +1988,29 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
     EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
     o.plan = true;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0) << "--plan needs no measurer";
+}
+
+TEST(TuneSchedule, AllErrorRecordCountsAsMissing) {
+    Ledger l;
+    CellRecord failed = cell_rec({cres("lpanel:panel=8", "h1", "error"), cres("vendor", "v1", "error")}, {});
+    failed.tier = Tier::deep;
+    l.cells.push_back(failed);
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "")
+        << "a failed child is no result";
+    l.cells[0].cands[1].status = "bad";
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current")
+        << "a verification failure is a result";
+}
+
+TEST(TuneTieredDriver, TransientChildFailureWritesNoRecord) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    FakeMeasurer broken;
+    broken.fail = true;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &broken), 0);
+    EXPECT_EQ(broken.keys.size(), 4u);
+    EXPECT_TRUE(read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake")).cells.empty());
+    FakeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    EXPECT_EQ(m.keys.size(), 8u) << "the next run measures every cell";
 }
