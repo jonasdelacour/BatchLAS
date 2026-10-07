@@ -26,7 +26,10 @@ add_executable(batchlas_tune_impl
     syr2k_spec.cc
     syev_spec.cc
     gesvd_spec.cc
-    spmm_spec.cc)
+    spmm_spec.cc
+    geqrf_spec.cc
+    orgqr_spec.cc
+    ormqr_spec.cc)
 batchlas_configure_binary_target(batchlas_tune_impl)
 # syev and gesvd check eigen- and singular values against host LAPACKE (host_reference.hh);
 # libbatchlas_backends links it PRIVATE, so a direct caller asks for it itself (as the benchmarks do).
