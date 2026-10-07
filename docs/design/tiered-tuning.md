@@ -128,18 +128,22 @@ one file per run cannot.
 
 | Record | Fields |
 | --- | --- |
-| `run` | run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, guard settings, tolerated foreign pids, worker mode per op/dtype (persistent or fresh-process), date |
-| `cell` | run id, tier, the key fields, `round` (0 = starting lattice), for each candidate: family hash, status (`ok`/`skipped`/`bad`/`error`), reason, median ms, interval, reps; the ranked tie set |
+| `run` | run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op/dtype (persistent or fresh-process), date. Guard settings and tolerated foreign pids: a deferred follow-up, not written yet |
+| `cell` | run id, tier, the key fields, `round` (0 = starting lattice), for each candidate: family hash, status (`ok`/`skipped`/`bad`/`error`/`eliminated`), reason, median ms, interval, reps; the ranked tie set |
 | `audit` | run id, the cell key, persistent versus fresh-process medians and winners, verdict |
 
-Per-rep timings go to `<run id>.reps.jsonl` in the same directory, written by deep runs only. A
+Per-rep timings in `<run id>.reps.jsonl` (same directory, deep runs only) are a deferred
+follow-up: no run writes the file yet, and readers already skip the name. A
 truncated last line (a killed run) is ignored with a warning, so a cell is either fully recorded or
 absent.
 
 **Per-candidate hashes.** A spec's `kernel-sources` block becomes `family -> files`, plus a common
 set (dispatch, `src/select/`) that every family depends on. A family's hash covers the common set
 plus its own files. The spec's `kernel-deps` comment block adds files outside the source list:
-`// family: <name> "path" ...` for one family, and `// common "path" ...` for every family. Each
+`// family: <name> "path" ...` for one family, and `// common "path" ...` for every family. Inside
+the source block itself, a comment line `// family: <name>` opens that family's section (reopening
+appends) and `// common` returns to the common set; paths before any marker are common, and the
+op-level hash takes every path in block order. CMake and CI read only the source block. Each
 spec lists its `src/ops/<op>/<op>.cc` there, where `can_run` lives, so an edit to what can run
 stales every cell. Neither kind of line moves the op-level `kernels=` hash. `cmake/BatchLASTunedStaleness.cmake`, `.github/ci/check_tuned_tables.py` and
 the driver compute it the same way. The posv coupling becomes explicit: posv's families list the
@@ -161,9 +165,14 @@ potrf and trsm families they call.
   is re-measured at the running tier, like a cell with no record.
 - A record in which every candidate is `error` (a failed child, not a result) counts as no record;
   the driver does not write one when a child fails without any `ok`, `bad` or `skipped` candidate.
+  Both `best_records` (C++ `ledger.cc` and `sweep_to_table.py`) apply this one rule, so planning,
+  refinement, `--status` and table generation agree.
 
 **Table generation.** `scripts/sweep_to_table.py --ledger <file>` replaces `--tuner`. Its output
-stays byte-reproducible, and `--check` keeps re-deriving every table.
+stays byte-reproducible, and `--check` keeps re-deriving every table. It refuses to overwrite an
+existing timed table that is not a ledger's (a `converted` or `tuner:` source) unless
+`--replace-timed` is given, so a preview run cannot silently replace measured tables; the
+diagnostic `--assume-current` needs an explicit `--out` outside `tuned/`.
 
 - For each cell it takes the best current record.
 - A lower-tier row is emitted only to fill a gap: when no higher-tier row lies within the lower
@@ -179,8 +188,10 @@ stays byte-reproducible, and `--check` keeps re-deriving every table.
   per-family hashes go in a new `family_kernels=` header word.
 
 **Record vocabulary.** A candidate's `status` is `ok`, `skipped`, `bad`, `error` or `eliminated`
-(raced and dropped by the race). An eliminated candidate carries the median of the reps it did
-time, which the table prints; one with no median is left out of its row. A record is *stale* when
+(raced and dropped by the race). The race verifies every candidate it raced, eliminated ones
+included: an eliminated candidate that fails verification is `bad` and is left out of its row; one
+that passes carries the median of the reps it did time, which the table prints; one with no median
+is left out of its row. A record is *stale* when
 the winner's hash differs or its family is gone, *partly stale* when another candidate's hash
 differs (a `skipped` one's is not compared) or a current family was never timed; an empty ranking
 has no winner to go stale.
@@ -230,7 +241,7 @@ in a fresh child per cell (errors can depend on the shape). The audit picks a ce
 `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, and until an op and dtype has been audited
 once, its next worker cell that did not fall back to a fresh child, whatever the hash picked. A
 mismatch is a candidate usable in one process and refused or failing in the other (`eliminated`
-against `bad` is inconclusive: the eliminated one was never verified), or a different winner whose
+against `bad` too: the race verifies eliminated candidates as well), or a different winner whose
 worker winner is more than 10% slower in the fresh run (3 to 10% swaps are noise at preview's rep
 counts). Every audited cell gets an `audit` ledger record; a mismatch appends a second `run` line
 with `wm.<op>.<dtype>: fresh` (readers keep the last `run` line of a run id).
@@ -295,7 +306,8 @@ measuring time, above the 25% threshold. Task 8 runs.
 
 - `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep --dtype ... --devices ...` replaces the
   protocol flags (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`). Those stay as
-  expert overrides, and a run that uses them is recorded with tier `custom`, ranked below preview.
+  expert overrides. A run that uses them is recorded with tier `custom`, ranked below preview,
+  only when `--ledger DIR` is given explicitly, so a spot check never lands in the shared ledger.
 - `--plan` prints the cells, the skipped cells with their reasons, and the time estimate, then exits
   without measuring. benchviz calls it for the estimate before launching.
 - `--budget <h>` caps refinement time.
@@ -595,12 +607,16 @@ plan and the estimate counted the starting lattice only.
    winner with no median at an end counts as decisively slower there only when it is not runnable
    there or was eliminated. Within the tie at both ends (near-tie alternation) is no flip.
 2. The margin trigger (preview, 10%) applies only to brackets whose two ends are both starting
-   lattice (round 0) cells of this run, so a refinement midpoint never re-triggers it.
+   lattice (round 0) cells at the running tier, measured now or stored by an earlier run, so a
+   refinement midpoint never re-triggers it and a resumed run still hedges.
 3. `batch` is never bisected below its lattice spacing: it refills its own axis values (index
    mode in every tier) and never takes a geometric midpoint.
 4. Refinement cells per op and dtype are at most `refine_cap_factor` x round-0 cells (preview 3.0,
-   coarse 1.0, deep 2.0; `TierParams`). Round-0 cells are the starting lattice cells measured in
-   this run, so a resumed run whose lattice is already current refines nothing. Midpoints come out flips first, then margin hedges; past
+   coarse 1.0, deep 2.0; `TierParams`). Both counts are the ledger's current records at the
+   running tier, overlaid by this run's: round-0 records are the base, and refined (round > 0)
+   records count against the cap. A run stopped by Ctrl-C or `--budget` after its lattice
+   therefore resumes refinement on the next run, and the total over runs stays within the cap.
+   Midpoints come out flips first, then margin hedges; past
    the cap the first ones run, refinement stops and the run reports it (`refine_cap` progress event,
    `refinement cap hit` line). `tune_replay` applies the same cap.
 5. The estimate counts refinement: ratio x the lattice cells measured now, at their mean estimate,
@@ -744,5 +760,7 @@ which is about 33 single-GPU minutes of useless re-races. Control edits:
   cannot test it, because the raw files come from warm, back-to-back runs.
 - If the per-child overhead turns out large and the audit fails often, the speedup has to come
   mostly from racing and the adaptive grid. The replay quantifies how much they provide.
+- Deferred follow-ups, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and
+  guard settings and tolerated foreign pids in `run` records.
 - Budgets are for one GPU and assume a quiet box. On the shared 4090 box, the guard's waits come on
   top.

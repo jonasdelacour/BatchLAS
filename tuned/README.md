@@ -163,13 +163,16 @@ and warn, never fail, on a table whose `kernels=` differs or says `unknown`.
 Ledger tables (header `source=ledger:<dir>`) come from tiered runs (`batchlas_tune --tier
 preview|coarse|deep`, design: [tiered tuning](../docs/design/tiered-tuning.md)). Each run appends
 per-cell records to a ledger directory `<op>.<dtype>.<device>/`, and
-`python3 scripts/sweep_to_table.py --ledger <dir or root> --out <dir>` writes the table: per cell
+`python3 scripts/sweep_to_table.py --ledger <dir or root> --out <scratch dir>` writes the table: per cell
 the best current record (deep > coarse > preview > custom), each row ending in `# <tier>`, the
 header carrying `tiers=` row counts and `family_kernels=<family>:<hash>,...` (the per-family
 kernel hashes that decide which records are stale). A changed hash on the winner's family drops
 the record. A changed hash on a candidate that ran but lost makes the cell partly stale: the row
 stays, and the next run re-races that candidate. A candidate that could not run there is not
-compared. `--check` re-derives the table from the ledger its `source=` names. No shipped
+compared. `--check` re-derives the table from the ledger its `source=` names. The converter
+refuses to overwrite a converted or `tuner:` table with a ledger table unless `--replace-timed` is
+given (transcribed and ledger tables are replaced without it), so compare a scratch `--out` with
+`tuned/` before switching a table. No shipped
 table is ledger-sourced yet: the engine was validated on 2026-10-07 (design page, "Engine:
 end-to-end validation on sm_120") and the switch needs coarse or deep runs and a maintainer
 decision.
