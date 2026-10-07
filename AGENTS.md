@@ -103,6 +103,8 @@ export CMAKE_PREFIX_PATH="/opt/netlib:$CMAKE_PREFIX_PATH"
 6. Quick Smoke Test
 
 cmake -B build .
+# GPU-only iteration tree (nvptx64 only, ~25% faster; never the gate, §7):
+#   cmake -B build-gpu . -DBATCHLAS_CPU_TARGET=none
 
 # Iterating on one algorithm: this builds the library and only this one test
 # binary. Do not build the default target while iterating — it also builds the
@@ -110,9 +112,11 @@ cmake -B build .
 cmake --build build --target stedc_tests -j"$(nproc)"
 ctest --test-dir build -R '^stedc_tests$' --output-on-failure
 
-# Before pushing, build and run everything.
+# Before pushing, build and run everything, one test per GPU slot (§8). The
+# final gate is a full-target tree (not BATCHLAS_CPU_TARGET=none), plus the
+# vendor-free tree (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF) built only now.
 cmake --build build -j"$(nproc)"
-ctest --test-dir build
+scripts/ctest_gpus.sh --test-dir build
 
 # Also before pushing, if you touched cmake/, include/ or the install rules:
 # the packaging gate. These are the same checks CI runs (.github/workflows/ci.yml).
@@ -147,13 +151,16 @@ Known Pitfalls
 
 7. Build Performance
 
-The build is **SYCL device-link-bound**, not compile-bound. The unit of device linking is the shared library: changing one object re-runs `sycl-post-link` + ptxas + native_cpu AOT for every object in that `.so`, single-threaded, so `-j` cannot shorten it.
-	•	Fast iteration: the `dev-gpu` / `dev-gpu-tests` presets drop the native_cpu target (~30% off every link), but instantiate only the GPU half of each typed suite. Use `dev-tests` or `cuda` for the pre-push gate.
+The build is **SYCL device-link-bound**, not compile-bound. The unit of device linking is the shared library: changing one object re-runs `sycl-post-link` + ptxas + CPU-target AOT for every object in that `.so`, single-threaded, so `-j` cannot shorten it. Measured on threadripper02 (64 cores, 4x RTX PRO 6000, default target = library + 82 test binaries, -j32): fresh tree, no cache ~285–335 s.
+	•	**ccache is on by default** (`BATCHLAS_USE_CCACHE`, cmake/BatchLASCcache.cmake) when `ccache` is on `PATH` or in `~/.local/bin`; configure prints `ccache enabled (...)`. No ccache? Drop the static binary from https://github.com/ccache/ccache/releases into `~/.local/bin`, no root needed. The generated `<build>/batchlas-ccache` wrapper sets depend mode, `CCACHE_BASEDIR` (= deepest common parent of source and build dir, `BATCHLAS_CCACHE_BASEDIR`), `CCACHE_NOHASHDIR` and sloppiness, so a **second tree hits the first tree's cache**: 187/196 hits, 203 s vs 284 s cold. The misses are TUs with an absolute path in a `-D`. Plain `CMAKE_CXX_COMPILER_LAUNCHER=ccache` without those settings got 3/196. Links are never cached, so ~170–200 s is the floor for a fresh tree.
+	•	**Never configure a fresh tree per stage** when an existing tree can be reused: reconfigure and rebuild it. Even all-cache-hits, a fresh tree pays every device link and test link again.
+	•	**Iterate GPU-only**: `-DBATCHLAS_CPU_TARGET=none` (or the `dev-gpu` / `dev-gpu-tests` presets) builds nvptx64 only: 248 s vs ~330 s fresh (-25%), and every relink is cheaper. The NETLIB/CPU instantiations need the CPU target, so a GPU-only tree is **not a gate**: the final pre-push run uses the full targets (`dev-tests`/`cuda` or a default configure), and a vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) is built **only at that final gate**, never per edit.
 	•	Build only the target you are working on (`--target stedc_tests`). Most test targets are EXCLUDE_FROM_ALL.
+	•	An incremental relink of `libbatchlas_backends` after a one-line `select.cc` edit is ~17 s, whatever `BATCHLAS_SYCL_LINK_JOBS` is (4: 17 s, 16: 18 s). Do not tune it.
 	•	`cmake --build --target A B C` with many targets can exit 0 and still skip some links. Check `test -x build/tests/<name>`, not the exit code.
 	•	Measured and ruled out (do not retry): Ninja (the Makefile null build is already 0.07 s), lld, PCH (the driver cannot emit one), unity builds (kernel-name collisions), `-fno-sycl-rdc`, explicit `-fsycl-device-code-split`, cutting one edge of a header cycle.
 	•	`-fsyntax-only` together with `-fsycl-targets` is rejected by this driver. Use real `-c` compiles as the oracle.
-	•	`touch` then rebuild measures a ccache hit. To time a real rebuild, append a line.
+	•	To time a real rebuild, append a line rather than `touch`: with ccache on, a touched file is a cache hit and the timing measures only the link.
 	•	The ROCm TUs can be syntax-checked without an AMD GPU: `scripts/rocm_syntax_check.sh` (headers live in `/opt/rocm/include/roc*/`, not directly under `include/`). Run it after touching `src/backends/roc*.cc` or any signature or instantiation that the ROCm TUs also spell out.
 	•	Tiny-kernel TUs build with `-mllvm -pragma-unroll-threshold=262144`. Without it, LLVM silently declines `#pragma unroll`, register arrays go to the stack, and tests stay green.
 
@@ -161,11 +168,13 @@ The build is **SYCL device-link-bound**, not compile-bound. The unit of device l
 
 8. Testing Policy
 
-	•	**Do not run the full ctest by default.** The full suite takes 15–20 min. Scope the run to what you changed:
-	  one case `./build/tests/X --gtest_filter=...` → one binary `ctest -R '^X$'` (`-R` is a substring regex, so anchor it) → one component `ctest -L util|blas|ortho|tridiag|eig|sparse` → `ctest -LE slow` → full `ctest` only before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool, `sg_compat`/`sg_partition`, `include/util`).
+	•	**Do not run the full ctest by default.** Scope the run to what you changed:
+	  one case `./build/tests/X --gtest_filter=...` → one binary `ctest -R '^X$'` (`-R` is a substring regex, so anchor it) → one component `-L util|blas|ortho|tridiag|eig|sparse` → `-LE slow` → full only before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool, `sg_compat`/`sg_partition`, `include/util`).
+	•	**Any multi-test run goes through `scripts/ctest_gpus.sh`** (same arguments as ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`). Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus` (`BATCHLAS_TEST_GPUS=<n>`, `=0` disables; `BATCHLAS_TEST_GPU_SLOTS`, default 2); every GPU test has `RESOURCE_GROUPS gpus:1`, and `tests/ctest_gpu_env.sh` sets `CUDA_VISIBLE_DEVICES` to its slot's GPU. Plain `ctest` ignores all of this. Measured `-LE slow` (88 tests, threadripper02, 4x RTX PRO 6000): plain serial 1737 s (another job shared the GPUs for part of it), serial with `CUDA_VISIBLE_DEVICES=1` 469 s, `ctest_gpus.sh` 1 slot/GPU 126 s, **2 slots/GPU 78 s** (the critical path is `gemm_candidates_tests` alone; 115 s for the 96 tests after #147); failing names identical in all modes.
+	•	A process that sees every GPU is slow: `trsm_candidates_tests` takes 132 s with 4 GPUs visible and 18 s with one (one case: 0.37 s with 1 visible, 1.2 s with 2, 5.1 s with 4). It is CUDA-level: `ONEAPI_DEVICE_SELECTOR=cuda:N` does not help. Running a binary by hand on a multi-GPU box? Set `CUDA_VISIBLE_DEVICES=<n>`.
 	•	`BATCHLAS_TEST_BACKEND=CUDA` skips the NETLIB/CPU instantiations, and `BATCHLAS_TEST_FLOAT_TYPE=float` skips the other types. Both are GTEST_SKIPs, so the case list is unchanged, but that coverage is silently gone.
 	•	**main is not green.** The accepted failures are listed in `tests/known-failures.txt`, and CI diffs against that ledger (docs/ci.md). Compare failing test **names** against a baseline, never pass/fail counts. To attribute a failure: save your diff, `git checkout <base> -- <files>`, rebuild only that test target, re-run, and compare names.
-	•	`syev_cta_tests` has a concurrency-dependent wrong-answer flake (fails a few percent of runs under `ctest -j2`). `sytrd_blocked_tests` also flakes on untouched main. Check the baseline before blaming your change.
+	•	`syev_cta_tests` has a concurrency-dependent wrong-answer flake (fails a few percent of runs under `ctest -j2` on the 4090 box; 0 of 15 concurrent `ctest_gpus.sh` runs on threadripper02, so it is not `RUN_SERIAL`; if it flakes there, give it `RUN_SERIAL`). `sytrd_blocked_tests` also flakes on untouched main. Check the baseline before blaming your change.
 	•	A CUDA-off (CPU-only) tree shows many fake failures: tests that were never built appear as "Not Run", and there is no sub-group size 32, so CTA kernels throw.
 	•	Before pushing, if you touched cmake/, include/ or the install rules, run `sh .github/ci/run_local_checks.sh`. It includes the per-file comment-density gate (§12).
 

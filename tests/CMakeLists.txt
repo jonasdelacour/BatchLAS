@@ -14,6 +14,11 @@ if(NOT GTest_FOUND)
     FetchContent_MakeAvailable(googletest)
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BatchLASTestGpus.cmake")
+
+# Host-only binaries: no SYCL device, so no GPU slot under scripts/ctest_gpus.sh.
+set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
+
 # Define test executables
 set(TEST_TARGETS
     sg_partition_tests
@@ -358,7 +363,14 @@ function(batchlas_add_test_target test_name)
             BATCHLAS_TUNED_SOURCE_DIR="${PROJECT_SOURCE_DIR}/tuned")
     endif()
 
-    add_test(NAME ${test_name} COMMAND ${test_name})
+    list(FIND BATCHLAS_HOST_ONLY_TESTS ${test_name} _host_only_idx)
+    if(_host_only_idx EQUAL -1)
+        batchlas_gpu_test_command(_cmd ${test_name})
+        add_test(NAME ${test_name} COMMAND ${_cmd})
+        batchlas_test_needs_gpu(${test_name})
+    else()
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endif()
 
     batchlas_test_component(_component ${test_name})
     set(_labels ${_component})
@@ -420,7 +432,9 @@ function(batchlas_add_route_pinned_test test_name env)
         return()
     endif()
     set(_pinned "${test_name}_native")
-    add_test(NAME ${_pinned} COMMAND ${test_name})
+    batchlas_gpu_test_command(_cmd ${test_name})
+    add_test(NAME ${_pinned} COMMAND ${_cmd})
+    batchlas_test_needs_gpu(${_pinned})
     batchlas_test_component(_component ${test_name})
     string(REPLACE "|" ";" _env "${env}")
     if(BATCHLAS_OPENBLAS_CORETYPE)
@@ -540,7 +554,8 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     find_program(BATCHLAS_BASH_PROGRAM bash)
     if(BATCHLAS_BASH_PROGRAM AND EXISTS "${PROJECT_SOURCE_DIR}/examples/consumer_test.sh")
         add_test(NAME consumer_package_tests
-            COMMAND "${BATCHLAS_BASH_PROGRAM}" "${PROJECT_SOURCE_DIR}/examples/consumer_test.sh"
+            COMMAND ${BATCHLAS_TEST_GPU_LAUNCHER}
+                    "${BATCHLAS_BASH_PROGRAM}" "${PROJECT_SOURCE_DIR}/examples/consumer_test.sh"
                     --build-dir "${PROJECT_BINARY_DIR}"
                     --example-dir "${PROJECT_SOURCE_DIR}/examples/consumer"
                     --compiler "${CMAKE_CXX_COMPILER}"
@@ -549,6 +564,7 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
             LABELS "packaging;slow"
             SKIP_RETURN_CODE 77
             TIMEOUT 1200)
+        batchlas_test_needs_gpu(consumer_package_tests)
         if(BATCHLAS_OPENBLAS_CORETYPE)
             set_tests_properties(consumer_package_tests PROPERTIES
                 ENVIRONMENT "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")

@@ -186,7 +186,7 @@ most likely place in this project to hit it.
 | `PATH` | prepend `/opt/dpcpp-cuda/bin` and `/usr/local/cuda-13.2/bin` | `cmake/BatchLASCompilerBootstrap.cmake` finds the compiler by first finding `sycl-ls` and then looking beside it. The compiler being installed is not enough — `sycl-ls` must resolve. |
 | `LD_LIBRARY_PATH` | `/opt/dpcpp-cuda/lib` (**mandatory**), `/usr/local/cuda-13.2/lib64`, `/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8`, `/usr/lib/x86_64-linux-gnu` | Nothing SYCL runs without the first entry. |
 | `CUDA_PATH` | `/usr/local/cuda-13.2` | `BatchLASDetectSYCL.cmake` reads it as the fallback for `--cuda-path` when `find_package(CUDAToolkit)` misses. |
-| `HOME` | `/home/jonaslacour` | ccache's `BATCHLAS_CCACHE_BASEDIR` defaults to it; a different `HOME` costs the whole cache with no error. Set by the service user, not by the workflow. |
+| `HOME` | `/home/jonaslacour` | ccache is looked for in `$HOME/.local/bin` as well as on `PATH`, and `BATCHLAS_CCACHE_BASEDIR` falls back to `$HOME` when the source and build trees share no parent below `/`. Set by the service user, not by the workflow. |
 
 And two things that must **not** be set:
 
@@ -389,6 +389,10 @@ is serial by construction and needs no `-j`.
 pass). Current measured counts on this tree: full `ctest` is **70 tests**;
 `ctest -LE slow` is **65 tests in about 95 s**. (`tests/README.md`'s table
 quotes an older 38-of-45; the counts here are the measured current ones.)
+Locally, run any multi-test scope through `scripts/ctest_gpus.sh` (one test
+per GPU slot, see `tests/README.md`). CI keeps its serial preset on purpose: the
+route-pinned reruns' gtest XML names and the OOM caveat below assume one test
+at a time.
 
 Two scoping choices are wrong for a pre-push gate, however convenient:
 
@@ -456,17 +460,20 @@ why the job's timeout is 180 minutes. Do not kill it.
 
 What is *not* expected is a cache that never warms up:
 
-* **`HOME` must be `/home/jonaslacour`.** `BATCHLAS_CCACHE_SHARE_ACROSS_TREES`
-  is ON and sets `CCACHE_BASEDIR=$HOME` plus `CCACHE_NOHASHDIR=1`, which is
-  precisely what lets a build in one checkout hit a cache another populated —
-  and a GitHub Actions runner checks every ref out into a *different* absolute
-  path. With the wrong `HOME`, ccache hashes absolute paths, the hit rate goes
-  to roughly zero, and there is no error and no log line. The cache just looks
-  useless.
+* **The base directory must cover both trees.** `BATCHLAS_CCACHE_SHARE_ACROSS_TREES`
+  is ON and sets `CCACHE_BASEDIR` (default: the deepest common parent of the
+  source and build directories, `$HOME` if that is `/`) plus `CCACHE_NOHASHDIR=1`,
+  which is precisely what lets a build in one checkout hit a cache another
+  populated — and a GitHub Actions runner checks every ref out into a
+  *different* absolute path. Without them ccache hashes absolute paths, the hit
+  rate goes to roughly zero (3/196 measured with a bare
+  `CMAKE_CXX_COMPILER_LAUNCHER=ccache`), and there is no error and no log line.
+  With them a second tree got 187/196; the misses are TUs that carry an
+  absolute path in a `-D`.
 * **The settings live in a generated wrapper, not in `~/.config/ccache`.**
   `cmake/BatchLASCcache.cmake` generates `<builddir>/batchlas-ccache`, a shell
   wrapper that exports `CCACHE_DEPEND=1`, `CCACHE_MAXSIZE=20G`,
-  `CCACHE_BASEDIR` and `CCACHE_NOHASHDIR=1` before exec'ing ccache. Any ccache
+  `CCACHE_SLOPPINESS`, `CCACHE_BASEDIR` and `CCACHE_NOHASHDIR=1` before exec'ing ccache. Any ccache
   invocation *not* through that wrapper sees the on-disk 5.0 G default and can
   evict. `ccache -s` currently reports 5.71 GB against that 20 G ceiling.
 * The nightly's vendor-free build shares no entries with the default one — the

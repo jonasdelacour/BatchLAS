@@ -17,6 +17,32 @@ Pick the narrowest scope that covers what you changed:
 `ctest -R` takes a *substring* regex — `-R syev` matches seven binaries. Anchor
 it with `^...$` when you mean one.
 
+## Running on every GPU at once
+
+For anything wider than one binary, use `scripts/ctest_gpus.sh` with the same
+arguments you would give ctest:
+
+```bash
+scripts/ctest_gpus.sh -LE slow                    # build/ by default
+scripts/ctest_gpus.sh --test-dir build-vf -L eig  # another tree
+```
+
+Configure writes `<build>/ctest_resources.json` (one entry per
+`nvidia-smi --list-gpus` device, `BATCHLAS_TEST_GPU_SLOTS` slots each, default
+2). Every GPU test carries `RESOURCE_GROUPS gpus:1`, and `tests/ctest_gpu_env.sh`
+restricts it to its slot's GPU through `CUDA_VISIBLE_DEVICES` (a pre-set
+`CUDA_VISIBLE_DEVICES` list is indexed instead; set `BATCHLAS_TEST_GPUS` to its
+length). `-DBATCHLAS_TEST_GPUS=<n>` overrides the count, `=0` turns it off.
+Plain `ctest` without `--resource-spec-file` runs exactly as before. Keep the
+serial run for a `GTEST_OUTPUT=xml:<dir>/` gate (docs/ci.md): a route-pinned
+rerun writes the same file name as its twin, and in parallel they can overlap.
+
+On the 4x RTX PRO 6000 box, `-LE slow` took 1737 s as a plain serial `ctest`,
+469 s serial with one GPU visible, 126 s at 1 slot per GPU and 78 s at 2, with
+the same failing names in every mode. A process that sees all four GPUs runs
+several times slower than one that sees one, so set `CUDA_VISIBLE_DEVICES` when
+running a binary by hand.
+
 ## Labels
 
 Component labels, one per binary (see `CMakeLists.txt`):
