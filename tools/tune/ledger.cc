@@ -170,10 +170,12 @@ void LedgerWriter::put(const std::string& line) {
     }
 }
 
-void LedgerWriter::cell(const CellRecord& r) {
+void LedgerWriter::cell(const CellRecord& r) { cell(r, meta_.tier); }
+
+void LedgerWriter::cell(const CellRecord& r, Tier tier) {
     CellRecord c = r;
     c.run_id = meta_.run_id;
-    c.tier = meta_.tier;
+    c.tier = tier;
     put(cell_line(c));
 }
 
@@ -287,7 +289,7 @@ CandResult summarize(const std::string& cand, const std::vector<PassInfo>& ps) {
 }  // namespace
 
 void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root,
-                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now) {
+                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier) {
     std::ifstream f(raw_jsonl);
     if (!f) throw std::runtime_error("cannot open " + raw_jsonl);
     std::vector<std::string> names, cands;
@@ -314,7 +316,9 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
             m.batchlas = rec->get("batchlas");
             m.argv = rec->get("argv");
             m.date = date = rec->get("date");
-            m.tier = Tier::deep;
+            m.tier = tier;
+            m.keys = rec->get("keys");
+            m.candidates = rec->get("candidates");
             w = std::make_unique<LedgerWriter>(ledger_dir(ledger_root, rec->get("op"), rec->get("dtype"), m.device), m);
             continue;
         }
@@ -330,7 +334,7 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
         const CellPasses passes = std::move(pending[key]);
         pending.erase(key);
         CellRecord c;
-        c.tier = Tier::deep;
+        c.tier = tier;
         c.key = key;
         c.round = static_cast<int>(rec->number("round"));
         c.date = date;

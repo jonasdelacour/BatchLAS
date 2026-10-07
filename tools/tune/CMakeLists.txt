@@ -8,6 +8,7 @@ add_executable(batchlas_tune_impl
     grid.cc
     ledger.cc
     schedule.cc
+    tiered_driver.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc

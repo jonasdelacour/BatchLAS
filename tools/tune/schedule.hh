@@ -1,7 +1,6 @@
 #pragma once
 
-// The tiered scheduler: which cells a round measures, with which arms and at which tier, and what
-// that costs. Host-only. evidence: docs/design/tiered-tuning.md#engine-tiers-and-the-per-cell-algorithm
+// Host-only. evidence: docs/design/tiered-tuning.md#engine-tiers-and-the-per-cell-algorithm
 
 #include "ledger.hh"
 #include "spec.hh"
@@ -20,8 +19,7 @@ inline constexpr double kChildOverheadS = 0.49;
 inline constexpr double kVerifyS = 0.05;        // per candidate, the untimed verification run
 inline constexpr double kModelBytesPerS = 500e9;
 
-// What plan_round needs of an op: plain data, so tests need no OpSpec.
-struct PlanSpec {
+struct PlanSpec {  // plain data, so tests need no OpSpec
     std::vector<std::string> candidates;  // the full current list, in tie order
     std::function<double(const CellKey&)> bytes;
 };
@@ -35,16 +33,13 @@ struct PlannedCell {
     const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
 };
 
-// Nearest ledger record's median for `cand` (equal non-integer fields, log distance on integer
-// ones), else the byte model bytes / 500 GB/s.
+// Nearest record's median (equal non-integer fields, log distance on integer ones), else bytes / 500 GB/s.
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand, double bytes);
 
-// overhead + per arm (max_reps x estimate + warm top-up + verification).
 double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<std::string>& arms, double bytes,
                        const TierParams& p, double overhead_s);
 
-// Sorted by ascending bytes (stable). `runnable` holds probe results per cell (nullptr = unknown);
-// skip:single needs a known probe.
+// Ascending bytes (stable). `runnable`: probe results per cell, nullptr = unknown (no skip:single).
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
@@ -56,8 +51,7 @@ std::vector<std::string> op_order(std::vector<std::string> ops);
 // Empty when the estimate fits the budget (or there is none); the lattice runs either way.
 std::string budget_warning(double est_s, double budget_h);
 
-// A measured cell: per-arm median/min/max of the reps, ranked by rank() at tie 0.03. A partial
-// re-race merges into `stored`: its unchanged candidates stay, removed families drop.
+// Ranked by rank() at tie 0.03; merging into `stored` keeps its unchanged candidates, drops removed ones.
 CellRecord record_from_arms(const CellKey& key, int round, const std::vector<ArmOutcome>& arms,
                             const std::vector<std::string>& order, const std::map<std::string, std::string>& family_hash,
                             const CellRecord* stored = nullptr);

@@ -49,6 +49,7 @@ public:
     LedgerWriter(const LedgerWriter&) = delete;
     LedgerWriter& operator=(const LedgerWriter&) = delete;
     void cell(const CellRecord& r);
+    void cell(const CellRecord& r, Tier tier);  // a partial re-race keeps its stored record's tier
     void audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms);
 
 private:
@@ -78,8 +79,9 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
 // Per key: highest tier, then newest date, then larger run_id (later line on a full tie).
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash);
 
-// Schema-1 raw sweep -> one deep run file; hashes are "legacy:<kernels>" unless `kernels` == `op_hash_now`.
+// Schema-1 raw sweep -> one run file at `tier` (a custom run records itself this way); hashes are
+// "legacy:<kernels>" unless `kernels` == `op_hash_now`.
 void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root,
-                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now);
+                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier = Tier::deep);
 
 }  // namespace batchlas::tune
