@@ -90,8 +90,18 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 - **Rounds, breadth-first.** Round 0 is the tier's starting lattice (`tier_lattice` of the op's
   axes; gemm's demand-driven grid is subsampled by key hash) for every op and dtype, in op order.
   Then refinement rounds (`refine_all_axes`, the tier's mode and margin) over every cell the
-  ledger and this run ranked inside the requested grid, until no midpoint is left or `--budget`
-  is spent. Within a round each GPU takes cells round-robin in ascending input bytes.
+  ledger and this run ranked inside the requested grid, until no midpoint is left, `--budget`
+  is spent or the refinement cap is hit. Within a round each GPU takes cells round-robin in
+  ascending input bytes.
+- **Refinement rules** (docs/design/tiered-tuning.md, "Engine: refinement convergence rules").
+  A bracket is a flip only when its two winners differ and, at each end, the other end's winner is
+  more than the 3% tie slower (or cannot win there: not runnable, or eliminated without a median);
+  near-tie alternation refines nothing. The preview margin (runner-up within 10%) applies only
+  between two round-0 cells of this run. `batch` refills only its own axis values, never a
+  geometric midpoint. Refinement cells per op and dtype are capped at `refine_cap_factor` x
+  round-0 cells (preview 1.0, coarse 1.0, deep 2.0; round-0 cells counted whether measured now or
+  already current); past it the first cells in `refine_all_axes` order (flips, then margin hedges)
+  run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
   the changed or added families plus its stored winner and runner-up, at the stored record's
@@ -114,11 +124,15 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   (the worker excepted); the full guard with utilization runs before a worker starts and every 60 s
   after a 1 s idle. A worker that exits or exceeds `--cell-timeout` is restarted and the cell retried
   once; a second failure, or any `error` candidate (a possible sticky CUDA error), restarts it and
-  races the cell in a fresh child, whose result is recorded (progress `worker_restart`). In a fresh child a failed
+  races the cell in a fresh child, whose result is recorded (progress `worker_restart`). A candidate
+  whose `error` the fresh child reproduced in two consecutive cells is the candidate's own error: for
+  the rest of the run that op and dtype race it alone in a fresh child per cell, the other candidates
+  on the worker. In a fresh child a failed
   child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
   or `skipped` candidate writes no record, so the next run measures the cell again.
 - **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again
-  in a fresh child, and the first worker cell of an op and dtype when the hash picks none. A
+  in a fresh child; until an op and dtype has been audited once, its next worker cell that did not
+  fall back is audited whatever the hash picked. A
   candidate usable (`ok`/`eliminated`) in one and refused or failing in the other (`eliminated`
   against `bad` is inconclusive), or a different winner whose worker winner is more than 10% slower
   in the fresh run, is a mismatch: the ledger gets
@@ -128,8 +142,13 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   record always carries the op's full key spec and candidate list, whatever `--grid` narrowed.
 - **Estimate.** Per cell: 0.49 s child start-up (`--cell-overhead-s`) plus, per candidate,
   `max_reps` times the nearest ledger record's median (else bytes / 500 GB/s), the warm-up top-up
-  and 0.05 s of verification. `--plan` prints it for the starting lattice; refinement comes on top.
-- **Progress events** (`--progress-fd`): `{"ev":"plan","cells":N,"est_s":S}`,
+  and 0.05 s of verification. Refinement adds, per op and dtype, ratio x the lattice cells to
+  measure at their mean estimate, where ratio is this ledger's refined / round-0 records at the tier
+  (at most the cap factor), else cap factor x 0.5. `--plan` prints both the lattice-only and the
+  with-refinement estimate; the run ends with a summary line per op and dtype (cells per round,
+  lattice and refinement counts, the planned refinement, wall time).
+- **Progress events** (`--progress-fd`): `{"ev":"plan","cells":N,"est_s":S,"refine_cells":R,"est_refine_s":E,"est_total_s":T}`
+  (`est_s` is the lattice only), `{"ev":"refine_cap","op":o,"dtype":d,"lattice":L,"refined":n,"cap":c,"dropped":k}`,
   `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
   `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,

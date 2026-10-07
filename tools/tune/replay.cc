@@ -1,5 +1,5 @@
 // tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, no GPU.
-//   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]
+//   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 
 #include "replay_core.hh"
@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     ro.holdout = true;
     bool print_axes = false;
     std::optional<std::string> mode;
-    std::optional<double> margin;
+    std::optional<double> margin, cap;
     std::vector<std::pair<std::string, std::pair<std::string, bool>>> shrink;  // axis, spec, keep
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
         else if (a == "--max-reps") max_reps = std::stoi(next());
         else if (a == "--refine-mode") mode = next();
         else if (a == "--refine-margin") margin = std::stod(next());
+        else if (a == "--refine-cap") cap = std::stod(next());
         else if (a == "--print-axes") print_axes = true;
         else if (a == "--axis-keep" || a == "--axis-stride") {
             const std::string v = next();
@@ -66,7 +67,7 @@ int main(int argc, char** argv) {
     const auto tier = parse_tier(tier_name);
     if (raw.empty() || !tier || *tier == Tier::transcribed || *tier == Tier::custom) {
         std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] "
-                             "[--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]\n");
+                             "[--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]\n");
         return 2;
     }
     p = params(*tier);
@@ -77,6 +78,7 @@ int main(int argc, char** argv) {
     if (refine) p.refine_ratio = *refine;
     if (mode) p.refine_mode = *mode == "index" ? RefineMode::index : RefineMode::geometric;
     if (margin) p.refine_margin = *margin;
+    if (cap) p.refine_cap_factor = *cap;
     try {
         ReplayMeta meta;
         const auto cells = load_replay(raw, &meta);
@@ -114,7 +116,9 @@ int main(int argc, char** argv) {
         const double race = ro.holdout ? r.excess_race : r.race_misrank, table = ro.holdout ? r.excess_table : r.table_misrank;
         j.num("bound", bound).str("verdict", race <= bound && table <= bound ? "PASS" : "FAIL");
         j.num("floor_race", r.floor_race).num("floor_table", r.floor_table).num("excess_race", r.excess_race).num("excess_table", r.excess_table);
-        j.integer("refine_unavailable", static_cast<std::int64_t>(r.refine_unavailable)).str("worst", worst);
+        j.integer("refine_unavailable", static_cast<std::int64_t>(r.refine_unavailable));
+        j.integer("cells_lattice", static_cast<std::int64_t>(r.cells_lattice)).num("refine_cap", p.refine_cap_factor);
+        j.integer("refine_capped", static_cast<std::int64_t>(r.refine_capped)).str("worst", worst);
         std::fputs(j.line().c_str(), stdout);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "tune_replay: %s\n", e.what());

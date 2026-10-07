@@ -971,14 +971,16 @@ public:
         WorkerProcess& w = *workers_.at(j.gpu);
         WorkerGate& gate = gates_.at(j.gpu);
         if (w.alive() && gate.restart_before(j.footprint)) stop(j.gpu);  // the carve-out order
-        auto attempt = [&] {
+        auto attempt = [&](const std::vector<std::string>& arms) {
+            CellJob part = j;
+            part.arms = arms;
             if (!w.alive()) {
                 d.start_worker(w, j.gpu);
                 gate.started();
                 gate.guarded(now());
             }
             const bool full = gate.full_guard_due(now());
-            WorkerTry r = d.race_worker(w, j, full);
+            WorkerTry r = d.race_worker(w, part, full);
             if (full) gate.guarded(now());
             if (r.ok) gate.ran(j.footprint);
             for (const ArmOutcome& a : r.arms)
@@ -989,7 +991,12 @@ public:
             std::fflush(stdout);
             return r;
         };
-        return race_on_worker(attempt, [&] { stop(j.gpu); }, [&] { return measure_fresh(j); });
+        auto fresh = [&](const std::vector<std::string>& arms) {
+            CellJob part = j;
+            part.arms = arms;
+            return measure_fresh(part);
+        };
+        return race_on_worker(j.arms, errors(j.spec->op() + "." + j.dtype), attempt, [&] { stop(j.gpu); }, fresh);
     }
 
 private:
@@ -997,9 +1004,15 @@ private:
     std::map<std::string, std::unique_ptr<Driver>> drivers_;
     std::map<int, std::unique_ptr<WorkerProcess>> workers_;
     std::map<int, WorkerGate> gates_;
+    std::mutex errors_mu_;
+    std::map<std::string, ArmErrors> errors_;  // per op.dtype; GPU threads share it
     const std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
 
     double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
+    ArmErrors& errors(const std::string& od) {
+        std::lock_guard<std::mutex> lock(errors_mu_);
+        return errors_[od];
+    }
     void stop(int gpu) {
         workers_.at(gpu)->stop();
         set_worker_pid(gpu, -1);

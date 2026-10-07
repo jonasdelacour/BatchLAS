@@ -1,6 +1,7 @@
 #include "grid.hh"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <set>
 
@@ -63,19 +64,54 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
     return out;
 }
 
+
+std::size_t refine_allowance(std::size_t lattice_cells, std::size_t refined, double cap_factor) {
+    const auto cap = std::size_t(std::floor(std::max(cap_factor, 0.0) * double(lattice_cells) + 1e-9));
+    return cap > refined ? cap - refined : 0;
+}
+
+namespace {
+
+// Batch is measured at saturation-relevant points only: it refills its own values, never a geometric midpoint.
+// evidence: docs/design/tiered-tuning.md#engine-refinement-convergence-rules
+constexpr const char* kBatchAxis = "batch";
+
+const RefineCell* info_of(const RefineOpts& o, const CellKey& k) {
+    if (!o.cells) return nullptr;
+    const auto it = o.cells->find(k);
+    return it == o.cells->end() ? nullptr : &it->second;
+}
+
+// At a cell won by `w`: `other` is more than the tie slower, or cannot win there (not runnable, eliminated untimed).
+bool decisive(const RefineCell& c, const std::string& w, const std::string& other, double tie) {
+    const auto o = c.ms.find(other);
+    if (o == c.ms.end()) return c.out.count(other) != 0;
+    const auto t = c.ms.find(w);
+    return t == c.ms.end() || o->second / t->second - 1 > tie;
+}
+
+double runner_up_gap(const RefineCell& c, const std::string& w) {
+    double g = std::numeric_limits<double>::infinity();
+    const auto t = c.ms.find(w);
+    if (t == c.ms.end()) return g;
+    for (const auto& [cand, ms] : c.ms)
+        if (cand != w) g = std::min(g, std::max(0.0, ms / t->second - 1));
+    return g;
+}
+
+}  // namespace
+
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
                             const std::vector<AxisSpec>& axes, double ratio, const RefineOpts& opts) {
     RefineRound out;
-    const bool plain = opts.mode == RefineMode::geometric && opts.margin <= 0;
     if (opts.mode == RefineMode::geometric && ratio <= 0) return out;
-    std::set<CellKey> seen;
-    auto gap_of = [&](const CellKey& k) -> double {
-        if (!opts.gap) return std::numeric_limits<double>::infinity();
-        const auto it = opts.gap->find(k);
-        return it == opts.gap->end() ? std::numeric_limits<double>::infinity() : it->second;
-    };
+    std::vector<CellKey> by_kind[2];  // [0] flips, [1] margin hedges
     for (const AxisSpec& a : axes) {
         if (!a.log) continue;
+        const bool batch = a.name == kBatchAxis;
+        std::vector<std::int64_t> lattice;
+        for (const std::string& v : a.values) lattice.push_back(std::stoll(v));
+        std::sort(lattice.begin(), lattice.end());
         // line = cells equal in every key but a.name, keyed by that remainder
         std::map<CellKey, std::vector<LinePoint>> lines;
         std::map<CellKey, CellKey> sample;
@@ -90,41 +126,40 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
         }
         for (auto& [rest, pts] : lines) {
             std::sort(pts.begin(), pts.end(), [](const LinePoint& x, const LinePoint& y) { return x.n < y.n; });
-            std::vector<std::int64_t> mids;
-            if (plain) {
-                mids = refine_midpoints(pts, ratio);
-            } else {
-                auto index_of = [&](std::int64_t n) {
-                    for (std::size_t i = 0; i < a.values.size(); ++i)
-                        if (std::stoll(a.values[i]) == n) return std::int64_t(i);
-                    return std::int64_t(-1);
-                };
-                auto at = [&](std::int64_t n) { return key_with(sample[rest], a.name, std::to_string(n)); };
-                for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
-                    const LinePoint &lo = pts[i], &hi = pts[i + 1];
-                    const bool near = opts.margin > 0 && (gap_of(at(lo.n)) <= opts.margin || gap_of(at(hi.n)) <= opts.margin);
-                    if (lo.winner == hi.winner && !near) continue;
-                    const std::int64_t li = index_of(lo.n), hj = index_of(hi.n);
-                    if (opts.mode == RefineMode::index && li >= 0 && hj - li > 1) {
-                        mids.push_back(std::stoll(a.values[std::size_t((li + hj) / 2)]));
-                    } else if (ratio > 0) {
-                        for (std::int64_t m : refine_midpoints({{lo.n, "lo"}, {hi.n, "hi"}}, ratio)) mids.push_back(m);
+            auto at = [&](std::int64_t n) { return key_with(sample[rest], a.name, std::to_string(n)); };
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                const LinePoint &lo = pts[i], &hi = pts[i + 1];
+                const RefineCell *cl = info_of(opts, at(lo.n)), *ch = info_of(opts, at(hi.n));
+                bool flip = lo.winner != hi.winner;
+                if (flip && cl && ch)
+                    flip = decisive(*cl, lo.winner, hi.winner, opts.tie) && decisive(*ch, hi.winner, lo.winner, opts.tie);
+                const bool near = !flip && opts.margin > 0 && cl && ch && cl->lattice && ch->lattice &&
+                                  (runner_up_gap(*cl, lo.winner) <= opts.margin || runner_up_gap(*ch, hi.winner) <= opts.margin);
+                if (!flip && !near) continue;
+                std::vector<std::int64_t> mids, inside;
+                for (std::int64_t v : lattice)
+                    if (v > lo.n && v < hi.n) inside.push_back(v);
+                if ((opts.mode == RefineMode::index || batch) && !inside.empty())
+                    mids.push_back(inside[(inside.size() - 1) / 2]);
+                else if (!batch && ratio > 0)
+                    mids = refine_midpoints({{lo.n, "lo"}, {hi.n, "hi"}}, ratio);
+                for (std::int64_t mid : mids) {
+                    CellKey k = at(mid);
+                    if (!ranked.count(k)) {
+                        by_kind[flip ? 0 : 1].push_back(std::move(k));
+                        continue;
                     }
+                    out.stalled.push_back(key_text(rest) + ": edge between " + a.name + "=" + std::to_string(lo.n) + " (" +
+                                          lo.winner + ") and " + std::to_string(hi.n) + " (" + hi.winner + ") stays wide: " +
+                                          a.name + "=" + std::to_string(mid) + " has no winner");
                 }
-            }
-            for (std::int64_t mid : mids) {
-                CellKey k = key_with(sample[rest], a.name, std::to_string(mid));
-                if (!ranked.count(k)) {
-                    if (seen.insert(k).second) out.next.push_back(std::move(k));
-                    continue;
-                }
-                const auto hi = std::find_if(pts.begin(), pts.end(), [&](const LinePoint& p) { return p.n > mid; });
-                out.stalled.push_back(key_text(rest) + ": edge between " + a.name + "=" + std::to_string((hi - 1)->n) +
-                                      " (" + (hi - 1)->winner + ") and " + std::to_string(hi->n) + " (" + hi->winner +
-                                      ") stays wide: " + a.name + "=" + std::to_string(mid) + " has no winner");
             }
         }
     }
+    std::set<CellKey> seen;
+    for (auto& kind : by_kind)
+        for (CellKey& k : kind)
+            if (seen.insert(k).second) out.next.push_back(std::move(k));
     return out;
 }
 

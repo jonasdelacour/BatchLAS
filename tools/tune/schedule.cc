@@ -283,16 +283,23 @@ CellRecord single_record(const CellKey& key, int round, const std::string& only,
     return r;
 }
 
-double runner_up_gap(const CellRecord& r) {
-    const double inf = std::numeric_limits<double>::infinity();
-    if (r.ranked.size() < 2) return inf;
-    auto ms = [&](const std::string& s) -> double {
-        for (const CandResult& c : r.cands)
-            if (c.cand == s) return c.median_ms;
-        return NAN;
-    };
-    const double a = ms(r.ranked[0]), b = ms(r.ranked[1]);
-    return std::isfinite(a) && std::isfinite(b) && a > 0 ? b / a - 1 : inf;
+RefineCell refine_cell(const CellRecord& r, bool lattice) {
+    RefineCell c;
+    c.lattice = lattice;
+    for (const CandResult& x : r.cands) {
+        const bool timed = (x.status == "ok" || x.status == "eliminated") && std::isfinite(x.median_ms) && x.median_ms > 0;
+        if (timed) c.ms[x.cand] = x.median_ms;
+        else if (x.status != "ok") c.out.insert(x.cand);  // an untimed "ok" (skip:single) is runnable
+    }
+    return c;
+}
+
+double refine_ratio_estimate(const Ledger& l, Tier tier, double cap_factor, bool* from_history) {
+    std::size_t lattice = 0, refined = 0;
+    for (const CellRecord& r : l.cells)
+        if (r.tier == tier) (r.round == 0 ? lattice : refined)++;
+    if (from_history) *from_history = lattice > 0;
+    return lattice > 0 ? std::min(cap_factor, double(refined) / double(lattice)) : cap_factor * 0.5;
 }
 
 std::vector<std::string> seed_order(const std::map<CellKey, CellRecord>& done, const CellKey& key,

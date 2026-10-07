@@ -19,10 +19,12 @@ struct TieredOpts {
     std::vector<int> devices;
     Tier tier = Tier::preview;
     double budget_h = 0, cap_gib = 4, overhead_s = kChildOverheadS;
-    double audit_fraction = -1;  // < 0: the tier's
+    double audit_fraction = -1;     // < 0: the tier's
+    double refine_cap_factor = -1;  // < 0: the tier's
     bool plan = false;
     int progress_fd = -1;
     std::string repo, ledger_root, out, argv;
+    std::string run_id;  // empty: make_run_id()
     std::map<std::string, std::vector<std::string>> grid;
 };
 

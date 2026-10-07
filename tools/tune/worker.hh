@@ -11,6 +11,8 @@
 #include <sys/types.h>
 
 #include <functional>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -72,10 +74,25 @@ struct WorkerTry {
     std::vector<ArmOutcome> arms;
 };
 
+// Consecutive confirmed errors per arm in one (op, dtype): the worker and the fresh child that re-raced
+// the cell both reported `error`. Two in a row bench the arm: it is the candidate, not a poisoned worker.
+class ArmErrors {
+public:
+    bool benched(const std::string& arm) const;
+    void note(const std::string& arm, bool confirmed);  // a confirmed error, or a run without one
+
+private:
+    mutable std::mutex mu_;
+    std::map<std::string, int> streak_;
+};
+
 // The worker path's failure handling: a failed try restarts the worker (not after a guard discard)
 // and retries once, then `fresh` races the cell. An `error` arm in a finished cell may be a sticky
 // CUDA error that poisons the process: restart, and the fresh child's result is the one recorded.
-ArmBatch race_on_worker(const std::function<WorkerTry()>& attempt, const std::function<void()>& restart,
-                        const std::function<ArmBatch()>& fresh);
+// A benched arm skips the worker and races alone in its own fresh child.
+ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
+                        const std::function<WorkerTry(const std::vector<std::string>&)>& attempt,
+                        const std::function<void()>& restart,
+                        const std::function<ArmBatch(const std::vector<std::string>&)>& fresh);
 
 }  // namespace batchlas::tune

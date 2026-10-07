@@ -48,6 +48,8 @@ struct ReplayReport {
     double measure_s = 0;  // rep time the replay consumed, alone
     double est_gpu_h = 0;  // (measure_s + candidates x (warm_topup_s + verify_s) + cell_overhead_s per cell) / 3600
     std::size_t refine_unavailable = 0;  // distinct bisection midpoints that are not in the raw file
+    std::size_t cells_lattice = 0;       // round-0 cells measured; cells_measured - this = refinement cells
+    std::size_t refine_capped = 0;       // midpoints the refinement cap dropped (0 = the cap was not hit)
     std::vector<std::string> worst;      // the five worst misranks of either kind
 };
 

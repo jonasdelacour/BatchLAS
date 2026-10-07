@@ -2,6 +2,7 @@
 
 // Host-only. evidence: docs/design/tiered-tuning.md#engine-tiers-and-the-per-cell-algorithm
 
+#include "grid.hh"
 #include "ledger.hh"
 #include "spec.hh"
 #include "tier.hh"
@@ -80,7 +81,10 @@ struct AuditResult {
 AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
                           const std::vector<std::string>& order, double tie = 0.03, double margin = 0.10);
 
-// runner-up time / winner time - 1 (the preview refinement margin); +inf without a timed runner-up.
-double runner_up_gap(const CellRecord& r);
+// The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
+RefineCell refine_cell(const CellRecord& r, bool lattice);
+
+// Refinement cells per lattice cell: this ledger's refined / round-0 records at `tier` (<= cap_factor), else cap_factor x 0.5.
+double refine_ratio_estimate(const Ledger& l, Tier tier, double cap_factor, bool* from_history = nullptr);
 
 }  // namespace batchlas::tune

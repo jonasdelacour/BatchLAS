@@ -829,6 +829,13 @@ CellKey batch_cell(int batch) { return {{"uplo", "L"}, {"n", "64"}, {"batch", st
 
 const std::vector<AxisSpec> kBatchAxes{{"uplo", false, {"L"}}, {"n", true, {"64"}}, {"batch", true, {}}};
 
+// kBatchAxes with batch lattice values: batch only ever refills these.
+std::vector<AxisSpec> batch_lattice(const std::vector<int>& batches) {
+    std::vector<AxisSpec> axes = kBatchAxes;
+    for (int b : batches) axes[2].values.push_back(std::to_string(b));
+    return axes;
+}
+
 }  // namespace
 
 TEST(TuneGrid, LatticesNestAcrossTiers) {
@@ -881,15 +888,6 @@ TEST(TuneGrid, HashSubsampleNests) {
     EXPECT_EQ(c.size(), g.size());
 }
 
-TEST(TuneGrid, BisectsBatchToo) {
-    const std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}},
-                                                             {batch_cell(8192), {"b", "a"}}};
-    const auto next = refine_all_axes(ranked, kBatchAxes, 1.1).next;
-    ASSERT_EQ(next.size(), 1u);
-    EXPECT_EQ(key_arg(next[0]), "uplo=L,n=64,batch=1024");
-    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 0).next.empty());
-}
-
 TEST(TuneGrid, AgreeingNeighboursAddNothing) {
     const std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}}, {batch_cell(8192), {"a", "b"}}};
     const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
@@ -900,7 +898,7 @@ TEST(TuneGrid, AgreeingNeighboursAddNothing) {
 TEST(TuneGrid, EmptyRankedCellIsSkippedInItsLine) {
     const std::map<CellKey, std::vector<std::string>> ranked{
         {batch_cell(128), {}}, {batch_cell(512), {"a"}}, {batch_cell(8192), {"b"}}};
-    const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
+    const auto r = refine_all_axes(ranked, batch_lattice({128, 512, 2048, 8192}), 1.1);
     ASSERT_EQ(r.next.size(), 1u);
     EXPECT_EQ(key_arg(r.next[0]), "uplo=L,n=64,batch=2048");
     EXPECT_TRUE(r.stalled.empty());
@@ -909,7 +907,7 @@ TEST(TuneGrid, EmptyRankedCellIsSkippedInItsLine) {
 TEST(TuneGrid, MidpointWithoutWinnerIsReportedStalled) {
     const std::map<CellKey, std::vector<std::string>> ranked{
         {batch_cell(128), {"a"}}, {batch_cell(1024), {}}, {batch_cell(8192), {"b"}}};
-    const auto r = refine_all_axes(ranked, kBatchAxes, 1.1);
+    const auto r = refine_all_axes(ranked, batch_lattice({128, 1024, 8192}), 1.1);
     EXPECT_TRUE(r.next.empty());
     ASSERT_EQ(r.stalled.size(), 1u);
     EXPECT_NE(r.stalled[0].find("batch=1024 has no winner"), std::string::npos);
@@ -1186,6 +1184,26 @@ TEST(TuneReplay, TierDefaultsDriveTheLatticeAndTheRefinementMode) {
     EXPECT_EQ(replay(rc, meta.axes, Tier::coarse).cells_measured, 8u);
 }
 
+TEST(TuneReplay, RefinementCapBoundsTheMeasuredCells) {
+    // Decisive winners a,b,b,a,a,b,b,a at n = 1..128: every preview lattice bracket (1,4,16,64,128) flips.
+    std::vector<SynCell> v;
+    const std::map<int, bool> a_wins{{1, true}, {2, false}, {4, false}, {8, true}, {16, true}, {32, false}, {64, false}, {128, true}};
+    for (const auto& [n, a] : a_wins) v.push_back({n, {{"a", a ? 1.0 : 1.5}, {"b", a ? 1.5 : 1.0}}});
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("cap.jsonl", v), &meta);
+    TierParams p = params(Tier::preview);
+    p.refine_margin = 0;
+    const ReplayReport full = replay(rc, meta.axes, Tier::preview, p);
+    EXPECT_EQ(full.cells_lattice, 5u);
+    EXPECT_EQ(full.cells_measured, 8u);
+    EXPECT_EQ(full.refine_capped, 0u);
+    p.refine_cap_factor = 0.4;  // floor(0.4 x 5) = 2 refinement cells
+    const ReplayReport cut = replay(rc, meta.axes, Tier::preview, p);
+    EXPECT_EQ(cut.cells_lattice, 5u);
+    EXPECT_EQ(cut.cells_measured, 7u);
+    EXPECT_EQ(cut.refine_capped, 1u);
+}
+
 TEST(TuneReplay, UnrunnableNearestWinnerFallsBackToTheNextEntry) {
     auto make = [](bool c_at_2) {
         std::map<std::string, double> two{{"a", 2.0}, {"b", 3.0}};
@@ -1282,20 +1300,104 @@ TEST(TuneGrid, IndexModeRefillsTheLatticeWhereWinnersDiffer) {
     EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 0, index).next.size() == 0u) << "adjacent and ratio 0: nothing off the lattice";
 }
 
+namespace {
+
+// Timed medians of one cell; `lattice` = a round-0 cell of this run.
+RefineCell timed(std::map<std::string, double> ms, bool lattice = true, std::set<std::string> out = {}) {
+    return {std::move(ms), std::move(out), lattice};
+}
+
+}  // namespace
+
 TEST(TuneGrid, IndexModeSeesAFlipInsideAStrideFourBracket) {
     // Winners a at 1, a at 16: the geometric rule sees agreement. Only the margin trigger refines.
-    const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a"}}, {n_cell(16), {"a"}}};
+    const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"a", "b"}}};
     EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index}).next.empty());
-    std::map<CellKey, double> close{{n_cell(1), 0.02}, {n_cell(16), 0.5}}, far{{n_cell(1), 0.30}, {n_cell(16), 0.5}};
+    std::map<CellKey, RefineCell> close{{n_cell(1), timed({{"a", 1.0}, {"b", 1.02}})}, {n_cell(16), timed({{"a", 1.0}, {"b", 1.5}})}};
+    std::map<CellKey, RefineCell> far{{n_cell(1), timed({{"a", 1.0}, {"b", 1.3}})}, {n_cell(16), timed({{"a", 1.0}, {"b", 1.5}})}};
     RefineOpts o{RefineMode::index, 0.05, &close};
     const auto r = refine_all_axes(ranked, kIndexAxes, 1.1, o);
     ASSERT_EQ(r.next.size(), 1u);
     EXPECT_EQ(key_arg(r.next[0]), "mode=x,n=4");
-    o.gap = &far;
+    o.cells = &far;
     EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.empty());
-    o.margin = 0.05, o.gap = &close;
+    o.cells = &close;
     o.mode = RefineMode::geometric;
     EXPECT_EQ(key_arg(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.at(0)), "mode=x,n=4") << "geometric midpoint of 1 and 16";
+}
+
+TEST(TuneGrid, NearTieAlternationIsNoFlip) {
+    const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"b", "a"}}};
+    EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index}).next.size(), 1u) << "no times: winners that differ flip";
+    std::map<CellKey, RefineCell> tie{{n_cell(1), timed({{"a", 1.0}, {"b", 1.02}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.01}})}};
+    std::map<CellKey, RefineCell> real{{n_cell(1), timed({{"a", 1.0}, {"b", 1.2}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.2}})}};
+    std::map<CellKey, RefineCell> one_end{{n_cell(1), timed({{"a", 1.0}, {"b", 1.2}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.02}})}};
+    for (RefineMode mode : {RefineMode::index, RefineMode::geometric}) {
+        EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &tie}).next.empty()) << "within the tie at both ends";
+        EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &one_end}).next.empty()) << "decisive at one end only";
+        ASSERT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &real}).next.size(), 1u);
+        EXPECT_EQ(key_arg(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &real}).next[0]), "mode=x,n=4");
+    }
+    std::map<CellKey, RefineCell> edge{{n_cell(1), timed({{"a", 1.0}, {"b", 1.0301}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.0301}})}};
+    EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &edge}).next.size(), 1u) << "just above the tie";
+    edge[n_cell(16)] = timed({{"b", 1.0}, {"a", 1.0299}});
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &edge}).next.empty()) << "just below the tie";
+}
+
+TEST(TuneGrid, UntimedOtherWinnerFlipsOnlyWhenItCannotWinThere) {
+    const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"b"}}};
+    // At n=16 a has no time: not runnable or eliminated there is decisive, unknown is not.
+    std::map<CellKey, RefineCell> cells{{n_cell(1), timed({{"a", 1.0}, {"b", 1.5}})}, {n_cell(16), timed({{"b", 1.0}}, true, {"a"})}};
+    EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &cells}).next.size(), 1u);
+    cells[n_cell(16)] = timed({{"b", 1.0}});
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &cells}).next.empty());
+}
+
+TEST(TuneGrid, MarginTriggersOnlyBetweenLatticeCells) {
+    std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"a", "b"}}};
+    std::map<CellKey, RefineCell> cells{{n_cell(1), timed({{"a", 1.0}, {"b", 1.02}})}, {n_cell(16), timed({{"a", 1.0}, {"b", 1.02}})}};
+    const RefineOpts o{RefineMode::index, 0.10, &cells};
+    EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.size(), 1u);
+    cells[n_cell(16)].lattice = false;
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.empty()) << "one end is a refinement cell";
+    cells[n_cell(16)].lattice = true;
+    // The margin midpoint n=4 is measured and agrees, also within the margin: it re-triggers nothing.
+    ranked[n_cell(4)] = {"a", "b"};
+    cells[n_cell(4)] = timed({{"a", 1.0}, {"b", 1.02}}, false);
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.empty());
+}
+
+TEST(TuneGrid, BatchRefillsOnlyItsLatticeValues) {
+    const std::vector<AxisSpec> axes{{"uplo", false, {"L"}}, {"n", true, {"64"}}, {"batch", true, {"128", "512", "2048", "8192"}}};
+    std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a"}}, {batch_cell(8192), {"b"}}};
+    for (RefineMode mode : {RefineMode::index, RefineMode::geometric}) {
+        const auto next = refine_all_axes(ranked, axes, 1.1, {mode}).next;
+        ASSERT_EQ(next.size(), 1u);
+        EXPECT_EQ(key_arg(next[0]), "uplo=L,n=64,batch=512") << "a lattice value, not the geometric 1024";
+    }
+    ranked = {{batch_cell(128), {"a"}}, {batch_cell(512), {"b"}}};
+    EXPECT_TRUE(refine_all_axes(ranked, axes, 1.1, {RefineMode::index}).next.empty()) << "adjacent batch values: no 256";
+    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 1.1).next.empty()) << "no lattice values: batch is never bisected";
+}
+
+TEST(TuneGrid, FlipMidpointsComeBeforeMarginMidpoints) {
+    std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"a", "b"}}, {n_cell(128), {"b", "a"}}};
+    std::map<CellKey, RefineCell> cells{{n_cell(1), timed({{"a", 1.0}, {"b", 1.02}})},
+                                        {n_cell(16), timed({{"a", 1.0}, {"b", 1.5}})},
+                                        {n_cell(128), timed({{"b", 1.0}, {"a", 1.5}})}};
+    const auto next = refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0.10, &cells}).next;
+    ASSERT_EQ(next.size(), 2u);
+    EXPECT_EQ(key_arg(next[0]), "mode=x,n=32") << "the flip 16|128";
+    EXPECT_EQ(key_arg(next[1]), "mode=x,n=4") << "the margin bracket 1|16";
+}
+
+TEST(TuneGrid, RefineAllowanceIsTheCapFactorTimesTheLattice) {
+    EXPECT_EQ(refine_allowance(108, 0, 1.0), 108u);
+    EXPECT_EQ(refine_allowance(108, 100, 1.0), 8u);
+    EXPECT_EQ(refine_allowance(108, 108, 1.0), 0u);
+    EXPECT_EQ(refine_allowance(108, 150, 1.0), 0u);
+    EXPECT_EQ(refine_allowance(5, 0, 0.5), 2u);
+    EXPECT_EQ(refine_allowance(5, 0, 2.0), 10u);
 }
 
 // ---- Ledger (tools/tune/ledger.cc) ----------------------------------------------------------
@@ -1867,10 +1969,39 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
                      0.49 + p.max_reps * 2.0e-3 + p.warm_topup_s + kVerifyS);
 }
 
-TEST(TuneSchedule, RunnerUpGapFeedsTheRefinementMargin) {
-    EXPECT_NEAR(runner_up_gap(cell_rec({cres("a", "1", "ok", 1.0), cres("b", "1", "ok", 1.05)}, {"a", "b"})), 0.05, 1e-12);
-    EXPECT_TRUE(std::isinf(runner_up_gap(cell_rec({cres("a", "1", "ok", 1.0), cres("b", "1", "bad")}, {"a"}))));
-    EXPECT_TRUE(std::isinf(runner_up_gap(cell_rec({}, {}))));
+TEST(TuneSchedule, RefineCellReadsTheRecord) {
+    CellRecord r = cell_rec({cres("a", "1", "ok", 1.0), cres("b", "1", "bad"), cres("c", "1", "skipped"), cres("d", "1", "ok", 1.5)}, {"a", "d"});
+    CandResult e = cres("e", "1", "eliminated");
+    r.cands.push_back(e);
+    e.cand = "f", e.median_ms = 3.0;
+    r.cands.push_back(e);
+    r.cands.push_back(cres("g", "1", "ok", NAN));
+    const RefineCell c = refine_cell(r, true);
+    EXPECT_EQ(c.ms, (std::map<std::string, double>{{"a", 1.0}, {"d", 1.5}, {"f", 3.0}}));
+    EXPECT_EQ(c.out, (std::set<std::string>{"b", "c", "e"})) << "an untimed ok (skip:single) is runnable";
+    EXPECT_TRUE(c.lattice);
+    EXPECT_FALSE(refine_cell(r, false).lattice);
+}
+
+TEST(TuneSchedule, RefineRatioEstimateReadsTheTiersHistory) {
+    Ledger l;
+    bool hist = true;
+    EXPECT_DOUBLE_EQ(refine_ratio_estimate(l, Tier::preview, 1.0, &hist), 0.5);
+    EXPECT_FALSE(hist);
+    EXPECT_DOUBLE_EQ(refine_ratio_estimate(l, Tier::deep, 2.0), 1.0);
+    for (int round : {0, 0, 0, 0, 1, 2, 3}) {
+        CellRecord r = cell_rec({}, {});
+        r.tier = Tier::preview, r.round = round;
+        l.cells.push_back(r);
+    }
+    CellRecord deep = cell_rec({}, {});
+    deep.tier = Tier::deep, deep.round = 5;
+    l.cells.push_back(deep);
+    EXPECT_DOUBLE_EQ(refine_ratio_estimate(l, Tier::preview, 1.0, &hist), 0.75) << "3 refined / 4 lattice; the deep record is another tier";
+    EXPECT_TRUE(hist);
+    EXPECT_DOUBLE_EQ(refine_ratio_estimate(l, Tier::preview, 0.5), 0.5) << "never above the cap";
+    EXPECT_DOUBLE_EQ(refine_ratio_estimate(l, Tier::coarse, 1.0, &hist), 0.5);
+    EXPECT_FALSE(hist);
 }
 
 namespace {
@@ -2304,8 +2435,10 @@ TEST(TuneWorker, StickyErrorArmRestartsTheWorkerAndRecordsTheFreshChild) {
     int tries = 0, restarts = 0, fresh = 0;
     auto run = [&](std::vector<WorkerTry> script) {
         tries = restarts = fresh = 0;
-        return race_on_worker([&] { return script.at(std::size_t(tries++)); }, [&] { ++restarts; },
-                              [&] {
+        ArmErrors errs;
+        return race_on_worker({"a", "b"}, errs, [&](const std::vector<std::string>&) { return script.at(std::size_t(tries++)); },
+                              [&] { ++restarts; },
+                              [&](const std::vector<std::string>&) {
                                   ++fresh;
                                   return ArmBatch{{arm("a", "ok", {1.0}), arm("b", "ok", {2.0})}, "", 0, false};
                               });
@@ -2336,6 +2469,53 @@ TEST(TuneWorker, StickyErrorArmRestartsTheWorkerAndRecordsTheFreshChild) {
     EXPECT_TRUE(b.fallback);
 }
 
+TEST(TuneWorker, TwoConfirmedErrorsTakeAnArmOffTheWorker) {
+    ArmErrors errs;
+    std::vector<std::vector<std::string>> sent, fresh_sent;
+    bool fresh_b_errors = true;
+    auto cell = [&] {
+        return race_on_worker(
+            {"a", "b"}, errs,
+            [&](const std::vector<std::string>& arms) {
+                sent.push_back(arms);
+                WorkerTry t{true, false, "", {}};
+                for (const std::string& a : arms) t.arms.push_back(a == "b" ? arm("b", "error") : arm(a, "ok", {1.0}));
+                return t;
+            },
+            [] {},
+            [&](const std::vector<std::string>& arms) {
+                fresh_sent.push_back(arms);
+                ArmBatch b;
+                for (const std::string& a : arms)
+                    b.arms.push_back(a == "b" && fresh_b_errors ? arm("b", "error") : arm(a, "ok", {a == "b" ? 2.0 : 1.0}));
+                return b;
+            });
+    };
+    using V = std::vector<std::vector<std::string>>;
+    cell();
+    fresh_b_errors = false;
+    cell();  // the worker's error is not reproduced: worker poisoning, the streak resets
+    fresh_b_errors = true;
+    cell();
+    EXPECT_EQ(sent, (V{{"a", "b"}, {"a", "b"}, {"a", "b"}}));
+    EXPECT_FALSE(errs.benched("b")) << "confirmed, unconfirmed, confirmed: not consecutive";
+    ArmBatch b = cell();
+    EXPECT_TRUE(b.fallback);
+    EXPECT_TRUE(errs.benched("b"));
+    EXPECT_FALSE(errs.benched("a"));
+    sent.clear(), fresh_sent.clear();
+    b = cell();
+    EXPECT_EQ(sent, (V{{"a"}})) << "b no longer goes to the worker";
+    EXPECT_EQ(fresh_sent, (V{{"b"}})) << "b races alone in a fresh child";
+    EXPECT_FALSE(b.fallback);
+    EXPECT_EQ(b.worker_restarts, 0);
+    ASSERT_EQ(b.arms.size(), 2u);
+    EXPECT_EQ(b.arms[0].arm, "a");
+    EXPECT_EQ(b.arms[0].status, "ok");
+    EXPECT_EQ(b.arms[1].arm, "b");
+    EXPECT_EQ(b.arms[1].status, "error");
+}
+
 TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
@@ -2344,4 +2524,79 @@ TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
     m.disagree = false;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     EXPECT_EQ(m.fresh_keys, (std::vector<std::string>{"n=1"})) << "the hash picked nothing: the first worker cell";
+}
+
+TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.refine_cap_factor = 0.5;  // 4 lattice cells: 2 refinement cells
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    FakeMeasurer m;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    ::close(fd);
+    EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64", "n=8", "n=11"}));
+    const std::string ev = read_file(events);
+    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1}"),
+              std::string::npos) << ev;
+    EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
+}
+
+TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.plan = true;
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    ::close(fd);
+    const std::string ev = read_file(events);
+    // No history: refine_cap_factor 1.0 x 0.5 x 4 lattice cells.
+    EXPECT_NE(ev.find("\"refine_cells\": 2"), std::string::npos) << ev;
+    EXPECT_NE(ev.find("\"est_refine_s\""), std::string::npos) << ev;
+    EXPECT_NE(out.find("with refinement"), std::string::npos) << out;
+    EXPECT_NE(out.find("lattice only"), std::string::npos) << out;
+}
+
+TEST(TuneTieredDriver, AHashPickedFallbackCellDoesNotUseUpTheForcedAudit) {
+    // A run id whose 2% hash picks exactly one lattice cell and no refinement cell; that cell falls back.
+    const std::vector<int> lattice{1, 4, 16, 64}, refined{8, 11, 9, 10};
+    const double fraction = 0.3;
+    auto picked = [&](const std::string& id, int n) { return audit_pick(id, {{"n", std::to_string(n)}}, fraction); };
+    std::string id;
+    int fallback_n = 0;
+    for (int i = 0; i < 10000 && id.empty(); ++i) {
+        const std::string c = "rid" + std::to_string(i);
+        std::vector<int> hit;
+        for (int n : lattice)
+            if (picked(c, n)) hit.push_back(n);
+        if (hit.size() == 1 && std::none_of(refined.begin(), refined.end(), [&](int n) { return picked(c, n); }))
+            id = c, fallback_n = hit[0];
+    }
+    ASSERT_FALSE(id.empty());
+    class FallbackMeasurer : public AuditMeasurer {
+    public:
+        int at = 0;
+        ArmBatch measure(const CellJob& j) override {
+            ArmBatch b = AuditMeasurer::measure(j);
+            b.fallback = key_int(j.key, "n") == at;
+            return b;
+        }
+    };
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.audit_fraction = fraction;
+    o.run_id = id;
+    FallbackMeasurer m;
+    m.disagree = false;
+    m.at = fallback_n;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    EXPECT_EQ(m.fresh_keys.size(), 1u) << "fallback n=" << fallback_n;
+    EXPECT_TRUE(std::find(m.fresh_keys.begin(), m.fresh_keys.end(), "n=" + std::to_string(fallback_n)) == m.fresh_keys.end());
 }

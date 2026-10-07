@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,15 +35,26 @@ std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t);
 // For grids that are not lattices: keep a cell when fnv1a64(key_arg(cell)) % stride == 0.
 std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t);
 
-// index mode bisects in AxisSpec::values (adjacent: geometric); margin > 0 also refines agreeing brackets
-// whose runner-up gap (time / winner time - 1) is <= margin at either end.
+// What the refinement rules read of one ranked cell. evidence: docs/design/tiered-tuning.md#engine-refinement-convergence-rules
+struct RefineCell {
+    std::map<std::string, double> ms;  // timed candidates (ok or eliminated): median ms
+    std::set<std::string> out;         // not runnable here, or eliminated without a median
+    bool lattice = false;              // a starting-lattice (round 0) cell of this run
+};
+
+// Flips (both ends decisive by > tie) and margin hedges (two lattice ends) refine; index mode refills
+// AxisSpec::values, then geometric; `batch` only refills. The rules: the evidence page above.
 struct RefineOpts {
     RefineMode mode = RefineMode::geometric;
     double margin = 0;
-    const std::map<CellKey, double>* gap = nullptr;  // per cell; a missing cell has an infinite gap
+    const std::map<CellKey, RefineCell>* cells = nullptr;  // a missing cell: differing winners flip, no margin
+    double tie = 0.03;
 };
 
-// RefineRound::next = midpoints between neighbours with different winners; stalled = midpoint without a winner.
+// The refinement cells an (op, dtype) may still measure: floor(cap_factor x lattice_cells) - refined.
+std::size_t refine_allowance(std::size_t lattice_cells, std::size_t refined, double cap_factor);
+
+// RefineRound::next = flip midpoints, then margin midpoints; stalled = a midpoint without a winner.
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
                             const std::vector<AxisSpec>& axes, double ratio, const RefineOpts& opts = {});
 

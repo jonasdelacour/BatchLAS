@@ -193,14 +193,35 @@ void WorkerProcess::stop() {
     pid_ = -1;
 }
 
-ArmBatch race_on_worker(const std::function<WorkerTry()>& attempt, const std::function<void()>& restart,
-                        const std::function<ArmBatch()>& fresh) {
+bool ArmErrors::benched(const std::string& arm) const {
+    std::lock_guard<std::mutex> lock(mu_);
+    const auto it = streak_.find(arm);
+    return it != streak_.end() && it->second >= 2;
+}
+
+void ArmErrors::note(const std::string& arm, bool confirmed) {
+    std::lock_guard<std::mutex> lock(mu_);
+    streak_[arm] = confirmed ? streak_[arm] + 1 : 0;
+}
+
+namespace {
+
+bool is_error(const ArmOutcome& a) { return a.status == "error"; }
+
+ArmBatch race_pool(const std::vector<std::string>& arms, ArmErrors& errs,
+                   const std::function<WorkerTry(const std::vector<std::string>&)>& attempt,
+                   const std::function<void()>& restart, const std::function<ArmBatch(const std::vector<std::string>&)>& fresh) {
     int restarts = 0;
+    std::vector<std::string> erred;
     for (int i = 0; i < 2; ++i) {
-        WorkerTry r = attempt();
+        WorkerTry r = attempt(arms);
         if (r.ok) {
-            if (std::none_of(r.arms.begin(), r.arms.end(), [](const ArmOutcome& a) { return a.status == "error"; }))
+            for (const ArmOutcome& a : r.arms)
+                if (is_error(a)) erred.push_back(a.arm);
+            if (erred.empty()) {
+                for (const ArmOutcome& a : r.arms) errs.note(a.arm, false);
                 return {std::move(r.arms), "", restarts, false};
+            }
             restart();
             ++restarts;
             break;
@@ -210,9 +231,37 @@ ArmBatch race_on_worker(const std::function<WorkerTry()>& attempt, const std::fu
             ++restarts;
         }
     }
-    ArmBatch b = fresh();
+    ArmBatch b = fresh(arms);
     b.worker_restarts = restarts;
     b.fallback = true;
+    for (const ArmOutcome& a : b.arms) {
+        const bool worker_erred = std::find(erred.begin(), erred.end(), a.arm) != erred.end();
+        if (!is_error(a)) errs.note(a.arm, false);
+        else if (worker_erred) errs.note(a.arm, true);  // reproduced in a fresh child: the candidate's own error
+    }
+    return b;
+}
+
+}  // namespace
+
+ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
+                        const std::function<WorkerTry(const std::vector<std::string>&)>& attempt,
+                        const std::function<void()>& restart,
+                        const std::function<ArmBatch(const std::vector<std::string>&)>& fresh) {
+    std::vector<std::string> pool, alone;
+    for (const std::string& a : arms) (errs.benched(a) ? alone : pool).push_back(a);
+    ArmBatch b;
+    if (!pool.empty()) b = race_pool(pool, errs, attempt, restart, fresh);
+    // Errors may depend on the shape, so a benched arm is still raced in every cell, alone.
+    for (const std::string& a : alone) {
+        ArmBatch f = fresh({a});
+        const auto it = std::find_if(f.arms.begin(), f.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; });
+        if (it != f.arms.end()) b.arms.push_back(std::move(*it));
+        else b.arms.push_back({a, "error", "child: " + f.error, {}, {}, 0, 0});
+    }
+    std::stable_sort(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x, const ArmOutcome& y) {
+        return std::find(arms.begin(), arms.end(), x.arm) < std::find(arms.begin(), arms.end(), y.arm);
+    });
     return b;
 }
 

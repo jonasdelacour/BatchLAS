@@ -234,9 +234,9 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     }
 
     std::map<CellKey, std::vector<std::string>> ranked;
-    std::map<CellKey, double> gap;
-    RefineOpts opts{p.refine_mode, p.refine_margin};
-    opts.gap = &gap;
+    std::map<CellKey, RefineCell> info;
+    RefineOpts opts{p.refine_mode, p.refine_margin, &info, tie};
+    bool lattice_round = true;
     auto measure = [&](const CellKey& key) {
         const ReplayCell& c = cells[at.at(key)];
         RaceState s;
@@ -256,18 +256,16 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
             if (race_step(s, p, tie) != RaceVerdict::more) break;
         }
         ranked[key] = race_ranking(s, order, tie);
-        std::vector<double> med;
+        RefineCell& rc = info[key];
+        rc.lattice = lattice_round;
         for (std::size_t k = 0; k < c.cands.size(); ++k) {
             std::vector<double> v;
             for (double x : s.ms[k])
                 if (!std::isnan(x)) v.push_back(x);
-            med.push_back(median(v));
+            if (!v.empty()) rc.ms[c.cands[k]] = median(v);
         }
-        const std::size_t w = std::size_t(std::find(c.cands.begin(), c.cands.end(), ranked[key].front()) - c.cands.begin());
-        double g = std::numeric_limits<double>::infinity();
-        for (std::size_t k = 0; k < c.cands.size(); ++k)
-            if (k != w && !std::isnan(med[k]) && !std::isnan(med[w])) g = std::min(g, std::max(0.0, med[k] / med[w] - 1));
-        gap[key] = g;
+        for (const std::string& cand : order)  // the raw file's failed candidates are not runnable here
+            if (!rc.ms.count(cand)) rc.out.insert(cand);
     };
 
     std::vector<CellKey> todo;
@@ -278,14 +276,22 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
             if (at.count(k)) todo.push_back(k);
     }
     std::set<CellKey> unavailable;
+    std::size_t refined = 0;
     while (!todo.empty()) {
         for (const CellKey& k : todo) measure(k);
+        if (lattice_round) rep.cells_lattice = todo.size();
+        lattice_round = false;
         todo.clear();
+        if (rep.refine_capped) break;
         for (CellKey& k : refine_all_axes(ranked, axes, p.refine_ratio, opts).next) {
             if (unavailable.count(k)) continue;
             if (at.count(k)) todo.push_back(std::move(k));
             else unavailable.insert(std::move(k));
         }
+        // The driver's cap (tiered_driver.cc refine), in refine_all_axes's order: flips before margins.
+        const std::size_t allow = refine_allowance(rep.cells_lattice, refined, p.refine_cap_factor);
+        if (todo.size() > allow) rep.refine_capped = todo.size() - allow, todo.resize(allow);
+        refined += todo.size();
     }
     rep.refine_unavailable = unavailable.size();
     rep.cells_measured = ranked.size();
