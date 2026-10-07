@@ -108,16 +108,20 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   eliminated candidate keeps the median of its rounds (status `eliminated`, ranked after the
   survivors) and is verified only when no survivor passes. The nearest finished cell's winner is
   raced first. Each candidate's median, min and max go into a ledger `cell` record.
-- **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up at start), fed its
-  cells on stdin in the scheduler's ascending-bytes order. Between cells the guard checks for foreign
-  compute processes (the worker excepted); utilization is checked only before a worker starts. A
-  worker that exits or exceeds `--cell-timeout` is restarted and the cell retried once; a second
-  failure races the cell in a fresh child (progress `worker_restart`). In a fresh child a failed
+- **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up kernel at start),
+  fed its share of a round in ascending per-item footprint (bytes / batch) and restarted before a
+  cell smaller than one it has run. Between cells the guard checks for foreign compute processes
+  (the worker excepted); the full guard with utilization runs before a worker starts and every 60 s
+  after a 1 s idle. A worker that exits or exceeds `--cell-timeout` is restarted and the cell retried
+  once; a second failure, or any `error` candidate (a possible sticky CUDA error), restarts it and
+  races the cell in a fresh child, whose result is recorded (progress `worker_restart`). In a fresh child a failed
   child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
   or `skipped` candidate writes no record, so the next run measures the cell again.
 - **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again
-  in a fresh child. A candidate feasible (`ok`/`eliminated`) in one and not the other, or a different
-  winner whose worker winner is more than 3% slower in the fresh run, is a mismatch: the ledger gets
+  in a fresh child, and the first worker cell of an op and dtype when the hash picks none. A
+  candidate usable (`ok`/`eliminated`) in one and refused or failing in the other (`eliminated`
+  against `bad` is inconclusive), or a different winner whose worker winner is more than 10% slower
+  in the fresh run, is a mismatch: the ledger gets
   an `audit` record either way, and on a mismatch the run line is rewritten with
   `wm.<op>.<dtype>: fresh` and the rest of that op and dtype runs in fresh children.
 - **Ledger.** One run file per (op, dtype) under `--ledger`, opened at the first record. Its `run`

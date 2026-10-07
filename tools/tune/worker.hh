@@ -5,10 +5,12 @@
 // evidence: docs/design/tiered-tuning.md#engine-persistent-workers-and-the-carve-out-audit
 
 #include "spec.hh"
+#include "tiered_driver.hh"
 #include "tune_core.hh"
 
 #include <sys/types.h>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -46,5 +48,34 @@ private:
     int to_ = -1, from_ = -1;
     std::string buf_, log_;
 };
+
+// Per-worker carve-out and guard bookkeeping. A cell with a smaller per-item footprint than one the
+// worker already ran needs a fresh worker; a full guard (utilization too) runs before the first cell
+// after a start and then every `every_s` seconds of worker time.
+class WorkerGate {
+public:
+    explicit WorkerGate(double every_s = 60) : every_s_(every_s) {}
+    bool restart_before(double footprint) const { return footprint < max_; }
+    bool full_guard_due(double now_s) const { return due_ || now_s - last_s_ >= every_s_; }
+    void started() { max_ = 0, due_ = true; }
+    void ran(double footprint) { max_ = std::max(max_, footprint); }
+    void guarded(double now_s) { last_s_ = now_s, due_ = false; }
+
+private:
+    double every_s_, max_ = 0, last_s_ = 0;
+    bool due_ = true;
+};
+
+struct WorkerTry {
+    bool ok = false, guard = false;  // guard: numbers discarded for a foreign process, the worker is fine
+    std::string error;
+    std::vector<ArmOutcome> arms;
+};
+
+// The worker path's failure handling: a failed try restarts the worker (not after a guard discard)
+// and retries once, then `fresh` races the cell. An `error` arm in a finished cell may be a sticky
+// CUDA error that poisons the process: restart, and the fresh child's result is the one recorded.
+ArmBatch race_on_worker(const std::function<WorkerTry()>& attempt, const std::function<void()>& restart,
+                        const std::function<ArmBatch()>& fresh);
 
 }  // namespace batchlas::tune

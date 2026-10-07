@@ -132,7 +132,9 @@ struct Job {
     std::set<CellKey> planned;  // never planned twice in a run: a skip:cap midpoint would come back forever
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
-    bool fresh = false;  // a failed audit: the rest of this run uses fresh children
+    bool fresh = false;        // a failed audit: the rest of this run uses fresh children
+    bool audit_first = false;  // the hash picked no round-0 cell: audit the first worker cell
+    bool audited = false;
     PlanSpec plan_spec() const {
         return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); }};
     }
@@ -282,7 +284,7 @@ void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
 void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const std::string& op = j.spec->op();
     emit(Json().str("ev", "cell_start").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu));
-    CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier)};
+    CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(j.spec->bytes(j.dtype, c.key), c.key)};
     bool worker = false;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -302,7 +304,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
             b.arms.push_back({a, "error", "child: " + b.error, {}, {}, 0, 0});
     // A child failure with no definitive arm is not a result: no record, so the next run measures the cell.
     if (!b.error.empty() && std::none_of(b.arms.begin(), b.arms.end(), [](const ArmOutcome& a) {
-            return a.status == "ok" || a.status == "bad" || a.status == "skipped";
+            return a.status == "ok" || a.status == "eliminated" || a.status == "bad" || a.status == "skipped";
         })) {
         std::printf("[gpu%d] %s %s %s r%d ERROR %s (not recorded)\n", gpu, op.c_str(), j.dtype.c_str(),
                     key_text(c.key).c_str(), round, b.error.c_str());
@@ -331,7 +333,13 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key)
              .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)));
     const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(c.tier).audit_fraction;
-    if (worker && !b.fallback && b.error.empty() && audit_pick(run_id_, c.key, fraction)) audit(j, job, b);
+    bool pick = audit_pick(run_id_, c.key, fraction);
+    if (worker && !b.fallback && b.error.empty()) {
+        std::lock_guard<std::mutex> lock(mu_);
+        pick = pick || (j.audit_first && !j.audited);
+        j.audited = j.audited || pick;
+    }
+    if (worker && !b.fallback && b.error.empty() && pick) audit(j, job, b);
 }
 
 void TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted) {
@@ -348,14 +356,20 @@ void TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int 
     std::printf("== %s %s %s round %d (%s): %zu of %zu cells to measure\n", j.spec->op().c_str(), j.dtype.c_str(),
                 id_.device.c_str(), round, to_string(o_.tier).c_str(), todo.size(), plan.size());
     std::fflush(stdout);
-    // Round-robin keeps each GPU's share in ascending bytes (the carve-out order, schedule.hh).
-    if (!todo.empty()) m_->begin_round();
+    if (round == 0) {
+        const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(o_.tier).audit_fraction;
+        j.audit_first = std::none_of(todo.begin(), todo.end(), [&](const PlannedCell* c) { return audit_pick(run_id_, c->key, fraction); });
+    }
+    // Round-robin shards; each GPU's share runs in ascending per-item footprint (the carve-out order).
+    std::vector<std::vector<const PlannedCell*>> shares(o_.devices.size());
+    for (std::size_t i = 0; i < todo.size(); ++i) shares[i % shares.size()].push_back(todo[i]);
+    for (auto& s : shares) sort_for_worker(s, [&](const CellKey& k) { return j.spec->bytes(j.dtype, k); });
     std::vector<std::thread> workers;
     for (std::size_t g = 0; g < o_.devices.size(); ++g)
         workers.emplace_back([&, g] {
-            for (std::size_t i = g; i < todo.size(); i += o_.devices.size()) {
+            for (const PlannedCell* c : shares[g]) {
                 if (budgeted && over_budget()) return;
-                measure_one(j, *todo[i], o_.devices[g], round);
+                measure_one(j, *c, o_.devices[g], round);
             }
         });
     for (auto& w : workers) w.join();

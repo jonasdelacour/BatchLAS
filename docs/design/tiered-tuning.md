@@ -193,21 +193,28 @@ a pipe, and results come back as `cell` records.
 launch succeed that would fail in a fresh process. That (a) hides a feasibility bug and (b) may
 shift the L1/SLM split, which changes timing. Two defences:
 
-1. **Ascending order.** Within an op and dtype, a worker processes its cells in ascending order of
-   input size. The first launch of a kernel that needs more than 48 KB therefore happens exactly as
-   in a fresh process: no larger launch has run before it.
+1. **Ascending order.** A worker processes its cells in ascending order of *per-item footprint*
+   (input bytes / batch, then total bytes): the SLM a launch asks for follows the matrix size, not
+   the batch, so ascending total bytes is not enough. The driver restarts the worker before any
+   cell whose per-item footprint is smaller than one it has already run. The first launch of a
+   kernel that needs more than 48 KB therefore happens exactly as in a fresh process.
 2. **Fresh-process audit.** Every run re-measures a sample of its cells in fresh one-cell processes
    (today's `--cell` path; the tier table gives the fraction). It compares feasibility per candidate
    and the winner. A mismatch marks that op and dtype *fresh-process only* in the ledger, and its
    remaining cells run one process per cell. The verdict is shown in the status matrix.
 
-**As built** (Task 8). Ascending order holds per measuring round: the driver restarts every worker
-at the start of each round, because a refinement round starts below the previous round's largest
-cell. Between cells the guard checks only for foreign compute processes (the worker's own last
-cell would trip the utilization check); utilization is checked before a worker starts. The audit
-picks a cell when `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, writes an `audit`
-ledger record for every audited cell, and on a mismatch appends a second `run` line with
-`wm.<op>.<dtype>: fresh` (readers keep the last `run` line of a run id).
+**As built** (Task 8). Each GPU's share of a round is sorted by per-item footprint; a refinement
+round, or a smaller cell after a larger one, restarts the worker. The full guard (utilization too)
+runs before a worker starts and, after a 1 s idle, every 60 s of worker time; between other cells
+only foreign compute processes are checked. A worker cell with an `error` candidate may carry a
+sticky CUDA error: the worker restarts and the cell is raced again in a fresh child, whose result
+is recorded. The audit picks a cell when `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`,
+and the first worker cell of an op and dtype when the hash picks none of the starting lattice. A
+mismatch is a candidate usable in one process and refused or failing in the other (`eliminated`
+against `bad` is inconclusive: the eliminated one was never verified), or a different winner whose
+worker winner is more than 10% slower in the fresh run (3 to 10% swaps are noise at preview's rep
+counts). Every audited cell gets an `audit` ledger record; a mismatch appends a second `run` line
+with `wm.<op>.<dtype>: fresh` (readers keep the last `run` line of a run id).
 
 **No carve-out mismatch found** (threadripper02, GPU 1, 2026-10-07; `tune_race_gpu_tests`). For
 each of potrf float (n=128, then n=110), potrf double (n=96, then n=78), posv float (n=128, then

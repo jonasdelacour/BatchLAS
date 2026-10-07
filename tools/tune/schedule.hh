@@ -34,8 +34,8 @@ struct PlannedCell {
     const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
 };
 
-// Nearest record's median (equal non-integer fields, log distance on integer ones), else bytes / 500 GB/s.
-double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand, double bytes);
+double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand,
+                   double bytes);  // nearest record (equal non-int fields, log distance), else bytes / 500 GB/s
 
 double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<std::string>& arms, double bytes,
                        const TierParams& p, double overhead_s);
@@ -65,16 +65,20 @@ CellRecord single_record(const CellKey& key, int round, const std::string& only,
 std::vector<std::string> seed_order(const std::map<CellKey, CellRecord>& done, const CellKey& key,
                                     const std::vector<std::string>& arms);
 
+double item_footprint(double bytes, const CellKey& key);  // bytes / batch (bytes without a batch key)
+// A worker's share: ascending per-item footprint, then bytes (stable): the carve-out order.
+void sort_for_worker(std::vector<const PlannedCell*>& cells, const std::function<double(const CellKey&)>& bytes);
+
 bool audit_pick(const std::string& run_id, const CellKey& key, double fraction);
 
-// verdict ok | mismatch:feasibility | mismatch:winner (beyond the tie in the fresh run) | inconclusive.
+// ok | mismatch:feasibility | mismatch:winner (> margin in the fresh run) | inconclusive[:eliminated/bad]
 struct AuditResult {
     std::string verdict;
     double fresh_ms = NAN, warm_ms = NAN;
     bool mismatch() const { return verdict.rfind("mismatch", 0) == 0; }
 };
 AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
-                          const std::vector<std::string>& order, double tie = 0.03);
+                          const std::vector<std::string>& order, double tie = 0.03, double margin = 0.10);
 
 // runner-up time / winner time - 1 (the preview refinement margin); +inf without a timed runner-up.
 double runner_up_gap(const CellRecord& r);

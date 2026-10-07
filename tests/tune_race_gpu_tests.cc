@@ -173,4 +173,11 @@ TEST(TuneRaceGpu, FreshChildAgreesWithAWorkerAfterALargerLaunch) {
         EXPECT_EQ(a.verdict.rfind("mismatch:feasibility", 0), std::string::npos) << c.op << " " << c.small << ": " << a.verdict;
     }
 }
+#else
+TEST(TuneRaceGpu, WorkerAnswersTwoCellsInOrder) {
+    GTEST_SKIP() << "needs batchlas_tune_impl: configure with -DBATCHLAS_BUILD_BENCHMARKS=ON";
+}
+TEST(TuneRaceGpu, FreshChildAgreesWithAWorkerAfterALargerLaunch) {
+    GTEST_SKIP() << "needs batchlas_tune_impl: configure with -DBATCHLAS_BUILD_BENCHMARKS=ON";
+}
 #endif

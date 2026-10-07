@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -190,6 +191,29 @@ void WorkerProcess::stop() {
         ::waitpid(pid_, &st, 0);
     }
     pid_ = -1;
+}
+
+ArmBatch race_on_worker(const std::function<WorkerTry()>& attempt, const std::function<void()>& restart,
+                        const std::function<ArmBatch()>& fresh) {
+    int restarts = 0;
+    for (int i = 0; i < 2; ++i) {
+        WorkerTry r = attempt();
+        if (r.ok) {
+            if (std::none_of(r.arms.begin(), r.arms.end(), [](const ArmOutcome& a) { return a.status == "error"; }))
+                return {std::move(r.arms), "", restarts, false};
+            restart();
+            ++restarts;
+            break;
+        }
+        if (!r.guard) {
+            restart();
+            ++restarts;
+        }
+    }
+    ArmBatch b = fresh();
+    b.worker_restarts = restarts;
+    b.fallback = true;
+    return b;
 }
 
 }  // namespace batchlas::tune

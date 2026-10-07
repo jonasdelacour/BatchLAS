@@ -26,6 +26,7 @@
 // get their GPU back explicitly. guard() dies if the driver's pid ever shows up on a GPU.
 
 #include <batchlas/util/sycl-device-queue.hh>
+#include <sycl/sycl.hpp>
 
 #include "../../src/select/select.hh"
 #include "cell_runner.hh"
@@ -228,22 +229,22 @@ int child_main(const std::vector<std::string>& a) {
     return out ? 0 : 1;
 }
 
-// Clock warm-up at worker start: a gemm loop near 64 MiB, the vendor arm when this build has one.
+// Clock warm-up at worker start: a plain FMA loop, so no library kernel runs before the first cell.
 void worker_warm(double seconds) {
-    const OpSpec* gemm = find_spec("gemm");
-    if (!gemm || seconds <= 0) return;
-    CellRequest r;
-    r.dtype = "float";
-    double best = INFINITY;
-    for (const CellKey& k : gemm->grid("float", {}))
-        if (const double d = std::abs(std::log(gemm->bytes("float", k) / double(64 << 20))); d < best) best = d, r.key = k;
-    const auto cands = gemm->candidates("float");
-    r.arms = {std::find(cands.begin(), cands.end(), "vendor") != cands.end() ? "vendor" : cands.front()};
-    r.mode = "time";
-    r.reps = 1;
-    r.warm_s = seconds;
+    if (seconds <= 0) return;
     try {
-        (void)gemm->run_cell(r);
+        sycl::queue q{sycl::gpu_selector_v};
+        constexpr std::size_t n = std::size_t(1) << 20;
+        float* out = sycl::malloc_device<float>(n, q);
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < seconds) {
+            q.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+                 float x = float(i[0]), y = 1.0001f;
+                 for (int k = 0; k < 4096; ++k) x = sycl::fma(x, y, 0.5f);
+                 out[i] = x;
+             }).wait();
+        }
+        sycl::free(out, q);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "batchlas_tune --worker: warm-up failed: %s\n", e.what());
     }
@@ -303,11 +304,6 @@ long worker_pid(int gpu) {
     return it == g_worker_pid.end() ? -1 : it->second;
 }
 
-struct WorkerOut {
-    bool ok = false, guard = false;
-    std::string error;
-    std::vector<ArmOutcome> arms;
-};
 
 struct Cell {
     CellKey key;
@@ -437,7 +433,8 @@ public:
         return name;
     }
     ArmBatch race_fresh(const CellJob& j);
-    WorkerOut race_worker(WorkerProcess& w, const CellJob& j);
+    void start_worker(WorkerProcess& w, int gpu);
+    WorkerTry race_worker(WorkerProcess& w, const CellJob& j, bool full_guard);
 
 private:
     const Opts& o_;
@@ -649,20 +646,26 @@ ArmBatch Driver::race_fresh(const CellJob& j) {
     return b;
 }
 
-// One cell on the GPU's worker, started here when it is not running. Between cells the guard
-// checks for foreign compute processes only: utilization would count the worker's own last cell.
-WorkerOut Driver::race_worker(WorkerProcess& w, const CellJob& j) {
-    WorkerOut r;
-    if (!w.alive()) {
-        guard(j.gpu);
-        const std::string log = tmp_ + "/worker" + std::to_string(j.gpu) + "_" + std::to_string(counter_++) + ".log";
-        if (!w.start({self_, "--worker", "--warm-s", "3"},
-                     {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(j.gpu)}}, log))
-            die("cannot start the worker for GPU " + std::to_string(j.gpu));
-        set_worker_pid(j.gpu, long(w.pid()));
-    }
+// The full guard (utilization too) runs before the worker starts.
+void Driver::start_worker(WorkerProcess& w, int gpu) {
+    guard(gpu);
+    const std::string log = tmp_ + "/worker" + std::to_string(gpu) + "_" + std::to_string(counter_++) + ".log";
+    if (!w.start({self_, "--worker", "--warm-s", "3"},
+                 {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}}, log))
+        die("cannot start the worker for GPU " + std::to_string(gpu));
+    set_worker_pid(gpu, long(w.pid()));
+}
+
+// One cell on the running worker. Between cells the guard checks for foreign compute processes;
+// `full_guard` first idles 1 s so the worker's own last cell leaves the utilization sample.
+WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guard) {
+    WorkerTry r;
     std::vector<std::string> tolerated;
-    for (double waited = 0; o_.guard; waited += 1) {
+    if (full_guard && o_.guard) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        tolerated = guard(j.gpu);
+    }
+    for (double waited = 0; o_.guard && !full_guard; waited += 1) {
         const GuardCheck g = guard_before(apps(j.gpu), 0, o_.util_ceiling, o_.allow_idle_foreign);
         if (g.refuse.empty()) {
             tolerated = g.tolerated;
@@ -948,57 +951,55 @@ std::vector<int> lock_devices(const Opts& o) {
 }
 
 // The tiered seam (tiered_driver.hh CellMeasurer): one Driver per op, one persistent worker per GPU
-// shared by every op. A worker that dies or times out is restarted and the cell retried once; then
-// the cell races in a fresh child.
+// shared by every op, restarted before a cell with a smaller per-item footprint than it has run.
+// Failures follow race_on_worker (worker.hh).
 class TieredMeasurer : public CellMeasurer {
 public:
     TieredMeasurer(const Opts& o, const std::vector<std::string>& ops) : o_(o) {
         for (const std::string& op : ops) drivers_[op] = std::make_unique<Driver>(o, *find_spec(op));
-        for (int gpu : o.devices) workers_[gpu] = std::make_unique<WorkerProcess>();
+        for (int gpu : o.devices) workers_[gpu] = std::make_unique<WorkerProcess>(), gates_[gpu] = WorkerGate(60);
     }
     ~TieredMeasurer() override {
         for (auto& [gpu, w] : workers_) stop(gpu);
     }
     Driver& first() { return *drivers_.begin()->second; }
     bool persistent() const override { return o_.worker; }
-    // Fresh workers per round: a refinement round starts below the last round's largest cell.
-    void begin_round() override {
-        for (auto& [gpu, w] : workers_) stop(gpu);
-    }
     ArmBatch measure_fresh(const CellJob& j) override { return drivers_.at(j.spec->op())->race_fresh(j); }
     ArmBatch measure(const CellJob& j) override {
         if (!o_.worker) return measure_fresh(j);
         Driver& d = *drivers_.at(j.spec->op());
         WorkerProcess& w = *workers_.at(j.gpu);
-        int restarts = 0;
-        std::string why;
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            WorkerOut r = d.race_worker(w, j);
-            if (r.ok) {
-                ArmBatch b{std::move(r.arms), "", restarts, false};
-                return b;
+        WorkerGate& gate = gates_.at(j.gpu);
+        if (w.alive() && gate.restart_before(j.footprint)) stop(j.gpu);  // the carve-out order
+        auto attempt = [&] {
+            if (!w.alive()) {
+                d.start_worker(w, j.gpu);
+                gate.started();
+                gate.guarded(now());
             }
-            why = r.error;
-            if (!r.guard) {
-                stop(j.gpu);
-                ++restarts;
-            }
-            std::printf("[gpu%d] %s %s: worker %s after %s\n", j.gpu, j.spec->op().c_str(), key_text(j.key).c_str(),
-                        attempt == 0 ? "retrying the cell" : "failed again, racing the cell in a fresh child",
-                        why.c_str());
+            const bool full = gate.full_guard_due(now());
+            WorkerTry r = d.race_worker(w, j, full);
+            if (full) gate.guarded(now());
+            if (r.ok) gate.ran(j.footprint);
+            for (const ArmOutcome& a : r.arms)
+                if (a.status == "error") r.error = "arm " + a.arm + " error: " + a.reason;
+            if (!r.error.empty())
+                std::printf("[gpu%d] %s %s: worker: %s\n", j.gpu, j.spec->op().c_str(), key_text(j.key).c_str(),
+                            r.error.c_str());
             std::fflush(stdout);
-        }
-        ArmBatch b = measure_fresh(j);
-        b.worker_restarts = restarts;
-        b.fallback = true;
-        return b;
+            return r;
+        };
+        return race_on_worker(attempt, [&] { stop(j.gpu); }, [&] { return measure_fresh(j); });
     }
 
 private:
     const Opts& o_;
     std::map<std::string, std::unique_ptr<Driver>> drivers_;
     std::map<int, std::unique_ptr<WorkerProcess>> workers_;
+    std::map<int, WorkerGate> gates_;
+    const std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
 
+    double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
     void stop(int gpu) {
         workers_.at(gpu)->stop();
         set_worker_pid(gpu, -1);

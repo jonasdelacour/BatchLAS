@@ -39,6 +39,7 @@ struct CellJob {
     std::vector<std::string> arms;
     Tier tier = Tier::preview;
     TierParams p{};
+    double footprint = 0;  // item_footprint: a worker restarts before a smaller one
 };
 
 // One outcome per requested arm; `error` names a child failure that hit every arm.
@@ -57,8 +58,6 @@ public:
     virtual ArmBatch measure(const CellJob& j) = 0;
     virtual ArmBatch measure_fresh(const CellJob& j) { return measure(j); }
     virtual bool persistent() const { return false; }
-    // A round's cells come in ascending bytes; the next round starts small again, so a worker restarts.
-    virtual void begin_round() {}
 };
 
 // `m` may be null only with o.plan, which prints the starting lattice's plan and touches no GPU.

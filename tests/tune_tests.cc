@@ -2061,9 +2061,18 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
                     .mismatch()) << "a candidate the warm worker refused runs in a fresh process";
     const std::vector<ArmOutcome> warm_b{arm("a", "eliminated", {2.0}), arm("b", "ok", {1.0}), arm("c", "skipped")};
     EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.02}), arm("c", "skipped")}, order).verdict, "ok")
-        << "winners differ (a by tie order), but the worker's winner b is within the tie in the fresh run";
-    EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.04}), arm("c", "skipped")}, order).verdict,
+        << "winners differ (a by tie order), but the worker's winner b is within 10% in the fresh run";
+    EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.08}), arm("c", "skipped")}, order).verdict, "ok")
+        << "a 3-10% swap is noise at the audit's rep counts";
+    EXPECT_EQ(audit_compare(warm_b, {arm("a", "ok", {1.0}), arm("b", "ok", {1.12}), arm("c", "skipped")}, order).verdict,
               "mismatch:winner b/a");
+    const std::vector<ArmOutcome> warm_elim{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "ok", {3.0})};
+    EXPECT_EQ(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "bad", {2.0}), arm("c", "ok", {3.0})}, order).verdict,
+              "inconclusive:b eliminated/bad") << "the eliminated arm was never verified";
+    EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "ok", {2.0}), arm("c", "bad", {3.0})}, order)
+                    .mismatch()) << "ok in the worker, bad in a fresh process";
+    EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "skipped"), arm("c", "ok", {3.0})}, order)
+                    .mismatch()) << "eliminated (it launched) vs refused";
     const AuditResult win = audit_compare(warm, {arm("a", "eliminated", {1.2}), arm("b", "ok", {1.0}), arm("c", "skipped")}, order);
     EXPECT_EQ(win.verdict, "mismatch:winner a/b");
     EXPECT_EQ(audit_compare(warm, {arm("a", "error"), arm("b", "error"), arm("c", "error")}, order).verdict, "inconclusive");
@@ -2175,11 +2184,11 @@ public:
     bool disagree = true;
     int restart_at = -1;  // the worker restarts on the cell with this n
     std::vector<std::string> fresh_keys, worker_keys;
-    std::vector<std::size_t> round_starts;  // worker_keys.size() at each begin_round()
+    std::vector<double> footprints;
     bool persistent() const override { return true; }
-    void begin_round() override { round_starts.push_back(worker_keys.size()); }
     ArmBatch measure(const CellJob& j) override {
         worker_keys.push_back(key_arg(j.key));
+        footprints.push_back(j.footprint);
         ArmBatch b = FakeMeasurer::measure(j);
         const std::string slower = key_int(j.key, "n") <= 10 ? "a" : "b";
         for (ArmOutcome& a : b.arms)
@@ -2250,11 +2259,89 @@ TEST(TuneTieredDriver, AuditMatchKeepsTheWorkerAndReportsRestarts) {
     ::close(fd);
     EXPECT_EQ(m.worker_keys.size(), 8u);
     EXPECT_EQ(m.fresh_keys, m.worker_keys) << "every cell audited, none moved to fresh children";
-    // Lattice, then index bisection 8, then 11, 9, 10 one round each: a fresh worker every round.
-    EXPECT_EQ(m.round_starts, (std::vector<std::size_t>{0, 4, 5, 6, 7}));
+    EXPECT_EQ(m.footprints, (std::vector<double>{1e3, 4e3, 16e3, 64e3, 8e3, 11e3, 9e3, 10e3})) << "no batch key: bytes";
     const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
     EXPECT_EQ(l.runs.at(0).worker_mode.at("fakeop.float"), "worker");
     const std::string ev = read_file(events);
     EXPECT_EQ(count_of(ev, "\"ev\": \"worker_restart\""), 1u) << ev;
     EXPECT_NE(ev.find("\"restarts\": 1"), std::string::npos) << ev;
+}
+
+TEST(TuneSchedule, WorkerShareRunsInAscendingPerItemFootprint) {
+    auto key = [](int n, int batch) { return CellKey{{"n", std::to_string(n)}, {"batch", std::to_string(batch)}}; };
+    std::vector<PlannedCell> cells(4);
+    cells[0].key = key(64, 128);    // 4096 per item, 524288 bytes
+    cells[1].key = key(16, 32768);  // 256 per item, the most bytes
+    cells[2].key = key(32, 512);    // 1024 per item
+    cells[3].key = key(16, 128);    // 256 per item, fewer bytes
+    std::vector<const PlannedCell*> share{&cells[0], &cells[1], &cells[2], &cells[3]};
+    sort_for_worker(share, [](const CellKey& k) { return double(key_int(k, "n") * key_int(k, "n") * key_int(k, "batch")); });
+    std::vector<std::string> got;
+    for (const PlannedCell* c : share) got.push_back(key_arg(c->key));
+    EXPECT_EQ(got, (std::vector<std::string>{"n=16,batch=128", "n=16,batch=32768", "n=32,batch=512", "n=64,batch=128"}));
+    EXPECT_DOUBLE_EQ(item_footprint(1024, {{"n", "4"}}), 1024) << "no batch key";
+}
+
+TEST(TuneWorker, GateRestartsBeforeASmallerFootprintAndSchedulesFullGuards) {
+    WorkerGate g(60);
+    g.started();
+    EXPECT_TRUE(g.full_guard_due(0)) << "first cell after a start";
+    g.guarded(0);
+    EXPECT_FALSE(g.full_guard_due(30));
+    EXPECT_TRUE(g.full_guard_due(61));
+    EXPECT_FALSE(g.restart_before(100));
+    g.ran(100);
+    EXPECT_FALSE(g.restart_before(100)) << "equal footprint: the same launch shape";
+    EXPECT_FALSE(g.restart_before(400));
+    g.ran(400);
+    EXPECT_TRUE(g.restart_before(399)) << "a smaller per-item footprint after a larger launch";
+    g.started();
+    EXPECT_FALSE(g.restart_before(1));
+    EXPECT_TRUE(g.full_guard_due(1)) << "a restarted worker is guarded fully again";
+}
+
+TEST(TuneWorker, StickyErrorArmRestartsTheWorkerAndRecordsTheFreshChild) {
+    int tries = 0, restarts = 0, fresh = 0;
+    auto run = [&](std::vector<WorkerTry> script) {
+        tries = restarts = fresh = 0;
+        return race_on_worker([&] { return script.at(std::size_t(tries++)); }, [&] { ++restarts; },
+                              [&] {
+                                  ++fresh;
+                                  return ArmBatch{{arm("a", "ok", {1.0}), arm("b", "ok", {2.0})}, "", 0, false};
+                              });
+    };
+    WorkerTry good{true, false, "", {arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0})}};
+    WorkerTry sticky{true, false, "", {arm("a", "ok", {1.0}), arm("b", "error")}};
+    WorkerTry died{false, false, "worker exited", {}};
+    WorkerTry guard{false, true, "guard", {}};
+    ArmBatch b = run({good});
+    EXPECT_FALSE(b.fallback);
+    EXPECT_EQ(b.arms[1].status, "eliminated");
+    EXPECT_EQ(restarts + fresh, 0);
+    b = run({sticky});
+    EXPECT_TRUE(b.fallback);
+    EXPECT_EQ(tries, 1) << "no second worker try: the fresh child decides";
+    EXPECT_EQ(restarts, 1);
+    EXPECT_EQ(fresh, 1);
+    EXPECT_EQ(b.worker_restarts, 1);
+    EXPECT_EQ(b.arms[1].status, "ok") << "the fresh child's result is recorded";
+    b = run({died, good});
+    EXPECT_FALSE(b.fallback);
+    EXPECT_EQ(b.worker_restarts, 1);
+    b = run({died, died});
+    EXPECT_TRUE(b.fallback);
+    EXPECT_EQ(restarts, 2);
+    b = run({guard, guard});
+    EXPECT_EQ(restarts, 0) << "a guard discard is not the worker's fault";
+    EXPECT_TRUE(b.fallback);
+}
+
+TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.audit_fraction = 0;
+    AuditMeasurer m;
+    m.disagree = false;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    EXPECT_EQ(m.fresh_keys, (std::vector<std::string>{"n=1"})) << "the hash picked nothing: the first worker cell";
 }

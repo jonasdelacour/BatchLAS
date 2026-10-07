@@ -325,6 +325,18 @@ std::vector<std::string> seed_order(const std::map<CellKey, CellRecord>& done, c
     return out;
 }
 
+double item_footprint(double bytes, const CellKey& key) {
+    const std::string* b = key_get(key, "batch");
+    return b && is_int(*b) && std::stod(*b) > 0 ? bytes / std::stod(*b) : bytes;
+}
+
+void sort_for_worker(std::vector<const PlannedCell*>& cells, const std::function<double(const CellKey&)>& bytes) {
+    std::stable_sort(cells.begin(), cells.end(), [&](const PlannedCell* a, const PlannedCell* b) {
+        const double ba = bytes(a->key), bb = bytes(b->key);
+        return std::pair(item_footprint(ba, a->key), ba) < std::pair(item_footprint(bb, b->key), bb);
+    });
+}
+
 bool audit_pick(const std::string& run_id, const CellKey& key, double fraction) {
     return double(fnv1a64(run_id + key_arg(key)) % 1000) < fraction * 1000;
 }
@@ -332,6 +344,17 @@ bool audit_pick(const std::string& run_id, const CellKey& key, double fraction) 
 namespace {
 
 bool feasible(const std::string& status) { return status == "ok" || status == "eliminated"; }
+
+// A per-candidate disagreement: "mismatch", "inconclusive" (eliminated vs bad: the eliminated arm
+// was never verified) or "" (agree, or both unusable).
+std::string differ(const std::string& w, const std::string& f) {
+    if (feasible(w) != feasible(f)) {
+        const std::string& other = feasible(w) ? f : w;
+        if (other != "bad") return "mismatch";
+        return (feasible(w) ? w : f) == "ok" ? "mismatch" : "inconclusive";
+    }
+    return "";
+}
 
 // rank()'s winner among the survivors, else the fastest eliminated arm; "" when nothing was timed.
 std::string winner_of(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& order, double tie) {
@@ -356,7 +379,7 @@ double median_of(const std::vector<ArmOutcome>& arms, const std::string& arm) {
 }  // namespace
 
 AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
-                          const std::vector<std::string>& order, double tie) {
+                          const std::vector<std::string>& order, double tie, double margin) {
     AuditResult r;
     const std::string ww = winner_of(warm, order, tie), fw = winner_of(fresh, order, tie);
     r.warm_ms = median_of(warm, ww);
@@ -367,21 +390,23 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
         r.verdict = "inconclusive";
         return r;
     }
-    std::vector<std::string> differ;
+    std::vector<std::string> bad, unsure;
     for (const ArmOutcome& w : warm)
-        for (const ArmOutcome& f : fresh)
-            if (w.arm == f.arm && feasible(w.status) != feasible(f.status))
-                differ.push_back(w.arm + " " + w.status + "/" + f.status);
-    if (!differ.empty()) {
-        r.verdict = "mismatch:feasibility " + join(differ, ",");
+        for (const ArmOutcome& f : fresh) {
+            if (w.arm != f.arm) continue;
+            const std::string d = differ(w.status, f.status);
+            if (!d.empty()) (d == "mismatch" ? bad : unsure).push_back(w.arm + " " + w.status + "/" + f.status);
+        }
+    if (!bad.empty()) {
+        r.verdict = "mismatch:feasibility " + join(bad, ",");
         return r;
     }
     const double ww_fresh = median_of(fresh, ww);
-    if (ww != fw && !(std::isfinite(ww_fresh) && ww_fresh <= r.fresh_ms * (1 + tie))) {
+    if (ww != fw && !(std::isfinite(ww_fresh) && ww_fresh <= r.fresh_ms * (1 + margin))) {
         r.verdict = "mismatch:winner " + ww + "/" + fw;
         return r;
     }
-    r.verdict = "ok";
+    r.verdict = unsure.empty() ? "ok" : "inconclusive:" + join(unsure, ",");
     return r;
 }
 
