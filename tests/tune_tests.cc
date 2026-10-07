@@ -1425,3 +1425,61 @@ TEST(TuneLedger, ImportSchema1BuildsADeepRunFromPassRecords) {
     EXPECT_EQ(legacy.cells[0].cands[0].hash, "legacy:k1");
     EXPECT_EQ(freshness(legacy.cells[0], now), Freshness::stale);
 }
+
+TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
+    TempDir d;
+    write_run(d, Tier::coarse, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    append_to(f, "{\"kind\": \"cell\", \"run_id\": \"20261001T00");  // killed mid-write
+    CellRecord second = two_family_cell();
+    second.key = {{"n", "128"}, {"batch", "1024"}};
+    RunMeta m;
+    m.run_id = "20261001T000000-a-1";
+    m.tier = Tier::coarse;
+    {
+        LedgerWriter w(d.str(), m);
+        w.cell(second);
+    }
+    Ledger l;
+    ASSERT_NO_THROW(l = read_ledger(d.str()));
+    EXPECT_EQ(l.cells.size(), 2u);
+    EXPECT_TRUE(l.warnings.empty());
+}
+
+TEST(TuneLedger, ValidLastLineWithoutNewlineParses) {
+    TempDir d;
+    write_run(d, Tier::coarse, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
+    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    std::string text = [&] { std::ifstream in(f); std::stringstream s; s << in.rdbuf(); return s.str(); }();
+    text.pop_back();
+    { std::ofstream out(f, std::ios::trunc); out << text; }
+    EXPECT_EQ(read_ledger(d.str()).cells.size(), 1u);
+    RunMeta m;
+    m.run_id = "20261001T000000-a-1";
+    m.tier = Tier::coarse;
+    CellRecord second = two_family_cell();
+    second.key = {{"n", "128"}, {"batch", "1024"}};
+    { LedgerWriter w(d.str(), m); w.cell(second); }
+    EXPECT_EQ(read_ledger(d.str()).cells.size(), 2u) << "the complete last record was kept";
+}
+
+TEST(TuneLedger, LaterRecordInSameRunWins) {
+    TempDir d;
+    RunMeta m;
+    m.run_id = "20261001T000000-a-1";
+    m.tier = Tier::coarse;
+    {
+        LedgerWriter w(d.str(), m);
+        CellRecord a = cell_rec({cres("vendor", "v1")}, {"vendor"});
+        a.date = "2026-10-01";
+        w.cell(a);
+        CellRecord b = cell_rec({cres("vendor", "v1")}, {"vendor"});
+        b.date = "2026-10-01";
+        b.round = 7;
+        w.cell(b);
+    }
+    const Ledger l = read_ledger(d.str());
+    const auto best = best_records(l, {{"vendor", "v1"}});
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->round, 7);
+}

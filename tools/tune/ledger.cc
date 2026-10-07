@@ -135,7 +135,23 @@ LedgerWriter::LedgerWriter(std::string dir, RunMeta meta) : meta_(std::move(meta
     const std::string path = dir + "/" + meta_.run_id + ".jsonl";
     fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd_ < 0) throw std::runtime_error("cannot open " + path);
+    repair_tail(path);
     put(run_line(meta_));
+}
+
+// A reopened file may end in a torn line. A complete record just missing its newline gets one; any
+// other fragment is cut, since appending after it would make it a malformed middle line.
+void LedgerWriter::repair_tail(const std::string& path) {
+    std::string text;
+    {
+        std::ifstream in(path, std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    if (text.empty() || text.back() == '\n') return;
+    const std::size_t nl = text.rfind('\n');
+    const std::size_t start = nl == std::string::npos ? 0 : nl + 1;
+    if (parse_record(std::string_view(text).substr(start))) put("\n");
+    else if (::ftruncate(fd_, static_cast<off_t>(start)) != 0) throw std::runtime_error("cannot repair " + path);
 }
 
 LedgerWriter::~LedgerWriter() {
@@ -226,7 +242,8 @@ std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::ma
     for (const CellRecord& c : l.cells) {
         if (freshness(c, family_hash) == Freshness::stale) continue;
         const auto [it, fresh] = best.try_emplace(c.key, &c);
-        if (!fresh && order(c) > order(*it->second)) it->second = &c;
+        // >=: on a full tie the later line wins (a re-race appended to the same run).
+        if (!fresh && order(c) >= order(*it->second)) it->second = &c;
     }
     return best;
 }

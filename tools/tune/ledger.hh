@@ -54,6 +54,7 @@ public:
 
 private:
     void put(const std::string& line);
+    void repair_tail(const std::string& path);
     RunMeta meta_;
     int fd_ = -1;
 };
@@ -75,7 +76,8 @@ enum class Freshness { current, partly_stale, stale };
 // differs, or a family exists that the record never saw. An empty ranking has no winner to go stale.
 Freshness freshness(const CellRecord& r, const std::map<std::string, std::string>& family_hash);
 
-// Families (sorted) whose hash changed, that are gone, or that the record never timed.
+// Family names (sorted), not spellings: changed, removed (still listed) or never timed. The consumer
+// expands them to current spellings and drops removed families.
 std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<std::string, std::string>& family_hash);
 
 // Per key: highest tier_rank among non-stale records, then newest date, then larger run_id.
