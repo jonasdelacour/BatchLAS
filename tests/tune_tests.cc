@@ -177,7 +177,7 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
 
 TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
-    for (const char* op : {"potrf", "posv"}) {
+    for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
         ASSERT_FALSE(list.empty()) << op;
         std::string missing;
@@ -327,6 +327,33 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         EXPECT_NE(std::find(d.begin(), d.end(), "src/extensions/potrf_cta.cc"), d.end()) << f;
         EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/trsm_native.cc"), d.end()) << f;
     }
+    // LU: getrf_cta.cc holds cta's kernel and blocked's panel leaf, so it is common, not a family.
+    for (const char* op : {"getrf", "getrs", "getri", "gesv"}) {
+        const KernelBlock b = block(op);
+        EXPECT_EQ(b.deps_common, std::vector<std::string>{"src/ops/" + std::string(op) + "/" + op + ".cc"}) << op;
+        for (const auto& [fam, files] : b.deps) {
+            EXPECT_FALSE(files.empty()) << op << " " << fam;
+            EXPECT_TRUE(kernel_hash(repo, files)) << op << " " << fam;
+        }
+    }
+    for (const char* f : {"tiny", "blocked"}) EXPECT_TRUE(block("getrf").family.count(f)) << f;
+    const auto& getrf_common = block("getrf").common;
+    EXPECT_NE(std::find(getrf_common.begin(), getrf_common.end(), "src/extensions/getrf_cta.cc"), getrf_common.end());
+    for (const char* f : {"cta", "blocked"}) EXPECT_TRUE(block("getrs").family.count(f)) << f;
+    EXPECT_TRUE(block("getri").family.count("blocked"));
+    EXPECT_TRUE(block("gesv").family.count("tiny"));
+    const auto has = [](const KernelBlock& b, const char* fam, const char* file) {
+        if (!b.deps.count(fam)) return false;
+        const auto& d = b.deps.at(fam);
+        return std::find(d.begin(), d.end(), file) != d.end();
+    };
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/gemm_kernels.cc"));
+    EXPECT_TRUE(has(block("getrs"), "blocked", "src/sycl/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getri"), "blocked", "src/sycl/trsm_native.cc"));
+    for (const char* file : {"src/extensions/getrf_tiny.cc", "src/extensions/getrf_cta.cc", "src/extensions/getrs_fused.cc",
+                             "src/extensions/getrs_native.cc", "src/sycl/trsm_native.cc", "src/sycl/gemm_kernels.cc"})
+        EXPECT_TRUE(has(block("gesv"), "blocked", file)) << file;
 }
 
 TEST(TuneGate, FailsOnlyWhenBothPassesLose) {
@@ -504,7 +531,7 @@ TEST(TuneHash, CmakeStalenessHashAgreesWithTheDriver) {
     const fs::path d = scratch("cmake_hash");
     std::ofstream(d / "hash.cmake") << "include(\"" << repo << "/cmake/BatchLASTunedStaleness.cmake\")\n"
                                     << "_batchlas_tune_kernel_hash(\"${SPEC}\" h)\nmessage(\"HASH=${h}\")\n";
-    for (const char* op : {"potrf", "posv"}) {
+    for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv"}) {
         const std::string spec = repo + "/tools/tune/" + op + "_spec.cc";
         const std::string out = run("'" + cmake + "' -DPROJECT_SOURCE_DIR='" + repo + "' -DSPEC='" + spec + "' -P '" +
                                     (d / "hash.cmake").string() + "' 2>&1");
