@@ -463,23 +463,123 @@ std::string sha256_hex(std::string_view data) {
     return std::string(out, 64);
 }
 
-std::vector<std::string> parse_kernel_list(std::string_view spec_source) {
+namespace {
+std::vector<std::string> quoted_paths(const std::string& line) {
     std::vector<std::string> out;
-    bool inside = false;
+    for (std::size_t a = line.find('"'); a != std::string::npos; a = line.find('"', a + 1)) {
+        const std::size_t b = line.find('"', a + 1);
+        if (b == std::string::npos) break;
+        out.push_back(line.substr(a + 1, b - a - 1));
+        a = b;
+    }
+    return out;
+}
+
+// "// family: name" -> name; empty when the line is not a family marker.
+std::string family_marker(const std::string& line) {
+    std::size_t c = line.find_first_not_of(" \t");
+    if (c == std::string::npos || line.compare(c, 2, "//") != 0) return {};
+    c = line.find_first_not_of(" \t", c + 2);
+    if (c == std::string::npos || line.compare(c, 7, "family:") != 0) return {};
+    std::size_t a = c + 7;
+    while (a < line.size() && line[a] == ' ') ++a;
+    std::size_t e = a;
+    while (e < line.size() && line[e] != ' ' && line[e] != '"') ++e;
+    return line.substr(a, e - a);
+}
+
+// A kernel-deps line "// common" followed by nothing but quoted paths ("// common helpers" is prose).
+bool is_deps_common(const std::string& line) {
+    std::size_t c = line.find_first_not_of(" \t");
+    if (c == std::string::npos || line.compare(c, 2, "//") != 0) return false;
+    c = line.find_first_not_of(" \t", c + 2);
+    if (c == std::string::npos || line.compare(c, 6, "common") != 0) return false;
+    for (std::size_t i = c + 6; i < line.size(); ++i) {
+        if (line[i] == '"') {
+            i = line.find('"', i + 1);
+            if (i == std::string::npos) return false;
+        } else if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A line that is exactly "// common" (trailing words or a path on the line do not count).
+bool is_common_marker(const std::string& line) {
+    const std::size_t a = line.find_first_not_of(" \t");
+    const std::size_t e = line.find_last_not_of(" \t\r");
+    return a != std::string::npos && line.substr(a, e - a + 1) == "// common";
+}
+}  // namespace
+
+KernelBlock parse_kernel_block(std::string_view spec_source) {
+    KernelBlock out;
+    enum class In { none, sources, deps } in_block = In::none;
+    std::string section;  // empty = common
     std::istringstream in{std::string(spec_source)};
     for (std::string line; std::getline(in, line);) {
         if (line.find("kernel-sources-begin") != std::string::npos) {
-            inside = true;
+            in_block = In::sources;
+            section.clear();
             continue;
         }
-        if (line.find("kernel-sources-end") != std::string::npos) break;
-        if (!inside) continue;
-        for (std::size_t a = line.find('"'); a != std::string::npos; a = line.find('"', a + 1)) {
-            const std::size_t b = line.find('"', a + 1);
-            if (b == std::string::npos) break;
-            out.push_back(line.substr(a + 1, b - a - 1));
-            a = b;
+        if (line.find("kernel-sources-end") != std::string::npos) {
+            in_block = In::none;
+            continue;
         }
+        if (line.find("kernel-deps-begin") != std::string::npos) {
+            in_block = In::deps;
+            continue;
+        }
+        if (line.find("kernel-deps-end") != std::string::npos) break;
+        if (in_block == In::none) continue;
+        const std::string fam = family_marker(line);
+        if (in_block == In::deps) {
+            if (fam.empty() && is_deps_common(line))
+                for (std::string& p : quoted_paths(line)) out.deps_common.push_back(std::move(p));
+            if (fam.empty()) continue;
+            auto& v = out.deps[fam];
+            for (std::string& p : quoted_paths(line)) v.push_back(std::move(p));
+            continue;
+        }
+        if (!fam.empty())
+            section = fam;
+        else if (is_common_marker(line))
+            section.clear();
+        for (std::string& p : quoted_paths(line)) {
+            out.all.push_back(p);
+            (section.empty() ? out.common : out.family[section]).push_back(std::move(p));
+        }
+    }
+    return out;
+}
+
+KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file) {
+    const std::string path = repo + "/" + spec_file;
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("cannot read " + path);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return parse_kernel_block(ss.str());
+}
+
+std::vector<std::string> parse_kernel_list(std::string_view spec_source) {
+    return parse_kernel_block(spec_source).all;
+}
+
+std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
+                                                 const std::vector<std::string>& families) {
+    std::map<std::string, std::string> out;
+    for (const std::string& f : families) {
+        std::vector<std::string> paths = b.common;
+        if (const auto it = b.family.find(f); it != b.family.end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
+        paths.insert(paths.end(), b.deps_common.begin(), b.deps_common.end());
+        if (const auto it = b.deps.find(f); it != b.deps.end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
+        std::string missing;
+        const auto h = kernel_hash(repo, paths, &missing);
+        if (!h) throw std::runtime_error("kernel source missing for family '" + f + "': " + missing);
+        out[f] = *h;
     }
     return out;
 }

@@ -17,11 +17,48 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 
 ## Usage
 
-    # tune: raw JSONL per dtype, then tables (omit --out for raw only)
+The normal workflow is tiered: plan, run, inspect, then write tables from the ledger.
+
+    batchlas_tune potrf --tier preview --dtype float,double --devices 1 --plan   # cells, skips, estimate; no GPU
+    batchlas_tune potrf --tier preview --dtype float,double --devices 1          # measure into the ledger
+    batchlas_tune --status                                                       # what each ledger holds
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out /tmp/tables   # source=ledger: tables
+
+A rerun measures only what is missing, stale or below the requested tier: a repeated preview run
+plans every cell `skip:current` and exits in seconds, and a kernel edit re-races only the cells
+whose families changed (`partial:<family>`). The `--plan` estimate is the sum over GPUs, so divide
+by the number of `--devices`; on threadripper02 it ran 1.3x to 1.8x high (docs/design/tiered-tuning.md,
+"Engine: end-to-end validation on sm_120"). Write ledger tables to a scratch `--out` and compare
+them with `tuned/` first: `--ledger` refuses to overwrite a timed table that is not a ledger's
+(a converted or `tuner:` source) and names it; `--replace-timed` is the deliberate switch, for when
+the ledger tables are meant to replace the measured ones. Transcribed and ledger tables are
+overwritten without it. `sweep_to_table.py --ledger ... --assume-current --out DIR` is a
+diagnostic that judges records by their stored hashes (an imported raw sweep round-trips to the
+shipped table); it refuses a missing `--out` or one that resolves to `tuned/`.
+
+Two modes. A **tiered** run (`--tier preview|coarse|deep`, docs/design/tiered-tuning.md) records
+per-cell results in the ledger and skips cells the ledger already holds. A **custom** run is the
+expert two-pass protocol below; any protocol flag (`--reps`, `--warm`, `--passes`, `--remeasure`,
+`--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad`, `--raw`) selects it. It is recorded in
+the ledger as tier `custom`, ranked below preview, only when `--ledger DIR` is given explicitly;
+otherwise it writes its raw JSONL (and tables with `--out`) and leaves every ledger alone. With
+neither mode, the tuner stops and asks.
+
+    # tiered: ledger records, then tables (omit --out to update the ledger only; a scratch --out,
+    # since the converter refuses to overwrite converted or tuner tables without --replace-timed)
+    batchlas_tune potrf,trsm,posv --tier preview --dtype float,double --devices 1 --out /tmp/tables
+    batchlas_tune all --tier coarse --devices 1,2 --budget 6 --progress-fd 3 3>events.jsonl
+
+    # what a run would do, from the ledger and nvidia-smi's compute capability; no GPU work
+    batchlas_tune potrf --tier preview --devices 1 --dtype float --plan
+    batchlas_tune --status                      # op x dtype x device matrix of ledgers and tables
+    batchlas_tune --import-raw benchmarks/results/tuning/trsm.float.sm_120.jsonl   # schema 1 -> deep run
+
+    # custom: raw JSONL per dtype, then tables (omit --out for raw only)
     batchlas_tune potrf --dtype float,double,cfloat,cdouble --devices 1 \
                   --raw benchmarks/results/tuning --out tuned
 
-    # a smaller protocol for a smoke test or a spot check
+    # a smaller custom protocol for a smoke test or a spot check
     batchlas_tune posv --devices 1 --dtype float --n-list 24,32 --nrhs-list 2 --batches 8192 --uplo L \
                   --reps 8 --warm 0.5 --raw /tmp/raw --out /tmp/tables
 
@@ -37,16 +74,28 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 
 | flag | default | meaning |
 |---|---|---|
+| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all`; tiered runs take potrf and trsm before posv. Gate and custom runs take one op |
+| `--tier` | none | `preview`, `coarse` or `deep`; see "Tiered mode" |
+| `--plan` | off | print the starting lattice's cells, skips with reasons and the time estimate, then exit; no GPU |
+| `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate with refinement exceeds H) |
+| `--progress-fd N` | none | one JSON event per line on fd N; see "Tiered mode" |
+| `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table; a custom run records into it only when this flag is given |
+| `--device-key sm_NN` | nvidia-smi compute capability of the first `--devices` GPU | the device `--plan` reads the ledger for |
+| `--cell-overhead-s` | 0.49 | per-child start-up in the estimate (measured on threadripper02) |
+| `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
+| `--audit-fraction F` | the tier's (preview, coarse 0.02; deep 0.10) | share of worker cells re-raced in a fresh child |
+| `--status` | | the op x dtype x device matrix: runs, cells, tier mix of each cell's best record, stale and partly stale counts, newest run and its age, the table's source, tier mix and date. No GPU |
+| `--import-raw F` | | a schema-1 raw sweep into the ledger as a deep run; op, dtype and device from its meta |
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
-| `--devices` | required | GPU indices (nvidia-smi / PCI order); inside `CUDA_VISIBLE_DEVICES` when that is set; see "Multi-GPU" |
-| `--raw DIR` | `<repo>/benchmarks/results/tuning` | raw JSONL (Git LFS there) |
-| `--out DIR` | none | table directory; runs the converter after each dtype |
-| `--reps`, `--warm`, `--passes` | 16, 1.5 s, 2 | §6.3 protocol |
-| `--remeasure` | 0.10 | re-measure a cell once when pass medians differ by more |
-| `--refine-ratio`, `--no-refine` | 1.1 | §6.2 bisection stops when hi/lo < ratio |
-| `--no-jit` | off | skip the throwaway JIT pass |
+| `--devices` | required (not for `--plan`) | GPU indices (nvidia-smi / PCI order); inside `CUDA_VISIBLE_DEVICES` when that is set; see "Multi-GPU" |
+| `--raw DIR` | `<repo>/benchmarks/results/tuning` | custom: raw JSONL (Git LFS there) |
+| `--out DIR` | none | table directory; runs the converter after each dtype (tiered: `--ledger`, custom: `--tuner`) |
+| `--reps`, `--warm`, `--passes` | 16, 1.5 s, 2 | custom: §6.3 protocol |
+| `--remeasure` | 0.10 | custom: re-measure a cell once when pass medians differ by more |
+| `--refine-ratio`, `--no-refine` | 1.1 | custom: §6.2 bisection stops when hi/lo < ratio |
+| `--no-jit` | off | custom: skip the throwaway JIT pass |
 | `--cap-gib` | 4 | skip cells whose matrices exceed this |
-| `--ld-pad` | 0 | ld = n + pad (non-natural leading dimension) |
+| `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | the idle guard; see "Guard" |
 | `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts; see "Guard" |
@@ -54,7 +103,89 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 | `--cell-timeout` | 1800 s | a child running longer is killed and counts as a failed child |
 | `--gate`, `--old-csv`, `--parent-bin`, `--gate-csv`, `--gate-limit` | 1.05 | gate mode |
 
+## Tiered mode
+
+The tier parameters, the ledger and the record rules are in docs/design/tiered-tuning.md
+("Engine: tiers and the per-cell algorithm", "Engine: the ledger and table generation"). Here,
+what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
+
+- **Rounds, breadth-first.** Round 0 is the tier's starting lattice (`tier_lattice` of the op's
+  axes; gemm's demand-driven grid is subsampled by key hash) for every op and dtype, in op order.
+  Then refinement rounds (`refine_all_axes`, the tier's mode and margin) over every cell the
+  ledger and this run ranked inside the requested grid, until no midpoint is left, `--budget`
+  is spent or the refinement cap is hit. Within a round each GPU takes cells round-robin in
+  ascending input bytes.
+- **Refinement rules** (docs/design/tiered-tuning.md, "Engine: refinement convergence rules").
+  A bracket is a flip when its two winners differ and, at either end, the other end's winner is
+  more than the 3% tie slower (or cannot win there: not runnable, or eliminated without a median);
+  near-tie alternation (within the tie at both ends) refines nothing. The preview margin (runner-up within 10%) applies only
+  between two round-0 cells at the running tier, stored or measured now. `batch` refills only its own axis values, never a
+  geometric midpoint. Refinement cells per op and dtype are capped at `refine_cap_factor` x
+  round-0 records at the running tier (preview 3.0, coarse 1.0, deep 2.0), counting the ledger's
+  current records as well as this run's, and refined records already stored count against it: a
+  run stopped by Ctrl-C or `--budget` after its lattice refines on the next run, within the same
+  total; past it the first cells in `refine_all_axes` order (flips, then margin hedges)
+  run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
+- **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
+  higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
+  the changed or added families (a candidate stored `skipped`, which could not run there, is not
+  compared; the spec's `// common` deps line puts `<op>.cc`, where `can_run` lives, in every family)
+  plus its stored winner and runner-up, at the stored record's
+  tier, and appends the merged record (`partial:<families>`; re-raced candidates ranked by their
+  new times, the unchanged ones below them in stored order). A stale record, or one where every
+  candidate is `error`, counts as missing: measured in full at the run's tier. A cell whose probe
+  found at most one runnable candidate is `skip:single`: recorded with that candidate ranked,
+  untimed, which the converter writes as an untimed row (`<spelling> - # <tier>`).
+  A probe result comes from an earlier child of the same cell (its `skipped` arms).
+- **Measuring.** A cell is raced (`--mode race`, `run_race` in `cell_runner.hh`): a
+  `warm_topup_s` warm-up per live candidate, interleaved, then rounds of one timed run per live
+  candidate (order rotated, every other round reversed in deep), `race_step` after each round, until
+  a winner, a tie or `max_reps` rounds (a candidate raced alone, or whose rivals all failed, still
+  runs `min_reps` rounds). Every raced candidate is then verified as in the custom protocol, the
+  eliminated too: one that passes keeps the median of its rounds (status `eliminated`, ranked
+  after the survivors), one that fails is `bad` and left out of the row. The nearest finished cell's winner is
+  raced first. Each candidate's median, min and max go into a ledger `cell` record.
+- **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up kernel at start),
+  fed its share of a round in ascending per-item footprint (bytes / batch) and restarted before a
+  cell smaller than one it has run. Between cells the guard checks for foreign compute processes
+  (the worker excepted); the full guard with utilization runs before a worker starts and every 60 s
+  after a 1 s idle. A worker that exits or exceeds `--cell-timeout` is restarted and the cell retried
+  once; a second failure, or any `error` candidate (a possible sticky CUDA error), restarts it and
+  races the cell in a fresh child, whose result is recorded (progress `worker_restart`). A candidate
+  whose `error` the fresh child reproduced in two consecutive cells is the candidate's own error: for
+  the rest of the run that op and dtype race it alone in a fresh child per cell, the other candidates
+  on the worker (all of them benched: the cell is a fallback). Arms raced alone are left out of the
+  audit's worker side. In a fresh child a failed
+  child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
+  or `skipped` candidate writes no record, so the next run measures the cell again.
+- **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again
+  in a fresh child; until an op and dtype has been audited once, its next worker cell that did not
+  fall back is audited whatever the hash picked. A
+  candidate usable (`ok`/`eliminated`) in one and refused or failing in the other (`eliminated`
+  against `bad` is inconclusive), or a different winner whose worker winner is more than 10% slower
+  in the fresh run, is a mismatch: the ledger gets
+  an `audit` record either way, and on a mismatch the run line is rewritten with
+  `wm.<op>.<dtype>: fresh` and the rest of that op and dtype runs in fresh children.
+- **Ledger.** One run file per (op, dtype) under `--ledger`, opened at the first record. Its `run`
+  record always carries the op's full key spec and candidate list, whatever `--grid` narrowed.
+- **Estimate.** Per cell: 0.49 s child start-up (`--cell-overhead-s`) plus, per candidate,
+  `max_reps` times the nearest ledger record's median (else bytes / 500 GB/s), the warm-up top-up
+  and 0.05 s of verification. Refinement adds, per op and dtype, ratio x the lattice cells to
+  measure at their mean estimate, where ratio is this ledger's refined / round-0 records at the tier
+  (at most the cap factor), else cap factor x 0.5. `--plan` prints both the lattice-only and the
+  with-refinement estimate; the run ends with a summary line per op and dtype (cells per round,
+  lattice and refinement counts, the planned refinement, wall time).
+- **Progress events** (`--progress-fd`): `{"ev":"plan","cells":N,"est_s":S,"refine_cells":R,"est_refine_s":E,"est_total_s":T}`
+  (`est_s` is the lattice only), `{"ev":"refine_cap","op":o,"dtype":d,"lattice":L,"refined":n,"cap":c,"dropped":k}`,
+  `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
+  `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
+  `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
+  `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
+  `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`, `{"ev":"done"}`.
+
 ## Protocol (§6.3) and where it lives
+
+This is the custom protocol; the tiered one is above.
 
 - **One cell per process.** The driver forks and execs itself with `--cell` once per (cell, pass);
   the SLM carve-out is sticky per CUfunction (`benchmarks/factor_bench.cc` header).

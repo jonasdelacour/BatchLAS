@@ -11,6 +11,8 @@ tables); flat-kernel-selection-phase3-plan.md section 2 option D.
     scripts/sweep_to_table.py --check --check-points pts.txt
     scripts/sweep_to_table.py --self-test            # converter rules on real rows (also run by --check)
     scripts/sweep_to_table.py --tuner JSONL... [--out DIR]   # tables from batchlas_tune raw output
+    scripts/sweep_to_table.py --ledger DIR... [--out DIR] [--replace-timed]   # tables from per-run ledgers
+    scripts/sweep_to_table.py --ledger DIR... --assume-current --out DIR   # diagnostic, see LEDGER
 
 A table comes from one of three sources:
 
@@ -88,6 +90,22 @@ candidate counts when it is status "ok" in all `passes` passes of that attempt, 
 is the mean of those pass medians, ">10% spread" marking the row "# noisy" as above. OpSpec
 field tuner_key turns a record into the key tuple; the default reads each '# keys:' name.
 
+LEDGER (--ledger input, docs/design/tiered-tuning.md "Ledger"): a directory of per-run JSONL files
+named <op>.<dtype>.<device>. Per cell the best record wins (tier deep > coarse > preview > custom,
+then newest date, run id, later line) unless its winner's family hash is stale or every candidate
+is "error" (a failed child: no record, as in the C++ best_records); the newest run's
+"candidates" fix the families hashed from tools/tune/<op>_spec.cc. Rows carry "# <tier>". A row of
+a lower tier is dropped when a higher-tier row has equal exact keys and lies within the tier's
+stride (preview/custom/transcribed 2, in index steps of the per-key lattice of the ledger's
+cells) on every log key; the replaced table's untimed rows are the transcribed tier. An empty
+ranking emits no row. --check re-derives the table from the ledger its source=ledger:<dir> names.
+--ledger refuses to overwrite an existing timed table whose source is not ledger: or transcribed:
+(a converted or tuner table) unless --replace-timed is given. A Git LFS pointer file in a ledger
+directory is an error naming git lfs pull. --assume-current (diagnostic only: an importer/generator
+round trip on data whose kernels have changed since) judges freshness against each family's last
+stored hash instead of the sources and needs an explicit --out outside tuned/; the header still
+names the source hashes, so --check fails such a table.
+
 TRANSCRIBER CSV (--transcribe input), with a header row:
   op,dtype,device,<one column per '# keys:' name>,ranked
   e.g.  posv,float,sm_89,L,8,1,128,tiny|cta|blocked
@@ -106,6 +124,7 @@ Python 3 standard library only.
 import argparse
 import csv
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -738,6 +757,381 @@ def write_tuner_tables(paths, out_dir):
         print(f"wrote {dest}: {len(rows)} rows, {noisy} noisy (kernels={meta['kernels']})")
 
 
+LEDGER = "ledger:"
+LEDGER_TIERS = ("deep", "coarse", "preview", "custom", "transcribed")  # precedence, highest first
+LEDGER_STRIDE = {"deep": 1, "coarse": 1, "preview": 2, "custom": 2, "transcribed": 2}
+LEDGER_STATUS_TIMED = ("ok", "eliminated")
+
+
+def quoted_paths(line):
+    """Every "..." pair on the line, like the C++ quoted_paths (an unmatched quote ends it)."""
+    out, a = [], line.find('"')
+    while a != -1:
+        b = line.find('"', a + 1)
+        if b == -1:
+            break
+        out.append(line[a + 1:b])
+        a = line.find('"', b + 1)
+    return out
+
+
+def family_marker(line):
+    """'// family: name' -> name, else ''; anchored at the start of the line like the C++ parser."""
+    m = re.match(r'\s*//\s*family:[ ]*([^ "]*)', line)
+    return m.group(1) if m else ""
+
+
+def parse_kernel_block(text):
+    """tools/tune/tune_core.cc parse_kernel_block: the kernel-sources block split by family
+    ('// family: x' opens a section, '// common' returns to common) plus the kernel-deps comment
+    block ('// family: x "path" ...'; '// common "path" ...' for every family). Returns
+    {'all', 'common', 'family', 'deps', 'deps_common'}."""
+    out = {"all": [], "common": [], "family": defaultdict(list), "deps": defaultdict(list), "deps_common": []}
+    state, section = "none", ""
+    for line in text.split("\n"):
+        if "kernel-sources-begin" in line:
+            state, section = "sources", ""
+            continue
+        if "kernel-sources-end" in line:
+            state = "none"
+            continue
+        if "kernel-deps-begin" in line:
+            state = "deps"
+            continue
+        if "kernel-deps-end" in line:
+            break
+        if state == "none":
+            continue
+        fam = family_marker(line)
+        if state == "deps":
+            if fam:
+                out["deps"][fam] += quoted_paths(line)
+            elif re.fullmatch(r'\s*//\s*common(\s*"[^"]*")*\s*', line):
+                out["deps_common"] += quoted_paths(line)
+            continue
+        if fam:
+            section = fam
+        elif line.strip() == "// common":
+            section = ""
+        for path in quoted_paths(line):
+            out["all"].append(path)
+            (out["family"][section] if section else out["common"]).append(path)
+    return out
+
+
+def kernel_hash(paths):
+    """First 8 hex of sha256 over 'sha256(file)  path' lines (sha256sum's format)."""
+    manifest = ""
+    for p in paths:
+        try:
+            with open(os.path.join(REPO, p), "rb") as f:
+                manifest += hashlib.sha256(f.read()).hexdigest() + "  " + p + "\n"
+        except OSError:
+            raise SystemExit(f"kernel source missing: {p}")
+    return hashlib.sha256(manifest.encode()).hexdigest()[:8]
+
+
+def family_hashes(repo, block, families):
+    """Per family: kernel_hash over common + the family's files + deps_common + its deps."""
+    assert repo == REPO
+    return {f: kernel_hash(block["common"] + block["family"].get(f, []) + block["deps_common"] + block["deps"].get(f, []))
+            for f in families}
+
+
+def read_spec_source(spec):
+    path = os.path.join(REPO, "tools", "tune", f"{spec.op}_spec.cc")
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        raise SystemExit(f"{path}: cannot read the kernel-sources block of {spec.op}")
+
+
+def spec_kernels(spec):
+    """The op-level kernels= hash: every path of the kernel-sources block, in order."""
+    return kernel_hash(parse_kernel_block(read_spec_source(spec))["all"])
+
+
+def spelling_family(spelling):
+    return spelling.split(":", 1)[0]
+
+
+@dataclass
+class Ledger:
+    runs: list = field(default_factory=list)
+    cells: list = field(default_factory=list)
+
+
+LFS_POINTER = "version https://git-lfs.github.com/spec/v1"  # the first line of an unfetched LFS file
+
+
+def read_ledger(path):
+    """Union of <path>/*.jsonl except *.reps.jsonl, files in name order, lines in file order.
+    A malformed last line of a file is a warning; an earlier one is fatal."""
+    led = Ledger()
+    names = sorted(n for n in os.listdir(path) if n.endswith(".jsonl") and not n.endswith(".reps.jsonl"))
+    for name in names:
+        with open(os.path.join(path, name)) as f:
+            lines = [(i, ln) for i, ln in enumerate(f.read().split("\n"), start=1) if ln.strip()]
+        if lines and lines[0][1].startswith(LFS_POINTER):
+            raise SystemExit(f"{path}/{name}: Git LFS pointer: run git lfs pull")
+        for pos, (no, line) in enumerate(lines):
+            try:
+                rec = json.loads(line)
+                kind = rec.get("kind")
+                if kind == "run":  # a repeated run id (a worker-mode update) replaces the earlier line
+                    led.runs = [r for r in led.runs if r.get("run_id") != rec.get("run_id")] + [rec]
+                elif kind == "cell":
+                    led.cells.append(read_cell(rec))
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError, AttributeError) as e:
+                where = f"{path}/{name}:{no}: {e}"
+                if pos + 1 != len(lines):
+                    raise SystemExit(where)
+                print(f"note: skipping truncated last line, {where}")
+    return led
+
+
+def read_cell(rec):
+    if rec["tier"] not in LEDGER_TIERS:
+        raise ValueError(f"unknown tier '{rec['tier']}'")
+    key = tuple(tuple(kv.split("=", 1)) for kv in rec["key"].split(","))
+    names = [n for n in rec["cands"].split("|") if n]
+    cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""), "median": rec.get(f"m{i}")}
+             for i, n in enumerate(names)]
+    return {"run_id": rec["run_id"], "tier": rec["tier"], "key": key, "date": rec.get("date", ""),
+            "ranked": [r for r in rec.get("ranked", "").split("|") if r], "cands": cands}
+
+
+def stale_families(cell, family_hash):
+    seen, out = set(), set()
+    for c in cell["cands"]:
+        fam = spelling_family(c["cand"])
+        seen.add(fam)
+        # A candidate that could not run there (skipped) cannot change the ranking: its hash is ignored.
+        if c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
+            out.add(fam)
+    return out | (set(family_hash) - seen)
+
+
+def freshness(cell, family_hash):
+    """'current' | 'partly_stale' | 'stale', the C++ freshness(): only the winner's staleness
+    voids a record; an empty ranking has no winner."""
+    if cell["ranked"]:
+        win = next((c for c in cell["cands"] if c["cand"] == cell["ranked"][0]), None)
+        if win is None or family_hash.get(spelling_family(win["cand"])) != win["hash"]:
+            return "stale"
+    return "partly_stale" if stale_families(cell, family_hash) else "current"
+
+
+def all_error(cell):
+    """Every candidate `error`: a failed child, not a result. Counts as no record (C++ all_error)."""
+    return bool(cell["cands"]) and all(c["status"] == "error" for c in cell["cands"])
+
+
+def usable(cell, family_hash):
+    return not all_error(cell) and freshness(cell, family_hash) != "stale"
+
+
+def best_records(cells, family_hash):
+    """Per key, skipping all-error and stale records, the highest tier, then newest date, then
+    larger run id, then the later line (the C++ best_records)."""
+    def order(c):
+        return (LEDGER_TIERS[::-1].index(c["tier"]), c["date"], c["run_id"])
+    best = {}
+    for c in cells:
+        if not usable(c, family_hash):
+            continue
+        if c["key"] not in best or order(c) >= order(best[c["key"]]):
+            best[c["key"]] = c
+    return best
+
+
+def ledger_identity(path):
+    """(op, dtype, device) from the <op>.<dtype>.<device> directory or table file name."""
+    parts = os.path.basename(os.path.normpath(path)).replace(".txt", "").split(".")
+    if len(parts) != 3 or parts[0] not in OP_BY_NAME:
+        raise SystemExit(f"{path}: not named <op>.<dtype>.<device> for a known op")
+    return tuple(parts)
+
+
+# Grid axes a tiered cell key carries that are not table keys (tools/tune/<op>_spec.cc axes()).
+HIDDEN_AXES = {"trsm": {"uplo", "diag"}}
+
+
+def key_tuple(spec, keyspec, key):
+    """A record's (name, value) pairs -> the table key tuple (log keys int), or fail. An op with
+    hidden grid axes (trsm's uplo and diag) projects through its tuner_key, which refuses a
+    record that varied them; any other extra or missing field fails."""
+    given = dict(key)
+    names = {n for n, _, _ in keyspec}
+    extra = set(given) - names
+    if spec.tuner_key and names <= set(given) and extra and extra <= HIDDEN_AXES.get(spec.op, set()):
+        out = spec.tuner_key(given)
+        if out is None:
+            raise SystemExit(f"ledger key {key} is not a {spec.op} table key")
+        return out
+    if set(given) != {n for n, _, _ in keyspec}:
+        raise SystemExit(f"ledger key {key} does not match the '# keys:' fields {[n for n, _, _ in keyspec]}")
+    return tuple(int(given[n]) if is_log else given[n] for n, is_log, _ in keyspec)
+
+
+def lattice_index(values, v):
+    """Position of v in the sorted distinct values; off the lattice, interpolated in log2 space."""
+    if v in values:
+        return float(values.index(v))
+    hi = next((i for i, x in enumerate(values) if x > v), len(values))
+    if hi == 0:
+        return -math.log2(values[0] / v)
+    if hi == len(values):
+        return len(values) - 1 + math.log2(v / values[-1])
+    lo = hi - 1
+    return lo + math.log2(v / values[lo]) / math.log2(values[hi] / values[lo])
+
+
+def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
+    """{key: (tier, [(spelling, ms)])}: each cell's best record, minus rows of a lower tier that
+    a higher-tier row brackets (equal exact keys, index distance < the tier's stride on every
+    log key), plus the old table's transcribed rows where no measured row is that close."""
+    current = [c for c in ledger.cells if usable(c, family_hash)]
+    log_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if is_log]
+    exact_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if not is_log]
+    lattice = {i: sorted({key_tuple(spec, keyspec, c["key"])[i] for c in current}) for i in log_pos}
+    cand_rows = []
+    for key, c in best_records(ledger.cells, family_hash).items():
+        entries = []
+        for name in c["ranked"]:
+            res = next((r for r in c["cands"] if r["cand"] == name), None)
+            # An eliminated candidate with no median cannot print a time: left out of the row.
+            if res and res["status"] in LEDGER_STATUS_TIMED and res["median"] and res["median"] > 0:
+                entries.append((name, float(res["median"])))
+        # A ranking with no time at all (a single runnable candidate, probed, never timed) is an untimed row.
+        if not entries and c["ranked"]:
+            entries = [(name, None) for name in c["ranked"]]
+        if entries:
+            cand_rows.append((key_tuple(spec, keyspec, key), c["tier"], entries))
+    cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
+    def near(a, b, stride):
+        return all(a[i] == b[i] for i in exact_pos) and all(
+            abs(lattice_index(lattice[i], a[i]) - lattice_index(lattice[i], b[i])) < stride for i in log_pos)
+
+    kept = {}
+    for tier in LEDGER_TIERS:
+        # Measured rows are bracketed by kept higher rows; a transcribed row by any measured row,
+        # kept or dropped, since a dropped preview row still says the region was measured.
+        against = [k for k, t, _ in cand_rows if t != "transcribed"] if tier == "transcribed" else list(kept)
+        for key, t, entries in cand_rows:
+            if t != tier or key in kept:
+                continue
+            if not any(near(hk, key, LEDGER_STRIDE[tier]) for hk in against):
+                kept[key] = (tier, entries)
+    return kept
+
+
+def read_old_transcribed(path):
+    """The untimed rows of the table about to be replaced: [(key, [(spelling, None)])]."""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path) as f:
+        # An untimed row tagged with a measured tier (a single-candidate cell) is the ledger's, not transcribed.
+        measured = set(LEDGER_TIERS) - {"transcribed"}
+        text = "".join(l for l in f if l.startswith("#") or "#" not in l or l.rsplit("#", 1)[1].strip() not in measured)
+    _, _, parsed = parse_table(text)
+    return [(k, [(c, None) for c, _ in ranked]) for k, ranked in parsed if all(ms is None for _, ms in ranked)]
+
+
+def stored_hashes(ledger, families):
+    """--assume-current: each family's hash as last stored in the ledger (file, then line order)."""
+    out = {}
+    for c in ledger.cells:
+        for r in c["cands"]:
+            if r["hash"]:
+                out[spelling_family(r["cand"])] = r["hash"]
+    return {f: out.get(f, "") for f in families}
+
+
+def ledger_text(spec, dtype, device, ledger, source_dir, old_path, assume_current=False):
+    """(table text, per-tier row counts) for one ledger. Header fields come from the newest
+    run (date, then run id): batchlas, date, and the keys/candidates it recorded."""
+    if not ledger.runs:
+        raise SystemExit(f"{source_dir}: no 'run' record")
+    newest = max(ledger.runs, key=lambda r: (r.get("date", ""), r["run_id"]))
+    keys = newest.get("keys") or spec.keys
+    if keys != spec.keys:
+        raise SystemExit(f"{source_dir}: run {newest['run_id']} keys '{keys}' != the {spec.op} OpSpec '{spec.keys}'")
+    cands = [c for c in (newest.get("candidates") or "|".join(spec.candidate_order)).split("|") if c]
+    families = list(dict.fromkeys(spelling_family(c) for c in cands))
+    block = parse_kernel_block(read_spec_source(spec))
+    fam_hash = family_hashes(REPO, block, families)
+    keyspec = parse_keys(spec.keys)
+    judge = stored_hashes(ledger, families) if assume_current else fam_hash
+    rows = ledger_rows(spec, keyspec, ledger, judge, read_old_transcribed(old_path))
+    counts = {t: sum(1 for tier, _ in rows.values() if tier == t) for t in LEDGER_TIERS}
+    lines = [
+        f"# op={spec.op} dtype={dtype} device={device} batchlas={newest['batchlas']} "
+        f"kernels={kernel_hash(block['all'])} family_kernels={','.join(f'{f}:{h}' for f, h in fam_hash.items())} "
+        f"date={newest['date']}",
+        f"# source={LEDGER}{tuner_rel(source_dir)} tiers={','.join(f'{t}:{counts[t]}' for t in LEDGER_TIERS)}",
+        f"# keys: {spec.keys}",
+    ]
+    for key in sorted(rows):
+        tier, entries = rows[key]
+        text = " | ".join(f"{c} {'-' if ms is None else fmt_ms(ms)}" for c, ms in entries)
+        lines.append(f"{fmt_key(spec, key)} | {text} # {tier}")
+    return "\n".join(lines) + "\n", counts
+
+
+def ledger_dirs(paths):
+    """A ledger directory holds *.jsonl run files; a root holds one such directory per table."""
+    out = []
+    for p in paths:
+        if any(n.endswith(".jsonl") for n in os.listdir(p)):
+            out.append(p)
+        else:
+            out += [os.path.join(p, n) for n in sorted(os.listdir(p)) if os.path.isdir(os.path.join(p, n))]
+    return out
+
+
+def timed_non_ledger(path):
+    """The source= of an existing table that is timed and not the ledger's (converted, tuner), else None."""
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        header, _, _ = parse_table(f.read())
+    source = header.get("source", "")
+    return None if source.startswith((LEDGER, TRANSCRIBED)) else source or "(none)"
+
+
+def write_ledger_tables(paths, out_dir, assume_current=False, replace_timed=False):
+    os.makedirs(out_dir, exist_ok=True)
+    for d in ledger_dirs(paths):
+        op, dtype, device = ledger_identity(d)
+        dest = os.path.join(out_dir, f"{op}.{dtype}.{device}.txt")
+        source = None if replace_timed else timed_non_ledger(dest)
+        if source:
+            raise SystemExit(f"{dest}: a timed table (source={source}) would be overwritten by a ledger table; "
+                             "write to a scratch --out DIR, or pass --replace-timed to replace it")
+        text, counts = ledger_text(OP_BY_NAME[op], dtype, device, read_ledger(d), d, dest, assume_current)
+        with open(dest, "w") as f:
+            f.write(text)
+        print(f"wrote {dest}: " + ", ".join(f"{t}={n}" for t, n in counts.items()))
+
+
+def check_ledger(rel, header, disk, parsed, path, failures):
+    """Re-derive a ledger table byte for byte from the directory its source= names; the table's
+    own untimed rows are the transcribed input. A missing ledger is a failure."""
+    src = header["source"][len(LEDGER):]
+    d = src if os.path.isabs(src) else os.path.join(REPO, src)
+    if not os.path.isdir(d):
+        failures.append(f"{rel}: ledger directory {src} is missing, cannot re-derive")
+        return
+    op, dtype, device = ledger_identity(path)
+    text, _ = ledger_text(OP_BY_NAME[op], dtype, device, read_ledger(d), d, path)
+    if disk != text:
+        failures.append(f"{rel}: differs from the ledger {src} (re-run --ledger)")
+    else:
+        print(f"check {rel}: {len(parsed)} rows re-derived from {src}")
+
+
 def build_converted(date, stats_by_source, problems):
     """Return {(op, dtype, device): (text, rows, spec, src)}; rows maps key -> (times, noisy).
 
@@ -1023,7 +1417,7 @@ def row_kind_problems(header, parsed):
         kinds = {ms is None for _, ms in ranked}
         if len(kinds) > 1:
             out.append(f"row {key} mixes timed and untimed ('-') entries")
-        elif kinds == {True} and not source.startswith(TRANSCRIBED):
+        elif kinds == {True} and not source.startswith((TRANSCRIBED, LEDGER)):
             out.append(f"untimed ('-') row {key} needs a 'source={TRANSCRIBED}<sha>' header")
     return out
 
@@ -1070,6 +1464,15 @@ def check(converted, points):
                 if hit is None or hit[0] != key:
                     failures.append(f"{rel}: nearest{key} -> {hit and hit[0]}")
             print(f"check {rel}: {len(parsed)} transcribed rows looked up")
+            continue
+        if header.get("source", "").startswith(LEDGER):
+            for key, _ in parsed:
+                hit = nearest(parsed, key, keyspec)
+                if hit is None or hit[0] != key:
+                    failures.append(f"{rel}: nearest{key} -> {hit and hit[0]}")
+            check_ledger(rel, header, disk, parsed, path, failures)
+            tuner_tables.add(fname)
+            review_texts[op][(dtype, device)] = disk
             continue
         if header.get("source", "").startswith(TUNER):
             check_tuner(rel, header, disk, parsed, keyspec, failures)
@@ -1144,7 +1547,7 @@ def is_tuner_table(path):
     if not os.path.exists(path):
         return False
     with open(path) as f:
-        return parse_table(f.read())[0].get("source", "").startswith(TUNER)
+        return parse_table(f.read())[0].get("source", "").startswith((TUNER, LEDGER))
 
 
 def transcribe(csv_paths, sha, date, converted, device=None):
@@ -1268,6 +1671,7 @@ def self_test():
     cells, _, _ = run(POTRF, [dict(potrf[0], route=None, reached=potrf[0]["route"])])
     expect(not cells, "potrf read its route from 'reached'")
     bad += self_test_tuner()
+    bad += self_test_ledger()
     return bad
 
 
@@ -1307,6 +1711,214 @@ def self_test_tuner():
     return bad + ([] if ok else [f"self-test: read_tuner -> {got}"])
 
 
+def self_test_ledger():
+    """Table generation from a ledger: gap fill, empty rankings, header counts, byte reproducibility."""
+    bad = []
+    spec = POSV
+    cands = ["tiny", "cta", "blocked"]
+    fh = family_hashes(REPO, parse_kernel_block(read_spec_source(spec)), cands)
+
+    def run_line(rid, date, tier="deep"):
+        return {"kind": "run", "run_id": rid, "host": "h", "device": "sm_0", "device_name": "d", "batchlas": "bl" + rid[-1],
+                "argv": "", "date": date, "tier": tier, "keys": spec.keys, "candidates": "|".join(cands)}
+
+    def cell(rid, tier, n, ranked=("tiny", "cta"), date="2026-10-01", hashes=None):
+        r = {"kind": "cell", "run_id": rid, "tier": tier, "key": f"uplo=L,n={n},nrhs=1,batch=128", "round": 0,
+             "date": date, "ranked": "|".join(ranked), "cands": "|".join(cands)}
+        for i, c in enumerate(cands):
+            r.update({f"h{i}": (hashes or fh)[c], f"s{i}": "ok" if c in ranked else "skipped", f"r{i}": "",
+                      f"m{i}": 1.0 + i if c in ranked else None, f"lo{i}": None, f"hi{i}": None, f"n{i}": 4})
+        return r
+
+    def build(runs, out_dir, name="posv.float.sm_0"):
+        led = os.path.join(out_dir, "led", name)
+        os.makedirs(led, exist_ok=True)
+        for rid, lines in runs.items():
+            with open(os.path.join(led, rid + ".jsonl"), "w") as f:
+                f.write("".join(json.dumps(x) + "\n" for x in lines))
+        return led
+
+    def derive(led, out_dir):
+        text, counts = ledger_text(spec, "float", "sm_0", read_ledger(led), led, os.path.join(out_dir, "none.txt"))
+        return text, counts
+
+    def row_tiers(text):
+        return {r.split(" | ")[0].split()[1]: r.rsplit("# ", 1)[1] for r in text.splitlines() if not r.startswith("#")}
+
+    with tempfile.TemporaryDirectory() as d:
+        r1, r2, r3, r4 = "20261001T000000-h-1", "20261002T000000-h-2", "20261003T000000-h-3", "20261004T000000-h-4"
+        # lattice n=8..256; deep@64 and coarse@32 bracket preview@16 (1 from coarse) and preview@128 (1 from deep).
+        led = build({r1: [run_line(r1, "2026-10-01", "deep"), cell(r1, "deep", 64)],
+                     r2: [run_line(r2, "2026-10-02", "coarse"), cell(r2, "coarse", 32)],
+                     r3: [run_line(r3, "2026-10-03", "preview")] + [cell(r3, "preview", n) for n in (8, 16, 128, 256)]}, d)
+        text, counts = derive(led, d)
+        got = row_tiers(text)
+        expect_rows = {"n=8": "preview", "n=32": "coarse", "n=64": "deep", "n=256": "preview"}
+        if got != expect_rows:
+            bad.append(f"self-test: ledger_gap_fill_drops_coarse_inside_deep_bracket -> {got}")
+        # header counts and provenance
+        lines = text.splitlines()
+        want0 = (f"# op=posv dtype=float device=sm_0 batchlas=bl3 kernels={spec_kernels(spec)} family_kernels="
+                 + ",".join(f"{c}:{fh[c]}" for c in cands) + " date=2026-10-03")
+        if lines[0] != want0:
+            bad.append(f"self-test: ledger_header_counts_tiers line 1 -> {lines[0]!r} != {want0!r}")
+        if not lines[1].endswith(" tiers=deep:1,coarse:1,preview:2,custom:0,transcribed:0") or " source=ledger:" not in lines[1]:
+            bad.append(f"self-test: ledger_header_counts_tiers line 2 -> {lines[1]!r}")
+        if lines[2] != f"# keys: {spec.keys}":
+            bad.append(f"self-test: ledger_header_counts_tiers line 3 -> {lines[2]!r}")
+        # an empty ranking emits no row; a stale winner is skipped so the lower tier stands
+        empty = cell(r4, "deep", 8, ranked=())
+        stale = cell(r4, "deep", 256, hashes=dict(fh, tiny="deadbeef"))
+        led2 = build({r3: [run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 8), cell(r3, "preview", 256)],
+                      r4: [run_line(r4, "2026-10-04", "deep"), empty, stale]}, os.path.join(d, "b"))
+        got2 = row_tiers(derive(led2, d)[0])
+        if got2 != {"n=256": "preview"}:
+            bad.append(f"self-test: ledger_empty_ranking_emits_no_row -> {got2}")
+        # transcribed rows survive only away from measured rows (lattice 8..256; 1024 is off it)
+        old = os.path.join(d, "old.txt")
+        with open(old, "w") as f:
+            f.write("# op=posv source=transcribed:2b46acab\n# keys: " + spec.keys + "\n"
+                    + "".join(f"uplo=L n={n} nrhs=1 batch=128 | tiny - | cta -\n" for n in (16, 32, 1024)))
+        text3, _ = ledger_text(spec, "float", "sm_0", read_ledger(led), led, old)
+        got3 = row_tiers(text3)
+        if got3.get("n=1024") != "transcribed" or "n=16" in got3 or got3.get("n=32") != "coarse" or "tiers=" not in text3 \
+                or "transcribed:1" not in text3:
+            bad.append(f"self-test: ledger_transcribed_rows_survive_away_from_measured -> {got3}")
+        # a transcribed row is dropped near a measured row even when that row was itself dropped
+        led3 = build({r1: [run_line(r1, "2026-10-01", "deep"), cell(r1, "deep", 64)],
+                      r3: [run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 32)]}, os.path.join(d, "c"))
+        text4, _ = ledger_text(spec, "float", "sm_0", read_ledger(led3), led3, old)
+        got4 = row_tiers(text4)
+        if got4 != {"n=64": "deep", "n=1024": "transcribed"}:
+            bad.append(f"self-test: ledger_transcribed_dropped_near_dropped_preview -> {got4}")
+        # a single runnable candidate, ranked but untimed, is an untimed row that --check and the loader rules accept
+        single = cell(r4, "deep", 64, ranked=("cta",))
+        single["m1"] = None
+        single["key"] = "uplo=U,n=64,nrhs=1,batch=128"  # an exact key no measured row of led2 shares
+        led5 = build({r4: [run_line(r4, "2026-10-04", "deep"), single]}, os.path.join(d, "e"))
+        text5, _ = derive(led5, d)
+        rows5 = [r for r in text5.splitlines() if not r.startswith("#")]
+        if rows5 != ["uplo=U n=64 nrhs=1 batch=128 | cta - # deep"]:
+            bad.append(f"self-test: ledger_single_candidate_is_an_untimed_row -> {rows5}")
+        header5, _, parsed5 = parse_table(text5)
+        path5 = os.path.join(d, "e", "posv.float.sm_0.txt")
+        with open(path5, "w") as f:
+            f.write(text5)
+        failures5 = row_kind_problems(header5, parsed5)
+        check_ledger("posv.float.sm_0.txt", dict(header5, source=LEDGER + led5), text5, parsed5, path5, failures5)
+        if failures5:
+            bad.append(f"self-test: ledger_single_candidate_row_passes_check -> {failures5}")
+        # once that record is gone, its untimed row does not come back as a transcribed one
+        got6 = row_tiers(ledger_text(spec, "float", "sm_0", read_ledger(led2), led2, path5)[0])
+        if got6 != {"n=256": "preview"}:
+            bad.append(f"self-test: ledger_untimed_measured_row_is_not_transcribed -> {got6}")
+        # --assume-current: a ledger of legacy hashes is all stale, unless judged by its stored hashes
+        legacy = cell(r1, "deep", 64, ranked=("cta", "tiny"), hashes={c: "legacy:0" for c in cands})
+        led7 = build({r1: [run_line(r1, "2026-10-01", "deep"), legacy]}, os.path.join(d, "g"))
+        rows7 = [ledger_text(spec, "float", "sm_0", read_ledger(led7), led7, None, ac)[0].splitlines()[3:] for ac in (False, True)]
+        if rows7 != [[], ["uplo=L n=64 nrhs=1 batch=128 | cta 2.000 | tiny 1.000 # deep"]]:
+            bad.append(f"self-test: ledger_assume_current_reads_stored_hashes -> {rows7}")
+        # trsm cells carry the hidden uplo/diag axes; they project to the table key, and a varied one is refused
+        tk = TRSM.keys
+        hidden = [("side", "L"), ("trans", "N"), ("order", "8"), ("q", "4"), ("batch", "128"), ("uplo", "L"), ("diag", "N")]
+        got8 = key_tuple(TRSM, parse_keys(tk), tuple(hidden))
+        if got8 != ("L", "N", 8, 4, 128):
+            bad.append(f"self-test: ledger_trsm_hidden_axes_project_to_the_table_key -> {got8}")
+        try:
+            key_tuple(TRSM, parse_keys(tk), tuple(hidden[:5] + [("uplo", "U"), ("diag", "N")]))
+            bad.append("self-test: ledger_trsm_varied_hidden_axis_is_refused -> accepted")
+        except SystemExit:
+            pass
+        # a skipped candidate (could not run there) whose family changed leaves the cell current; a ranked one does not
+        if freshness(read_cell(cell(r1, "deep", 64, hashes=dict(fh, blocked="old"))), fh) != "current" or \
+                freshness(read_cell(cell(r1, "deep", 64, hashes=dict(fh, cta="old"))), fh) != "partly_stale":
+            bad.append("self-test: ledger_skipped_candidate_hash_is_ignored")
+        # '// common "path"' in the deps block joins every family's hash but not the op-level list
+        blk = parse_kernel_block('// kernel-sources-begin\n"a.cc",\n// kernel-sources-end\n// kernel-deps-begin\n'
+                                 '// common "op.cc"\n// common helpers "x.cc"\n// family: f "d.cc"\n// kernel-deps-end\n')
+        if blk["all"] != ["a.cc"] or blk["deps_common"] != ["op.cc"] or blk["deps"]["f"] != ["d.cc"]:
+            bad.append(f"self-test: kernel_block_deps_common -> {blk}")
+        # only declared hidden axes project: gemm has none, so an extra field fails and a plain key reads as is
+        gk = (("ta", "N"), ("tb", "T"), ("layout", "packed"), ("m", "64"), ("n", "32"), ("k", "8"), ("batch", "128"))
+        got9 = key_tuple(GEMM, parse_keys(GEMM.keys), gk)
+        if got9 != ("N", "T", "packed", 64, 32, 8, 128):
+            bad.append(f"self-test: ledger_gemm_plain_key_reads_as_is -> {got9}")
+        try:
+            key_tuple(GEMM, parse_keys(GEMM.keys), gk + (("uplo", "L"),))
+            bad.append("self-test: ledger_gemm_extra_field_is_refused -> accepted")
+        except SystemExit:
+            pass
+        # an all-error record (a failed child) counts as no record: the lower-tier row stands. The
+        # fixture is shared with tune_tests' TuneLedger.AllErrorRecordCountsAsNoRecord.
+        fix = os.path.join(REPO, "tests", "data", "ledger_all_error", "posv.float.sm_0")
+        rows10 = ledger_text(spec, "float", "sm_0", read_ledger(fix), fix, None, True)[0].splitlines()[3:]
+        if rows10 != ["uplo=L n=64 nrhs=1 batch=128 | tiny 1.000 | cta 2.000 # preview"]:
+            bad.append(f"self-test: ledger_all_error_record_counts_as_no_record -> {rows10}")
+        # --ledger refuses to overwrite a timed non-ledger table unless --replace-timed
+        tabs = os.path.join(d, "tabs")
+        os.makedirs(tabs)
+        dest = os.path.join(tabs, "posv.float.sm_0.txt")
+        for source, refused in (("benchmarks/results/routing/x.jsonl", True), ("tuner:x.jsonl", True),
+                                ("transcribed:2b46acab", False), (LEDGER + "old", False)):
+            with open(dest, "w") as f:
+                f.write(f"# op=posv dtype=float\n# source={source}\n# keys: {spec.keys}\n")
+            try:
+                write_ledger_tables([led], tabs)
+                if refused:
+                    bad.append(f"self-test: ledger_refuses_timed_table ({source}) -> overwritten")
+            except SystemExit as e:
+                if not refused or dest not in str(e) or "--replace-timed" not in str(e):
+                    bad.append(f"self-test: ledger_refuses_timed_table ({source}) -> {e}")
+        with open(dest, "w") as f:
+            f.write(f"# op=posv dtype=float\n# source=tuner:x.jsonl\n# keys: {spec.keys}\n")
+        write_ledger_tables([led], tabs, replace_timed=True)
+        with open(dest) as f:
+            if " source=ledger:" not in f.read():
+                bad.append("self-test: ledger_replace_timed_overwrites -> not replaced")
+        # --assume-current needs an explicit --out outside tuned/
+        if scratch_out(None) or scratch_out(os.path.join(REPO, TUNED)) or scratch_out(os.path.join(REPO, "x", "..", TUNED)) \
+                or not scratch_out(tabs):
+            bad.append("self-test: assume_current_needs_scratch_out (scratch_out)")
+        # an unfetched LFS pointer is named, not parsed as a malformed ledger
+        lfs = os.path.join(d, "lfs", "posv.float.sm_0")
+        os.makedirs(lfs)
+        with open(os.path.join(lfs, "r.jsonl"), "w") as f:
+            f.write(LFS_POINTER + "\noid sha256:00\nsize 12\n")
+        try:
+            read_ledger(lfs)
+            bad.append("self-test: ledger_lfs_pointer_is_named -> read")
+        except SystemExit as e:
+            if "Git LFS pointer: run git lfs pull" not in str(e):
+                bad.append(f"self-test: ledger_lfs_pointer_is_named -> {e}")
+        # ... and main() refuses without it: on the unreadable ledger above, so a broken check cannot write tuned/
+        res = subprocess.run([sys.executable, os.path.abspath(__file__), "--ledger", lfs, "--assume-current"],
+                             capture_output=True, text=True)
+        if res.returncode == 0 or "explicit --out" not in res.stderr:
+            bad.append(f"self-test: assume_current_needs_scratch_out -> rc {res.returncode} {res.stderr!r}")
+        # --check re-derives byte for byte
+        out = os.path.join(d, "out")
+        os.makedirs(out)
+        path = os.path.join(out, "posv.float.sm_0.txt")
+        with open(path, "w") as f:
+            f.write(text)
+        for disk, led_dir, want_fail in ((text, led, False), (text.replace("tiny 1.000", "tiny 1.001", 1), led, True),
+                                         (text, os.path.join(d, "gone"), True)):
+            header, _, parsed = parse_table(disk)
+            header["source"] = LEDGER + led_dir
+            failures = []
+            with open(path, "w") as f:
+                f.write(disk)
+            check_ledger("posv.float.sm_0.txt", header, disk, parsed, path, failures)
+            if bool(failures) != want_fail:
+                bad.append(f"self-test: ledger_check_is_byte_reproducible ({'edited' if want_fail else 'fresh'}) -> {failures}")
+    return bad
+
+
+def scratch_out(out):
+    """An explicit --out that does not resolve to <repo>/tuned."""
+    return bool(out) and os.path.realpath(out) != os.path.realpath(os.path.join(REPO, TUNED))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true", help="diff tuned/ against the sources")
@@ -1317,11 +1929,24 @@ def main():
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     ap.add_argument("--self-test", action="store_true", help="run the converter self-test only")
     ap.add_argument("--tuner", nargs="+", metavar="JSONL", help="batchlas_tune raw files to write")
-    ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="--tuner: table directory")
+    ap.add_argument("--ledger", nargs="+", metavar="DIR", help="per-run ledger directories (or a root of them) to write")
+    ap.add_argument("--assume-current", action="store_true",
+                    help="--ledger, diagnostic: treat stored kernel hashes as current (never for tuned/)")
+    ap.add_argument("--replace-timed", action="store_true",
+                    help="--ledger: may overwrite a timed table that is not a ledger's (converted, tuner)")
+    ap.add_argument("--out", help="--tuner/--ledger: table directory (default tuned/)")
     args = ap.parse_args()
+    explicit_out, args.out = args.out, args.out or os.path.join(REPO, TUNED)
 
     if args.tuner:
         write_tuner_tables(args.tuner, args.out)
+        return 0
+    if args.assume_current and not args.ledger:
+        raise SystemExit("--assume-current needs --ledger")
+    if args.assume_current and not scratch_out(explicit_out):
+        raise SystemExit("--assume-current needs an explicit --out DIR outside tuned/ (its tables are diagnostic)")
+    if args.ledger:
+        write_ledger_tables(args.ledger, args.out, args.assume_current, args.replace_timed)
         return 0
     if args.self_test:
         bad = self_test()

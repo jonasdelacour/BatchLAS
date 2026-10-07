@@ -2,13 +2,17 @@
 // per-device selection tables (docs/design/flat-kernel-selection.md §6). Usage, the raw JSONL
 // schema and the protocol are in tools/tune/README.md.
 //
-//   batchlas_tune potrf --dtype float --devices 1 --raw benchmarks/results/tuning --out tuned
+//   batchlas_tune potrf,trsm --tier preview --dtype float --devices 1 --out tuned   (tiered_driver.cc)
+//   batchlas_tune potrf --dtype float --devices 1 --reps 16 --raw benchmarks/results/tuning   (custom)
 //   batchlas_tune potrf --devices 1 --gate --old-csv old.csv --gate-csv gate.csv
 //
-// ONE CELL PER PROCESS. The driver never runs a kernel itself: it forks and execs this binary
-// in --cell mode once per (cell, pass), because the SLM carve-out attribute is sticky per
-// CUfunction and an earlier, larger launch in the same process changes what a later one does
-// (benchmarks/factor_bench.cc header). Candidates are interleaved inside that child.
+// THE DRIVER NEVER RUNS A KERNEL. The custom protocol forks and execs this binary in --cell mode
+// once per (cell, pass), because the SLM carve-out attribute is sticky per CUfunction and an
+// earlier, larger launch in the same process changes what a later one does
+// (benchmarks/factor_bench.cc header). A tiered run keeps one --worker per GPU instead, fed its
+// cells in ascending bytes and audited against fresh --cell --mode race children
+// (docs/design/tiered-tuning.md#engine-persistent-workers-and-the-carve-out-audit); --no-worker
+// races every cell in a fresh child. Candidates are interleaved inside the process either way.
 //
 // MULTI-GPU (--devices 1,2,3) runs one child per GPU at a time, each GPU held under a flock for
 // the whole run, cells sharded round-robin and both passes of a cell kept on one GPU. This
@@ -22,11 +26,14 @@
 // get their GPU back explicitly. guard() dies if the driver's pid ever shows up on a GPU.
 
 #include <batchlas/util/sycl-device-queue.hh>
+#include <sycl/sycl.hpp>
 
 #include "../../src/select/select.hh"
 #include "cell_runner.hh"
 #include "spec.hh"
+#include "tiered_driver.hh"
 #include "tune_core.hh"
+#include "worker.hh"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -44,6 +51,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -65,6 +73,13 @@ constexpr double kTie = 0.03;  // §6.3; scripts/sweep_to_table.py TIE
 
 struct Opts {
     std::string op;
+    std::vector<std::string> ops;  // the op argument: a comma list or "all"
+    std::optional<Tier> tier;      // --tier; the protocol flags below make the run tier custom
+    std::string custom_flag;       // the first protocol flag seen (custom tier, the two-pass path)
+    double budget_h = 0, overhead_s = kChildOverheadS;
+    bool plan = false, status = false, ledger_given = false;  // custom runs touch a ledger only when given
+    int progress_fd = -1;
+    std::string ledger, import_raw, device_key;
     std::vector<std::string> dtypes{"float"};
     std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
@@ -74,6 +89,8 @@ struct Opts {
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
     bool allow_idle_foreign = false;
+    bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
+    double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
     std::map<std::string, std::vector<std::string>> grid;
     bool gate = false;
@@ -196,21 +213,70 @@ int child_main(const std::vector<std::string>& a) {
         else if (a[i] == "--warm") req.warm_s = std::stod(val());
         else if (a[i] == "--reverse") req.reverse = true;
         else if (a[i] == "--ld-pad") req.ld_pad = std::stoi(val());
+        else if (a[i] == "--tier") req.tier = val();
+        else if (a[i] == "--min-reps") req.min_reps = std::stoi(val());
+        else if (a[i] == "--max-reps") req.max_reps = std::stoi(val());
+        else if (a[i] == "--confidence") req.confidence = std::stod(val());
+        else if (a[i] == "--alternate-reverse") req.alternate_reverse = true;
+        else if (a[i] == "--seed-order") req.seed_order = split(val(), ',');
         else if (a[i] == "--result") result = val();
         else die("--cell: unknown argument " + a[i]);
     }
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
     std::ofstream out(result);
-    for (const ArmOutcome& o : spec->run_cell(req)) {
-        out << Json().str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
-                   .num("median_ms", median(o.ms)).num("residual", o.residual).integer("info_nonzero", o.info_nonzero)
-                   .integer("reps", static_cast<std::int64_t>(o.ms.size())).line();
-        for (std::size_t r = 0; r < o.ms.size(); ++r)
-            out << Json().str("kind", "rep").str("arm", o.arm).integer("rep", static_cast<std::int64_t>(r))
-                       .integer("slot", o.slot[r]).num("ms", o.ms[r]).line();
-    }
+    out << outcome_text(spec->run_cell(req));
     return out ? 0 : 1;
+}
+
+// Clock warm-up at worker start: a plain FMA loop, so no library kernel runs before the first cell.
+void worker_warm(double seconds) {
+    if (seconds <= 0) return;
+    try {
+        sycl::queue q{sycl::gpu_selector_v};
+        constexpr std::size_t n = std::size_t(1) << 20;
+        float* out = sycl::malloc_device<float>(n, q);
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < seconds) {
+            q.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+                 float x = float(i[0]), y = 1.0001f;
+                 for (int k = 0; k < 4096; ++k) x = sycl::fma(x, y, 0.5f);
+                 out[i] = x;
+             }).wait();
+        }
+        sycl::free(out, q);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "batchlas_tune --worker: warm-up failed: %s\n", e.what());
+    }
+}
+
+// One request line per cell on stdin, its records and a "done" line on the saved stdout (worker.hh).
+// Library output goes to stderr (the driver's log), so stray prints never reach the record stream.
+int worker_main(const std::vector<std::string>& a) {
+    double warm_s = 3;
+    for (std::size_t i = 1; i < a.size(); ++i) {
+        if (a[i] == "--warm-s" && i + 1 < a.size()) warm_s = std::stod(a[++i]);
+        else die("--worker: unknown argument " + a[i]);
+    }
+    const int out = ::dup(1);
+    if (out < 0 || ::dup2(2, 1) < 0) die("--worker: cannot redirect stdout");
+    worker_warm(warm_s);
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
+        std::string err;
+        const auto req = parse_request(line, &err);
+        if (!req) die("--worker: bad request (" + err + "): " + line);
+        const OpSpec* spec = find_spec(req->first);
+        if (!spec) die("--worker: unknown op " + req->first);
+        const std::string text = outcome_text(spec->run_cell(req->second)) + Json().str("kind", "done").line();
+        for (std::size_t done = 0; done < text.size();) {
+            const ssize_t n = ::write(out, text.data() + done, text.size() - done);
+            if (n <= 0) return 1;
+            done += static_cast<std::size_t>(n);
+        }
+    }
+    return 0;
 }
 
 int info_main(const std::string& result) {
@@ -221,6 +287,23 @@ int info_main(const std::string& result) {
 }
 
 // ---- the driver --------------------------------------------------------------------------
+
+// The live worker per GPU: our own compute process, so the guard does not count it as foreign.
+std::mutex g_worker_mu;
+std::map<int, long> g_worker_pid;
+
+void set_worker_pid(int gpu, long pid) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    if (pid > 0) g_worker_pid[gpu] = pid;
+    else g_worker_pid.erase(gpu);
+}
+
+long worker_pid(int gpu) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    const auto it = g_worker_pid.find(gpu);
+    return it == g_worker_pid.end() ? -1 : it->second;
+}
+
 
 struct Cell {
     CellKey key;
@@ -240,28 +323,35 @@ struct ChildOut {
 
 class Driver {
 public:
+    // One driver per op (tiered runs take several): each gets its own subdirectory of g_tmp.
     Driver(const Opts& o, const OpSpec& spec) : o_(o), spec_(spec) {
-        tmp_ = (fs::temp_directory_path() / ("batchlas_tune." + std::to_string(::getpid()))).string();
+        static int instances = 0;
+        g_tmp = (fs::temp_directory_path() / ("batchlas_tune." + std::to_string(::getpid()))).string();
+        tmp_ = g_tmp + "/" + std::to_string(instances++);
         fs::create_directories(tmp_);
-        g_tmp = tmp_;
         self_ = self_exe();
     }
     ~Driver() {
         std::error_code ec;
         fs::remove_all(tmp_, ec);
+        fs::remove(g_tmp, ec);  // only once empty
     }
 
+    // reps/warm < 0: the --reps/--warm options; `extra` arguments go to the child as they are.
     ChildOut child(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                    const std::vector<std::string>& arms, const std::string& mode, bool reverse,
-                   const std::string& coverage = "") {
+                   const std::string& coverage = "", int reps = -1, double warm = -1,
+                   const std::vector<std::string>& extra = {}) {
         const std::vector<std::string> tolerated = guard(gpu);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
         std::vector<std::string> argv{bin, "--cell", spec_.op(), "--dtype", dtype, "--key", key_arg(key),
-                                      "--arms", join(arms, ","), "--mode", mode, "--reps", std::to_string(o_.reps),
-                                      "--warm", fmt(o_.warm, "%g"), "--ld-pad", std::to_string(o_.ld_pad),
+                                      "--arms", join(arms, ","), "--mode", mode,
+                                      "--reps", std::to_string(reps < 0 ? o_.reps : reps),
+                                      "--warm", fmt(warm < 0 ? o_.warm : warm, "%g"), "--ld-pad", std::to_string(o_.ld_pad),
                                       "--result", res};
         if (reverse) argv.push_back("--reverse");
+        argv.insert(argv.end(), extra.begin(), extra.end());
         std::vector<std::pair<std::string, std::string>> env{{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"},
                                                              {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}};
         if (!coverage.empty()) env.push_back({"BATCHLAS_COVERAGE_OUT", coverage});
@@ -296,8 +386,9 @@ public:
     // child() once more after a failure: a transient crash or a foreign process must not sink a cell.
     ChildOut child_retry(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                          const std::vector<std::string>& arms, const std::string& mode, bool reverse,
-                         const std::string& coverage = "") {
-        ChildOut c = child(gpu, bin, dtype, key, arms, mode, reverse, coverage);
+                         const std::string& coverage = "", int reps = -1, double warm = -1,
+                         const std::vector<std::string>& extra = {}) {
+        ChildOut c = child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
         if (c.ok) return c;
         std::printf("[gpu%d] %s %s %s: retrying after %s\n", gpu, spec_.op().c_str(), key_text(key).c_str(),
                     mode.c_str(), c.error.c_str());
@@ -305,7 +396,7 @@ public:
         if (raw_.is_open())
             write(Json().str("kind", "retry").str("op", spec_.op()).str("dtype", dtype).key(key).str("mode", mode)
                       .str("error", c.error).line());
-        return child(gpu, bin, dtype, key, arms, mode, reverse, coverage);
+        return child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
     }
 
     // The spelling a binary's Auto picks at a cell, from its coverage `reached` row.
@@ -336,6 +427,14 @@ public:
 
     int tune();
     int gate();
+    std::string start(std::string* device) {
+        const std::string name = preflight();
+        *device = device_;
+        return name;
+    }
+    ArmBatch race_fresh(const CellJob& j);
+    void start_worker(WorkerProcess& w, int gpu);
+    WorkerTry race_worker(WorkerProcess& w, const CellJob& j, bool full_guard);
 
 private:
     const Opts& o_;
@@ -347,6 +446,8 @@ private:
     std::vector<std::string> cands_;
 
     std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
+    CellRequest race_request(const CellJob& j) const;
+    std::vector<std::string> race_args(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
     std::vector<std::string> guard(int gpu);
@@ -370,8 +471,10 @@ AppScan Driver::apps(int gpu) {
     if (rc == std::string::npos || out.substr(rc) != "rc=0")
         die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi (--no-guard measures without the guard)");
     out.resize(rc);
-    const AppScan scan = scan_compute_apps(out, long(::getpid()));
+    AppScan scan = scan_compute_apps(out, long(::getpid()));
     if (scan.self) die("the driver holds a CUDA context on GPU " + std::to_string(gpu) + ": start it via the launcher");
+    const std::string w = std::to_string(worker_pid(gpu));
+    scan.foreign.erase(std::remove(scan.foreign.begin(), scan.foreign.end(), w), scan.foreign.end());
     return scan;
 }
 
@@ -490,6 +593,112 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
     return p;
 }
 
+CellRequest Driver::race_request(const CellJob& j) const {
+    CellRequest r;
+    r.dtype = j.dtype;
+    r.key = j.key;
+    r.arms = j.arms;
+    r.mode = "race";
+    r.warm_s = j.p.warm_topup_s;
+    r.ld_pad = o_.ld_pad;
+    r.tier = to_string(j.tier);
+    r.min_reps = j.p.min_reps;
+    r.max_reps = j.p.max_reps;
+    r.confidence = j.p.confidence;
+    r.alternate_reverse = j.p.alternate_reverse;
+    r.seed_order = j.arms;
+    return r;
+}
+
+std::vector<std::string> Driver::race_args(const CellJob& j) const {
+    std::vector<std::string> a{"--tier", to_string(j.tier), "--min-reps", std::to_string(j.p.min_reps), "--max-reps",
+                               std::to_string(j.p.max_reps), "--confidence", fmt(j.p.confidence, "%.17g"),
+                               "--seed-order", join(j.arms, ",")};
+    if (j.p.alternate_reverse) a.push_back("--alternate-reverse");
+    return a;
+}
+
+// One fresh `--cell --mode race` child (the audit, --no-worker, the worker's fallback). Arms that
+// crash a child even alone are `error`; the rest race without them.
+ArmBatch Driver::race_fresh(const CellJob& j) {
+    const auto extra = race_args(j);
+    const double warm = j.p.warm_topup_s;
+    ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, warm, extra);
+    std::map<std::string, std::string> alone;
+    if (!ch.ok && !ch.guard) {
+        std::vector<std::string> keep;
+        for (const auto& a : j.arms) {
+            const ChildOut one = child(j.gpu, self_, j.dtype, j.key, {a}, "jit", false);
+            if (one.ok) keep.push_back(a);
+            else alone[a] = one.error;
+        }
+        if (!alone.empty() && !keep.empty()) ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, warm, extra);
+    }
+    std::map<std::string, ArmOutcome> got;
+    for (ArmOutcome& o : outcomes_from_records(ch.records)) got[o.arm] = std::move(o);
+    ArmBatch b;
+    if (!ch.ok) b.error = ch.error;
+    for (const auto& a : j.arms) {
+        if (alone.count(a)) b.arms.push_back({a, "error", "crashed alone: " + alone[a], {}, {}, 0, 0});
+        else if (got.count(a) && !got[a].status.empty()) b.arms.push_back(got[a]);
+        else b.arms.push_back({a, "error", "child: " + ch.error, {}, {}, 0, 0});
+    }
+    return b;
+}
+
+// The full guard (utilization too) runs before the worker starts.
+void Driver::start_worker(WorkerProcess& w, int gpu) {
+    guard(gpu);
+    const std::string log = tmp_ + "/worker" + std::to_string(gpu) + "_" + std::to_string(counter_++) + ".log";
+    if (!w.start({self_, "--worker", "--warm-s", "3"},
+                 {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}}, log))
+        die("cannot start the worker for GPU " + std::to_string(gpu));
+    set_worker_pid(gpu, long(w.pid()));
+}
+
+// One cell on the running worker. Between cells the guard checks for foreign compute processes;
+// `full_guard` first idles 1 s so the worker's own last cell leaves the utilization sample.
+WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guard) {
+    WorkerTry r;
+    std::vector<std::string> tolerated;
+    if (full_guard && o_.guard) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        tolerated = guard(j.gpu);
+    }
+    for (double waited = 0; o_.guard && !full_guard; waited += 1) {
+        const GuardCheck g = guard_before(apps(j.gpu), 0, o_.util_ceiling, o_.allow_idle_foreign);
+        if (g.refuse.empty()) {
+            tolerated = g.tolerated;
+            break;
+        }
+        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + g.refuse + "); refusing to measure");
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::vector<Record> recs;
+    WorkerProcess::Got got = WorkerProcess::Got::eof;
+    if (w.send(request_line(spec_.op(), race_request(j)))) got = w.receive(o_.cell_timeout, &recs);
+    if (got != WorkerProcess::Got::done) {
+        r.error = std::string(got == WorkerProcess::Got::timeout ? "worker timeout" : "worker exited") + ": " +
+                  tail(w.log());
+        return r;
+    }
+    if (const auto fresh = o_.guard ? guard_new_foreign(apps(j.gpu), tolerated) : std::vector<std::string>{};
+        !fresh.empty()) {
+        r.guard = true;
+        r.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(j.gpu) +
+                  " during the cell; numbers discarded";
+        return r;
+    }
+    r.arms = outcomes_from_records(recs);
+    for (const std::string& a : j.arms)
+        if (std::none_of(r.arms.begin(), r.arms.end(), [&](const ArmOutcome& o) { return o.arm == a && !o.status.empty(); })) {
+            r.error = "worker: no outcome for " + a;
+            return r;
+        }
+    r.ok = true;
+    return r;
+}
+
 void Driver::run_shard(int gpu, const std::vector<Cell*>& cells) {
     for (Cell* c : cells) c->gpu = gpu;
     if (o_.jit)
@@ -599,6 +808,21 @@ int Driver::tune() {
         raw_.close();
         std::printf("== wrote %s: %d cells ranked, %d with no candidate timed in every pass, %d over the cap, "
                     "%zu stalled edges\n", path.c_str(), ok, none, skipped, stalled.size());
+        // An explicit --ledger records a protocol-flag run as tier custom (docs/design/tiered-tuning.md,
+        // driver interface); without it a spot check never lands in the shared ledger.
+        if (!o_.ledger_given) std::printf("== not recorded in a ledger (custom run without --ledger)\n");
+        else try {
+            std::vector<std::string> fams;
+            for (const std::string& c : cands_)
+                if (std::find(fams.begin(), fams.end(), c.substr(0, c.find(':'))) == fams.end())
+                    fams.push_back(c.substr(0, c.find(':')));
+            const auto fh = family_hashes(o_.repo, spec_.kernel_block(o_.repo), fams);
+            import_schema1(path, o_.ledger, fh, kernel_hash(o_.repo, spec_.kernel_sources()).value_or(""), Tier::custom,
+                           spec_.axes());
+            std::printf("== recorded as a custom run under %s\n", ledger_dir(o_.ledger, spec_.op(), dtype, device_).c_str());
+        } catch (const std::exception& e) {
+            die(std::string("ledger: ") + e.what());
+        }
         if (!o_.out.empty()) convert(path);
     }
     return 0;
@@ -717,7 +941,7 @@ std::vector<int> lock_devices(const Opts& o) {
     std::vector<int> fds;
     for (int d : o.devices) {
         const std::string path = o.lock_dir + "/batchlas_tune_gpu" + std::to_string(d) + ".lock";
-        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT, 0666);
+        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);  // a worker outliving us must not hold it
         if (fd < 0) die("cannot open " + path);
         if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
             std::printf("waiting for %s (another tuner holds GPU %d)\n", path.c_str(), d);
@@ -729,14 +953,95 @@ std::vector<int> lock_devices(const Opts& o) {
     return fds;
 }
 
+// The tiered seam (tiered_driver.hh CellMeasurer): one Driver per op, one persistent worker per GPU
+// shared by every op, restarted before a cell with a smaller per-item footprint than it has run.
+// Failures follow race_on_worker (worker.hh).
+class TieredMeasurer : public CellMeasurer {
+public:
+    TieredMeasurer(const Opts& o, const std::vector<std::string>& ops) : o_(o) {
+        for (const std::string& op : ops) drivers_[op] = std::make_unique<Driver>(o, *find_spec(op));
+        for (int gpu : o.devices) workers_[gpu] = std::make_unique<WorkerProcess>(), gates_[gpu] = WorkerGate(60);
+    }
+    ~TieredMeasurer() override {
+        for (auto& [gpu, w] : workers_) stop(gpu);
+    }
+    Driver& first() { return *drivers_.begin()->second; }
+    bool persistent() const override { return o_.worker; }
+    ArmBatch measure_fresh(const CellJob& j) override { return drivers_.at(j.spec->op())->race_fresh(j); }
+    ArmBatch measure(const CellJob& j) override {
+        if (!o_.worker) return measure_fresh(j);
+        Driver& d = *drivers_.at(j.spec->op());
+        WorkerProcess& w = *workers_.at(j.gpu);
+        WorkerGate& gate = gates_.at(j.gpu);
+        if (w.alive() && gate.restart_before(j.footprint)) stop(j.gpu);  // the carve-out order
+        auto attempt = [&](const std::vector<std::string>& arms) {
+            CellJob part = j;
+            part.arms = arms;
+            if (!w.alive()) {
+                d.start_worker(w, j.gpu);
+                gate.started();
+                gate.guarded(now());
+            }
+            const bool full = gate.full_guard_due(now());
+            WorkerTry r = d.race_worker(w, part, full);
+            if (full) gate.guarded(now());
+            if (r.ok) gate.ran(j.footprint);
+            for (const ArmOutcome& a : r.arms)
+                if (a.status == "error") r.error = "arm " + a.arm + " error: " + a.reason;
+            if (!r.error.empty())
+                std::printf("[gpu%d] %s %s: worker: %s\n", j.gpu, j.spec->op().c_str(), key_text(j.key).c_str(),
+                            r.error.c_str());
+            std::fflush(stdout);
+            return r;
+        };
+        auto fresh = [&](const std::vector<std::string>& arms) {
+            CellJob part = j;
+            part.arms = arms;
+            return measure_fresh(part);
+        };
+        return race_on_worker(j.arms, errors(j.spec->op() + "." + j.dtype), attempt, [&] { stop(j.gpu); }, fresh);
+    }
+
+private:
+    const Opts& o_;
+    std::map<std::string, std::unique_ptr<Driver>> drivers_;
+    std::map<int, std::unique_ptr<WorkerProcess>> workers_;
+    std::map<int, WorkerGate> gates_;
+    std::mutex errors_mu_;
+    std::map<std::string, ArmErrors> errors_;  // per op.dtype; GPU threads share it
+    const std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
+
+    double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
+    ArmErrors& errors(const std::string& od) {
+        std::lock_guard<std::mutex> lock(errors_mu_);
+        return errors_[od];
+    }
+    void stop(int gpu) {
+        workers_.at(gpu)->stop();
+        set_worker_pid(gpu, -1);
+    }
+};
+
+// --plan names the device from nvidia-smi's compute capability (no CUDA context), as select.cc does.
+std::string plan_device_key(const Opts& o) {
+    if (!o.device_key.empty()) return o.device_key;
+    const std::string gpu = std::to_string(o.devices.empty() ? 0 : o.devices[0]);
+    const std::string cc = capture("nvidia-smi --id=" + gpu + " --query-gpu=compute_cap --format=csv,noheader 2>/dev/null");
+    const auto dot = cc.find('.');
+    if (dot == std::string::npos) die("--plan: cannot read GPU " + gpu + "'s compute capability; pass --device-key sm_NN");
+    return "sm_" + cc.substr(0, dot) + cc.substr(dot + 1);
+}
+
 void usage() {
     std::puts(
-        "usage: batchlas_tune <op> --devices N[,M..] [options]          tune: tables for every --dtype\n"
+        "usage: batchlas_tune <op>[,<op>..|all] --tier preview|coarse|deep --devices N[,M..] [options]   ledger + tables\n"
+        "       batchlas_tune <op>[,..] --tier T --plan [--devices N | --device-key sm_NN]   plan and estimate, no GPU\n"
+        "       batchlas_tune --status | --import-raw RAW.jsonl | --list\n"
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
-        "       batchlas_tune --list\n"
-        "options: --dtype float,double,cfloat,cdouble  --raw DIR  --out DIR\n"
-        "         --reps 16 --warm 1.5 --passes 2 --remeasure 0.10 --refine-ratio 1.1 --no-refine\n"
-        "         --no-jit --cap-gib 4 --ld-pad 0 --cell-timeout 1800 --no-guard --guard-wait 300\n"
+        "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
+        "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
+        "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
+        "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --cell-timeout 1800 --no-guard --guard-wait 300\n"
         "         --util-ceiling 5 --allow-idle-foreign\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
@@ -757,6 +1062,26 @@ int list_main(const std::string& repo) {
 
 std::vector<std::string> csv_list(const std::string& v) { return split(v, ','); }
 
+TieredOpts tiered_opts(const Opts& o) {
+    TieredOpts t;
+    t.ops = o.ops;
+    t.dtypes = o.dtypes;
+    t.devices = o.devices;
+    t.tier = *o.tier;
+    t.budget_h = o.budget_h;
+    t.cap_gib = o.cap_gib;
+    t.overhead_s = o.overhead_s;
+    t.audit_fraction = o.audit_fraction;
+    t.plan = o.plan;
+    t.progress_fd = o.progress_fd;
+    t.repo = o.repo;
+    t.ledger_root = o.ledger;
+    t.out = o.out;
+    t.argv = join(o.argv, " ");
+    t.grid = o.grid;
+    return t;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -766,6 +1091,7 @@ int main(int argc, char** argv) {
         return a.empty() ? 2 : 0;
     }
     if (a[0] == "--cell") return child_main(a);
+    if (a[0] == "--worker") return worker_main(a);
     if (a[0] == "--info") return info_main(a.size() > 2 ? a[2] : "/dev/stdout");
     Opts o;
     o.argv.assign(argv, argv + argc);
@@ -776,6 +1102,10 @@ int main(int argc, char** argv) {
             return a[++i];
         };
         const std::string& f = a[i];
+        // An expert protocol flag: the run is tier custom, on the two-pass path.
+        auto custom = [&, flag = f] {
+            if (o.custom_flag.empty()) o.custom_flag = flag;
+        };
         if (f == "--list") list = true;
         else if (f == "--dtype") o.dtypes = csv_list(val()), o.dtype_given = true;
         else if (f == "--devices") {
@@ -783,17 +1113,31 @@ int main(int argc, char** argv) {
             o.devices_given = true;
             for (const auto& d : csv_list(val())) o.devices.push_back(std::stoi(d));
         } else if (f == "--repo") o.repo = val();
-        else if (f == "--raw") o.raw = val();
+        else if (f == "--raw") o.raw = val(), custom();
         else if (f == "--out") o.out = val();
-        else if (f == "--reps") o.reps = std::stoi(val());
-        else if (f == "--warm") o.warm = std::stod(val());
-        else if (f == "--passes") o.passes = std::stoi(val());
-        else if (f == "--remeasure") o.remeasure = std::stod(val());
-        else if (f == "--refine-ratio") o.refine_ratio = std::stod(val());
-        else if (f == "--no-refine") o.refine = false;
-        else if (f == "--no-jit") o.jit = false;
+        else if (f == "--reps") o.reps = std::stoi(val()), custom();
+        else if (f == "--warm") o.warm = std::stod(val()), custom();
+        else if (f == "--passes") o.passes = std::stoi(val()), custom();
+        else if (f == "--remeasure") o.remeasure = std::stod(val()), custom();
+        else if (f == "--refine-ratio") o.refine_ratio = std::stod(val()), custom();
+        else if (f == "--no-refine") o.refine = false, custom();
+        else if (f == "--no-jit") o.jit = false, custom();
+        else if (f == "--ld-pad") o.ld_pad = std::stoi(val()), custom();
+        else if (f == "--tier") {
+            const auto t = parse_tier(val());
+            if (!t || *t == Tier::custom || *t == Tier::transcribed) die("--tier takes preview, coarse or deep");
+            o.tier = t;
+        } else if (f == "--budget") o.budget_h = std::stod(val());
+        else if (f == "--plan") o.plan = true;
+        else if (f == "--status") o.status = true;
+        else if (f == "--progress-fd") o.progress_fd = std::stoi(val());
+        else if (f == "--ledger") o.ledger = val(), o.ledger_given = true;
+        else if (f == "--import-raw") o.import_raw = val();
+        else if (f == "--device-key") o.device_key = val();
+        else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
+        else if (f == "--no-worker") o.worker = false;
+        else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
         else if (f == "--cap-gib") o.cap_gib = std::stod(val());
-        else if (f == "--ld-pad") o.ld_pad = std::stoi(val());
         else if (f == "--cell-timeout") o.cell_timeout = std::stod(val());
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
@@ -818,32 +1162,70 @@ int main(int argc, char** argv) {
         else die("unknown argument " + f + " (--help)");
     }
     if (list) return list_main(o.repo);
-    const OpSpec* spec = find_spec(o.op);
-    if (!spec) die("unknown op '" + o.op + "' (--list)");
+    if (o.ledger.empty()) o.ledger = o.repo + "/benchmarks/results/tuning/ledger";
+    try {
+        if (o.status) return status_main(o.repo, o.ledger, o.repo + "/tuned");
+        if (!o.import_raw.empty()) return import_raw_main(o.repo, o.ledger, o.import_raw);
+    } catch (const std::exception& e) {
+        die(e.what());
+    }
+    if (o.op == "all")
+        for (const OpSpec* s : all_specs()) o.ops.push_back(s->op());
+    else o.ops = csv_list(o.op);
+    if (o.ops.empty()) die("no op given (--list)");
+    for (const std::string& op : o.ops)
+        if (!find_spec(op)) die("unknown op '" + op + "' (--list)");
+    o.ops = op_order(o.ops);
+    const bool tiered = !o.gate && o.custom_flag.empty();
+    if (!o.gate && !o.custom_flag.empty() && o.tier)
+        die(o.custom_flag + " sets tier custom (the two-pass protocol); drop it or --tier");
+    if (tiered && !o.tier)
+        die("give --tier preview|coarse|deep, or a protocol flag (--reps, --warm, --passes, --remeasure, --refine-ratio, "
+            "--no-refine, --no-jit, --ld-pad, --raw) for a custom two-pass run");
+    if (!tiered && o.ops.size() != 1) die("--gate and the custom protocol take one op");
+    if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0)) die("--plan, --budget and --progress-fd need --tier");
+    for (const std::string& op : o.ops) {
+        const OpSpec* s = find_spec(op);
+        for (const auto& d : o.dtypes) (void)s->candidates(d);
+        std::ifstream f(o.repo + "/" + s->spec_file());
+        std::stringstream ss;
+        ss << f.rdbuf();
+        if (!f) std::fprintf(stderr, "batchlas_tune: %s not found under --repo; kernel list unchecked\n", s->spec_file().c_str());
+        else if (parse_kernel_list(ss.str()) != s->kernel_sources())
+            die(s->spec_file() + ": its kernel-sources block differs from this binary's list (rebuild)");
+    }
     if (!std::getenv("BATCHLAS_TUNE_LAUNCHED"))
         die("start the tuner as batchlas_tune (launcher.cc), not batchlas_tune_impl: the launcher keeps the driver "
             "off every GPU");
+    if (o.plan) {
+        try {
+            return run_tiered(tiered_opts(o), {plan_device_key(o), ""}, nullptr);
+        } catch (const std::exception& e) {
+            die(e.what());
+        }
+    }
     std::optional<std::string> parent_visible;
     if (const char* v = std::getenv("BATCHLAS_TUNE_PARENT_CVD")) parent_visible = v;
     if (const auto why = devices_problem(o.devices, o.devices_given, parent_visible)) die(*why);
     if (o.reps < 1 || o.passes < 1) die("need --reps >= 1, --passes >= 1");
     if (std::set<int>(o.devices.begin(), o.devices.end()).size() != o.devices.size())
         die("--devices lists a GPU twice: one child per GPU at a time");
-    for (const auto& d : o.dtypes) (void)spec->candidates(d);
-    {
-        std::ifstream f(o.repo + "/" + spec->spec_file());
-        std::stringstream ss;
-        ss << f.rdbuf();
-        if (!f) std::fprintf(stderr, "batchlas_tune: %s not found under --repo; kernel list unchecked\n",
-                             spec->spec_file().c_str());
-        else if (parse_kernel_list(ss.str()) != spec->kernel_sources())
-            die(spec->spec_file() + ": its kernel-sources block differs from this binary's list (rebuild)");
-    }
     for (const char* var : {"ROUTE"})
         for (char** e = environ; *e; ++e)
             if (std::strncmp(*e, "BATCHLAS_", 9) == 0 && std::strstr(*e, (std::string("_") + var + "=").c_str()))
                 std::fprintf(stderr, "batchlas_tune: warning: %s is set and reaches the op's children\n", *e);
     const auto locks = lock_devices(o);
+    if (tiered) {
+        TieredMeasurer m(o, o.ops);
+        RunIdentity id;
+        id.device_name = m.first().start(&id.device);
+        try {
+            return run_tiered(tiered_opts(o), id, &m);
+        } catch (const std::exception& e) {
+            die(e.what());
+        }
+    }
+    const OpSpec* spec = find_spec(o.ops[0]);
     Driver drv(o, *spec);
     if (o.gate) {
         if (o.gate_csv.empty() || (o.old_csv.empty() == o.parent_bin.empty()))

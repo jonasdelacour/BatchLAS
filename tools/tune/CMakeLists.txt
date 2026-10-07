@@ -4,6 +4,12 @@
 add_executable(batchlas_tune_impl
     batchlas_tune.cc
     tune_core.cc
+    race.cc
+    grid.cc
+    ledger.cc
+    schedule.cc
+    tiered_driver.cc
+    worker.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc
@@ -17,3 +23,8 @@ target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="
 # libbatchlas or libsycl would put a CUDA context on every visible GPU (see launcher.cc).
 add_executable(batchlas_tune launcher.cc)
 add_dependencies(batchlas_tune batchlas_tune_impl)
+
+# Offline replay of the tiers against a raw sweep (docs/design/tiered-tuning.md). Host-only, like the tests:
+# no batchlas_configure_binary_target, no SYCL.
+add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc tune_core.cc)
+target_compile_features(tune_replay PRIVATE cxx_std_20)

@@ -206,17 +206,27 @@ public:
             "src/sycl/gemm_kernels.hh",
             "src/sycl/gemm/accessors.hh",
             "src/sycl/gemm/epilogue_linear.hh",
+            // family: reg
             "src/sycl/gemm/load_policies.hh",
             "src/sycl/gemm/register_128x128.hh",
+            // family: wide
             "src/sycl/gemm/register_64x64_k16_wide.hh",
+            // family: reg
             "src/sycl/gemm/register_launchers.hh",
             "src/sycl/gemm/register_tiled_common.hh",
+            // family: wide
             "src/sycl/gemm/register_wide_transposed.hh",
+            // family: small
             "src/sycl/gemm/small_batched.hh",
+            // family: tiled
             "src/sycl/gemm/tiled_general.hh",
+            // common
             "src/ops/gemm/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // common "src/ops/gemm/gemm.cc"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gemm_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {
@@ -234,6 +244,7 @@ public:
             GemmProblem<T> p(*q, trans_of(get("ta", "N"), kComplex), trans_of(get("tb", "N"), kComplex),
                              int(key_int(req.key, "m")), int(key_int(req.key, "n")), int(key_int(req.key, "k")),
                              int(key_int(req.key, "batch")), packed ? 0 : std::max(1, req.ld_pad));
+            if (req.mode == "race") return run_race<G::GemmChoice>("gemm", p, req, Tol<T>::v);
             return run_arms<G::GemmChoice>("gemm", p, req, Tol<T>::v);
         });
     }

@@ -22,6 +22,15 @@ const OpSpec* find_spec(std::string_view op) {
 
 std::vector<const OpSpec*> all_specs() { return registry(); }
 
+KernelBlock OpSpec::kernel_block(const std::string& repo) const { return kernel_block_from_file(repo, spec_file()); }
+
+std::map<std::string, std::vector<std::string>> OpSpec::family_sources(const std::string& repo) const {
+    const KernelBlock b = kernel_block(repo);
+    std::map<std::string, std::vector<std::string>> out = b.family;
+    for (const auto& [fam, files] : b.deps) out[fam].insert(out[fam].end(), files.begin(), files.end());
+    return out;
+}
+
 std::vector<CellKey> OpSpec::grid(const std::string& dtype,
                                   const std::map<std::string, std::vector<std::string>>& overrides) const {
     static_cast<void>(dtype);

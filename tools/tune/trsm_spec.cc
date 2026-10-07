@@ -153,11 +153,16 @@ public:
         return {
             "src/sycl/trsm_native.cc",
             "src/sycl/trsm_native.hh",
+            // family: sg_left
             "src/sycl/trsm_sg_left.cc",
+            // common
             "src/sycl/trsm_canonical.hh",
             "src/ops/trsm/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // common "src/ops/trsm/trsm.cc"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/trsm_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {
@@ -179,6 +184,7 @@ public:
             const Diag diag = get("diag", "N") == "U" ? Diag::Unit : Diag::NonUnit;
             TrsmProblem<T> p(*q, side, uplo, trans, diag, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
+            if (req.mode == "race") return run_race<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
             return run_arms<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
         });
     }

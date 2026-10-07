@@ -78,17 +78,27 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            // family: tiny
             "src/extensions/potrf_tiny.cc",
+            // family: cta
             "src/extensions/potrf_cta.cc",
             "src/extensions/potrf_cta_device.hh",
+            // family: lpanel
             "src/extensions/potrf_lpanel.cc",
             "src/extensions/potrf_lpanel_device.hh",
+            // family: blocked
             "src/extensions/potrf_blocked.cc",
+            // common
             "src/extensions/potrf_native.hh",
             "src/extensions/potrf_slm_hole.hh",
             "src/ops/potrf/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // common "src/ops/potrf/potrf.cc"
+        // family: tiny "src/extensions/tiny_device.hh"
+        // family: blocked "src/extensions/symmetric_product_fold.hh" "src/sycl/trsm_native.hh"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potrf_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {
@@ -99,6 +109,7 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PotrfProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad, uplo);
+            if (req.mode == "race") return run_race<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
             return run_arms<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
         });
     }
