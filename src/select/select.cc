@@ -333,7 +333,7 @@ Table parse_table(std::string_view text, std::string_view file) {
     }
     if (const auto h = header.find("source"); h != header.end()) t.source = h->second;
     // Each row is all-timed or all-untimed (checked above); a table may hold both kinds, but
-    // an untimed row needs a transcribed:<hex sha> source. sweep_to_table.py --check agrees.
+    // an untimed row needs a transcribed:<hex sha> or ledger:<dir> source. sweep_to_table.py --check agrees.
     const std::string_view tr = "transcribed:";
     if (t.source.rfind(tr, 0) == 0) {
         const std::string sha = t.source.substr(tr.size());
@@ -341,6 +341,8 @@ Table parse_table(std::string_view text, std::string_view file) {
         if (sha.empty() || !std::all_of(sha.begin(), sha.end(), [](char c) { return std::isxdigit(
                 static_cast<unsigned char>(c)); }))
             fail("source=" + t.source + ": the commit after 'transcribed:' must be a hex sha");
+    } else if (t.source.rfind("ledger:", 0) == 0) {
+        // A ledger table keeps the old router's rows beside measured ones: untimed rows are allowed.
     } else if (const auto u = std::find_if(t.rows.begin(), t.rows.end(), [](const TableRow& r) { return !r.timed; });
                u != t.rows.end()) {
         line_no = u->line;

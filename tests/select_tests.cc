@@ -194,6 +194,26 @@ TEST(SelectTable, TranscribedRowsAreRankedWithoutTimes) {
     EXPECT_DOUBLE_EQ(mixed.rows[1].ranked[1].ms, 2.0);
 }
 
+TEST(SelectTable, LedgerTableMixesTimedAndTranscribedRows) {
+    const auto t = sel::parse_table("# op=synth dtype=float device=sm_89 batchlas=x kernels=y family_kernels=a:b date=d\n"
+                                    "# source=ledger:benchmarks/results/tuning/ledger/synth.float.sm_89 tiers=deep:1,coarse:0,preview:0,custom:0,transcribed:1\n"
+                                    "# keys: uplo:exact n:log batch:log\n"
+                                    "uplo=L n=20 batch=8192 | tiny - | cta - # transcribed\n"
+                                    "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2 # deep\n", "synth.float.sm_89.txt");
+    EXPECT_EQ(t.source.rfind("ledger:", 0), 0u);
+    ASSERT_EQ(t.rows.size(), 2u);
+    EXPECT_FALSE(t.rows[0].timed);
+    EXPECT_TRUE(t.rows[1].timed);
+    const auto* lo = t.nearest({{"uplo", "L"}, {"n", "16"}, {"batch", "8192"}});
+    ASSERT_NE(lo, nullptr);
+    EXPECT_EQ(lo->ranked[0].spelling, "tiny");
+    const auto* hi = t.nearest({{"uplo", "L"}, {"n", "70"}, {"batch", "8192"}});
+    ASSERT_NE(hi, nullptr);
+    EXPECT_EQ(hi->ranked[0].spelling, "blocked");
+    EXPECT_THROW(sel::parse_table("# op=synth dtype=float device=sm_89 source=sweep.jsonl\n# keys: n:log\nn=4 | tiny -\n",
+                                  "synth.float.sm_89.txt"), std::runtime_error);
+}
+
 TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
     const auto t = sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt");
     EXPECT_EQ(t.file, "op.cfloat.gfx90a.txt");

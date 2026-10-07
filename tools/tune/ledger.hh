@@ -14,7 +14,8 @@
 
 namespace batchlas::tune {
 
-// status: ok | skipped | bad | error | eliminated (raced and dropped by the race).
+// status: ok | skipped | bad | error | eliminated (raced and dropped by the race); an eliminated
+// candidate must carry the median of the reps it did time (rows print it; no median = omitted).
 struct CandResult {
     std::string cand, hash, status, reason;
     double median_ms = NAN, lo = NAN, hi = NAN;
