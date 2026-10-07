@@ -62,7 +62,8 @@ valid low-fidelity data, not a different kind of number.
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
 | Starting lattice | every 2nd point of each `choice.hh` axis (ends kept) | the full lattice | the full lattice |
-| Bisection between neighbours | in index space of the axis, until adjacent, then geometric to hi/lo < 1.1; also when a runner-up is within 10% | geometric, until hi/lo < 1.1 | geometric, until hi/lo < 1.1 |
+| Bisection between neighbours | in index space of the axis, until adjacent, then geometric to hi/lo < 1.1; also between two starting-lattice cells when a runner-up is within 10% | geometric, until hi/lo < 1.1 | geometric, until hi/lo < 1.1 |
+| Refinement cap per op and dtype | 1.0 x round-0 cells | 1.0 x round-0 cells | 2.0 x round-0 cells |
 | Race: min / max reps per candidate | 3 / 6 | 4 / 12 | 6 / 16 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a confirmation round in reversed order |
 | Fresh-process audit sample | 2% of cells | 2% | 10% |
@@ -98,12 +99,17 @@ Across cells:
 - **Breadth-first.** For every op and dtype in a run, the starting lattice is measured before any
   refinement. A run interrupted at any point leaves complete, usable tables.
 - **Bisection on every key axis,** not only `n`: batch, q and nrhs too, using each key's own
-  distance: `log` axes are bisected geometrically, `exact` axes (uplo, side, trans) never. Nothing is inferred or interpolated: a
+  distance: `log` axes are bisected geometrically, `exact` axes (uplo, side, trans) never, and
+  batch only ever refills its own axis values. A bracket refines on a decisive winner flip, not on
+  near-tie alternation, and refinement is capped per op and dtype
+  ([convergence rules](#engine-refinement-convergence-rules)). Nothing is inferred or interpolated: a
   table simply has fewer rows where neighbours agree, and `select::choose` already takes the
   nearest row.
 - **Time estimate and budget.** Before starting, the driver predicts the run's cost from earlier
   ledger timings for the same op, dtype and device, or from a flop/byte model of the op against the
-  device's ceilings when there are none. The estimate is printed (and shown in the UI). `--budget
+  device's ceilings when there are none. It covers the expected refinement cells too (this ledger's
+  refined / round-0 ratio at the tier, else half the cap), and `--plan` prints it with and without
+  them. The estimate is printed (and shown in the UI). `--budget
   <h>` stops refinement when the budget is spent; the starting lattice always completes.
 - **Op order follows dependencies.** potrf and trsm are tuned before posv, whose cta and blocked
   times depend on their choices (@ref tune_tool_readme, section Specs). Other compositions found in
@@ -208,8 +214,11 @@ round, or a smaller cell after a larger one, restarts the worker. The full guard
 runs before a worker starts and, after a 1 s idle, every 60 s of worker time; between other cells
 only foreign compute processes are checked. A worker cell with an `error` candidate may carry a
 sticky CUDA error: the worker restarts and the cell is raced again in a fresh child, whose result
-is recorded. The audit picks a cell when `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`,
-and the first worker cell of an op and dtype when the hash picks none of the starting lattice. A
+is recorded. When the fresh child reproduces the `error` in two consecutive cells, it is the
+candidate's own error: that op and dtype stop sending the candidate to the worker and race it alone
+in a fresh child per cell (errors can depend on the shape). The audit picks a cell when
+`fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, and until an op and dtype has been audited
+once, its next worker cell that did not fall back to a fresh child, whatever the hash picked. A
 mismatch is a candidate usable in one process and refused or failing in the other (`eliminated`
 against `bad` is inconclusive: the eliminated one was never verified), or a different winner whose
 worker winner is more than 10% slower in the fresh run (3 to 10% swaps are noise at preview's rep
@@ -526,7 +535,8 @@ measured neighbours at positions i < j of the axis's full value list with j - i 
 at (i + j) / 2, so every proposal is on the `choice.hh` lattice; adjacent neighbours fall back to the
 geometric midpoint at the tier's ratio. `--refine-margin m` also refines a bracket whose two winners
 agree when, at either end, the runner-up's raced median is within m of the winner's (the replay passes
-this per-cell gap in `RefineOpts::gap`). Exact axes are never bisected. Every row uses the preview race
+the per-cell medians in `RefineOpts::cells`). The tables below predate the
+[convergence rules](#engine-refinement-convergence-rules). Exact axes are never bisected. Every row uses the preview race
 parameters, bisection ratio 1.1 and the full axes; `s2` and `s4` are the starting lattice stride on every
 log axis. Same machine, data and metrics as above.
 
@@ -554,6 +564,88 @@ at 7 to 13%. None of these comes near the 1% table bound that the full lattice m
 with 4390 and 4088 cells, and p99 loss stays near 0.6 to 1.4 in every sparse row: the replay can bisect only along `order`
 in the raw files, so the q and batch refills here are limited to cells the raw file holds, and a flip
 between two lattice points on those axes is still left to the nearest-cell rule.
+
+## Engine: refinement convergence rules
+
+> **Status:** as built 2026-10-07 (Task 8b). Replay on the sm_120 trsm raw files of threadripper02;
+> GPU run on threadripper02 GPU 1 (RTX PRO 6000, sm_120).
+
+**The problem.** A preview potrf float run planned 108 cells and measured 2029 over 16 rounds
+(47, 76, 107, 186, 345, 353, 383, 212, 119, 62, then 49 over rounds 11 to 15). Of the 1939
+refinement cells, 908 came from winner flips and 1031 from the 0.10 margin trigger. Many flips were
+near-tie winners alternating between neighbours (`lpanel:panel=8` against `lpanel:panel=16` within
+3%), batch was bisected down to values such as 431, and a 4x2 starting grid grew to 129 cells. The
+plan and the estimate counted the starting lattice only.
+
+**The rules** (`refine_all_axes` in `tools/tune/grid.cc`, the same code in the driver and in
+`tune_replay`; each cell's raced medians arrive as a `RefineCell`):
+
+1. A bracket is a winner flip only when the two winners differ and, at each end, the other end's
+   winner is more than the 3% tie slower than the local winner. A winner with no median at an end
+   counts as decisively slower there only when it is not runnable there or was eliminated.
+2. The margin trigger (preview, 10%) applies only to brackets whose two ends are both starting
+   lattice (round 0) cells of this run, so a refinement midpoint never re-triggers it.
+3. `batch` is never bisected below its lattice spacing: it refills its own axis values (index
+   mode in every tier) and never takes a geometric midpoint.
+4. Refinement cells per op and dtype are at most `refine_cap_factor` x round-0 cells (preview 1.0,
+   coarse 1.0, deep 2.0; `TierParams`). Round-0 cells are the starting lattice minus `skip:cap`,
+   whether measured now or already current. Midpoints come out flips first, then margin hedges; past
+   the cap the first ones run, refinement stops and the run reports it (`refine_cap` progress event,
+   `refinement cap hit` line). `tune_replay` applies the same cap.
+5. The estimate counts refinement: ratio x the lattice cells measured now, at their mean estimate,
+   where ratio is this ledger's refined / round-0 records at the tier (at most the cap factor), else
+   cap factor x 0.5. `--plan` prints the lattice-only and the with-refinement estimate, the `plan`
+   event carries `refine_cells`, `est_refine_s` and `est_total_s`, and the run ends with a summary
+   line per op and dtype.
+
+**Replay re-validation** (holdout acceptance, `tune_replay --tier T` with the tier defaults; excess
+over the noise floor; measured = lattice + refinement cells the raw file holds):
+
+| tier | dtype | bound | before: measured | before: excess race / table | after: measured (lattice + refined, capped) | after: excess race / table | after |
+|---|---|---|---|---|---|---|---|
+| preview | float | 5% | 2934 | 0.51% / 2.96% | 1232 (616 + 616, 135 dropped) | 0.28% / 7.52% | FAIL |
+| coarse | float | 1% | 4427 | 0.03% / 0.04% | 3859 (3480 + 379) | -0.03% / 3.75% | FAIL |
+| deep | float | 0.2% | 4426 | 0.01% / 0.09% | 3849 (3480 + 369) | 0.00% / 3.91% | FAIL |
+| preview | double | 5% | 2364 | 0.59% / 4.22% | 1170 (585 + 585, 62 dropped) | 0.39% / 7.32% | FAIL |
+| coarse | double | 1% | 4066 | 0.03% / 0.12% | 3619 (3219 + 400) | 0.10% / 1.73% | FAIL |
+| deep | double | 0.2% | 4068 | -0.02% / 0.07% | 3621 (3219 + 402) | 0.04% / 1.68% | FAIL |
+
+Reading it: with rules 1 to 4 as above every tier fails its table bound. Coarse and deep never hit
+their cap, so rule 1 alone costs them 1.7 to 3.9 points: the trsm flips are one-sided. Their
+crossover sits near one end of the bracket, the other end's winner is within the tie there and far
+behind at the far end, so rule 1 drops the bracket and the cells between read the wrong neighbour.
+
+The same replay with rule 1 relaxed to "decisive at *either* end" (rules 2 to 4 unchanged; a
+diagnostic build, not the shipped code) measures exactly what the unrestricted flip rule measured on
+coarse and deep: the trsm files hold no bracket whose two winners are within the tie at both ends.
+
+| variant | tier | dtype | measured (lattice + refined, capped) | excess table | verdict |
+|---|---|---|---|---|---|
+| either end, cap 1.0 | preview | float / double | 1232 (135 dropped) / 1170 (62 dropped) | 7.84% / 7.32% | FAIL / FAIL |
+| either end, cap 2.0 | preview | float / double | 1848 (78 dropped) / 1755 (2 dropped) | 5.75% / 4.32% | FAIL / PASS |
+| either end, cap 3.0 | preview | float / double | 2197 (616 + 1581) / 1763 (585 + 1178), not hit | 3.89% / 4.25% | PASS / PASS |
+| either end, cap 1.0 | coarse | float / double | 4427 / 4066, not hit | 0.04% / 0.12% | PASS / PASS |
+| either end, cap 2.0 | deep | float / double | 4427 / 4068, not hit | 0.09% / 0.07% | PASS / PASS |
+| both ends (shipped), cap 3.0 | preview | float / double | 1702 / 1495, not hit | 6.49% / 4.73% | FAIL / PASS |
+
+So the cheapest passing set on this data is rule 1 at either end plus a preview cap of 3.0 (coarse
+1.0, deep 2.0 unchanged): 25% fewer preview cells than before the rules (2197 and 1763 against
+2934 and 2364) and coarse and deep unchanged. The replay cannot show the growth these rules exist
+to stop: it can only measure midpoints the raw file holds (3915 and 3534 preview midpoints were
+unavailable before), so its refinement counts are lower bounds of a GPU run's.
+
+**GPU run** (`batchlas_tune potrf --tier preview --dtype float --devices 1`, persistent worker):
+
+| | planned | measured | rounds (cells per round) | wall |
+|---|---|---|---|---|
+| before the rules (Task 8) | 108 lattice | 2029 | 16 (47, 76, 107, ... 49 over rounds 11 to 15) | 2388 s |
+| after | 90 lattice + ~45 refinement (est 0.05 h lattice, 0.08 h with refinement) | 90 + 79 = 169 | 7 (90, 47, 18, 8, 4, 1, 1) | 205 s |
+
+The 108 planned cells include 18 `skip:cap` cells, so the cap base is 90 and the cap 90 refinement
+cells: refinement converged at 79 without hitting it, so measured cells stay within (1 + 1.0) x 90.
+No worker restarts, 3 audits, nothing stalled. The estimate is low by about 25% (271 s planned, 205 s
+wall for 169 cells against 135 planned); the history ratio of the next run (79 / 90) will replace the
+cap x 0.5 default.
 
 ## Tiered tuning: open risks
 
