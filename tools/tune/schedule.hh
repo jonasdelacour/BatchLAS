@@ -1,0 +1,72 @@
+#pragma once
+
+// The tiered scheduler: which cells a round measures, with which arms and at which tier, and what
+// that costs. Host-only. evidence: docs/design/tiered-tuning.md#engine-tiers-and-the-per-cell-algorithm
+
+#include "ledger.hh"
+#include "spec.hh"
+#include "tier.hh"
+#include "tune_core.hh"
+
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace batchlas::tune {
+
+// Task 0's measured child start-up (threadripper02): docs/design/tiered-tuning.md#engine-measured-per-child-overhead
+inline constexpr double kChildOverheadS = 0.49;
+inline constexpr double kVerifyS = 0.05;        // per candidate, the untimed verification run
+inline constexpr double kModelBytesPerS = 500e9;
+
+// What plan_round needs of an op: plain data, so tests need no OpSpec.
+struct PlanSpec {
+    std::vector<std::string> candidates;  // the full current list, in tie order
+    std::function<double(const CellKey&)> bytes;
+};
+
+struct PlannedCell {
+    CellKey key;
+    std::string reason;  // "" = measure, "skip:current", "skip:single", "skip:cap", "partial:<fams>"
+    std::vector<std::string> arms;
+    double est_s = 0;
+    Tier tier = Tier::preview;            // a partial re-race keeps the stored record's tier
+    const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
+};
+
+// Nearest ledger record's median for `cand` (equal non-integer fields, log distance on integer
+// ones), else the byte model bytes / 500 GB/s.
+double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand, double bytes);
+
+// overhead + per arm (max_reps x estimate + warm top-up + verification).
+double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<std::string>& arms, double bytes,
+                       const TierParams& p, double overhead_s);
+
+// Sorted by ascending bytes (stable). `runnable` holds probe results per cell (nullptr = unknown);
+// skip:single needs a known probe.
+std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
+                                    const std::map<std::string, std::string>& family_hash, double cap_gib,
+                                    double per_cell_overhead_s,
+                                    const std::map<CellKey, std::vector<std::string>>* runnable = nullptr);
+
+// potrf and trsm before posv; otherwise input order.
+std::vector<std::string> op_order(std::vector<std::string> ops);
+
+// Empty when the estimate fits the budget (or there is none); the lattice runs either way.
+std::string budget_warning(double est_s, double budget_h);
+
+// A measured cell: per-arm median/min/max of the reps, ranked by rank() at tie 0.03. A partial
+// re-race merges into `stored`: its unchanged candidates stay, removed families drop.
+CellRecord record_from_arms(const CellKey& key, int round, const std::vector<ArmOutcome>& arms,
+                            const std::vector<std::string>& order, const std::map<std::string, std::string>& family_hash,
+                            const CellRecord* stored = nullptr);
+
+// skip:single: `only` ranked untimed, every other candidate skipped.
+CellRecord single_record(const CellKey& key, int round, const std::string& only, const std::vector<std::string>& order,
+                         const std::map<std::string, std::string>& family_hash);
+
+// runner-up time / winner time - 1 (the preview refinement margin); +inf without a timed runner-up.
+double runner_up_gap(const CellRecord& r);
+
+}  // namespace batchlas::tune

@@ -6,6 +6,7 @@
 #include "../tools/tune/ledger.hh"
 #include "../tools/tune/race.hh"
 #include "../tools/tune/replay_core.hh"
+#include "../tools/tune/schedule.hh"
 #include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
 
@@ -1669,4 +1670,193 @@ TEST(TuneLedger, LaterRecordInSameRunWins) {
     const auto best = best_records(l, {{"vendor", "v1"}});
     ASSERT_EQ(best.size(), 1u);
     EXPECT_EQ(best.begin()->second->round, 7);
+}
+
+namespace {
+
+CellKey nkey(int n, int batch = 1024) { return {{"n", std::to_string(n)}, {"batch", std::to_string(batch)}}; }
+
+PlanSpec plan_spec(std::vector<std::string> cands) {
+    return {std::move(cands), [](const CellKey& k) { return double(key_int(k, "n")) * 1e6; }};
+}
+
+const std::vector<std::string> kTwo{"lpanel:panel=8", "vendor"};
+
+ArmOutcome arm(const std::string& name, const std::string& status, std::vector<double> ms = {}) {
+    ArmOutcome a;
+    a.arm = name;
+    a.status = status;
+    a.ms = std::move(ms);
+    return a;
+}
+
+}  // namespace
+
+TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
+    Ledger l;
+    CellRecord r = two_family_cell();
+    r.tier = Tier::deep;
+    l.cells.push_back(r);
+    auto plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64), nkey(128)}, l, kHashes, 4, kChildOverheadS);
+    ASSERT_EQ(plan.size(), 2u);
+    EXPECT_EQ(plan[0].key, nkey(64));
+    EXPECT_EQ(plan[0].reason, "skip:current");
+    EXPECT_TRUE(plan[0].arms.empty());
+    EXPECT_EQ(plan[0].est_s, 0);
+    EXPECT_EQ(plan[1].reason, "");
+    EXPECT_EQ(plan[1].arms, kTwo);
+    EXPECT_EQ(plan[1].tier, Tier::coarse);
+    EXPECT_GT(plan[1].est_s, kChildOverheadS);
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::deep, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+
+    l.cells[0].tier = Tier::coarse;
+    plan = plan_round(plan_spec(kTwo), Tier::deep, {nkey(64)}, l, kHashes, 4, 0);
+    EXPECT_EQ(plan[0].reason, "") << "a coarse record does not satisfy deep";
+    EXPECT_EQ(plan[0].tier, Tier::deep);
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::preview, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+
+    l.cells[0].tier = Tier::deep;
+    auto changed = kHashes;
+    changed["lpanel"] = "h2";  // the winner's family changed: stale, re-raced in full at the record's tier
+    plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, changed, 4, 0);
+    EXPECT_EQ(plan[0].reason, "");
+    EXPECT_EQ(plan[0].arms, kTwo);
+    EXPECT_EQ(plan[0].tier, Tier::deep);
+}
+
+TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
+    const std::vector<std::string> cands{"lpanel:panel=8", "lpanel:panel=16", "vendor", "wide:m=1", "cta"};
+    Ledger l;
+    CellRecord r = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("lpanel:panel=16", "h1", "ok", 1.5),
+                             cres("vendor", "v1", "ok", 2.0), cres("cta", "c1", "ok", 3.0), cres("old:x", "o1", "ok", 5.0)},
+                            {"lpanel:panel=8", "lpanel:panel=16", "vendor", "cta", "old:x"});
+    r.tier = Tier::deep;
+    l.cells.push_back(r);
+    // cta changed, wide was added, old was removed; lpanel and vendor are unchanged.
+    const std::map<std::string, std::string> now{{"lpanel", "h1"}, {"vendor", "v1"}, {"cta", "c2"}, {"wide", "w1"}};
+    const auto plan = plan_round(plan_spec(cands), Tier::preview, {nkey(64)}, l, now, 4, 0);
+    ASSERT_EQ(plan.size(), 1u);
+    EXPECT_EQ(plan[0].reason, "partial:cta,wide");
+    EXPECT_EQ(plan[0].arms, (std::vector<std::string>{"lpanel:panel=8", "lpanel:panel=16", "wide:m=1", "cta"}))
+        << "the stale families plus the stored winner and runner-up; vendor is not re-raced";
+    EXPECT_EQ(plan[0].tier, Tier::deep) << "measured at the stored record's tier";
+    ASSERT_EQ(plan[0].stored, &l.cells[0]);
+
+    const CellRecord merged = record_from_arms(nkey(64), 3,
+                                               {arm("lpanel:panel=8", "ok", {1.1, 1.0, 1.2}), arm("lpanel:panel=16", "ok", {1.6}),
+                                                arm("wide:m=1", "ok", {0.5, 0.6}), arm("cta", "bad")},
+                                               cands, now, plan[0].stored);
+    EXPECT_EQ(merged.round, 3);
+    std::vector<std::string> names;
+    for (const CandResult& c : merged.cands) names.push_back(c.cand);
+    EXPECT_EQ(names, cands) << "unchanged vendor kept, removed old dropped, candidate order";
+    ASSERT_EQ(merged.cands.size(), cands.size());
+    EXPECT_DOUBLE_EQ(merged.cands[0].median_ms, 1.1);
+    EXPECT_DOUBLE_EQ(merged.cands[0].lo, 1.0);
+    EXPECT_DOUBLE_EQ(merged.cands[0].hi, 1.2);
+    EXPECT_EQ(merged.cands[0].reps, 3);
+    EXPECT_DOUBLE_EQ(merged.cands[2].median_ms, 2.0) << "the stored vendor time";
+    EXPECT_EQ(merged.cands[3].hash, "w1");
+    EXPECT_EQ(merged.cands[4].status, "bad");
+    EXPECT_EQ(merged.cands[4].hash, "c2");
+    EXPECT_TRUE(std::isnan(merged.cands[4].median_ms));
+    EXPECT_EQ(merged.ranked, (std::vector<std::string>{"wide:m=1", "lpanel:panel=8", "lpanel:panel=16", "vendor"}));
+    EXPECT_EQ(freshness(merged, now), Freshness::current);
+}
+
+TEST(TuneSchedule, SingleRunnableCandidateIsNotTimed) {
+    std::map<std::string, std::string> h;
+    for (const char* f : {"tiny", "cta", "lpanel", "blocked", "vendor"}) h[f] = "x";
+    const std::map<CellKey, std::vector<std::string>> runnable{
+        {nkey(16), {"tiny"}}, {nkey(24), {}}, {nkey(32), {"vendor", "cta"}}};
+    const auto plan = plan_round(plan_spec(kPotrfOrder), Tier::preview, {nkey(16), nkey(24), nkey(32), nkey(64)},
+                                 Ledger{}, h, 4, kChildOverheadS, &runnable);
+    ASSERT_EQ(plan.size(), 4u);
+    EXPECT_EQ(plan[0].reason, "skip:single");
+    EXPECT_EQ(plan[0].arms, std::vector<std::string>{"tiny"});
+    EXPECT_DOUBLE_EQ(plan[0].est_s, kChildOverheadS) << "a probe, nothing timed";
+    EXPECT_EQ(plan[1].reason, "skip:single");
+    EXPECT_TRUE(plan[1].arms.empty());
+    EXPECT_EQ(plan[2].reason, "");
+    EXPECT_EQ(plan[2].arms, (std::vector<std::string>{"cta", "vendor"})) << "the runnable arms, candidate order";
+    EXPECT_EQ(plan[3].arms, kPotrfOrder) << "no probe result: every candidate";
+    EXPECT_EQ(plan_round(plan_spec(kPotrfOrder), Tier::preview, {nkey(16)}, Ledger{}, h, 4, 0)[0].reason, "")
+        << "unknown runnable set: measured";
+
+    const CellRecord one = single_record(nkey(16), 0, "tiny", kPotrfOrder, h);
+    EXPECT_EQ(one.ranked, std::vector<std::string>{"tiny"});
+    ASSERT_EQ(one.cands.size(), kPotrfOrder.size());
+    EXPECT_EQ(one.cands[0].status, "ok");
+    EXPECT_EQ(one.cands[0].reps, 0);
+    EXPECT_TRUE(std::isnan(one.cands[0].median_ms));
+    for (std::size_t i = 1; i < one.cands.size(); ++i) EXPECT_EQ(one.cands[i].status, "skipped") << one.cands[i].cand;
+    EXPECT_TRUE(single_record(nkey(24), 0, "", kPotrfOrder, h).ranked.empty());
+}
+
+TEST(TuneSchedule, AscendingBytesOrder) {
+    const double cap_gib = 200e6 / (1024.0 * 1024.0 * 1024.0);
+    const auto plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(256), nkey(64, 2048), nkey(64), nkey(128)},
+                                 Ledger{}, kHashes, cap_gib, 0);
+    std::vector<std::string> order;
+    for (const PlannedCell& c : plan) order.push_back(key_arg(c.key));
+    EXPECT_EQ(order, (std::vector<std::string>{"n=64,batch=2048", "n=64,batch=1024", "n=128,batch=1024",
+                                               "n=256,batch=1024"}))
+        << "ascending bytes, equal bytes in input order";
+    ASSERT_EQ(plan.size(), 4u);
+    EXPECT_EQ(plan[3].reason, "skip:cap");
+    EXPECT_TRUE(plan[3].arms.empty());
+}
+
+TEST(TuneSchedule, PosvAfterPotrfAndTrsm) {
+    using V = std::vector<std::string>;
+    EXPECT_EQ(op_order({"posv", "gemm", "potrf", "trsm"}), (V{"gemm", "potrf", "trsm", "posv"}));
+    EXPECT_EQ(op_order({"potrf", "posv", "trsm"}), (V{"potrf", "trsm", "posv"}));
+    EXPECT_EQ(op_order({"trsm", "potrf", "posv", "gemm"}), (V{"trsm", "potrf", "posv", "gemm"}));
+    EXPECT_EQ(op_order({"gemm", "posv"}), (V{"gemm", "posv"}));
+}
+
+TEST(TuneSchedule, BudgetBelowLatticeWarnsAndStillPlansTheLattice) {
+    const std::vector<AxisSpec> axes{{"n", true, {"8", "16", "32", "64", "128", "256", "512"}}, {"batch", false, {"1024"}}};
+    const auto lattice = tier_lattice(axes, Tier::preview);
+    ASSERT_EQ(lattice.size(), 4u);
+    const auto plan = plan_round(plan_spec(kTwo), Tier::preview, lattice, Ledger{}, kHashes, 4, 600);
+    ASSERT_EQ(plan.size(), lattice.size()) << "the budget never trims the starting lattice";
+    double est = 0;
+    for (const PlannedCell& c : plan) {
+        EXPECT_EQ(c.reason, "");
+        est += c.est_s;
+    }
+    EXPECT_GT(est, 2400);
+    const std::string w = budget_warning(est, 0.5);
+    EXPECT_NE(w.find("0.50 h"), std::string::npos) << w;
+    char e[32];
+    std::snprintf(e, sizeof(e), "%.2f h", est / 3600);
+    EXPECT_NE(w.find(e), std::string::npos) << w;
+    EXPECT_EQ(budget_warning(est, 1.0), "");
+    EXPECT_EQ(budget_warning(est, 0), "") << "no budget";
+}
+
+TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
+    Ledger l;
+    EXPECT_DOUBLE_EQ(estimate_ms(l, nkey(64), "vendor", 1e9), 2.0) << "500 GB/s";
+    l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 2.0)}, {"vendor"}, 64));
+    l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 8.0)}, {"vendor"}, 256));
+    CellRecord other = cell_rec({cres("vendor", "v1", "ok", 99.0)}, {"vendor"}, 100);
+    other.key.insert(other.key.begin(), {"uplo", "U"});
+    l.cells.push_back(other);
+    EXPECT_DOUBLE_EQ(estimate_ms(l, nkey(100), "vendor", 1e9), 2.0);
+    EXPECT_DOUBLE_EQ(estimate_ms(l, nkey(200), "vendor", 1e9), 8.0);
+    EXPECT_DOUBLE_EQ(estimate_ms(l, nkey(100), "cta", 1e9), 2.0) << "no record of the candidate: the model";
+    CellKey lower = nkey(100);
+    lower.insert(lower.begin(), {"uplo", "L"});
+    EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
+    const TierParams& p = params(Tier::coarse);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, p, 0.49),
+                     0.49 + p.max_reps * 2.0e-3 + p.warm_topup_s + kVerifyS);
+}
+
+TEST(TuneSchedule, RunnerUpGapFeedsTheRefinementMargin) {
+    EXPECT_NEAR(runner_up_gap(cell_rec({cres("a", "1", "ok", 1.0), cres("b", "1", "ok", 1.05)}, {"a", "b"})), 0.05, 1e-12);
+    EXPECT_TRUE(std::isinf(runner_up_gap(cell_rec({cres("a", "1", "ok", 1.0), cres("b", "1", "bad")}, {"a"}))));
+    EXPECT_TRUE(std::isinf(runner_up_gap(cell_rec({}, {}))));
 }

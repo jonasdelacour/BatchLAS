@@ -7,6 +7,7 @@ add_executable(batchlas_tune_impl
     race.cc
     grid.cc
     ledger.cc
+    schedule.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc
