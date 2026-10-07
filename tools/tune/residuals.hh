@@ -5,11 +5,13 @@
 // same residuals as a factor_bench sweep row: double promotion, items 0 AND batch-1 (item 0
 // alone is blind to a wrong batch stride), NaN-propagating maxima.
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace batchlas::tune {
 
@@ -45,6 +47,14 @@ struct Rng {
         return double(std::int32_t(std::uint32_t(s >> 32))) / 2147483648.0;
     }
 };
+
+// Up to `cap` indices of [0, n), evenly spread, always the first and the last (a lost tile edge).
+inline std::vector<int> sample_indices(int n, int cap) {
+    std::vector<int> out;
+    for (int i = 0; i < std::min(n, cap); ++i)
+        out.push_back(n <= cap ? i : int(std::int64_t(i) * (n - 1) / (cap - 1)));
+    return out;
+}
 
 // The inputs are conditioned O(1) by construction, so these bounds are generous, not tuned.
 template <class T> struct Tol;

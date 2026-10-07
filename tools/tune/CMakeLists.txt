@@ -18,7 +18,12 @@ add_executable(batchlas_tune_impl
     getrf_spec.cc
     getrs_spec.cc
     getri_spec.cc
-    gesv_spec.cc)
+    gesv_spec.cc
+    gemv_spec.cc
+    trmm_spec.cc
+    symm_spec.cc
+    syrk_spec.cc
+    syr2k_spec.cc)
 batchlas_configure_binary_target(batchlas_tune_impl)
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

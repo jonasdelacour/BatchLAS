@@ -51,6 +51,33 @@ decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     throw std::invalid_argument("unknown dtype '" + dtype + "'");
 }
 
+// symm, syrk and syr2k are real-only (RealScalar): no complex instantiation and no complex table.
+template <class F>
+decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, F&& f) {
+    if (dtype == "float") return f.template operator()<float>();
+    if (dtype == "double") return f.template operator()<double>();
+    throw std::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
+}
+
+// A non-lattice grid() (form derived from the extents) under `--grid name=v1:v2`: the overrides
+// FILTER the declared cells, as gemm's do.
+inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> cells,
+                                         const std::map<std::string, std::vector<std::string>>& overrides) {
+    const auto ax = s.axes();
+    for (const auto& [name, values] : overrides)
+        if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
+            throw std::invalid_argument(s.op() + " has no grid axis '" + name + "'");
+    std::vector<CellKey> out;
+    for (CellKey& key : cells)
+        if (std::all_of(key.begin(), key.end(), [&](const auto& kv) {
+                const auto it = overrides.find(kv.name);
+                return it == overrides.end() || std::find(it->second.begin(), it->second.end(), kv.value) != it->second.end();
+            }))
+            out.push_back(std::move(key));
+    if (out.empty()) throw std::invalid_argument(s.op() + ": the --grid filters leave no cell of the declared grid");
+    return out;
+}
+
 template <class Choice, std::size_t N>
 std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
     std::vector<std::string> out;
