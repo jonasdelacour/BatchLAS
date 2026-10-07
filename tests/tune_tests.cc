@@ -329,6 +329,42 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     }
 }
 
+// The QR specs: every listed file exists, every family hashes, can_run's <op>.cc is the one common
+// dep, and the composed sub-ops are declared (geqrf blocked -> gemm; orgqr blocked -> ormqr -> gemm,
+// trmm; ormqr blocked -> gemm, trmm).
+TEST(TuneHash, QrSpecsDeclareTheirFamiliesAndCompositions) {
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const std::map<std::string, std::vector<std::string>> families{
+        {"geqrf", {"tiny", "cta", "blocked", "vendor"}}, {"orgqr", {"blocked", "vendor"}}, {"ormqr", {"blocked", "vendor"}}};
+    const std::map<std::string, std::vector<std::string>> blocked_deps{
+        {"geqrf", {"src/ops/gemm/gemm.cc", "src/sycl/gemm_kernels.cc"}},
+        {"orgqr", {"src/ops/ormqr/ormqr.cc", "src/extensions/ormqr_blocked.cc", "src/sycl/gemm_kernels.cc",
+                   "src/ops/trmm/trmm.cc"}},
+        {"ormqr", {"src/sycl/gemm_kernels.cc", "src/ops/trmm/trmm.cc", "include/batchlas/tuning_params.hh"}}};
+    for (const auto& [op, fams] : families) {
+        const std::string spec = "tools/tune/" + op + "_spec.cc";
+        const KernelBlock b = kernel_block_from_file(repo, spec);
+        std::string missing;
+        const auto op_hash = kernel_hash(repo, b.all, &missing);
+        ASSERT_TRUE(op_hash) << op << ": " << missing;
+        if (const std::string py = BATCHLAS_TUNE_PYTHON; !py.empty())
+            EXPECT_EQ(run("cd '" + repo + "' && '" + py +
+                          "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
+                          "print(c.kernel_hash('.', c.parse_kernel_list(open('" + spec + "').read()))[0])\""),
+                      *op_hash) << op;
+        EXPECT_EQ(b.deps_common.front(), "src/ops/" + op + "/" + op + ".cc") << op;
+        EXPECT_TRUE(b.family.count("blocked")) << op;
+        const auto h = family_hashes(repo, b, fams);
+        EXPECT_EQ(h.size(), fams.size()) << op;
+        const auto& d = b.deps.at("blocked");
+        for (const std::string& f : blocked_deps.at(op)) EXPECT_NE(std::find(d.begin(), d.end(), f), d.end()) << op << " " << f;
+        for (const auto& [fam, files] : b.family)
+            for (const std::string& f : files) EXPECT_EQ(std::count(b.all.begin(), b.all.end(), f), 1) << op << " " << f;
+    }
+    for (const char* f : {"tiny", "cta"})
+        EXPECT_TRUE(kernel_block_from_file(repo, "tools/tune/geqrf_spec.cc").family.count(f)) << f;
+}
+
 TEST(TuneGate, FailsOnlyWhenBothPassesLose) {
     EXPECT_EQ(gate_verdict(1.06, 1.07, false), "FAIL");
     EXPECT_EQ(gate_verdict(1.06, 1.04, false), "pass");
