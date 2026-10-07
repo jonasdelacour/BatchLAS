@@ -12,6 +12,7 @@ tables); flat-kernel-selection-phase3-plan.md section 2 option D.
     scripts/sweep_to_table.py --self-test            # converter rules on real rows (also run by --check)
     scripts/sweep_to_table.py --tuner JSONL... [--out DIR]   # tables from batchlas_tune raw output
     scripts/sweep_to_table.py --ledger DIR... [--out DIR]    # tables from per-run result ledgers
+    scripts/sweep_to_table.py --ledger DIR... --assume-current --out DIR   # diagnostic, see LEDGER
 
 A table comes from one of three sources:
 
@@ -97,6 +98,9 @@ a lower tier is dropped when a higher-tier row has equal exact keys and lies wit
 stride (preview/custom/transcribed 2, in index steps of the per-key lattice of the ledger's
 cells) on every log key; the replaced table's untimed rows are the transcribed tier. An empty
 ranking emits no row. --check re-derives the table from the ledger its source=ledger:<dir> names.
+--assume-current (diagnostic only: an importer/generator round trip on data whose kernels have
+changed since) judges freshness against each family's last stored hash instead of the sources;
+the header still names the source hashes, so --check fails such a table.
 
 TRANSCRIBER CSV (--transcribe input), with a header row:
   op,dtype,device,<one column per '# keys:' name>,ranked
@@ -999,7 +1003,17 @@ def read_old_transcribed(path):
     return [(k, [(c, None) for c, _ in ranked]) for k, ranked in parsed if all(ms is None for _, ms in ranked)]
 
 
-def ledger_text(spec, dtype, device, ledger, source_dir, old_path):
+def stored_hashes(ledger, families):
+    """--assume-current: each family's hash as last stored in the ledger (file, then line order)."""
+    out = {}
+    for c in ledger.cells:
+        for r in c["cands"]:
+            if r["hash"]:
+                out[spelling_family(r["cand"])] = r["hash"]
+    return {f: out.get(f, "") for f in families}
+
+
+def ledger_text(spec, dtype, device, ledger, source_dir, old_path, assume_current=False):
     """(table text, per-tier row counts) for one ledger. Header fields come from the newest
     run (date, then run id): batchlas, date, and the keys/candidates it recorded."""
     if not ledger.runs:
@@ -1013,7 +1027,8 @@ def ledger_text(spec, dtype, device, ledger, source_dir, old_path):
     block = parse_kernel_block(read_spec_source(spec))
     fam_hash = family_hashes(REPO, block, families)
     keyspec = parse_keys(spec.keys)
-    rows = ledger_rows(spec, keyspec, ledger, fam_hash, read_old_transcribed(old_path))
+    judge = stored_hashes(ledger, families) if assume_current else fam_hash
+    rows = ledger_rows(spec, keyspec, ledger, judge, read_old_transcribed(old_path))
     counts = {t: sum(1 for tier, _ in rows.values() if tier == t) for t in LEDGER_TIERS}
     lines = [
         f"# op={spec.op} dtype={dtype} device={device} batchlas={newest['batchlas']} "
@@ -1040,12 +1055,12 @@ def ledger_dirs(paths):
     return out
 
 
-def write_ledger_tables(paths, out_dir):
+def write_ledger_tables(paths, out_dir, assume_current=False):
     os.makedirs(out_dir, exist_ok=True)
     for d in ledger_dirs(paths):
         op, dtype, device = ledger_identity(d)
         dest = os.path.join(out_dir, f"{op}.{dtype}.{device}.txt")
-        text, counts = ledger_text(OP_BY_NAME[op], dtype, device, read_ledger(d), d, dest)
+        text, counts = ledger_text(OP_BY_NAME[op], dtype, device, read_ledger(d), d, dest, assume_current)
         with open(dest, "w") as f:
             f.write(text)
         print(f"wrote {dest}: " + ", ".join(f"{t}={n}" for t, n in counts.items()))
@@ -1747,6 +1762,12 @@ def self_test_ledger():
         got6 = row_tiers(ledger_text(spec, "float", "sm_0", read_ledger(led2), led2, path5)[0])
         if got6 != {"n=256": "preview"}:
             bad.append(f"self-test: ledger_untimed_measured_row_is_not_transcribed -> {got6}")
+        # --assume-current: a ledger of legacy hashes is all stale, unless judged by its stored hashes
+        legacy = cell(r1, "deep", 64, ranked=("cta", "tiny"), hashes={c: "legacy:0" for c in cands})
+        led7 = build({r1: [run_line(r1, "2026-10-01", "deep"), legacy]}, os.path.join(d, "g"))
+        rows7 = [ledger_text(spec, "float", "sm_0", read_ledger(led7), led7, None, ac)[0].splitlines()[3:] for ac in (False, True)]
+        if rows7 != [[], ["uplo=L n=64 nrhs=1 batch=128 | cta 2.000 | tiny 1.000 # deep"]]:
+            bad.append(f"self-test: ledger_assume_current_reads_stored_hashes -> {rows7}")
         # --check re-derives byte for byte
         out = os.path.join(d, "out")
         os.makedirs(out)
@@ -1777,14 +1798,18 @@ def main():
     ap.add_argument("--self-test", action="store_true", help="run the converter self-test only")
     ap.add_argument("--tuner", nargs="+", metavar="JSONL", help="batchlas_tune raw files to write")
     ap.add_argument("--ledger", nargs="+", metavar="DIR", help="per-run ledger directories (or a root of them) to write")
+    ap.add_argument("--assume-current", action="store_true",
+                    help="--ledger, diagnostic: treat stored kernel hashes as current (never for tuned/)")
     ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="--tuner/--ledger: table directory")
     args = ap.parse_args()
 
     if args.tuner:
         write_tuner_tables(args.tuner, args.out)
         return 0
+    if args.assume_current and not args.ledger:
+        raise SystemExit("--assume-current needs --ledger")
     if args.ledger:
-        write_ledger_tables(args.ledger, args.out)
+        write_ledger_tables(args.ledger, args.out, args.assume_current)
         return 0
     if args.self_test:
         bad = self_test()
