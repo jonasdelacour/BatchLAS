@@ -204,6 +204,8 @@ Ledger read_ledger(const std::string& dir) {
         std::string line;
         for (int no = 1; std::getline(f, line); ++no)
             if (line.find_first_not_of(" \t\r") != std::string::npos) lines.emplace_back(no, line);
+        if (!lines.empty() && lines[0].second.rfind("version https://git-lfs.github.com/spec/v1", 0) == 0)
+            throw std::runtime_error(path + ": Git LFS pointer: run git lfs pull");
         for (std::size_t i = 0; i < lines.size(); ++i) {
             try {
                 std::string err;
@@ -250,11 +252,15 @@ Freshness freshness(const CellRecord& r, const std::map<std::string, std::string
     return stale_candidates(r, family_hash).empty() ? Freshness::current : Freshness::partly_stale;
 }
 
+bool all_error(const CellRecord& r) {
+    return !r.cands.empty() && std::all_of(r.cands.begin(), r.cands.end(), [](const CandResult& c) { return c.status == "error"; });
+}
+
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash) {
     const auto order = [](const CellRecord& x) { return std::tuple(tier_rank(x.tier), x.date, x.run_id); };
     std::map<CellKey, const CellRecord*> best;
     for (const CellRecord& c : l.cells) {
-        if (freshness(c, family_hash) == Freshness::stale) continue;
+        if (all_error(c) || freshness(c, family_hash) == Freshness::stale) continue;
         const auto [it, fresh] = best.try_emplace(c.key, &c);
         // >=: on a full tie the later line wins (a re-race appended to the same run).
         if (!fresh && order(c) >= order(*it->second)) it->second = &c;

@@ -89,22 +89,6 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     return s;
 }
 
-bool all_error(const CellRecord& r) {
-    return !r.cands.empty() &&
-           std::all_of(r.cands.begin(), r.cands.end(), [](const CandResult& c) { return c.status == "error"; });
-}
-
-// best_records without all-`error` records (a failed child, not a result): such a cell counts as missing.
-std::map<CellKey, const CellRecord*> usable_best(const Ledger& l, const std::map<std::string, std::string>& family_hash) {
-    Ledger kept;
-    std::vector<const CellRecord*> orig;
-    for (const CellRecord& r : l.cells)
-        if (!all_error(r)) kept.cells.push_back(r), orig.push_back(&r);
-    std::map<CellKey, const CellRecord*> out;
-    for (const auto& [k, p] : best_records(kept, family_hash)) out[k] = orig[std::size_t(p - kept.cells.data())];
-    return out;
-}
-
 }  // namespace
 
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand, double bytes) {
@@ -122,7 +106,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     double per_cell_overhead_s,
                                     const std::map<CellKey, std::vector<std::string>>* runnable) {
     const TimeIndex idx(l);
-    const auto best = usable_best(l, family_hash);
+    const auto best = best_records(l, family_hash);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::pair<double, PlannedCell>> out;
     for (const CellKey& key : cells) {
@@ -352,16 +336,9 @@ namespace {
 
 bool feasible(const std::string& status) { return status == "ok" || status == "eliminated"; }
 
-// A per-candidate disagreement: "mismatch", "inconclusive" (eliminated vs bad: the eliminated arm
-// was never verified) or "" (agree, or both unusable).
-std::string differ(const std::string& w, const std::string& f) {
-    if (feasible(w) != feasible(f)) {
-        const std::string& other = feasible(w) ? f : w;
-        if (other != "bad") return "mismatch";
-        return (feasible(w) ? w : f) == "ok" ? "mismatch" : "inconclusive";
-    }
-    return "";
-}
+// A per-candidate disagreement: usable in one process (ok or eliminated; run_race verifies both),
+// refused or failing in the other.
+bool differ(const std::string& w, const std::string& f) { return feasible(w) != feasible(f); }
 
 // rank()'s winner among the survivors, else the fastest eliminated arm; "" when nothing was timed.
 std::string winner_of(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& order, double tie) {
@@ -397,13 +374,10 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
         r.verdict = "inconclusive";
         return r;
     }
-    std::vector<std::string> bad, unsure;
+    std::vector<std::string> bad;
     for (const ArmOutcome& w : warm)
-        for (const ArmOutcome& f : fresh) {
-            if (w.arm != f.arm) continue;
-            const std::string d = differ(w.status, f.status);
-            if (!d.empty()) (d == "mismatch" ? bad : unsure).push_back(w.arm + " " + w.status + "/" + f.status);
-        }
+        for (const ArmOutcome& f : fresh)
+            if (w.arm == f.arm && differ(w.status, f.status)) bad.push_back(w.arm + " " + w.status + "/" + f.status);
     if (!bad.empty()) {
         r.verdict = "mismatch:feasibility " + join(bad, ",");
         return r;
@@ -413,7 +387,7 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
         r.verdict = "mismatch:winner " + ww + "/" + fw;
         return r;
     }
-    r.verdict = unsure.empty() ? "ok" : "inconclusive:" + join(unsure, ",");
+    r.verdict = "ok";
     return r;
 }
 

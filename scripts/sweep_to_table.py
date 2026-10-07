@@ -11,7 +11,7 @@ tables); flat-kernel-selection-phase3-plan.md section 2 option D.
     scripts/sweep_to_table.py --check --check-points pts.txt
     scripts/sweep_to_table.py --self-test            # converter rules on real rows (also run by --check)
     scripts/sweep_to_table.py --tuner JSONL... [--out DIR]   # tables from batchlas_tune raw output
-    scripts/sweep_to_table.py --ledger DIR... [--out DIR]    # tables from per-run result ledgers
+    scripts/sweep_to_table.py --ledger DIR... [--out DIR] [--replace-timed]   # tables from per-run ledgers
     scripts/sweep_to_table.py --ledger DIR... --assume-current --out DIR   # diagnostic, see LEDGER
 
 A table comes from one of three sources:
@@ -92,15 +92,19 @@ field tuner_key turns a record into the key tuple; the default reads each '# key
 
 LEDGER (--ledger input, docs/design/tiered-tuning.md "Ledger"): a directory of per-run JSONL files
 named <op>.<dtype>.<device>. Per cell the best record wins (tier deep > coarse > preview > custom,
-then newest date, run id, later line) unless its winner's family hash is stale; the newest run's
+then newest date, run id, later line) unless its winner's family hash is stale or every candidate
+is "error" (a failed child: no record, as in the C++ best_records); the newest run's
 "candidates" fix the families hashed from tools/tune/<op>_spec.cc. Rows carry "# <tier>". A row of
 a lower tier is dropped when a higher-tier row has equal exact keys and lies within the tier's
 stride (preview/custom/transcribed 2, in index steps of the per-key lattice of the ledger's
 cells) on every log key; the replaced table's untimed rows are the transcribed tier. An empty
 ranking emits no row. --check re-derives the table from the ledger its source=ledger:<dir> names.
---assume-current (diagnostic only: an importer/generator round trip on data whose kernels have
-changed since) judges freshness against each family's last stored hash instead of the sources;
-the header still names the source hashes, so --check fails such a table.
+--ledger refuses to overwrite an existing timed table whose source is not ledger: or transcribed:
+(a converted or tuner table) unless --replace-timed is given. A Git LFS pointer file in a ledger
+directory is an error naming git lfs pull. --assume-current (diagnostic only: an importer/generator
+round trip on data whose kernels have changed since) judges freshness against each family's last
+stored hash instead of the sources and needs an explicit --out outside tuned/; the header still
+names the source hashes, so --check fails such a table.
 
 TRANSCRIBER CSV (--transcribe input), with a header row:
   op,dtype,device,<one column per '# keys:' name>,ranked
@@ -858,6 +862,9 @@ class Ledger:
     cells: list = field(default_factory=list)
 
 
+LFS_POINTER = "version https://git-lfs.github.com/spec/v1"  # the first line of an unfetched LFS file
+
+
 def read_ledger(path):
     """Union of <path>/*.jsonl except *.reps.jsonl, files in name order, lines in file order.
     A malformed last line of a file is a warning; an earlier one is fatal."""
@@ -866,6 +873,8 @@ def read_ledger(path):
     for name in names:
         with open(os.path.join(path, name)) as f:
             lines = [(i, ln) for i, ln in enumerate(f.read().split("\n"), start=1) if ln.strip()]
+        if lines and lines[0][1].startswith(LFS_POINTER):
+            raise SystemExit(f"{path}/{name}: Git LFS pointer: run git lfs pull")
         for pos, (no, line) in enumerate(lines):
             try:
                 rec = json.loads(line)
@@ -914,13 +923,23 @@ def freshness(cell, family_hash):
     return "partly_stale" if stale_families(cell, family_hash) else "current"
 
 
+def all_error(cell):
+    """Every candidate `error`: a failed child, not a result. Counts as no record (C++ all_error)."""
+    return bool(cell["cands"]) and all(c["status"] == "error" for c in cell["cands"])
+
+
+def usable(cell, family_hash):
+    return not all_error(cell) and freshness(cell, family_hash) != "stale"
+
+
 def best_records(cells, family_hash):
-    """Per key the highest tier, then newest date, then larger run id, then the later line."""
+    """Per key, skipping all-error and stale records, the highest tier, then newest date, then
+    larger run id, then the later line (the C++ best_records)."""
     def order(c):
         return (LEDGER_TIERS[::-1].index(c["tier"]), c["date"], c["run_id"])
     best = {}
     for c in cells:
-        if freshness(c, family_hash) == "stale":
+        if not usable(c, family_hash):
             continue
         if c["key"] not in best or order(c) >= order(best[c["key"]]):
             best[c["key"]] = c
@@ -973,7 +992,7 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
     """{key: (tier, [(spelling, ms)])}: each cell's best record, minus rows of a lower tier that
     a higher-tier row brackets (equal exact keys, index distance < the tier's stride on every
     log key), plus the old table's transcribed rows where no measured row is that close."""
-    current = [c for c in ledger.cells if freshness(c, family_hash) != "stale"]
+    current = [c for c in ledger.cells if usable(c, family_hash)]
     log_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if is_log]
     exact_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if not is_log]
     lattice = {i: sorted({key_tuple(spec, keyspec, c["key"])[i] for c in current}) for i in log_pos}
@@ -1072,11 +1091,25 @@ def ledger_dirs(paths):
     return out
 
 
-def write_ledger_tables(paths, out_dir, assume_current=False):
+def timed_non_ledger(path):
+    """The source= of an existing table that is timed and not the ledger's (converted, tuner), else None."""
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        header, _, _ = parse_table(f.read())
+    source = header.get("source", "")
+    return None if source.startswith((LEDGER, TRANSCRIBED)) else source or "(none)"
+
+
+def write_ledger_tables(paths, out_dir, assume_current=False, replace_timed=False):
     os.makedirs(out_dir, exist_ok=True)
     for d in ledger_dirs(paths):
         op, dtype, device = ledger_identity(d)
         dest = os.path.join(out_dir, f"{op}.{dtype}.{device}.txt")
+        source = None if replace_timed else timed_non_ledger(dest)
+        if source:
+            raise SystemExit(f"{dest}: a timed table (source={source}) would be overwritten by a ledger table; "
+                             "write to a scratch --out DIR, or pass --replace-timed to replace it")
         text, counts = ledger_text(OP_BY_NAME[op], dtype, device, read_ledger(d), d, dest, assume_current)
         with open(dest, "w") as f:
             f.write(text)
@@ -1815,6 +1848,53 @@ def self_test_ledger():
             bad.append("self-test: ledger_gemm_extra_field_is_refused -> accepted")
         except SystemExit:
             pass
+        # an all-error record (a failed child) counts as no record: the lower-tier row stands. The
+        # fixture is shared with tune_tests' TuneLedger.AllErrorRecordCountsAsNoRecord.
+        fix = os.path.join(REPO, "tests", "data", "ledger_all_error", "posv.float.sm_0")
+        rows10 = ledger_text(spec, "float", "sm_0", read_ledger(fix), fix, None, True)[0].splitlines()[3:]
+        if rows10 != ["uplo=L n=64 nrhs=1 batch=128 | tiny 1.000 | cta 2.000 # preview"]:
+            bad.append(f"self-test: ledger_all_error_record_counts_as_no_record -> {rows10}")
+        # --ledger refuses to overwrite a timed non-ledger table unless --replace-timed
+        tabs = os.path.join(d, "tabs")
+        os.makedirs(tabs)
+        dest = os.path.join(tabs, "posv.float.sm_0.txt")
+        for source, refused in (("benchmarks/results/routing/x.jsonl", True), ("tuner:x.jsonl", True),
+                                ("transcribed:2b46acab", False), (LEDGER + "old", False)):
+            with open(dest, "w") as f:
+                f.write(f"# op=posv dtype=float\n# source={source}\n# keys: {spec.keys}\n")
+            try:
+                write_ledger_tables([led], tabs)
+                if refused:
+                    bad.append(f"self-test: ledger_refuses_timed_table ({source}) -> overwritten")
+            except SystemExit as e:
+                if not refused or dest not in str(e) or "--replace-timed" not in str(e):
+                    bad.append(f"self-test: ledger_refuses_timed_table ({source}) -> {e}")
+        with open(dest, "w") as f:
+            f.write(f"# op=posv dtype=float\n# source=tuner:x.jsonl\n# keys: {spec.keys}\n")
+        write_ledger_tables([led], tabs, replace_timed=True)
+        with open(dest) as f:
+            if " source=ledger:" not in f.read():
+                bad.append("self-test: ledger_replace_timed_overwrites -> not replaced")
+        # --assume-current needs an explicit --out outside tuned/
+        if scratch_out(None) or scratch_out(os.path.join(REPO, TUNED)) or scratch_out(os.path.join(REPO, "x", "..", TUNED)) \
+                or not scratch_out(tabs):
+            bad.append("self-test: assume_current_needs_scratch_out (scratch_out)")
+        # an unfetched LFS pointer is named, not parsed as a malformed ledger
+        lfs = os.path.join(d, "lfs", "posv.float.sm_0")
+        os.makedirs(lfs)
+        with open(os.path.join(lfs, "r.jsonl"), "w") as f:
+            f.write(LFS_POINTER + "\noid sha256:00\nsize 12\n")
+        try:
+            read_ledger(lfs)
+            bad.append("self-test: ledger_lfs_pointer_is_named -> read")
+        except SystemExit as e:
+            if "Git LFS pointer: run git lfs pull" not in str(e):
+                bad.append(f"self-test: ledger_lfs_pointer_is_named -> {e}")
+        # ... and main() refuses without it: on the unreadable ledger above, so a broken check cannot write tuned/
+        res = subprocess.run([sys.executable, os.path.abspath(__file__), "--ledger", lfs, "--assume-current"],
+                             capture_output=True, text=True)
+        if res.returncode == 0 or "explicit --out" not in res.stderr:
+            bad.append(f"self-test: assume_current_needs_scratch_out -> rc {res.returncode} {res.stderr!r}")
         # --check re-derives byte for byte
         out = os.path.join(d, "out")
         os.makedirs(out)
@@ -1834,6 +1914,11 @@ def self_test_ledger():
     return bad
 
 
+def scratch_out(out):
+    """An explicit --out that does not resolve to <repo>/tuned."""
+    return bool(out) and os.path.realpath(out) != os.path.realpath(os.path.join(REPO, TUNED))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true", help="diff tuned/ against the sources")
@@ -1847,16 +1932,21 @@ def main():
     ap.add_argument("--ledger", nargs="+", metavar="DIR", help="per-run ledger directories (or a root of them) to write")
     ap.add_argument("--assume-current", action="store_true",
                     help="--ledger, diagnostic: treat stored kernel hashes as current (never for tuned/)")
-    ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="--tuner/--ledger: table directory")
+    ap.add_argument("--replace-timed", action="store_true",
+                    help="--ledger: may overwrite a timed table that is not a ledger's (converted, tuner)")
+    ap.add_argument("--out", help="--tuner/--ledger: table directory (default tuned/)")
     args = ap.parse_args()
+    explicit_out, args.out = args.out, args.out or os.path.join(REPO, TUNED)
 
     if args.tuner:
         write_tuner_tables(args.tuner, args.out)
         return 0
     if args.assume_current and not args.ledger:
         raise SystemExit("--assume-current needs --ledger")
+    if args.assume_current and not scratch_out(explicit_out):
+        raise SystemExit("--assume-current needs an explicit --out DIR outside tuned/ (its tables are diagnostic)")
     if args.ledger:
-        write_ledger_tables(args.ledger, args.out, args.assume_current)
+        write_ledger_tables(args.ledger, args.out, args.assume_current, args.replace_timed)
         return 0
     if args.self_test:
         bad = self_test()

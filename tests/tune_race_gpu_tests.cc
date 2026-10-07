@@ -73,8 +73,12 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
         eliminated += a.status == "eliminated";
         EXPECT_GE(a.ms.size(), 3u) << a.arm;
         EXPECT_LE(a.ms.size(), 6u) << a.arm;
-        if (a.status == "eliminated") EXPECT_EQ(t->status, "ok") << a.arm << " (eliminated arms are not verified)";
-        else EXPECT_EQ(a.status, t->status) << a.arm;
+        if (a.status == "eliminated") {
+            EXPECT_EQ(t->status, "ok") << a.arm;
+            EXPECT_GT(a.residual, 0.0) << a.arm << ": an eliminated arm is verified too (0 = never verified)";
+        } else {
+            EXPECT_EQ(a.status, t->status) << a.arm;
+        }
     }
     EXPECT_GE(raced, 2) << "the cell must race something";
     EXPECT_GE(eliminated, 1) << "tiny is about 2x faster than every other arm here";
@@ -83,6 +87,18 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
     ASSERT_FALSE(tw.empty());
     EXPECT_LE(median(find(timed, rw)->ms), 1.03 * median(find(timed, tw)->ms))
         << "race winner " << rw << " vs 16-rep winner " << tw << " (" << eliminated << " eliminated)";
+}
+
+// An arm raced alone (a benched arm's fresh child) has no rival to beat: race_step calls it the
+// winner after one round, and run_race still gives it min_reps rounds.
+TEST(TuneRaceGpu, AnArmRacedAloneGetsMinReps) {
+    CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
+    r.arms = {"tiny"};
+    const auto race = find_spec("potrf")->run_cell(r);
+    ASSERT_EQ(race.size(), 1u);
+    EXPECT_EQ(race[0].status, "ok") << race[0].reason;
+    EXPECT_EQ(race[0].ms.size(), std::size_t(r.min_reps));
+    EXPECT_GT(race[0].residual, 0.0);
 }
 
 #ifdef BATCHLAS_TUNE_IMPL

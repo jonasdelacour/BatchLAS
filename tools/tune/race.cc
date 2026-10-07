@@ -70,6 +70,10 @@ RaceVerdict race_step(RaceState& s, const TierParams& p, double tie) {
     return static_cast<int>(rounds) >= p.max_reps ? RaceVerdict::cap : RaceVerdict::more;
 }
 
+bool race_over(RaceVerdict v, int rounds, const TierParams& p) {
+    return v != RaceVerdict::more && !(v == RaceVerdict::winner && rounds < p.min_reps);
+}
+
 std::vector<std::string> race_ranking(const RaceState& s, const std::vector<std::string>& order, double tie) {
     std::map<std::string, double> alive;
     std::vector<std::pair<double, std::size_t>> dead;

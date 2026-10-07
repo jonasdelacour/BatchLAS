@@ -22,24 +22,31 @@ The normal workflow is tiered: plan, run, inspect, then write tables from the le
     batchlas_tune potrf --tier preview --dtype float,double --devices 1 --plan   # cells, skips, estimate; no GPU
     batchlas_tune potrf --tier preview --dtype float,double --devices 1          # measure into the ledger
     batchlas_tune --status                                                       # what each ledger holds
-    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out tuned   # source=ledger: tables
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out /tmp/tables   # source=ledger: tables
 
 A rerun measures only what is missing, stale or below the requested tier: a repeated preview run
 plans every cell `skip:current` and exits in seconds, and a kernel edit re-races only the cells
 whose families changed (`partial:<family>`). The `--plan` estimate is the sum over GPUs, so divide
 by the number of `--devices`; on threadripper02 it ran 1.3x to 1.8x high (docs/design/tiered-tuning.md,
-"Engine: end-to-end validation on sm_120"). `sweep_to_table.py --ledger ... --assume-current` is a
+"Engine: end-to-end validation on sm_120"). Write ledger tables to a scratch `--out` and compare
+them with `tuned/` first: `--ledger` refuses to overwrite a timed table that is not a ledger's
+(a converted or `tuner:` source) and names it; `--replace-timed` is the deliberate switch, for when
+the ledger tables are meant to replace the measured ones. Transcribed and ledger tables are
+overwritten without it. `sweep_to_table.py --ledger ... --assume-current --out DIR` is a
 diagnostic that judges records by their stored hashes (an imported raw sweep round-trips to the
-shipped table); never write `tuned/` with it.
+shipped table); it refuses a missing `--out` or one that resolves to `tuned/`.
 
 Two modes. A **tiered** run (`--tier preview|coarse|deep`, docs/design/tiered-tuning.md) records
 per-cell results in the ledger and skips cells the ledger already holds. A **custom** run is the
 expert two-pass protocol below; any protocol flag (`--reps`, `--warm`, `--passes`, `--remeasure`,
-`--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad`, `--raw`) selects it, and it is recorded in
-the ledger as tier `custom`, ranked below preview. With neither, the tuner stops and asks.
+`--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad`, `--raw`) selects it. It is recorded in
+the ledger as tier `custom`, ranked below preview, only when `--ledger DIR` is given explicitly;
+otherwise it writes its raw JSONL (and tables with `--out`) and leaves every ledger alone. With
+neither mode, the tuner stops and asks.
 
-    # tiered: ledger records, then tables (omit --out to update the ledger only)
-    batchlas_tune potrf,trsm,posv --tier preview --dtype float,double --devices 1 --out tuned
+    # tiered: ledger records, then tables (omit --out to update the ledger only; a scratch --out,
+    # since the converter refuses to overwrite converted or tuner tables without --replace-timed)
+    batchlas_tune potrf,trsm,posv --tier preview --dtype float,double --devices 1 --out /tmp/tables
     batchlas_tune all --tier coarse --devices 1,2 --budget 6 --progress-fd 3 3>events.jsonl
 
     # what a run would do, from the ledger and nvidia-smi's compute capability; no GPU work
@@ -72,7 +79,7 @@ the ledger as tier `custom`, ranked below preview. With neither, the tuner stops
 | `--plan` | off | print the starting lattice's cells, skips with reasons and the time estimate, then exit; no GPU |
 | `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate with refinement exceeds H) |
 | `--progress-fd N` | none | one JSON event per line on fd N; see "Tiered mode" |
-| `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table |
+| `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table; a custom run records into it only when this flag is given |
 | `--device-key sm_NN` | nvidia-smi compute capability of the first `--devices` GPU | the device `--plan` reads the ledger for |
 | `--cell-overhead-s` | 0.49 | per-child start-up in the estimate (measured on threadripper02) |
 | `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
@@ -112,10 +119,12 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   A bracket is a flip when its two winners differ and, at either end, the other end's winner is
   more than the 3% tie slower (or cannot win there: not runnable, or eliminated without a median);
   near-tie alternation (within the tie at both ends) refines nothing. The preview margin (runner-up within 10%) applies only
-  between two round-0 cells of this run. `batch` refills only its own axis values, never a
+  between two round-0 cells at the running tier, stored or measured now. `batch` refills only its own axis values, never a
   geometric midpoint. Refinement cells per op and dtype are capped at `refine_cap_factor` x
-  round-0 cells measured in this run (preview 3.0, coarse 1.0, deep 2.0; a resumed run whose
-  lattice is already current refines nothing); past it the first cells in `refine_all_axes` order (flips, then margin hedges)
+  round-0 records at the running tier (preview 3.0, coarse 1.0, deep 2.0), counting the ledger's
+  current records as well as this run's, and refined records already stored count against it: a
+  run stopped by Ctrl-C or `--budget` after its lattice refines on the next run, within the same
+  total; past it the first cells in `refine_all_axes` order (flips, then margin hedges)
   run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
@@ -131,9 +140,10 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 - **Measuring.** A cell is raced (`--mode race`, `run_race` in `cell_runner.hh`): a
   `warm_topup_s` warm-up per live candidate, interleaved, then rounds of one timed run per live
   candidate (order rotated, every other round reversed in deep), `race_step` after each round, until
-  a winner, a tie or `max_reps` rounds. Survivors are verified as in the custom protocol; an
-  eliminated candidate keeps the median of its rounds (status `eliminated`, ranked after the
-  survivors) and is verified only when no survivor passes. The nearest finished cell's winner is
+  a winner, a tie or `max_reps` rounds (a candidate raced alone, or whose rivals all failed, still
+  runs `min_reps` rounds). Every raced candidate is then verified as in the custom protocol, the
+  eliminated too: one that passes keeps the median of its rounds (status `eliminated`, ranked
+  after the survivors), one that fails is `bad` and left out of the row. The nearest finished cell's winner is
   raced first. Each candidate's median, min and max go into a ledger `cell` record.
 - **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up kernel at start),
   fed its share of a round in ascending per-item footprint (bytes / batch) and restarted before a

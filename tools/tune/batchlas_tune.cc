@@ -77,7 +77,7 @@ struct Opts {
     std::optional<Tier> tier;      // --tier; the protocol flags below make the run tier custom
     std::string custom_flag;       // the first protocol flag seen (custom tier, the two-pass path)
     double budget_h = 0, overhead_s = kChildOverheadS;
-    bool plan = false, status = false;
+    bool plan = false, status = false, ledger_given = false;  // custom runs touch a ledger only when given
     int progress_fd = -1;
     std::string ledger, import_raw, device_key;
     std::vector<std::string> dtypes{"float"};
@@ -808,8 +808,10 @@ int Driver::tune() {
         raw_.close();
         std::printf("== wrote %s: %d cells ranked, %d with no candidate timed in every pass, %d over the cap, "
                     "%zu stalled edges\n", path.c_str(), ok, none, skipped, stalled.size());
-        // The ledger records a protocol-flag run as tier custom (docs/design/tiered-tuning.md, driver interface).
-        try {
+        // An explicit --ledger records a protocol-flag run as tier custom (docs/design/tiered-tuning.md,
+        // driver interface); without it a spot check never lands in the shared ledger.
+        if (!o_.ledger_given) std::printf("== not recorded in a ledger (custom run without --ledger)\n");
+        else try {
             std::vector<std::string> fams;
             for (const std::string& c : cands_)
                 if (std::find(fams.begin(), fams.end(), c.substr(0, c.find(':'))) == fams.end())
@@ -939,7 +941,7 @@ std::vector<int> lock_devices(const Opts& o) {
     std::vector<int> fds;
     for (int d : o.devices) {
         const std::string path = o.lock_dir + "/batchlas_tune_gpu" + std::to_string(d) + ".lock";
-        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT, 0666);
+        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);  // a worker outliving us must not hold it
         if (fd < 0) die("cannot open " + path);
         if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
             std::printf("waiting for %s (another tuner holds GPU %d)\n", path.c_str(), d);
@@ -1129,7 +1131,7 @@ int main(int argc, char** argv) {
         else if (f == "--plan") o.plan = true;
         else if (f == "--status") o.status = true;
         else if (f == "--progress-fd") o.progress_fd = std::stoi(val());
-        else if (f == "--ledger") o.ledger = val();
+        else if (f == "--ledger") o.ledger = val(), o.ledger_given = true;
         else if (f == "--import-raw") o.import_raw = val();
         else if (f == "--device-key") o.device_key = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());

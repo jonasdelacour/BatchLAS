@@ -177,9 +177,8 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
 }
 
 // The race (docs/design/tiered-tuning.md, the per-cell algorithm): rounds of one timed run per
-// live arm, race_step after each, until a verdict. Only survivors are verified; the eliminated
-// keep their medians. Eliminated arms are verified too when no survivor passes, so a ranking never
-// starts with an unverified arm.
+// live arm, race_step after each, until race_over. Every raced arm is then verified, the
+// eliminated too: one that fails is "bad" and leaves the row; one that passes keeps its median.
 template <class Choice, class Problem>
 std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     std::vector<std::string> names;
@@ -218,19 +217,14 @@ std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRe
             else failed[c] = true, s.alive[c] = false;
         }
         for (std::size_t c = 0; c < idx.size(); ++c) s.ms[c].push_back(round[c]);
-        if (race_step(s, tp, 0.03) != RaceVerdict::more) break;
-    }
-    bool any = false;
-    for (std::size_t c = 0; c < idx.size(); ++c) {
-        if (!s.alive[c]) continue;
-        b.verify(arms[idx[c]], tol);
-        any = any || arms[idx[c]].status == "ok";
+        if (std::find(s.alive.begin(), s.alive.end(), true) == s.alive.end()) break;
+        if (race_over(race_step(s, tp, 0.03), r + 1, tp)) break;
     }
     for (std::size_t c = 0; c < idx.size(); ++c) {
-        if (s.alive[c] || failed[c]) continue;
+        if (failed[c]) continue;
         ArmOutcome& a = arms[idx[c]];
-        if (!any) b.verify(a, tol);
-        if (a.status != "ok") continue;
+        b.verify(a, tol);
+        if (s.alive[c] || a.status != "ok") continue;
         a.status = "eliminated";
         a.reason = "round " + std::to_string(a.ms.size());
     }

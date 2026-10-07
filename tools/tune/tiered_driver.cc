@@ -135,7 +135,6 @@ struct Job {
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     bool audited = false;  // until set, the next eligible worker cell is audited whatever the hash says
-    std::size_t lattice_cells = 0, refined = 0;  // the refinement cap's base (round-0 cells measured) and count
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
@@ -164,6 +163,7 @@ private:
     std::vector<PlannedCell> plan(Job& j);
     void print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells);
     double cap_factor() const { return o_.refine_cap_factor >= 0 ? o_.refine_cap_factor : params(o_.tier).refine_cap_factor; }
+    std::pair<std::size_t, std::size_t> cap_base(const Job& j) const;
     void cap(Job& j, std::vector<PlannedCell>& plan);
     std::size_t measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
@@ -261,6 +261,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     }
     CellRecord c = r;
     c.date = date_;
+    c.tier = tier;
     j.writer->cell(c, tier);
     j.mine[c.key] = c;
 }
@@ -383,15 +384,27 @@ std::size_t TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& pla
 
 bool measurable(const PlannedCell& c) { return c.reason.empty() || c.reason.rfind("partial:", 0) == 0; }
 
-// Refinement cells per (op, dtype) <= cap_factor x round-0 cells: past it, the first cells in
+// (round-0, refined) records at the running tier: the ledger's current ones overlaid by this run's,
+// so a resumed or budget-stopped run refines against the lattice an earlier run measured.
+std::pair<std::size_t, std::size_t> TieredRun::cap_base(const Job& j) const {
+    std::map<CellKey, int> round;
+    for (const auto& [k, r] : best_records(j.ledger, j.fh))
+        if (r->tier == o_.tier) round[k] = r->round;
+    for (const auto& [k, r] : j.mine)
+        if (r.tier == o_.tier) round[k] = r.round;
+        else round.erase(k);
+    std::pair<std::size_t, std::size_t> n{0, 0};
+    for (const auto& [k, r] : round) ++(r == 0 ? n.first : n.second);
+    return n;
+}
+
+// Refinement records per (op, dtype) <= cap_factor x round-0 records: past it, the first cells in
 // refine_all_axes's order (flips, then margin hedges) run and refinement stops, reported.
 void TieredRun::cap(Job& j, std::vector<PlannedCell>& plan) {
+    const auto [lattice, done] = cap_base(j);
     const std::size_t want = std::size_t(std::count_if(plan.begin(), plan.end(), measurable));
-    const std::size_t allow = refine_allowance(j.lattice_cells, j.refined, cap_factor());
-    if (want <= allow) {
-        j.refined += want;
-        return;
-    }
+    const std::size_t allow = refine_allowance(lattice, done, cap_factor());
+    if (want <= allow) return;
     std::set<CellKey> keep;
     for (const CellKey& k : j.next) {
         if (keep.size() == allow) break;
@@ -399,15 +412,15 @@ void TieredRun::cap(Job& j, std::vector<PlannedCell>& plan) {
         if (c != plan.end() && measurable(*c)) keep.insert(k);
     }
     std::erase_if(plan, [&](const PlannedCell& c) { return measurable(c) && !keep.count(c.key); });
-    j.refined += allow;
+    const std::size_t refined = done + allow;
     j.capped = true;
-    const std::size_t limit = refine_allowance(j.lattice_cells, 0, cap_factor());
+    const std::size_t limit = refine_allowance(lattice, 0, cap_factor());
     std::printf("== %s %s refinement cap hit: %zu refinement cells (cap %.2f x %zu round-0 cells); %zu midpoints left "
-                "unmeasured, refinement stops\n", j.spec->op().c_str(), j.dtype.c_str(), j.refined, cap_factor(),
-                j.lattice_cells, want - allow);
+                "unmeasured, refinement stops\n", j.spec->op().c_str(), j.dtype.c_str(), refined, cap_factor(),
+                lattice, want - allow);
     std::fflush(stdout);
     emit(Json().str("ev", "refine_cap").str("op", j.spec->op()).str("dtype", j.dtype)
-             .integer("lattice", std::int64_t(j.lattice_cells)).integer("refined", std::int64_t(j.refined))
+             .integer("lattice", std::int64_t(lattice)).integer("refined", std::int64_t(refined))
              .integer("cap", std::int64_t(limit)).integer("dropped", std::int64_t(want - allow)));
 }
 
@@ -416,9 +429,9 @@ void TieredRun::refine(Job& j) {
     std::map<CellKey, RefineCell> cells;
     for (const auto& [k, r] : best_records(j.ledger, j.fh))
         // A lower-tier record is no bracket end: a midpoint on it is measured again. The margin
-        // hedges only this run's own lattice cells.
+        // hedges lattice cells of this tier, stored or measured now (a resumed run hedges too).
         if (j.region->contains(k) && tier_rank(r->tier) >= tier_rank(o_.tier))
-            ranked[k] = r->ranked, cells[k] = refine_cell(*r, false);
+            ranked[k] = r->ranked, cells[k] = refine_cell(*r, r->round == 0 && r->tier == o_.tier);
     for (const auto& [k, r] : j.mine) ranked[k] = r.ranked, cells[k] = refine_cell(r, r.round == 0);
     const TierParams& p = params(o_.tier);
     RefineOpts ro;
@@ -454,9 +467,11 @@ int TieredRun::go() {
         j->est_refine_cells = ratio * double(n_measure);
         const double s = n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;
-        std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x %zu round-0 cells measured\n",
-                    j->est_refine_cells, ratio, history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(),
-                    cap_factor(), n_measure);
+        const auto [stored, refined] = cap_base(*j);
+        std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x round-0 records "
+                    "(%zu stored, %zu refined stored, %zu to measure)\n", j->est_refine_cells, ratio,
+                    history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(), cap_factor(), stored,
+                    refined, n_measure);
     }
     std::printf("== plan total: %zu cells to measure or probe; est %s lattice only, %s with refinement (~%.0f refinement "
                 "cells; %.2f s per child)\n", to_measure, hours(est).c_str(), hours(est + est_refine).c_str(), refine_cells,
@@ -470,10 +485,7 @@ int TieredRun::go() {
     if (!m_) throw std::logic_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
     t0_ = std::chrono::steady_clock::now();
-    for (std::size_t i = 0; i < jobs_.size(); ++i) {
-        jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
-        jobs_[i]->lattice_cells = jobs_[i]->per_round[0];  // a resumed lattice of current cells allows no refinement
-    }
+    for (std::size_t i = 0; i < jobs_.size(); ++i) jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
     for (int round = 1;; ++round) {
         std::size_t pending = 0;
         for (auto& j : jobs_) {

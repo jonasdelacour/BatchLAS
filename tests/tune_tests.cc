@@ -717,25 +717,66 @@ RaceRun run_race(const TierParams& p, const std::function<std::pair<double, doub
     return r;
 }
 
+// Fixed noise within +-0.25%: a 4% gap stays above the 3% tie (worst 1.04 x 0.9975 / 1.0025 = 1.0379)
+// and a 2% gap below it (worst 1.02 x 1.0025 / 0.9975 = 1.0251), whatever the library's RNG.
+constexpr double kNoise[] = {0.0025, -0.0011, 0.0019, -0.0025, 0.0004, -0.0018, 0.0023, -0.0006,
+                             0.0012, -0.0021, 0.0008, -0.0014, 0.0025, -0.0025, 0.0001, -0.0009};
+double noise(int i) { return 1 + kNoise[i % 16]; }
+
 }  // namespace
 
 TEST(TuneRace, FourPercentSlowerIsEliminatedInDeep) {
-    std::mt19937 g(7);
-    std::uniform_real_distribution<double> u(-0.005, 0.005);
-    const auto r = run_race(params(Tier::deep), [&](int) { return std::pair(1.00 * (1 + u(g)), 1.04 * (1 + u(g))); });
+    const auto r = run_race(params(Tier::deep), [&](int i) { return std::pair(1.00 * noise(i), 1.04 * noise(i + 5)); });
     EXPECT_FALSE(r.s.alive[1]);
     EXPECT_TRUE(r.s.alive[0]);
     EXPECT_EQ(r.v, RaceVerdict::winner);
 }
 
 TEST(TuneRace, TwoPercentSlowerIsKeptAsATie) {
-    std::mt19937 g(11);
-    std::uniform_real_distribution<double> u(-0.005, 0.005);
-    const auto r = run_race(params(Tier::deep), [&](int) { return std::pair(1.00 * (1 + u(g)), 1.02 * (1 + u(g))); });
+    const auto r = run_race(params(Tier::deep), [&](int i) { return std::pair(1.00 * noise(i), 1.02 * noise(i + 5)); });
     EXPECT_TRUE(r.s.alive[1]);
     EXPECT_TRUE(r.v == RaceVerdict::tie || r.v == RaceVerdict::cap);
     EXPECT_EQ(race_ranking(r.s, {"b", "a"}), (std::vector<std::string>{"b", "a"}));
     EXPECT_EQ(race_ranking(r.s, {"a", "b"}), (std::vector<std::string>{"a", "b"}));
+}
+
+TEST(TuneRace, OneDiesAndTheOtherTwoTieInOneStep) {
+    const auto& p = params(Tier::preview);  // min_reps 3, k = 1 at 3 pairs
+    RaceState s;
+    s.cands = {"a", "b", "c"};
+    s.alive = {true, true, true};
+    s.ms = {{1.0, 1.0}, {1.10, 1.10}, {1.01, 1.01}};
+    EXPECT_EQ(race_step(s, p), RaceVerdict::more);
+    s.ms = {{1.0, 1.0, 1.0}, {1.10, 1.10, 1.10}, {1.01, 1.01, 1.01}};
+    EXPECT_EQ(race_step(s, p), RaceVerdict::tie) << "b is 10% slower, c within the tie of a";
+    EXPECT_EQ(s.alive, (std::vector<bool>{true, false, true}));
+    EXPECT_EQ(race_ranking(s, {"a", "b", "c"}), (std::vector<std::string>{"a", "c", "b"}));
+}
+
+TEST(TuneRace, AnArmAloneOrBeatenByDefaultStillRunsMinReps) {
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
+        const auto& p = params(t);
+        RaceState alone;
+        alone.cands = {"a"};
+        alone.alive = {true};
+        alone.ms = {{}};
+        int rounds = 0;
+        do alone.ms[0].push_back(1.0);
+        while (!race_over(race_step(alone, p), ++rounds, p) && rounds < 100);
+        EXPECT_EQ(rounds, p.min_reps) << to_string(t) << ": race_step says winner after one round";
+        RaceState failed;  // b failed in round 0, as run_race marks it: a wins by default
+        failed.cands = {"a", "b"};
+        failed.alive = {true, false};
+        failed.ms = {{}, {}};
+        rounds = 0;
+        do failed.ms[0].push_back(1.0), failed.ms[1].push_back(nan);
+        while (!race_over(race_step(failed, p), ++rounds, p) && rounds < 100);
+        EXPECT_EQ(rounds, p.min_reps) << to_string(t);
+    }
+    EXPECT_FALSE(race_over(RaceVerdict::more, 50, params(Tier::preview)));
+    EXPECT_TRUE(race_over(RaceVerdict::tie, 1, params(Tier::preview)));
+    EXPECT_TRUE(race_over(RaceVerdict::cap, 1, params(Tier::preview)));
 }
 
 TEST(TuneRace, SingleRoundNeverEliminates) {
@@ -1482,6 +1523,29 @@ std::string append_to(const fs::path& p, const std::string& text) {
 
 }  // namespace
 
+// The fixture is shared with sweep_to_table.py's self-test (ledger_all_error_record_counts_as_no_record).
+TEST(TuneLedger, AllErrorRecordCountsAsNoRecord) {
+    const Ledger l = read_ledger(std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/tests/data/ledger_all_error/posv.float.sm_0");
+    ASSERT_EQ(l.cells.size(), 2u);
+    ASSERT_TRUE(all_error(l.cells[1]));
+    const std::map<std::string, std::string> stored{{"tiny", "htiny"}, {"cta", "hcta"}, {"blocked", "hblocked"}};
+    const auto best = best_records(l, stored);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->tier, Tier::preview) << "the newer deep record is a failed child, not a result";
+    EXPECT_EQ(best.begin()->second->ranked, (std::vector<std::string>{"tiny", "cta"}));
+}
+
+TEST(TuneLedger, AGitLfsPointerIsNamed) {
+    TempDir d;
+    std::ofstream(d.path / "20261001T000000-a-1.jsonl") << "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n";
+    try {
+        (void)read_ledger(d.str());
+        ADD_FAILURE() << "read an LFS pointer as a ledger";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("Git LFS pointer: run git lfs pull"), std::string::npos) << e.what();
+    }
+}
+
 TEST(TuneLedger, CoarseNeverDisplacesCurrentDeep) {
     TempDir d;
     write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
@@ -2217,6 +2281,18 @@ TEST(TuneTieredDriver, TransientChildFailureWritesNoRecord) {
 
 // ---- Task 8: race records, the worker wire format, the fresh-process audit --------------------
 
+TEST(TuneSchedule, AnEliminatedArmThatFailsVerificationLeavesTheRow) {
+    // run_race verifies eliminated arms too: one that fails comes back "bad", with its race reps.
+    const CellRecord r = record_from_arms(nkey(64), 0,
+                                          {arm("a", "bad", {0.5, 0.5, 0.5}), arm("b", "ok", {1.0, 1.0, 1.1}),
+                                           arm("c", "eliminated", {2.0, 2.1, 2.2})},
+                                          {"a", "b", "c"}, {});
+    EXPECT_EQ(r.ranked, (std::vector<std::string>{"b", "c"}));
+    ASSERT_EQ(r.cands.size(), 3u);
+    EXPECT_EQ(r.cands[0].status, "bad");
+    EXPECT_TRUE(std::isnan(r.cands[0].median_ms)) << "a wrong answer prints no time";
+}
+
 TEST(TuneSchedule, EliminatedArmsKeepTheirMedianAndRankAfterSurvivors) {
     const std::vector<std::string> order{"a", "b", "c"};
     const CellRecord r = record_from_arms(nkey(64), 0,
@@ -2266,7 +2342,7 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
               "mismatch:winner b/a");
     const std::vector<ArmOutcome> warm_elim{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "ok", {3.0})};
     EXPECT_EQ(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "bad", {2.0}), arm("c", "ok", {3.0})}, order).verdict,
-              "inconclusive:b eliminated/bad") << "the eliminated arm was never verified";
+              "mismatch:feasibility b eliminated/bad") << "run_race verifies eliminated arms too";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "ok", {2.0}), arm("c", "bad", {3.0})}, order)
                     .mismatch()) << "ok in the worker, bad in a fresh process";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "skipped"), arm("c", "ok", {3.0})}, order)
@@ -2694,23 +2770,58 @@ TEST(TuneTieredDriver, AHashPickedFallbackCellDoesNotUseUpTheForcedAudit) {
     EXPECT_TRUE(std::find(m.fresh_keys.begin(), m.fresh_keys.end(), "n=" + std::to_string(fallback_n)) == m.fresh_keys.end());
 }
 
-TEST(TuneTieredDriver, ResumedCurrentLatticeAllowsNoRefinement) {
+TEST(TuneTieredDriver, BudgetStoppedRunResumesRefinementWithinTheCap) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
-    o.refine_cap_factor = 0;  // the first run measures the lattice only
+    o.budget_h = 1e-12;  // run 1: the lattice only, then the budget stops refinement
     FakeMeasurer first;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
     EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
-    o.refine_cap_factor = -1;
+    o.budget_h = 0;
+    o.refine_cap_factor = 0.5;  // floor(0.5 x 4 stored round-0 records) = 2 refinement cells over all runs
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
     FakeMeasurer resumed;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
     ::close(fd);
-    EXPECT_TRUE(resumed.keys.empty()) << "the cap base is round-0 cells measured, here none";
-    EXPECT_NE(read_file(events).find("\"lattice\": 0, \"refined\": 0, \"cap\": 0, \"dropped\": 1"), std::string::npos)
+    EXPECT_EQ(resumed.keys, (std::vector<std::string>{"n=8", "n=11"})) << "the stored lattice is the cap base";
+    EXPECT_NE(read_file(events).find("\"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1"), std::string::npos)
         << read_file(events);
+    FakeMeasurer third;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &third), 0);
+    EXPECT_TRUE(third.keys.empty()) << "the 2 stored refinement cells used the cap up";
+    o.refine_cap_factor = -1;  // preview's 3.0: 12 in all, the bracket closes after 2 more
+    FakeMeasurer fourth;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &fourth), 0);
+    EXPECT_EQ(sorted(fourth.keys), sorted({"n=9", "n=10"}));
+    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    std::size_t lattice = 0, refined = 0;
+    for (const CellRecord& c : l.cells) ++(c.round == 0 ? lattice : refined);
+    EXPECT_EQ(lattice, 4u);
+    EXPECT_LE(refined, std::size_t(3 * lattice));
+}
+
+TEST(TuneTieredDriver, AResumedLatticeStillGetsTheMarginHedge) {
+    class CloseMeasurer : public FakeMeasurer {
+    public:
+        ArmBatch measure(const CellJob& j) override {
+            keys.push_back(key_arg(j.key));
+            ArmBatch b;
+            for (const std::string& a : j.arms) b.arms.push_back(arm(a, "ok", {a == "a" ? 1.0 : 1.05}));
+            return b;
+        }
+    };
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.budget_h = 1e-12;
+    CloseMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
+    o.budget_h = 0;
+    CloseMeasurer resumed;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
+    EXPECT_EQ(sorted(resumed.keys), sorted({"n=2", "n=8", "n=32"})) << "stored round-0 cells are lattice ends";
 }
 
 TEST(TuneTieredDriver, MarginRefinesLatticeBracketsOnly) {

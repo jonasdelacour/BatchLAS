@@ -72,7 +72,7 @@ void sort_for_worker(std::vector<const PlannedCell*>& cells, const std::function
 
 bool audit_pick(const std::string& run_id, const CellKey& key, double fraction);
 
-// ok | mismatch:feasibility | mismatch:winner (> margin in the fresh run) | inconclusive[:eliminated/bad]
+// ok | mismatch:feasibility | mismatch:winner (> margin in the fresh run) | inconclusive (the fresh child ran nothing)
 struct AuditResult {
     std::string verdict;
     double fresh_ms = NAN, warm_ms = NAN;

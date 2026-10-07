@@ -113,11 +113,8 @@ std::string sha256_hex(std::string_view data);
 // Quoted paths between the kernel-sources-begin/-end markers (CI and CMake parse the same block).
 std::vector<std::string> parse_kernel_list(std::string_view spec_source);
 
-// The same block split by family. Inside it a comment line `// family: <name>` opens that family's
-// section (reopening appends) and `// common` returns to common; paths before any marker are
-// common. `all` is every path in block order (the op-level `kernels=` hash). The kernel-deps comment
-// block adds files outside it, never to `all`: `// family: <name> "path" ...` (`deps`, posv's potrf/trsm
-// kernels) and `// common "path" ...` (`deps_common`, the op's <op>.cc). CMake and CI never read it.
+// The same block split by `// family: <name>` / `// common` markers (`all`: block order), plus the
+// kernel-deps block (`deps`, `deps_common`). evidence: docs/design/tiered-tuning.md#engine-the-ledger-and-table-generation
 struct KernelBlock {
     std::vector<std::string> all;
     std::vector<std::string> common;
@@ -127,11 +124,9 @@ struct KernelBlock {
 };
 KernelBlock parse_kernel_block(std::string_view spec_source);
 
-// parse_kernel_block of <repo>/<spec_file>; throws std::runtime_error naming the path if unreadable.
-KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file);
+KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file);  // throws naming the path
 
-// kernel_hash over common + family files + deps_common + deps, per family; a family with no section
-// hashes common and deps_common only. Throws std::runtime_error naming a missing file.
+// Per family: kernel_hash over common + its files + deps_common + deps. Throws naming a missing file.
 std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
                                                  const std::vector<std::string>& families);
 

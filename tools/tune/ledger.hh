@@ -78,7 +78,10 @@ Freshness freshness(const CellRecord& r, const std::map<std::string, std::string
 // Sorted family names that changed, were removed or were never timed.
 std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<std::string, std::string>& family_hash);
 
-// Per key: highest tier, then newest date, then larger run_id (later line on a full tie).
+bool all_error(const CellRecord& r);  // every candidate "error": a failed child, no record
+
+// Per key, skipping all_error and stale records (sweep_to_table.py's rule too): highest tier, then
+// newest date, then larger run_id (later line on a full tie).
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash);
 
 // Schema-1 raw sweep -> one run file at `tier` (a custom run records itself this way); hashes are

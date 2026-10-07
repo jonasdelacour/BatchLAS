@@ -23,6 +23,8 @@ std::size_t lower_order_stat(int n, double confidence);
 
 RaceVerdict race_step(RaceState& s, const TierParams& p, double tie = 0.03);
 
+bool race_over(RaceVerdict v, int rounds, const TierParams& p);  // a winner by default runs min_reps rounds
+
 // Survivors ranked by rank() on their medians, then the eliminated by median.
 std::vector<std::string> race_ranking(const RaceState& s, const std::vector<std::string>& order, double tie = 0.03);
 
