@@ -90,13 +90,23 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            // family: tiny
             "src/extensions/posv_tiny.cc",
             "src/extensions/solve_native.hh",
+            // family: cta
             "src/extensions/getrs_fused.cc",
             "src/extensions/getrs_native.hh",
+            // common
             "src/ops/posv/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // posv cta and blocked call the public potrf and trsm: their native kernels count too.
+        // family: cta "src/extensions/potrf_tiny.cc" "src/extensions/potrf_cta.cc" "src/extensions/potrf_cta_device.hh" "src/extensions/potrf_lpanel.cc" "src/extensions/potrf_lpanel_device.hh" "src/extensions/potrf_blocked.cc" "src/extensions/potrf_native.hh" "src/extensions/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: cta "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: blocked "src/extensions/potrf_tiny.cc" "src/extensions/potrf_cta.cc" "src/extensions/potrf_cta_device.hh" "src/extensions/potrf_lpanel.cc" "src/extensions/potrf_lpanel_device.hh" "src/extensions/potrf_blocked.cc" "src/extensions/potrf_native.hh" "src/extensions/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: blocked "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {

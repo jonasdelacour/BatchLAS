@@ -78,12 +78,17 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            // family: tiny
             "src/extensions/potrf_tiny.cc",
+            // family: cta
             "src/extensions/potrf_cta.cc",
             "src/extensions/potrf_cta_device.hh",
+            // family: lpanel
             "src/extensions/potrf_lpanel.cc",
             "src/extensions/potrf_lpanel_device.hh",
+            // family: blocked
             "src/extensions/potrf_blocked.cc",
+            // common
             "src/extensions/potrf_native.hh",
             "src/extensions/potrf_slm_hole.hh",
             "src/ops/potrf/choice.hh",

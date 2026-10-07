@@ -206,14 +206,21 @@ public:
             "src/sycl/gemm_kernels.hh",
             "src/sycl/gemm/accessors.hh",
             "src/sycl/gemm/epilogue_linear.hh",
+            // family: reg
             "src/sycl/gemm/load_policies.hh",
             "src/sycl/gemm/register_128x128.hh",
+            // family: wide
             "src/sycl/gemm/register_64x64_k16_wide.hh",
+            // family: reg
             "src/sycl/gemm/register_launchers.hh",
             "src/sycl/gemm/register_tiled_common.hh",
+            // family: wide
             "src/sycl/gemm/register_wide_transposed.hh",
+            // family: small
             "src/sycl/gemm/small_batched.hh",
+            // family: tiled
             "src/sycl/gemm/tiled_general.hh",
+            // common
             "src/ops/gemm/choice.hh",
         };
         // kernel-sources-end

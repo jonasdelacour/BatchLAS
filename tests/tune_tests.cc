@@ -189,6 +189,89 @@ TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
     }
 }
 
+TEST(TuneHash, UnprefixedLinesAreCommon) {
+    const std::string spec = "// kernel-sources-begin\n  \"a.cc\",\n  // family: cta\n  \"b.cc\",\n  // common\n"
+                             "  \"c.hh\", \"d.hh\",\n  // family: tiny\n  \"e.cc\",\n  // family: cta\n  \"f.cc\",\n"
+                             "// kernel-sources-end\n// kernel-deps-begin\n// family: cta \"x.cc\" \"y.cc\"\n"
+                             "// family: cta \"z.cc\"\n// kernel-deps-end\n  \"late.cc\",\n";
+    const KernelBlock b = parse_kernel_block(spec);
+    EXPECT_EQ(b.all, (std::vector<std::string>{"a.cc", "b.cc", "c.hh", "d.hh", "e.cc", "f.cc"}));
+    EXPECT_EQ(b.common, (std::vector<std::string>{"a.cc", "c.hh", "d.hh"}));
+    EXPECT_EQ(b.family.at("cta"), (std::vector<std::string>{"b.cc", "f.cc"}));
+    EXPECT_EQ(b.family.at("tiny"), (std::vector<std::string>{"e.cc"}));
+    EXPECT_EQ(b.deps.at("cta"), (std::vector<std::string>{"x.cc", "y.cc", "z.cc"}));
+    EXPECT_EQ(parse_kernel_list(spec), b.all);
+}
+
+TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
+    const fs::path d = scratch("famhash");
+    std::ofstream(d / "common.hh") << "c";
+    std::ofstream(d / "cta.cc") << "cta";
+    std::ofstream(d / "tiny.cc") << "tiny";
+    std::ofstream(d / "dep.cc") << "dep";
+    KernelBlock b;
+    b.all = {"common.hh", "cta.cc", "tiny.cc"};
+    b.common = {"common.hh"};
+    b.family = {{"cta", {"cta.cc"}}, {"tiny", {"tiny.cc"}}};
+    b.deps = {{"cta", {"dep.cc"}}};
+    const std::vector<std::string> fams{"cta", "tiny", "vendor"};
+    const auto h0 = family_hashes(d.string(), b, fams);
+    ASSERT_EQ(h0.size(), 3u);
+    EXPECT_EQ(h0.at("cta"), *kernel_hash(d.string(), {"common.hh", "cta.cc", "dep.cc"}));
+    EXPECT_EQ(h0.at("vendor"), *kernel_hash(d.string(), {"common.hh"}));
+    std::ofstream(d / "cta.cc") << "cta edited";
+    const auto h1 = family_hashes(d.string(), b, fams);
+    EXPECT_NE(h1.at("cta"), h0.at("cta"));
+    EXPECT_EQ(h1.at("tiny"), h0.at("tiny"));
+    EXPECT_EQ(h1.at("vendor"), h0.at("vendor"));
+    std::ofstream(d / "dep.cc") << "dep edited";
+    const auto h2 = family_hashes(d.string(), b, fams);
+    EXPECT_NE(h2.at("cta"), h1.at("cta"));
+    EXPECT_EQ(h2.at("tiny"), h0.at("tiny"));
+    std::ofstream(d / "common.hh") << "c edited";
+    const auto h3 = family_hashes(d.string(), b, fams);
+    for (const char* f : {"cta", "tiny", "vendor"}) EXPECT_NE(h3.at(f), h2.at(f)) << f;
+    fs::remove(d / "tiny.cc");
+    EXPECT_THROW(family_hashes(d.string(), b, fams), std::runtime_error);
+}
+
+// Values computed before the family annotations were added: comment markers must not move the
+// op-level hash that CMake and CI compare against the table headers.
+TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const std::map<std::string, std::string> pinned{
+        {"gemm", "b8d9ff55"}, {"potrf", "f4043f40"}, {"posv", "b905a231"}, {"trsm", "6446e809"}};
+    for (const auto& [op, want] : pinned) {
+        const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
+        EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
+        for (const auto& [fam, files] : b.family)
+            for (const auto& f : files)
+                EXPECT_NE(std::find(b.all.begin(), b.all.end(), f), b.all.end()) << op << " " << fam << " " << f;
+        for (const auto& [fam, files] : b.deps) {
+            EXPECT_FALSE(files.empty()) << op << " " << fam;
+            EXPECT_TRUE(kernel_hash(repo, files)) << op << " " << fam;
+        }
+    }
+}
+
+TEST(TuneHash, SpecsDeclareTheirFamilies) {
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const auto block = [&](const char* op) {
+        return parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
+    };
+    // gemm direct lives in gemm_kernels.cc with the shared launch code: common only.
+    for (const char* f : {"tiny", "cta", "lpanel", "blocked"}) EXPECT_TRUE(block("potrf").family.count(f)) << f;
+    for (const char* f : {"tiled", "small", "reg", "wide"}) EXPECT_TRUE(block("gemm").family.count(f)) << f;
+    EXPECT_TRUE(block("trsm").family.count("sg_left"));
+    const KernelBlock posv = block("posv");
+    for (const char* f : {"cta", "blocked"}) {
+        ASSERT_TRUE(posv.deps.count(f)) << f;
+        const auto& d = posv.deps.at(f);
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/extensions/potrf_cta.cc"), d.end()) << f;
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/trsm_native.cc"), d.end()) << f;
+    }
+}
+
 TEST(TuneGate, FailsOnlyWhenBothPassesLose) {
     EXPECT_EQ(gate_verdict(1.06, 1.07, false), "FAIL");
     EXPECT_EQ(gate_verdict(1.06, 1.04, false), "pass");

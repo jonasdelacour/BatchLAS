@@ -53,6 +53,11 @@ public:
     // §6.4: repo-relative kernel sources (the kernel-sources block CI and CMake read too).
     virtual std::vector<std::string> kernel_sources() const = 0;
     virtual std::string spec_file() const = 0;
+    // The spec's own kernel block parsed from spec_file() under BATCHLAS_TUNE_SOURCE_DIR (one source
+    // of truth with CI and CMake); family_hashes() of it hashes each candidate family.
+    virtual KernelBlock kernel_block() const;
+    // Family -> repo-relative files (own section plus deps; common is kernel_block().common).
+    virtual std::map<std::string, std::vector<std::string>> family_sources() const;
     // A coverage `reached` route -> this op's pin spelling; then the child side: run one cell.
     virtual std::string normalize_route(const std::string& origin, const std::string& algo) const = 0;
     virtual std::vector<ArmOutcome> run_cell(const CellRequest& req) const = 0;

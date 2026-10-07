@@ -153,7 +153,9 @@ public:
         return {
             "src/sycl/trsm_native.cc",
             "src/sycl/trsm_native.hh",
+            // family: sg_left
             "src/sycl/trsm_sg_left.cc",
+            // common
             "src/sycl/trsm_canonical.hh",
             "src/ops/trsm/choice.hh",
         };

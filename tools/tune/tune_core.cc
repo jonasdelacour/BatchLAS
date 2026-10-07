@@ -463,23 +463,87 @@ std::string sha256_hex(std::string_view data) {
     return std::string(out, 64);
 }
 
-std::vector<std::string> parse_kernel_list(std::string_view spec_source) {
+namespace {
+std::vector<std::string> quoted_paths(const std::string& line) {
     std::vector<std::string> out;
-    bool inside = false;
+    for (std::size_t a = line.find('"'); a != std::string::npos; a = line.find('"', a + 1)) {
+        const std::size_t b = line.find('"', a + 1);
+        if (b == std::string::npos) break;
+        out.push_back(line.substr(a + 1, b - a - 1));
+        a = b;
+    }
+    return out;
+}
+
+// "// family: name" -> name; empty when the line is not a family marker.
+std::string family_marker(const std::string& line) {
+    const std::size_t c = line.find("//");
+    if (c == std::string::npos) return {};
+    const std::size_t f = line.find("family:", c);
+    if (f == std::string::npos) return {};
+    std::size_t a = f + 7;
+    while (a < line.size() && line[a] == ' ') ++a;
+    std::size_t e = a;
+    while (e < line.size() && line[e] != ' ' && line[e] != '"') ++e;
+    return line.substr(a, e - a);
+}
+}  // namespace
+
+KernelBlock parse_kernel_block(std::string_view spec_source) {
+    KernelBlock out;
+    enum class In { none, sources, deps } in_block = In::none;
+    std::string section;  // empty = common
     std::istringstream in{std::string(spec_source)};
     for (std::string line; std::getline(in, line);) {
         if (line.find("kernel-sources-begin") != std::string::npos) {
-            inside = true;
+            in_block = In::sources;
+            section.clear();
             continue;
         }
-        if (line.find("kernel-sources-end") != std::string::npos) break;
-        if (!inside) continue;
-        for (std::size_t a = line.find('"'); a != std::string::npos; a = line.find('"', a + 1)) {
-            const std::size_t b = line.find('"', a + 1);
-            if (b == std::string::npos) break;
-            out.push_back(line.substr(a + 1, b - a - 1));
-            a = b;
+        if (line.find("kernel-sources-end") != std::string::npos) {
+            in_block = In::none;
+            continue;
         }
+        if (line.find("kernel-deps-begin") != std::string::npos) {
+            in_block = In::deps;
+            continue;
+        }
+        if (line.find("kernel-deps-end") != std::string::npos) break;
+        if (in_block == In::none) continue;
+        const std::string fam = family_marker(line);
+        if (in_block == In::deps) {
+            if (fam.empty()) continue;
+            auto& v = out.deps[fam];
+            for (std::string& p : quoted_paths(line)) v.push_back(std::move(p));
+            continue;
+        }
+        if (!fam.empty())
+            section = fam;
+        else if (line.find("// common") != std::string::npos && line.find('"') == std::string::npos)
+            section.clear();
+        for (std::string& p : quoted_paths(line)) {
+            out.all.push_back(p);
+            (section.empty() ? out.common : out.family[section]).push_back(std::move(p));
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> parse_kernel_list(std::string_view spec_source) {
+    return parse_kernel_block(spec_source).all;
+}
+
+std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
+                                                 const std::vector<std::string>& families) {
+    std::map<std::string, std::string> out;
+    for (const std::string& f : families) {
+        std::vector<std::string> paths = b.common;
+        for (const auto* m : {&b.family, &b.deps})
+            if (const auto it = m->find(f); it != m->end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
+        std::string missing;
+        const auto h = kernel_hash(repo, paths, &missing);
+        if (!h) throw std::runtime_error("kernel source missing for family '" + f + "': " + missing);
+        out[f] = *h;
     }
     return out;
 }

@@ -113,6 +113,24 @@ std::string sha256_hex(std::string_view data);
 // Quoted paths between the kernel-sources-begin/-end markers (CI and CMake parse the same block).
 std::vector<std::string> parse_kernel_list(std::string_view spec_source);
 
+// The same block split by family. Inside it a comment line `// family: <name>` opens that family's
+// section (reopening appends) and `// common` returns to common; paths before any marker are
+// common. `all` is every path in block order (the op-level `kernels=` hash). `deps` come from the
+// separate kernel-deps-begin/-end comment block (`// family: <name> "path" ...`): files a family
+// also depends on that are not in the block (posv's potrf/trsm kernels). CMake and CI never read it.
+struct KernelBlock {
+    std::vector<std::string> all;
+    std::vector<std::string> common;
+    std::map<std::string, std::vector<std::string>> family;
+    std::map<std::string, std::vector<std::string>> deps;
+};
+KernelBlock parse_kernel_block(std::string_view spec_source);
+
+// kernel_hash over common + family files + deps, per family; a family with no section hashes common
+// only. Throws std::runtime_error naming a missing file.
+std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
+                                                 const std::vector<std::string>& families);
+
 // sha256 of "<sha256(file)>  <path>\n" lines (sha256sum's format), first 8 hex; nullopt if missing.
 std::optional<std::string> kernel_hash(const std::string& repo, const std::vector<std::string>& paths,
                                        std::string* missing = nullptr);
