@@ -623,10 +623,7 @@ SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorVi
                 use_fixed_weight_update = !use_fixed_weight_update;
         }
     }
-    // Was `assert(converged && ...)`. An assert in device code is compiled out in a
-    // release build, so on the path that actually ships this was not a diagnostic
-    // at all -- a root that hit the iteration cap returned a wrong eigenvalue and
-    // nothing said so. Report it instead.
+    // Report, do not assert: a device assert is compiled out in the release build.
     converged_out = converged;
     return root; // return the computed root (k^{th} eigenvalue)
 }
@@ -691,11 +688,9 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     auto new_lam = lam + eta;
 
                     auto stop_threshold = tol_factor * std::numeric_limits<T>::epsilon() * n * (1 + std::abs(psi1) + std::abs(psi2));
-                    // The two exit reasons used to be one condition, so a root that
-                    // ran out of budget was indistinguishable from one that met the
-                    // tolerance. Split them: only the tolerance arm is convergence.
-                    // (The 100 is a hardcoded literal on this arm -- StedcParams::
-                    // max_sec_iter does not reach it. Noted in `deferred`.)
+                    // Only the tolerance arm is convergence; budget exhaustion is not. The
+                    // 100 here is a literal that StedcParams::max_sec_iter does not reach.
+                    // evidence: docs/perf/stedc.md#stedc-open-debts
                     const bool tol_met = std::abs(eta) <= stop_threshold;
                     if (tol_met || iter >= 100) {
                         lam = new_lam;

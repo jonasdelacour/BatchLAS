@@ -27,17 +27,8 @@ struct Record {
 };
 
 inline std::atomic<bool> g_initialized{false};
-// ONE INSTANCE PER PROCESS, not per library. These are vague-linkage inline
-// variables, so every TU that includes this header emits its own copy and the
-// linker is expected to fold them. Under -fvisibility=hidden the library's
-// copies become hidden and stop participating in that fold, while a test TU --
-// which is NOT compiled with hidden visibility and includes this header
-// directly (tests/stedc_tests.cc:5, tests/device_blas_tests.cc:12) -- keeps a
-// default-visibility copy of its own. The result is two record vectors: traces
-// written inside the library are invisible to the test's flush, silently.
-//
-// BATCHLAS_INTERNAL_API keeps them exported so the fold still happens. The same
-// applies to any process-wide state that lives in a private header.
+// ONE INSTANCE PER PROCESS: BATCHLAS_INTERNAL_API keeps these vague-linkage inlines folding with
+// the copies in test TUs. evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 inline BATCHLAS_INTERNAL_API std::atomic<bool> g_enabled{false};
 inline BATCHLAS_INTERNAL_API std::mutex g_mu;
 inline BATCHLAS_INTERNAL_API std::vector<Record> g_records;

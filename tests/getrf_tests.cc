@@ -778,7 +778,7 @@ TYPED_TEST_SUITE(LuTest, LuTestTypes);
 // GetrfPanelResidentKernel<T> serves every panel shape of a type, so any earlier
 // launch of a LARGER panel warms the cap and this test can never fail again. DO
 // NOT MOVE IT, and add no resident-leaf launch above it.
-// evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
 
@@ -1704,7 +1704,7 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
     // AND THE DEFAULT IS THE REGISTER LEAF. Every P4 ratio on the page was measured
     // against a driver that takes it with the variable UNSET, so a silent revert of
     // the default would leave the transcribed getrf rows scored against an arm
-    // nothing runs. evidence: docs/perf/lu.md#the-register-leaf-ab
+    // nothing runs. evidence: docs/perf/lu.md#lu-the-register-leaf-ab
     {
         const ScopedEnvVar unset("BATCHLAS_GETRF_LEAF", nullptr);
         for (int n : {64, 128, 256}) {
@@ -1944,7 +1944,7 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
 // L7. THE PIVOT METRIC IS cabs1, NOT THE MODULUS. cublas{C,Z}getrfBatched pivots
 // on |z| while LAPACK and this kernel pivot on |Re| + |Im|; on the matrix below the
 // two rules SELECT DIFFERENT ROWS, which they do not on random or dominant data.
-// evidence: docs/perf/lu.md#correctness-findings
+// evidence: docs/perf/lu.md#lu-correctness-findings
 TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
     using T = typename TestFixture::T;
     if constexpr (!test_utils::is_complex_type_v<T>) {

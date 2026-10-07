@@ -181,18 +181,10 @@ namespace batchlas {
         auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
                                n - 1, batch_size, increment, e_stride);
 
-        // The status array this kernel has always written, now reachable.
-        //
-        // `info` is the caller's USM, so when it is supplied the kernel writes it in
-        // place and the pool draw is simply skipped -- which is why
-        // steqr_cta_buffer_size below is unchanged, and why the int32 term stays
-        // UNCONDITIONAL there: supplying `info` only ever REMOVES an allocation, so a
-        // workspace sized without status is never too small for a call made with it.
-        //
-        // Only the pool fallback is zeroed here. A caller-supplied span arrives
-        // already zeroed -- `steqr` and `stedc` do it -- and re-zeroing it would erase
-        // the first half's failure when stedc runs its second leaf solve over the same
-        // batch items. That is the accumulator rule in info_span.hh.
+        // `info` is caller USM: when supplied it is written in place and the pool draw is
+        // skipped, so the int32 term in steqr_cta_buffer_size stays UNCONDITIONAL. Only
+        // the pool fallback is zeroed: re-zeroing a caller span would erase stedc's
+        // first-half failure on its second leaf solve (info_span.hh accumulator rule).
         const int64_t status_len = std::max<int64_t>(int64_t(1), batch_size);
         int32_t* status = detail::info_ptr(info, batch_size);
         if (!status) {

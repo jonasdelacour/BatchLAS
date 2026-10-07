@@ -2,7 +2,7 @@
 // body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
 // against a global accessor -- correctness fixes belong there. Whether Auto picks THIS arm is
 // the tuned/geqrf.* table's call; a pin (BATCHLAS_GEQRF_ROUTE=cta) reaches it on any build.
-// evidence: docs/perf/qr.md#route-arms
+// evidence: docs/perf/qr.md#qr-route-arms
 
 #include "geqrf_native.hh"
 #include "geqrf_cta_device.hh"
@@ -221,10 +221,9 @@ Event geqrf_panel_global_launch(Queue& ctx,
     return ctx.get_event();
 }
 
-// v1 ships FALSE. The register leaf is built, tested and reachable by explicit request, but Auto
-// must not move until R8's interleaved A/B has a measured grid behind it -- this campaign has
-// already shipped one flip that was a 0.848x loss.
-// evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
+// TRUE only together with geqrf_panel_reg_preferred's height window: true WITHOUT that policy
+// turned five guards red. False restores the pre-register-leaf Auto answer.
+// evidence: docs/perf/qr.md#the-panel-height-window
 constexpr bool kGeqrfAutoPrefersRegisterLeaf = true;
 
 template <typename T, int NW> class GeqrfPanelRegKernel;
@@ -347,7 +346,7 @@ bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes, int min_blocks_p
 // The RESIDENCY predicate, at the whole budget: "can this panel be held in local memory
 // at all". The blocked driver's leading panel is chosen with it, because a panel that
 // stops being resident streams from global memory -- a large-n regression, not an
-// occupancy win. evidence: docs/perf/qr.md#the-panel-leaf-is-not-the-tier-ceiling
+// occupancy win. evidence: docs/perf/qr.md#qr-the-panel-leaf-is-not-the-tier-ceiling
 template <typename T>
 bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
     return geqrf_cta_fits<T>(m, n, slm_budget_bytes, 1);
@@ -419,8 +418,8 @@ Event geqrf_panel_factorize(Queue& ctx,
     const bool reg_ok = geqrf_panel_reg_fits<T>(m, n, max_wg);
     const bool reg_pref = geqrf_panel_reg_preferred<T>(m, n, max_wg);
 
-    // Auto's answer is EXACTLY what it was before the register leaf existed while the constant
-    // above is false; that is what makes this revision a no-op for every shipped route.
+    // Auto takes the register leaf only inside the preferred height window; outside it, the
+    // resident-or-global answer is unchanged.
     GeqrfPanelLeaf chosen = leaf;
     if (chosen == GeqrfPanelLeaf::Auto) {
         chosen = (kGeqrfAutoPrefersRegisterLeaf && reg_pref)

@@ -1,5 +1,8 @@
 #pragma once
 
+/// @file
+/// @brief getrs: cta, blocked, vendor. evidence: docs/perf/lu.md @ingroup selection_ops
+
 #include "../../select/select.hh"
 
 #include <array>
@@ -8,22 +11,21 @@
 
 namespace batchlas::ops::getrs {
 
-// All fieldless: nb, accumulator width, work-group and permutation spelling are derived in the drivers.
-struct Cta : select::NoFields<"cta"> {};          // getrs_fused_dispatch: permute + both solves, one kernel
-struct Blocked : select::NoFields<"blocked"> {};  // getrs_blocked_dispatch: laswp + two public trsm
-struct Vendor : select::NoFields<"vendor"> {};    // backend::getrs_vendor
+struct Cta : select::NoFields<"cta"> {};          ///< getrs_fused_dispatch: permute + both solves; B fits in SLM
+struct Blocked : select::NoFields<"blocked"> {};  ///< getrs_blocked_dispatch: laswp + two public trsm
+struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getrs_vendor; also takes non-conforming pairs
 
-using GetrsChoice = std::variant<Cta, Blocked, Vendor>;
+using GetrsChoice = std::variant<Cta, Blocked, Vendor>;  ///< natives: GPU, sub-group 32, conforming, not NETLIB
 
-template <class T>
+template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GetrsChoice>(); }
 
-inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};
+inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
 
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  // work ~ n^2 nrhs batch
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< ~ n^2 nrhs batch
 
-// A log grid plus both sides of every old threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
-// batch 127/128); the transcriber (tuned/README.md) spells the same grid.
+/// A log grid plus both sides of every old threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
+/// batch 127/128); the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 18> grid_n{1, 2, 4, 8, 16, 24, 31, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                                             768, 1024};
 inline constexpr std::array<int, 15> grid_nrhs{1, 2, 3, 4, 5, 8, 16, 32, 63, 64, 127, 128, 256, 512, 1024};

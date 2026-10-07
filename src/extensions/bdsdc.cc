@@ -1,14 +1,8 @@
-// Bidiagonal divide-and-conquer SVD. This does NOT port LAPACK's dlasd0/2/3/4/8:
-// it reduces the bidiagonal SVD to a symmetric tridiagonal eigenproblem that
-// `stedc` already solves. For B upper bidiagonal with diagonal d and
-// superdiagonal e, the Golub-Kahan matrix [0 B^T; B 0] has eigenvalues
-// +/- sigma_i, and under the perfect shuffle y = (v_0, u_0, v_1, u_1, ...) it is
-// TRIDIAGONAL with a zero diagonal and off-diagonal
-// (d_0, e_0, d_1, e_1, ..., e_{n-2}, d_{n-1}), 2n-1 entries. Nothing is squared,
-// so the condition number is not either; the price is a 2n x 2n eigenvector
-// matrix. Splitting an eigenvector into its even (-> v) and odd (-> u) rows and
-// normalising each half is exact, not heuristic: for sigma != 0 the eigenvector
-// is forced to the interleaved form (alpha v; beta u).
+// Bidiagonal SVD via stedc, NOT a port of LAPACK's dlasd*: the perfect-shuffled
+// Golub-Kahan matrix [0 B^T; B 0] is tridiagonal with zero diagonal and
+// off-diagonal (d_0, e_0, d_1, ..., d_{n-1}), eigenvalues +/- sigma_i. Nothing is
+// squared; splitting an eigenvector into even (-> v) / odd (-> u) rows is exact.
+// evidence: docs/design/gesvd.md#gesvd-design-why-bdsdc-goes-through-golub-kahan
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
@@ -230,14 +224,11 @@ void bdsdc_extract_vectors(Queue& ctx,
     });
 }
 
-// Rebuild the singular vectors of the numerically-zero singular values.
-//
-// The criterion is sigma, not the shape of the extracted column: a degenerate
-// block comes back full-norm and individually plausible while its columns are
-// parallel to each other, so nothing local sees it. Candidate axes are ranked in
-// one pass, using the fact that the residual of e_c against an orthonormal set Q
-// is exactly 1 - sum_t Q(c,t)^2. The serial j loop runs only for degenerate
-// columns: a bidiagonal of full numerical rank reads sigma and exits.
+// Rebuild the singular vectors of the numerically-zero singular values. The
+// criterion is sigma, not the column's shape (a degenerate block looks locally
+// healthy). Axes are ranked in one pass: residual of e_c against orthonormal Q
+// is 1 - sum_t Q(c,t)^2. Full-rank input reads sigma and exits.
+// evidence: docs/perf/gesvd.md#gesvd-bdsdc-null-space-repair-criteria-that-failed
 template <Backend B, typename T>
 void bdsdc_repair_degenerate(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& u,
@@ -258,13 +249,10 @@ void bdsdc_repair_degenerate(Queue& ctx,
         const int32_t nn = n;
         const bool wu = want_u;
         const bool wv = want_vh;
-        // Once 2*sigma reaches the noise floor of the 2n eigenproblem, both halves of
-        // the +/- pair normalise to the same (v, u) and U gets two parallel columns.
-        // Column i contributes orthogonality error ~eps*sigma_max/(2*sigma_i), so a
-        // target tau needs sigma_i >= eps*sigma_max/(2*tau). The factor must NOT carry
-        // an n: an n-scaled tolerance discards singular values that still carry
-        // information. This does not fix the singular VALUES, which keep gebrd's own
-        // eps*||A|| floor; use one-sided Jacobi for those.
+        // Repair sigma_i < eps*sigma_max/(2*tau): below that the +/- pair is
+        // unresolved and U gets parallel columns. No factor of n (it would
+        // discard informative sigma). Values keep gebrd's eps*||A|| floor.
+        // evidence: docs/perf/gesvd.md#gesvd-bdsdc-the-repair-threshold-from-the-resolution-limit
         constexpr T kOrthTarget = T(1e-3);
         const T tol_factor =
             (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();

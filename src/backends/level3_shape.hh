@@ -4,36 +4,14 @@
 
 #include <string>
 
-// These live in their own namespace rather than in batchlas::backend::detail,
-// where the neighbouring expansion helpers live, because netlib_lapack.cc
-// writes most of its file in namespace batchlas and reaches its own
-// batchlas::detail helpers unqualified. Introducing a
-// batchlas::backend::detail into that translation unit makes the unqualified
-// `detail::` inside its `namespace backend` blocks resolve to the wrong one,
-// and submit_host_task stops being found. A distinct name cannot shadow
-// anything.
+// Trap: NOT batchlas::backend::detail. netlib_lapack.cc reaches batchlas::detail
+// unqualified, and a backend::detail in that TU makes its `detail::` resolve wrong.
 namespace batchlas::backend::shape {
 
-// The Level-3 shape checks, written once instead of seventeen times.
-//
-// symm/hemm/trmm, syrk/herk and syr2k/her2k each impose the same three shape
-// contracts whatever backend is about to serve them, and every one of the three
-// backends wrote all three out by hand: cuBLAS and rocBLAS at the top of the
-// vendor wrapper, netlib inside the deferred host task. The checks are not
-// merely similar, they are the same predicates in the same order, so the only
-// thing worth keeping per-backend is the exception type -- hence E.
-//
-// E is a template parameter rather than a fixed type because netlib's checks
-// run inside submit_host_task, i.e. at a different point in time from the
-// caller's own stack, and it throws std::runtime_error there; cuBLAS and
-// rocBLAS throw std::invalid_argument from the call itself, which
-// options_api_tests pins with EXPECT_THROW. Collapsing the two would change
-// what a caller catches, so it is not collapsed.
-//
-// Each validator returns the dimensions it had to derive in order to check
-// them, so the caller does not recompute what the check already knows. That is
-// the reason these are functions rather than a void assert-block: the derived
-// m/n/k were the other half of the duplication.
+// The level-3 shape checks shared by every backend. E is the exception type,
+// and it must stay per-backend: netlib throws std::runtime_error from its host
+// task, cuBLAS/rocBLAS std::invalid_argument (pinned by options_api_tests).
+// evidence: docs/perf/level3.md#level-3-one-set-of-shape-validators
 
 // What symm/hemm/trmm derive: C is m x n and A is square of order k.
 struct ProductShape {
@@ -48,10 +26,7 @@ struct RankShape {
     int k;
 };
 
-// The two-operand and three-operand batch checks. Naming every batch size is
-// the whole diagnostic -- which operand is the odd one out is not otherwise
-// visible to the caller -- so the short "batch size mismatch" that rocBLAS and
-// netlib used to emit now says what cuBLAS already said.
+// Batch checks. The message names every batch size: that is the whole diagnostic.
 template <class E>
 inline void check_batch(const char* op, int batch_a, int batch_c) {
     if (batch_a != batch_c) {
@@ -70,11 +45,7 @@ inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
 }
 
 // symm / hemm / trmm: C <- alpha * A * B or alpha * B * A, with A square and B
-// and C both m x n.
-//
-// The order of the checks is the order all seven call sites used: squareness
-// first, because a non-square A makes "order k" meaningless; then the batch,
-// because a mismatch there says nothing about the shapes; then the shapes.
+// and C both m x n. Check order (square, batch, shapes) is part of the contract.
 template <class E, typename T>
 inline ProductShape validate_product(const char* op,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -88,8 +59,6 @@ inline ProductShape validate_product(const char* op,
 
     const int m = C.rows();
     const int n = C.cols();
-    // A multiplies from whichever side the caller asked for, so it is m x m on
-    // the left and n x n on the right.
     const int k = side == Side::Left ? m : n;
     if (A.rows() != k || B.rows() != m || B.cols() != n) {
         throw E(std::string(op) + ": incompatible matrix dimensions");
@@ -100,9 +69,7 @@ inline ProductShape validate_product(const char* op,
 
 // syrk / herk: C <- alpha * op(A) * op(A)^T-or-^H + beta * C, C square.
 //
-// `hermitian` additionally rejects Transpose::Trans, which would ask for
-// A * A^T -- complex-symmetric rather than Hermitian. That operation is syrk's,
-// and BLAS does not spell it for a complex type.
+// `hermitian` rejects Transpose::Trans: A * A^T would be complex-symmetric.
 template <class E, typename T>
 inline RankShape validate_rank_k(const char* op,
                                  const MatrixView<T, MatrixFormat::Dense>& A,

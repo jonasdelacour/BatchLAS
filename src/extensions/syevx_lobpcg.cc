@@ -23,7 +23,8 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxResidualsKernel;
 
-    // Only used by the params.iterations == 0 cold path (SYEVX_PLAN.md 7.8).
+    // Only used by the params.iterations == 0 cold path.
+    // evidence: docs/perf/syevx.md#lobpcg-column-reversal-kernels-removed
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsKernel;
 
@@ -41,7 +42,8 @@ namespace {
 // Block power-iteration steps applied to the random start; meaningful only when
 // searching for the largest eigenpairs. Kept small deliberately: an over-compressed
 // block is rank-deficient in floating point, at which point the Cholesky-based ortho
-// returns NaN rather than an error. Evidence: SYEVX_PLAN.md §7.9.
+// returns NaN rather than an error.
+// evidence: docs/perf/syevx.md#lobpcg-x-only-fill-and-power-iteration-start
 constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
@@ -74,13 +76,14 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
 }
 
 // How often the host reads back the convergence flags; each check is a full pipeline
-// drain (SYEVX_PLAN.md §7.1).
+// drain. evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 inline int64_t lobpcg_check_every() {
     return batchlas::settings().geometry.syevx_check_every;
 }
 
-// Instrumentation staging plan (SYEVX_PLAN.md §7.2). The caller-supplied
-// SyevxInstrumentation spans are not guaranteed device-accessible -- the Python binding
+// Instrumentation staging plan.
+// evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
+// The caller-supplied SyevxInstrumentation spans are not guaranteed device-accessible -- the Python binding
 // hands us a plain std::vector -- so NO kernel may write them. The residual kernel stores
 // here instead, and one host pass after the loop scatters into the caller's spans.
 struct LobpcgInstrumentationPlan {
@@ -99,11 +102,8 @@ struct LobpcgInstrumentationPlan {
     }
 };
 
-// A/B escape hatch: the device-staged path must produce exactly the host path's values,
-// and tests/syevx_tests.cc checks that by running both.
-// First-CHARACTER truthiness, so "true" works and "on" does not. That is a
-// different dialect from env_truthy and is left exactly as it was; the field
-// carries the raw value so no spelling changes meaning.
+// A/B escape hatch for tests/syevx_tests.cc. Trap: first-CHARACTER truthiness
+// ("true" works, "on" does not), unlike env_truthy; kept deliberately.
 inline bool lobpcg_instrumentation_force_host() {
     const char* v = batchlas::settings().selection.syevx_instr_host.get();
     return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
@@ -127,13 +127,10 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
     return plan;
 }
 
-// Soft locking, variant (a): column masking. OFF by default and deliberately so -- the
-// mechanism is implemented and correct, but it saves no flops (the block shapes are
-// fixed) and measured no benefit. Evidence: SYEVX_PLAN.md §7.5.
-// The test below is INVERTED -- anything not in the disable set enables the
-// feature, so "=off" and an empty value both turn it ON. Preserved deliberately
-// rather than normalised: changing it here would flip the feature for anyone
-// already exporting one of those spellings. See `risks` in the WP5 report.
+// Soft locking: OFF by default (no flops saved, no measured benefit).
+// evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
+// Trap: the test is INVERTED -- "=off" and an empty value both turn it ON.
+// Preserved deliberately: normalising would flip it for existing spellings.
 inline bool lobpcg_soft_locking() {
     if (const char* v = batchlas::settings().selection.syevx_soft_lock.get()) {
         return !(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F');
@@ -141,29 +138,22 @@ inline bool lobpcg_soft_locking() {
     return false;
 }
 
-// Safety factor on the locking threshold: a column is masked only once its residual is
-// this multiple of the requested tolerance. Locking exactly at `tol` oscillates -- a
-// masked column is not frozen, its Ritz vector is still recombined every iteration, so a
-// column at the boundary loses its correction direction and drifts back above `tol`.
+// Lock at factor * tol, not tol: a masked column is still recombined, so locking
+// exactly at tol oscillates.
 inline double lobpcg_lock_factor() {
     return batchlas::settings().geometry.syevx_lock_factor;
 }
 
-// Relative floor below which a Jacobi shift is treated as singular and the column entry
-// is left unpreconditioned. `d_ii - lambda` genuinely reaches zero: for a nearly diagonal
-// A the wanted Ritz value converges *to* some d_ii. Dividing by it costs the whole block,
-// since the Cholesky-based ortho returns NaN on a rank-deficient input rather than
-// failing loudly.
+// Below this relative floor a Jacobi shift is singular and the entry is left alone:
+// d_ii - lambda does reach zero (the Ritz value converges to some d_ii), and one
+// such column costs the whole block (Cholesky ortho returns NaN).
 template <typename R>
 inline constexpr R jacobi_singular_tolerance() {
     return std::sqrt(std::numeric_limits<R>::epsilon());
 }
 
-// The unshifted diag(A)^{-1} is a valid LOBPCG preconditioner only where it is SPD, i.e.
-// where every diagonal entry is strictly positive; applying it anyway drives the solve to
-// the iteration cap. Positivity is the real condition -- this floor merely keeps the
-// amplification finite, and is deliberately loose because tightening it also disables the
-// preconditioner on graded matrices whose diagonal is perfectly positive.
+// Unshifted diag(A)^{-1} needs a strictly positive diagonal. This floor only keeps the
+// amplification finite, and is loose deliberately: tighter disables graded matrices.
 template <typename R>
 inline constexpr R jacobi_definiteness_floor() {
     return R(1e-6);
@@ -184,11 +174,8 @@ inline constexpr R jacobi_definiteness_floor() {
         ) {
         using float_type = typename base_type<T>::type;
 
-        // LOBPCG converges to whichever EXTREME the trial block is biased toward; it has
-        // no il/iu to honour. `syevx` never routes a non-extremal request here, but this
-        // is a public entry point too, and silently returning extremal eigenpairs to an
-        // interior request is the one failure mode no downstream check can catch.
-        // See SYEVX_RANGE_PLAN.md §2.5.
+        // LOBPCG converges to an extreme and cannot honour il/iu; public entry point.
+        // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
         if (params.select != SyevxSelect::Extremal) {
             throw batchlas::invalid_argument(
                 "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
@@ -196,9 +183,6 @@ inline constexpr R jacobi_definiteness_floor() {
                 "syevx_direct_subset for an index or value range");
         }
 
-        // Was a hand-rolled copy of env_truthy's exact spelling set; the field
-        // is parsed by env_truthy itself in settings.cc, which accepts the same
-        // five spellings {1,true,TRUE,on,ON} and nothing else.
         const bool trace_enabled = batchlas::settings().diagnostics.syevx_trace;
         auto trace = [&](const char* msg) {
             if (!trace_enabled) return;
@@ -506,7 +490,7 @@ inline constexpr R jacobi_definiteness_floor() {
         // Block power-iteration start: X <- ortho(A X), a few times. Powers of A amplify
         // the largest eigendirections, so this is valid *only* for find_largest;
         // lobpcg_init_power_iterations returns 0 otherwise and this loop does not run.
-        // Evidence: SYEVX_PLAN.md §7.9.
+        // evidence: docs/perf/syevx.md#lobpcg-x-only-fill-and-power-iteration-start
         const int init_power_steps =
             lobpcg_init_power_iterations(params.init_power_iterations, params.find_largest);
         for (int step = 0; step < init_power_steps; ++step) {
@@ -715,7 +699,8 @@ inline constexpr R jacobi_definiteness_floor() {
                     }
 
                     sycl::group_barrier(cta);
-                    // Instrumentation history, staged device-side (SYEVX_PLAN.md §7.2).
+                    // Instrumentation history, staged device-side.
+                    // evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
                     if (stage_best_ptr != nullptr) {
                         for (size_t i = tid; i < neigs; i += local_size) {
                             const size_t dst = static_cast<size_t>(bid) * neigs + i;
@@ -758,7 +743,8 @@ inline constexpr R jacobi_definiteness_floor() {
             // Drain only when a host-side reader needs the results this iteration: the
             // convergence check, or instrumentation that could not be staged on the
             // device. Overshooting the stopping point by a few iterations is far cheaper
-            // than a drain per iteration (SYEVX_PLAN.md §7.1).
+            // than a drain per iteration.
+            // evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
             const bool instrumentation_host_readback = instr_plan.active && !stage_device_side;
             const bool last_iteration = (it + 1 >= static_cast<int64_t>(params.iterations));
             const bool check_convergence =
@@ -839,22 +825,11 @@ inline constexpr R jacobi_definiteness_floor() {
                 trace("syevx: ILU(k) apply done");
             }
 
-            // ---- Soft locking, variant (a): column masking (SYEVX_PLAN.md §7.5)
-            //
-            // The masking happens in two places, and the reason is the one non-obvious
-            // thing about the feature: `ortho` MIXES COLUMNS. Householder QR and the
-            // Chol/Chol2 triangular solve both replace R by R * (upper triangular)^-1, so
-            // column j of the orthonormalised block spans r_0..r_j. Masking only *after*
-            // ortho therefore deletes span content the unconverged columns were
-            // orthogonalised against and convergence freezes; masking only *before* it
-            // leaves zero columns, which make R^T R singular and make the Cholesky-based
-            // algorithms (Chol2 is the default) silently produce NaN from potrf.
-            //
-            // So: before ortho, *replace* each converged column with a pseudo-random
-            // vector scaled to the largest surviving residual column, keeping the block
-            // full rank; after ortho, zero those same columns so the injected directions
-            // never reach AR/StAS. Skipped on the restart iteration, where P is a copy of
-            // R taken just below and would keep the zero columns permanently.
+            // ---- Soft locking: masking in TWO places, because `ortho` mixes columns.
+            // Before ortho, replace converged columns by a scaled random filler (full
+            // rank); after ortho, zero them. Neither half alone works.
+            // evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
+            // Skipped on restart: P is copied from R below and would keep the zeros.
             const bool mask_this_iteration = soft_locking && !restart;
             if (mask_this_iteration) {
                 trace("syevx: soft-lock fill converged residual columns");
@@ -1234,17 +1209,9 @@ inline constexpr R jacobi_definiteness_floor() {
             }
         }
 
-        // The per-item flag this routine has always written and then collapsed into
-        // one `all_converged` bool. Three traps, all of them silent:
-        //   * POLARITY IS INVERTED versus LAPACK -- converged_flags[b] == 1 means the
-        //     item DID converge -- so it is negated here. Copying it verbatim reports
-        //     failure on every healthy item and success on every broken one.
-        //   * The flags are only fresh on iterations where the residual drain ran, so
-        //     this reads them AFTER the loop rather than from mid-loop state.
-        // converged_flags is a POOL draw whose bytes syevx_lobpcg_buffer_size already
-        // accounts for unconditionally, and it lives in the caller's workspace, so
-        // there is neither a sizing change nor a lifetime hazard here -- no wait is
-        // needed, unlike syevx_filtered's local UnifiedVector.
+        // Traps: POLARITY IS INVERTED versus LAPACK (1 == converged), and the flags
+        // are read AFTER the loop (fresh only where the residual drain ran).
+        // converged_flags is a pool draw, so unlike syevx_filtered no wait is needed.
         detail::info_from_flags(ctx, info, converged_flags.data(),
                                 static_cast<int64_t>(batch_size), /*one_means_converged=*/true);
         return ctx.get_event();

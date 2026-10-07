@@ -1,14 +1,9 @@
 #pragma once
 
-// Device-side building blocks of the CTA (sub-group-partition) STEQR solver.
-//
-// These live in a header because two translation units need the *same* code:
-//   - steqr_cta.cc      : the standalone tridiagonal eigensolver kernel
-//   - syev_cta_fused.cc : the monolithic SYEV kernel, which runs this solve
-//                         in-place between tridiagonalization and back-transform
-//
-// Keeping a single definition is what makes the fused-vs-partitioned comparison
-// a measurement of *fusion* rather than of two independently drifting solvers.
+// Device-side building blocks of the CTA (sub-group-partition) STEQR solver, shared by
+// steqr_cta.cc and syev_cta_fused.cc. Keep ONE definition: it is what makes a
+// fused-vs-partitioned benchmark measure fusion and nothing else.
+// evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
@@ -22,14 +17,10 @@
 
 namespace batchlas {
 
-    // Givens rotation specialised for the real bulge chase.
-    //
-    // On the in-range fast path this is algebraically identical to internal::lartg(),
-    // but it forms the single quantity 1/sqrt(f^2 + g^2) with a hardware reciprocal
-    // square root plus one Newton refinement instead of one IEEE square root and two
-    // IEEE divisions.  The bulge chase calls this once per rotation (O(n^2) times per
-    // problem), and div/sqrt expansion dominated the instruction mix there.
-    // Out-of-range inputs fall back to the fully scaled reference implementation.
+    // Givens rotation for the real bulge chase: in range, algebraically internal::lartg()
+    // but with rsqrt + one Newton step instead of sqrt and two divisions. Out-of-range
+    // inputs fall back to the fully scaled reference implementation.
+    // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
     template <typename T>
     struct cta_rotation {
         T c;
@@ -40,14 +31,10 @@ namespace batchlas {
     template <typename T>
     inline cta_rotation<T> cta_lartg(const T f, const T g) {
         if constexpr (std::is_same_v<T, float>) {
-            // Range guard: |f| and |g| inside (sqrt(safmin), sqrt(safmax/2)) keeps
-            // f^2 + g^2 finite and normal; anything else (NaN included, since every
-            // compare is false) takes the scaled reference implementation.
-            //
-            // g == 0 must return exactly (1, 0, f), which rsqrt + Newton does not
-            // guarantee. It is forced by the final select, not an early return, so
-            // an identity rotation takes the same path as its neighbours instead of
-            // diverging; the result is bitwise what the early return gave.
+            // Range guard: |f|, |g| in (sqrt(safmin), sqrt(safmax/2)) keeps f^2 + g^2 finite
+            // and normal; anything else (NaN included) takes the scaled reference.
+            // g == 0 must return exactly (1, 0, f): forced by the final select, not an
+            // early return, so an identity rotation does not diverge from its neighbours.
             const bool gz = (g == T(0));
             const T f_abs = sycl::fabs(f);
             const T g_abs = sycl::fabs(g);
@@ -89,14 +76,9 @@ namespace batchlas {
         return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
     }
 
-    // Compile-time selectable shared-memory cache for Q.
-    //
-    // Storage is column-major in local memory with a caller-chosen leading
-    // dimension: Q_local[base_q + row + col*LDQ] = Q(row, col).  LDQ == P is
-    // right for the standalone solver, which only ever indexes the tile by
-    // lane == row (already conflict-free).  A consumer that later reads the tile
-    // *by column* (lane == column, as the fused SYEV back-transform does) wants
-    // LDQ == P+1 so that consecutive lanes land in different banks.
+    // Compile-time selectable shared-memory cache for Q, column-major:
+    // Q_local[base_q + row + col*LDQ] = Q(row, col). LDQ == P suits row-indexed use;
+    // a consumer that reads the tile by column (fused SYEV) needs LDQ == P+1 (banks).
     template <typename T, size_t P, size_t LDQ, bool ComputeVecs, typename LocalAcc>
     struct QSharedCache;
 
@@ -115,11 +97,8 @@ namespace batchlas {
         template <typename QProb>
         inline void load(const QProb& Q_prob) {
             const int32_t pN = static_cast<int32_t>(LDQ);
-            // Zero rather than skip the padding rows (lane >= n).  Once every row of
-            // the tile holds a defined value, the chase can run unguarded on all P
-            // lanes: its column indices are always inside the tile, and `store` only
-            // reads back the first n rows.  That removes a divergent branch from the
-            // innermost loop of the solver.
+            // Zero, not skip, the padding rows (lane >= n): the chase then runs unguarded
+            // on all P lanes, and `store` reads back only the first n rows.
             if (lane < n) {
                 for (int32_t c = 0; c < n; ++c) {
                     Q_local[base_q + lane + c * pN] = Q_prob(lane, c);
@@ -150,18 +129,10 @@ namespace batchlas {
             Q_local[i1] = s * q0 + c * q1;
         }
 
-        // Streaming form of `apply` for a bulge chase.
-        //
-        // Successive rotations in a chase always share a column (rotation k writes
-        // columns (a, b) and rotation k+1 reads column b again), so the shared column
-        // can stay in a register.  That halves both the shared-memory traffic and the
-        // address arithmetic of the eigenvector update.
-        //
-        // A chase also visits columns strictly consecutively, so the element index
-        // only ever moves by +/-P between steps.  Keeping it in a register and
-        // advancing it by a compile-time constant turns the per-step address
-        // computation into a single integer add, and lets the partner column be
-        // reached through the load/store instruction's immediate offset.
+        // Streaming form of `apply` for a bulge chase: successive rotations share a
+        // column, so it stays in a register, and the element index moves by +/-P, so it
+        // advances by a compile-time constant (partner via the immediate offset).
+        // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
         inline void chase_begin(int32_t col) {
             idx = base_q + lane + col * static_cast<int32_t>(LDQ);
             carry = Q_local[idx];
@@ -243,14 +214,13 @@ namespace batchlas {
                         int32_t end_ix,
                         T zero_threshold) {
         // `zero_threshold` is currently unused: deflation follows LAPACK's relative test.
+        // evidence: docs/algorithms/steqr.md#steqr-the-relative-deflation-criterion
         (void)zero_threshold;
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);
 
-        // We need d_{i+1} (neighbor lane's diagonal). A 1-lane shift is the most direct.
-        // Note: for lanes without i+1 (last lane), the result is unspecified (on a
-        // full-sub-group partition it is the next chunk's lane 0), but those lanes
-        // never use d_ip1 due to lane_in_active_range.
+        // d_{i+1} by a 1-lane shift. The last lane's value is unspecified (next chunk's
+        // lane 0 on a full-sub-group partition) and unused: lane_in_active_range.
         const T d_ip1 = shift_group_left(partition, d, 1);
 
         if (lane_in_active_range) {
@@ -265,12 +235,9 @@ namespace batchlas {
         }
     }
 
-    // T := J*T*J and Q := Q*J on the block [bb, be] when `rev`, J the reversal.
-    //
-    // A QR sweep on T is exactly a QL sweep on J*T*J (shift, rotation and
-    // deflation formulas are mirror images), so a QR block is mirrored, swept
-    // by the QL chase and mirrored back. d mirrors about bb+be, e about
-    // bb+be-1; e(bb-1) (the split mark) and e(be) (zero) do not move.
+    // T := J*T*J and Q := Q*J on [bb, be] when `rev` (J the reversal): a QR sweep is a QL
+    // sweep on J*T*J. d mirrors about bb+be, e about bb+be-1; e(bb-1) and e(be) stay.
+    // evidence: docs/algorithms/steqr.md#steqr-choosing-qr-versus-ql
     template <size_t P, typename T, typename Partition, typename QCache>
     inline void reverse_block(const Partition& partition,
                               T& diag,
@@ -287,12 +254,8 @@ namespace batchlas {
         qcache.reverse_columns(bb, be, rev);
     }
 
-    // Butterfly (XOR-shuffle) all-reduce within the partition.
-    //
-    // These replace the previous shared-memory + leader-lane serial loops.  A
-    // butterfly reduction needs log2(P) shuffles, keeps every lane active, and
-    // touches neither local memory nor barriers, which matters because the
-    // block/subproblem boundary searches run once per QL/QR sweep.
+    // Butterfly (XOR-shuffle) all-reduce within the partition: log2(P) shuffles, every
+    // lane active, no local memory or barriers (boundary searches run once per sweep).
     template <size_t P, typename Partition>
     inline int32_t partition_reduce_min(const Partition& partition, int32_t value) {
 #pragma unroll
@@ -370,10 +333,8 @@ namespace batchlas {
         const int32_t ls = Pad ? sycl::clamp(l, int32_t(0), static_cast<int32_t>(P) - 2) : l;
         const int32_t ms = Pad ? sycl::clamp(m, int32_t(0), static_cast<int32_t>(P) - 1) : m;
 
-        // EXP update scheme = explicit similarity update (bulge-chase), matching the logic in steqr.cc.
-        // We implement QL by operating on a *virtual reversed* indexing inside [l..m] and running a QR-style
-        // bulge chase in that virtual space. This is the only chase: QR sweeps run it on a mirrored block
-        // (see reverse_block).
+        // EXP scheme: QL as a QR-style bulge chase in *virtual reversed* indexing inside
+        // [l..m]. The only chase: QR sweeps run it on a mirrored block (reverse_block).
         const auto explicit_ql_step_exp = [&]() {
             // Preload shift inputs.
             T p0  = select_from_group(partition, diag, ls);
@@ -407,36 +368,23 @@ namespace batchlas {
             //   d_v(v+1) = d( m - v - 1 )
             //   e_v(v)   = e( m - v - 1 )  (couples the two diags above)
             //   e_v(v+1) = e( m - v - 2 )
-            //
-            // The chase walks physical indices downward one step at a time, so the
-            // (di, ei) pair of iteration v+1 is exactly the (dj_new, ej_new) pair this
-            // iteration just produced.  Carrying them in registers halves the number of
-            // cross-lane shuffles in the hottest loop of the solver.
-            // Shuffles run unconditionally with a clamped source and the value is
-            // selected afterwards: a shuffle under a condition not provably warp-uniform
-            // costs a MATCH/VOTE/BRA.DIV wrapper per call and breaks full-warp lockstep.
+            // Iteration v+1's (di, ei) is the (dj_new, ej_new) this one produced, so it
+            // is carried in registers. Shuffles run UNCONDITIONALLY with a clamped source:
+            // a non-uniform condition costs a MATCH/VOTE/BRA.DIV wrapper and lockstep.
             T di = select_from_group(partition, diag, ms);
             T ei = select_from_group(partition, offdiag, std::max(ms - 1, 0));
             ei = (ms >= 1) ? ei : T(0);
             T e_own = T(0);
 
-            // Snapshot the tridiagonal before the chase.
-            //
-            // The chase writes lane `hi` at iteration v but only ever reads lanes
-            // strictly below it, so every broadcast below observes the pre-chase value.
-            // Shuffling from immutable snapshots is what makes that visible to the
-            // compiler: reading `diag`/`offdiag` directly forces each SHFL to be
-            // ordered after the previous iteration's conditional write, which chains
-            // them onto the lartg dependency path.  From snapshots the shuffles are
-            // loop-invariant-free and can be hoisted and overlapped with the rotation
-            // arithmetic instead.
+            // Snapshot the tridiagonal before the chase. The chase writes lane `hi` but only
+            // reads lanes below it, so broadcasts see pre-chase values; immutable
+            // snapshots let the compiler hoist the shuffles off the lartg dependency path.
+            // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
             const T diag_snap = diag;
             const T offdiag_snap = offdiag;
 
-            // The first rotation uses (d(m) - mu, e(m-1)); every later one uses the
-            // running (eprev, bulge) pair.  Seeding the running pair with the initial
-            // values makes the two cases identical, which removes a loop-carried bool,
-            // its two selects and a branch from every iteration of the hottest loop.
+            // Seed the running (eprev, bulge) pair with (d(m) - mu, e(m-1)) so the first
+            // rotation needs no special case in the hottest loop.
             T eprev = di - mu;
             T bulge = ei;
 
@@ -471,9 +419,7 @@ namespace batchlas {
                     // This corresponds to LAPACK's QL inner-loop assignment E(i+1)=r.
                     const T e_hi_new = x * c1 - y * sigma; // only meaningful when !first
 
-                    // Explicit similarity update for the local (di, ei, dj) pair plus propagation into ej.
-                    // This matches the formulas used in steqr.cc's apply_givens_rotation for QR sweeps,
-                    // applied in the virtual ordering.
+                    // Explicit similarity update (steqr.cc apply_givens_rotation), virtual order.
                     const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
                     const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
                     const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
@@ -492,15 +438,10 @@ namespace batchlas {
                 const T c1 = upd[0];
                 const T sigma = upd[1];
 
-                // Only two of the five candidate register updates survive to the next
-                // iteration: d(hi) and e(hi) are final once the bulge has moved past
-                // them, while d(lo), e(lo) and e(lo-1) are recomputed by the following
-                // rotation.  Those three are therefore carried in registers and written
-                // once after the chase instead of every iteration.
-                //
-                // Written as selects, not `if`s: exactly one lane of the partition is
-                // ever the target, so a branch here is a guaranteed divergence (and a
-                // BSSY/BSYNC pair) on every single rotation.
+                // d(hi), e(hi) are final once the bulge passes; d(lo), e(lo), e(lo-1) are
+                // recomputed next rotation, so they are carried and written once after
+                // the chase. Selects, not `if`s: one target lane means an `if` diverges
+                // on every rotation.
                 const bool owns_hi = act && (lane == hi);
                 diag = owns_hi ? upd[2] : diag;
                 offdiag = (owns_hi && hi < e_hi_limit) ? upd[6] : offdiag;
@@ -620,13 +561,9 @@ namespace batchlas {
         }
     }
 
-    // One problem's worth of the STEQR outer loop: split into blocks separated by
-    // zero offdiagonals, then run shifted QL sweeps on each block (QR as QL on the
-    // mirrored block).
-    //
-    // `diag`/`offdiag` are register-resident with lane i owning d(i) and e(i);
-    // `qcache` accumulates the rotations (a no-op when eigenvectors are not
-    // wanted). Returns true if any block failed to converge within budget.
+    // One problem's STEQR outer loop: split at zero offdiagonals, then shifted QL sweeps
+    // per block (QR as QL on the mirrored block). Lane i owns d(i), e(i); `qcache`
+    // accumulates rotations (no-op without vectors). True if any block failed.
     template <typename T, size_t P, typename Partition, typename QCache>
     inline bool steqr_cta_solve_nested(const Partition& partition,
                                        T& diag,
@@ -697,12 +634,10 @@ namespace batchlas {
                 }
             }
 
-            // Choose between QL and QR as LAPACK dsteqr does: QL if |D(l)| <= |D(lend)|,
-            // QR otherwise, so a graded block converges its small end first. The
-            // inverted rule took ~2x the steps and lost relative accuracy on graded input.
-            // QR runs as QL on the mirrored block (reverse_block), so chunks of one
-            // warp that pick different directions share one loop nest instead of
-            // running two back to back. It is mirrored back even on failure.
+            // QL if |D(l)| <= |D(lend)|, QR otherwise (as dsteqr: the graded small end
+            // converges first; the inverted rule loses relative accuracy). QR runs as QL
+            // on the mirrored block so chunks share one loop nest; mirrored back even on
+            // failure. evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
             const T d_first = sycl::fabs(select_from_group(partition, diag, block_begin));
             const T d_last = sycl::fabs(select_from_group(partition, diag, block_end));
             const bool rev = d_last < d_first;
@@ -769,16 +704,11 @@ namespace batchlas {
         return failed;
     }
 
-    // steqr_cta_solve_nested with the sweep hoisted out of the loop nest, for a
-    // partition whose collectives are chunk-local (a masked SubGroupPartition).
-    //
-    // The nested loops realign the chunks of a warp only at their exits, so a
-    // chunk that advances past an eigenvalue waits while its neighbours finish
-    // sweeping theirs, and the warp pays the sum over eigenvalues of the slowest
-    // chunk. Here a chunk settles (opens, tests, 2x2-solves, closes) until it has
-    // a sweep to run or is done, and every chunk with a sweep chases in the same
-    // pass, so the warp pays closer to the slowest chunk's total. The per-chunk
-    // operation sequence is the nested solver's, so the results are bitwise equal.
+    // steqr_cta_solve_nested with the sweep hoisted out of the loop nest, for a partition
+    // whose collectives are chunk-local (a masked SubGroupPartition): each chunk settles
+    // until it has a sweep or is done, then every chunk with a sweep chases in the same
+    // pass. Same per-chunk operation sequence as the nested solver: bitwise equal.
+    // evidence: docs/perf/steqr.md#lockstep-flat-solver
     template <typename T, size_t P, typename Partition, typename QCache>
     inline bool steqr_cta_solve_flat(const Partition& partition,
                                      T& diag,
@@ -914,11 +844,9 @@ namespace batchlas {
         return failed;
     }
 
-    // The same state machine for a partition whose lockstep domain is the whole
-    // sub-group (emulated partition): every branch that guards a collective must
-    // be taken by all chunks, so each phase runs under a sub-group vote with its
-    // updates gated per chunk, and the sweep is the padded chase. A chunk outside
-    // a phase feeds its collectives in-range sources and discards the results.
+    // The same state machine when the lockstep domain is the whole sub-group: every branch
+    // guarding a collective runs under a sub-group vote with per-chunk gated updates, and
+    // a chunk outside a phase feeds in-range sources and discards the results.
     template <typename T, size_t P, typename Partition, typename QCache>
     inline bool steqr_cta_solve_lockstep(const Partition& partition,
                                          T& diag,
@@ -1068,14 +996,11 @@ namespace batchlas {
 
     // Returns true if any block failed to converge within budget.
     //
-    // A full-sub-group (emulated) partition is the caller's promise that every
-    // lane of the sub-group runs this solve. P == 32 is one chunk per warp, so
-    // the nested loops are warp-uniform and run on it without the per-collective
-    // mask check. Smaller chunks diverge around its collectives: on NVPTX the
-    // chunk-masked partition takes over, because every maskless form measured
-    // slower there (the padding costs more than the masks save); elsewhere the
-    // lockstep solver is the legal form for EXP, while PG still runs the nested
-    // loops, which is only legal while the chunks happen not to diverge.
+    // A full-sub-group (emulated) partition promises every lane of the sub-group runs
+    // this. P == 32 runs the nested loops maskless; smaller chunks on NVPTX take the
+    // chunk-masked partition (every maskless form measured slower there); elsewhere EXP
+    // takes the lockstep solver, while PG's nested loops are legal only while the chunks
+    // happen not to diverge. Judge changes here by real-kernel A/B, not microbenchmarks.
     // evidence: docs/perf/steqr.md#full-warp-partition
     template <typename T, size_t P, typename Partition, typename QCache>
     inline bool steqr_cta_solve(const Partition& partition,

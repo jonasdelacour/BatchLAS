@@ -341,6 +341,27 @@ inline constexpr void dispatch_trmm(const Exec& exec,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Triangular matrix-matrix product \f$ C := \alpha\,\mathrm{op}(A)\,B + \beta\,C \f$ (Left) or \f$ C := \alpha\,B\,\mathrm{op}(A) + \beta\,C \f$ (Right).
+///
+/// Unlike BLAS `trmm` it has a separate output and a `beta`. `B` and `C` may
+/// overlap: the generic path orders its traversal so no entry is overwritten
+/// before it is read, and overlap disables both fast paths. The fast paths
+/// (`float`, an `nd_item` executor; the register-tiled one also an
+/// `nd_item<3>`, 256 work-items and a workspace) are otherwise as for gemm().
+/// @tparam SideV   side `A` multiplies from
+/// @tparam UploV   stored triangle of `A`
+/// @tparam TransV  op() applied to `A`
+/// @tparam DiagV   `Unit`: the diagonal is taken as 1
+/// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group      executor
+/// @param a          single square triangular matrix, order `B.rows()` (Left) or `B.cols()` (Right)
+/// @param operand    `B`, `C` (same shape as `B`), `alpha`, `beta`
+/// @param workspace  local memory of trmm_workspace_elements() elements, or `nullptr`
+/// @pre `C` holds finite values even when `beta == 0`.
+/// @note On the generic path each `C` element is written by the group leader; barrier before other work-items read `C`.
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -354,6 +375,7 @@ inline constexpr void trmm(const Group& group,
     detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As trmm(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -368,6 +390,17 @@ inline constexpr void trmm(const Group& group,
     detail::dispatch_trmm<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that trmm() can use for this launch and shape.
+///
+/// Nonzero only for an `nd_item<3>` launch description whose shape admits the
+/// register-tiled path. When the result is 0 pass `nullptr`.
+/// @trap `T` is the LAST template parameter here, after the four mode parameters,
+///       unlike every other `*_workspace_elements` and unlike the policy overload.
+/// @param launch      description of the launch the call runs in
+/// @param row_extent  rows of `C`
+/// @param col_extent  columns of `C`
+/// @param aliased     `B` and `C` overlap; the call then takes no staged path, so this returns 0
+/// @return element count, or 0 when no staged path applies
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -380,6 +413,12 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::trmm_workspace_elements<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, DeviceBlasPolicy::Auto, T>(launch, row_extent, col_extent, aliased);
 }
 
+/// @brief Local memory, in elements of `T`, that trmm() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param row_extent rows of `C`
+/// @param col_extent columns of `C`
+/// @param aliased `B` and `C` overlap; the call then takes no staged path, so this returns 0
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
@@ -393,6 +432,7 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::trmm_workspace_elements<detail::TriangularTransformTag<SideV, UploV, TransV, DiagV>, Policy, T>(launch, row_extent, col_extent, aliased);
 }
 
+/// @brief As trmm(), with the operands passed separately instead of in an operand struct.
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -409,6 +449,7 @@ inline constexpr void trmm(const Group& group,
     trmm<SideV, UploV, TransV, DiagV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief As trmm(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -425,5 +466,7 @@ inline constexpr void trmm(const Group& group,
                            T* workspace = nullptr) {
     trmm<Policy, SideV, UploV, TransV, DiagV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

@@ -42,6 +42,21 @@ inline constexpr void dispatch_ger(const Group& group,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Rank-1 update \f$ A := A + \alpha\,\tilde{x}\,\tilde{y}^{T} \f$, with \f$\tilde{x}\f$, \f$\tilde{y}\f$ optionally conjugated.
+///
+/// geru() and gerc() are the BLAS-named spellings (no conjugation, and
+/// conjugated `y`). Each element of `A` is owned by one work-item, so no
+/// reduction and no barrier is involved.
+/// @tparam ConjugateXV  use \f$\bar{x}\f$
+/// @tparam ConjugateYV  use \f$\bar{y}\f$
+/// @tparam Group        `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group    executor whose work-items share the elements of `A`
+/// @param x        left vector, length `a.rows()`
+/// @param operand  `y` (length `a.cols()`), `A` (updated in place) and `alpha`
+/// @pre single-problem views; sizes as above. Checked by `assert` only.
 template <bool ConjugateXV = false, bool ConjugateYV = false, typename Group, typename T>
 inline constexpr void ger(const Group& group,
                           const VectorView<T>& x,
@@ -49,6 +64,7 @@ inline constexpr void ger(const Group& group,
     detail::dispatch_ger<OuterProductTransformTag<ConjugateXV, ConjugateYV>>(group, x, operand);
 }
 
+/// @brief As ger(), with an explicit DeviceBlasPolicy (ignored: one implementation).
 template <DeviceBlasPolicy Policy,
           bool ConjugateXV = false,
           bool ConjugateYV = false,
@@ -61,6 +77,7 @@ inline constexpr void ger(const Group& group,
     ger<ConjugateXV, ConjugateYV>(group, x, operand);
 }
 
+/// @brief As ger(), with the operands passed separately instead of in an operand struct.
 template <bool ConjugateXV = false, bool ConjugateYV = false, typename Group, typename T>
 inline constexpr void ger(const Group& group,
                           const VectorView<T>& x,
@@ -70,6 +87,7 @@ inline constexpr void ger(const Group& group,
     ger<ConjugateXV, ConjugateYV>(group, x, make_rank1_update_operand(y, a, alpha));
 }
 
+/// @brief As ger(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
 template <DeviceBlasPolicy Policy,
           bool ConjugateXV = false,
           bool ConjugateYV = false,
@@ -84,6 +102,10 @@ inline constexpr void ger(const Group& group,
     ger<ConjugateXV, ConjugateYV>(group, x, y, a, alpha);
 }
 
+/// @brief Unconjugated rank-1 update \f$ A := A + \alpha\,x\,y^{T} \f$; ger() without conjugation.
+/// @param group    executor whose work-items share the elements of `A`
+/// @param x        left vector, length `a.rows()`
+/// @param operand  `y`, `A` and `alpha`
 template <typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -91,6 +113,7 @@ inline constexpr void geru(const Group& group,
     ger<false, false>(group, x, operand);
 }
 
+/// @brief As geru(), with an explicit DeviceBlasPolicy (ignored: one implementation).
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -99,6 +122,7 @@ inline constexpr void geru(const Group& group,
     geru(group, x, operand);
 }
 
+/// @brief As geru(), with the operands passed separately instead of in an operand struct.
 template <typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -108,6 +132,7 @@ inline constexpr void geru(const Group& group,
     ger<false, false>(group, x, y, a, alpha);
 }
 
+/// @brief As geru(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void geru(const Group& group,
                            const VectorView<T>& x,
@@ -118,6 +143,10 @@ inline constexpr void geru(const Group& group,
     geru(group, x, y, a, alpha);
 }
 
+/// @brief Conjugated rank-1 update \f$ A := A + \alpha\,x\,y^{H} \f$; ger() with conjugated `y`.
+/// @param group    executor whose work-items share the elements of `A`
+/// @param x        left vector, length `a.rows()`
+/// @param operand  `y`, `A` and `alpha`
 template <typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -125,6 +154,7 @@ inline constexpr void gerc(const Group& group,
     ger<false, true>(group, x, operand);
 }
 
+/// @brief As gerc(), with an explicit DeviceBlasPolicy (ignored: one implementation).
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -133,6 +163,7 @@ inline constexpr void gerc(const Group& group,
     gerc(group, x, operand);
 }
 
+/// @brief As gerc(), with the operands passed separately instead of in an operand struct.
 template <typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -142,6 +173,7 @@ inline constexpr void gerc(const Group& group,
     ger<false, true>(group, x, y, a, alpha);
 }
 
+/// @brief As gerc(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
 template <DeviceBlasPolicy Policy, typename Group, typename T>
 inline constexpr void gerc(const Group& group,
                            const VectorView<T>& x,
@@ -151,5 +183,7 @@ inline constexpr void gerc(const Group& group,
     (void)Policy;
     gerc(group, x, y, a, alpha);
 }
+
+/// @}
 
 } // namespace batchlas::device

@@ -13,6 +13,17 @@ measurement work; it is not. Every number below that is not marked
 and lives either in `docs/perf/*.md` or at tag `perf-evidence/vendor-independence`
 (`git show perf-evidence/vendor-independence:experiments/<path>`).
 
+**Route vocabulary.** This plan was written against the route layer that
+flat kernel selection deleted (@ref design_flat_selection): `RouteTable`
+order arrays in `route_<op>.hh`, `supports()`, `preferred()` and the
+vendor-free hook `native_tier_preferred`. Every such name below describes
+that deleted code. Today a former `supports()` term is a `can_run` term in
+`src/ops/<op>/<op>.cc`, and a former `preferred()` window or tier hook is
+the ranking in the rows of `tuned/<op>.<dtype>.<device>.txt`. Because
+`select::choose` takes the first runnable entry of a single row for both the
+vendor-present and the vendor-free walk, the R8b defect below cannot recur
+in that form.
+
 Ratios are `vendor_ms / native_ms`; **>1 means native wins**. "Large batch"
 means the saturating batch for the order (>= 2048 at n <= 64, >= 512 at n = 512).
 
@@ -420,8 +431,8 @@ elementwise).
 serially from local (N reads; serial beats a tree for N <= 32, literature
 and MAGMA), `alpha = sA(j, j)`; LAPACK `larfg` scalars (`beta =
 -copysign(norm, re alpha)`, `tau`, `scale = 1/(alpha - beta)`), the
-`tau = 0` branch when the sub-column is zero and `im(alpha) = 0`; lanes `r
-> j`: `rA[j] *= scale`; lane `j`: `rA[j] = 1`, publishes `tau`; `A(r, j)`
+`tau = 0` branch when the sub-column is zero and `im(alpha) = 0`; lanes
+`r > j`: `rA[j] *= scale`; lane `j`: `rA[j] = 1`, publishes `tau`; `A(r, j)`
 stored now (`beta` on the diagonal, `v` below); then `y = conj(tau) v^H
 A(:, j+1..N)`: lane `r` writes `sP(r, k) = conj(rA[j]) * rA[k]` for `k >
 j` into an `N x (N+1)`-padded local tile; barrier; lane `k` sums column `k`
@@ -811,8 +822,8 @@ orgqr small `n <= 128`: >= 1.5x over the current identity+ormqr path
 **Design.**
 - `GeqrfPanelRegKernel<T, N>`: WG = `roundup(m, 32)` work-items, one panel
   per WG (G-pack for `m <= 64`), `rA[N]` = row `r`, `m` runtime with
-  `r >= m` lanes holding zeros. Per column `j`: partial `|rA[j]|^2` for `r
-  > j` -> `reduce_over_group(sg, ...)` + one slot per sub-group + serial
+  `r >= m` lanes holding zeros. Per column `j`: partial `|rA[j]|^2` for
+  `r > j` -> `reduce_over_group(sg, ...)` + one slot per sub-group + serial
   combine (2 barriers) instead of MAGMA's `log2(M32/8)` shared tree;
   `larfg` scalars with LAPACK scaling; scale, store column; `y = conj(tau)
   v^H A(:, j+1..N)`: lane products into a `32 x N`-per-sub-group local
@@ -1113,7 +1124,7 @@ opinion:
    plan to land should replace it with the measured cost per
    instantiation.
 
-## 6. The comment-density burn-down
+## 6. The comment-density burn-down {#small-n-comment-density-burn-down}
 
 **2026-09-11.** The house rule -- measured numbers live in `docs/perf/<op>.md` behind an
 `evidence: docs/perf/<page>.md#<anchor>` pointer, and code comments carry correctness

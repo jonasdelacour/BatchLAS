@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched Cholesky factorization (potrf) and its workspace query.
+/// @ingroup factorizations
+
 #include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
@@ -26,8 +30,7 @@ using potrf_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Uplo);
 
-// backend::potrf_vendor's signature, spelled out from the definition rather than
-// aliased to sig::potrf: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using potrf_vendor = Event(Queue&,
                            const MatrixView<T, MatrixFormat::Dense>&,
@@ -35,35 +38,21 @@ using potrf_vendor = Event(Queue&,
                            Span<std::byte>,
                            Span<int32_t>);
 
-// backend::potrf_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::potrf_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using potrf_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T,MatrixFormat::Dense>&,
                                         Uplo);
 }  // namespace sig
 
-// Validation for the POSITIONAL entry point, which had none.
-//
-// There was no potrf_validate_params anywhere in the tree -- the analogous
-// functions/trsm.hh:39 exists, potrf's did not. require_square /
-// require_info_span are attached only to the OPTION overloads
-// (options.hh:548-549, :557-558, :565-566); the workspace-taking <Backend B>
-// overload at :539-543 -- the spelling src/extensions/ortho.cc:200 uses -- has
-// neither. So a non-square view reached the backend and cuSOLVER factorised
-// A.rows() x A.rows() out of it.
-//
-// It runs in the facade, ahead of the shape builder, because the builder reads
-// A.rows()/A.cols() and must not describe a non-conforming view. Same hoist as
-// trsm's (src/ops/trsm/trsm.cc:127).
-//
-// SCOPE IS DELIBERATELY MINIMAL: exactly what the shape builder needs. In
-// particular this does NOT check the length of a non-empty `info` span. A short
-// non-empty span silently becomes pool scratch today
-// (src/linalg-impl.hh:763-771, whose fallback is `>= count`), documented as by
-// design; turning that into a throw is a user-visible behaviour change and
-// belongs to its own change with its own test, not to a step whose gate is
-// "zero behaviour change".
+/// @brief Validates the arguments of the positional potrf() entry point.
+///
+/// Checks only what no kernel can serve: non-negative extents, a square A and a
+/// valid @p uplo. It does not check the length of a non-empty `info` span.
+/// Called by the public potrf() before the selection key is built.
+/// @throws batchlas::invalid_argument on negative extents, a non-square A or an
+///         invalid @p uplo.
+/// @ingroup factorizations
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
@@ -85,22 +74,55 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 
+/// @brief Workspace, in bytes, that potrf() needs for this shape on this queue.
+///
+/// The size does not depend on whether a caller passes an `info` span, so the
+/// same value serves both potrf() overloads.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx   queue the factorization will run on (kernel selection reads its device)
+/// @param A     batch of n x n matrices to be factorized
+/// @param uplo  triangle that will be factorized
+/// @return bytes to pass as the `workspace` span of potrf()
+/// @ingroup factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  Uplo uplo);
 
-// `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
-// and >0 for the leading minor at which the item stopped being positive
-// definite. It used to be unreachable -- every backend allocated the array the
-// vendor call needs, passed it, and dropped it -- so a caller could not tell a
-// batch that factorised from one where item 37 is rank-deficient and everything
-// downstream is noise (see issue #73).
-//
-// An EMPTY span means "not requested" and is exactly today's behaviour: the
-// backend falls back to its own scratch allocation. The workspace size is
-// deliberately the same either way, so potrf_buffer_size stays correct whether
-// or not a caller asks for status.
+/// @brief Batched Cholesky factorization of Hermitian positive-definite matrices.
+///
+/// For every batch item computes \f$ A = L L^H \f$ (`Uplo::Lower`) or
+/// \f$ A = U^H U \f$ (`Uplo::Upper`) and overwrites the @p uplo triangle of A
+/// with the factor. Only that triangle is read. The opposite triangle is not
+/// part of the result: some vendor paths (cuSOLVER's Upper potrf) overwrite it.
+///
+/// The call is asynchronous: it enqueues on @p ctx and returns; A and @p info
+/// are readable only after the returned event (or the queue) has been waited on.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx        queue the kernels are enqueued on
+/// @param descrA     batch of n x n matrices (any `ld >= n`, any batch stride);
+///                   overwritten with the Cholesky factor
+/// @param uplo       triangle of A that holds the input and receives the factor
+/// @param workspace  device-accessible scratch of at least potrf_buffer_size() bytes
+/// @param info       per-item LAPACK status, one int32 per batch item: 0 on
+///                   success, i > 0 if the leading minor of order i is not
+///                   positive definite (that item's factor is incomplete).
+///                   An empty span means "not requested".
+/// @return event of the last enqueued kernel
+/// @pre `descrA.rows() == descrA.cols()`
+/// @pre a non-empty @p info holds at least `descrA.batch_size()` elements; a
+///      shorter non-empty span is silently ignored by this overload (the
+///      checked option overloads throw).
+/// @throws batchlas::invalid_argument on negative extents, a non-square A or an
+///         invalid @p uplo
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
+/// @see PotrfOptions for the option-struct spelling; its checked overloads
+///      validate the info span, and its arena overloads lease the workspace.
+/// @ingroup factorizations
+// evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
 template <Backend B, typename T>
 BATCHLAS_API Event potrf(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -108,11 +130,10 @@ BATCHLAS_API Event potrf(Queue& ctx,
                      Span<std::byte> workspace,
                      Span<int32_t> info);
 
-// Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
-// sig:: aliases above are function *types* and function types cannot carry
-// default arguments (see src/util/template-instantiations.hh), so a default
-// would not be part of the instantiated signature. A separate overload keeps
-// every existing four-argument call site compiling unchanged.
+/// @brief potrf() without per-item status (`info` not requested).
+/// @ingroup factorizations
+// Not a defaulted `info`: the sig:: aliases are function types, which cannot
+// carry default arguments, so a default would not be part of the instantiation.
 template <Backend B, typename T>
 inline Event potrf(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -126,13 +147,10 @@ inline Event potrf(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for potrf.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `potrf` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/ops/potrf/potrf.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of potrf(); called by the public potrf(), not by users.
+/// @ingroup dispatch
+// Declaration only: the public potrf lives in src/ops/potrf/potrf.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event potrf_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -141,6 +159,8 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
                                 Span<int32_t> info_out);
 
 
+/// @brief Workspace query of the vendor arm of potrf().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T,MatrixFormat::Dense>& A,
@@ -150,11 +170,7 @@ BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(potrf)
 BATCHLAS_ACCEPT_OWNING(potrf_buffer_size)
 

@@ -93,18 +93,13 @@ inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
     }
 }
 
-// The chase is sequential per matrix, so a work-group owns one problem and the
-// only parallelism inside it is the <= kd x kd window of the current step. With
-// a 32-thread work-group and kd=32 that means each lane loops 32x serially, and
-// at batch=128 the whole kernel occupies ~4096 threads on a GPU with ~196k
-// slots -- about 2% occupancy, which is what made the chase cost as much as the
-// back-transform. kWg=256 with a 2D (row, column-chunk) mapping puts 8 lanes on
-// each row of the window instead of 1.
-//
-// kRowsPar is a pure split of the 256 lanes between window rows and the reduced
-// dimension, NOT a bound on kd: windows taller than kRowsPar are walked in
-// row-blocks. kTpr must stay <= 32 so the lanes sharing a row are inside one
-// sub-group.
+// The chase is sequential per matrix; the only parallelism inside a work-group is the
+// <= kd x kd window. kWg = 256 with a 2D (row, column-chunk) mapping puts 8 lanes on
+// each window row (a 32-lane group ran at ~2% occupancy).
+// kRowsPar splits the lanes between window rows and the reduced dimension; it is NOT
+// a bound on kd (taller windows are walked in row-blocks). kTpr must stay <= 32 so
+// the lanes sharing a row are inside one sub-group.
+// evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-work-group-shape
 constexpr int kWg = 256;
 constexpr int kRowsPar = 32;          // window rows resident at once
 constexpr int kTpr = kWg / kRowsPar;  // lanes cooperating on one row/column
@@ -443,24 +438,13 @@ Event sytrd_sb2st_hh(Queue& ctx,
 }
 
 // ---------------------------------------------------------------------------
-// Q2 back-transform:  Z := Q2 Z  with  Q2 = H_1 H_2 ... H_m.
+// Q2 back-transform:  Z := Q2 Z  with  Q2 = H_1 H_2 ... H_m, so the reflectors are
+// applied in REVERSE generation order: H_m first, H_1 last.
 //
-// Because the product is in generation order, Z := Q2 Z applies the reflectors
-// in *reverse* order: H_m first, H_1 last.
-//
-// Parallelisation: reflectors act on rows, so distinct columns of Z are
-// completely independent. Each work-group takes one (batch item, column chunk)
-// and walks the entire reflector list itself -- no inter-work-group
-// synchronisation and no launch per sweep. Within a work-group the 32 lanes map
-// to *rows* of the reflector (row-blocked when kd > 32), which keeps the Z
-// accesses contiguous since Z is column-major; the dot product is a sub-group
-// reduction.
-//
-// This is flop-optimal (2n^3 total, versus ~4n^3 for a larft/larfb formulation
-// whose V panels are zero-padded) but memory bound. Wang et al. (PPoPP'25)
-// found a hand-written BLAS-2 back-transform beat MAGMA's BLAS-3 one by 1.5x on
-// A100 for exactly this reason, so this is a reasonable starting point; the
-// larft grouping remains available if profiling says otherwise.
+// Streaming form: columns of Z are independent, so each work-group takes one (batch
+// item, column chunk) and walks the whole reflector list; lanes map to reflector
+// rows (contiguous in column-major Z) and the dot is a sub-group reduction.
+// evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
 namespace {
 template <Backend B, typename T>
 class Sb2stHhBackKernel;
@@ -475,29 +459,12 @@ constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path
 
 }
 
-// Wave back-transform: resident Z tile + concurrent application of every
-// reflector in a commuting run.
-//
-// The resident-tile kernel below fixed the traffic on Z but left the *serial
-// chain* untouched: one work-group walked all m reflectors one at a time with
-// 32 threads. At n=1024/kd=64 that is 8687 dependent steps, and the tile's
-// local-memory footprint capped occupancy at ~1 block/SM worth of threads.
-//
-// But the reflectors of a single chase sweep act on disjoint row ranges (each
-// starts one past the previous one's end), so they commute and can all be
-// applied at once. build_sb2st_hh_wave_offsets recovers those runs: at
-// n=1024/kd=64 the 8687 reflectors form 1022 waves averaging 8.5 reflectors, so
-// the chain is 8.5x shorter than the reflector count suggests.
-//
-// One work-group of S sub-groups owns a C-column tile of Z. Per wave each
-// sub-group takes reflectors k = lo + sgid, lo + sgid + S, ...; they touch
-// disjoint rows of the tile, so no synchronisation is needed *within* a wave --
-// not even between successive reflectors handled by the same sub-group. A
-// single work-group barrier separates waves.
-//
-// This also fixes the occupancy problem for free: the tile costs n*C
-// regardless of S, so going from 32 to S*32 threads multiplies threads-per-byte
-// of local memory by S.
+// Wave back-transform: resident Z tile + concurrent application of every reflector
+// in a commuting run (build_sb2st_hh_wave_offsets). One work-group of S sub-groups
+// owns a C-column tile; per wave sub-group s takes reflectors lo + s, lo + s + S, ...
+// Those touch disjoint rows of the tile, so no synchronisation is needed within a
+// wave; one work-group barrier separates waves.
+// evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
 template <Backend B, typename T, int C, int S>
 Event unmqr_hb2st_wave(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& v_in,
@@ -601,28 +568,11 @@ Event unmqr_hb2st_wave(Queue& ctx,
     return ctx.get_event();
 }
 
-// Resident-tile back-transform.
-//
-// The bottleneck is not flops, it is traffic on Z: every reflector reloads its
-// kd rows, and each row of Z is touched ~n/2 times over the whole sweep set, so
-// the naive form moves ~n^3 elements for 2n^3 flops -- about 2 flops/element.
-//
-// A larft/larfb formulation cannot fix that here. Two reflectors commute iff
-// their row ranges are disjoint, i.e. iff |u - u'| >= kd where u = start-1. The
-// BLAS-3-groupable sets (consecutive u, one per sweep at a fixed chase step)
-// interleave: for n=32,kd=4 generation order gives u = 0,4,8,1,..., so u=0
-// precedes u=4 which precedes u=1, and the groups {0..3} and {4..7} cannot be
-// linearised as contiguous units. More generally, in any valid schedule the
-// consecutive reflectors are mutually disjoint -- that is what makes them
-// schedulable -- so the row-sharing ones are always far apart in the product.
-// This is why Wang et al. (PPoPP'25) found a hand-written BLAS-2 back-transform
-// beat MAGMA's larft-based one by 1.5x on A100.
-//
-// So instead of reordering, keep Z resident: one work-group owns a C-column
-// tile of Z for one batch item, loads it into local memory once, applies every
-// reflector in the exact same order, and writes it back once. Traffic drops
-// from ~n^3 to 2*n*ncols per matrix, which is where the BLAS-3-like arithmetic
-// intensity actually comes from.
+// Resident-tile back-transform: one work-group loads a C-column tile of Z into local
+// memory once, applies every reflector in the exact generation-reverse order, and
+// writes it back once. Reordering into larft/larfb blocks is not possible here: the
+// row-sharing reflectors are never contiguous in the product.
+// evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
 //
 // Lane mapping: lane -> (column, row-group), col = lane % C, grp = lane / C,
 // with G = 32/C lanes cooperating per column. Lanes with the same column differ
@@ -720,43 +670,13 @@ Event unmqr_hb2st_tiled(Queue& ctx,
 namespace {
 
 // Per-scalar-type geometry for the wave-parallel back-transform, consulted in
-// unmqr_hb2st after tuning::sb2st_back_*_for_n and before the budget
-// heuristic. 0 means "no opinion" and hands the choice back to the heuristic;
-// that is what every unswept cell returns, including every real type, so real
-// scalars take byte-for-byte the path they took before this helper existed.
-//
-// The heuristic is not type-blind to begin with: its budget is in bytes and
-// per_col is n*sizeof(T), so replaying it at kd=32 gives float (8,4)/(8,8)/
-// (8,16) but cfloat (8,4)/(8,8)/(4,16) at n=256/512/1024. What complex does
-// inherit from float is the 32 KB *budget*, and that is the wrong budget for a
-// kernel that is register bound rather than local-memory bound (stage 2 at
-// n=512 cfloat issues on 35.3% of SM cycles at 49.8% occupancy).
-//
-// Measured, RTX 4090, batch = 512, two-stage eigenvectors, us/matrix:
-//
-//   cfloat n=512   heuristic (tile=8, subs=8) 972.41   (2,4) 855.75   1.136x
-//
-// That is the entire table. cfloat at n=256 and n=1024, and both double types
-// at every n, are UNSWEPT and deliberately return 0 rather than inheriting
-// 512's answer: the float subs table at the call site shows the optimum moving
-// with n (8 wins where a wave holds ~8 reflectors, 16 where it holds ~16), so a
-// single constant stretched across n is a regression waiting to happen. The
-// bucket is an equality for the same reason -- 512 is the only n measured.
-//
-// The missing rows get cheap once sb2st_hh_benchmark registers a complex type:
-// sweep n in {256, 512, 1024} and pass kd positionally, e.g.
-// `sb2st_hh_benchmark 256 1024 32`. The benchmark's default n=256 row is
-// registered with kd=16, which gives subs=8 where the solver's kd=32 gives 4 --
-// sweeping it measures a geometry syev never runs.
-//
-// This is the cheap fraction of the complex stage-2 occupancy problem: it
-// reshapes the launch, it does not touch the kernel. It is NOT additive with a
-// type-aware retiling of unmqr_hb2st_wave, which moves the same occupancy limit
-// and would re-open the geometry question from scratch.
-//
+// unmqr_hb2st after the env knob and BEFORE tuning:: and the budget heuristic. 0
+// means "no opinion"; every unswept cell and every real type returns 0, so real
+// scalars take byte-for-byte the path they took before. Only cfloat n == 512 was
+// measured, so the bucket is an equality; do not stretch it across n.
 // internal::is_complex rather than a base_type/is_same_v dance (the idiom public
-// headers use, where is_complex is not visible): here it is visible
-// (math-helpers.hh, used by conj_if above).
+// headers use, where is_complex is not visible): here it is visible (math-helpers.hh).
+// evidence: docs/perf/sytrd.md#sytrd-sb2st-per-type-wave-geometry
 template <typename T>
 constexpr int32_t sb2st_back_tile_for(int32_t n) {
     if constexpr (internal::is_complex<T>::value) {
@@ -780,8 +700,8 @@ constexpr int32_t sb2st_back_subs_for(int32_t n) {
 }  // namespace
 
 // True for any spelling a user would plausibly write to mean "off", matched
-// case-insensitively. See the call site in unmqr_hb2st for why this is local
-// rather than a widening of util/env.hh's env_falsy.
+// case-insensitively. Local on purpose: env_falsy is not widened.
+// evidence: docs/perf/sytrd.md#sytrd-the-sb2st-wave-knob-spelling-history
 static bool sb2st_wave_disabled(const char* v) {
     if (!v || !*v) return false;  // unset is not "off" -- the default is on
     std::string s(v);
@@ -810,29 +730,11 @@ Event unmqr_hb2st(Queue& ctx,
 
     // Preferred path: resident tile + wave-parallel reflectors. Set
     // BATCHLAS_SB2ST_BACK_WAVE=0 to fall through to the single-sub-group tiled
-    // kernel below (kept for comparison and as a fallback if the tile does not
-    // fit in local memory).
-    //
-    // Read against a local case-folded disable set rather than through
-    // env_falsy/env_int_or. This knob used to be parsed with a local atoi, under
-    // which every non-numeric spelling collapsed to 0, so "=off" and "=false"
-    // disabled the wave path; routing it through the shared helpers inverted
-    // that, because env_falsy matches only {0,false,FALSE,off,OFF} and
-    // env_int_or hands an unparseable value back as the fallback 1 -- so
-    // "=False", "=Off" and "=no" silently turned the wave path *on*. The cost of
-    // that is not a wasted flag: a wave-vs-tiled A/B driven by such a spelling
-    // measures the wave kernel against itself and reports the two paths as
-    // identical.
-    //
-    // env_falsy is deliberately not widened to fix this. Its contract is "exactly
-    // the spellings the six parsers it replaced accepted", and this is the only
-    // knob that wants more; broadening it would quietly change every other call
-    // site's reading of the same strings.
-    //
-    // Anything not in the set enables the wave path, including a typo. That is
-    // the fail-open direction on purpose: a mistyped value must not silently cost
-    // the fast path, and the spellings a user would actually write to mean "off"
-    // are all here.
+    // kernel below (kept for comparison and as the fallback when the tile does not
+    // fit). Parsed against a local case-folded disable set, NOT env_falsy/env_int_or,
+    // which read "=False"/"=Off"/"=no" as ON. Anything else, typos included,
+    // enables the wave path: fail-open on purpose.
+    // evidence: docs/perf/sytrd.md#sytrd-the-sb2st-wave-knob-spelling-history
     const bool want_wave =
         !sb2st_wave_disabled(batchlas::settings().selection.sb2st_back_wave.get());
     if (want_wave) {
@@ -840,31 +742,13 @@ Event unmqr_hb2st(Queue& ctx,
         const size_t per_col = static_cast<size_t>(n) * sizeof(T);
         const int32_t num_waves = static_cast<int32_t>(waves.size()) - 1;
 
-        // With S sub-groups the tile is shared by 32*S threads, so a wider tile
-        // no longer costs occupancy the way it did at S=1; C is chosen to keep
-        // the footprint near a budget rather than as small as possible. Measured
-        // best at 8 columns for every n tried on float (see the subs table
-        // below); cfloat at n=512 wants 2, see sb2st_back_tile_for.
-        // Precedence: the legacy env knob forces a value, then the per-type
-        // constant (0 = no opinion), then the tuned constant (likewise), then
-        // the budget heuristic below. The lmem clamp afterwards applies to all
-        // four.
-        //
-        // The per-type constant sits ABOVE tuning:: deliberately, and the order
-        // is load-bearing rather than cosmetic. tuning:: is generated by
-        // evaluation/tuning/generate_tuning_header.py from the sb2st cases in
-        // spaces/default.json, which sweep back_tile x back_subs at n =
-        // 256/512/1024 -- but the only registration those cases can measure was
-        // BM_SB2ST_HH_BACK<float> until this series added the complex one, so a
-        // retune bakes FLOAT's optimum at n=512, (8,8), into SB2ST_BACK_*_LARGE.
-        // With tuning:: consulted first that constant is non-zero, this helper
-        // is never reached, and cfloat at n=512 silently returns from 856 to 972
-        // us/matrix -- with nothing failing, because no test reaches n = 512
-        // (sytrd_sb2st_hh_tests.cc sweeps n in {16,32,48,160}).
-        //
-        // Putting the per-type constant first costs the harness nothing: it
-        // returns 0 for every real T, so tuning:: still owns every cell the
-        // float bench can actually measure.
+        // Tile width C. Precedence: the legacy env knob, then the per-type constant
+        // (0 = no opinion), then tuning:: (likewise), then the budget heuristic; the
+        // lmem clamp afterwards applies to all four. The per-type constant sits ABOVE
+        // tuning:: deliberately: a float-only retune bakes (8,8) into
+        // SB2ST_BACK_*_LARGE, which would silently regress cfloat n=512, and no test
+        // reaches n = 512.
+        // evidence: docs/perf/sytrd.md#sytrd-the-sb2st-tuning-precedence-trap
         int tile = batchlas::settings().geometry.sb2st_back_tile_w;
         if (tile <= 0) tile = sb2st_back_tile_for<T>(n);
         if (tile <= 0) tile = tuning::sb2st_back_tile_for_n(n);
@@ -877,25 +761,10 @@ Event unmqr_hb2st(Queue& ctx,
         }
         while (tile > 1 && per_col * static_cast<size_t>(tile) > lmem) tile >>= 1;
 
-        // Sub-groups per work-group. More than a wave holds just leaves
-        // sub-groups idle at every barrier, and fewer serialises the wave, so
-        // this tracks the mean wave width (~n/2kd, but read off the schedule
-        // rather than assumed).
-        //
-        // Back-transform alone, RTX 4090, float, ms (rows subs, cols the four
-        // benchmark shapes; tile=8):
-        //           256/1024 512/512 1024/128 1024/256   mean wave
-        //   subs=8      17.1    51.0    123.8    245.0    8.5 / 8.5 / 16.5
-        //   subs=16     20.6    58.5    103.5    207.1
-        // -- 8 wins where waves hold ~8, 16 wins where they hold ~16.
-        //
-        // Same ordering argument as tile above, and note the two are a measured
-        // PAIR: (2,4) was swept together for cfloat at n=512. Forcing only one
-        // of the two env knobs therefore yields a geometry -- e.g. (8,4) from
-        // BATCHLAS_SB2ST_BACK_TILE_W=8 alone -- that was never measured. That is
-        // the knobs' long-standing behaviour and is left alone, but a sweep that
-        // pins one knob and reads the other from the default is not measuring
-        // either optimum.
+        // Sub-groups per work-group: tracks the mean wave width (~n/2kd, read off the
+        // schedule). Same precedence as tile. Tile and subs are a measured PAIR:
+        // forcing only one env knob yields a geometry that was never measured.
+        // evidence: docs/perf/sytrd.md#sytrd-sb2st-back-transform-sub-groups-per-work-group
         int subs = batchlas::settings().geometry.sb2st_back_subs;
         if (subs <= 0) subs = sb2st_back_subs_for<T>(n);
         if (subs <= 0) subs = tuning::sb2st_back_subs_for_n(n);
@@ -928,24 +797,10 @@ Event unmqr_hb2st(Queue& ctx,
     // reflector. Falls back to the streaming kernel below only if even a single
     // column does not fit (very large n).
     {
-        // Two competing costs set the tile width C.
-        //
-        // Holding a column of Z resident already gives the full ~n/2 reuse, so
-        // reuse does NOT grow with C. What does grow is amortisation of the V
-        // reads: V is re-read once per column tile, and at C=1 that alone is
-        // ~292 GB at n=1024/batch=128, which dominates. Pushing C up shrinks
-        // that but grows the local footprint (n*C*sizeof(T)) and so cuts
-        // occupancy -- these are 32-thread work-groups, so a 32 KB tile is
-        // ~1 block/SM.
-        //
-        // Measured on RTX 4090 (back-transform alone, ms):
-        //         C=0(stream)  C=1   C=2   C=4   C=8   C=16
-        //   n=256/b=1024  39.9  109.2  44.8  25.9  27.1   42.8
-        //   n=512/b=512  107.6  184.6 107.0 109.7 174.2  238.3
-        //   n=1024/b=128 420.7  379.5 332.2 396.2 553.6 1391.4
-        //   n=1024/b=256 913.5  752.0 660.5 786.1 1105.7 2782.9
-        //
-        // The optimum tracks a ~8 KB footprint, capped at 4 columns.
+        // Tile width C trades V re-reads (once per column tile) against local footprint
+        // n*C*sizeof(T), which costs occupancy in 32-thread work-groups. The optimum
+        // tracks a ~8 KB footprint, capped at 4 columns.
+        // evidence: docs/perf/sytrd.md#sytrd-sb2st-back-transform-tile-width
         constexpr size_t kTargetLocalBytes = 8192;
         constexpr int kMaxTile = 4;
         const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
@@ -954,11 +809,9 @@ Event unmqr_hb2st(Queue& ctx,
         while (want < kMaxTile && per_col * static_cast<size_t>(want * 2) <= kTargetLocalBytes) {
             want <<= 1;
         }
-        // RAW value, and it must stay raw: 0 is a MEANINGFUL value here -- it
-        // selects the streaming kernel -- so this knob cannot share
-        // env_positive_int_or's "<= 0 means unset" reading with its
-        // near-namesake BATCHLAS_SB2ST_BACK_TILE_W one screen up. They also
-        // drive two DIFFERENT kernels; the name is not an abbreviation.
+        // RAW value, and it must stay raw: 0 is MEANINGFUL (selects the streaming
+        // kernel), so this knob cannot use env_positive_int_or's "<= 0 means unset".
+        // Not an abbreviation of BATCHLAS_SB2ST_BACK_TILE_W: different kernel.
         if (const char* ev = batchlas::settings().geometry.sb2st_back_tile.get()) {
             const int f = std::atoi(ev);
             if (f == 0) goto streaming;   // 0 selects the streaming kernel

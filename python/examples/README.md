@@ -1,4 +1,4 @@
-# BatchLAS Python examples
+# BatchLAS Python examples {#python_examples}
 
 Twelve self-checking notebooks for the `batchlas` Python package. Each one
 explains a slice of the API in prose, then computes something and verifies it

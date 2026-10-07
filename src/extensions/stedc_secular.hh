@@ -5,16 +5,10 @@
 
 namespace batchlas {
 
-// `converged_out` is the flag both of these already computed and then destroyed:
-// sec_solve_ext_roc ended in `(void)converged;` and sec_solve_roc in
-// `assert(converged && ...)`, which is a NO-OP in a release device build -- so a
-// root that never converged produced a silently wrong eigenvalue with no
-// diagnostic anywhere. It is an out-parameter rather than a change of return type
-// because the root itself is the return value and both are needed.
-//
-// It is NOT defaulted: these are SYCL_EXTERNAL, so the flag has to be threaded
-// from every call site by hand, and a default would let a new call site drop the
-// status again without saying so.
+// `converged_out`: whether the root met its tolerance (a release-mode assert used to be
+// the only check). NOT defaulted: these are SYCL_EXTERNAL, and a default would let a
+// new call site drop the status silently.
+// evidence: docs/perf/stedc.md#stedc-convergence-reporting-through-info
 template <typename T>
 SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
                                   const VectorView<T>& D,

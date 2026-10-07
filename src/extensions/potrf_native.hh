@@ -17,7 +17,7 @@
 namespace batchlas::sycl_potrf {
 
 // TINY tier (potrf_tiny.cc): it owns NO local memory, so the ceiling takes no budget argument
-// and is a flat compile-time constant; 0 = absent. evidence: docs/perf/potrf.md#the-tiny-tier
+// and is a flat compile-time constant; 0 = absent. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 template <typename T>
 BATCHLAS_INTERNAL_API int potrf_tiny_max_n();
 
@@ -42,7 +42,7 @@ BATCHLAS_INTERNAL_API Event potrf_tiny_dispatch(Queue& ctx,
 // Per-type CTA capacity for a budget in BYTES: the budget is a device property, and a
 // hardcoded ceiling makes can_run promise an unlaunchable choice. `min_blocks_per_sm`
 // scales it to the ADVERTISED capacity; 1 asks the residency question, which has a different
-// answer. evidence: docs/perf/potrf.md#the-occupancy-rule
+// answer. evidence: docs/perf/potrf.md#potrf-the-occupancy-rule
 template <typename T>
 BATCHLAS_INTERNAL_API int potrf_cta_max_n_for_slm(
     std::size_t slm_budget_bytes,

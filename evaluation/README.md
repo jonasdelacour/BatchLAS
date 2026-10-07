@@ -1,4 +1,4 @@
-# Evaluation
+# Performance regression evaluation {#perf_regression}
 
 This folder contains lightweight evaluation tooling for BatchLAS.
 

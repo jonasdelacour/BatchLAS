@@ -39,7 +39,7 @@ template <typename T> class GetrsPermGatherKernel;
 
 constexpr std::size_t kGetrsPermTileCap = 24576;
 
-// The 48 KB launch hole. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// The 48 KB launch hole. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t kGetrsPermHoleLo = 47104;
 constexpr std::size_t kGetrsPermHoleHi = 49664;
 constexpr std::size_t kGetrsPermHolePadTo = 49920;

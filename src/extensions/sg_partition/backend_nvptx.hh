@@ -8,14 +8,12 @@
 // MATCH.ANY slows with the number of distinct masks in the warp, 32 / P, but
 // ptxas shares one check among the collectives of a basic block.
 // A masked collective narrower than the warp uses the chunk mask by default.
-// BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH instead tests activemask first: if
-// all 32 lanes are here, all will execute the same shfl.sync and the immediate
-// full mask is legal, so ptxas adds no check. That test cannot be shared across
-// collectives, so it wins only where collectives are sparse; in the
-// collective-dense CTA eigensolvers it measured slower than the shared check.
-//
-// The `c` operand's segment mask ((32 - P) << 8) makes idx take the chunk-local
-// lane and makes down/up clamp at the chunk edge.
+// BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH tests activemask first (all 32 lanes here:
+// the immediate full mask is legal, no check). That test cannot be shared across
+// collectives, and in the collective-dense CTA eigensolvers it measured slower.
+// evidence: docs/perf/steqr.md#full-warp-partition
+// The `c` operand's segment mask ((32 - P) << 8) makes idx chunk-local and
+// down/up clamp at the chunk edge.
 
 #include <sycl/sycl.hpp>
 

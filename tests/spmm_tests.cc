@@ -24,7 +24,7 @@ using namespace batchlas;
 // dimensions and strides, and the alpha/beta corners. Fixtures are hand-built:
 // convert_to<CSR> is correct only for SQUARE inputs, so a generated rectangular
 // fixture would compare the kernel against a garbage A.
-// evidence: docs/perf/spmm.md#correctness-findings
+// evidence: docs/perf/spmm.md#spmm-correctness-findings
 
 template <typename T, Backend B>
 struct TestConfig {

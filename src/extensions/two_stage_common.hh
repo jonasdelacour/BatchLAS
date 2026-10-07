@@ -1,16 +1,8 @@
-// Helpers shared by the two-stage reduction paths (syev_two_stage, syevx_direct_subset).
-//
-// NOTE on kd: syev_two_stage no longer forces kd = 1 in either mode -- since
-// sytrd_sb2st_hh retains Q2, it reduces at a real band width and then applies the
-// stage-2 reflectors explicitly. As of the chase fix below, syev_two_stage uses
-// the Householder chase in BOTH modes; eigenvalues-only simply discards Q2.
-// syevx_direct_subset now does the same. Do not assume the value returned by
-// choose_two_stage_kd_for_job is safe for a path that never applies stage-2
-// reflectors.
-//
-// build_phase_from_kd1_band and apply_phase_rows operate on a kd = 1 band regardless
-// of the reduction width -- in syev_two_stage that band is sb2st_hh's tridiagonal
-// output, in syevx_direct_subset it is the sy2sb output directly.
+// Helpers shared by syev_two_stage and syevx_direct_subset. Both run the Householder
+// chase in both jobz modes at a real band width kd: choose_two_stage_kd_for_job is not
+// safe for a path that never applies stage-2 reflectors.
+// build_phase_from_kd1_band / apply_phase_rows act on a kd = 1 band (sb2st_hh's
+// tridiagonal output in syev_two_stage, the sy2sb output in syevx_direct_subset).
 
 #pragma once
 
@@ -30,108 +22,31 @@
 
 namespace batchlas::two_stage_detail {
 
-// Both knobs below spell "a value that does not parse, or parses to <= 0, means
-// unset": a forced band width or block size is meaningless at zero or negative,
-// and these call sites want the computed default there rather than a nonsense
-// launch geometry. That is env_positive_int_or's contract, and settings.cc
-// applies it to both fields with the same literal defaults spelled here, so the
-// parse is unchanged -- only its timing moved.
+// Both knobs below: a value that does not parse, or parses to <= 0, means unset
+// (env_positive_int_or, applied in settings.cc with the same literal defaults).
 
 inline int32_t choose_two_stage_kd(int32_t n) {
-    // Measured with syev_two_stage_benchmark (float, eigenvectors, RTX 4090,
-    // total ms; kd across, n/batch down):
-    //
-    //                kd=16      32      48      64      96   blocked
-    //   128/2048      27.8    23.4    22.8    21.9    19.6     15.0
-    //   256/1024      78.9    65.3    66.9    66.7    72.2     42.4
-    //   512/512      249.5   203.9   223.1   240.0   298.6    193.3
-    //   1024/128     500.1   425.8   443.9   470.0   546.6    481.4
-    //   2048/32     1275.3  1183.4  1259.0  1353.8  1614.0   1265.7
-    //
-    // kd=32 is optimal at every n >= 256. This supersedes an earlier 32/64 split
-    // measured before the wave back-transform landed: back then Q2 dominated and
-    // its cost fell with kd, which pulled the optimum up to 64 at large n. Now
-    // that Q2 is ~3x cheaper the balance is set by stage 1 and the chase, whose
-    // O(n^2 kd) work favours a narrow band, so the optimum came back down.
-    //
-    // Two-stage now *wins* at n >= 1024 (1.13x at n=1024, 1.06x at n=2048) and
-    // still loses below that, where blocked's lower fixed overhead dominates.
-    //
-    // RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8, float,
-    // eigenvectors, total ms, median of 3, one process at a time). kd = 32 IS
-    // STILL THE OPTIMUM -- confirmed at n = 256, 512, 1024 and 2048:
-    //
-    //   n/batch      kd=16   kd=32   kd=48   kd=64   kd=96  kd=128   blocked
-    //   128/2048      27.6    22.0    22.0    21.0    18.5    16.9      14.6
-    //   256/1024      69.5    61.3    64.2    65.7    93.5    75.7      40.9
-    //   512/512      217.7   194.2   216.8   236.1   294.9       -     191.4
-    //   1024/128     445.3   369.9   394.9   433.2   541.3   715.3     475.5
-    //   2048/32     1171    1066    1160    1286    1609    1943       876
-    //
-    // A PREDICTION THIS DISPROVES. It was argued that the kd optimum should move
-    // UP to 96-128 now that f7f3c57 lets the panel back-transform use nb = kd,
-    // since the old split-WY behaviour chopped every band back to 16 and so
-    // structurally penalised wide kd. That is wrong everywhere except n = 128
-    // (where 128 beats 32 by 1.30x, and two-stage loses to blocked anyway). The
-    // reason is visible in the nb A/B at n = 1024, the only shape where
-    // f7f3c57's gate (n >= 1024 && batch >= 32) actually fires:
-    //
-    //   kd            16      32      48      64      96     128
-    //   nb hint on   445.3   369.9   394.9   433.2   541.3   715.3
-    //   nb hint off  453.6   391.1   420.0   448.1   531.0   662.4
-    //   hint gives   1.019x  1.057x  1.064x  1.034x  0.981x  0.926x
-    //
-    // The hint HELPS narrow bands and HURTS wide ones -- exactly as the comment
-    // at sytrd_sy2sb.cc:44 predicts, since LARFT work is O(m*k*nb) and doubles
-    // with nb. So removing the split-WY penalty did not free wide kd; it made
-    // wide kd relatively worse.
-    //
-    // AND THE "two-stage wins at n >= 1024" CLAIM ABOVE IS NOW SHAPE-DEPENDENT.
-    // Grid-latrd (87f6887, default at n >= 768) sped the BLOCKED baseline up
-    // underneath this comparison, and nothing re-checked it:
-    //
-    //   n=2048/32   blocked latrd=legacy 1235.1   grid 875.8   (grid is 1.41x)
-    //               two-stage kd=32      1066
-    //     -> with legacy latrd two-stage wins 1.16x (matching the claim above);
-    //        with today's default grid latrd, BLOCKED wins 1.22x.
-    //   n=1024/128  blocked legacy 475.5, grid 475.7 -- identical, because batch
-    //               128 already saturates the 128 SMs so there is no starvation
-    //               for the grid path to fix. There two-stage wins by 1.29x.
-    //
-    // So: two-stage wins where the batch saturates the device, and loses where it
-    // does not, because that is precisely where grid-latrd rescues blocked. Do
-    // not restate it as a plain "n >= 1024" rule.
+    // kd = 32 is the measured optimum at every n >= 256, eigenvectors included; wide kd
+    // does not win after the split-WY fix. Two-stage beats blocked only where the batch
+    // saturates the device -- do not restate it as a plain "n >= 1024" rule.
+    // evidence: docs/perf/syev.md#syev-the-two-stage-band-width-kd
     const int32_t kd = batchlas::settings().geometry.syev_two_stage_kd;  // default 32
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
 }
 
-// Which stage-2 bulge chase should the eigenvalues-only path use?
-//
-// The Householder chase (sytrd_sb2st_hh) is the default in BOTH modes because it
-// is ~5x faster than the Givens chase on this GPU -- see the note at the call
-// site in syev_two_stage.cc. `BATCHLAS_SYEV_TWO_STAGE_CHASE=givens` restores the
-// old eigenvalues-only behaviour, which is what makes the two an intra-run A/B
-// rather than a comparison across builds. It has no effect in eigenvector mode,
-// where the Givens chase cannot be used at all: it discards Q2.
-//
-// Consumed by both two-stage callers: syev_two_stage and syevx_direct_subset.
-// Both read it in their solve *and* in their *_buffer_size query, so the two stay
-// in lockstep; do not make it stateful or randomize it between the two calls.
+// Values-mode stage-2 chase: Householder by default (Givens is ~5x slower here);
+// BATCHLAS_SYEV_TWO_STAGE_CHASE=givens restores Givens (values only). Read in the solve
+// AND its *_buffer_size query: never make it stateful between the two.
+// evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
 inline bool two_stage_use_givens_chase_for_values() {
     const char* v = batchlas::settings().selection.syev_two_stage_chase.get();
     return v && (std::string_view(v) == "givens");
 }
 
 inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
-    // Eigenvector mode used to force kd=1 because the Givens stage-2 discards
-    // Q2. sytrd_sb2st_hh retains it, so both modes now use a real band width.
-    //
-    // Note the tuning literature has the optimum going *up*, not down, when
-    // eigenvectors are wanted (Gates/Tomov/Dongarra 2018 measure GPU 32/64
-    // without vectors -> 96/128 with; MAGMA's get_nb.cpp uses band nb=128),
-    // because the extra back-transform favours large nb while only stage 2's
-    // O(n^2 nb) work favours small. choose_two_stage_kd is left shared for now;
-    // splitting it is a tuning question, not a correctness one.
+    // Shared by both modes. The literature puts the eigenvector optimum higher; the
+    // measurement here did not, so a per-mode split is a tuning question only.
+    // evidence: docs/perf/syev.md#syev-the-two-stage-band-width-kd
     (void)jobz;
     return choose_two_stage_kd(n);
 }
@@ -198,10 +113,8 @@ inline void apply_phase_rows(Queue& ctx,
     });
 }
 
-// Applies the per-row phase to a real eigenvector block, writing the result in
-// T's own scalar type: for complex T the real column is lifted to (x, 0)
-// before scaling, for real T the phase is just a sign. Used by the
-// eigenvector path, which is now shared between the real and complex cases.
+// Applies the per-row phase to a real eigenvector block, writing T: complex T lifts the
+// real column to (x, 0) before scaling; for real T the phase is a sign.
 template <typename T>
 inline void lift_eigvecs_with_phase(Queue& ctx,
                                     const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,

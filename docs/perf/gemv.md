@@ -1,4 +1,11 @@
-# GEMV: five kernel bodies, the only native tier that is not GPU-gated (WP7 and its repair pass)
+# GEMV: five kernel bodies, and the only native family that is not GPU-gated (WP7 and its repair pass) {#perf_gemv}
+
+> **Covers:** native batched `gemv` (families `cta`, `direct`, `vendor`), its five kernel bodies, the
+> `complex<double>` transposed window in `tuned/gemv.*.txt`, and the correctness record.
+> **Status:** current. Selection is flat (`src/ops/gemv/`); the measurements predate it and are
+> the evidence the transcribed tables reproduce.
+> **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda, unless a section says otherwise.
+> **Measured:** WP7, its repair pass and the WP6/WP7 closure pass (2026-08/09); tables transcribed 2026-10-05.
 
 Native batched `gemv` for all four scalar types and all three `transA`, plus the routing decisions from WP7, its
 repair pass, and the WP6/WP7 closure pass (whose experiment directories are named `wp8_*` — a misnomer; WP8 proper is
@@ -8,57 +15,61 @@ achievable roof**; two cards in the chassis, device 0 drives the display. Ratio 
 
 ## What ships
 
-**Flat selection (phase 5, [flat-kernel-selection.md, Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)).** `route_gemv.hh` and `src/backends/gemv_route.hh`
-are deleted. gemv now decides in `src/ops/gemv/gemv.cc` over the families `cta`, `direct` and `vendor`; the
-`supports()` clauses below are its `can_run()` (plus the x/y length and batch agreement the old shape builder checked),
-and the `preferred()` window is data: `tuned/gemv.<dtype>.{sm_89,sm_120}.txt`, transcribed from the old router with
-grid points on both sides of every edge (red 63/64 and 352/353, out 255/256, batch 319/320), so nearest-row lookup
-reproduces the window exactly. A pin the shape cannot take now throws instead of falling through. The sections below
-describe the deleted code and remain the evidence for the window.
+gemv decides in `src/ops/gemv/gemv.cc` with flat selection (@ref design_flat_selection,
+[Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)). `select::run` takes the first entry of the
+nearest row of `tuned/gemv.<dtype>.<device>.txt` that `can_run` admits; with no table (the CPU never borrows one)
+it takes the last resort, `vendor` then `direct` (`src/ops/gemv/choice.hh:30`). The tables are **transcribed,
+untimed** (`source=transcribed:424a45bc`, `tuned/README.md`): they reproduce the old router's decision at every
+grid point, they are not measurements. The measurements are the rest of this page. @ref selection_tables lists which family
+ranks first where, generated from the same files.
 
-### The route arms
+### The families and their `can_run` terms
 
-`kGemvOrder` (`include/batchlas/blas/dispatch/route_gemv.hh:26-30`) is a **capability ladder, tighter first**, not a
-preference list:
+The vocabulary is `src/ops/gemv/choice.hh:14-18`, in tie-break order. `can_run` is correctness only, never a speed
+cutoff:
 
-| order | Route | `supports()` — correctness only, never a speed cutoff |
-|---|---|---|
-| 1 | `{Native, CTA}` | `cta_available && is_gpu && has_sg32 && transA != NoTrans` (`route_gemv.hh:50-54`) |
-| 2 | `{Native, Direct}` | `direct_available` — **and no `is_gpu` clause at all** (`route_gemv.hh:46`) |
-| 3 | `{Vendor, Auto}` | everything |
+| spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:53-64`) |
+|---|---|---|---|
+| `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | the native term, `gemv_cta_available<T>()`, and `device_allows`: `d.is_gpu && d.has_sg32 && transA != NoTrans` (`choice.hh:25`) |
+| `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | the native term and `gemv_direct_available<T>()` — **and no `is_gpu` term at all** (`choice.hh:27`) |
+| `vendor` | `backend::gemv_vendor` | — | `d.has_vendor` (`choice.hh:26`) |
 
-Both native arms are additionally refused for `heterogeneous_batch` (one launch covers the batch with a single
+The native term (`gemv.cc:55-57`) refuses a heterogeneous `A` (one launch covers the batch with a single
 `(m, n, ld, stride)` tuple, and `VectorView` has no active-size concept, so gemv cannot get gemm's heterogeneous
-walker) and for `m < 0 || n < 0 || batch < 1`. `m == 0 || n == 0` is **not** refused: it is a legal call that
-quick-returns. `has_sg32` is **enumerated** from `sycl::info::device::sub_group_sizes`, never
-`get_property(MAX_SUB_GROUP_SIZE)` (which returns `sub_group_sizes()[0]` and is wrong in both directions — and for a
-kernel carrying `[[sycl::reqd_sub_group_size(32)]]` the "accepted although it has no 32" direction aborts the launch).
+walker), negative extents and `batch < 1`, and requires x and y to agree with A in batch and length (see
+[the shape builder contract](#gemv-the-shape-builder-contract)). `m == 0 || n == 0` is **not** refused: it is a
+legal call that quick-returns. `has_sg32` is **enumerated** from `sycl::info::device::sub_group_sizes` (`Device::supports_sub_group_size`, called by
+`select::describe` at `src/select/select.cc:220`), never `get_property(MAX_SUB_GROUP_SIZE)` (which returns `sub_group_sizes()[0]` and is wrong in both
+directions — and for a kernel carrying `[[sycl::reqd_sub_group_size(32)]]` the "accepted although it has no 32"
+direction aborts the launch).
 
-**The missing `is_gpu` gate is the work package.** `tests/gemv_tests.cc` instantiates
+**The missing `is_gpu` term is the work package.** `tests/gemv_tests.cc` instantiates
 `GemvMatrixViewTest` over eight configurations — `/0..3` are `Backend::NETLIB` on a
-`native_cpu Device("cpu")` queue, `/4..7` are `Backend::CUDA`. (The file as it now stands runs
+`native_cpu Device("cpu")` queue, `/4..7` are `Backend::CUDA`. (The file as it stood at WP7 ran
 **264 tests from 16 suites**, once `GemvCoverageTest`'s eight are counted.) A GPU-gated native `gemv`
 closes 20 of the 40 vendor-free failures, leaves the suite red, and moves the vendor-free burn-down by **zero**.
 `src/sycl/gemv_native.cc` is therefore compiled for the `native_cpu` target too, and bodies 1 and 2 use no collective,
 no local memory and no required sub-group size. Vendor-free `gemv_tests`: **40 FAILED → 0** (264/264 after the repair
-pass, in both builds). The layout fact that inverts the usual intuition: column-major `A(i,j)` at `i + j*ld`, one
-work-item per output element ⇒ **`NoTrans` is already fully coalesced and needs no collective; it is
+pass, in both builds). That is also why the last resort ends in `direct`: a vendor-free CPU queue has no table and no
+vendor, and `direct` is what runs. The layout fact that inverts the usual intuition: column-major `A(i,j)` at
+`i + j*ld`, one work-item per output element ⇒ **`NoTrans` is already fully coalesced and needs no collective; it is
 `Trans`/`ConjTrans` that wants the sub-group reduction.**
 
 ### The five kernel bodies
 
-| body | kernel | route | shape | decomposition |
+| body | kernel | family | shape | decomposition |
 |---|---|---|---|---|
-| 1 | `GemvDirectNKernel<T>` | `{Native, Direct}` | `NoTrans` | one work-item per output row |
-| 2 | `GemvDirectTKernel<T>` | `{Native, Direct}` | `Trans`/`ConjTrans` | one work-item per output column — **the portable arm**. Bodies 1 *and* 2 are what run on `native_cpu`: body 1 for `NoTrans`, body 2 for the transposed spellings |
-| 3 | `GemvCtaTKernel<T>` | `{Native, CTA}` | transposed, GPU, enumerated sg 32 | one 32-lane sub-group per output, `shift_group_left` ladder |
-| 4 | `GemvSegNKernel<T,W>` | `{Native, Direct}` | `NoTrans`, `out_len <= 16`, sg 32 | `W = 32/out_len` lanes per output, one sub-group per batch item, fold at stride `out_len` |
-| 5 | `GemvSegTKernel<T,W>` | `{Native, CTA}` | transposed, short reduction, sg 32 | `W` outputs per sub-group, `L = 32/W` lanes each, fold at stride 1 |
+| 1 | `GemvDirectNKernel<T>` | `direct` | `NoTrans` | one work-item per output row |
+| 2 | `GemvDirectTKernel<T>` | `direct` | `Trans`/`ConjTrans` | one work-item per output column — **the portable arm**. Bodies 1 *and* 2 are what run on `native_cpu`: body 1 for `NoTrans`, body 2 for the transposed spellings |
+| 3 | `GemvCtaTKernel<T>` | `cta` | transposed, GPU, enumerated sg 32 | one 32-lane sub-group per output, `shift_group_left` ladder |
+| 4 | `GemvSegNKernel<T,W>` | `direct` | `NoTrans`, `out_len <= 16`, sg 32 | `W = 32/out_len` lanes per output, one sub-group per batch item, fold at stride `out_len` |
+| 5 | `GemvSegTKernel<T,W>` | `cta` | transposed, short reduction, sg 32 | `W` outputs per sub-group, `L = 32/W` lanes each, fold at stride 1 |
 
-**A route column cannot tell you which body ran.** `{Native, Direct}` names bodies 1/2/4 and `{Native, CTA}` names
-bodies 3/5; those choices are decompositions, not algorithms, and are deliberately kept below the routing vocabulary
-(putting them in `supports()` would be a speed cutoff in the predicate that carries correctness only, and would
-re-introduce the GPU gate). What *can* separate them: `gemv_seg_trans_width_debug` (test-only, resolving through the
+**A spelling cannot tell you which body ran.** `direct` names bodies 1/2/4 and `cta` names bodies 3/5, and the
+`BATCHLAS_SELECT_TRACE` line and the coverage `chosen_algo` column carry only the spelling. The choice of body is a
+decomposition, not an algorithm, and is deliberately derived inside the driver rather than made a family or a field
+(`choice.hh:18`): putting it in `can_run` would be a speed cutoff in the predicate that carries correctness only, and
+would re-introduce the GPU gate. What *can* separate them: `gemv_seg_trans_width_debug` (test-only, resolving through the
 **same** gate function the launcher calls) and breaks that are red for one body and green for the other.
 
 All five declare **zero bytes of local memory**, static and dynamic: no `local_accessor` is created anywhere in the
@@ -72,43 +83,49 @@ measured **58.03 s absent vs 57.59 s present**, body 5's 12 measured **+0.26 s /
 spread). *(`repair/README.md` writes "5 instantiations per scalar type — 40 extra entry functions" in one sentence;
 `linktime.sh` and `wp8_gemv/README.md` §12 both say "twenty", and 5 × 4 = 20. Twenty is the number.)*
 
-### The shipped `preferred()` window
+### The cdouble window in the tables
 
-**The WP7 exploration notes say `preferred()` ships all-false. That is no longer what ships.**
-`experiments/wp7_gemv/ab/README.md`, `experiments/wp7_gemv/audit/README.md` §5 and the WP7 and "WP7 REPAIR PASS"
-sections of `VENDOR_INDEPENDENCE_PLAN.md` all recommend and record all-false — and so does `route_gemv.hh`'s own
-`---- MEASURED WINDOW ----` preamble, which still opens **"ALL-FALSE, AND THAT IS A RESULT, NOT AN OMISSION"** two
-hundred lines above the `WP8 ROUTING PASS` block that supersedes it. What is *not* stale: the plan's summary row
-(`VENDOR_INDEPENDENCE_PLAN.md:25`) and its "WP6/WP7 performance-closure pass" section both state the shipped clause
-correctly. The closure pass re-searched the clause family with `batch` as a first-class term and landed a window.
-The code is the authority:
+The tables key on `trans:exact out:log red:log batch:log` (`choice.hh:34`); `out` and `red` are y's and x's lengths,
+which swap with `transA` (`gemv.cc:27-35`), and ConjTrans folds to `T` (`gemv.cc:37-44`). The grid
+(`choice.hh:37-39`) puts points on both sides of every edge of the measured window — `out` 255/256, `red` 63/64 and
+352/353, `batch` 319/320 — so nearest-row lookup reproduces the window's edges exactly. What the rows say, read off
+`tuned/gemv.<dtype>.sm_89.txt` (1408 rows each; the sm_120 tables are the same transcription and hold the same
+rankings):
 
-```cpp
-// include/batchlas/blas/dispatch/route_gemv.hh:60-71
-static bool preferred(Route r, const GemvShape& s) {
-    if (!is_native(r) || r.algo != Algorithm::CTA) return false;
-    if constexpr (std::is_same_v<T, std::complex<double>>) {
-        if (s.transA == Transpose::NoTrans) return false;
-        const int64_t red = s.red_len();   // == A.rows() under Trans
-        const int64_t out = s.out_len();   // == A.cols() under Trans
-        return red >= 64 && red <= 352 && out >= 256 && s.batch >= 320;   // :68
-    }
-    return false;
-}
-```
+| rows | ranking | where |
+|---|---|---|
+| 48, `complex<double>` only | `cta \| vendor \| direct` | `trans=T`, `red` ∈ {64, 128, 352}, `out` ∈ {256, 1024, 4096, 32768}, `batch` ∈ {320, 1024, 8192, 32768} |
+| every other `trans=T` row, all four types | `vendor \| cta \| direct` | |
+| every `trans=N` row | `vendor \| direct` | `cta` cannot run `NoTrans` |
 
-**`complex<double>` only, `{Native, CTA}` only, `transA != NoTrans`, `64 <= red_len() <= 352`, `out_len() >= 256`,
-`batch >= 320`.** `float`, `double` and `complex<float>` are all-false at every shape, and so is the `Direct` tier.
-`red_len()` is `n` under `NoTrans` and **`m` under `Trans`/`ConjTrans`**; the measured band is on `m`, so a predicate
-written on `out_len()` tests the wrong extent and *inverts* the window — an error caught twice during WP7.
+So with the vendor present, **`cta` ranks first only for `complex<double>`, `transA != NoTrans`, `64 <= red_len <= 352`,
+`out_len >= 256`, `batch >= 320`** — the measured window below. `float`, `double` and `complex<float>` go to the vendor
+at every shape, and `direct` never ranks first anywhere while the vendor can run. Vendor-free, the walk skips `vendor`
+and the same rows give `cta` on every transposed GPU call and `direct` everywhere else. The band is on `red_len`, which
+is `n` under `NoTrans` and **`m` under `Trans`/`ConjTrans`**: a window written on `out_len` tests the wrong extent and
+*inverts* the window — an error caught twice during WP7, and the reason `key_of` names both lengths rather than `m`
+and `n`. `tests/gemv_candidates_tests.cc` (`GemvTranscribedTable.RowsHoldTheOldPreference`) checks the rows against
+the old preference.
+
+**Before flat selection** the same decision was a route table, `include/batchlas/blas/dispatch/route_gemv.hh`: a
+capability ladder `kGemvOrder` of `{Native, CTA}`, `{Native, Direct}`, `{Vendor, Auto}` whose `supports()` clauses are
+now `can_run`, and a `preferred()` predicate holding the `complex<double>` clause above, read by a shape builder
+(`src/backends/gemv_route.hh`). Both were deleted in flat selection phase 5 (@ref design_flat_selection). The WP7
+exploration notes (`experiments/wp7_gemv/ab/README.md`, `audit/README.md` §5, the WP7 and "WP7 REPAIR PASS"
+sections of `VENDOR_INDEPENDENCE_PLAN.md`) all recorded an *all-false* `preferred()`; the closure pass re-searched
+with `batch` as a first-class term and landed the window, which the plan's summary row
+(`VENDOR_INDEPENDENCE_PLAN.md:25`) and its "WP6/WP7 performance-closure pass" section state correctly.
 
 ### The sub-route gates
 
-Body 4 (`src/sycl/gemv_native.cc:75-80`): `W = gemv_seg_width(out_len)`, the largest power of two with
+Inside the two native families the drivers pick a body; these gates are kernel-internal and are not keys, families
+or `can_run` terms. Body 4 (`gemv_seg_width`, `src/sycl/gemv_native.cc:76-81`, used by `gemv_native_direct`
+at `:701-714`): `W = gemv_seg_width(out_len)`, the largest power of two with
 `W*out_len <= 32`; `W == 1` means "no segmentation available", so **body 4 serves `out_len <= 16`** and body 1 takes
 17 and above. It also requires `Device::supports_sub_group_size(32)` — false on `native_cpu`, which is why the 20
-NETLIB rows keep body 1. Body 5 (`src/sycl/gemv_native.cc:88-387`) has three gates, all on `red_len()` and never on
-`out_len()`, all transcribed cell by cell from a CSV rather than derived from an inequality:
+NETLIB rows keep body 1. Body 5 (`src/sycl/gemv_native.cc:83-107`, applied by `gemv_seg_trans_width`) has three gates,
+all on `red_len()` and never on `out_len()`, all transcribed cell by cell from a CSV rather than derived from an
+inequality:
 
 | gate | float | complex&lt;float&gt; | double | complex&lt;double&gt; |
 |---|---|---|---|---|
@@ -117,19 +134,27 @@ NETLIB rows keep body 1. Body 5 (`src/sycl/gemv_native.cc:88-387`) has three gat
 | 3 — floor on `out_len*batch` | `16*CU` in the `W = 8` band, `64*CU` in the `W = 4` band (2048 / 8192 here) | | | |
 
 `W ∈ {2, 4, 8}` is instantiated; `W = 2` exists only so `BATCHLAS_GEMV_SEGT=2` keeps meaning `W = 2` rather than
-silently resolving elsewhere. Environment: **`BATCHLAS_GEMV_ROUTE`** (`direct` / `cta` / `native` / `vendor`) selects
-the route; **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) selects the body-5 spelling and bypasses all three
-gates. The latter is re-read on **every launch and never latched** — a latched presence flag has been a blind guard
-eleven times in this campaign. Two silent traps, both measured:
+silently resolving elsewhere. Environment:
 
-* A bare `BATCHLAS_GEMV_ROUTE=native` resolves to the first **supported** native route — `Direct` for `NoTrans`, for a
-  CPU device, and for a GPU without an enumerated 32. **76 of 104 decisions in `gemv_tests` land on Direct.** Pin
-  `native:cta` / `native:direct` explicitly.
-* Pinning a route the shape cannot take does **not** fail and does **not** warn: `resolve_route` falls through to
-  `automatic()`, which is the **vendor** in a vendor-present build and `native:direct` in a vendor-free one. Measured:
-  `native:cta` on `NoTrans` shapes sends 76 of 136 decisions to cuBLAS/OpenBLAS while the operator believes CTA is
-  pinned; a misspelled value behaves identically, because `ParsedRouteEnv::unparsed` is discarded (campaign-wide, not
-  a gemv invention). **The resolved-route column is the only way to know which arm ran.**
+* **`BATCHLAS_GEMV_ROUTE`** pins the family, parsed by `select` like every op's pin: `auto`, `native`, `vendor`,
+  or a spelling (`cta`, `direct`). `native` takes the first non-vendor entry of the row that can run — `cta` on a
+  transposed call on a GPU with an enumerated 32 (every `trans=T` row lists `cta` before `direct`), `direct` for
+  `NoTrans`, on a CPU or without a 32. **A spelling the shape cannot take throws `invalid_argument`**
+  (`src/select/select.hh:402-407`): `cta` on a `NoTrans` call is an error, not a silent reroute, and so is a
+  misspelling. Only `native` or `vendor` with nothing of their class runnable falls back to Auto, with a warning.
+* **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) selects the body-5 spelling inside `cta` and bypasses all three
+  gates. It is read from `settings()` on **every launch and never latched** (`gemv_segt_mode`,
+  `src/sycl/gemv_native.cc:116-124`) — a latched presence flag has been a blind guard eleven times in this campaign.
+
+**Before flat selection, the pin had two silent traps, both measured.** A bare `BATCHLAS_GEMV_ROUTE=native` resolved
+to the first **supported** native route in ladder order — `Direct` for `NoTrans`, for a CPU device, and for a GPU
+without an enumerated 32: **76 of 104 decisions in `gemv_tests` landed on Direct.** And pinning a route the shape
+could not take neither failed nor warned: `resolve_route` fell through to `automatic()`, the **vendor** in a
+vendor-present build and `native:direct` in a vendor-free one. `native:cta` on `NoTrans` shapes sent 76 of 136
+decisions to cuBLAS/OpenBLAS while the operator believed CTA was pinned; a misspelled value behaved identically,
+because `ParsedRouteEnv::unparsed` was discarded (campaign-wide, not a gemv invention). Both are gone: the
+select pin throws instead. The lesson that survives: **the spelling in the trace or coverage row is the only record
+of which family ran**, and it still does not name the body.
 
 ## Evidence for each boundary
 
@@ -158,11 +183,11 @@ reads 936–941 GB/s for *all four* types at matched bytes.
 The dip is a **discrete kernel-selection switch inside cuBLAS**, not a gradient: at `out_len 512, red_len 128,
 cdouble, Trans` its throughput is 894.9 / 919.4 / 930.1 GB/s at batch 128 / 192 / 256, then 360.4 / 359.7 / 363.1 /
 358.4 at batch 320 / 384 / 448 / 512. One batch rung, a 2.6× fall, and it stays fallen. That is why no function of
-`n*batch` and no power law `n^a*batch` can describe it, and why the shipped predicate names `batch` outright.
+`n*batch` and no power law `n^a*batch` can describe it, and why the window has a `batch` edge of its own (the tables' `batch` 319/320 grid points).
 
 **The finer grid puts the rung one step lower than the shipped floor.** `g6_fit2_p1.csv` walks the same shape through
 `batch 288` and reads the vendor at **359.3 GB/s** there against 931.3 at batch 256 — so the switch is between 256 and
-288, and 320 is one measured rung *above* it. See [open-debts](#open-debts): 288 is not a bracketed boundary, it is a
+288, and 320 is one measured rung *above* it. See [the open debts](#gemv-open-debts): 288 is not a bracketed boundary, it is a
 threshold the search never enumerated.
 
 Every boundary, with the measured non-winner that brackets it:
@@ -198,8 +223,8 @@ reproduces to 1.6%. Native-vs-native A/B ran on device 0; every vendor-facing ta
 Three more hygiene rules this campaign paid for, all encoded in the harnesses and all easy to skip:
 **(1)** `rel_sd` does **not** catch contention — a contended row can have a *low* relative standard deviation, which
 is why every parity and prize row carries a per-device foreign-process count instead. **(2) Campaign trap 2:** the A/B
-harness resolves and prints the route *in its own TU*, so it must be rebuilt after any `preferred()` change or the
-route column lies (`ab/build.sh`; the audit rebuilt it before starting). **(3)** A foreign rebuild of
+harness resolves and prints the route *in its own TU*, so it must be rebuilt after any change to the decision (then
+`preferred()`, now a table or `can_run`) or the route column lies (`ab/build.sh`; the audit rebuilt it before starting). **(3)** A foreign rebuild of
 `libbatchlas_sycl.so` landed mid-sweep during the audit — two `prize_p1.csv` rows died with `invalid ELF header` —
 and that was disclosed and *checked* rather than assumed away: the native arm's own timings agree across the boundary
 to a median of **1.0010** and a worst of 1.054 over 197 paired cells, and all 15 blockers were re-run against the
@@ -254,7 +279,7 @@ at `m = 70`, so this is a live layout, not a hypothetical.
 
 ### The body-4 gate
 
-The family body 4 fixed: `{Native, Direct}`, `NoTrans`, `out_len < 32`, **0.08×–0.38× of cuBLAS on 13 cells**, worst
+The family body 4 fixed: the `direct` family (then `{Native, Direct}`), `NoTrans`, `out_len < 32`, **0.08×–0.38× of cuBLAS on 13 cells**, worst
 `cfloat out=1 red=2048 batch=512` at 0.08 (vendor 1206.9 GB/s vs native 99.2), reproduced on three passes to ±0.02×.
 Two independent effects, **both stopping exactly at 32 lanes**, both from `ncu` (`cdouble`, `red_len 2048`,
 `batch 512`):
@@ -297,8 +322,9 @@ bandwidth that a streaming kernel never sees.
   is at **924.7 GB/s** — the roof — for 0.97/0.97. The auditor's out-of-sample grid refuted it separately at
   `m=96, n=192, batch=1024` (0.97/0.97, cuBLAS 925 GB/s).
 * **`A >= 256 MB` instead of a batch term. REFUTED by a cell** — 0.9628 at `out 512, red 128, batch 256`, which *is*
-  256 MB; that is the answer to "isn't batch just a proxy for size". An **L2-residency gate is separately forbidden**
-  (`route_gemv.hh:60-71`) and the data agrees: the dip switches on at 537 MB for one shape and 134 MB for another,
+  256 MB; that is the answer to "isn't batch just a proxy for size". An **L2-residency gate is separately ruled out**
+  (`can_run` carries correctness only, and the table keys, `choice.hh:34`, have no footprint term) and the data
+  agrees: the dip switches on at 537 MB for one shape and 134 MB for another,
   while 268 MB shows none — all far above the 72 MB L2.
 * **`64 <= m <= 320 && A >= 512 MB`: survives "do no harm" and fails the gate anyway.** On both the fitted grid
   (admits 34) and the auditor's out-of-sample grid (admits 18) its worst cell is **1.01×** and nothing is below
@@ -361,11 +387,53 @@ bandwidth that a streaming kernel never sees.
   a grid whose minimum `red_len` was 64. Walking `red_len` to 1 shows every type collapsing below the warp width,
   because body 3 puts 32 lanes on the reduction whatever its length: at `red_len 8`, body 3 runs 261 GB/s for float
   and 450 for cfloat against a 950 roof, where body 5 is worth 5.91× and 3.98×.
-* **The `latrd` `symv` opportunity is not this work package** (a different kernel), and **per-call route resolution is
-  not a regression**: 0.164 µs total (0.077 µs `sub_group_sizes`, 0.067 µs `getenv` plus two `std::string`
-  constructions), 2–3% of a minimal batched launch.
+* **The `latrd` `symv` opportunity is not this work package** (a different kernel), and **per-call route resolution
+  was not a regression**: the deleted resolver measured 0.164 µs total (0.077 µs `sub_group_sizes`, 0.067 µs `getenv`
+  plus two `std::string` constructions), 2–3% of a minimal batched launch. The device facts are now memoized by
+  `select::describe` and the pin comes from the `settings()` snapshot, so neither query repeats per call.
 
-## Correctness findings
+## GEMV: the shape builder contract
+
+`src/ops/gemv/gemv.cc` holds the rules a shape builder (`gemv_op_shape` in `src/backends/gemv_route.hh`, deleted in
+flat selection phase 5) used to enforce. The contract, as it is now:
+
+* **The native term of `can_run` is the only agreement check in the tree** (`gemv.cc:55-57`): A homogeneous,
+  `batch >= 1`, x and y matching A in batch, `X.size() == red_len` and `Y.size() == out_len`. There is no
+  `gemv_validate_params`: the public entry has never validated anything, and WP7 deliberately did not add a throw (it
+  would turn silent bugs into crashes in live paths, and make WP7 unattributable for them). So the checks are not
+  duplicated safety; they are the only thing between a non-conforming call and a native kernel indexing off the end
+  of a buffer, and their answer is "only `vendor` can run it", which is where every such call went before WP7 (the
+  builder said it by returning `nullopt`). In a vendor-free build nothing can run it and `select::pick` throws
+  `NoRouteError`. One non-conforming call is live and known — see [The known bad caller](#the-known-bad-caller).
+* **Batch agreement.** cuBLAS's strided-batched call reads `A.batch_size()` items out of all three views with each
+  view's own stride, so a disagreement is a buffer overrun in the vendor too; but the vendor is where it went before,
+  and moving the failure onto a new kernel would have made WP7 own it.
+* **`can_run` never dereferences `data_ptr()`.** `rows()`, `cols()`, `size()`, `batch_size()` and
+  `is_heterogeneous()` are metadata; a data read is an immediate segfault in a sizing path.
+* **Lengths swap with `transA`**: `red_len` is `n` under `NoTrans` and `m` otherwise, `out_len` the other one
+  (`out_len`/`red_len`, `gemv.cc:27-35`). The table keys are these lengths, not A's extents.
+* **The coverage row's backend is set**, by `select::run` (`src/select/select.hh`), so no gemv row reads
+  `Backend::AUTO` (trsm's deleted builder never set it; see the TRSM page's open debt 18).
+* **Field mapping.** The coverage row keeps the builder's mapping (`gemv.cc:86-88`): `m` and `n` are A's extents as
+  stored, not as transposed, and `k` repeats `m` so `max_dim()`/`min_dim()` range over the two real extents rather
+  than over a zero.
+* **`transA` is the field that separates gemv's kernels, and its omission would be silent.** It is a table key
+  (`trans:exact`) and `coverage.cc`'s `variant_key` carries it; the two values are not a flag on one kernel but body 1
+  versus bodies 2/3 — different access patterns, families and measured behaviour (the one cuBLAS slow region in the
+  whole baseline is `Trans`-only). Dropping it from the coverage row collapses them into one first-writer-wins row and
+  makes `route_diff` blind to the distinction.
+* **`has_sg32` is enumerated**, via `Device::supports_sub_group_size` walking `sycl::info::device::sub_group_sizes`,
+  never `get_property(MAX_SUB_GROUP_SIZE)` (see [the families](#the-families-and-their-can_run-terms) for why that is
+  wrong in both directions).
+* **Only `A` can be heterogeneous.** `VectorView` has no active-size concept, which is also why gemv cannot have
+  gemm's heterogeneous walker.
+* **Capabilities are asked of the kernel TU** (`gemv_direct_available`, `gemv_cta_available`), so `can_run` describes
+  the build and not the design.
+* **The environment read is `select`'s**: `BATCHLAS_GEMV_ROUTE` is parsed like every other op's pin (see
+  [the sub-route gates](#the-sub-route-gates)), and `BATCHLAS_GEMV_SEGT` is read by the driver, not by selection.
+  No legacy gemv variable ever shipped.
+
+## GEMV: correctness findings
 
 Across every timed sweep here `relerr` is exactly 0 (468 baseline rows, 840 A/B rows, 2052 audit rows, 1152 repair
 rows) — **and that is not evidence of numerical quality.** The A/B harness generates `h * 0.0625` for `h ∈ [0,16]`, so
@@ -380,7 +448,7 @@ quick-returns on `m == 0 || n == 0 || (alpha == 0 && beta == 1)` and leaves `y` 
 wrong answer. `A` is also never read when `alpha == 0`, so a NaN in `A` cannot leak into `y = beta*y`. The two halves
 of the quick return are tested on *opposite arms*, each where the launch could actually write: `n == 0` under
 `NoTrans`, `m == 0` under `Trans` (under `NoTrans`, `m == 0` gives an empty launch and the test would be vacuous).
-**(2)** **No `__restrict__` on any pointer** — `ortho.cc:227-232` passes `A_i` and `A_next` as views into the *same*
+**(2)** **No `__restrict__` on any pointer** — `ortho.cc:198-203` passes `A_i` and `A_next` as views into the *same*
 allocation; they are element-disjoint but alias at the object level, and `__restrict__` promises about the object.
 
 ### Blind guards found and closed
@@ -391,13 +459,13 @@ allocation; they are element-disjoint but alias at the object level, and `__rest
    complex cross-term, got `ConjTrans` backwards, or ignored `ld`/`xinc`/`yinc` passed all forty. Measured: breaks
    `cross`, `conj`, `ld`, `xinc`, `yinc`, `segld`, `segxinc`, `segyinc` each leave all 40 **green** while turning
    coverage cases red (`cross` 84/0, `segld` 20/0, `segxinc` 16/0, `segyinc` 20/0). `ConjTrans` is the **live
-   production path** — `ortho.cc:119-121` selects it for **both** complex types (`ab/README.md` says "all four", but
+   production path** — `ortho.cc:123-124` selects it for **both** complex types (`ab/README.md` says "all four", but
    the ternary is `std::is_same_v<T, std::complex<float_t>> ? ConjTrans : Trans`, and only on the `NoTrans` arm) —
    and it had no coverage and no measurement at all.
 2. **The ninth blind guard — the natural batch stride.** All 232 cases in the suite as it then stood (40 pre-WP7 +
    192 new) used `a_stride == ld*n`,
    `x_stride == size*inc`, `y_stride == size*inc`, so a kernel that *derived* each stride rather than reading it from
-   the view passed the whole suite — while `ortho.cc:218-220` hands the native path `A.stride() == m*A.cols()` against
+   the view passed the whole suite — while `ortho.cc:189-191` hands the native path `A.stride() == m*A.cols()` against
    a view whose `ld*cols` is `m*i`, every CGS iteration. Four `stride_pad` cases, one per body; break `padstride`
    turns exactly 32 red, nothing else.
 3. **The twelfth blind guard — no guard band past `y`.** Body 5's tail sub-group covers `W` outputs and can run past
@@ -406,13 +474,17 @@ allocation; they are element-disjoint but alias at the object level, and `__rest
    looking. `run_case` now allocates 64 elements of guard, poisons them before the call and asserts them untouched
    after; `segTtailwrite` and `segTclampoff2` then turn exactly the three partial-tail cases red
    (`out_len*batch mod W != 0`) and nothing else.
-4. **`tests/route_vocabulary_tests.cc` had zero `Op::gemv` assertions** and did not include `route_gemv.hh`. Proved
-   blind from two directions before being closed: vendor-present, **all 114 `gemv` decisions in a full `ctest` capture
-   resolve to `vendor:auto`**, so no vendor-present test could observe the table at all; vendor-free, pinning
-   `native:direct` removes the CTA kernel from every decision and all `gemv_tests` still pass. It now covers all three
-   CTA gates, the Direct arm's absent `is_gpu` clause, `kGemvOrder`, the `out_len()`/`red_len()` swap, the
-   all-false-for-three-types claim, and every boundary of the cdouble window from both sides — arming proved by 7
-   breaks including `unarmed` (the V1 trap itself).
+4. **The route-table test (`tests/route_vocabulary_tests.cc`, since deleted) had zero `Op::gemv` assertions** and
+   did not include `route_gemv.hh`. Proved blind from two directions before being closed: vendor-present, **all 114
+   `gemv` decisions in a full `ctest` capture resolved to `vendor:auto`**, so no vendor-present test could observe the
+   table at all; vendor-free, pinning `native:direct` removed the CTA kernel from every decision and all `gemv_tests`
+   still passed. It then covered all three CTA gates, the Direct arm's absent `is_gpu` clause, the ladder order, the
+   `out_len()`/`red_len()` swap, the all-false-for-three-types claim, and every boundary of the cdouble window from
+   both sides — arming proved by 7 breaks including `unarmed` (the V1 trap itself). The same ground is now held by
+   `tests/gemv_candidates_tests.cc`: `GemvDeviceAllows.CtaNeedsAGpuWithSubGroup32AndATransposedCall` (the `cta`
+   device term and `direct`'s missing GPU term), `GemvTranscribedTable.RowsHoldTheOldPreference` (the window's rows),
+   `AutoReadsTheTranscribedTable` / `AutoReadsEveryKeyField` / `TraceKeyOutRedFollowTrans` (the walk reads every key,
+   and `out`/`red` swap with `trans`) and `CanRunFalsePinsThrow`.
 
 Two anti-vacuity devices are worth keeping. `SegTransCasesAreReachable` **skips with a message naming the numbers**
 when `16*CU`/`64*CU` exceed the body-5 cases' own `out_len*batch` (2385 and 8288) — on a bigger device every body-5
@@ -435,8 +507,8 @@ Recorded rather than dropped, because each is a claim about what a test *cannot*
 The armed breaks were each applied, rebuilt in `build-novendor`, run and reverted: **14** against body 4 and **24**
 against body 5 (`breaks_kernel.py`, `breaks_body5.py`); 13 and 21 of them turn cases red and the rest are the green
 ones tabled above. Between them they cover `ld`, `xinc`, `yinc`, the three per-view batch strides, the lane map, both folds (real and complex
-are separate code), the write mask, conjugation, `alpha`/`beta`, and every gate edge. Three route-clause breaks guard
-the shipped window: `gemv_axisswap` (spells the band on `out_len`, inverting it), `gemv_nobatch` (drops the batch
+are separate code), the write mask, conjugation, `alpha`/`beta`, and every gate edge. Three breaks of the then-`preferred()` clause guarded
+the window the tables now transcribe: `gemv_axisswap` (spells the band on `out_len`, inverting it), `gemv_nobatch` (drops the batch
 floor, admitting 0.9562) and `gemv_alltypes` (drops the type gate, admitting 0.9340 / 0.9722 / 0.6644). Notable
 single-case arming: `segwidth34` (an off-by-one in `w * 2 * out_len <= 32`, made 34) turns **only**
 `SegmentGateBoundaryNoTranspose` red, `out_len == 17` being the only length with `32 < 2*out_len <= 34`; `segfold` is
@@ -446,11 +518,12 @@ Trans conjugates too) exactly the 20 complex plain-Trans cases, since one break 
 
 ### The known bad caller
 
-`src/extensions/ortho.cc:216-224`'s `transA = Trans` branch builds `A_i` as `i × m` with `ld = m` and passes
+`src/extensions/ortho.cc:189-194`'s `transA = Trans` branch builds `A_i` as `i × m` with `ld = m` and passes
 `A(Slice(), i)` — a column of length `A.rows()` — as `x`, so the lengths agree only in the accidental case
 `A.rows() == m`. **It is structurally wrong today, under the vendor**, and WP7 deliberately neither fixed it nor threw
 on it (a new host-level validation throw would turn today's silent misbehaviour into a crash in a live path). The
-length checks in `gemv_op_shape` (`src/backends/gemv_route.hh:73-75`) guarantee it returns `nullopt` → the vendor,
+length checks, once in `gemv_op_shape` (`src/backends/gemv_route.hh`, deleted in flat selection phase 5) and now the
+native term of `can_run` in `src/ops/gemv/gemv.cc`, make both native families unrunnable for it, so it goes to the vendor,
 i.e. it keeps going exactly where it went before WP7 rather than becoming a native out-of-bounds read. Fixing it needs
 the right `A_i`, an `A_next` that is the *i*-th vector rather than the *i*-th column, and an
 `ortho(..., Transpose::Trans)` test that checks orthogonality of the **rows** — which `ortho_tests` does not have,
@@ -459,11 +532,12 @@ which is why it survived. Otherwise what the library issues is fine: over the 56
 **1.14×**, and 49 of 56 are at or above cuBLAS — the 0.08× family needed a short *output*, and `ortho` only ever gives
 the `NoTrans` body a short *reduction*.
 
-## Open debts
+## GEMV: open debts
 
-* **The clause's upper batch and `out_len` corners are unbracketed.** Nothing in the fitting grids was measured above
+* **The window's upper batch and `out_len` corners are unbracketed.** Nothing in the fitting grids was measured above
   `batch 1024` or `out_len 2048` (confirmed by reading `g6_fit{,2}_p*.csv`: max batch 1024, max `out_len` 2048), yet
-  the predicate admits every batch above 320 and every `out_len` above 256. A cell list exists for the **batch** half
+  the tables rank `cta` first at every batch above 320 and every `out_len` above 256 (their `cta` rows run to
+  `out=32768`, `batch=32768`, and nearest-row lookup carries larger shapes to them). A cell list exists for the **batch** half
   — grid J, `out_len` 256/512 × `red_len` 64/128/256 × batch 2048/4096/8192 — and was not run; **nothing at all
   brackets `out_len` above 2048**, not even as a cell list.
 * **The batch floor of 320 is the lowest threshold the search *enumerated*, not the lowest that wins.**
@@ -486,7 +560,8 @@ the `NoTrans` body a short *reduction*.
   against a 72 MB L2) body 5 at `W = 4` measures **1.40×–2.09×** for cfloat at `red_len 24..64`, **2.62×** for double
   at `red_len 64` and **1.22×–1.71×** for float at `red_len 48..128` — all *above* their gates, while the same
   `red_len` at `out_len 2048` measures 0.986×–0.996×. Separating them needs a **footprint** term, which is the
-  L2-residency reasoning `route_gemv.hh:60-71` forbids and which would be no better founded in a launcher.
+  L2-residency reasoning the window was forbidden to use, which the table keys (`choice.hh:34`) cannot express, and
+  which would be no better founded in a launcher.
 * **`17 <= out_len <= 31` on the `NoTrans` arm is unmeasured** — body 4 declines it by arithmetic (`W == 1`), and no
   timing brackets that side of its gate. **`complex<double>` transposed at short reduction is cleared, not solved**:
   body 5 lifted the last two sub-0.50× cells to 0.862/0.861, which is not parity and cannot be.
@@ -495,11 +570,16 @@ the `NoTrans` body a short *reduction*.
   coverage dump *can* settle is reachability, and it did once here: `lanczos_tests` fails identically in both builds
   and its dump holds only `linked,gemv` rows with **zero `reached` rows** — it never calls `gemv` at all, which is
   how that failure was excluded from WP7's ledger rather than assumed out of it.
-* **Not verified in this record:** the count of route decisions the shipped clause actually moves in a live capture.
-  The intended move is enumerated (`vendor:auto → native:cta` for cdouble, `transA != NoTrans`, `red_len` 64..352,
-  `out_len >= 256`, `batch >= 320`) and a pure-layer probe admits **384 grid cells, every one cdouble, every one
-  `native:cta`** — but no post-clause `route_diff` output was found in the sources read. The body-5 pass, which by
-  construction moves nothing, *was* diffed: **0 removed decisions, 60 added, gemv-only, 0 non-gemv rows moved.**
+* **Not verified in this record:** the count of decisions the window actually moves in a live capture. The intended
+  move is enumerated (`vendor` → `cta` for cdouble, `transA != NoTrans`, `red_len` 64..352, `out_len >= 256`,
+  `batch >= 320`; in the old router's words `vendor:auto → native:cta`) and a pure-layer probe of the old clause
+  admitted **384 grid cells, every one cdouble, every one `native:cta`** — but no post-clause `route_diff` output was
+  found in the sources read. The body-5 pass, which by construction moves nothing, *was* diffed: **0 removed
+  decisions, 60 added, gemv-only, 0 non-gemv rows moved.** The transcription was gated instead (phase 5, sm_120): the
+  tables reproduce the old decision in 100.00% of random off-grid points per (device, dtype, scenario)
+  ([Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)).
+* **The tables are untimed.** Every row is `source=transcribed:424a45bc`; no tuner sweep of gemv exists on either
+  device. On sm_120 the rankings are the sm_89 window carried over unmeasured.
 
 ## Raw evidence
 

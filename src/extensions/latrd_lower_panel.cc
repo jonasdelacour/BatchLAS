@@ -29,14 +29,10 @@ namespace {
 
 enum class LatrdImpl { Legacy, Device, Grid };
 
-// Selected from BATCHLAS_LATRD_IMPL.
-//   (unset) / anything else -> Legacy   (default, bit-for-bit unchanged)
-//   "device"                -> Device   (device-BLAS variant, measured slower)
-//   "grid"                  -> Grid     (multi-work-group-per-matrix panel)
-// Deliberately re-read on every call (not cached) so that a single process can
-// A/B the implementations by flipping the environment variable between runs;
-// settings() is re-read on reload, so this stays true, but a static here would
-// pin the first answer for the process and make the A/B vacuous.
+// BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "device" -> Device, "grid" -> Grid.
+// Re-read on every call, never cached: a static would pin the first answer and
+// make an in-process A/B vacuous.
+// evidence: docs/perf/sytrd.md#sytrd-the-latrd-implementation-selector
 inline LatrdImpl latrd_impl() {
     const char* v = batchlas::settings().selection.latrd_impl.get();
     if (!v) return LatrdImpl::Legacy;
@@ -48,52 +44,10 @@ inline LatrdImpl latrd_impl() {
 
 inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 
-// Smallest n at which the multi-work-group panel path is worth its grid barrier.
-//
-// The grid path is ON BY DEFAULT above this size -- it is the fix for the
-// one-work-group-per-matrix starvation, and at large n it is worth a lot -- but
-// it is NOT free: the software grid barrier costs 5 device-scope syncs per panel
-// column, and below this size that cost exceeds what the extra work-groups buy.
-//
-// MEASURED, RTX 4090, float, eigenvalues-only, blocked provider, legacy/grid
-// (so > 1 means the grid path wins):
-//
-//    n      b=1    b=4    b=8    b=16   b=64
-//   128    0.71   0.74   0.75   0.76   0.77
-//   256    0.79   0.74   0.74   0.75   0.75
-//   384    0.95    -     0.95    -      -
-//   512    1.03   1.02   1.03   1.02   0.95
-//   768    1.43    -     1.41    -      -
-//   1024   1.94   1.91   1.90   1.82   1.24
-//   2048   4.10    -     3.63    -      -
-//
-// The win grows with n because the barrier count is O(n) per panel while the
-// work it parallelizes is O(n^2) per column. The loss below 512 is uniform in
-// batch, which is the signature of a fixed per-column overhead. Gated at 768:
-// every measured point at or above it wins by >= 1.4x, and 512 is only neutral.
-//
-// A knob rather than a formula because the crossover is a barrier-latency
-// property of the device, not of the algorithm -- re-measure on new hardware.
-//
-// EIGENVECTOR MODE RE-MEASURED 2026-08-04 (RTX 4090 device 1, build 12963a8,
-// float, blocked provider, legacy/grid so > 1 means the grid path wins). The
-// grid above was taken eigenvalues-only, but the gate is applied in BOTH modes,
-// so that was an untested extrapolation. It holds:
-//
-//    n      b=1    b=8    b=64
-//   256    0.734  0.734  0.788
-//   384    0.885  0.894  0.881
-//   512    1.012  1.018  0.956
-//   768    1.379  1.375  1.090
-//   1024   1.843  1.781    -
-//
-// Same crossover as eigenvalues-only: a loss below 512, neutral at 512, a clear
-// win from 768. The 768 gate does NOT need splitting per mode.
-//
-// Note the win shrinks as batch grows (n=768: 1.38 at batch 1, 1.09 at batch 64;
-// n=1024/128 is a dead heat, 475.5 vs 475.7 ms) -- which is the mechanism
-// working as designed, since once the batch alone saturates the SMs there is no
-// starvation left for the extra work-groups to absorb.
+// Smallest n at which the multi-work-group panel is worth its grid barrier (five
+// device-scope syncs per panel column). A knob, not a formula: the crossover is a
+// barrier-latency property of the device. Applied in both jobz modes.
+// evidence: docs/perf/sytrd.md#sytrd-the-latrd-grid-path-threshold
 inline int64_t latrd_grid_min_n() {
     return batchlas::settings().geometry.latrd_grid_min_n;
 }
@@ -120,36 +74,11 @@ inline U conj_if_needed(const U& x) {
     }
 }
 
-// acc += a * b, and acc += conj(a) * b, in explicit real arithmetic.
-//
-// WHY THESE EXIST AT ALL. `std::complex<float> * std::complex<float>` is not four
-// multiplies. C99 Annex G (which C++ inherits, and which clang implements unless
-// -fcx-limited-range / -ffast-math is passed -- this build passes neither) requires
-// that a complex multiply producing (NaN, NaN) be retried by a recovery routine that
-// rescues infinities. clang emits the four multiplies inline, then a branch on
-// isnan(re) && isnan(im), then a call to __mulsc3 (__muldc3 for double). Both symbols
-// are present in this library's device code.
-//
-// In a matvec inner loop that is ruinous. The branch is per element, it is opaque to
-// the unroller, and it holds live the operands the call would need -- so the loop
-// cannot keep several loads in flight, which is the one thing this kernel depends on
-// (see the note on the symv below: it is memory-latency bound, and memory-level
-// parallelism is what matters).
-//
-// Every dense BLAS makes exactly this trade: the naive form is what -fcx-limited-range
-// gives, and what cuBLAS/MKL/MAGMA use. The semantic difference is confined to operands
-// that already carry Inf/NaN. This kernel is fed a Hermitian matrix and Householder
-// reflectors computed from it; if those contain Inf or NaN the eigensolve is meaningless
-// long before the recovery path could matter.
-//
-// The product is formed first and only then added, which is the SAME association the
-// `acc += a * b` it replaces used. Writing it as `acc.real() + ar*br - ai*bi` instead
-// would re-associate the sum and perturb the last ulp for no gain; it is not faster,
-// because the compiler contracts these into fma either way.
-//
-// Real types route to the plain multiply-add and are completely unaffected: this is a
-// complex-only change, and the float and double panel timings confirm it (n=512,
-// batch=1024: 50.86 us/matrix before, 50.87 after).
+// acc += a * b, and acc += conj(a) * b, in explicit real arithmetic: std::complex *
+// carries an Annex G isnan branch plus __mulsc3 call that stops the symv keeping
+// loads in flight. Product first, then add: the same association as the `acc += a * b`
+// it replaces, so results do not move. Real types take the plain multiply-add.
+// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
 template <typename U>
 inline void mac(U& acc, const U& a, const U& b) {
     if constexpr (internal::is_complex<U>::value) {
@@ -179,15 +108,10 @@ inline void mac_conj(U& acc, const U& a, const U& b) {
     }
 }
 
-// APPLIED TO THE SYMV ONLY, DELIBERATELY. The same escape was tried at every other
-// complex multiply in this kernel -- the rank-2 column update, the gamma/delta
-// reductions, the tau/alpha scalings, the fused trailing update -- and it made the
-// panel 1.16x SLOWER, reproducibly (n=512 batch=1024: 108.4 us/matrix symv-only,
-// 125.8 with all sites converted; n=512 batch=512: 103.3 vs 122.1). Those sites are
-// together about 6% of the panel's work, so this is not their arithmetic; it is that
-// inlining the expanded form everywhere costs enough registers to lose occupancy in
-// the one loop that matters. Converting the symv and nothing else is the measured
-// optimum -- do not "finish the job" here without re-measuring.
+// APPLIED TO THE SYMV ONLY, DELIBERATELY. Converting every other complex multiply in
+// this kernel made the panel 1.16x slower (register pressure). Do not "finish the
+// job" without re-measuring.
+// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
 
 template <typename T>
 inline typename base_type<T>::type abs2_if_complex(const T& x) {
@@ -285,15 +209,10 @@ using GridBarrierWord = uint32_t;
 // Sense-reversing software grid barrier over the `groups` work-groups that share
 // `bar` (bar[0] = arrival counter, bar[1] = generation).
 //
-// SAFETY: this only terminates if every participating work-group is
-// simultaneously resident on the device. The launch configuration guarantees
-// that (see choose_grid_launch): total work-groups <= MAX_COMPUTE_UNITS, and
-// each work-group needs at most ~2*n*sizeof(T) bytes of local memory and
-// <= 256 work-items, so one block per SM is always schedulable. Blocks are
-// dispatched to distinct SMs while the block count does not exceed the SM
-// count, hence all of them are co-resident before any of them spins.
-// BATCHLAS_LATRD_GRID_FORCE_UNSAFE deliberately breaks that guarantee for
-// measurement; see the comment on the override in choose_grid_launch.
+// SAFETY: terminates only if every participating work-group is co-resident.
+// choose_grid_launch guarantees it (<= MAX_COMPUTE_UNITS work-groups in total, one
+// block per SM); BATCHLAS_LATRD_GRID_FORCE_UNSAFE deliberately breaks it.
+// evidence: docs/perf/sytrd.md#sytrd-the-latrd-grid-kernel-and-its-co-residency-cap
 inline void grid_barrier(const sycl::nd_item<1>& it, GridBarrierWord* bar, int groups) {
     if (groups <= 1) {
         it.barrier(sycl::access::fence_space::global_and_local);
@@ -502,23 +421,10 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         // Symmetric mat-vec: acc = sum_c Ah(r,c) * v(c), where
                         // Ah(r,c) is Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r.
-                        //
-                        // Ascending c crosses that boundary exactly once, at c == r,
-                        // so the loop splits into two contiguous ranges without
-                        // changing the accumulation order (results stay bit-identical).
-                        // Removing the per-element branch lets the compiler unroll and
-                        // keep several independent loads in flight; this kernel is
-                        // memory-latency bound, so memory-level parallelism is what
-                        // matters here.
-                        //
-                        // Measured alternatives that were all slower and rejected:
-                        //   - unroll 8, and processing two rows per iteration: both
-                        //     cost more registers than the added parallelism returns.
-                        //   - computing the c > r term with one sub-group per column
-                        //     (fully coalesced, 20 -> 9.7 sectors/request): the extra
-                        //     barrier destroys reuse between the two passes and short
-                        //     columns near r -> n leave most lanes idle, so DRAM
-                        //     traffic and runtime both rose.
+                        // Ascending c crosses c == r once, so splitting the loop there
+                        // keeps the accumulation order (bit-identical) and removes the
+                        // per-element branch. Memory-latency bound: keep loads in flight.
+                        // evidence: docs/perf/sytrd.md#sytrd-rejected-latrd-symv-loop-shapes
                         const int c_split = sycl::min(r, n - 1);
 
                         T acc = T(0);
@@ -623,24 +529,16 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 }
 
 // ---------------------------------------------------------------------------
-// Grid kernel: G work-groups per matrix.
-//
-// The trailing row range [i+1, n) of the current panel column is split into G
-// contiguous blocks, one per work-group. Every one of the per-row loops in the
-// legacy kernel (column update, reflector scaling, symv, the rank-2k
-// corrections, and the W write-back) is perfectly load balanced over r, so this
-// split needs no communication at all. The four quantities that ARE reductions
-// over the whole trailing range -- sumsq for the reflector norm, gamma/delta
-// per previous panel column, and the final dot -- are reduced per work-group
-// and then combined through global scratch, in a fixed group order so the
-// result is run-to-run deterministic.
-//
-// Five grid barriers per panel column are required:
+// Grid kernel: G work-groups per matrix, each owning a contiguous block of the
+// trailing rows [i+1, n). Whole-range reductions (sumsq, gamma/delta, the final
+// dot) are combined through global scratch in a FIXED group order, so the result is
+// run-to-run deterministic. Five grid barriers per panel column:
 //   1. after the column update + sumsq partials  (reflector needs the whole col)
 //   2. after scaling the reflector               (v must be fully updated)
 //   3. after gamma/delta partials
 //   4. after the dot partials
 //   5. at the end of the column                  (next column reads row i+1 of W)
+// evidence: docs/perf/sytrd.md#sytrd-the-latrd-grid-kernel-and-its-co-residency-cap
 // ---------------------------------------------------------------------------
 template <typename T, int WG, bool FuseTrailingUpdate>
 Event latrd_lower_panel_batched_wg_grid(Queue& q,
@@ -1140,16 +1038,9 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
 // Dispatcher: selects legacy or device path based on use_device_latrd().
 // Legacy supports WG = 64/128/256; device additionally supports WG = 512.
 // ---------------------------------------------------------------------------
-// Chooses (G, wg) for the grid path.
-//
-// Co-residency is the hard constraint: the software grid barrier deadlocks
-// unless all batch*G work-groups are resident at once. We therefore never
-// launch more than MAX_COMPUTE_UNITS work-groups in total, i.e. at most one
-// block per SM, which is schedulable for any work-group size <= 256 and any
-// local-memory footprint the legacy kernel already accepts.
-//
-// Beyond that, the useful parallelism of the panel is one work-item per
-// trailing row, so G*wg is kept close to n and never far above it.
+// Chooses (G, wg) for the grid path. Co-residency is the hard constraint: the
+// software grid barrier deadlocks unless all batch*G work-groups are resident, so
+// never launch more than MAX_COMPUTE_UNITS work-groups in total. G*wg stays near n.
 // Returns G == 1 to mean "use the legacy kernel verbatim".
 struct GridLaunch { int groups; int wg; };
 
@@ -1169,27 +1060,12 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     const int forced_g = batchlas::settings().geometry.latrd_grid_groups;
     int cap = resident_cap / batch;            // integer division, never rounds up
 
-    // MEASUREMENT ONLY, DEADLOCK-CAPABLE. The cap above makes the grid path
-    // unreachable at batch >= MAX_COMPUTE_UNITS (128 SMs here): at batch == 128
-    // it clamps BATCHLAS_LATRD_GRID_GROUPS to 1, and at batch > 128 cap is 0 and
-    // we return before ever reading the variable. The escape hatch was therefore
-    // clamped by the cap it exists to escape, and the recorded L2-residency A/B
-    // -- taken at batch 512-1024 -- compared legacy against legacy: float
-    // n=256/b=1024 31.06 vs 32.19 ms, float n=512/b=512 327.3 vs 325.9, cfloat
-    // n=512/b=512 698.8 vs 698.3, i.e. identical to three digits, which is the
-    // signature of the fallback, not of a fast grid kernel.
-    //
-    // Raising cap here is not safe in general: grid_barrier spins, so a forced
-    // launch whose G work-groups of one matrix are not co-resident hangs rather
-    // than fails, and a hang here looks exactly like slow JIT. The barrier is
-    // per matrix (bar_all + 2*b, b = glid / G), so the requirement is only that
-    // the G groups of a single matrix are co-resident, which small G plausibly
-    // satisfies at large batch -- but it rests on an in-order block dispatch the
-    // spec does not promise. Run forced-unsafe measurements under `timeout`.
-    // Do not use this to relax the default cap; that needs its own argument.
-    // One of the knobs BATCHLAS_ALLOW_UNSAFE_ENV gates: with that build option
-    // OFF the field is false whatever the environment says, so the cap below
-    // cannot be raised into a deadlock by ambient process state.
+    // MEASUREMENT ONLY, DEADLOCK-CAPABLE. Without this override the cap above makes
+    // BATCHLAS_LATRD_GRID_GROUPS unreachable at batch >= MAX_COMPUTE_UNITS. A forced
+    // launch that is not co-resident HANGS (looks like slow JIT): run it under
+    // `timeout`, and never use it to relax the default cap. Gated by the
+    // BATCHLAS_ALLOW_UNSAFE_ENV build option, so ambient state cannot enable it.
+    // evidence: docs/perf/sytrd.md#sytrd-the-vacuous-latrd-grid-groups-ab
     if (forced_g > 0 && batchlas::settings().unsafe.latrd_grid_force_unsafe) {
         cap = forced_g;
     }

@@ -133,12 +133,9 @@ Event syev_cta(Queue& ctx,
     // We overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
 
-    // NOTE: The CTA SYTRD/SYEV pipeline currently exhibits severe correctness issues
-    // specifically for the Uplo::Lower path. Until the lower-path kernel is fixed,
-    // we run the (known-good) Uplo::Upper pipeline.
-    //
-    // To preserve the public API contract when callers only initialize the lower
-    // triangle, we first explicitly symmetrize: A_upper := conj(A_lower).
+    // NOTE: the CTA SYTRD/SYEV Uplo::Lower path has a known correctness defect, so Lower
+    // input is symmetrized (A_upper := conj(A_lower)) and runs the known-good Upper pipeline.
+    // evidence: docs/design/known-defects.md#known-defects-the-cta-sytrd-lower-path
     Uplo uplo_eff = uplo;
     if (uplo == Uplo::Lower) {
         uplo_eff = Uplo::Upper;

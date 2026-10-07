@@ -1,28 +1,9 @@
 #pragma once
 
-// Stage-2 band -> tridiagonal reduction by Householder bulge chasing, with the
-// reflectors *retained* so that the eigenvector back-transform Z := Q2 Z is
-// possible.
-//
-// The shipped sytrd_sb2st is a Givens (LAPACK DSBTRD/ZHBTRD) chase and writes
-// tau_out = 0 -- Q2 is discarded. That is why syev_two_stage clamps kd to 1
-// whenever eigenvectors are requested, which in turn degenerates stage 1 into an
-// unblocked BLAS-2 reduction. This routine exists to remove that clamp.
-//
-// Schedule: the plain sequential one (for each sweep, eliminate then chase the
-// bulge to the bottom), not LAPACK's pipelined THGRSIZ/GRSIZ/SHIFT=3 order. The
-// pipelining exists to give multi-core CPU parallelism; here a work-group owns
-// one problem and parallelism comes from the batch dimension and from lanes
-// inside each <= kd x kd window. Validated in
-// playground/sb2st_hh_sequential.py against tridiagonality, d, signed e,
-// orthogonality of Q and the reference spectrum.
-//
-// Reflector k acts on rows [start_k, start_k + len_k) and the overall
-// similarity is
-//
-//     Q = H_1 H_2 ... H_m   (generation order),   Q^H A Q = T
-//
-// so the back-transform applies them in *reverse* generation order.
+// Stage-2 band -> tridiagonal by Householder bulge chasing, reflectors RETAINED for Z := Q2 Z
+// (the Givens sytrd_sb2st discards Q2). Reflector k acts on rows [start_k, start_k + len_k);
+// Q = H_1 ... H_m in generation order, so the back-transform applies them in REVERSE.
+// evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
@@ -36,19 +17,15 @@
 namespace batchlas {
 namespace internal {
 
-// One stored reflector. `sweep` is retained because all reflectors belonging to
-// a single sweep act on mutually disjoint row ranges (starts stride by kd, each
-// length <= kd), so a whole sweep can be applied concurrently in the
-// back-transform.
+// One stored reflector. `sweep` is kept because one sweep's reflectors act on disjoint
+// row ranges (starts stride by kd, length <= kd) and can be applied concurrently.
 struct Sb2stHhRefl {
     int32_t start;
     int32_t len;
     int32_t sweep;
 };
 
-// Replays the sequential chase schedule on the host. The schedule depends only
-// on (n, kd) -- never on the matrix values -- so it is identical for every item
-// in the batch, which is what lets the back-transform use uniform batched work.
+// The chase schedule depends only on (n, kd), so one host replay serves every batch item.
 inline std::vector<Sb2stHhRefl> build_sb2st_hh_schedule(int32_t n, int32_t kd) {
     std::vector<Sb2stHhRefl> out;
     if (n <= 2 || kd <= 1) return out;
@@ -58,10 +35,8 @@ inline std::vector<Sb2stHhRefl> build_sb2st_hh_schedule(int32_t n, int32_t kd) {
         int32_t r1 = (st + kd < n - 1) ? (st + kd) : (n - 1);
         if (r1 <= r0) continue;
 
-        // TYPE 1: annihilate column st below the subdiagonal.
+        // Annihilate column st below the subdiagonal, then chase the bulge down the band.
         out.push_back(Sb2stHhRefl{r0, r1 - r0 + 1, st});
-
-        // Chase the resulting bulge to the bottom of the band.
         while (true) {
             const int32_t p0 = r1 + 1;
             const int32_t p1 = (r1 + kd < n - 1) ? (r1 + kd) : (n - 1);
@@ -78,23 +53,17 @@ inline int32_t sb2st_hh_num_reflectors(int32_t n, int32_t kd) {
     return static_cast<int32_t>(build_sb2st_hh_schedule(n, kd).size());
 }
 
-// Working half-bandwidth needed to hold transient bulge fill. A length-kd
-// reflector applied symmetrically pushes fill up to kd rows below the band.
+// A length-kd reflector applied symmetrically fills up to kd rows below the band: hold 2*kd.
 inline int32_t sb2st_hh_work_bandwidth(int32_t n, int32_t kd) {
     const int32_t want = 2 * kd;
     const int32_t cap = (n > 0) ? (n - 1) : 0;
     return (want < cap) ? want : cap;
 }
 
-// Band -> tridiagonal, retaining the reflectors.
-//
-//   ab_in      (kd+1) x n   lower band, read-only
-//   ab_tri_out 2 x n        row 0 = diagonal, row 1 = *signed* subdiagonal,
-//                           so build_phase_from_kd1_band consumes it unchanged
-//   d_out/e_out             real diagonal and |subdiagonal|
-//   v_out      kd x nrefl   reflector k in column k, v[0] = 1, zero-padded;
-//                           nrefl == build_sb2st_hh_schedule(n, kd).size()
-//   tau_out    nrefl
+// ab_in: (kd+1) x n lower band, read-only. ab_tri_out: 2 x n, diagonal and SIGNED subdiagonal
+// (build_phase_from_kd1_band consumes it unchanged). d_out/e_out: real diagonal, |subdiagonal|.
+// v_out: kd x nrefl, reflector k in column k with v[0] = 1, zero-padded; tau_out: nrefl, where
+// nrefl == build_sb2st_hh_schedule(n, kd).size().
 template <Backend B, typename T>
 BATCHLAS_INTERNAL_API Event sytrd_sb2st_hh(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -110,19 +79,14 @@ BATCHLAS_INTERNAL_API Event sytrd_sb2st_hh(Queue& ctx,
 template <Backend B, typename T>
 BATCHLAS_INTERNAL_API size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch);
 
-// Splits the reflector list into maximal runs of consecutive reflectors with
-// pairwise-disjoint row ranges. Disjoint reflectors commute, so a whole run can
-// be applied concurrently in the back-transform; run w is [off[w], off[w+1]).
-//
-// The runs come out equal to the chase sweeps, but this derives them from the
-// schedule rather than assuming it, so an unsound grouping cannot slip through.
+// Maximal runs of pairwise-disjoint (commuting) reflectors, run w = [off[w], off[w+1]). They
+// equal the sweeps but are DERIVED from the schedule, so an unsound grouping cannot slip in.
 inline std::vector<int32_t> build_sb2st_hh_wave_offsets(
     const std::vector<Sb2stHhRefl>& sched, int32_t n) {
     std::vector<int32_t> off;
     const int32_t nrefl = static_cast<int32_t>(sched.size());
     if (nrefl <= 0 || n <= 0) return off;
 
-    // stamp[r] == run means row r is already claimed by the run being built.
     std::vector<int32_t> stamp(static_cast<size_t>(n), -1);
     int32_t run = 0;
     off.push_back(0);
@@ -140,13 +104,8 @@ inline std::vector<int32_t> build_sb2st_hh_wave_offsets(
     return off;
 }
 
-// Z := Q2 Z, with Q2 = H_1 H_2 ... H_m from sytrd_sb2st_hh. Applies the
-// reflectors in reverse generation order. `starts`/`lens` come from
-// build_sb2st_hh_schedule and `waves` from build_sb2st_hh_wave_offsets (all
-// host side, batch-independent).
-//
-// All four spans must stay alive until the returned Event completes -- they are
-// read by the kernel, not copied.
+// Z := Q2 Z. starts/lens/waves come from the two builders above; every span must outlive the
+// returned Event (nothing is copied).
 template <Backend B, typename T>
 BATCHLAS_INTERNAL_API Event unmqr_hb2st(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& v_in,

@@ -406,11 +406,8 @@ namespace batchlas {
                BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
-    // gesvd has no rocSOLVER binding yet. This stub exists because
-    // include/batchlas/blas/functions/gesvd.hh is now declaration-only (it used to define a
-    // generic throwing template, which is what blocked a cuSOLVER implementation).
-    // Without a definition here a ROCM build fails to link rather than failing at
-    // the call, so the throw is preserved deliberately.
+    // No rocSOLVER gesvd yet. The throwing stub is deliberate: gesvd.hh is declaration-only, so
+    // without it a ROCM build fails to LINK rather than at the call.
     template <Backend B, typename T>
     Event gesvd_vendor(Queue& /*ctx*/,
                        const MatrixView<T, MatrixFormat::Dense>& /*A*/,
@@ -437,18 +434,8 @@ namespace batchlas {
 
     } // namespace backend
 
-    // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
-    // header edit rather than one edit per backend TU.
-    //
-    // Every row names a `backend::`-qualified `_vendor` symbol, and that is the
-    // WP0b invariant rather than an oversight: the public potrf/syev/geqrf/
-    // getrf/getrs/getri/ormqr/orgqr definitions moved out of the vendor TUs into
-    // src/ops/<op>/<op>.cc, which instantiate them
-    // keyed on the device family instead of on any vendor library. A
-    // BATCHLAS_INSTANTIATE_OP row for a public op here would collide with those.
-    // _BACKEND_OP still looks the alias up as `sig::OP` -- only the FUNCTION is
-    // backend-qualified.
+    // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define ROCSOLVER_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \

@@ -23,14 +23,9 @@ namespace batchlas {
 
 namespace {
 
-// `is_gpu`, not `B != Backend::NETLIB`.
-//
-// The else-branch below says why in its own comment: the host backend "cannot
-// safely invoke the ROCm-style secular root routines from inside SYCL kernels".
-// That is a statement about the DEVICE, and the backend enum was standing in for
-// it. Asked directly it stays correct for a host queue reached through any
-// backend, and today's outcome is unchanged -- NETLIB is the only backend that
-// runs on a host device in this tree.
+// `is_gpu`, not `B != Backend::NETLIB`: why the host path exists (no ROCm-style root
+// routines inside host SYCL kernels) is a property of the DEVICE, not the backend.
+// evidence: docs/perf/stedc.md#stedc-convergence-reporting-through-info
 template <Backend B, typename T>
 inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params, bool is_gpu) {
     const int32_t nn = static_cast<int32_t>(n);
@@ -70,12 +65,9 @@ template <Backend B, typename T> class StedcComputeV;
 template <Backend B, typename T> class StedcDeflation;
 
 // Smallest subproblem size at which the deflation-aware back-transform is used.
-// It needs a host sync to learn the batch-wide non-deflated width, so for small
-// merges the sync costs more than the saved GEMM flops.
-// Smallest subproblem size at which the deflation-aware back-transform is used.
 // Learning the batch-wide non-deflated width needs a host sync, which stalls the
 // enqueue pipeline; below this size the saved GEMM flops do not pay for it.
-// Measured on an RTX 4090: neutral at n = 256, 5.8% at n = 512, 24% at n = 1024.
+// evidence: docs/perf/stedc.md#stedc-the-deflation-gemm-threshold
 inline constexpr int64_t stedc_deflation_gemm_min_n = 512;
 
 // Only take the narrow path when deflation actually removed enough columns to
@@ -98,14 +90,9 @@ template <Backend B, typename T> class StedcLevelUnpad;
 template <Backend B, typename T> class StedcLevelLeafStatus;
 
 // ---------------------------------------------------------------------------
-// One divide-and-conquer merge, applied to a *super-batch*.
-//
-// Everything below the merge is size-uniform: it takes `P` independent
-// sub-problems that all have size `s`, whose left/right halves have already
-// been solved, and combines each into one size-`s` eigendecomposition. The
-// recursive driver calls this with P = batch_size (one tree node at a time);
-// the level-synchronous driver calls it once per level with
-// P = nodes_at_level * batch_size, which is the whole point of flattening.
+// One divide-and-conquer merge, applied to a *super-batch* of P size-uniform
+// sub-problems of size s whose halves are already solved. The recursive driver
+// passes P = batch_size; the level-synchronous one P = nodes_at_level * batch_size.
 //
 //   eigenvalues  s x P, in/out: children's eigenvalues in, merged ones out
 //   eigvects     s x s x P, in/out: block-diagonal diag(Q_left, Q_right) in,
@@ -113,11 +100,11 @@ template <Backend B, typename T> class StedcLevelLeafStatus;
 //   Qprime, temp_Q   s x s x P scratch
 //   rho          P signed rank-1 coefficients (the split off-diagonal element)
 //   m            size of the left half
+// evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
 // ---------------------------------------------------------------------------
 // Select the even- or odd-indexed half of a batched view. Both halves stay
-// affine (stride doubles), so they remain usable as strided-batched GEMM
-// operands -- which is what lets a level write its result straight into its
-// parent's two diagonal sub-blocks.
+// affine (stride doubles), so a level can write straight into its parent's two
+// diagonal sub-blocks with strided-batched GEMMs.
 template <typename T>
 inline MatrixView<T, MatrixFormat::Dense> stedc_batch_parity(const MatrixView<T, MatrixFormat::Dense>& m, int parity) {
     return MatrixView<T, MatrixFormat::Dense>(m.data_ptr() + parity * m.stride(),
@@ -135,11 +122,8 @@ void stedc_merge_step(Queue& ctx,
                       const Span<std::byte>& ws,
                       int64_t m,
                       const StedcParams<T>& effective_params,
-                      // Per-item convergence status, or nullptr when not requested.
-                      // `info_nodes_per_item` is how many merge nodes this launch
-                      // covers per batch item -- 1 for the recursive driver, 2^l for
-                      // the level-synchronous one, which merges every sibling at a
-                      // level in a single launch. See src/extensions/info_span.hh.
+                      // Per-item status or nullptr. `info_nodes_per_item`: merge nodes per
+                      // item in this launch (1 recursive, 2^l level-synchronous).
                       int32_t* info,
                       int64_t info_nodes_per_item,
                       const MatrixView<T, MatrixFormat::Dense>& out_even = MatrixView<T, MatrixFormat::Dense>(),
@@ -217,12 +201,10 @@ void stedc_merge_step(Queue& ctx,
 
         sycl::group_barrier(cta);
 
-        // Compute LAPACK-style absolute deflation tolerance: tol = 8*eps*max(|D|_inf, |z|_inf).
-        // We need this BEFORE the Givens loop so eigenvalue-proximity deflation uses the
-        // same (absolute) tolerance as the small-|z| deflation. The previous code used a
-        // relative tolerance (64*eps*max(1,|D_j|,|D_{j+1}|)) which massively under-deflated
-        // clustered small-magnitude eigenvalues, producing two near-parallel eigenvectors
-        // (good residual, bad orthogonality) -- the bimodal ortho distribution.
+        // LAPACK-style ABSOLUTE deflation tolerance tol = 8*eps*max(|D|_inf, |z|_inf),
+        // computed before the Givens loop so proximity deflation uses it too. A relative
+        // tolerance under-deflates clustered small eigenvalues (bad orthogonality).
+        // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
         auto eig_max = sycl::joint_reduce(cta,
                           util::get_raw_ptr(norm_mem),
@@ -356,11 +338,8 @@ void stedc_merge_step(Queue& ctx,
                 sycl::group_barrier(cta);
                 for (int k = tid; k < n; k += bdim) {
                     auto dview = Q_bid(Slice{}, k);
-                    // sec_solve_* computed this flag already: the ext variant threw
-                    // it away with `(void)converged` and the other guarded it with a
-                    // release-mode-dead assert. Several threads may report the same
-                    // item; info_report is an atomic fetch_max, which is exactly the
-                    // "did ANY root fail" reduction wanted.
+                    // info_report is an atomic fetch_max: exactly the "did ANY root
+                    // fail" reduction, however many threads report the same item.
                     bool root_converged = true;
                     if (k == n - 1){
                         temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), root_converged);
@@ -392,12 +371,9 @@ void stedc_merge_step(Queue& ctx,
                     auto Qbid = Qview.batch_item(bid);
                     auto dd = n_reduced[bid];
 
-                    // Löwner-rescale z_tilde via the ~dd-term ratio product. A prior
-                    // fix promoted this accumulation to double to suppress a bimodal
-                    // orthogonality distribution, but the root cause turned out to be
-                    // the deflation tolerance (see absolute 8*eps*max(|D|,|z|) above).
-                    // With correct deflation, native-T accumulation matches double to
-                    // reported digits across n=16..256 for R/O/relerr.
+                    // Löwner-rescale z_tilde via the ~dd-term ratio product, in native T
+                    // (double accumulation is unnecessary with the absolute tolerance).
+                    // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
                     for (int eid = 0; eid < dd; ++eid)
                     {
                         const T Di = eigenvalues(eid, bid);
@@ -470,27 +446,12 @@ void stedc_merge_step(Queue& ctx,
     (void)argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
     (void)permute(ctx, eigenvalues, permutation);
 
-    // Deflation-aware back-transform.
-    //
-    // Qprime is identity-filled and only its first n_reduced columns carry
-    // secular eigenvectors, so as a block it is M = [W | I]. With A the
-    // perm_map-permuted accumulated eigenvectors, the result we want is
-    //
-    //     eigvects = A * M[:, perm] = (A * M)[:, perm],
-    //
-    // because permuting M's columns permutes the product's columns identically.
-    // And A * M = [A*W | A(:, dd:)] -- the deflated columns of the product are
-    // just columns of A, needing no multiply at all. So only the first dd
-    // columns require a GEMM.
-    //
-    // dd varies across the batch, and a per-item GEMM would be ragged, which
-    // would drop off the vendor batched kernel onto the homemade heterogeneous
-    // path. Using a single batch-wide dd_max keeps one uniform cuBLAS call and
-    // is still exact: for an item with dd < dd_max, columns dd..dd_max-1 of M
-    // really are identity columns, so the GEMM reproduces A there.
-    //
-    // Reading dd_max costs a host sync, so only do this where the GEMM is big
-    // enough to pay for it; below the threshold, keep the original path.
+    // Deflation-aware back-transform. Qprime is M = [W | I], and
+    //     eigvects = A * M[:, perm] = (A * M)[:, perm],   A * M = [A*W | A(:, dd:)],
+    // so only the first dd columns need a GEMM. One batch-wide dd_max keeps a single
+    // uniform vendor call and stays exact (columns dd..dd_max-1 of M are identity).
+    // Reading dd_max costs a host sync, hence the size threshold.
+    // evidence: docs/perf/stedc.md#stedc-deflation-aware-back-transform-gemm
     if (split_output) {
         // The deflation-narrow variant below needs a host sync and an in-place
         // fold-back, neither of which fits a split destination. The saving it
@@ -566,15 +527,11 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     steqr_params.sort = true;
     steqr_params.sort_order = SortOrder::Ascending;
     if (n <= effective_params.recursion_threshold){
-        // steqr_dispatch, not steqr: this is the recursive driver's LEAF, and a
-        // leaf that exhausts its sweep budget is exactly what LAPACK's ?stedc
-        // reports as info > 0. Calling the public steqr here dropped `info` on
-        // the floor, so every shape that reaches this driver -- Recursive
-        // requested, plan.levels == 0 (i.e. every n <= recursion_threshold), or
-        // an unpadded-but-unpacked eigvects view -- reported convergence it had
-        // not checked. steqr_dispatch is the no-clear entry point that
-        // steqr_internal.hh added for precisely this caller; the two half-solves
-        // below then accumulate through info_report's fetch_max.
+        // steqr_dispatch, not steqr: this leaf must RAISE the caller's `info`, not clear
+        // it; the two half-solves below accumulate through info_report's fetch_max.
+        // `jobz` is forwarded as the caller's, although the merges consume leaf
+        // eigenvectors: an unverified hazard for direct NoEigenVectors calls.
+        // evidence: docs/perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors
         return steqr_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
 
@@ -625,27 +582,13 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 }
 
 // ---------------------------------------------------------------------------
-// Level-synchronous ("flattened") divide and conquer.
-//
-// The recursive driver walks the merge tree depth-first, so the 2^l sibling
-// merges at level l are enqueued one after another, each with only
-// `batch_size` work-groups. Near the leaves that is nothing like enough work to
-// fill a GPU, and the whole tree costs O(2^L) kernel launches.
-//
-// Flattening turns the tree inside out: all nodes at a level are merged by one
-// launch over `nodes * batch_size` work-groups, so the launch count drops to
-// O(L) and the narrowest level is the widest one in the batch dimension.
-//
-// To keep every level size-uniform (which is what lets one strided-batched
-// GEMM and one work-group-per-node kernel cover a whole level), the problem is
-// padded from n up to N = leaf * 2^L with a diagonal tail above the Gershgorin
-// bound of the input. Those padded eigenvalues sort last and their eigenvectors
-// stay inside the padded subspace, so the answer is the leading n x n block.
-// Padding is nil whenever 2^L divides n, which covers the power-of-two sizes
-// the library is normally driven with.
-//
-// `StedcLevelPlan` / `plan_stedc_levels` live in stedc_levels_plan.hh so the
-// tree shape can be asserted on without a device.
+// Level-synchronous ("flattened") divide and conquer: all nodes of a level are
+// merged by one launch over nodes * batch_size work-groups (O(L) launches, not
+// O(2^L)). Every level must be size-uniform, so the problem is padded from n to
+// N = leaf * 2^L with a diagonal tail above the input's Gershgorin bound: padded
+// eigenvalues sort last and the answer is the leading n x n block.
+// The plan lives in stedc_levels_plan.hh so tests can assert on it without a device.
+// evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
 // ---------------------------------------------------------------------------
 
 // Total scratch the flattened driver needs, given a plan. `own_top` tells it
@@ -695,12 +638,8 @@ size_t stedc_levels_workspace(Queue& ctx, const StedcLevelPlan& plan, size_t bat
     // The merges consume the leaves' eigenvectors whatever the caller asked
     // for, so the leaf solve always computes them.
     (void)jobz;
-    // Per-leaf convergence status for the single leaf STEQR call. It is
-    // UNCONDITIONAL, exactly like potrf's: the size must not depend on whether the
-    // caller asked for status, or a workspace sized without `info` would be too
-    // small for a call made with it. This array cannot be the caller's `info` --
-    // that one is indexed by batch item and this one by leaf, and there are
-    // `leaves` of them per item.
+    // Per-leaf status array (indexed by leaf, not by item). UNCONDITIONAL, like potrf's:
+    // a workspace sized without `info` must not be too small for a call made with it.
     bytes += BumpAllocator::allocation_size<int32_t>(ctx, leaf_batch);
     bytes += BumpAllocator::allocation_size<std::byte>(
         ctx, steqr_buffer_size<T>(ctx, d_leaf, e_leaf, w_leaf, JobType::EigenVectors, leaf_params));
@@ -844,14 +783,10 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         });
     }
 
-    // Each node's accumulated eigenvector block is diag(left child, right
-    // child). Rather than copying the children into place, every merge writes
-    // its result *directly* into its parent's two diagonal sub-blocks, leaving
-    // only the off-diagonal zero blocks to materialise -- the Givens rotations
-    // in deflation need those because they mix columns across the split. That
-    // costs one extra launch per level (even and odd children need separate
-    // strided-batched calls) and saves ~2/3 of the assembly traffic; measured
-    // on an RTX 4090 it is at worst neutral and up to 5% ahead of copying.
+    // Each merge writes directly into its parent's two diagonal sub-blocks; only the
+    // off-diagonal zero blocks are materialised here (deflation's Givens rotations
+    // mix columns across the split, so they must be zero, not stale).
+    // evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
     const auto zero_offdiagonal = [&](int32_t level) {
         const int64_t s = N >> level;
         const int64_t half = s >> 1;
@@ -900,12 +835,9 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         });
     };
 
-    // 4. Solve every leaf of every batch item in a single STEQR call, then
-    //    copy the leaves into the deepest merge level. Unlike the merges, the
-    //    leaves do *not* write into their parent's sub-blocks directly: that
-    //    doubles the leading dimension of every leaf block, and the coalescing
-    //    it costs the CTA STEQR kernel outweighs the copy it saves (measured
-    //    10% slower at n = 64).
+    // 4. Solve every leaf of every batch item in a single STEQR call, then copy the
+    //    leaves into the deepest merge level (in place is slower: leaf ld doubles).
+    //    evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
     {
         const int64_t P = (int64_t(1) << (L - 1)) * bs;
         const int64_t leaf_batch = 2 * P;
@@ -920,14 +852,10 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         // Always compute leaf eigenvectors: the merges consume them even when
         // the caller only wants eigenvalues.
         //
-        // THE LEAF AXIS IS NOT THE BATCH AXIS. This one call solves leaf_batch =
-        // 2^L * bs independent problems, so handing it the caller's `info` (length
-        // bs) would alias and over-run it. It gets its own per-leaf array, folded
-        // down afterwards: leaf j belongs to batch item j / 2^L, because
-        // gather_blockdiag maps parent node p to children 2p and 2p+1, so a node at
-        // level l covers item p / 2^l. steqr_dispatch, not steqr, because steqr
-        // would clear the span it is handed; the memset here is the leaf array's
-        // own, and the caller's span was cleared once in `stedc`.
+        // THE LEAF AXIS IS NOT THE BATCH AXIS. This call solves 2^L * bs problems, so
+        // the caller's `info` (length bs) would alias and over-run. It gets its own
+        // per-leaf array, folded afterwards: leaf j belongs to item j / 2^L (node p's
+        // children are 2p and 2p+1). steqr_dispatch, because steqr would clear the span.
         const bool want_leaf_status = (detail::info_ptr(info, bs) != nullptr);
         Span<int32_t> leaf_info;
         if (want_leaf_status) {

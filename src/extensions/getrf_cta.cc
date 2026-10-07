@@ -56,7 +56,7 @@ constexpr std::size_t getrf_slm_bytes(int m, int n) {
 
 // The 48 KB launch hole: a request inside this band is refused at enqueue, so it is padded past.
 // Band and pad must stay byte-identical to potrf_cta.cc's and geqrf_cta.cc's. No group collective
-// here, so the pad is defensive -- adding one arms it. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// here, so the pad is defensive -- adding one arms it. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t kGetrfHoleLo = 47104;
 constexpr std::size_t kGetrfHoleHi = 49664;
 constexpr std::size_t kGetrfHolePadTo = 49920;
@@ -67,7 +67,7 @@ constexpr std::size_t getrf_hole_padded(std::size_t bytes) {
 
 // Work-group width: about four columns' worth of rows, clamped to [64, 512]. A pure performance
 // knob -- getrf_slm_bytes does not depend on wg, so changing it cannot move a capacity -- but the
-// 512 cap is deliberate, not a default. evidence: docs/perf/lu.md#negative-results
+// 512 cap is deliberate, not a default. evidence: docs/perf/lu.md#lu-negative-results
 inline int getrf_leaf_wg(int m, int n, int max_wg) {
     const int cols = (n >= 4) ? 4 : ((n < 1) ? 1 : n);
     const std::int64_t target = static_cast<std::int64_t>(m) * cols;

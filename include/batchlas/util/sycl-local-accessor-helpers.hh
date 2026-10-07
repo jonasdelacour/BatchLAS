@@ -2,6 +2,13 @@
 // Copyright (c) 2025 Jonas deLacour
 #pragma once
 
+/// @file
+/// @brief util::get_raw_ptr() for `sycl::local_accessor`, used to pass device-BLAS workspaces.
+///
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
+/// @ingroup internal_helpers
+
 #include <sycl/sycl.hpp>
 
 namespace batchlas {
@@ -18,6 +25,7 @@ namespace util {
  * @tparam Dims The dimensionality of the accessor
  * @param accessor The local accessor to get a pointer from
  * @return T* Raw pointer to the local accessor's storage
+ * @ingroup internal_helpers
  */
 template <typename T, int Dims = 1>
 inline T* get_raw_ptr(const sycl::local_accessor<T, Dims>& accessor) {

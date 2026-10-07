@@ -1,7 +1,9 @@
-# batchlas_tune
+# batchlas_tune {#tune_tool_readme}
 
-The tuner that produces `tuned/<op>.<dtype>.<device>.txt` (spec: `docs/design/flat-kernel-selection.md`
-§6; plan: `flat-kernel-selection-phase3-plan.md` §1 "P3.2", §2 option B, §4). It times every entry
+The tuner that produces `tuned/<op>.<dtype>.<device>.txt` (spec:
+[flat kernel selection](../../docs/design/flat-kernel-selection.md) §6; plan:
+[the phase-3 plan](../../docs/design/flat-kernel-selection-phase3-plan.md) §1 "P3.2", §2 option B, §4;
+the tables themselves: [tuned/README.md](../../tuned/README.md)). It times every entry
 of an op's `candidates<T>()` over the op's declared grid, pinned with `select::ScopedPin` through the
 public entry point, and hands the raw timings to `scripts/sweep_to_table.py --tuner`, which writes
 the table with the same formatter as the converted seed tables.
@@ -151,7 +153,10 @@ else 0. The last line counts every verdict.
 
 ## Specs
 
-`<op>_spec.cc` implements `OpSpec` (`spec.hh`): key names, candidates and grid axes from the op's
+One spec per op, registered with `BATCHLAS_TUNE_REGISTER` and listed in `CMakeLists.txt`; `--list`
+prints the registered ops. Adding one is step 4 of
+[adding an op to kernel selection](../../docs/extending.md#adding-an-op-to-kernel-selection).
+`<op>_spec.cc` implements `OpSpec` (`spec.hh`; not `select::OpSpec`): key names, candidates and grid axes from the op's
 `choice.hh`, a problem builder (potrf, posv: SPD A; posv, trsm: random B; trsm: a diagonally
 dominant triangular A, the other triangle poisoned), host verification, the 4 GiB
 cap, how an old coverage route maps to a spelling, and the kernel-source list for the §6.4 hash

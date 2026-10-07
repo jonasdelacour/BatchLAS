@@ -1,9 +1,24 @@
 #pragma once
+
+/// @file
+/// @brief batchlas::ReferenceWrapper, a write-through `std::reference_wrapper`.
+///
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
+/// @ingroup internal_helpers
+
 #include <functional>
 #include <iostream>
 
 namespace batchlas {
 
+/// @brief `std::reference_wrapper` whose assignment from a `T` writes THROUGH the reference.
+///
+/// Unlike `std::reference_wrapper`, `operator=(const T&)` and the assignments
+/// from another `std::reference_wrapper` assign the referred-to object instead
+/// of rebinding; comparison operators compare the referred-to values. Not
+/// default-constructible.
+/// @ingroup internal_helpers
 template<typename T>
 struct ReferenceWrapper : public std::reference_wrapper<T> {
     using std::reference_wrapper<T>::reference_wrapper;

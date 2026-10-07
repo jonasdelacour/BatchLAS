@@ -1,7 +1,8 @@
 #pragma once
 
-// geqrf's can_run (rule R3), in a header so a host test can call it with a synthetic
-// select::Device: no test device here lacks a GPU, sub-group size 32 or one CTA element of SLM.
+/// @file
+/// @brief geqrf's can_run, a header so host tests can pass a synthetic select::Device. No real test
+/// device lacks a GPU, sub-group 32 or one CTA element of SLM. @ingroup selection_ops
 
 #include <batchlas/blas/matrix.hh>
 
@@ -20,9 +21,8 @@ using select::overloaded;
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-// Correctness only (R3): each clause is the argument check at the top of that driver's
-// *_dispatch. One launch covers the batch with a single (m, n, ld, stride), and on a wide view
-// the trailing update runs off the panel, so no native family takes either.
+/// Correctness only (R3): false means `c` throws or answers wrongly. Each clause is its driver's check; one
+/// launch serves one (m, n, ld, stride) and a wide view's update runs off the panel, so natives take neither.
 template <class T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();

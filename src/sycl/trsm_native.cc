@@ -346,14 +346,9 @@ inline int trsm_outer_block_default() { return 128; }
 // Widening helps Side::Left and HURTS Side::Right, whose trailing update puts the
 // width on the other GEMM dimension. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
 inline int trsm_outer_block(int cta_nb, Side side) {
-    // Read per call, not latched: once a function-local static caches the first
-    // process-wide answer, a later change is invisible and an A/B harness (or the
-    // knob's own test) silently measures the default arm twice and passes. The
-    // settings() snapshot is re-read on reload, so reading it here per call keeps
-    // that property; a static here would destroy it again.
-    //
-    // 0 means "unset" at this site, which is what the field carries: the real
-    // default is side-dependent and is applied on the next line.
+    // Read per call, NEVER latch in a static: an A/B would measure one arm twice.
+    // 0 = unset; the side-dependent default applies on the next line.
+    // evidence: docs/perf/trsm.md#tuning-knobs-and-environment
     const int env = batchlas::settings().geometry.trsm_outer_nb;
     const int want = env ? env : (side == Side::Left ? trsm_outer_block_default() : cta_nb);
     const int rounded = (want / cta_nb) * cta_nb;

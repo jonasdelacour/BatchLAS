@@ -43,11 +43,12 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
             {"batch", A.batch_size()}};
 }
 
-// Correctness only (R3). There is no gemv validator, deliberately (known-defects #1: a throw
-// would turn a live silent misuse into a crash), so the native terms carry the agreement checks:
+// Correctness only (R3). There is no gemv validator, deliberately: a throw would turn a live
+// silent misuse (ortho's transposed arm) into a crash, so the native terms carry the agreement checks:
 // one launch reads A.batch_size() items of all three views with one (m, n), so x and y must
 // match A in batch and length or a native kernel indexes past them. The vendor takes any call,
 // as before. m == 0 or n == 0 is legal; the drivers quick-return.
+// evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
 template <class T>
 bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const VectorView<T>& X,
              const VectorView<T>& Y, Transpose transA) {

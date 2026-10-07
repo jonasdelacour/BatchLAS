@@ -1,4 +1,10 @@
-# Phase 3 execution plan: flat selection for posv, trsm and gemm
+# Phase 3 execution plan: flat selection for posv, trsm and gemm {#design_flat_selection_phase3_plan}
+
+> **Covers:** the 2026-10-04 execution plan for flat-selection phase 3 (posv, the tuner, trsm, gemm).
+> **Status:** historical. Every PR it plans has landed; what was actually built, and where it
+> departed from this plan, is in @ref design_flat_selection (section 12, "As built", and section 13,
+> the maintainer's decisions). Kept because code, tables and the tuner cite its sections
+> ("plan §1.2"). Its file:line maps describe a tree that no longer exists.
 
 Status: plan, 2026-10-04. The maintainer's answers to §5's questions are in `flat-kernel-selection.md` §13, and they override this file where the two differ (Q1 yes; tuner pulled forward; blackwell kernels first; gemm Q8 yes; Q5, Q3 and Q7 not approved).
 

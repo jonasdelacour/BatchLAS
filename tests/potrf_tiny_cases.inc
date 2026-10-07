@@ -3,7 +3,7 @@
 // multiply_back_residual and residual_tol are in scope.
 //
 // Every case here but the facade one drives sycl_potrf::potrf_tiny_dispatch DIRECTLY.
-// evidence: docs/perf/potrf.md#the-tiny-tier
+// evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 
 // One batch of n x n matrices at an arbitrary (ld, stride), everything outside the `uplo`
 // triangle set to `pad`. Matrix<T>(n,n,batch) cannot express a padded ld or a stride that

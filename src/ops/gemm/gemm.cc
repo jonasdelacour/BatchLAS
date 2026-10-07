@@ -87,7 +87,7 @@ inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
 
 // Correctness only (R3): false means the launcher would throw or answer wrongly. Every register
 // and wide tile hard-wires its transpose form, so a form it does not instantiate is refused
-// here; before this, 18 NN-only variants silently computed NN on a transposed call.
+// here (a silent wrong answer otherwise). evidence: docs/perf/gemm.md#choices-flat-selection-p34
 template <class T>
 bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, const MV<T>& C,
              Transpose ta, Transpose tb, ComputePrecision precision) {

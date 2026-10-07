@@ -24,6 +24,12 @@ the runner exist, and what to do when it misbehaves.
 | Public headers do not reach into `src/` | hosted | |
 | No unprefixed `<blas/…>`, `<util/…>` or `<internal/…>` include | hosted | |
 | No type declared in the consumer's global namespace | hosted | No build can see this defect; a text scan is the only cheap oracle. |
+| No C++ source over the 18% comment-density ceiling | hosted | `check_comment_density.py`, self-test first. Doxygen doc comments in `include/batchlas/` are exempt; see [Writing API documentation](developer/documentation.md#writing-api-documentation). |
+| Every `evidence:` pointer resolves, and every cited heading slug is unique across `docs/` | hosted | `check_evidence_anchors.py`, self-test first. |
+| No Markdown outside `docs/` | hosted | `check_markdown_locations.py`, self-test first. `README.md` anywhere, root `AGENTS.md`/`CLAUDE.md`/`LICENSE.md` and `.github/` are exempt. |
+| Nothing under an LFS path committed as raw content | hosted | `check_lfs_pointers.py`, self-test first. |
+| Documentation site builds with zero Doxygen warnings | hosted | `docs` job: pinned Doxygen 1.18.0 (sha256-checked), `BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh`, which also checks every cited anchor is live in the generated site. Site uploaded as the `docs-html` artifact on every run. |
+| Documentation site published | hosted, **push to `main` only** | `docs-deploy` job, GitHub Pages. Needs Pages enabled once in the repository settings; see [The docs jobs](#the-docs-jobs). |
 | Configure with a real CUDA DPC++ | GPU, per PR | `-DBATCHLAS_ENABLE_CUDA=ON`, plus an explicit grep for `Using SYCL targets: … nvidia_gpu_sm_89`. |
 | Compile every component library and every test binary | GPU, per PR | `cmake --build --preset dev-tests` builds the default `all` target: the component shared objects from 95 source TUs, plus 61 test executables. |
 | Run the test suite on a GPU | GPU, per PR | `ctest --preset dev-tests -LE slow` — 65 of 70 tests. Wrong numbers, kernel launch failures and device-side aborts are caught here and nowhere else. |
@@ -52,9 +58,9 @@ behind it. There is no second runner and no cloud fallback.
 ## The jobs
 
 **Static checks** (`ubuntu-latest`): `cmake-lint`, `exported-package`,
-`public-headers`. Their reach is unchanged from before the GPU job existed.
-Every one is a script under `.github/ci/`, so all of it runs locally with no
-toolchain:
+`public-headers`, `comment-density` (comment density, evidence anchors and the
+Markdown location rule) and `lfs-pointers`. Every one is a script under
+`.github/ci/`, so all of it runs locally with no toolchain:
 
 ```bash
 .github/ci/run_local_checks.sh
@@ -71,8 +77,32 @@ with `run_nightly`. The full 70-test `ctest` (the four `slow` suites plus
 `consumer_package_tests`), then a vendor-free configure/build/ctest that reports
 rather than gates. Timeout 360 minutes.
 
-Two properties of the GPU jobs are not optional, and both are already in the
-workflow:
+### The docs jobs
+
+**`docs`** (`ubuntu-latest`), on every trigger. Runs
+`docs/tools/gen_db_pages.py --self-test`, downloads the official Doxygen
+1.18.0 release tarball and checks it against the sha256 pinned in `ci.yml`,
+installs Graphviz, then runs `BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh
+build/docs`. Strict mode makes any Doxygen warning a failure; the script also
+runs `docs/tools/check_doc_anchors.py`, which fails if a cited anchor is not a
+live section id in the generated site. `build/docs/html` and the warnings log
+are uploaded as the `docs-html` artifact (14 days), so a pull request's site
+can be browsed from its run page. The checkout does not fetch LFS content: the
+Results database lists a pointer as a pointer. It does fetch full history
+(`fetch-depth: 0`), because that page dates each result file by the commit
+that added it.
+
+**`docs-deploy`**, only on a push to `main`, after `docs`. Publishes the
+Pages artifact with `actions/deploy-pages`. The `pages: write` and
+`id-token: write` permissions are granted to this job alone, and it runs no
+repository code. **GitHub Pages must be enabled once by a repository admin:
+Settings → Pages → Build and deployment → Source: "GitHub Actions".** Until
+then this job fails and `docs` stays green. To bump Doxygen, see
+[Building the site](developer/documentation.md#building-the-site).
+
+### The GPU jobs: two properties that are not optional
+
+Both are already in the workflow:
 
 * **No fork pull requests.** A self-hosted runner on a workstation executes
   whatever the pull request contains, as this user, with this user's `$HOME`,
@@ -364,6 +394,11 @@ When `compare_failures.py` prints `NEWLY PASSING`:
 .github/ci/run_local_checks.sh /tmp/inst       # ...plus the real installed package
 ```
 
+The wrapper also builds the documentation site into `build/docs` when a
+Doxygen 1.18+ is on `PATH` (or named by `DOXYGEN=`), and prints a skip line
+otherwise. Locally it is not strict; set `BATCHLAS_DOCS_STRICT=1` to fail on
+warnings the way the `docs` job does.
+
 The optional argument is an install prefix (`cmake --install
 build/presets/dev-tests --prefix /tmp/inst`). It enables the `--package` half of
 the export check, which reads the `BatchLASConfig` / `BatchLASTargets` cmake
@@ -387,8 +422,7 @@ is serial by construction and needs no `-j`.
 `tests/README.md` has the scoping table (`ctest -R '^name$'` for one binary,
 `ctest -L <component>` for a subsystem, `ctest -LE slow` for a broad-but-quick
 pass). Current measured counts on this tree: full `ctest` is **70 tests**;
-`ctest -LE slow` is **65 tests in about 95 s**. (`tests/README.md`'s table
-quotes an older 38-of-45; the counts here are the measured current ones.)
+`ctest -LE slow` is **65 tests in about 95 s**.
 `scripts/ctest_gpus.sh` (one test per GPU slot, see `tests/README.md`) was
 validated only on threadripper02 (64 cores, 4 GPUs). On this box CI keeps its
 serial preset, and so should a local full gate: the route-pinned reruns' gtest

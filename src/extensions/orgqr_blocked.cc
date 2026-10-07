@@ -1,5 +1,5 @@
 // Native batched ORGQR, blocked tier: Q = H_1 H_2 ... H_k I_{m x n}, i.e. the
-// routed ormqr applied to an identity. evidence: docs/perf/qr.md#the-vendor-baseline
+// routed ormqr applied to an identity. evidence: docs/perf/qr.md#qr-the-vendor-baseline
 //
 // Both apply-Q seams must be injected, never defaulted: this driver is
 // instantiated per scalar type with no Backend parameter, so only the facade
@@ -98,7 +98,7 @@ std::size_t orgqr_apply_bytes(Queue& ctx,
 }  // namespace
 
 // True for all four types; Auto takes this driver where tuned/orgqr.*.txt ranks
-// blocked first (m, n <= 512). evidence: docs/perf/qr.md#route-arms
+// blocked first (m, n <= 512). evidence: docs/perf/qr.md#qr-route-arms
 template <> bool orgqr_blocked_available<float>()                { return true; }
 template <> bool orgqr_blocked_available<double>()               { return true; }
 template <> bool orgqr_blocked_available<std::complex<float>>()  { return true; }

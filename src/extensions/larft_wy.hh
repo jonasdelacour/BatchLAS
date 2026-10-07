@@ -2,36 +2,16 @@
 
 #include <type_traits>
 
-// The WY block-reflector machinery, SHARED.
+// The WY block-reflector machinery (larft, pack_v), shared by ormqr_blocked.cc and
+// geqrf_blocked.cc. sytrd_sy2sb.cc's private copy is unreachable, not a third user.
+// evidence: docs/perf/qr.md#larft_wyhh-why-the-wy-helpers-are-shared
 //
-// WHY THIS FILE EXISTS. `larft` (form the ib x ib triangular factor T of a block
-// of Householder reflectors) and `pack_v` (materialise the unit-lower V panel
-// from geqrf's packed output) existed in this tree in TWO private copies inside
-// src/extensions/ormqr_blocked.cc, plus a THIRD in sytrd_sy2sb.cc:233 that its
-// own loop no longer reaches. WP5 needs both for the blocked geqrf's trailing
-// update, and the WP5 brief is explicit that the answer is to factor them out
-// rather than to write a sixth private copy. This is that factoring: the bodies
-// below are ormqr_blocked.cc's, moved verbatim, and ormqr_blocked.cc now calls
-// them here.
+// KERNEL NAMES ARE TAGGED BY CALLER, and that is not decoration: the callers sit in
+// DIFFERENT device-code clusters (src/extensions/CMakeLists.txt), so an untagged
+// closure type would be emitted into two device images of one shared library.
 //
-// (sytrd_sy2sb.cc's third copy is left alone. It is unreachable from that file's
-// own loop, which goes through ormqr, so deleting it is a separate change with a
-// separate justification. It is named here so the next reader does not mistake
-// it for a fourth reusable primitive.)
-//
-// KERNEL NAMES ARE TAGGED BY CALLER, and that is not decoration. These are
-// inline function templates in a header, so two translation units that include
-// it instantiate the same closure types; if those TUs sit in DIFFERENT
-// device-code clusters (ormqr_blocked.cc is in EXTENSIONS_FACTORIZATION_SOURCES,
-// geqrf_blocked.cc in EXTENSIONS_CTA_SOURCES -- see src/extensions/
-// CMakeLists.txt) the same SYCL kernel name would be emitted into two
-// device images of one shared library. The `Tag` parameter makes each caller's
-// kernels distinct types, which removes the question rather than answering it.
-//
-// WHAT IS *NOT* SHARED. The `use_device` switch is a PARAMETER, not a getenv
-// read: ormqr reads BATCHLAS_ORMQR_IMPL for itself and passes the answer in, and
-// geqrf chooses independently. Putting the getenv here would silently tie a
-// geqrf kernel selection to a variable named for ormqr.
+// `use_device` is a PARAMETER, never a getenv here: ormqr reads BATCHLAS_ORMQR_IMPL
+// itself, and a getenv here would tie geqrf's kernel choice to ormqr's variable.
 
 #include <batchlas/blas/device.hh>
 #include <batchlas/blas/matrix.hh>
@@ -228,21 +208,9 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
 
 }  // namespace detail
 
-// Dispatcher over the work-group ladder. The ladder and its thresholds are
-// ormqr's, moved unchanged.
-//
-// UseDevice IS A TEMPLATE PARAMETER, NOT A RUNTIME BOOL, AND THAT IS A DEVICE
-// LINK-TIME DECISION. As a runtime bool it instantiated BOTH implementations for
-// every (Tag, T, WG) the ladder can reach. geqrf passes a literal `false`
-// (geqrf_blocked.cc), so `larft_forward_columnwise_wg_device<GeqrfWyTag, ...>`
-// was 32 entry functions -- 4 types x 4 work-group rungs x 2 (base and
-// _with_offset) -- that were compiled, ptxas'd and device-linked into
-// batchlas_extensions_cta, the slowest-linking library in the tree at ~125 s,
-// and could never be launched. nsys confirmed it: no `(bool)1` variant appears
-// in any WP5 run. They also included the highest-register kernel in the whole
-// WP5 set (cdouble, 90 registers, 208 B stack frame), so they were not free to
-// leave in. A caller that genuinely chooses at RUNTIME -- ormqr, via
-// BATCHLAS_ORMQR_IMPL -- keeps both by calling the runtime wrapper below.
+// Dispatcher over the work-group ladder. UseDevice is a TEMPLATE parameter, not a runtime
+// bool, because a runtime bool device-links both implementations for every rung even
+// where the caller passes a literal. evidence: docs/perf/qr.md#larft_wyhh-usedevice-is-a-template-parameter
 template <typename Tag, typename T, bool UseDevice>
 sycl::event larft_forward_columnwise_batched_t(Queue& q,
                                                T* t_data, int ld_t, int stride_t,
@@ -268,10 +236,8 @@ sycl::event larft_forward_columnwise_batched_t(Queue& q,
     return pick(std::integral_constant<int, 256>{});
 }
 
-// Runtime-selecting wrapper. ONLY for a caller whose choice is not a compile-time
-// fact -- today that is ormqr alone (use_device_ormqr() reads BATCHLAS_ORMQR_IMPL).
-// Calling this from a caller that passes a literal is what put 32 dead entry
-// functions in the device link; call the _t form with an explicit `false` instead.
+// Runtime-selecting wrapper, ONLY for a caller whose choice is not a compile-time fact
+// (today ormqr alone, via BATCHLAS_ORMQR_IMPL). A caller with a literal calls the _t form.
 template <typename Tag, typename T>
 sycl::event larft_forward_columnwise_batched(Queue& q,
                                              T* t_data, int ld_t, int stride_t,
@@ -309,15 +275,9 @@ sycl::event pack_v_panel_batched(Queue& q,
     const int batch = a.batch_size();
 
     return q->submit([&](sycl::handler& h) {
-        // DIM 2 IS THE ROW, NOT THE COLUMN. sycl::id<3> makes dim 2 the
-        // fastest-varying index and both operands are COLUMN-MAJOR, so putting
-        // the column there made a warp read a_ptr at ld_a*sizeof(T) apart and
-        // write v_out at ld_v_out*sizeof(T) apart -- 32 sectors per warp instead
-        // of 4, on both sides. Measured before the swap: 63.7 us median per
-        // instance for a 17.3 MB job (float m=n=1024, batch=128, nb=32), 3.4x
-        // the DRAM floor, and the amplification was MUTED only because an 8.7 MB
-        // panel is L2-resident on a 72 MB L2 -- it degrades toward the full 8x at
-        // larger m or batch. Same convention as src/matrix.cc:400.
+        // DIM 2 IS THE ROW, NOT THE COLUMN: dim 2 is fastest-varying and both operands
+        // are column-major, so the column there is uncoalesced (32 sectors per warp, not 4).
+        // evidence: docs/perf/qr.md#larft_wyhh-pack_v-indexes-the-row-fastest
         h.parallel_for<PackVKernelName<Tag, T>>(
             sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(ib),
                            static_cast<size_t>(m)),

@@ -27,37 +27,13 @@ namespace batchlas {
 namespace {
 
 // ---------------------------------------------------------------------------
-// WY block width for the panel back-transform.
-//
-// sy2sb factors a panel of width kd (default 32) and then calls ormqr on it.
-// ormqr's dispatch picks its WY block width from tuning::ormqr_block_size_for_n
-// keyed on A.rows() -- the panel *height* (hundreds to thousands) -- while the
-// dimension that actually matters is k = kd. Every ORMQR_BLOCK_SIZE_* constant is
-// 16, so a kd=32 panel is split into two WY blocks: 2x pack_v, 2x larft and 6
-// GEMMs per ormqr instead of 1, 1 and 3, with every GEMM at k=16 instead of 32.
-//
-// Using nb = kd was measured (prior probe, interleaved A/B, median of 15 rounds,
-// idle GPU) on the sy2sb panel loop:
-//
-//     n=1024 kd=32 batch=64  : 1.19-1.20x faster
-//     n=2048 kd=32 batch=32  : 1.36x   faster
-//     n=512  kd=32 batch=128 : 0.90x   (regression)
-//     n=1024 kd=32 batch=8   : 0.67x   (large regression)
-//
-// The win comes from GEMM k-depth, not from the lower launch count; LARFT work is
-// O(m*k*nb) and doubles with nb, which dominates once the GEMMs are too small to
-// benefit. So this is gated to the region where the win was measured: n >= 1024
-// and batch >= 32. Outside it we return 0, i.e. exactly today's behaviour.
-//
-// Override with BATCHLAS_SY2SB_ORMQR_NB:
-//   unset          -> shape gate below (default)
-//   0 / "off"      -> never hint; restores the pre-change tuning-table behaviour
-//   <positive int> -> force that block width unconditionally
-//
-// Read fresh on every call (like the BATCHLAS_<OP>_ROUTE pins) so an A/B harness can flip it
-// inside one process. It must NOT be changed between a sytrd_sy2sb_buffer_size
-// query and the matching sytrd_sy2sb call -- that would desynchronise the
-// workspace size from the block width actually used.
+// WY block width for the panel back-transform. ormqr keys its block width on the
+// panel HEIGHT, but the dimension that matters is k = kd; nb = kd wins only where
+// the GEMMs are big enough (n >= 1024, batch >= 32), and returns 0 (table) elsewhere.
+// BATCHLAS_SY2SB_ORMQR_NB: unset -> gate, 0/"off" -> never hint, >0 -> force.
+// Read fresh per call for in-process A/B, but it must NOT change between a
+// sytrd_sy2sb_buffer_size query and its sytrd_sy2sb call (workspace is linear in nb).
+// evidence: docs/perf/sytrd.md#sytrd-the-dense-to-band-ormqr-block-width-hint
 inline int32_t sy2sb_ormqr_nb_env(bool& has_override) {
     // Three-valued (unset / "off"|0 / positive), so the field is the raw value
     // and the strcmp-plus-strtol contract stays here.
@@ -346,22 +322,15 @@ Event sytrd_sy2sb(Queue& ctx,
 
         auto V = a_in({i + kd_i, SliceEnd()}, {i, i + pk});           // (pn x pk)
 
-        // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), so Q^H
-        // must hit *every* column left of the trailing block as well, not just
-        // A22. Columns < i are already zero below row i+kd (they were banded by
-        // earlier panels) and columns [i, i+pk) become R inside geqrf, so when
-        // pk == kd the trailing block is genuinely all that is left.
-        //
-        // On the final panel pk = min(pn, kd) can be < kd, and then columns
-        // [i+pk, i+kd) are neither zero nor part of the panel -- they used to be
-        // skipped entirely, silently corrupting the band. Widening the left
-        // apply to start at column i+pk (and the right apply, its transpose, to
-        // start at row i+pk) covers them; both reduce to the old A22-only calls
-        // when pk == kd. Those leftover columns are exactly the tail columns
-        // [n-kd, n), which the copy after the loop picks up afterwards.
-        //
-        // This is why the failure needed n % kd >= 2: at n % kd == 1 the
-        // leftover Q is 1x1 with tau = 0, i.e. the identity.
+        // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), so Q^H must hit
+        // EVERY column left of the trailing block, not just A22. When pk < kd (final
+        // panel), columns [i+pk, i+kd) are neither zero nor in the panel; starting the
+        // left apply at column i+pk (and the right apply at row i+pk) covers them.
+        // Columns < i are already zero below row i+kd and [i, i+pk) become R inside
+        // geqrf, so at pk == kd both reduce to the A22-only apply. The leftover columns
+        // are the tail [n-kd, n), which the copy after the loop picks up.
+        // Skipping them corrupts the band, visible only at n % kd >= 2 (at 1 the
+        // leftover Q is 1x1 with tau = 0).
         auto A_left = a_in({i + kd_i, SliceEnd()}, {i + pk, SliceEnd()});
         auto A_right = a_in({i + pk, SliceEnd()}, {i + kd_i, SliceEnd()});
 

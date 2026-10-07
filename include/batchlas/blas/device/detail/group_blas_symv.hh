@@ -248,6 +248,22 @@ inline void dispatch_symv(const Group& group,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Symmetric matrix-vector product \f$ y := \alpha\,A\,x + \beta\,y \f$, reading only the `UploV` triangle of `A`.
+///
+/// With a workspace, a non-`Generic` policy, at least 16 work-items and
+/// n >= 16, 16 x 16 blocks of `A` are staged through local memory and each
+/// off-diagonal block is used for both its own and its mirrored contribution.
+/// @tparam UploV  stored triangle of `A`
+/// @tparam Group  `sycl::group` or `sycl::sub_group` (the tiled path barriers on it); every work-item must call
+/// @param group      executor
+/// @param a          single n x n matrix
+/// @param operand    `x`, `y` (each of length at least n), `alpha`, `beta`
+/// @param workspace  local memory of symv_workspace_elements() elements, or `nullptr`
+/// @pre `y` holds finite values even when `beta == 0`; `y` does not alias `x`.
+/// @see hemv(), @ref design_device_group_blas
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -256,6 +272,7 @@ inline constexpr void symv(const Group& group,
     detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As symv(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -264,18 +281,27 @@ inline constexpr void symv(const Group& group,
     detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, false>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that symv() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @return element count, or 0 when no staged path applies
 template <typename T, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
     return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, false>, DeviceBlasPolicy::Auto, T>(launch, extent);
 }
 
+/// @brief Local memory, in elements of `T`, that symv() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @return element count, or 0 when no staged path applies
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
     return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, false>, Policy, T>(launch, extent);
 }
 
+/// @brief As symv(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -287,6 +313,7 @@ inline constexpr void symv(const Group& group,
     symv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
+/// @brief As symv(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -298,6 +325,14 @@ inline constexpr void symv(const Group& group,
     symv<Policy, UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
+/// @brief Hermitian matrix-vector product \f$ y := \alpha\,A\,x + \beta\,y \f$; symv() with conjugated mirroring.
+///
+/// For real `T` this is exactly symv(). The diagonal is read as stored; its
+/// imaginary part is not forced to zero.
+/// @param group      executor (`sycl::group` or `sycl::sub_group`)
+/// @param a          single n x n matrix, `UploV` triangle read
+/// @param operand    `x`, `y`, `alpha`, `beta`
+/// @param workspace  local memory of hemv_workspace_elements() elements, or `nullptr`
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -306,6 +341,7 @@ inline constexpr void hemv(const Group& group,
     detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As hemv(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -314,18 +350,27 @@ inline constexpr void hemv(const Group& group,
     detail::dispatch_symv<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that hemv() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @return element count, or 0 when no staged path applies
 template <typename T, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
     return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent);
 }
 
+/// @brief Local memory, in elements of `T`, that hemv() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @return element count, or 0 when no staged path applies
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
     return detail::symv_workspace_elements<detail::SymmetricTransformTag<Side::Left, UploV, ComplexScalar<T>>, Policy, T>(launch, extent);
 }
 
+/// @brief As hemv(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -337,6 +382,7 @@ inline constexpr void hemv(const Group& group,
     hemv<UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
+/// @brief As hemv(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void hemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -347,5 +393,7 @@ inline constexpr void hemv(const Group& group,
                            T* workspace = nullptr) {
     hemv<Policy, UploV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

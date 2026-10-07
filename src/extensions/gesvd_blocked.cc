@@ -33,96 +33,23 @@ enum class GesvdNativeMode {
     CTA,
 };
 
-// Smallest n for which the Blocked path uses the BLOCKED bidiagonalisation.
-//
-// This was 128, and everything in 33 <= n <= 127 ran the unblocked, level-2,
-// panel-serial gebrd instead -- exactly the band that has no other route, since
-// the CTA path stops at 32. The cost was not a tuning-scale difference:
-//
-//   float, batch=256, full vectors, ms
-//   n        33      36      48      64      127     128
-//   unblkd   10.92   15.50   44.83   99.94   609.1   (n/a)
-//   blocked   1.06    1.13    1.44    2.12     5.83    6.02
-//
-// so n=127 cost 101x what n=128 cost, and n=64 cost 16x what a problem eight
-// times larger cost. Blocked wins at EVERY n from 33 up in both float and double
-// (double, batch=256: n=64 107.8 -> 10.6, n=127 646.9 -> 36.8) -- there is no
-// crossover to find, the unblocked path is simply never the right choice above
-// the CTA cutoff. Accuracy is unchanged: at n=64, kappa=1e4, float, 512 samples,
-// orthogonality 1.78e-5 -> 1.79e-5 and residual 1.29e-6 -> 1.32e-6.
-//
-// The threshold is now 1, not 33. 33 was chosen on the reasoning that the CTA
-// path takes over below it -- but that is only true for SQUARE input. The CTA
-// and Jacobi predicates both require max(m, n) <= 32, so a TALL matrix with
-// n <= 32 satisfies neither and lands here, on the level-2 path, where it is
-// the m rows that make it ruinous. Nothing covered that band: it needs
-// min(m,n) <= 32 to reach it and m > 32 to be slow, and every gesvd benchmark
-// built a square Random(n, n) until the m/n split.
-//
-// Measured, float, m=1024, batch=128, jobu=None jobvh=All, us per matrix:
-//
-//   n              8      16      24      32
-//   unblocked  138.73  604.48  1535.2  2537.2
-//   blocked      2.15    5.69     9.42   14.15
-//   speedup       64x    106x     163x    179x
-//
-// And it is not only the tall case. Square input through this provider is
-// faster blocked too -- 8x8 0.935 -> 0.370 us, 32x32 48.67 -> 1.84 us (26x) --
-// so there is no n at which the unblocked path is the right choice, and the
-// threshold is a floor of 1 rather than a tuned constant.
-//
-// BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the tables above
-// were taken; set it above the largest n to get the old behaviour back.
-// The field carries the raw value because bare atoi is load-bearing here: an
-// unparseable value yields 0, which is BELOW the default of 1 and therefore
-// silently widens the blocked path rather than falling back to it. Routing this
-// through env_int_or would change that.
+// Smallest n for which the Blocked path uses the blocked gebrd. 1 is a floor,
+// not a tuned constant: blocked wins at every n, square and tall (tall n <= 32
+// fails both CTA predicates and lands here).
+// evidence: docs/perf/gesvd.md#gesvd-the-unblocked-gebrd-cliff
+// Bare atoi is load-bearing: an unparseable BATCHLAS_GESVD_BLOCKED_GEBRD_MIN
+// yields 0, which widens the blocked path; env_int_or would change that.
 inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
     const char* v = batchlas::settings().geometry.gesvd_blocked_gebrd_min.get();
     const int32_t threshold = (v != nullptr) ? std::atoi(v) : 1;
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
 
-// Which bidiagonal solver the Blocked path uses.
-//
-// Three choices, selected by BATCHLAS_GESVD_BIDIAG:
-//
-//   bdsdc (default)  Golub-Kahan 2n tridiagonal -> stedc   -- accurate, ~as fast
-//   normal           the tridiagonal of B^T B              -- fastest, squares kappa
-//   bdsqr            sequential Golub-Kahan sweep          -- accurate, very slow
-//
-// bdsdc is the default because the normal-equation path is not merely less
-// accurate at n > 32, it is wrong: forming the tridiagonal of B^T B and taking
-// sigma = sqrt(lambda) squares the condition number. Measured, float, 1024
-// samples, n=64 (benchmarks/gesvd_relacc):
-//
-//   kappa   normal relerr   bdsdc relerr   normal ortho   bdsdc ortho
-//   1e2     5.0e-5          1.8e-6         1.1e-4         1.1e-6
-//   1e3     9.4e-2          9.7e-6         3.8e-1         2.8e-6
-//   1e4     4.1e-1          9.4e-5         6.8e-1         1.9e-5
-//   1e6     8.5e-1          5.0e-1         1.6e+0         1.4e-4
-//
-// At kappa=1e4 the old default returns U and V that are not orthogonal at all.
-// The cost of fixing that is small, because bdsdc hands the work to the batched,
-// tuned stedc at order 2n rather than iterating per matrix. Measured, float, full
-// vectors:
-//
-//   n     batch   normal-eq   bdsdc              bdsqr
-//   64    512     202 ms      201 ms  (1.00x)    643 ms
-//   128   512     8.4 ms      10.0 ms (1.19x)    3255 ms
-//   256   512     66.3 ms     76.4 ms (1.15x)    24388 ms
-//   512   256     291 ms      324 ms  (1.11x)    --
-//
-// bdsqr is kept for A/B: it runs one THREAD per matrix with the whole sweep
-// serial inside it, so its cost is not a tuning problem -- values-only bdsqr at
-// n=128 (59 ms) is already 7x the entire normal-equation pipeline including its
-// back-transforms. It retains one real advantage: zero-shift QR keeps high
-// RELATIVE accuracy for tiny singular values, where divide-and-conquer does not
-// (measured at kappa=1e6, n=64: bdsqr relerr 0.198 vs bdsdc 0.497).
-//
-// The price of bdsdc is memory: a 2n x 2n eigenvector matrix per batch item, ~4x
-// what the tridiagonal path allocates. Set BATCHLAS_GESVD_BIDIAG=normal to get
-// the old behaviour back if that matters more than the accuracy.
+// Bidiagonal solver of the Blocked path, BATCHLAS_GESVD_BIDIAG:
+//   bdsdc (default)  Golub-Kahan 2n tridiagonal -> stedc   accurate, ~as fast
+//   normal           tridiagonal of B^T B                  squares kappa; A/B only
+//   bdsqr            one thread per matrix, zero-shift QR  accurate, 300-400x slower
+// evidence: docs/perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver
 enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
 
 inline GesvdBidiagSolver gesvd_bidiag_solver() {
@@ -143,20 +70,11 @@ inline bool gesvd_direct_bidiag(GesvdNativeMode mode) {
         && gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
 }
 
-// A thin tall U forces a direct bidiagonal solve even under
-// BATCHLAS_GESVD_BIDIAG=normal.
-//
-// This is deliberate and it overrides the environment variable. The
-// normal-equations path allocates an m x m left_vecs and runs a second
-// order-m eigensolve, and patch_zero_left_vectors writes m columns of U
-// unconditionally. Honouring "normal" for a thin tall request would therefore
-// pay the whole m x m cost the caller asked to avoid -- in the workspace
-// instead of in U, so it would look like it worked -- and then overrun a U that
-// only has k columns.
-//
-// The override depends only on the arguments, never on the environment, so
-// gesvd_native_buffer_size and gesvd_native_impl cannot reach different
-// conclusions about which path runs.
+// A thin tall U forces a direct bidiagonal solve, deliberately overriding
+// BATCHLAS_GESVD_BIDIAG=normal: the normal-equations path allocates m x m
+// scratch and patch_zero_left_vectors writes m columns of U, overrunning a
+// k-column U. The override reads only the arguments, so buffer_size and the
+// run path cannot disagree about which path runs.
 inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
     return gesvd_direct_bidiag(mode) || (mode == GesvdNativeMode::Blocked && thin_tall_u);
 }
@@ -943,11 +861,9 @@ Event gesvd_native_impl(Queue& ctx,
         const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k);
         const bool thin_tall_u = want_u && u_cols < m;
         const bool direct_bidiag = gesvd_direct_bidiag(mode, thin_tall_u);
-        // Only a FULL U needs the order-m tridiagonal buffers; with a thin U the
-        // normal-equations branch is unreachable (see gesvd_direct_bidiag's
-        // two-argument overload), so these shrink from max(m,k) to k. That is
-        // the point of the exercise on a 10000 x 32 problem: without it the
-        // m x m cost simply moves from U into the workspace.
+        // Only a FULL U needs order-m tridiagonal buffers; a thin U cannot reach
+        // the normal-equations branch, so they shrink to k (else the m x m cost
+        // of a 10000 x 32 problem just moves into the workspace).
         const int32_t max_order = (want_u && u_cols == m) ? std::max(m, k) : k;
 
         auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -973,20 +889,17 @@ Event gesvd_native_impl(Queue& ctx,
         VectorView<T> sign_right(sign_span, k, batch, 1, max_order);
 
         MatrixView<T, MatrixFormat::Dense> vecs_view;
-        // Not needed on the Blocked (bdsqr) path: bdsqr writes its rotations
-        // straight into u_out / vh_out, so there is no intermediate k x k
-        // eigenvector matrix to hold.
+        // Not needed on a direct bidiagonal solve (bdsdc/bdsqr): those write
+        // straight into u_out / vh_out, with no intermediate k x k matrix.
         if (tridiag_returns_vectors && !direct_bidiag) {
             auto vecs_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(k) * static_cast<size_t>(batch));
             vecs_view = MatrixView<T, MatrixFormat::Dense>(vecs_span.data(), k, k, k, static_cast<int64_t>(k) * static_cast<int64_t>(k), batch);
         }
 
         const JobType tridiag_job = tridiag_returns_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
-        // The Blocked path goes through bdsqr and touches neither the tridiagonal
-        // eigensolver nor its eigenvector buffer, so it does not allocate them.
-        // At n=512 the stedc workspace is the single largest allocation here;
-        // skipping it is a real saving, not just tidiness. The sizing function is
-        // an upper bound that still covers both shapes.
+        // A direct bidiagonal solve touches neither the tridiagonal eigensolver
+        // nor its buffers (at n=512 the largest allocation here), so skip them.
+        // The sizing function is an upper bound covering both shapes.
         Span<std::byte> solver_ws;
         if (!direct_bidiag) {
             size_t solver_ws_bytes = gesvd_solver_workspace_size<B, T>(ctx, k, batch, tridiag_job, mode);
@@ -1015,23 +928,12 @@ Event gesvd_native_impl(Queue& ctx,
         });
 
         // ---- Bidiagonal SVD ----
-        // Blocked path: solve the bidiagonal problem DIRECTLY, on B itself.
-        //
-        // The branch below (kept for CTA mode and for the default) forms the
-        // tridiagonal of B^T B explicitly and takes sigma = sqrt(lambda), which
-        // squares the condition number -- measured relative error 0.299 at
-        // kappa=1e4 and 2.13 at 1e6 for n=32 float, with U/V no longer orthogonal
-        // at all (GESVD_PLAN.md section 2.1). Both direct solvers work on B, so
-        // the error stays proportional to eps*kappa.
-        //
-        // Both write only the leading k x k of U and V^H, so U's trailing columns
-        // k..m-1 are seeded to the identity here and carried to an orthonormal
-        // basis of the complement by the back-transform -- which is what the old
-        // path needed a whole second tridiagonal eigensolve plus
-        // patch_zero_left_vectors to produce. With A = Q_B B P_B^H and B = Q S P^T,
-        //     A = (Q_B Q) S (P^T P_B^H)
-        // which is exactly what the two back-transforms below apply (ormbr 'Q' on
-        // the left, ormbr 'P' on the right) -- unchanged.
+        // Direct solve on B itself; the else branch (CTA mode, =normal) forms
+        // B^T B and squares kappa.
+        // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
+        // Direct solvers write only the leading k x k of U and V^H; U's columns
+        // k..m-1 are seeded to I and completed by the back-transform, since
+        // A = (Q_B Q) S (P^T P_B^H) is exactly ormbr 'Q' left and 'P' right.
         if (direct_bidiag) {
             const bool use_bdsdc = gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsdc;
             const size_t bidiag_ws_bytes =
@@ -1340,14 +1242,10 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k_i32, mode);
         const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k_i32);
 
-        // Mirror the run path's branch exactly. A direct bidiagonal solve
-        // allocates neither the right-singular-vector scratch nor the tridiagonal
-        // solver workspace, and instead needs the bidiagonal solver's own -- which
-        // for bdsdc is the dominant term (a 2k x 2k eigenvector matrix per batch
-        // item plus a stedc workspace at order 2k), far past anything the
-        // tridiagonal path reserves. bdsqr's is small enough that it used to fit
-        // inside the over-allocation here by accident; bdsdc's does not, so this
-        // branch is what keeps buffer_size an actual upper bound.
+        // Mirror the run path's branch exactly. A direct solve needs the
+        // bidiagonal solver's own workspace instead; for bdsdc (2k x 2k vectors
+        // plus stedc at order 2k) it dominates, and only this branch keeps
+        // buffer_size an upper bound.
         if (direct_bidiag) {
             VectorView<T> d_dummy(nullptr, k_i32, static_cast<int32_t>(batch), 1, k_i32);
             const int32_t e_size = static_cast<int32_t>(k > 0 ? k - 1 : 0);

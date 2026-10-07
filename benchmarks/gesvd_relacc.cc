@@ -2,7 +2,8 @@
 //
 // This exists because the pre-existing gesvd accuracy benchmarks cannot see the
 // effect that decides the comparison against cuSOLVER's gesvdjBatched
-// (GESVD_PLAN.md defect C). Two independent reasons they are blind:
+// (evidence: docs/perf/gesvd.md#gesvd-defect-c-an-accuracy-harness-that-could-not-see-relative-error).
+// Two independent reasons they are blind:
 //
 //   1. They report an ABSOLUTE singular-value error (max_abs_singular_error).
 //      The normal-equations defect shows up as a loss of RELATIVE accuracy in

@@ -189,6 +189,25 @@ inline void dispatch_gemv(const Group& group,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief General matrix-vector product \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$.
+///
+/// With a workspace, `NoTrans`, a non-`Generic` policy, an executor of at least
+/// 16 work-items and both extents at least the tile (16 or 32), `A` is staged
+/// through local memory tile by tile; otherwise each output element is a
+/// group reduction (or one work-item's loop when the inner extent is smaller
+/// than the group).
+/// @tparam TransV  op() applied to `A`
+/// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item` (unwrapped to its work-group); every work-item must call
+/// @param group      executor
+/// @param a          single m x n matrix
+/// @param operand    `x` (length of op(A)'s columns), `y` (length of op(A)'s rows), `alpha`, `beta`
+/// @param workspace  local memory of gemv_workspace_elements() elements, or `nullptr`
+/// @pre `y` holds finite values even when `beta == 0`; `y` does not alias `x` or `A`.
+/// @note Issue a group barrier before other work-items read `y`.
+/// @see @ref design_device_group_blas
 template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -197,6 +216,7 @@ inline constexpr void gemv(const Group& group,
     detail::dispatch_gemv<MatrixVectorTransformTag<TransV>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As gemv(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Transpose TransV = Transpose::NoTrans,
           typename Group,
@@ -208,6 +228,11 @@ inline constexpr void gemv(const Group& group,
     detail::dispatch_gemv<MatrixVectorTransformTag<TransV>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that gemv() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param rows rows of `A`
+/// @param cols columns of `A`
+/// @return element count, or 0 when no staged path applies
 template <typename T, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int rows,
@@ -215,6 +240,11 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::gemv_workspace_elements<MatrixVectorTransformTag<TransV>, DeviceBlasPolicy::Auto, T>(launch, rows, cols);
 }
 
+/// @brief Local memory, in elements of `T`, that gemv() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param rows rows of `A`
+/// @param cols columns of `A`
+/// @return element count, or 0 when no staged path applies
 template <typename T, DeviceBlasPolicy Policy, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int rows,
@@ -222,6 +252,7 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::gemv_workspace_elements<MatrixVectorTransformTag<TransV>, Policy, T>(launch, rows, cols);
 }
 
+/// @brief As gemv(), with the operands passed separately instead of in an operand struct.
 template <Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void gemv(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -233,6 +264,7 @@ inline constexpr void gemv(const Group& group,
     gemv<TransV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
 
+/// @brief As gemv(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Transpose TransV = Transpose::NoTrans,
           typename Group,
@@ -246,5 +278,7 @@ inline constexpr void gemv(const Group& group,
                            T* workspace = nullptr) {
     gemv<Policy, TransV>(group, a, make_matvec_operand(x, y, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

@@ -403,8 +403,8 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
             }
         }
 
-        // secular_threads_per_root = 4 is what the tuning tables select for
-        // n <= 64, giving parts_per_wg = 8.
+        // The tuned default (STEDC_THREADS_PER_ROOT_*, 8 in every bucket) is one
+        // of these; parts_per_wg = wg_size / P varies across the sweep.
         for (int P : {4, 8, 16, 32}) {
             auto a_cta = diag;
             auto b_cta = sub;

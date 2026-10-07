@@ -544,7 +544,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
 #if BATCHLAS_HAS_HOST_BACKEND
 // RouteLuPivotFormat's getri half, ported: GPU backends pack 1-based int32 pivots into the int64
 // span and netlib writes genuine int64, so on a GPU queue a NETLIB getri must never take Blocked.
-// evidence: docs/perf/lu.md#correctness-findings
+// evidence: docs/perf/lu.md#lu-correctness-findings
 TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
     using T = typename TestFixture::T;
     const auto A = meta_view<T>(512, 512, 256);

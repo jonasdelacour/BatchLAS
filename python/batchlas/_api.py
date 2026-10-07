@@ -1218,8 +1218,8 @@ def syevx_range(
     ``neigs`` here is a CAPACITY and is required -- there is no safe default
     short of ``n``, and ``n`` is a worst case that costs
     ``O(n^2 * batch)`` of eigenvector storage plus a much larger ``stein``
-    scratch (see SYEVX_RANGE_PLAN.md section 13). Pass an estimate you believe,
-    then check ``result.truncated``.
+    scratch. Pass an estimate you believe, then check ``result.truncated``.
+    evidence: docs/design/syevx-range-selection.md#syevx-range-stein-workspace-scaling
 
     ``abstol`` and ``order`` default to ``None`` meaning "leave whatever
     ``options`` says", so passing an ``SyevxOptions`` that sets them still works.

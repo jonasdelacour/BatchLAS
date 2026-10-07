@@ -9,7 +9,7 @@
 //     unmqr_hb2st    Q2 back-transform, k columns not n
 //     ormqr_blocked  Q1 back-transform, k columns not n
 //
-// Design and evidence: SYEVX_PLAN.md (Tier 2).
+// evidence: docs/perf/syevx.md#syevx-tier-2-directsubset
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -73,38 +73,23 @@ Event syevx_direct_subset(Queue& ctx,
     } else {
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
-        // The caller's declared room per item: the stride of W and the column count
-        // of V. Not the number of eigenvalues produced (the per-item `count` in
-        // m_span) and not the internal stebz stride (`w_sub_len`); conflating the
-        // three is how a batched solver writes item b's answers into item b+1's slots.
+        // Stride of W and columns of V; never the per-item count nor w_sub_len
+        // (conflating them writes item b's answers into item b+1's slots).
         const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
-        // Reported as converged, deliberately and with a caveat.
-        //
-        // sytrd_sy2sb/sb2st are direct, but the two solvers below are not: stebz
-        // bisects to a tolerance and cannot tell its three loop exits apart
-        // afterwards, and stein runs a FIXED count of inverse iterations with no
-        // convergence test at all (LAPACK's ?stein reports how many vectors failed;
-        // nothing here measures it). Giving either a real flag means adding a
-        // residual check -- new arithmetic, not surfacing something that exists --
-        // so it is out of this work package's scope and listed in `deferred`.
-        //
-        // Writing 0 rather than leaving the span untouched is the deliberate part:
-        // an uninitialised span is worse than a conservative one, because the caller
-        // cannot tell "converged" from "never written".
+        // Reported as converged (0) deliberately, although stebz/stein measure no
+        // convergence: an unwritten span would be worse.
+        // evidence: docs/design/syevx.md#syevx-directsubset-reported-as-converged-with-a-caveat
         detail::info_clear(ctx, info, batch);
 
         if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_direct_subset: A must be square");
-        // A capacity above n just leaves the tail of W and V unwritten (the work
-        // count is clamped inside syevx_resolve_range); zero is rejected because
-        // stein requires k >= 1.
+        // A capacity above n is fine (clamped); zero is not, stein requires k >= 1.
         if (capacity < 1) throw batchlas::invalid_argument("syevx_direct_subset: invalid neigs");
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch) {
             throw batchlas::invalid_argument("syevx_direct_subset: m must cover every batch item");
         }
-        // Validated here rather than left to stebz, which would otherwise reject the
-        // range two layers down, after the whole O(n^3) reduction has already run.
+        // Validated here, not by stebz after the whole O(n^3) reduction has run.
         if (params.select == SyevxSelect::Index) {
             const int64_t iu = (params.iu < 0) ? (int64_t(n) - 1) : params.iu;
             if (params.il < 0 || iu >= n || params.il > iu) {
@@ -123,8 +108,7 @@ Event syevx_direct_subset(Queue& ctx,
             throw batchlas::invalid_argument("syevx_direct_subset: requires an in-order Queue");
         }
 
-        // Resolved once so this function and syevx_direct_subset_buffer_size cannot
-        // disagree about what was asked for.
+        // Resolved exactly as syevx_direct_subset_buffer_size does; they must not disagree.
         const auto rr = syevx_resolve_range(n, neigs, params);
         const size_t w_sub_len = subset_w_sub_len(n, capacity, rr.value_range);
 

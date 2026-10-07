@@ -21,6 +21,15 @@ inline constexpr void hadamard(const Group& group,
 
 } // namespace detail::generic
 
+/// @addtogroup device
+/// @{
+
+/// @brief \f$ y := x \f$, cooperatively across `group`.
+/// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group  executor whose work-items share the elements
+/// @param x      input vector
+/// @param y      output vector
+/// @pre `x.size() == y.size()`; both single vectors (`batch_size() == 1`). Checked by `assert` only.
 template <typename Group, typename T>
 inline constexpr void copy(const Group& group,
                            const VectorView<T>& x,
@@ -34,6 +43,11 @@ inline constexpr void copy(const Group& group,
     }
 }
 
+/// @brief \f$ y := \bar{x} \f$ (a plain copy for real `T`).
+/// @param group  executor whose work-items share the elements
+/// @param x      input vector
+/// @param y      output vector
+/// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr void copyc(const Group& group,
                             const VectorView<T>& x,
@@ -47,6 +61,10 @@ inline constexpr void copyc(const Group& group,
     }
 }
 
+/// @brief \f$ x := \alpha\,x \f$.
+/// @param group  executor whose work-items share the elements
+/// @param x      vector scaled in place
+/// @param alpha  scale
 template <typename Group, typename T>
 inline constexpr void scal(const Group& group,
                            const VectorView<T>& x,
@@ -60,6 +78,12 @@ inline constexpr void scal(const Group& group,
     }
 }
 
+/// @brief \f$ y := \alpha\,x + y \f$.
+/// @param group  executor whose work-items share the elements
+/// @param x      input vector
+/// @param y      vector updated in place
+/// @param alpha  scale of `x`
+/// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr void axpy(const Group& group,
                            const VectorView<T>& x,
@@ -74,6 +98,12 @@ inline constexpr void axpy(const Group& group,
     }
 }
 
+/// @brief Element-wise product \f$ z_i := x_i\,y_i \f$.
+/// @param group  executor whose work-items share the elements
+/// @param x      first factor
+/// @param y      second factor
+/// @param z      output; may alias `x` or `y`
+/// @pre all three vectors have the same size.
 template <typename Group, typename T>
 inline constexpr void hadamard(const Group& group,
                                const VectorView<T>& x,
@@ -82,6 +112,13 @@ inline constexpr void hadamard(const Group& group,
     hadamard(group, z, [](const T& lhs, const T& rhs) { return lhs * rhs; }, x, y);
 }
 
+/// @brief Element-wise n-ary map \f$ z_i := \mathrm{op}(u_i, v_i, \ldots) \f$.
+/// @tparam Op      callable taking one `T` per input and returning `T`; must be device-callable
+/// @tparam Inputs  one or more `VectorView<T>`
+/// @param group   executor whose work-items share the elements
+/// @param z       output vector
+/// @param op      the element-wise function
+/// @param inputs  input vectors, each of `z.size()`
 template <typename Group, typename T, typename Op, typename... Inputs>
     requires(sizeof...(Inputs) > 0 && (detail::VectorOperandFor<T, Inputs> && ...))
 inline constexpr void hadamard(const Group& group,
@@ -92,6 +129,12 @@ inline constexpr void hadamard(const Group& group,
     detail::generic::hadamard(group, z, op, inputs...);
 }
 
+/// @brief Unconjugated dot product \f$ \sum_i x_i\,y_i \f$.
+/// @param group  executor whose work-items share the elements
+/// @param x      first vector
+/// @param y      second vector
+/// @return the group-wide sum, on every work-item of `group`
+/// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr T dotu(const Group& group,
                         const VectorView<T>& x,
@@ -108,6 +151,12 @@ inline constexpr T dotu(const Group& group,
     return detail::reduce_sum_group(group, partial);
 }
 
+/// @brief Conjugated dot product \f$ \sum_i \bar{x}_i\,y_i \f$ (dotu for real `T`).
+/// @param group  executor whose work-items share the elements
+/// @param x      conjugated vector
+/// @param y      second vector
+/// @return the group-wide sum, on every work-item of `group`
+/// @pre `x.size() == y.size()`.
 template <typename Group, typename T>
 inline constexpr T dotc(const Group& group,
                         const VectorView<T>& x,
@@ -123,5 +172,7 @@ inline constexpr T dotc(const Group& group,
 
     return detail::reduce_sum_group(group, partial);
 }
+
+/// @}
 
 } // namespace batchlas::device

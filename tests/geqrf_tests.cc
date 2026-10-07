@@ -302,7 +302,7 @@ protected:
 
     // The RESIDENCY predicate, at the whole budget: which leaf geqrf_panel_factorize
     // takes. Strictly wider than cta_fits, and the only one that can reach the 48 KB
-    // launch hole. evidence: docs/perf/qr.md#the-occupancy-rule
+    // launch hole. evidence: docs/perf/qr.md#qr-the-occupancy-rule
     bool leaf_fits(int m, int n) const {
         return sycl_geqrf::geqrf_leaf_fits<T>(m, n, budget());
     }

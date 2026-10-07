@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched LU factorization with partial pivoting (getrf) and its workspace query.
+/// @ingroup factorizations
+
 #include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
@@ -25,8 +29,7 @@ template <typename T>
 using getrf_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&);
 
-// backend::getrf_vendor's signature, spelled out from the definition rather than
-// aliased to sig::getrf: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using getrf_vendor = Event(Queue&,
                            const MatrixView<T, MatrixFormat::Dense>&,
@@ -34,34 +37,24 @@ using getrf_vendor = Event(Queue&,
                            Span<std::byte>,
                            Span<int32_t>);
 
-// backend::getrf_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::getrf_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using getrf_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
 
-// WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
-// kernel selection in src/ops/getrf/getrf.cc because choose() reads
-// A.rows()/A.cols(). Modelled on geqrf_validate_params
-// (geqrf.hh:71-77) and potrf_validate_params, and it obeys geqrf.hh:55-70's rule:
-// validate only what no route could serve.
-//
-// TWO THINGS IT DELIBERATELY DOES NOT CHECK, and both omissions are load-bearing:
-//
-//   * NO SQUARENESS CHECK, although every native family's can_run in
-//     src/ops/getrf/getrf.cc carries one and the arena spellings check it
-//     (options.hh:615's require_square). can_run saying "the native drivers cannot
-//     serve this" sends the call to the vendor (vendor-free: NoRouteError); it
-//     does not say the CALL is invalid. A validator that threw here
-//     would turn a currently-working positional call into an error -- a
-//     user-visible behaviour change that belongs in its own commit with its own
-//     test, which is exactly the rule potrf.hh:59-65 states.
-//
-//   * NO pivots LENGTH CHECK. options.hh:616-617 already does require_span_at_least
-//     on the arena spellings; turning a currently-tolerated short span into a throw
-//     on the positional one is the same class of behaviour change.
+/// @brief Validates the arguments of the positional getrf() entry point.
+///
+/// Checks only non-negative extents. Squareness and the pivot span's length are
+/// checked by the option overloads, not here: every native kernel's can_run
+/// refuses a non-square view, which sends it to the vendor rather than rejecting
+/// it (in a vendor-free build: batchlas::NoRouteError).
+/// @throws batchlas::invalid_argument on negative extents
+/// @ingroup factorizations
+// Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
+// Deliberately no squareness or pivots-length check; adding either is a
+// user-visible behaviour change.
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
@@ -72,16 +65,45 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 
-// `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
-// and >0 for the column at which U became exactly singular. Every backend
-// already allocates that array for the vendor call and then throws it away, so
-// a caller could not tell "the batch factorised" from "item 37 is singular and
-// every getrs/getri downstream of it is noise" (see issue #73).
-//
-// An EMPTY span means "not requested" and is exactly today's behaviour: the
-// backend falls back to its own scratch allocation. The workspace size is
-// deliberately the same either way, so getrf_buffer_size stays correct whether
-// or not a caller asks for status.
+/// @brief Batched LU factorization with partial pivoting.
+///
+/// For every batch item computes \f$ A = P L U \f$ with L unit lower triangular
+/// and U upper triangular, and overwrites A with L (below the diagonal, unit
+/// diagonal implied) and U (on and above it), as LAPACK `?getrf`.
+///
+/// **Pivot format.** @p pivots is typed `int64_t`, but on the GPU backends and
+/// every native kernel it holds *packed 1-based int32* indices: item b's row
+/// interchange i (row i was swapped with row `ipiv[i]`) is the int32 at index
+/// `b * n + i` of the span's bytes reinterpreted as `int32_t`. The NETLIB
+/// backend writes genuine 1-based int64 instead. Pass the span unchanged to
+/// getrs() / getri() on the same backend; do not read or compare the entries
+/// across backends. Complex pivots are chosen on `|Re| + |Im|` natively and on
+/// the modulus by cuBLAS, so pivot sequences can differ between kernels while
+/// both factorizations are valid.
+///
+/// Asynchronous: A, @p pivots and @p info are readable after the returned event
+/// is waited on.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx         queue the kernels are enqueued on
+/// @param A           batch of n x n matrices; overwritten with L and U
+/// @param pivots      pivot output, at least `n * batch` `int64_t` elements
+/// @param work_space  device-accessible scratch of at least getrf_buffer_size() bytes
+/// @param info        per-item LAPACK status, one int32 per batch item: 0 on
+///                    success, i > 0 if U(i,i) is exactly zero (1-based; the
+///                    factorization completed but U is singular). Empty span =
+///                    not requested.
+/// @return event of the last enqueued kernel
+/// @pre `A.rows() == A.cols()` (checked by the option overloads only)
+/// @pre `pivots.size() >= A.rows() * A.batch_size()` (checked by the option overloads only)
+/// @pre a non-empty @p info holds at least `A.batch_size()` elements; a shorter
+///      one is silently ignored by this overload
+/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
+/// @note The workspace size does not depend on whether @p info is requested.
+/// @ingroup factorizations
+// evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
 template <Backend B, typename T>
 BATCHLAS_API Event getrf(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -89,11 +111,9 @@ BATCHLAS_API Event getrf(Queue& ctx,
                          Span<std::byte> work_space,
                          Span<int32_t> info);
 
-// Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
-// sig:: alias above is a function *type* and function types cannot carry
-// default arguments (see src/util/template-instantiations.hh), so a default
-// would not be part of the instantiated signature. A separate overload keeps
-// every existing four-argument call site compiling unchanged.
+/// @brief getrf() without per-item status (`info` not requested).
+/// @ingroup factorizations
+// Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend B, typename T>
 inline Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -102,6 +122,11 @@ inline Event getrf(Queue& ctx,
         return getrf<B,T>(ctx, A, pivots, work_space, Span<int32_t>{});
 }
 
+/// @brief Workspace, in bytes, that getrf() needs for this shape on this queue.
+/// @param ctx  queue the factorization will run on (kernel selection reads its device)
+/// @param A    batch of n x n matrices to be factorized
+/// @return bytes to pass as the `work_space` span of getrf()
+/// @ingroup factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);
@@ -111,13 +136,11 @@ BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for getrf.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `getrf` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/ops/getrf/getrf.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of getrf(); called by getrf() when it selects the `vendor`
+///        kernel family, not by users.
+/// @ingroup dispatch
+// DECLARATION ONLY: the public getrf is defined in src/ops/getrf/getrf.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event getrf_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -126,6 +149,8 @@ BATCHLAS_API Event getrf_vendor(Queue& ctx,
                                 Span<int32_t> info_out);
 
 
+/// @brief Workspace query of the vendor arm of getrf().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A);
@@ -134,11 +159,7 @@ BATCHLAS_API size_t getrf_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(getrf)
 BATCHLAS_ACCEPT_OWNING(getrf_buffer_size)
 

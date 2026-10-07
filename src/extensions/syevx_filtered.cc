@@ -1,6 +1,7 @@
 // syevx_filtered: Chebyshev-filtered subspace iteration.
 //
-// This is SYEVX_PLAN.md Tier 3. One outer iteration is
+// evidence: docs/perf/syevx.md#syevx-tier-3-filtered
+// One outer iteration is
 //
 //     Y  = p_m(A) X          Chebyshev filter, m matvecs
 //     Y  = ortho(Y)
@@ -8,29 +9,11 @@
 //     H  = Z diag(theta) Z^H syev
 //     X  = Y Z               Ritz vectors
 //
-// The filter is the whole point: p_m is the degree-m Chebyshev polynomial of the
-// spectrum mapped so that the *unwanted* interval falls in [-1, 1], where |T_m|
-// <= 1, while the wanted end falls outside, where T_m grows like
-// cosh(m acosh(x)). A handful of iterations therefore does what many
-// unpreconditioned Krylov steps could not.
-//
-// Why this rather than more LOBPCG: the filter needs no preconditioner and no
-// factorization, only matvecs. Unpreconditioned LOBPCG is documented to stagnate,
-// and the ILU(k) preconditioner syevx_lobpcg can build is only valid when looking
-// for the *smallest* eigenpairs (it approximates A^{-1}). Filtering has no such
-// restriction and handles either end.
-//
-// Scaling: the recurrence is the scaled Zhou/Saad form, not the textbook one.
-// T_m evaluated directly overflows quickly -- with a spectrum reaching x = 3 on
-// the mapped axis, T_25(3) is about 1e38, which is float infinity. Carrying the
-// sigma factors keeps every intermediate near unit magnitude, and since the block
-// is orthonormalized immediately afterwards the overall scale is irrelevant
-// anyway; only the *ratio* between wanted and unwanted components matters.
-//
-// Known cost, not yet addressed: the convergence test reads a device flag on the
-// host once per outer iteration, which serializes the queue. That is the same
-// defect as SYEVX_PLAN.md §7.1 in LOBPCG. It costs one sync per outer iteration
-// (not per matvec), so it is far less severe here than there.
+// p_m maps the unwanted interval into [-1, 1]. The recurrence is the scaled
+// Zhou/Saad form: the textbook T_m overflows float (T_25(3) ~ 1e38).
+// evidence: docs/design/syevx.md#syevx-filtered-the-scaled-chebyshev-filter
+// Known cost: one host read of the convergence flag per outer iteration.
+// evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -68,28 +51,18 @@ template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterFinaliz
 
 namespace {
 
-// Default Chebyshev degree. Deliberately mid-range: too low and each outer
-// iteration barely separates the spectrum, too high and the extra matvecs are
-// wasted because the block is reorthogonalized anyway. Unmeasured on this
-// hardware -- see the benchmark note in SYEVX_PLAN.md §2.4.
+// Untuned mid-range guess. evidence: docs/perf/syevx.md#syevx-automatic-chebyshev-filter-degree
 constexpr size_t kDefaultFilterDegree = 10;
 
-// Bounds for the automatically derived degree (see the note at the interval
-// kernel). The lower bound is the historical default, so switching auto on can
-// never make a step *less* selective than the old constant did. The upper bound
-// is the usual ChASE-style ceiling: past roughly this the extra matvecs stop
-// paying for themselves and the precision cap tends to bind anyway.
+// Auto-degree bounds; the minimum equals the old constant, so auto is never less selective.
+// evidence: docs/design/syevx.md#syevx-filtered-the-problem-derived-degree
 constexpr int kAutoDegreeMin = 10;
 constexpr int kAutoDegreeMax = 40;
 
-// Work-group size of the parallel Gershgorin kernel. One work-item per row, so
-// neighbouring items read neighbouring addresses of a column-major matrix and
-// every load is coalesced. Row-groups per matrix scale as n / kBoundsWG, i.e.
-// the parallelism grows linearly while the work grows as n^2.
+// One work-item per row of the Gershgorin kernel: coalesced column-major loads.
 constexpr size_t kBoundsWG = 64;
 
-// xorshift-based fill, so the starting block does not depend on host RNG state
-// and is reproducible across runs and backends.
+// Hash-based fill: the start block is reproducible across runs and backends.
 inline uint32_t splitmix(uint32_t x) {
     x += 0x9e3779b9u;
     x = (x ^ (x >> 16)) * 0x85ebca6bu;
@@ -118,12 +91,8 @@ Event syevx_filtered(Queue& ctx,
 
     if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_filtered: A must be square");
     if (k < 1 || k > n) throw batchlas::invalid_argument("syevx_filtered: invalid neigs");
-    // The Chebyshev filter is a HIGH-PASS: it is built by mapping the unwanted
-    // interval into [-1,1], where |T_m| <= 1, and letting the wanted END fall
-    // outside. An interior interval has unwanted spectrum on both sides, which that
-    // construction cannot express -- it would quietly return an extremal block
-    // instead of failing. `syevx` never routes a non-extremal request here, but
-    // this is also a public entry point. See SYEVX_RANGE_PLAN.md §2.5, §12.2.
+    // A high-pass filter cannot answer an interior range; this is a public entry point.
+    // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
     if (params.select != SyevxSelect::Extremal) {
         throw batchlas::invalid_argument(
             "syevx_filtered: only SyevxSelect::Extremal is supported; the Chebyshev filter is a "
@@ -131,53 +100,27 @@ Event syevx_filtered(Queue& ctx,
             "syevx_direct_subset for an index or value range");
     }
 
-    // Block size. Extra directions give the filter room to resolve the boundary
-    // between wanted and unwanted; without any, the cut sits exactly at the edge
-    // of the block and convergence of the last wanted pair is slow.
+    // Guard directions keep the filter's cut off the edge of the wanted block.
     int64_t m = k + static_cast<int64_t>(params.extra_directions);
     if (params.extra_directions == 0) m = k + std::max<int64_t>(2, k / 4);
     m = std::min(m, n);
 
-    // Filter degree. Precedence: BATCHLAS_SYEVX_FILTER_DEGREE > params.filter_degree
-    // > derived-from-the-problem > kDefaultFilterDegree. Either of the first two
-    // pins the degree and turns the derivation off; BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0
-    // also turns it off, restoring the old constant-10 behaviour exactly.
+    // Precedence: BATCHLAS_SYEVX_FILTER_DEGREE > params.filter_degree > derived
+    // (auto) > kDefaultFilterDegree; either pin turns the derivation off.
     bool degree_explicit = params.filter_degree > 0;
     size_t degree = degree_explicit ? params.filter_degree : kDefaultFilterDegree;
-    // 0 on the field means unset, which is what the call site's `> 0` test
-    // computed before. Setting it also flips degree_explicit, which is why the
-    // four-level precedence chain stays here rather than on the field.
     if (const int parsed = batchlas::settings().geometry.syevx_filter_degree; parsed > 0) {
         degree = static_cast<size_t>(parsed);
         degree_explicit = true;
     }
-    // The derivation is OFF by default, opt in with BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1.
-    //
-    // It is a large win at small batch and a large LOSS at batch >= 4, so it cannot
-    // ship on. MEASURED (RTX 4090, float, n=1024, neigs=8, derived / fixed-10, and
-    // the two modes agree to within 0.02x so this is not a jobz effect):
-    //
-    //   batch          1      2      4      8     16
-    //   NoEigenVectors 2.18x  2.25x  0.70x  0.50x  0.48x
-    //   EigenVectors   2.20x  2.30x  0.69x  0.49x  0.48x
-    //
-    // The mechanism is the batch reduction, not the derivation itself: the degree is
-    // derived per matrix and then reduced to a MIN across the batch, so the GEMM
-    // shapes stay uniform. As the batch grows, the chance that some matrix forces a
-    // low degree tends to 1, the whole batch runs at that worst-case degree, and the
-    // outer iteration count explodes -- which is exactly the plateau at ~0.48x.
-    //
-    // Fixing it means changing the batch reduction (a per-matrix degree costs the
-    // batched GEMM shape; a quantile instead of a min would keep it), not the
-    // per-matrix formula. Until then the constant is the safer default.
+    // The derivation is OFF by default: it wins at batch <= 2 and loses at batch >= 4.
+    // evidence: docs/perf/syevx.md#syevx-automatic-chebyshev-filter-degree
     bool auto_degree = false;
     if (const char* av = batchlas::settings().selection.syevx_filter_degree_auto.get()) {
         if (std::atoi(av) != 0 && !degree_explicit) auto_degree = true;
     }
     bool legacy_bounds = false;
-    // atoi, not env_truthy: "true"/"on" parse to 0 here and are FALSE. Kept as
-    // it is -- the field is the raw value, so the reading of every spelling is
-    // exactly what it was.
+    // Trap: atoi, not env_truthy, so "true"/"on" are FALSE here. Kept deliberately.
     if (const char* bv = batchlas::settings().selection.syevx_bounds_legacy.get()) {
         legacy_bounds = (std::atoi(bv) != 0);
     }
@@ -255,22 +198,10 @@ Event syevx_filtered(Queue& ctx,
         }
     };
 
-    // ---- Gershgorin bounds. Cheap, needs no matvec, and only has to be
-    // conservative: a loose interval costs filter sharpness, never correctness.
-    //
-    // Row i contributes the interval [a_ii - sum_{j!=i}|a_ij|, a_ii + sum_{j!=i}|a_ij|];
-    // lo/hi are the min/max over rows. The legacy kernel ran that as ONE work-item
-    // per matrix walking all n^2 elements with a column-major stride (every load its
-    // own sector) -- measured at 80.2% of the whole solve at n=1024, and completely
-    // independent of batch. The parallel version below gives each work-item one row
-    // and keeps the *inner* j loop serial and in ascending order, so each row's
-    // radius is accumulated in exactly the legacy order and the per-row endpoints are
-    // bit-identical; only the outer min/max is re-associated, and min/max is exact
-    // under any association. The results are therefore bit-identical, not merely
-    // equivalent. Neighbouring work-items handle neighbouring rows, so at a fixed j
-    // the work-group reads a contiguous run of a column: fully coalesced.
-    //
-    // BATCHLAS_SYEVX_BOUNDS_LEGACY=1 restores the serial kernel for A/B.
+    // ---- Gershgorin bounds: only need to be conservative (a loose interval costs
+    // sharpness, never correctness). Invariant: the inner j loop stays serial and
+    // ascending, so the parallel kernel is bit-identical to the legacy one
+    // (BATCHLAS_SYEVX_BOUNDS_LEGACY=1). evidence: docs/perf/syevx.md#syevx-the-parallel-gershgorin-bounds-kernel
     auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) {
         Real diag = Real(0);
         Real radius = Real(0);
@@ -309,9 +240,7 @@ Event syevx_filtered(Queue& ctx,
 
     const size_t row_groups =
         std::max<size_t>(1, (static_cast<size_t>(n) + kBoundsWG - 1) / kBoundsWG);
-    // Per-(matrix, row-group) partial [min, max]. Small (2 * ceil(n/64) * batch
-    // reals) and allocated outside the BumpAllocator, so the workspace query is
-    // unaffected -- see the note at syevx_filtered_buffer_size.
+    // Outside the BumpAllocator on purpose; see syevx_filtered_buffer_size.
     UnifiedVector<Real> bounds_partial(2 * row_groups * static_cast<size_t>(batch));
     if (legacy_bounds) {
         auto lo = lo_span.data();
@@ -515,16 +444,9 @@ Event syevx_filtered(Queue& ctx,
                 h.parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(
                     sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                         const int b = static_cast<int>(tid[0]);
-                        // `far` is the point at which the scaled polynomial is
-                        // normalised to 1. It must be the extreme *Ritz* value,
-                        // not the Gershgorin bound: Gershgorin overestimates the
-                        // spectral radius badly for a random symmetric matrix
-                        // (O(n) versus the true O(sqrt n)), and normalising there
-                        // divides by T_m of a point far outside the spectrum. At
-                        // degree 40 that underflows the whole block to zero, and
-                        // orthogonalising a zero block yields NaN. Normalising at
-                        // the wanted end instead keeps p ~ 1 exactly where the
-                        // wanted vectors live.
+                        // `far` (where p = 1) must be the extreme *Ritz* value, not
+                        // the Gershgorin bound: that underflows the block to zero -> NaN.
+                        // evidence: docs/design/syevx.md#syevx-filtered-normalising-the-filter-and-capping-its-degree
                         Real a, bb, far;
                         if (large) {
                             // Damp [lo, cut]; amplify above it.
@@ -552,37 +474,21 @@ Event syevx_filtered(Queue& ctx,
                         s1[b] = e / den;
                         sg[b] = s1[b];
 
-                        // Precision-bounded degree.
-                        //
-                        // The filter amplifies the most-wanted direction over the
-                        // least-wanted one by cosh(d*acosh(y_far)) /
-                        // cosh(d*acosh(y_edge)). Once that ratio passes 1/sqrt(eps)
-                        // the least-wanted columns are numerically swamped, the
-                        // block becomes rank-deficient, and the Cholesky-based
-                        // orthogonalization fails -- producing NaN rather than a
-                        // slow answer. Bounding d keeps every outer iteration
-                        // well-conditioned; the lost sharpness is recovered by
-                        // doing another iteration, which is cheap by comparison.
+                        // Precision-bounded degree: cap the amplification ratio
+                        // cosh(d acosh(y_far)) / cosh(d acosh(y_edge)) so the block
+                        // stays full rank (else Cholesky ortho returns NaN).
                         const Real y_far = sycl::fabs((far - c) / e);
                         const int64_t edge = large ? (mm - kk >= 0 ? mm - kk : 0)
                                                    : (kk - 1 >= 0 ? kk - 1 : 0);
                         const Real y_edge = sycl::fabs((th[b * mm + edge] - c) / e);
-                        //
-                        // When y_edge <= 1 the least-wanted direction is inside
-                        // the damped band, where |T_d| <= 1. That is the *worst*
-                        // case for the ratio, not a case to skip: the growth is
-                        // then the full cosh(d*acosh(y_far)), so the edge term
-                        // drops to zero rather than the cap being waived.
+                        // y_edge <= 1 is the WORST case, not one to skip: edge term 0.
                         int dcap = 1 << 20;
                         if (y_far > Real(1)) {
                             const Real edge_term =
                                 (y_edge > Real(1)) ? sycl::acosh(y_edge) : Real(0);
                             const Real g = sycl::acosh(y_far) - edge_term;
                             if (g > Real(0)) {
-                                // Cap the amplification ratio at eps^-1/4 (about
-                                // 300 in float). eps^-1/2 was measured to be too
-                                // generous: the block still went rank-deficient
-                                // and Chol2 returned NaN at degree 40.
+                                // eps^-1/4, not eps^-1/2 (measured NaN at degree 40).
                                 const Real budget = -Real(0.25) *
                                     sycl::log(std::numeric_limits<Real>::epsilon());
                                 const Real d = budget / g;
@@ -592,23 +498,10 @@ Event syevx_filtered(Queue& ctx,
                         }
                         dcap_out[b] = dcap;
 
-                        // ---- Degree derived from the problem (ChASE-style).
-                        //
-                        // Inside the damped band |T_d| <= 1; the least-amplified
-                        // *wanted* direction sits at mapped coordinate y_edge > 1
-                        // and grows like cosh(d acosh(y_edge)) ~ exp(d rate)/2 with
-                        // rate = acosh(y_edge). So one outer iteration shrinks the
-                        // unwanted content of the block by roughly exp(-d rate),
-                        // and the degree that would finish the job in one more
-                        // iteration is
-                        //
-                        //     d_need = log(worst_residual / target) / rate
-                        //
-                        // measured in the same scaled units the convergence test
-                        // uses. This is exactly the geometry the code already
-                        // computes for the precision cap; the cap stays an upper
-                        // bound on top of it, because it guards the real measured
-                        // failure mode (rank-deficient block -> NaN from Cholesky).
+                        // ---- Problem-derived degree (ChASE-style):
+                        // d_need = log(worst_residual / target) / acosh(y_edge),
+                        // still trimmed by the precision cap above.
+                        // evidence: docs/design/syevx.md#syevx-filtered-the-problem-derived-degree
                         Real ratio = Real(1);
                         for (int64_t j = 0; j < kk; ++j) {
                             const int64_t col = large ? (mm - 1 - j) : j;
@@ -682,15 +575,11 @@ Event syevx_filtered(Queue& ctx,
         apply_step(X, X, Y, /*first=*/true);
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, Yprev, X);
 
-        // The interval kernel just wrote the per-batch precision limit; take the
-        // strictest so every item runs the same recurrence length. This reuses
-        // the sync already paid for the convergence check above.
+        // One degree for the whole batch keeps every GEMM shape batched: the
+        // largest need, trimmed by the strictest precision cap.
         ctx.wait();
         size_t eff_degree = degree;
         if (auto_degree) {
-            // Uniform across the batch so the recurrence length -- and hence every
-            // GEMM shape -- stays batched: take the largest requirement, then let
-            // the strictest precision cap trim it.
             size_t need = static_cast<size_t>(kAutoDegreeMin);
             for (int64_t b = 0; b < batch; ++b) {
                 need = std::max(need, static_cast<size_t>(std::max(1, degree_need[b])));
@@ -779,20 +668,12 @@ Event syevx_filtered(Queue& ctx,
         });
     }
 
-    // The per-item flag this routine has always computed and then collapsed into
-    // one `all_converged` bool. Three things it is easy to get wrong here:
-    //   * POLARITY IS INVERTED versus LAPACK -- `converged[b] == 1` means the item
-    //     DID converge -- so one_means_converged flips it. Copying it verbatim
-    //     would report failure on every healthy item and success on every broken
-    //     one, and a one-directional test would not catch that.
-    //   * It is read AFTER the loop, not from mid-loop state: the loop breaks
-    //     either on all-converged or on the iteration cap, and in the second case
-    //     the last kernel's flags are the ones that matter.
-    //   * `converged` is a UnifiedVector local to this function, NOT a pool draw,
-    //     so the kernel reading it must complete before the destructor frees it --
-    //     hence the wait, paid only when status was actually requested. (It is also
-    //     why syevx_filtered_buffer_size is unaffected by any of this: the array is
-    //     outside the workspace entirely.)
+    // Three traps in the per-item flag:
+    //   * POLARITY IS INVERTED versus LAPACK (converged[b] == 1 means converged);
+    //     one_means_converged flips it. A one-directional test would not catch it.
+    //   * Read AFTER the loop: on the iteration cap the last kernel's flags matter.
+    //   * `converged` is a local UnifiedVector, not a pool draw, so the reading
+    //     kernel must finish before its destructor runs -- hence the wait.
     if (detail::info_ptr(info, batch) != nullptr) {
         detail::info_from_flags(ctx, info, converged.data(), batch, /*one_means_converged=*/true);
         ctx.wait();
@@ -808,18 +689,12 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
                                   JobType jobz,
                                   const MatrixView<T, MatrixFormat::Dense>& V,
                                   const SyevxParams<T>& params) {
-    // NOTE (workspace lockstep): the parallel Gershgorin reduction added to
-    // syevx_filtered() needs one extra scratch array (2 * ceil(n/kBoundsWG) * batch
-    // reals), but it is a UnifiedVector allocated outside the BumpAllocator -- the
-    // same pattern already used for `converged` and `degree_cap`. The sequence of
-    // pool.allocate() calls in syevx_filtered() is therefore byte-for-byte unchanged,
-    // and this query needs no corresponding change. The degree change touches no
-    // allocation at all (the recurrence reuses Y/Yprev regardless of length).
+    // Workspace lockstep: bounds_partial, converged and degree_cap are UnifiedVectors
+    // outside the pool, so they have no term here; the degree allocates nothing.
     using Real = typename base_type<T>::type;
     (void)W; (void)V; (void)jobz;
 
-    // Must reject exactly what the solver rejects: a sizing call that returns a
-    // number for a request the solve will refuse is a caller-visible inconsistency.
+    // Must reject exactly what the solver rejects.
     if (params.select != SyevxSelect::Extremal) {
         throw batchlas::invalid_argument(
             "syevx_filtered_buffer_size: only SyevxSelect::Extremal is supported; see "

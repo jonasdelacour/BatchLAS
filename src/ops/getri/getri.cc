@@ -39,7 +39,7 @@ select::Key key_of(const MV<T>& A) {
 // are getri_blocked_dispatch's own checks on A (C, the pivot span and aliasing are argument
 // errors the driver reports itself), plus the pivot format: GPU backends pack 1-based int32 into
 // the int64 span and netlib writes genuine int64, so a NETLIB backend on a GPU queue would read
-// netlib's pivots wrongly. evidence: docs/perf/lu.md#correctness-findings
+// netlib's pivots wrongly. evidence: docs/perf/lu.md#lu-correctness-findings
 // Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, class T>

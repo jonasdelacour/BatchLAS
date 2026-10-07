@@ -1,0 +1,14 @@
+/* BatchLAS accents on top of doxygen-awesome. Tokens only; layout is the theme's. */
+html {
+    --primary-color: #1f6f8b;
+    --primary-dark-color: #174f63;
+    --primary-light-color: #5fa8c2;
+    --content-maxwidth: 1100px;
+}
+html.dark-mode {
+    --primary-color: #5fa8c2;
+    --primary-dark-color: #8cc6da;
+    --primary-light-color: #1f6f8b;
+}
+/* Evidence tables are wide; let them scroll instead of squeezing. */
+div.contents table.markdownTable { display: block; overflow-x: auto; }

@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched matrix inverse from LU factors (getri) and its workspace query.
+/// @ingroup factorizations
+
 #include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
@@ -26,8 +30,7 @@ template <typename T>
 using getri_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&);
 
-// backend::getri_vendor's signature, spelled out from the definition rather than
-// aliased to sig::getri: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using getri_vendor = Event(Queue&,
                            const MatrixView<T, MatrixFormat::Dense>&,
@@ -36,36 +39,20 @@ using getri_vendor = Event(Queue&,
                            Span<std::byte>,
                            Span<int32_t>);
 
-// backend::getri_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::getri_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using getri_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
 
 
-// WP6: the one thing that is invalid for EVERY route, checked once, before
-// choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
-// Modelled on geqrf_validate_params
-// (geqrf.hh:71-77); it obeys geqrf.hh:55-70's rule of validating only what no
-// route could serve.
-//
-// IT COMES IN TWO ARITIES, AND THAT IS FORCED BY THE SIGNATURES RATHER THAN A
-// CONVENIENCE. getri_buffer_size takes A ALONE (getri.hh) while the call
-// takes A and C, so a single two-argument validator could not be used by both --
-// and the query must validate exactly the view its route is built from, because
-// getri's key and can_run are functions of A alone (getri_buffer_size has no C to
-// read; src/ops/getri/getri.cc). The two arities check A
-// identically; the second adds C's extents, which nothing else on the positional
-// path looks at.
-//
-// WHAT NEITHER DELIBERATELY CHECKS: squareness of A or C, their agreement in order
-// and batch, and the pivot span's length. All are checked on the arena spellings
-// (options.hh:687-693); a non-square A additionally fails can_run(Blocked),
-// which routes the call to the vendor.
-// Routing a call away from the native arm is not the same as rejecting it, and a
-// validator that threw would turn a currently-working positional call into an
-// error (potrf.hh:59-65).
+/// @brief Validates A for getri_buffer_size(): non-negative extents only.
+/// @throws batchlas::invalid_argument on negative extents
+/// @ingroup factorizations
+// Runs before choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
+// Two arities because the query takes A alone and getri's key and can_run are
+// functions of A alone; neither checks squareness, agreement of A and C, or the
+// pivots length (a non-square A fails can_run(Blocked) and goes to the vendor).
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
@@ -75,6 +62,9 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     }
 }
 
+/// @brief Validates A and C for the positional getri(): non-negative extents only.
+/// @throws batchlas::invalid_argument on negative extents of A or C
+/// @ingroup factorizations
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& C) {
@@ -87,15 +77,32 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 
-// `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
-// and >0 for the diagonal of U that was exactly zero, so the item has no
-// inverse. The vendor call already writes it and every backend discarded it
-// (see issue #73), leaving the caller to consume a matrix of infinities.
-//
-// An EMPTY span means "not requested" and is exactly today's behaviour: the
-// backend falls back to its own scratch allocation. The workspace size is
-// deliberately the same either way, so getri_buffer_size stays correct whether
-// or not a caller asks for status.
+/// @brief Batched inverse \f$ C = A^{-1} \f$ from the LU factors produced by getrf().
+///
+/// A and @p pivots must be exactly what getrf() produced on the same backend
+/// (see getrf() for the packed 1-based int32 pivot format). The inverse is
+/// written to C, out of place; A is not part of the output.
+///
+/// Asynchronous: C and @p info are readable after the returned event is waited on.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx         queue the kernels are enqueued on
+/// @param A           batch of n x n LU factors from getrf()
+/// @param C           batch of n x n outputs, receives \f$ A^{-1} \f$
+/// @param pivots      pivots from getrf(), `n * batch` entries
+/// @param work_space  device-accessible scratch of at least getri_buffer_size() bytes
+/// @param info        per-item LAPACK status, one int32 per batch item: 0 on
+///                    success, i > 0 if U(i,i) is exactly zero, so the item has
+///                    no inverse (its C is not meaningful). Empty span = not requested.
+/// @return event of the last enqueued kernel
+/// @pre A and C square of the same order and batch, and
+///      `pivots.size() >= n * batch` (checked by the option overloads only)
+/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
+/// @note The workspace size does not depend on whether @p info is requested.
+/// @ingroup factorizations
+// evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
 template <Backend B, typename T>
 BATCHLAS_API Event getri(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -104,11 +111,9 @@ BATCHLAS_API Event getri(Queue& ctx,
                          Span<std::byte> work_space,
                          Span<int32_t> info);
 
-// Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
-// sig:: alias above is a function *type* and function types cannot carry
-// default arguments (see src/util/template-instantiations.hh), so a default
-// would not be part of the instantiated signature. A separate overload keeps
-// every existing five-argument call site compiling unchanged.
+/// @brief getri() without per-item status (`info` not requested).
+/// @ingroup factorizations
+// Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend B, typename T>
 inline Event getri(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -118,6 +123,10 @@ inline Event getri(Queue& ctx,
         return getri<B,T>(ctx, A, C, pivots, work_space, Span<int32_t>{});
 }
 
+/// @brief Workspace, in bytes, that getri() needs for A on this queue.
+///
+/// Takes A alone: the kernel choice, and therefore the size, depends only on A.
+/// @ingroup factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);
@@ -127,13 +136,11 @@ BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for getri.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `getri` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/ops/getri/getri.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of getri(); called by getri() when it selects the `vendor`
+///        kernel family, not by users.
+/// @ingroup dispatch
+// DECLARATION ONLY: the public getri is defined in src/ops/getri/getri.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event getri_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -143,6 +150,8 @@ BATCHLAS_API Event getri_vendor(Queue& ctx,
                                 Span<int32_t> info_out);
 
 
+/// @brief Workspace query of the vendor arm of getri().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A);
@@ -151,11 +160,7 @@ BATCHLAS_API size_t getri_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(getri)
 BATCHLAS_ACCEPT_OWNING(getri_buffer_size)
 

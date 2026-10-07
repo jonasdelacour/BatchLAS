@@ -218,11 +218,8 @@ template <typename U, MatrixFormat M>
 Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     : rows_(rows), cols_(cols), batch_size_(batch_size),
       ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols) {
-    // The layout invariant every other part of the class assumes: ld is the distance
-    // between successive columns, so it is at least rows, and the batch items are far
-    // enough apart to hold a full item. This used to go unchecked here (the from-data
-    // constructors have always checked it), so an ld < rows produced a matrix whose
-    // own accessors read into the next column.
+    // The layout invariant the whole class assumes: ld >= rows, stride holds a full item.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     {
         const std::string prefix = "Matrix(rows, cols, batch_size, ld, stride): ";
         if (rows < 0 || cols < 0) {
@@ -475,15 +472,8 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         // 2. Create row offsets using exclusive scan within each batch
         Matrix<T, MatrixFormat::CSR> result(rows, cols, NonZeros{max_nnz}, batch_size);
 
-        // The scan below writes offsets 1..rows of each batch item and never element 0,
-        // and the CSR allocating constructor reaches the buffer through
-        // UnifiedVector::resize, which does not zero. So row_offsets()[b * (rows + 1)]
-        // was left uninitialised for every item, and anything reading an item's non-zero
-        // count as offsets[end] - offsets[start] read garbage. The CSR Random path writes
-        // that element explicitly; this path did not. Zeroing the whole array also makes
-        // the value/index padding above each item's own count deterministic: max_nnz is
-        // the batch MAXIMUM, so on a heterogeneous batch every smaller item has slots the
-        // population kernel never touches.
+        // The scan never writes element 0 of each item and resize() does not zero: zero it all.
+        // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
         std::fill(result.row_offsets().begin(), result.row_offsets().end(), 0);
 
         // Initialize batch offset counters
@@ -920,24 +910,9 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
                                                     Diag diag) const {
-    // `uplo` names the triangle to KEEP: Uplo::Upper zeroes the strict lower
-    // triangle and leaves an upper-triangular matrix.
-    //
-    // This used to do the opposite. The decode named `i` the row and `j` the
-    // column, but addressed `b*stride + i*ld + j`, and this library is
-    // column-major (`data_[b*stride_ + j*ld_ + i]`, matrix.hh:80) -- so `i` was
-    // really the column and `j` the row, and `Upper && i > j` zeroed col>row,
-    // i.e. the strict UPPER triangle. The names were wrong, not the address
-    // arithmetic, so the fix is to name them correctly and compare the right
-    // way round. The inversion cost PR #66 a day: extracting R from a geqrf
-    // result silently yielded the Householder reflectors instead, which are
-    // easier to diagonalise, and fabricated an apparent 1.7x win for QR
-    // preconditioning that did not exist.
-    //
-    // Two further bugs went with it: the element count came from `data_.size()`
-    // (the span extent, which for a sliced or strided view is not
-    // batch*rows*cols) and `n` was taken from rows_ alone, so a non-square view
-    // decoded its own indices wrongly. Both are fixed here.
+    // `uplo` names the triangle to KEEP: Uplo::Upper zeroes the strict lower triangle. The count is
+    // rows*cols*batch, never data_.size() (wrong for a strided view).
+    // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     T* data_ptr = data_.data();
     const size_t rows = static_cast<size_t>(rows_);
     const size_t cols = static_cast<size_t>(cols_);
@@ -1595,38 +1570,10 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
     return ctx.get_event();
 }
 
-// Pitch between successive *rows* of a buffer that holds row-major data.
-//
-// This used to be inferred from the stored ld (`ld > rows ? ld : cols`). The
-// inference cannot work: `ld` means the distance between successive *columns*, so
-// for any matrix with rows > cols a legal row-major pitch p in `cols < p <= rows`
-// is indistinguishable from "packed" and was silently read at pitch `cols`. And in
-// the other direction the inference was not even self-consistent: the allocation is
-// sized `ld * cols` (a column-major extent), so an inferred row pitch of `ld > cols`
-// makes the row-major read run off the end of the matrix' own buffer.
-//
-// So the pitch is a parameter now. It still has a default -- `cols`, packed --
-// but only where packed is the *only* layout the matrix can be holding, which is
-// what the ld/stride check below decides:
-//
-//   ld == rows and stride == rows * cols  =>  the item is exactly rows * cols
-//   elements, so a row-major read at pitch p needs (rows-1)*p + cols <= rows*cols,
-//   i.e. p <= cols; with the p >= cols check below that forces p == cols.
-//
-// Anywhere else -- a padded ld, or a gap between batch items -- the item has room
-// to spare and a padded row-major buffer fits in it just as well as a packed one.
-// Defaulting there is a guess, and a guess that reads the wrong elements *in
-// bounds*, silently: for rows=8, cols=6, ld=8, stride=64 a genuinely padded
-// (pitch 8) buffer came back with 42 of its 48 elements wrong. So the default
-// refuses to guess and says which two spellings resolve it. Note that the
-// converse makes this complete rather than merely strict: a padded row-major
-// layout needs more than rows * cols per item, so it cannot be held by a matrix
-// whose metadata is packed -- with this check every padded row-major read either
-// throws or was given its pitch explicitly.
-//
-// This helper resolves the default, decides that question, and checks that the
-// resulting read is inside the buffer and does not straddle the next batch item;
-// anything else throws with the numbers in the text.
+// Row pitch of row-major data: a PARAMETER, never inferred from ld (ld is a column distance). The
+// packed default is accepted only when ld == rows and stride == rows*cols, where no padded layout fits;
+// elsewhere it would read wrong elements IN BOUNDS, so it throws. Also bounds-checks the read.
+// evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
 namespace {
 inline std::size_t checked_row_major_pitch(int row_pitch, int rows, int cols, std::size_t ld,
                                            std::size_t stride, int batch_size,
@@ -1840,28 +1787,10 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                             ld > 0 ? ld * cols : rows * cols) * batch_size),
                 rows_(rows), cols_(cols), batch_size_(batch_size),
                 ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
-    // This constructor performed no validation at all -- it was an init list with an
-    // empty body -- while the allocating Matrix constructor above has checked the same
-    // invariant for a while. That asymmetry is what makes the argument-order trap silent:
-    // Matrix takes (rows, cols, batch_size, ld, stride) but MatrixView takes
-    // (data, rows, cols, ld, stride, batch_size), so a caller who learned the order from
-    // `Matrix A(n, n, batch)` writes `MatrixView<float> V(p, n, n, batch)` and gets
-    // ld = batch, stride = batch * n, batch_size = 1 -- a view over a wrongly strided
-    // buffer, with no throw and plausible-looking numbers. `ld_ < rows` catches exactly
-    // that whenever batch < n, and the message names the intended spelling.
-    //
-    // What this deliberately does NOT check:
-    //   * a null `data` pointer, or rows == 0 / cols == 0. Roughly 37 in-repo sites build
-    //     `MatrixView<T, Dense>(nullptr, ...)` as a shape-only stand-in for a workspace
-    //     query, several of them with the shape (nullptr, 0, 0, 1, 1, batch).
-    //   * stride_ >= ld_ * cols, which the Matrix constructor does check. Two live call
-    //     sites violate it -- src/extensions/ortho.cc's transposed CGS view
-    //     `(A.data_ptr(), i, m, m, A.stride(), batch)`, where A is k x m with k <= m so
-    //     A.stride() is k*m against an ld*cols of m*m, and syevx_lobpcg's workspace-sizing
-    //     dummy `(p, 3*bv, 3*bv, 3*bv, 3*bv*bv, batch)`. Both look like real bugs in those
-    //     files, but a throw here would take out ortho and syevx_lobpcg_buffer_size, and
-    //     the check adds nothing against the trap this constructor is being hardened
-    //     against: for `V(p, n, n, batch)` the resolved stride equals ld * cols exactly.
+    // TRAP: MatrixView(p, n, n, batch) (Matrix's argument order) gives ld = batch; `ld_ < rows`
+    // catches it. Deliberately NOT checked: null data / zero extents (shape-only sizing views) and
+    // stride >= ld*cols (two live violators, ortho.cc and syevx_lobpcg sizing, would throw).
+    // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     const std::string prefix = "MatrixView(data, rows, cols, ld, stride, batch_size): ";
     if (rows < 0 || cols < 0) {
         throw batchlas::invalid_argument(prefix + "invalid matrix dimensions " +
