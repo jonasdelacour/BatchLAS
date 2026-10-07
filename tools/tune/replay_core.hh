@@ -22,12 +22,14 @@ struct ReplayCell {
     std::vector<std::vector<double>> rounds;
     std::map<std::string, double> exhaustive;  // final_times: the mean of the pass medians
     int round = 0;                              // 0 = starting lattice of the raw run
+    int passes = 2;
 };
 
 struct ReplayMeta {
     std::vector<std::string> key_names;  // "order:log:2" entries of meta.keys
     std::vector<std::string> candidates;
     std::vector<AxisSpec> axes;  // round-0 values per key, skipped cells included
+    double total_rep_ms = 0;     // every `rep` record of the file: the exhaustive run's summed rep time
 };
 
 // Throws std::runtime_error without a meta record. Cells whose status is not "ok" are not returned.
@@ -42,13 +44,21 @@ struct ReplayReport {
     double mean_loss = 0, p95_loss = 0, p99_loss = 0, max_loss = 0;  // exhaustive(chosen) / best - 1, runnable cells
     double time_weighted_loss = 0;                                   // sum(chosen) / sum(best) - 1, runnable cells
     std::size_t unrunnable = 0;                                      // cells where no entry of the nearest row can run
-    double est_gpu_h = 0;                                            // set by the caller: reps_fraction x exhaustive hours
+    double measure_s = 0;  // rep time the replay consumed, alone
+    double est_gpu_h = 0;  // (measure_s + candidates x (warm_topup_s + verify_s) + cell_overhead_s per cell) / 3600
     std::size_t refine_unavailable = 0;  // distinct bisection midpoints that are not in the raw file
     std::vector<std::string> worst;      // the five worst misranks of either kind
 };
 
+// holdout: race on pass-1 reps only (no reversed round), score against the pass-2 median; off: shared samples.
+struct ReplayOpts {
+    bool holdout = false;
+    double verify_s = 0.05;        // residual check of one candidate in a cell
+    double cell_overhead_s = 0;    // per cell; 0 = persistent worker
+    std::vector<std::string> order;  // tie order (meta.candidates); empty = first appearance in the cells
+};
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t,
-                    const TierParams& p, double tie = 0.03);
+                    const TierParams& p, double tie = 0.03, const ReplayOpts& o = {});
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t, double tie = 0.03);
 
 // "--axis-keep name=v1:v2" / "--axis-stride name=k": shrink one axis's starting lattice in place

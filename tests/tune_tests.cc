@@ -871,6 +871,80 @@ TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     EXPECT_GT(c.refine_unavailable, 0u);
 }
 
+namespace {
+
+// One cell n=1 with explicit reps: reps[attempt][cand][pass-1] = value of that (pass, rep) is `f(pass, rep)`; the
+// pass record's median is median of those reps. final_attempt says which attempt the converter would use.
+struct AttemptData {
+    int attempt;
+    std::map<std::string, std::function<double(int, int)>> value;
+};
+
+std::string write_attempts(const std::string& name, const std::vector<AttemptData>& attempts, int final_attempt) {
+    const std::string path = (scratch("replay") / name).string();
+    std::ofstream f(path);
+    f << Json().str("kind", "meta").integer("schema", 1).str("keys", "mode:exact n:log:2")
+             .str("candidates", "a|b").integer("passes", 2).integer("reps", 16).line();
+    auto base = [&](const char* kind) { return Json().str("kind", kind).str("mode", "x").integer("n", 1).str("uplo", "L"); };
+    for (const AttemptData& a : attempts)
+        for (const auto& [cand, val] : a.value)
+            for (int pass = 1; pass <= 2; ++pass) {
+                std::vector<double> v;
+                for (int rep = 0; rep < 16; ++rep) {
+                    v.push_back(val(pass, rep));
+                    f << base("rep").integer("pass", pass).integer("attempt", a.attempt).str("cand", cand).integer("rep", rep)
+                             .num("ms", v.back()).line();
+                }
+                f << base("pass").integer("pass", pass).integer("attempt", a.attempt).str("cand", cand).str("status", "ok")
+                         .str("reason", "").num("median_ms", median(v)).line();
+            }
+    f << base("cell").integer("round", 0).str("status", "ok").integer("final_attempt", final_attempt).line();
+    return path;
+}
+
+}  // namespace
+
+TEST(TuneReplay, LoaderUsesTheFinalAttemptAndInterleavesPassesByRep) {
+    // Attempt 0 (a 1.0, b 2.0) disagrees with attempt 1, which is final. Attempt 1 values are 10 * pass + rep / 100.
+    auto first = [](double base) { return [base](int, int) { return base; }; };
+    const std::vector<AttemptData> att{{0, {{"a", first(1.0)}, {"b", first(2.0)}}},
+                                       {1, {{"a", [](int pass, int rep) { return 10.0 * pass + rep / 100.0; }},
+                                            {"b", [](int pass, int rep) { return 5.0 * pass + rep / 100.0; }}}}};
+    const auto rc = load_replay(write_attempts("attempts.jsonl", att, 1));
+    ASSERT_EQ(rc.size(), 1u);
+    ASSERT_EQ(rc[0].cands, (std::vector<std::string>{"a", "b"}));
+    // pass medians of a: 10.075 and 20.075 -> mean 15.075 (attempt 0 would give 1.0)
+    EXPECT_NEAR(rc[0].exhaustive.at("a"), 15.075, 1e-9);
+    EXPECT_NEAR(rc[0].exhaustive.at("b"), 7.575, 1e-9);
+    ASSERT_EQ(rc[0].rounds[0].size(), 32u);
+    for (int rep = 0; rep < 16; ++rep)
+        for (int pass = 1; pass <= 2; ++pass)
+            EXPECT_DOUBLE_EQ(rc[0].rounds[0][std::size_t(rep * 2 + pass - 1)], 10.0 * pass + rep / 100.0) << "p" << pass << "r" << rep;
+    EXPECT_EQ(load_replay(write_attempts("attempts0.jsonl", att, 0))[0].exhaustive.at("a"), 1.0);
+}
+
+TEST(TuneReplay, HoldoutRacesOnPassOneAndScoresAgainstPassTwo) {
+    // Pass 1 says a is faster (1.0 vs 1.5), pass 2 says b is (1.5 vs 1.0): a holdout reference exposes the winner.
+    auto pass_ms = [](double p1, double p2) { return [p1, p2](int pass, int) { return pass == 1 ? p1 : p2; }; };
+    const auto rc = load_replay(write_attempts("holdout.jsonl", {{0, {{"a", pass_ms(1.0, 1.5)}, {"b", pass_ms(1.5, 1.0)}}}}, 0));
+    ReplayMeta meta;
+    meta.axes = axis_specs({"mode:exact", "n:log:2"}, {{"mode", {"x"}}, {"n", {"1"}}});
+    TierParams p = params(Tier::coarse);
+    p.confidence = 1.0;
+    p.min_reps = p.max_reps = 16;
+    ReplayOpts hold;
+    hold.holdout = true;
+    const ReplayReport h = replay(rc, meta.axes, Tier::coarse, p, 0.03, hold);
+    EXPECT_NEAR(h.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "16 pass-1 rounds of both candidates, nothing from pass 2";
+    EXPECT_EQ(h.race_misrank, 1.0);
+    EXPECT_NEAR(h.max_loss, 0.5, 1e-9) << "reference a = 1.5 (pass 2), best b = 1.0";
+    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + 2 * (p.warm_topup_s + 0.05)) / 3600, 1e-12);
+    p.min_reps = p.max_reps = 32;
+    const ReplayReport all = replay(rc, meta.axes, Tier::coarse, p);
+    EXPECT_NEAR(all.measure_s, 32 * (1.0 + 1.5) / 1000, 1e-12) << "without holdout every round of both passes is raced";
+    EXPECT_EQ(all.race_misrank, 0.0) << "the pass medians tie, so the race and the reference agree by construction";
+}
+
 TEST(TuneReplay, TierDefaultsDriveTheLatticeAndTheRefinementMode) {
     ReplayMeta meta;
     const auto rc = load_replay(write_raw("defaults.jsonl", flip_cells()), &meta);

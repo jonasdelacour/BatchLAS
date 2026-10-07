@@ -60,6 +60,7 @@ std::vector<ReplayCell> load_replay(const std::string& raw_jsonl, ReplayMeta* me
         const int attempt = static_cast<int>(rec->number("attempt")), pass = static_cast<int>(rec->number("pass"));
         const std::string cand = rec->get("cand");
         if (kind == "rep") {
+            if (const double ms = rec->number("ms"); !std::isnan(ms)) meta.total_rep_ms += ms;
             c.reps[attempt][cand][{pass, static_cast<int>(rec->number("rep"))}] = rec->number("ms");
             continue;
         }
@@ -78,6 +79,7 @@ std::vector<ReplayCell> load_replay(const std::string& raw_jsonl, ReplayMeta* me
         ReplayCell rc;
         rc.key = key;
         rc.round = c.round;
+        rc.passes = passes;
         rc.exhaustive = attempt_times(c.attempts[c.final_attempt], meta.candidates);
         const auto& reps = c.reps[c.final_attempt];
         int per_pass = 0;
@@ -178,9 +180,9 @@ std::vector<CellKey> lattice(const std::vector<AxisSpec>& axes, int stride) {
     return cells;
 }
 
-double best_time(const ReplayCell& c) {
+double best_time(const std::map<std::string, double>& times) {
     double b = std::numeric_limits<double>::infinity();
-    for (const auto& [cand, t] : c.exhaustive) b = std::min(b, t);
+    for (const auto& [cand, t] : times) b = std::min(b, t);
     return b;
 }
 
@@ -209,14 +211,22 @@ std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, co
 }
 
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier, const TierParams& p,
-                    double tie) {
+                    double tie, const ReplayOpts& o) {
     ReplayReport rep;
     rep.cells = cells.size();
     std::map<CellKey, std::size_t> at;
-    std::vector<std::string> order;
-    double total_reps = 0, used_reps = 0;
+    std::vector<std::string> order = o.order;
+    double total_reps = 0, used_reps = 0, measure_ms = 0, fixed_s = 0;
+    std::vector<std::map<std::string, double>> ref(cells.size());
     for (std::size_t i = 0; i < cells.size(); ++i) {
         at[cells[i].key] = i;
+        if (!o.holdout) ref[i] = cells[i].exhaustive;
+        for (std::size_t k = 0; o.holdout && k < cells[i].cands.size(); ++k) {
+            std::vector<double> v;
+            for (std::size_t r = 1; r < cells[i].rounds[k].size(); r += std::size_t(cells[i].passes))
+                if (!std::isnan(cells[i].rounds[k][r])) v.push_back(cells[i].rounds[k][r]);
+            if (!v.empty()) ref[i][cells[i].cands[k]] = median(v);
+        }
         for (const auto& r : cells[i].rounds)
             total_reps += double(std::count_if(r.begin(), r.end(), [](double x) { return !std::isnan(x); }));
         for (const std::string& c : cells[i].cands)
@@ -233,11 +243,15 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
         s.cands = c.cands;
         s.ms.assign(c.cands.size(), {});
         s.alive.assign(c.cands.size(), true);
-        for (std::size_t r = 0; r < c.rounds.front().size(); ++r) {
+        const std::size_t step = o.holdout ? std::size_t(c.passes) : 1, rounds = c.rounds.front().size() / step;
+        fixed_s += double(c.cands.size()) * (p.warm_topup_s + o.verify_s) + o.cell_overhead_s;
+        for (std::size_t r = 0; r < rounds; ++r) {
             for (std::size_t k = 0; k < c.cands.size(); ++k) {
-                const bool run = s.alive[k] && !std::isnan(c.rounds[k][r]);
-                s.ms[k].push_back(run ? c.rounds[k][r] : kNaN);
+                const double v = c.rounds[k][r * step];
+                const bool run = s.alive[k] && !std::isnan(v);
+                s.ms[k].push_back(run ? v : kNaN);
                 used_reps += run;
+                if (run) measure_ms += v;
             }
             if (race_step(s, p, tie) != RaceVerdict::more) break;
         }
@@ -272,6 +286,8 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     rep.refine_unavailable = unavailable.size();
     rep.cells_measured = ranked.size();
     rep.reps_fraction = total_reps > 0 ? used_reps / total_reps : 0;
+    rep.measure_s = measure_ms / 1000;
+    rep.est_gpu_h = (rep.measure_s + fixed_s) / 3600;
 
     std::vector<std::pair<double, std::string>> worst;
     auto note = [&](const char* what, const ReplayCell& c, const std::string& winner, double ratio) {
@@ -281,7 +297,9 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     std::vector<CellKey> rows;
     for (const auto& [key, rk] : ranked) {
         const ReplayCell& c = cells[at.at(key)];
-        const double ratio = c.exhaustive.at(rk.front()) / best_time(c);
+        const auto& ex = ref[at.at(key)];
+        const auto won = ex.find(rk.front());
+        const double ratio = won == ex.end() ? std::numeric_limits<double>::infinity() : won->second / best_time(ex);
         if (ratio > kMisrank) ++race_bad, note("race", c, rk.front(), ratio);
         rows.push_back(key);
     }
@@ -290,13 +308,15 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     std::size_t lattice_cells = 0, lattice_bad = 0;
     if (!rows.empty()) {
         const NearestIndex nearest(rows, axes);
-        for (const ReplayCell& c : cells) {
+        for (std::size_t ci = 0; ci < cells.size(); ++ci) {
+            const ReplayCell& c = cells[ci];
+            const auto& ex = ref[ci];
             const auto& row = ranked.at(rows[nearest.find(c.key)]);
-            const auto pick = std::find_if(row.begin(), row.end(), [&](const std::string& n) { return c.exhaustive.count(n) != 0; });
+            const auto pick = std::find_if(row.begin(), row.end(), [&](const std::string& n) { return ex.count(n) != 0; });
             const bool runs = pick != row.end();
             const std::string& winner = runs ? *pick : row.front();
-            const double ratio = runs ? c.exhaustive.at(winner) / best_time(c) : std::numeric_limits<double>::infinity();
-            if (runs) losses.push_back(ratio - 1), sum_chosen += c.exhaustive.at(winner), sum_best += best_time(c);
+            const double ratio = runs ? ex.at(winner) / best_time(ex) : std::numeric_limits<double>::infinity();
+            if (runs) losses.push_back(ratio - 1), sum_chosen += ex.at(winner), sum_best += best_time(ex);
             else ++rep.unrunnable;
             if (ratio > kMisrank) ++table_bad, note("table", c, winner, ratio);
             if (c.round == 0) ++lattice_cells, lattice_bad += ratio > kMisrank;

@@ -34,7 +34,7 @@ These were decided with the maintainer on 2026-10-07.
 | Question | Decision |
 | --- | --- |
 | Main purpose | Initial fill of every table for a machine; incremental retune and exploration are secondary |
-| Speed versus rigor | The user picks a tier per run: **preview** (sparse, fills gaps only), **coarse** (the full lattice, fewer reps) or **deep**. Budgets are per-op estimates that `--plan` prints; for trsm on sm_120 the replay gives about 1.2 (preview), 2.5 (coarse) and 3.8 (deep) GPU-h for float. More GPUs shard the work. Every tier avoids measurements that cannot change a table. |
+| Speed versus rigor | The user picks a tier per run: **preview** (sparse, fills gaps only), **coarse** (the full lattice, fewer reps) or **deep**. Budgets are per-op estimates that `--plan` prints from a cost model of warm-up, verification and rep time, not from rep counts ("Engine: where the old tuner's time went"). More GPUs shard the work. Every tier avoids measurements that cannot change a table. |
 | Grid reduction | Sparse grids misrank 4-13% of cells with up to about 2x tail loss in the replay, so the lattice is not thinned in coarse or deep. **Preview** is the only sparse tier (every 2nd point, bisection in index space plus a runner-up margin) and fills gaps only. |
 | A cheaper run must not degrade a better one | **Higher fidelity wins per cell.** A table row comes from the highest-tier result whose kernel hashes are still current. A lower tier fills gaps and replaces stale results, never current ones. |
 | Op scope | All 19 routed ops, plus the `tuning_params.hh` constants under the same tiers, ledger and UI. Their header is generated, no longer hand-ported. |
@@ -264,6 +264,34 @@ The engine changes which kernel ships for every shape, so its tests follow the a
   writes pass `tuned_tables_tests` and `--check`. A coarse run of trsm float on sm_120 agrees with
   the existing deep table within the replay's misranking bound.
 
+## Engine: where the old tuner's time went
+
+The replay's first cost estimate scaled the old run's GPU-hours by `reps_fraction`. That is wrong: the sum of every
+`rep` record in `trsm.float.sm_120.jsonl` is 251 s (0.070 GPU-h), and in the double file 709 s (0.197 GPU-h),
+against a 5 h 20 min run on 3 GPUs (about 16 GPU-h) for float (`benchmarks/results/tuning/README.md`). Over 99% of
+the old tuner's time was per-arm warm-up (1.5 s per candidate per pass per cell) and process start-up, JIT and
+verification, which do not shrink with fewer reps. The cost model of `tune_replay` therefore charges
+
+`est_gpu_h = [measure_s + live_candidates x (warm_topup_s + verify_s) + cell_overhead_s per cell] / 3600`
+
+with `measure_s` the rep time the race consumed, `warm_topup_s` = 0.2 from the tier parameters, `--verify-s` = 0.05
+and `--cell-overhead-s` = 0 (a persistent worker, no per-cell process). With those assumptions, on trsm sm_120
+(holdout replay of the tier defaults):
+
+| tier | dtype | measured cells | measure_s | est_gpu_h |
+| --- | --- | --- | --- | --- |
+| preview | float | 2934 | 9.2 | 0.570 |
+| preview | double | 2364 | 23.2 | 0.499 |
+| coarse | float | 4427 | 32.0 | 0.856 |
+| coarse | double | 4066 | 84.9 | 0.811 |
+| deep | float | 4426 | 48.0 | 0.861 |
+| deep | double | 4068 | 131.0 | 0.824 |
+
+The estimate is dominated by the per-candidate term (about 0.25 s per candidate per measured cell), so a tier's
+cost follows its measured cells and not its reps: coarse and deep cost about the same, and preview about two thirds
+of them. A per-cell process (`--cell-overhead-s`) would add its start-up time to every measured cell and raise all
+three. These numbers exclude that overhead and the audit processes, and are estimates for trsm sm_120 only.
+
 ## Engine: replay results on the trsm data
 
 `tune_replay` (`tools/tune/replay.cc`, host-only) replays the race and the bisection of a tier against
@@ -275,63 +303,87 @@ midpoint the raw file lacks is counted (`refine_unavailable`) and dropped. `race
 cells the replay measured, `table_misrank` over all cells: the nearest measured cell is picked by a
 port of `nearest()` in `scripts/sweep_to_table.py`, and its pick counts as a misrank when it is more
 than 3% slower than the exhaustive best at the cell. Like `select::choose`, the pick is the first entry of that row's ranking (survivors, then the eliminated) that can run at the cell; a cell where no entry can run counts as a misrank and as `unrunnable`. `reps_fraction` is the
-candidate-reps the replay timed over those in the file. The table below is the acceptance run at the
-tier values in the tier table above (the bounds apply to both misranks; `tune_replay` prints the verdict):
+candidate-reps the replay timed over those in the file. `measure_s` is the rep time the replay consumed and
+`est_gpu_h` the cost model of "Engine: where the old tuner's time went".
 
-| tier | dtype | measured/cells | reps | GPU-h | race % | table % | lattice % | mean | p99 | max | tw | bound | verdict |
+The acceptance run scores the race on samples it did not see. In holdout mode (the default; `--no-holdout`
+switches it off) the race uses only the pass-1 reps, in rep order, and every misrank and loss is scored
+against the pass-2 median per candidate. Deep's reversed confirmation round cannot be modelled by this, so
+deep is raced like coarse with its own reps and confidence. Holdout table (bounds apply to both misranks):
+
+| tier | dtype | measured/cells | reps | measure_s | race % | table % | lattice % | mean | p99 | max | tw | bound | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| preview | float | 2818/4452 | 0.0730 | 1.17 | 0.25 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 | 5.0% | PASS |
-| preview | double | 2363/4098 | 0.0703 | 2.22 | 0.00 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 | 5.0% | PASS |
-| coarse | float | 4413/4452 | 0.1583 | 2.53 | 0.11 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 1.0% | PASS |
-| coarse | double | 4094/4098 | 0.1518 | 4.78 | 0.02 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 1.0% | PASS |
-| deep | float | 4417/4452 | 0.2375 | 3.80 | 0.11 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0.2% | PASS |
-| deep | double | 4095/4098 | 0.2248 | 7.08 | 0.02 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0.2% | PASS |
+| preview | float | 2934/4452 | 0.0772 | 9.2 | 2.01 | 4.47 | 4.37 | 0.0178 | 0.703 | 2.12 | 0.0121 | 5.0% | PASS |
+| preview | double | 2364/4098 | 0.0698 | 23.2 | 1.73 | 5.37 | 4.94 | 0.0193 | 0.585 | 3.26 | 0.0049 | 5.0% | FAIL |
+| coarse | float | 4427/4452 | 0.1601 | 32.0 | 1.54 | 1.55 | 1.41 | 0.0018 | 0.035 | 0.12 | 0.0009 | 1.0% | FAIL |
+| coarse | double | 4066/4098 | 0.1505 | 84.9 | 1.18 | 1.27 | 1.18 | 0.0013 | 0.037 | 0.47 | 0.0004 | 1.0% | FAIL |
+| deep | float | 4426/4452 | 0.2346 | 48.0 | 1.51 | 1.59 | 1.44 | 0.0019 | 0.037 | 0.13 | 0.0009 | 0.2% | FAIL |
+| deep | double | 4068/4098 | 0.2220 | 131.0 | 1.13 | 1.22 | 1.12 | 0.0012 | 0.036 | 0.12 | 0.0004 | 0.2% | FAIL |
+
+Without holdout, the race and the reference share the same reps, which flatters the result (same-sample
+table, same tier values):
+
+| tier | dtype | measured/cells | reps | race % | table % | lattice % | mean | p99 | max | tw | bound | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| preview | float | 2818/4452 | 0.0730 | 0.25 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 | 5.0% | PASS |
+| preview | double | 2363/4098 | 0.0703 | 0.00 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 | 5.0% | PASS |
+| coarse | float | 4413/4452 | 0.1583 | 0.11 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 1.0% | PASS |
+| coarse | double | 4094/4098 | 0.1518 | 0.02 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 1.0% | PASS |
+| deep | float | 4417/4452 | 0.2375 | 0.11 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0.2% | PASS |
+| deep | double | 4095/4098 | 0.2248 | 0.02 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0.2% | PASS |
+
+Verdicts in holdout mode: preview float passes, preview double misses its 5% bound by 0.4 points, and coarse
+and deep miss their 1% and 0.2% bounds at 1.2% to 1.6%. The numbers are the noise floor of the reference, not
+the race: choosing from all 16 pass-1 reps with no elimination (full lattice, confidence 1.0) scores 1.51% race and
+1.59% table on float and 1.16% and 1.29% on double, the same as deep and coarse. Pass 1 and pass 2 disagree by
+more than 3% for about that many cells, so no race can score below the floor against a pass-2 reference. The bounds
+in "Engine: testing and acceptance" were set before this was measured; they are not changed here.
 
 The sections below record how these values were chosen. Rows named preview in those experiment tables use
 the preview race parameters (3/6 reps, confidence 0.80) with the stride and bisection stated in the row,
 not the final preview tier.
 
-Racing is not the problem: every tier meets its race bound, deep saves 76-78% of the reps, and
-changing confidence or reps moves `table_misrank` by under one point. The table bound is set by the
+The experiment tables below are all same-sample (no holdout), so they measure the lattice and the bisection,
+not the race. Changing confidence or reps moves `table_misrank` by under one point; the table bound is set by the
 lattice and the bisection ratio. The trade-off is easier to read with the loss of the chosen candidate,
 `exhaustive(chosen) / best - 1`, over all cells, where chosen is the `select::choose` pick: `mean_loss`
 and the percentiles cover the cells where some entry of the nearest row can run, `unrunnable` counts
 the rest, `time_weighted_loss` is the summed chosen time over the summed best time minus one, and
 `table_misrank_lattice` repeats `table_misrank` over the round-0 cells only, which removes the raw
-file's refinement points at winner flips. `est_gpu_h` is `reps_fraction` times the exhaustive run
-(float 16.0 GPU-h, double 31.5 GPU-h, from `benchmarks/results/tuning/README.md`), without per-cell
-process overhead. Each row uses the named tier's race parameters; the config column changes only the
+file's refinement points at winner flips. The tables carry no GPU-hour column, because the measured
+time of a tier is dominated by costs that do not scale with reps (next section). Each row uses the named
+tier's race parameters; the config column changes only the
 lattice stride and the bisection ratio.
 
-| config | dtype | cells_measured | reps_fraction | est_gpu_h | table_misrank % | table_misrank_lattice % | mean_loss | p99_loss | max_loss | time_weighted_loss | unrunnable |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| preview default | float | 132 | 0.0031 | 0.05 | 19.50 | 17.76 | 0.0819 | 1.283 | 2.40 | 0.0592 | 0 |
-| preview default | double | 124 | 0.0030 | 0.10 | 14.20 | 11.06 | 0.0581 | 0.999 | 2.84 | 0.0190 | 0 |
-| preview stride 2 | float | 616 | 0.0150 | 0.24 | 11.48 | 8.91 | 0.0297 | 0.614 | 1.61 | 0.0205 | 0 |
-| preview stride 2 | double | 585 | 0.0150 | 0.47 | 10.49 | 5.62 | 0.0367 | 0.770 | 1.92 | 0.0110 | 0 |
-| preview stride 1, no refine | float | 3480 | 0.0867 | 1.39 | 6.36 | 0.17 | 0.0110 | 0.239 | 0.77 | 0.0031 | 0 |
-| preview stride 1, no refine | double | 3219 | 0.0853 | 2.69 | 6.05 | 0.00 | 0.0209 | 0.601 | 2.08 | 0.0080 | 0 |
-| preview stride 1, refine 1.25 | float | 4021 | 0.1005 | 1.61 | 2.52 | 0.17 | 0.0035 | 0.115 | 0.77 | 0.0025 | 0 |
-| preview stride 1, refine 1.25 | double | 3725 | 0.0991 | 3.12 | 1.42 | 0.00 | 0.0037 | 0.052 | 2.08 | 0.0027 | 0 |
-| preview stride 1, refine 1.1 | float | 4390 | 0.1074 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 | 0 |
-| preview stride 1, refine 1.1 | double | 4088 | 0.1062 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 | 0 |
-| preview stride 2, refine 1.25 | float | 820 | 0.0193 | 0.31 | 7.88 | 5.86 | 0.0192 | 0.542 | 1.86 | 0.0104 | 0 |
-| preview stride 2, refine 1.25 | double | 712 | 0.0189 | 0.60 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 | 0 |
-| coarse default | float | 810 | 0.0279 | 0.45 | 8.33 | 6.38 | 0.0210 | 0.599 | 1.86 | 0.0119 | 0 |
-| coarse default | double | 711 | 0.0272 | 0.86 | 9.83 | 4.38 | 0.0375 | 0.790 | 1.95 | 0.0083 | 0 |
-| coarse stride 1, refine 1.25 | float | 4025 | 0.1476 | 2.36 | 2.54 | 0.06 | 0.0036 | 0.118 | 0.77 | 0.0024 | 0 |
-| coarse stride 1, refine 1.25 | double | 3727 | 0.1416 | 4.46 | 1.49 | 0.00 | 0.0038 | 0.055 | 2.08 | 0.0027 | 0 |
-| coarse stride 2, refine 1.1 | float | 813 | 0.0280 | 0.45 | 8.31 | 6.38 | 0.0210 | 0.599 | 1.86 | 0.0115 | 0 |
-| coarse stride 2, refine 1.1 | double | 715 | 0.0273 | 0.86 | 9.83 | 4.38 | 0.0375 | 0.790 | 1.95 | 0.0083 | 0 |
-| coarse stride 1, refine 1.1 | float | 4413 | 0.1583 | 2.53 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 0 |
-| coarse stride 1, refine 1.1 | double | 4094 | 0.1518 | 4.78 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 0 |
-| deep default | float | 4417 | 0.2375 | 3.80 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0 |
-| deep default | double | 4095 | 0.2248 | 7.08 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0 |
+| config | dtype | cells_measured | reps_fraction | table_misrank % | table_misrank_lattice % | mean_loss | p99_loss | max_loss | time_weighted_loss | unrunnable |
+|---|---|---|---|---|---|---|---|---|---|---|
+| preview default | float | 132 | 0.0031 | 19.50 | 17.76 | 0.0819 | 1.283 | 2.40 | 0.0592 | 0 |
+| preview default | double | 124 | 0.0030 | 14.20 | 11.06 | 0.0581 | 0.999 | 2.84 | 0.0190 | 0 |
+| preview stride 2 | float | 616 | 0.0150 | 11.48 | 8.91 | 0.0297 | 0.614 | 1.61 | 0.0205 | 0 |
+| preview stride 2 | double | 585 | 0.0150 | 10.49 | 5.62 | 0.0367 | 0.770 | 1.92 | 0.0110 | 0 |
+| preview stride 1, no refine | float | 3480 | 0.0867 | 6.36 | 0.17 | 0.0110 | 0.239 | 0.77 | 0.0031 | 0 |
+| preview stride 1, no refine | double | 3219 | 0.0853 | 6.05 | 0.00 | 0.0209 | 0.601 | 2.08 | 0.0080 | 0 |
+| preview stride 1, refine 1.25 | float | 4021 | 0.1005 | 2.52 | 0.17 | 0.0035 | 0.115 | 0.77 | 0.0025 | 0 |
+| preview stride 1, refine 1.25 | double | 3725 | 0.0991 | 1.42 | 0.00 | 0.0037 | 0.052 | 2.08 | 0.0027 | 0 |
+| preview stride 1, refine 1.1 | float | 4390 | 0.1074 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 | 0 |
+| preview stride 1, refine 1.1 | double | 4088 | 0.1062 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 | 0 |
+| preview stride 2, refine 1.25 | float | 820 | 0.0193 | 7.88 | 5.86 | 0.0192 | 0.542 | 1.86 | 0.0104 | 0 |
+| preview stride 2, refine 1.25 | double | 712 | 0.0189 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 | 0 |
+| coarse default | float | 810 | 0.0279 | 8.33 | 6.38 | 0.0210 | 0.599 | 1.86 | 0.0119 | 0 |
+| coarse default | double | 711 | 0.0272 | 9.83 | 4.38 | 0.0375 | 0.790 | 1.95 | 0.0083 | 0 |
+| coarse stride 1, refine 1.25 | float | 4025 | 0.1476 | 2.54 | 0.06 | 0.0036 | 0.118 | 0.77 | 0.0024 | 0 |
+| coarse stride 1, refine 1.25 | double | 3727 | 0.1416 | 1.49 | 0.00 | 0.0038 | 0.055 | 2.08 | 0.0027 | 0 |
+| coarse stride 2, refine 1.1 | float | 813 | 0.0280 | 8.31 | 6.38 | 0.0210 | 0.599 | 1.86 | 0.0115 | 0 |
+| coarse stride 2, refine 1.1 | double | 715 | 0.0273 | 9.83 | 4.38 | 0.0375 | 0.790 | 1.95 | 0.0083 | 0 |
+| coarse stride 1, refine 1.1 | float | 4413 | 0.1583 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 0 |
+| coarse stride 1, refine 1.1 | double | 4094 | 0.1518 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 0 |
+| deep default | float | 4417 | 0.2375 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0 |
+| deep default | double | 4095 | 0.2248 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0 |
 
 Reading it: with the fallback, `unrunnable` is 0 in every row, so the earlier unrunnable choices were
 cells where the first entry could not run and the next one could. The full lattice is what matters:
-at stride 1 with the preview race parameters, bisecting to 1.1 gives 0.29% and 0.02% for 1.72 and 3.35
-GPU-h, against 0.11% and 0.05% for 2.53 and 4.78 GPU-h with the coarse race parameters; bisecting to
+at stride 1 with the preview race parameters, bisecting to 1.1 gives 0.29% and 0.02% on 4390 and 4088
+measured cells, against 0.11% and 0.05% on 4413 and 4094 with the coarse race parameters; bisecting to
 1.25 gives 2.5% and 1.4%, and no bisection 6.4% and 6.1%. The sparse rows (stride 2 and 4) stay at 8 to
 20% whatever the ratio, because the replay drops the `q` and `batch` midpoints the raw file lacks; it
 cannot say what bisection on those axes would buy. The mean and time-weighted losses are small in every
@@ -348,46 +400,45 @@ the listed values; the other axes stay full. The raw files hold the same axes fo
 Every row uses the preview race parameters, stride 1 and bisection to 1.1. Bisection refills only where
 the raw file has points, which is `order` (the raw sweep refined only along it), so shrinking `order`
 is partly repaired while shrinking `q` or `batch` is not. The metrics are over all raw cells, so a cell
-at a dropped value pays for the dropped measurement. Same machine and data as above; est_gpu_h as above.
+at a dropped value pays for the dropped measurement. Same machine and data as above.
 
-| config | dtype | measured | est_gpu_h | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
-|---|---|---|---|---|---|---|---|---|---|
-| baseline (preview s1 r1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
-| baseline (preview s1 r1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
-| batch stride 2 | float | 2920 | 1.14 | 4.27 | 3.39 | 0.0162 | 0.615 | 1.86 | 0.0080 |
-| batch stride 2 | double | 2546 | 2.10 | 4.76 | 3.76 | 0.0250 | 0.757 | 2.36 | 0.0069 |
-| batch keep 8192:32768 | float | 1356 | 0.54 | 11.32 | 10.11 | 0.0263 | 0.540 | 0.93 | 0.0188 |
-| batch keep 8192:32768 | double | 1226 | 0.98 | 6.83 | 5.03 | 0.0230 | 0.799 | 1.27 | 0.0041 |
-| batch keep 128:32768 | float | 2118 | 0.84 | 7.86 | 7.30 | 0.0299 | 0.864 | 1.86 | 0.0193 |
-| batch keep 128:32768 | double | 1789 | 1.50 | 6.86 | 5.28 | 0.0329 | 0.837 | 2.36 | 0.0062 |
-| batch keep 2048 | float | 916 | 0.36 | 13.52 | 11.24 | 0.0314 | 0.549 | 0.93 | 0.0200 |
-| batch keep 2048 | double | 814 | 0.67 | 7.22 | 4.16 | 0.0192 | 0.421 | 1.73 | 0.0036 |
-| q stride 2 | float | 2964 | 1.14 | 1.50 | 0.95 | 0.0039 | 0.063 | 1.46 | 0.0007 |
-| q stride 2 | double | 2435 | 2.02 | 2.98 | 1.03 | 0.0074 | 0.279 | 0.78 | 0.0021 |
-| q stride 3 | float | 1728 | 0.68 | 6.42 | 5.89 | 0.0122 | 0.325 | 0.91 | 0.0103 |
-| q stride 3 | double | 1696 | 1.39 | 6.12 | 5.65 | 0.0207 | 0.553 | 1.04 | 0.0137 |
-| order stride 2 | float | 1911 | 0.74 | 4.65 | 2.41 | 0.0066 | 0.142 | 1.06 | 0.0026 |
-| order stride 2 | double | 1837 | 1.51 | 6.93 | 2.05 | 0.0244 | 0.755 | 0.91 | 0.0045 |
-| order stride 4 | float | 1348 | 0.53 | 6.45 | 3.85 | 0.0128 | 0.422 | 1.06 | 0.0040 |
-| order stride 4 | double | 1269 | 1.06 | 6.34 | 4.57 | 0.0176 | 0.430 | 4.00 | 0.0045 |
-| q2 + batch2 | float | 1978 | 0.75 | 6.04 | 5.09 | 0.0212 | 0.704 | 1.86 | 0.0086 |
-| q2 + batch2 | double | 1530 | 1.28 | 5.66 | 3.42 | 0.0203 | 0.639 | 2.19 | 0.0050 |
-| q2 + batch2 + order2 | float | 824 | 0.31 | 7.84 | 5.86 | 0.0191 | 0.542 | 1.86 | 0.0100 |
-| q2 + batch2 + order2 | double | 716 | 0.60 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 |
-| q2 + order2 | float | 1254 | 0.48 | 5.05 | 2.87 | 0.0085 | 0.201 | 1.06 | 0.0028 |
-| q2 + order2 | double | 1120 | 0.93 | 8.17 | 2.67 | 0.0279 | 0.748 | 0.91 | 0.0051 |
-| q3 + batch2 + order2 | float | 491 | 0.19 | 10.53 | 9.68 | 0.0277 | 0.561 | 2.17 | 0.0207 |
-| q3 + batch2 + order2 | double | 447 | 0.37 | 12.71 | 8.45 | 0.0571 | 0.859 | 5.12 | 0.0164 |
-| q2 + batch keep 2048 + order2 | float | 243 | 0.09 | 16.85 | 12.90 | 0.0399 | 0.594 | 1.13 | 0.0247 |
-| q2 + batch keep 2048 + order2 | double | 212 | 0.18 | 11.05 | 5.25 | 0.0382 | 0.797 | 1.73 | 0.0066 |
+| config | dtype | measured | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
+|---|---|---|---|---|---|---|---|---|
+| baseline (preview s1 r1.1) | float | 4390 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
+| baseline (preview s1 r1.1) | double | 4088 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
+| batch stride 2 | float | 2920 | 4.27 | 3.39 | 0.0162 | 0.615 | 1.86 | 0.0080 |
+| batch stride 2 | double | 2546 | 4.76 | 3.76 | 0.0250 | 0.757 | 2.36 | 0.0069 |
+| batch keep 8192:32768 | float | 1356 | 11.32 | 10.11 | 0.0263 | 0.540 | 0.93 | 0.0188 |
+| batch keep 8192:32768 | double | 1226 | 6.83 | 5.03 | 0.0230 | 0.799 | 1.27 | 0.0041 |
+| batch keep 128:32768 | float | 2118 | 7.86 | 7.30 | 0.0299 | 0.864 | 1.86 | 0.0193 |
+| batch keep 128:32768 | double | 1789 | 6.86 | 5.28 | 0.0329 | 0.837 | 2.36 | 0.0062 |
+| batch keep 2048 | float | 916 | 13.52 | 11.24 | 0.0314 | 0.549 | 0.93 | 0.0200 |
+| batch keep 2048 | double | 814 | 7.22 | 4.16 | 0.0192 | 0.421 | 1.73 | 0.0036 |
+| q stride 2 | float | 2964 | 1.50 | 0.95 | 0.0039 | 0.063 | 1.46 | 0.0007 |
+| q stride 2 | double | 2435 | 2.98 | 1.03 | 0.0074 | 0.279 | 0.78 | 0.0021 |
+| q stride 3 | float | 1728 | 6.42 | 5.89 | 0.0122 | 0.325 | 0.91 | 0.0103 |
+| q stride 3 | double | 1696 | 6.12 | 5.65 | 0.0207 | 0.553 | 1.04 | 0.0137 |
+| order stride 2 | float | 1911 | 4.65 | 2.41 | 0.0066 | 0.142 | 1.06 | 0.0026 |
+| order stride 2 | double | 1837 | 6.93 | 2.05 | 0.0244 | 0.755 | 0.91 | 0.0045 |
+| order stride 4 | float | 1348 | 6.45 | 3.85 | 0.0128 | 0.422 | 1.06 | 0.0040 |
+| order stride 4 | double | 1269 | 6.34 | 4.57 | 0.0176 | 0.430 | 4.00 | 0.0045 |
+| q2 + batch2 | float | 1978 | 6.04 | 5.09 | 0.0212 | 0.704 | 1.86 | 0.0086 |
+| q2 + batch2 | double | 1530 | 5.66 | 3.42 | 0.0203 | 0.639 | 2.19 | 0.0050 |
+| q2 + batch2 + order2 | float | 824 | 7.84 | 5.86 | 0.0191 | 0.542 | 1.86 | 0.0100 |
+| q2 + batch2 + order2 | double | 716 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 |
+| q2 + order2 | float | 1254 | 5.05 | 2.87 | 0.0085 | 0.201 | 1.06 | 0.0028 |
+| q2 + order2 | double | 1120 | 8.17 | 2.67 | 0.0279 | 0.748 | 0.91 | 0.0051 |
+| q3 + batch2 + order2 | float | 491 | 10.53 | 9.68 | 0.0277 | 0.561 | 2.17 | 0.0207 |
+| q3 + batch2 + order2 | double | 447 | 12.71 | 8.45 | 0.0571 | 0.859 | 5.12 | 0.0164 |
+| q2 + batch keep 2048 + order2 | float | 243 | 16.85 | 12.90 | 0.0399 | 0.594 | 1.13 | 0.0247 |
+| q2 + batch keep 2048 + order2 | double | 212 | 11.05 | 5.25 | 0.0382 | 0.797 | 1.73 | 0.0066 |
 
 Reading it: batch is the costliest axis to shrink, because the winner flips along it (stride 2 already
 gives 4.3% and 4.8%; one batch value gives 13.5% and 7.2%). q stride 2 is the cheapest single cut
-(1.5% float, 3.0% double, at 66% and 60% of the baseline GPU-hours), and order stride 2 gives 4.7% and
+(1.5% float, 3.0% double, with 68% and 60% of the baseline's measured cells), and order stride 2 gives 4.7% and
 6.9%. Combinations add their misranks rather than their savings: q stride 2 with batch stride 2 and
-order stride 2 costs 0.31 and 0.60 GPU-h and misranks 7.8% and 9.7%, the same as the sparse coarse
-tier. No shrunken grid in this sweep meets the 1% table bound; the baseline does, at 1.72 and 3.35
-GPU-h.
+order stride 2 measures 824 and 716 cells and misranks 7.8% and 9.7%, the same as the sparse coarse
+tier. No shrunken grid in this sweep meets the 1% table bound; the baseline does, on 4390 and 4088 measured cells.
 
 ## Engine: replay of index-space refinement
 
@@ -400,28 +451,28 @@ this per-cell gap in `RefineOpts::gap`). Exact axes are never bisected. Every ro
 parameters, bisection ratio 1.1 and the full axes; `s2` and `s4` are the starting lattice stride on every
 log axis. Same machine, data and metrics as above.
 
-| config | dtype | measured | est_gpu_h | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
-|---|---|---|---|---|---|---|---|---|---|
-| baseline (s1 geometric 1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
-| baseline (s1 geometric 1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
-| s2 index | float | 1412 | 0.54 | 6.72 | 6.38 | 0.0281 | 0.938 | 2.18 | 0.0112 |
-| s2 index | double | 1096 | 0.92 | 5.78 | 3.60 | 0.0202 | 0.639 | 1.95 | 0.0062 |
-| s2 index margin 0.05 | float | 2542 | 1.06 | 4.25 | 4.45 | 0.0219 | 0.785 | 2.17 | 0.0126 |
-| s2 index margin 0.05 | double | 2214 | 2.11 | 5.22 | 4.78 | 0.0222 | 0.733 | 3.27 | 0.0059 |
-| s2 index margin 0.10 | float | 2818 | 1.17 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 |
-| s2 index margin 0.10 | double | 2363 | 2.22 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 |
-| s4 index | float | 612 | 0.23 | 13.32 | 12.67 | 0.0579 | 1.242 | 2.99 | 0.0526 |
-| s4 index | double | 501 | 0.43 | 10.42 | 7.58 | 0.0487 | 1.037 | 3.10 | 0.0075 |
-| s4 index margin 0.05 | float | 1566 | 0.70 | 11.10 | 10.89 | 0.0598 | 1.404 | 2.77 | 0.0354 |
-| s4 index margin 0.05 | double | 1402 | 1.44 | 6.76 | 6.18 | 0.0242 | 0.716 | 1.41 | 0.0059 |
-| s4 index margin 0.10 | float | 1812 | 0.80 | 9.07 | 9.17 | 0.0477 | 1.304 | 2.76 | 0.0348 |
-| s4 index margin 0.10 | double | 1434 | 1.46 | 6.81 | 6.31 | 0.0247 | 0.716 | 1.31 | 0.0070 |
+| config | dtype | measured | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
+|---|---|---|---|---|---|---|---|---|
+| baseline (s1 geometric 1.1) | float | 4390 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
+| baseline (s1 geometric 1.1) | double | 4088 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
+| s2 index | float | 1412 | 6.72 | 6.38 | 0.0281 | 0.938 | 2.18 | 0.0112 |
+| s2 index | double | 1096 | 5.78 | 3.60 | 0.0202 | 0.639 | 1.95 | 0.0062 |
+| s2 index margin 0.05 | float | 2542 | 4.25 | 4.45 | 0.0219 | 0.785 | 2.17 | 0.0126 |
+| s2 index margin 0.05 | double | 2214 | 5.22 | 4.78 | 0.0222 | 0.733 | 3.27 | 0.0059 |
+| s2 index margin 0.10 | float | 2818 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 |
+| s2 index margin 0.10 | double | 2363 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 |
+| s4 index | float | 612 | 13.32 | 12.67 | 0.0579 | 1.242 | 2.99 | 0.0526 |
+| s4 index | double | 501 | 10.42 | 7.58 | 0.0487 | 1.037 | 3.10 | 0.0075 |
+| s4 index margin 0.05 | float | 1566 | 11.10 | 10.89 | 0.0598 | 1.404 | 2.77 | 0.0354 |
+| s4 index margin 0.05 | double | 1402 | 6.76 | 6.18 | 0.0242 | 0.716 | 1.41 | 0.0059 |
+| s4 index margin 0.10 | float | 1812 | 9.07 | 9.17 | 0.0477 | 1.304 | 2.76 | 0.0348 |
+| s4 index margin 0.10 | double | 1434 | 6.81 | 6.31 | 0.0247 | 0.716 | 1.31 | 0.0070 |
 
-Reading it: index refinement at stride 2 refills the lattice for 0.54 and 0.92 GPU-h and misranks 6.7%
+Reading it: index refinement at stride 2 refills the lattice with 1412 and 1096 measured cells and misranks 6.7%
 and 5.8%, against 7.9% and 9.7% for the geometric stride-2 rows above. The margin trigger buys a few
-points more at about twice the cost (margin 0.10: 3.6% and 4.3% for 1.17 and 2.22 GPU-h). Stride 4 stays
-at 7 to 13%. None of these comes near the 1% table bound that the full lattice meets at 1.72 and 3.35
-GPU-h, and p99 loss stays near 0.6 to 1.4 in every sparse row: the replay can bisect only along `order`
+points more at about twice the cells (margin 0.10: 3.6% and 4.3% on 2818 and 2363 cells). Stride 4 stays
+at 7 to 13%. None of these comes near the 1% table bound that the full lattice meets
+with 4390 and 4088 cells, and p99 loss stays near 0.6 to 1.4 in every sparse row: the replay can bisect only along `order`
 in the raw files, so the q and batch refills here are limited to cells the raw file holds, and a flip
 between two lattice points on those axes is still left to the nearest-cell rule.
 
