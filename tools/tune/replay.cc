@@ -1,5 +1,5 @@
 // tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, no GPU.
-//   tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n]
+//   tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 
 #include "replay_core.hh"
@@ -16,6 +16,8 @@ int main(int argc, char** argv) {
     TierParams p = params(Tier::coarse);
     std::optional<double> confidence;
     std::optional<int> min_reps, max_reps, stride;
+    std::optional<double> refine;
+    double gpu_h = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -30,6 +32,8 @@ int main(int argc, char** argv) {
         else if (a == "--confidence") confidence = std::stod(next());
         else if (a == "--min-reps") min_reps = std::stoi(next());
         else if (a == "--max-reps") max_reps = std::stoi(next());
+        else if (a == "--refine") refine = std::stod(next());
+        else if (a == "--exhaustive-gpu-h") gpu_h = std::stod(next());
         else if (a == "--stride") stride = std::stoi(next());
         else {
             std::fprintf(stderr, "tune_replay: unknown argument %s\n", a.c_str());
@@ -39,7 +43,7 @@ int main(int argc, char** argv) {
     const auto tier = parse_tier(tier_name);
     if (raw.empty() || !tier || *tier == Tier::transcribed || *tier == Tier::custom) {
         std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] "
-                             "[--max-reps n] [--stride n]\n");
+                             "[--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h]\n");
         return 2;
     }
     p = params(*tier);
@@ -47,10 +51,12 @@ int main(int argc, char** argv) {
     if (min_reps) p.min_reps = *min_reps;
     if (max_reps) p.max_reps = *max_reps;
     if (stride) p.stride = *stride;
+    if (refine) p.refine_ratio = *refine;
     try {
         ReplayMeta meta;
         const auto cells = load_replay(raw, &meta);
-        const ReplayReport r = replay(cells, meta.axes, *tier, p);
+        ReplayReport r = replay(cells, meta.axes, *tier, p);
+        r.est_gpu_h = r.reps_fraction * gpu_h;
         std::string worst;
         for (const std::string& w : r.worst) worst += (worst.empty() ? "" : "; ") + w;
         Json j;
@@ -59,6 +65,9 @@ int main(int argc, char** argv) {
         j.integer("max_reps", p.max_reps).num("confidence", p.confidence);
         j.integer("cells", static_cast<std::int64_t>(r.cells)).integer("cells_measured", static_cast<std::int64_t>(r.cells_measured));
         j.num("reps_fraction", r.reps_fraction).num("race_misrank", r.race_misrank).num("table_misrank", r.table_misrank);
+        j.num("table_misrank_lattice", r.table_misrank_lattice).num("mean_loss", r.mean_loss).num("p95_loss", r.p95_loss);
+        j.num("p99_loss", r.p99_loss).num("max_loss", r.max_loss).num("time_weighted_loss", r.time_weighted_loss);
+        j.integer("unrunnable", static_cast<std::int64_t>(r.unrunnable)).num("est_gpu_h", r.est_gpu_h);
         j.integer("refine_unavailable", static_cast<std::int64_t>(r.refine_unavailable)).str("worst", worst);
         std::fputs(j.line().c_str(), stdout);
     } catch (const std::exception& e) {

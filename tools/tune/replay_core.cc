@@ -252,17 +252,32 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
         if (ratio > kMisrank) ++race_bad, note("race", c, rk.front(), ratio);
         rows.push_back(key);
     }
+    std::vector<double> losses;
+    double sum_chosen = 0, sum_best = 0;
+    std::size_t lattice_cells = 0, lattice_bad = 0;
     if (!rows.empty()) {
         const NearestIndex nearest(rows, axes);
         for (const ReplayCell& c : cells) {
             const std::string& winner = ranked.at(rows[nearest.find(c.key)]).front();
             const auto it = c.exhaustive.find(winner);
-            const double ratio = it == c.exhaustive.end() ? std::numeric_limits<double>::infinity() : it->second / best_time(c);
+            const bool runs = it != c.exhaustive.end();
+            const double ratio = runs ? it->second / best_time(c) : std::numeric_limits<double>::infinity();
+            if (runs) losses.push_back(ratio - 1), sum_chosen += it->second, sum_best += best_time(c);
+            else ++rep.unrunnable;
             if (ratio > kMisrank) ++table_bad, note("table", c, winner, ratio);
+            if (c.round == 0) ++lattice_cells, lattice_bad += ratio > kMisrank;
         }
     }
     rep.race_misrank = rows.empty() ? 0 : double(race_bad) / double(rows.size());
     rep.table_misrank = cells.empty() ? 0 : double(table_bad) / double(cells.size());
+    rep.table_misrank_lattice = lattice_cells ? double(lattice_bad) / double(lattice_cells) : 0;
+    if (!losses.empty()) {
+        std::sort(losses.begin(), losses.end());
+        auto q = [&](double f) { return losses[std::min(losses.size() - 1, std::size_t(f * double(losses.size())))]; };
+        for (double l : losses) rep.mean_loss += l / double(losses.size());
+        rep.p95_loss = q(0.95), rep.p99_loss = q(0.99), rep.max_loss = losses.back();
+        rep.time_weighted_loss = sum_chosen / sum_best - 1;
+    }
     std::sort(worst.rbegin(), worst.rend());
     for (std::size_t i = 0; i < worst.size() && i < 5; ++i) rep.worst.push_back(worst[i].second);
     return rep;

@@ -38,6 +38,11 @@ struct ReplayReport {
     double reps_fraction = 0;  // candidate-reps the replay timed / candidate-reps in the file
     double race_misrank = 0;   // measured cells whose first-ranked candidate is > 1.03x the exhaustive best
     double table_misrank = 0;  // all cells whose nearest measured cell's winner is > 1.03x (or cannot run)
+    double table_misrank_lattice = 0;  // table_misrank over round-0 cells only
+    double mean_loss = 0, p95_loss = 0, p99_loss = 0, max_loss = 0;  // exhaustive(chosen) / best - 1, runnable cells
+    double time_weighted_loss = 0;                                   // sum(chosen) / sum(best) - 1, runnable cells
+    std::size_t unrunnable = 0;                                      // cells whose chosen winner cannot run there
+    double est_gpu_h = 0;                                            // set by the caller: reps_fraction x exhaustive hours
     std::size_t refine_unavailable = 0;  // distinct bisection midpoints that are not in the raw file
     std::vector<std::string> worst;      // the five worst misranks of either kind
 };

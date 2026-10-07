@@ -820,6 +820,13 @@ TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     EXPECT_EQ(u.race_misrank, 0.0);
     EXPECT_DOUBLE_EQ(u.table_misrank, 1.0 / 8);  // n=8 reads n=16's winner b; n=4 ties and reads n=1
     EXPECT_FALSE(u.worst.empty());
+    EXPECT_NEAR(u.mean_loss, 0.5 / 8, 0.01);  // only n=8 loses, by 50%
+    EXPECT_NEAR(u.max_loss, 0.5, 0.01);
+    EXPECT_NEAR(u.p99_loss, 0.5, 0.01);
+    EXPECT_EQ(u.p95_loss, u.max_loss);
+    EXPECT_NEAR(u.time_weighted_loss, 0.5 / 8, 0.01);  // chosen 8.5 over a best total of 8
+    EXPECT_DOUBLE_EQ(u.table_misrank_lattice, 1.0 / 8);
+    EXPECT_EQ(u.unrunnable, 0u);
     EXPECT_EQ(replay(rc, meta.axes, Tier::deep).table_misrank, 0.0);
     const ReplayReport c = replay(rc, meta.axes, Tier::coarse);  // n = 1,4,16,64,128, then bisects to 8
     EXPECT_EQ(c.cells_measured, 6u);
@@ -837,7 +844,10 @@ TEST(TuneReplay, UnrunnableNearestWinnerIsAMisrank) {
     };
     ReplayMeta meta;
     auto rc = load_replay(write_raw("unrunnable.jsonl", make(false)), &meta);
-    EXPECT_DOUBLE_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 1.0 / 5);  // n=2 reads n=1's c
+    const ReplayReport r = replay(rc, meta.axes, Tier::ultra);
+    EXPECT_DOUBLE_EQ(r.table_misrank, 1.0 / 5);  // n=2 reads n=1's c
+    EXPECT_EQ(r.unrunnable, 1u);
+    EXPECT_EQ(r.max_loss, 0.0) << "an unrunnable winner is not a finite loss";
     rc = load_replay(write_raw("runnable.jsonl", make(true)), &meta);
     EXPECT_EQ(replay(rc, meta.axes, Tier::ultra).table_misrank, 0.0);
 }

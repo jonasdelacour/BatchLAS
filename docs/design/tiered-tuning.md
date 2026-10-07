@@ -286,14 +286,49 @@ above, unchanged.
 | ultra | float | 132 / 4452 | 0.0031 | 0% | 19.50% | 5%: race met, table missed |
 | ultra | double | 124 / 4098 | 0.0030 | 0% | 14.98% | 5%: race met, table missed |
 
-Racing is not the problem: every tier meets its race bound, and deep saves 76-78% of the reps while
-meeting both bounds. The table bound fails for ultra and coarse because of the lattice, not the
-statistic. Changing confidence, min and max reps moves `table_misrank` by under one point (coarse at
-0.98 confidence and 6 to 12 reps: 9.05% and 11.47%). A lattice with stride 1 and no bisection (ultra
-stride 1) still misranks 14.3% and 16.2% of the cells. The likely cause, not isolated here, is that the raw
-files hold the 1.1-ratio refinement points along `order`, which sit where the winner flips. Coarse at stride 1 reaches 6.4% on both
-dtypes, and ultra at stride 2 reaches 11.5% and 10.8%. No allowed parameter setting meets the ultra
-5% or the coarse 1% table bound, so the tier values stay as above and the bound is open.
+Racing is not the problem: every tier meets its race bound, deep saves 76-78% of the reps, and
+changing confidence or reps moves `table_misrank` by under one point. The table bound fails for ultra
+and coarse because of the lattice and the bisection ratio. The trade-off is easier to read with the
+loss of the chosen candidate, `exhaustive(chosen) / best - 1`, over all cells: `mean_loss` and the
+percentiles cover the cells whose chosen winner can run, `unrunnable` counts the rest,
+`time_weighted_loss` is the summed chosen time over the summed best time minus one, and
+`table_misrank_lattice` repeats `table_misrank` over the round-0 cells only, which removes the raw
+file's refinement points at winner flips. `est_gpu_h` is `reps_fraction` times the exhaustive run
+(float 16.0 GPU-h, double 31.5 GPU-h, from `benchmarks/results/tuning/README.md`), without per-cell
+process overhead. Each row uses the named tier's race parameters; the config column changes only the
+lattice stride and the bisection ratio.
+
+| config | dtype | cells_measured | reps_fraction | est_gpu_h | table_misrank % | table_misrank_lattice % | mean_loss | p99_loss | max_loss | time_weighted_loss | unrunnable |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ultra default | float | 132 | 0.0031 | 0.05 | 19.50 | 17.76 | 0.0819 | 1.283 | 2.40 | 0.0592 | 0 |
+| ultra default | double | 124 | 0.0030 | 0.10 | 14.98 | 11.56 | 0.0585 | 0.999 | 2.84 | 0.0196 | 32 |
+| ultra stride 2 | float | 616 | 0.0150 | 0.24 | 11.48 | 8.91 | 0.0297 | 0.614 | 1.61 | 0.0205 | 0 |
+| ultra stride 2 | double | 585 | 0.0150 | 0.47 | 10.79 | 5.65 | 0.0368 | 0.770 | 1.92 | 0.0110 | 12 |
+| ultra stride 1, no refine | float | 3480 | 0.0867 | 1.39 | 14.33 | 0.17 | 0.0085 | 0.202 | 0.74 | 0.0028 | 435 |
+| ultra stride 1, no refine | double | 3219 | 0.0853 | 2.69 | 16.20 | 0.00 | 0.0230 | 0.624 | 2.08 | 0.0083 | 426 |
+| ultra stride 2, refine 1.25 | float | 820 | 0.0193 | 0.31 | 8.92 | 6.26 | 0.0194 | 0.542 | 1.86 | 0.0105 | 47 |
+| ultra stride 2, refine 1.25 | double | 712 | 0.0189 | 0.60 | 11.30 | 4.91 | 0.0377 | 0.790 | 1.95 | 0.0083 | 76 |
+| coarse default | float | 810 | 0.0279 | 0.45 | 9.05 | 6.61 | 0.0212 | 0.599 | 1.86 | 0.0119 | 33 |
+| coarse default | double | 711 | 0.0272 | 0.86 | 11.47 | 4.97 | 0.0379 | 0.790 | 1.95 | 0.0083 | 76 |
+| coarse stride 1, refine 1.25 | float | 4025 | 0.1476 | 2.36 | 6.38 | 0.06 | 0.0019 | 0.056 | 0.22 | 0.0022 | 215 |
+| coarse stride 1, refine 1.25 | double | 3727 | 0.1416 | 4.46 | 6.34 | 0.00 | 0.0038 | 0.051 | 2.08 | 0.0027 | 205 |
+| coarse stride 2, refine 1.1 | float | 813 | 0.0280 | 0.45 | 9.03 | 6.61 | 0.0211 | 0.599 | 1.86 | 0.0115 | 33 |
+| coarse stride 2, refine 1.1 | double | 715 | 0.0273 | 0.86 | 11.47 | 4.97 | 0.0379 | 0.790 | 1.95 | 0.0083 | 76 |
+| coarse stride 1, refine 1.1 | float | 4413 | 0.1583 | 2.53 | 0.11 | 0.06 | 0.0006 | 0.020 | 0.03 | 0.0003 | 0 |
+| coarse stride 1, refine 1.1 | double | 4094 | 0.1518 | 4.78 | 0.05 | 0.00 | 0.0004 | 0.015 | 0.08 | 0.0002 | 0 |
+| deep default | float | 4417 | 0.2375 | 3.80 | 0.16 | 0.11 | 0.0006 | 0.022 | 0.06 | 0.0004 | 0 |
+| deep default | double | 4095 | 0.2248 | 7.08 | 0.02 | 0.00 | 0.0004 | 0.015 | 0.03 | 0.0001 | 0 |
+
+Reading it: on the uniform lattice, coarse at stride 1 misranks 0.06% and 0.00%, and deep 0.11% and
+0.00%; the large `table_misrank` of the sparse tiers comes from the lattice spacing, and for stride 1
+from the refinement points. The mean and time-weighted losses are small in every row (at most 8.2%
+and 5.9%, both ultra default float); the p99 loss is not (0.5 to 1.3 for the sparse rows), so the
+sparse tiers are right on average and badly wrong at a few percent of shapes. Bisection to 1.1 at
+stride 1 costs 0.17 GPU-h more than 1.25 on float and removes the flip-point misranks (6.38% to
+0.11%); with stride 2 the ratio changes almost nothing (9.05% against 9.03%), because the raw file
+holds no refined `q` or `batch` points and the replay drops those midpoints. Unrunnable choices
+appear wherever bisection is off or coarse: a winner measured on the lattice does not run at the
+neighbouring cell. The replay cannot say what bisection on `q` and `batch` would buy.
 
 ## Tiered tuning: open risks
 
