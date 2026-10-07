@@ -333,6 +333,57 @@ cannot say what bisection on those axes would buy. The mean and time-weighted lo
 row (at most 8.2% and 5.9%, both ultra default float), but the p99 loss of the sparse rows is 0.5 to
 1.3, so they are right on average and badly wrong at a few percent of shapes.
 
+## Engine: replay of shrunken trsm grids
+
+Instead of sparse tiers, the grids themselves can shrink. `tune_replay --axis-stride name=k` keeps every
+k-th value and the last of one axis in the starting lattice, and `--axis-keep name=v1:v2` keeps only
+the listed values; the other axes stay full. The raw files hold the same axes for both dtypes
+(`--print-axes`): order 1 2 4 8 12 16 24 32 48 64 96 128 192 256 384 512 768 1024 (log, weight 2), q 1 2 4
+8 16 32 64 128 256 512 1024 4096 (log), batch 128 512 2048 8192 32768 (log), plus side L R and trans N T.
+Every row uses the ultra race parameters, stride 1 and bisection to 1.1. Bisection refills only where
+the raw file has points, which is `order` (the raw sweep refined only along it), so shrinking `order`
+is partly repaired while shrinking `q` or `batch` is not. The metrics are over all raw cells, so a cell
+at a dropped value pays for the dropped measurement. Same machine and data as above; est_gpu_h as above.
+
+| config | dtype | measured | est_gpu_h | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline (ultra s1 r1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
+| baseline (ultra s1 r1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
+| batch stride 2 | float | 2920 | 1.14 | 4.27 | 3.39 | 0.0162 | 0.615 | 1.86 | 0.0080 |
+| batch stride 2 | double | 2546 | 2.10 | 4.76 | 3.76 | 0.0250 | 0.757 | 2.36 | 0.0069 |
+| batch keep 8192:32768 | float | 1356 | 0.54 | 11.32 | 10.11 | 0.0263 | 0.540 | 0.93 | 0.0188 |
+| batch keep 8192:32768 | double | 1226 | 0.98 | 6.83 | 5.03 | 0.0230 | 0.799 | 1.27 | 0.0041 |
+| batch keep 128:32768 | float | 2118 | 0.84 | 7.86 | 7.30 | 0.0299 | 0.864 | 1.86 | 0.0193 |
+| batch keep 128:32768 | double | 1789 | 1.50 | 6.86 | 5.28 | 0.0329 | 0.837 | 2.36 | 0.0062 |
+| batch keep 2048 | float | 916 | 0.36 | 13.52 | 11.24 | 0.0314 | 0.549 | 0.93 | 0.0200 |
+| batch keep 2048 | double | 814 | 0.67 | 7.22 | 4.16 | 0.0192 | 0.421 | 1.73 | 0.0036 |
+| q stride 2 | float | 2964 | 1.14 | 1.50 | 0.95 | 0.0039 | 0.063 | 1.46 | 0.0007 |
+| q stride 2 | double | 2435 | 2.02 | 2.98 | 1.03 | 0.0074 | 0.279 | 0.78 | 0.0021 |
+| q stride 3 | float | 1728 | 0.68 | 6.42 | 5.89 | 0.0122 | 0.325 | 0.91 | 0.0103 |
+| q stride 3 | double | 1696 | 1.39 | 6.12 | 5.65 | 0.0207 | 0.553 | 1.04 | 0.0137 |
+| order stride 2 | float | 1911 | 0.74 | 4.65 | 2.41 | 0.0066 | 0.142 | 1.06 | 0.0026 |
+| order stride 2 | double | 1837 | 1.51 | 6.93 | 2.05 | 0.0244 | 0.755 | 0.91 | 0.0045 |
+| order stride 4 | float | 1348 | 0.53 | 6.45 | 3.85 | 0.0128 | 0.422 | 1.06 | 0.0040 |
+| order stride 4 | double | 1269 | 1.06 | 6.34 | 4.57 | 0.0176 | 0.430 | 4.00 | 0.0045 |
+| q2 + batch2 | float | 1978 | 0.75 | 6.04 | 5.09 | 0.0212 | 0.704 | 1.86 | 0.0086 |
+| q2 + batch2 | double | 1530 | 1.28 | 5.66 | 3.42 | 0.0203 | 0.639 | 2.19 | 0.0050 |
+| q2 + batch2 + order2 | float | 824 | 0.31 | 7.84 | 5.86 | 0.0191 | 0.542 | 1.86 | 0.0100 |
+| q2 + batch2 + order2 | double | 716 | 0.60 | 9.66 | 4.32 | 0.0373 | 0.790 | 1.95 | 0.0083 |
+| q2 + order2 | float | 1254 | 0.48 | 5.05 | 2.87 | 0.0085 | 0.201 | 1.06 | 0.0028 |
+| q2 + order2 | double | 1120 | 0.93 | 8.17 | 2.67 | 0.0279 | 0.748 | 0.91 | 0.0051 |
+| q3 + batch2 + order2 | float | 491 | 0.19 | 10.53 | 9.68 | 0.0277 | 0.561 | 2.17 | 0.0207 |
+| q3 + batch2 + order2 | double | 447 | 0.37 | 12.71 | 8.45 | 0.0571 | 0.859 | 5.12 | 0.0164 |
+| q2 + batch keep 2048 + order2 | float | 243 | 0.09 | 16.85 | 12.90 | 0.0399 | 0.594 | 1.13 | 0.0247 |
+| q2 + batch keep 2048 + order2 | double | 212 | 0.18 | 11.05 | 5.25 | 0.0382 | 0.797 | 1.73 | 0.0066 |
+
+Reading it: batch is the costliest axis to shrink, because the winner flips along it (stride 2 already
+gives 4.3% and 4.8%; one batch value gives 13.5% and 7.2%). q stride 2 is the cheapest single cut
+(1.5% float, 3.0% double, at 66% and 60% of the baseline GPU-hours), and order stride 2 gives 4.7% and
+6.9%. Combinations add their misranks rather than their savings: q stride 2 with batch stride 2 and
+order stride 2 costs 0.31 and 0.60 GPU-h and misranks 7.8% and 9.7%, the same as the sparse coarse
+tier. No shrunken grid in this sweep meets the 1% table bound; the baseline does, at 1.72 and 3.35
+GPU-h.
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps

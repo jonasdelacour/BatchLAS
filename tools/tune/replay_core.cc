@@ -186,6 +186,24 @@ double best_time(const ReplayCell& c) {
 
 }  // namespace
 
+void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std::string& spec, bool keep) {
+    const auto it = std::find_if(axes.begin(), axes.end(), [&](const AxisSpec& a) { return a.name == name; });
+    if (it == axes.end()) throw std::invalid_argument("unknown axis " + name);
+    if (!keep) {
+        const int k = std::stoi(spec);
+        if (k < 1) throw std::invalid_argument("axis stride must be >= 1");
+        it->values = subsample_axis(it->values, k);
+        return;
+    }
+    std::vector<std::string> kept;
+    for (const std::string& v : split(spec, ':')) {
+        if (std::find(it->values.begin(), it->values.end(), v) == it->values.end())
+            throw std::invalid_argument("axis " + name + " has no value " + v);
+        kept.push_back(v);
+    }
+    it->values = std::move(kept);
+}
+
 std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes) {
     return NearestIndex(rows, axes).find(key);
 }

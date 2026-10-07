@@ -812,6 +812,26 @@ TEST(TuneReplay, BisectionDropsMidpointsThatAreNotInTheRawFile) {
     EXPECT_LT(r.reps_fraction, 1.0) << "a 50% gap is eliminated before the cap";
 }
 
+TEST(TuneReplay, ShrinkingAnAxisShrinksTheLatticeAndCostsTheDroppedCells) {
+    ReplayMeta meta;
+    const auto rc = load_replay(write_raw("shrink.jsonl", flip_cells()), &meta);
+    auto axes = meta.axes;
+    shrink_axis(axes, "n", "2", false);  // 1,4,16,64,128
+    EXPECT_EQ(axes[1].values, (std::vector<std::string>{"1", "4", "16", "64", "128"}));
+    EXPECT_EQ(replay(rc, axes, Tier::ultra, [] { auto p = params(Tier::ultra); p.stride = 1; return p; }()).cells_measured, 5u);
+    axes = meta.axes;
+    shrink_axis(axes, "n", "1:8", true);
+    EXPECT_EQ(axes[1].values.size(), 2u);
+    TierParams p = params(Tier::ultra);
+    p.stride = 1;
+    const ReplayReport r = replay(rc, axes, Tier::ultra, p);
+    EXPECT_EQ(r.cells_measured, 2u);
+    EXPECT_GT(r.table_misrank, 0.0) << "n=16 and up read n=8, which loses there";
+    EXPECT_THROW(shrink_axis(axes, "n", "3", true), std::invalid_argument);
+    EXPECT_THROW(shrink_axis(axes, "zz", "2", false), std::invalid_argument);
+    EXPECT_THROW(shrink_axis(axes, "n", "0", false), std::invalid_argument);
+}
+
 TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
     ReplayMeta meta;
     const auto rc = load_replay(write_raw("flip.jsonl", flip_cells()), &meta);

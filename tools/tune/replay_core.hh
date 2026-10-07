@@ -51,6 +51,11 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
                     const TierParams& p, double tie = 0.03);
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t, double tie = 0.03);
 
+// "--axis-keep name=v1:v2" / "--axis-stride name=k": shrink one axis's starting lattice in place
+// (stride keeps every k-th value and the last). Throws std::invalid_argument on an unknown axis, a value
+// the axis lacks or a bad stride.
+void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std::string& spec, bool keep);
+
 // Port of nearest() in scripts/sweep_to_table.py (exact-key prefix, weighted log2 distance, ties as there).
 std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes);
 
