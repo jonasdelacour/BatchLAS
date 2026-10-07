@@ -4,6 +4,7 @@
 add_executable(batchlas_tune_impl
     batchlas_tune.cc
     tune_core.cc
+    race.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc

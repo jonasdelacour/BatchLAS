@@ -2,6 +2,8 @@
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, the §6.4 hash, and
 // the round trip through scripts/sweep_to_table.py --tuner. No GPU.
 
+#include "../tools/tune/race.hh"
+#include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
 
 #include <gtest/gtest.h>
@@ -480,4 +482,119 @@ TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
 
 TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
     EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), 0, 5, true).refuse, "compute processes [610696,[N/A]]");
+}
+
+namespace {
+
+// Feeds rounds of {a, b} times from `gen(round)` until race_step stops asking for more.
+struct RaceRun {
+    RaceState s;
+    RaceVerdict v = RaceVerdict::more;
+    int rounds = 0;
+};
+RaceRun run_race(const TierParams& p, const std::function<std::pair<double, double>(int)>& gen) {
+    RaceRun r;
+    r.s.cands = {"a", "b"};
+    r.s.ms.assign(2, {});
+    r.s.alive.assign(2, true);
+    while (r.v == RaceVerdict::more && r.rounds < 100) {
+        const auto [a, b] = gen(r.rounds++);
+        r.s.ms[0].push_back(a);
+        r.s.ms[1].push_back(b);
+        r.v = race_step(r.s, p);
+    }
+    return r;
+}
+
+}  // namespace
+
+TEST(TuneRace, FourPercentSlowerIsEliminatedInDeep) {
+    std::mt19937 g(7);
+    std::uniform_real_distribution<double> u(-0.005, 0.005);
+    const auto r = run_race(params(Tier::deep), [&](int) { return std::pair(1.00 * (1 + u(g)), 1.04 * (1 + u(g))); });
+    EXPECT_FALSE(r.s.alive[1]);
+    EXPECT_TRUE(r.s.alive[0]);
+    EXPECT_EQ(r.v, RaceVerdict::winner);
+}
+
+TEST(TuneRace, TwoPercentSlowerIsKeptAsATie) {
+    std::mt19937 g(11);
+    std::uniform_real_distribution<double> u(-0.005, 0.005);
+    const auto r = run_race(params(Tier::deep), [&](int) { return std::pair(1.00 * (1 + u(g)), 1.02 * (1 + u(g))); });
+    EXPECT_TRUE(r.s.alive[1]);
+    EXPECT_TRUE(r.v == RaceVerdict::tie || r.v == RaceVerdict::cap);
+    EXPECT_EQ(race_ranking(r.s, {"b", "a"}), (std::vector<std::string>{"b", "a"}));
+    EXPECT_EQ(race_ranking(r.s, {"a", "b"}), (std::vector<std::string>{"a", "b"}));
+}
+
+TEST(TuneRace, SingleRoundNeverEliminates) {
+    for (Tier t : {Tier::ultra, Tier::coarse, Tier::deep}) {
+        const auto& p = params(t);
+        const auto r = run_race(p, [&](int) { return std::pair(1.0, 10.0); });
+        EXPECT_EQ(r.rounds, p.min_reps) << to_string(t);
+        EXPECT_FALSE(r.s.alive[1]) << to_string(t);
+        RaceState s;
+        s.cands = {"a", "b"};
+        s.ms = {{1.0}, {10.0}};
+        s.alive = {true, true};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more);
+        EXPECT_TRUE(s.alive[1]);
+    }
+}
+
+TEST(TuneRace, PairedRatiosCancelADriftingClock) {
+    std::mt19937 g(3);
+    std::uniform_real_distribution<double> u(-0.003, 0.003);
+    const auto r = run_race(params(Tier::coarse), [&](int i) {
+        const double drift = 1.0 + 0.3 * i / 12.0;
+        return std::pair(drift * (1 + u(g)), 1.06 * drift * (1 + u(g)));
+    });
+    EXPECT_FALSE(r.s.alive[1]);
+    EXPECT_EQ(r.v, RaceVerdict::winner);
+}
+
+TEST(TuneRace, NaNRoundsAreUnpaired) {
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    RaceState s;
+    s.cands = {"a", "b"};
+    s.alive = {true, true};
+    s.ms = {{1, 1, 1, 1}, {nan, 2, nan, 2}};
+    EXPECT_EQ(race_step(s, params(Tier::ultra)), RaceVerdict::more);  // 2 pairs < min_reps 3
+    EXPECT_TRUE(s.alive[1]);
+    s.ms = {{1, 1, 1, 1, 1}, {nan, 2, nan, 2, 2}};
+    EXPECT_EQ(race_step(s, params(Tier::ultra)), RaceVerdict::winner);  // 3 pairs
+    EXPECT_FALSE(s.alive[1]);
+}
+
+TEST(TuneRace, LowerOrderStatMatchesTheBinomial) {
+    EXPECT_EQ(lower_order_stat(3, 0.80), 1u);
+    EXPECT_EQ(lower_order_stat(6, 0.98), 1u);
+    EXPECT_EQ(lower_order_stat(16, 0.98), 4u);
+    EXPECT_EQ(lower_order_stat(2, 0.98), 0u);
+}
+
+TEST(TuneRace, RankingPutsSurvivorsBeforeTheEliminated) {
+    RaceState s;
+    s.cands = {"a", "b", "c"};
+    s.ms = {{2, 2}, {1, 1}, {1.5, 1.5}};
+    s.alive = {true, true, false};
+    EXPECT_EQ(race_ranking(s, {"a", "b", "c"}), (std::vector<std::string>{"b", "a", "c"}));
+}
+
+TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
+    EXPECT_LT(tier_rank(Tier::coarse), tier_rank(Tier::deep));
+    EXPECT_LT(tier_rank(Tier::ultra), tier_rank(Tier::coarse));
+    EXPECT_LT(tier_rank(Tier::custom), tier_rank(Tier::ultra));
+    EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::custom));
+    for (Tier t : {Tier::transcribed, Tier::custom, Tier::ultra, Tier::coarse, Tier::deep})
+        EXPECT_EQ(parse_tier(to_string(t)), t);
+    EXPECT_FALSE(parse_tier("fast").has_value());
+    EXPECT_EQ(params(Tier::ultra).stride, 4);
+    EXPECT_EQ(params(Tier::coarse).stride, 2);
+    EXPECT_EQ(params(Tier::deep).stride, 1);
+    EXPECT_EQ(params(Tier::ultra).refine_ratio, 0.0);
+    EXPECT_EQ(params(Tier::coarse).refine_ratio, 1.25);
+    EXPECT_EQ(params(Tier::deep).refine_ratio, 1.1);
+    EXPECT_TRUE(params(Tier::deep).alternate_reverse);
+    EXPECT_FALSE(params(Tier::coarse).alternate_reverse);
 }
