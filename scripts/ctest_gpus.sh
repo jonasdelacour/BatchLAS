@@ -1,12 +1,7 @@
 #!/bin/sh
-# Run ctest with one test per GPU slot, using the build's resource spec.
-#
-#   scripts/ctest_gpus.sh -LE slow                     # build/ (or $BATCHLAS_BUILD_DIR)
-#   scripts/ctest_gpus.sh --test-dir build-vf -L eig
-#
-# <build>/ctest_resources.json is written at configure from nvidia-smi
-# (BATCHLAS_TEST_GPUS / BATCHLAS_TEST_GPU_SLOTS). Each GPU test gets one slot and
-# sees only its GPU (tests/ctest_gpu_env.sh). A later -j in the arguments wins.
+# ctest, one test per GPU slot of <build>/ctest_resources.json (tests/README.md):
+#   [CUDA_VISIBLE_DEVICES=1] scripts/ctest_gpus.sh [--test-dir build] -LE slow
+# A pre-set CUDA_VISIBLE_DEVICES trims the spec to its length. A later -j wins.
 set -eu
 
 build=${BATCHLAS_BUILD_DIR:-build}
@@ -14,20 +9,48 @@ if [ "${1:-}" = "--test-dir" ] && [ "$#" -ge 2 ]; then
     build=$2
     shift 2
 fi
-spec="$build/ctest_resources.json"
+# Absolute: ctest resolves a relative spec path after changing into --test-dir.
+dir=$(cd "$build" 2>/dev/null && pwd) || dir=$build
+spec="$dir/ctest_resources.json"
 if [ ! -f "$spec" ]; then
-    echo "ctest_gpus.sh: $spec not found. Configure with tests enabled on a box where" >&2
-    echo "nvidia-smi lists GPUs, or set -DBATCHLAS_TEST_GPUS=<n>." >&2
+    echo "ctest_gpus.sh: $spec not found (no CUDA build, no nvidia-smi GPUs, or" >&2
+    echo "BATCHLAS_TEST_GPUS=0). Run plain serial ctest instead: ctest --test-dir $build $*" >&2
     exit 2
 fi
 
-jobs=0
-for n in $(grep -o '"slots": *[0-9]*' "$spec" | grep -o '[0-9]*$'); do
-    jobs=$((jobs + n))
-done
+slots=$(grep -o '"slots": *[0-9]*' "$spec" | head -n 1 | grep -o '[0-9]*$')
+gpus=$(grep -c '"id":' "$spec")
+
+if [ -n "${CUDA_VISIBLE_DEVICES+set}" ]; then
+    visible=$(printf '%s' "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | grep -c . || true)
+    if [ "$visible" -eq 0 ]; then
+        echo "ctest_gpus.sh: CUDA_VISIBLE_DEVICES is empty, so no GPU is visible." >&2
+        exit 2
+    fi
+    if [ "$visible" -lt "$gpus" ]; then
+        gpus=$visible
+        tmp=$(mktemp "${TMPDIR:-/tmp}/batchlas_ctest_resources.XXXXXX")
+        trap 'rm -f "$tmp"' EXIT INT TERM
+        {
+            printf '{\n  "version": { "major": 1, "minor": 0 },\n  "local": [\n    {\n      "gpus": [\n'
+            i=0
+            while [ "$i" -lt "$gpus" ]; do
+                sep=","
+                [ "$i" -eq $((gpus - 1)) ] && sep=""
+                printf '        { "id": "%s", "slots": %s }%s\n' "$i" "$slots" "$sep"
+                i=$((i + 1))
+            done
+            printf '      ]\n    }\n  ]\n}\n'
+        } > "$tmp"
+        spec=$tmp
+    fi
+fi
+
+jobs=$((gpus * slots))
 if [ "$jobs" -le 0 ]; then
     echo "ctest_gpus.sh: no GPU slots in $spec" >&2
     exit 2
 fi
 
-exec ctest --test-dir "$build" -j"$jobs" --resource-spec-file "$spec" "$@"
+# Not exec: the trap must remove a trimmed spec after ctest has read it.
+ctest --test-dir "$build" -j"$jobs" --resource-spec-file "$spec" "$@"

@@ -5,15 +5,36 @@
 # -j<total slots>; tests/ctest_gpu_env.sh maps the allocation to CUDA_VISIBLE_DEVICES.
 # Plain ctest (no --resource-spec-file) ignores RESOURCE_GROUPS, and the launcher is
 # a pass-through without an allocation, so it runs exactly as before.
+# Included from the top-level CMakeLists.txt so tests/ and python/ both see it.
 # evidence: AGENTS.md section 8 (Testing Policy)
+include_guard(GLOBAL)
 
 set(BATCHLAS_TEST_GPUS "auto" CACHE STRING
     "GPUs in <build>/ctest_resources.json: auto (nvidia-smi --list-gpus), <n>, or 0 to disable")
 set(BATCHLAS_TEST_GPU_SLOTS "2" CACHE STRING
     "Concurrent GPU tests per device under scripts/ctest_gpus.sh")
 
+if(NOT BATCHLAS_TEST_GPU_SLOTS MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "BATCHLAS_TEST_GPU_SLOTS='${BATCHLAS_TEST_GPU_SLOTS}': expected a positive integer")
+endif()
+
+# Isolation is CUDA_VISIBLE_DEVICES only, so the SYCL runtime must expose CUDA devices
+# ([cuda:gpu] in sycl-ls; BATCHLAS_ENABLE_CUDA governs only cuBLAS). A Level Zero or
+# HIP tree would run count x slots tests on one default device: no spec at all.
 set(BATCHLAS_TEST_GPU_COUNT 0)
-if(BATCHLAS_TEST_GPUS STREQUAL "auto")
+set(_why "")
+find_program(BATCHLAS_TEST_SH sh)
+if(BATCHLAS_TEST_GPUS STREQUAL "0")
+    set(_why "BATCHLAS_TEST_GPUS=0")
+elseif(NOT BATCHLAS_TEST_GPUS STREQUAL "auto" AND NOT BATCHLAS_TEST_GPUS MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "BATCHLAS_TEST_GPUS='${BATCHLAS_TEST_GPUS}': expected auto, 0 or a GPU count")
+elseif(NOT BATCHLAS_DETECTED_NVIDIA_GPU OR WIN32 OR NOT BATCHLAS_TEST_SH)
+    set(_why "needs a [cuda:gpu] in sycl-ls and a POSIX sh")
+    if(NOT BATCHLAS_TEST_GPUS STREQUAL "auto")
+        message(FATAL_ERROR "BATCHLAS_TEST_GPUS=${BATCHLAS_TEST_GPUS}: per-test GPU isolation "
+            "(tests/ctest_gpu_env.sh) ${_why}; set it to 0 or auto")
+    endif()
+elseif(BATCHLAS_TEST_GPUS STREQUAL "auto")
     find_program(BATCHLAS_NVIDIA_SMI nvidia-smi)
     if(BATCHLAS_NVIDIA_SMI)
         execute_process(COMMAND "${BATCHLAS_NVIDIA_SMI}" --list-gpus
@@ -23,13 +44,9 @@ if(BATCHLAS_TEST_GPUS STREQUAL "auto")
             list(LENGTH _gpu_lines BATCHLAS_TEST_GPU_COUNT)
         endif()
     endif()
-elseif(BATCHLAS_TEST_GPUS MATCHES "^[0-9]+$")
-    set(BATCHLAS_TEST_GPU_COUNT ${BATCHLAS_TEST_GPUS})
+    set(_why "nvidia-smi --list-gpus found none")
 else()
-    message(FATAL_ERROR "BATCHLAS_TEST_GPUS='${BATCHLAS_TEST_GPUS}': expected auto, 0 or a GPU count")
-endif()
-if(NOT BATCHLAS_TEST_GPU_SLOTS MATCHES "^[1-9][0-9]*$")
-    message(FATAL_ERROR "BATCHLAS_TEST_GPU_SLOTS='${BATCHLAS_TEST_GPU_SLOTS}': expected a positive integer")
+    set(BATCHLAS_TEST_GPU_COUNT ${BATCHLAS_TEST_GPUS})
 endif()
 
 set(_spec "${CMAKE_BINARY_DIR}/ctest_resources.json")
@@ -44,14 +61,13 @@ if(BATCHLAS_TEST_GPU_COUNT GREATER 0)
     file(WRITE "${_spec}"
         "{\n  \"version\": { \"major\": 1, \"minor\": 0 },\n  \"local\": [\n    {\n"
         "      \"gpus\": [\n        ${_entries}\n      ]\n    }\n  ]\n}\n")
-    find_program(BATCHLAS_TEST_SH sh)
     set(BATCHLAS_TEST_GPU_LAUNCHER "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh")
     math(EXPR _slots_total "${BATCHLAS_TEST_GPU_COUNT} * ${BATCHLAS_TEST_GPU_SLOTS}")
     message(STATUS "GPU test resources: ${BATCHLAS_TEST_GPU_COUNT} GPU(s) x ${BATCHLAS_TEST_GPU_SLOTS} slot(s) "
                    "-> scripts/ctest_gpus.sh runs ctest -j${_slots_total}")
 else()
     file(REMOVE "${_spec}")
-    message(STATUS "GPU test resources: none (BATCHLAS_TEST_GPUS=${BATCHLAS_TEST_GPUS}); scripts/ctest_gpus.sh unavailable")
+    message(STATUS "GPU test resources: none (${_why}); use plain serial ctest")
 endif()
 
 # add_test COMMAND for a GPU test binary: the launcher (if any) then the target.

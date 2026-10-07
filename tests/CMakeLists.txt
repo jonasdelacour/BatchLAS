@@ -14,10 +14,10 @@ if(NOT GTest_FOUND)
     FetchContent_MakeAvailable(googletest)
 endif()
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BatchLASTestGpus.cmake")
-
-# Host-only binaries: no SYCL device, so no GPU slot under scripts/ctest_gpus.sh.
+# Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
+# any -j: syev_cta_tests has a concurrency wrong-answer flake (AGENTS.md section 8).
 set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
+set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
 set(TEST_TARGETS
@@ -379,6 +379,9 @@ function(batchlas_add_test_target test_name)
         list(APPEND _labels slow)
     endif()
     set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
+    if(test_name IN_LIST BATCHLAS_RUN_SERIAL_TESTS)
+        set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE)
+    endif()
     if(test_name STREQUAL "sg_partition_tests")
         # A backend that breaks a divergent collective deadlocks rather than
         # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
@@ -563,7 +566,9 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
         set_tests_properties(consumer_package_tests PROPERTIES
             LABELS "packaging;slow"
             SKIP_RETURN_CODE 77
+            RUN_SERIAL TRUE
             TIMEOUT 1200)
+        # RUN_SERIAL: three parallel cmake builds beside GPU tests (OOM, docs/ci.md).
         batchlas_test_needs_gpu(consumer_package_tests)
         if(BATCHLAS_OPENBLAS_CORETYPE)
             set_tests_properties(consumer_package_tests PROPERTIES

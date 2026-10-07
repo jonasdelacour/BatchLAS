@@ -1,19 +1,17 @@
 #!/bin/sh
-# CTest launcher for GPU tests: maps the resource allocation to CUDA_VISIBLE_DEVICES.
-#
-# Under `ctest --resource-spec-file` (scripts/ctest_gpus.sh) CTest exports
-# CTEST_RESOURCE_GROUP_0_GPUS=id:<N>,slots:1. Without an allocation this is a
-# pass-through. A caller's own CUDA_VISIBLE_DEVICES list is honoured: id N picks
-# its N-th entry. HIP/ONEAPI selectors are left alone.
+# CTest launcher: CTEST_RESOURCE_GROUP_0_GPUS=id:<N>,... -> CUDA_VISIBLE_DEVICES.
+# No allocation: pass-through. A caller's CUDA_VISIBLE_DEVICES (even empty) is
+# honoured: id N picks its N-th entry. tests/cmake/BatchLASTestGpus.cmake.
 set -eu
 
 if [ -n "${CTEST_RESOURCE_GROUP_COUNT:-}" ] && [ -n "${CTEST_RESOURCE_GROUP_0_GPUS:-}" ]; then
     id=${CTEST_RESOURCE_GROUP_0_GPUS#id:}
     id=${id%%,*}
-    if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    if [ -n "${CUDA_VISIBLE_DEVICES+set}" ]; then
         dev=$(printf '%s,\n' "$CUDA_VISIBLE_DEVICES" | cut -d, -f"$((id + 1))")
         if [ -z "$dev" ]; then
-            echo "ctest_gpu_env.sh: resource id $id has no entry in CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" >&2
+            echo "ctest_gpu_env.sh: resource id $id has no entry in CUDA_VISIBLE_DEVICES='$CUDA_VISIBLE_DEVICES'" >&2
+            echo "(run through scripts/ctest_gpus.sh, which trims the spec to the list)" >&2
             exit 1
         fi
     else

@@ -389,10 +389,12 @@ is serial by construction and needs no `-j`.
 pass). Current measured counts on this tree: full `ctest` is **70 tests**;
 `ctest -LE slow` is **65 tests in about 95 s**. (`tests/README.md`'s table
 quotes an older 38-of-45; the counts here are the measured current ones.)
-Locally, run any multi-test scope through `scripts/ctest_gpus.sh` (one test
-per GPU slot, see `tests/README.md`). CI keeps its serial preset on purpose: the
-route-pinned reruns' gtest XML names and the OOM caveat below assume one test
-at a time.
+`scripts/ctest_gpus.sh` (one test per GPU slot, see `tests/README.md`) was
+validated only on threadripper02 (64 cores, 4 GPUs). On this box CI keeps its
+serial preset, and so should a local full gate: the route-pinned reruns' gtest
+XML names and the OOM caveat below assume one test at a time. Even under
+`ctest_gpus.sh`, `consumer_package_tests` (three parallel cmake builds) and
+`syev_cta_tests` are `RUN_SERIAL`.
 
 Two scoping choices are wrong for a pre-push gate, however convenient:
 
