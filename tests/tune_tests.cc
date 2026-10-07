@@ -2,6 +2,7 @@
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, the §6.4 hash, and
 // the round trip through scripts/sweep_to_table.py --tuner. No GPU.
 
+#include "../tools/tune/grid.hh"
 #include "../tools/tune/race.hh"
 #include "../tools/tune/tier.hh"
 #include "../tools/tune/tune_core.hh"
@@ -610,4 +611,94 @@ TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     EXPECT_EQ(params(Tier::deep).refine_ratio, 1.1);
     EXPECT_TRUE(params(Tier::deep).alternate_reverse);
     EXPECT_FALSE(params(Tier::coarse).alternate_reverse);
+}
+
+namespace {
+
+std::vector<AxisSpec> trsm_axes() {
+    return axis_specs({"side:exact", "trans:exact", "order:log:2", "q:log", "batch:log"},
+                      {{"side", {"L", "R"}},
+                       {"trans", {"N", "T"}},
+                       {"order", {"1", "2", "4", "8", "12", "16", "24", "32", "48", "64", "96", "128", "192", "256",
+                                  "384", "512", "768", "1024"}},
+                       {"q", {"1", "2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "4096"}},
+                       {"batch", {"128", "512", "2048", "8192", "32768"}}});
+}
+
+std::set<std::string> arg_set(const std::vector<CellKey>& v) {
+    std::set<std::string> s;
+    for (const auto& k : v) s.insert(key_arg(k));
+    return s;
+}
+
+CellKey batch_cell(int batch) { return {{"uplo", "L"}, {"n", "64"}, {"batch", std::to_string(batch)}}; }
+
+const std::vector<AxisSpec> kBatchAxes{{"uplo", false, {"L"}}, {"n", true, {"64"}}, {"batch", true, {}}};
+
+}  // namespace
+
+TEST(TuneGrid, LatticesNestAcrossTiers) {
+    const auto axes = trsm_axes();
+    ASSERT_EQ(axes.size(), 5u);
+    EXPECT_FALSE(axes[0].log);
+    EXPECT_TRUE(axes[2].log);
+    const auto u = arg_set(tier_lattice(axes, Tier::ultra));
+    const auto c = arg_set(tier_lattice(axes, Tier::coarse));
+    const auto d = arg_set(tier_lattice(axes, Tier::deep));
+    EXPECT_EQ(d.size(), 2u * 2 * 18 * 12 * 5);
+    EXPECT_TRUE(std::includes(c.begin(), c.end(), u.begin(), u.end()));
+    EXPECT_TRUE(std::includes(d.begin(), d.end(), c.begin(), c.end()));
+    EXPECT_LT(u.size(), c.size());
+    EXPECT_LT(c.size(), d.size());
+}
+
+TEST(TuneGrid, EndsAreAlwaysKept) {
+    const auto u = tier_lattice(trsm_axes(), Tier::ultra);
+    bool n_end = false, b_end = false;
+    for (const auto& k : u) {
+        n_end |= *key_get(k, "order") == "1024";
+        b_end |= *key_get(k, "batch") == "32768";
+    }
+    EXPECT_TRUE(n_end);
+    EXPECT_TRUE(b_end);
+}
+
+TEST(TuneGrid, ExactAxesAreNeverSubsampled) {
+    std::set<std::string> sides, trans;
+    for (const auto& k : tier_lattice(trsm_axes(), Tier::ultra)) {
+        sides.insert(*key_get(k, "side"));
+        trans.insert(*key_get(k, "trans"));
+    }
+    EXPECT_EQ(sides, (std::set<std::string>{"L", "R"}));
+    EXPECT_EQ(trans, (std::set<std::string>{"N", "T"}));
+}
+
+TEST(TuneGrid, HashSubsampleNests) {
+    std::vector<CellKey> g;
+    for (int m = 1; m <= 47; ++m)
+        for (int n = 1; n <= 32; ++n) g.push_back({{"m", std::to_string(m)}, {"n", std::to_string(n)}});
+    ASSERT_EQ(g.size(), 1504u);
+    const auto u = arg_set(tier_subsample(g, Tier::ultra));
+    const auto c = arg_set(tier_subsample(g, Tier::coarse));
+    const auto d = arg_set(tier_subsample(g, Tier::deep));
+    EXPECT_EQ(d.size(), g.size());
+    EXPECT_TRUE(std::includes(c.begin(), c.end(), u.begin(), u.end()));
+    EXPECT_NEAR(double(u.size()), 1504 / 4.0, 1504 / 4.0 * 0.1);
+    EXPECT_NEAR(double(c.size()), 1504 / 2.0, 1504 / 2.0 * 0.1);
+}
+
+TEST(TuneGrid, BisectsBatchToo) {
+    const std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}},
+                                                             {batch_cell(8192), {"b", "a"}}};
+    const auto next = refine_all_axes(ranked, kBatchAxes, 1.1);
+    ASSERT_EQ(next.size(), 1u);
+    EXPECT_EQ(key_arg(next[0]), "uplo=L,n=64,batch=1024");
+    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 0).empty());
+}
+
+TEST(TuneGrid, AgreeingNeighboursAddNothing) {
+    std::map<CellKey, std::vector<std::string>> ranked{{batch_cell(128), {"a", "b"}}, {batch_cell(8192), {"a", "b"}}};
+    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 1.1).empty());
+    ranked[batch_cell(128)] = {};  // no winner: never triggers bisection
+    EXPECT_TRUE(refine_all_axes(ranked, kBatchAxes, 1.1).empty());
 }

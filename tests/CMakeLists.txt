@@ -254,7 +254,8 @@ function(batchlas_add_test_target test_name)
         # Host-only: the tuner core (tools/tune/tune_core.cc) and no batchlas library. The
         # round-trip case runs scripts/sweep_to_table.py, so it needs the interpreter's path.
         target_sources(${test_name} PRIVATE "${PROJECT_SOURCE_DIR}/tools/tune/tune_core.cc"
-                                            "${PROJECT_SOURCE_DIR}/tools/tune/race.cc")
+                                            "${PROJECT_SOURCE_DIR}/tools/tune/race.cc"
+                                            "${PROJECT_SOURCE_DIR}/tools/tune/grid.cc")
         batchlas_configure_binary_target(${test_name} NO_FACADE LIBRARIES GTest::gtest GTest::gtest_main)
         find_package(Python3 QUIET COMPONENTS Interpreter)
         target_compile_definitions(${test_name} PRIVATE
