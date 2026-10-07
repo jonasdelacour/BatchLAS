@@ -43,7 +43,7 @@ RaceVerdict race_step(RaceState& s, const TierParams& p, double tie) {
         const double m = run_median(s.ms[c]);
         if (!std::isnan(m) && m < best) best = m, leader = static_cast<int>(c);
     }
-    bool all_tied = true;
+    bool all_tied = leader >= 0;
     if (leader >= 0) {
         std::vector<std::size_t> dying;
         for (std::size_t c = 0; c < s.cands.size(); ++c) {

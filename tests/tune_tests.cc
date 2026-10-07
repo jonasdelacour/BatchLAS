@@ -566,6 +566,19 @@ TEST(TuneRace, NaNRoundsAreUnpaired) {
     EXPECT_FALSE(s.alive[1]);
 }
 
+TEST(TuneRace, AllNaNRoundsNeverTie) {
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    const auto& p = params(Tier::ultra);
+    RaceState s;
+    s.cands = {"a", "b"};
+    s.alive = {true, true};
+    s.ms = {std::vector<double>(p.max_reps - 1, nan), std::vector<double>(p.max_reps - 1, nan)};
+    EXPECT_EQ(race_step(s, p), RaceVerdict::more);
+    s.ms = {std::vector<double>(p.max_reps, nan), std::vector<double>(p.max_reps, nan)};
+    EXPECT_EQ(race_step(s, p), RaceVerdict::cap);
+    EXPECT_TRUE(s.alive[0] && s.alive[1]);
+}
+
 TEST(TuneRace, LowerOrderStatMatchesTheBinomial) {
     EXPECT_EQ(lower_order_stat(3, 0.80), 1u);
     EXPECT_EQ(lower_order_stat(6, 0.98), 1u);
