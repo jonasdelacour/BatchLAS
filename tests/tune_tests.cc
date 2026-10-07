@@ -945,6 +945,28 @@ TEST(TuneReplay, HoldoutRacesOnPassOneAndScoresAgainstPassTwo) {
     EXPECT_EQ(all.race_misrank, 0.0) << "the pass medians tie, so the race and the reference agree by construction";
 }
 
+TEST(TuneReplay, NoiseFloorIsTheNoEliminationOracleAndExcessIsTheDifference) {
+    const TierParams o = oracle_params();
+    EXPECT_EQ(o.confidence, 1.0);
+    EXPECT_EQ(o.min_reps, 16);
+    EXPECT_EQ(o.max_reps, 16);
+    EXPECT_EQ(o.stride, 1);
+    auto pass_ms = [](double p1, double p2) { return [p1, p2](int pass, int) { return pass == 1 ? p1 : p2; }; };
+    const auto rc = load_replay(write_attempts("floor.jsonl", {{0, {{"a", pass_ms(1.0, 1.5)}, {"b", pass_ms(1.5, 1.0)}}}}, 0));
+    const auto axes = axis_specs({"mode:exact", "n:log:2"}, {{"mode", {"x"}}, {"n", {"1"}}});
+    ReplayOpts hold;
+    hold.holdout = true;
+    const ReplayReport floor = replay(rc, axes, Tier::deep, o, 0.03, hold);
+    EXPECT_NEAR(floor.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "every pass-1 rep of every candidate, no elimination";
+    EXPECT_EQ(floor.race_misrank, 1.0) << "pass 1 prefers a, the pass-2 reference prefers b: unavoidable";
+    ReplayReport r = replay(rc, axes, Tier::deep, params(Tier::deep), 0.03, hold);
+    apply_floor(r, floor);
+    EXPECT_EQ(r.floor_table, floor.table_misrank);
+    EXPECT_DOUBLE_EQ(r.excess_race, r.race_misrank - floor.race_misrank);
+    EXPECT_DOUBLE_EQ(r.excess_table, r.table_misrank - floor.table_misrank);
+    EXPECT_EQ(r.excess_race, 0.0) << "the race cannot lose more than the oracle here";
+}
+
 TEST(TuneReplay, TierDefaultsDriveTheLatticeAndTheRefinementMode) {
     ReplayMeta meta;
     const auto rc = load_replay(write_raw("defaults.jsonl", flip_cells()), &meta);

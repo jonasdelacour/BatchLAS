@@ -44,6 +44,7 @@ struct ReplayReport {
     double mean_loss = 0, p95_loss = 0, p99_loss = 0, max_loss = 0;  // exhaustive(chosen) / best - 1, runnable cells
     double time_weighted_loss = 0;                                   // sum(chosen) / sum(best) - 1, runnable cells
     std::size_t unrunnable = 0;                                      // cells where no entry of the nearest row can run
+    double floor_race = 0, floor_table = 0, excess_race = 0, excess_table = 0;  // see apply_floor
     double measure_s = 0;  // rep time the replay consumed, alone
     double est_gpu_h = 0;  // (measure_s + candidates x (warm_topup_s + verify_s) + cell_overhead_s per cell) / 3600
     std::size_t refine_unavailable = 0;  // distinct bisection midpoints that are not in the raw file
@@ -68,5 +69,9 @@ void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std
 
 // Port of nearest() in scripts/sweep_to_table.py (exact-key prefix, weighted log2 distance, ties as there).
 std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes);
+
+// Holdout noise floor: the no-elimination oracle over every raw cell, scored on the same pass-2 reference.
+TierParams oracle_params();
+void apply_floor(ReplayReport& r, const ReplayReport& oracle);
 
 }  // namespace batchlas::tune

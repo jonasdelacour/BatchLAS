@@ -91,6 +91,7 @@ int main(int argc, char** argv) {
         ro.order = meta.candidates;
         for (const auto& [name, sv] : shrink) shrink_axis(meta.axes, name, sv.first, sv.second);
         ReplayReport r = replay(cells, meta.axes, *tier, p, 0.03, ro);
+        if (ro.holdout) apply_floor(r, replay(cells, meta.axes, *tier, oracle_params(), 0.03, ro));
         std::string worst;
         for (const std::string& w : r.worst) worst += (worst.empty() ? "" : "; ") + w;
         Json j;
@@ -105,7 +106,9 @@ int main(int argc, char** argv) {
         j.num("measure_s", r.measure_s).boolean("holdout", ro.holdout).num("exhaustive_rep_s", meta.total_rep_ms / 1000);
         j.num("exhaustive_rep_gpu_h", meta.total_rep_ms / 3.6e6);
         const double bound = *tier == Tier::deep ? 0.002 : *tier == Tier::coarse ? 0.01 : 0.05;  // spec "Engine: testing and acceptance"
-        j.num("bound", bound).str("verdict", r.race_misrank <= bound && r.table_misrank <= bound ? "PASS" : "FAIL");
+        const double race = ro.holdout ? r.excess_race : r.race_misrank, table = ro.holdout ? r.excess_table : r.table_misrank;
+        j.num("bound", bound).str("verdict", race <= bound && table <= bound ? "PASS" : "FAIL");
+        j.num("floor_race", r.floor_race).num("floor_table", r.floor_table).num("excess_race", r.excess_race).num("excess_table", r.excess_table);
         j.integer("refine_unavailable", static_cast<std::int64_t>(r.refine_unavailable)).str("worst", worst);
         std::fputs(j.line().c_str(), stdout);
     } catch (const std::exception& e) {

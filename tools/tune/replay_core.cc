@@ -337,6 +337,18 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     return rep;
 }
 
+TierParams oracle_params() {
+    TierParams p = params(Tier::deep);
+    p.stride = 1, p.confidence = 1.0, p.min_reps = p.max_reps = 16, p.refine_ratio = 1.1;
+    p.refine_mode = RefineMode::geometric, p.refine_margin = 0;
+    return p;
+}
+
+void apply_floor(ReplayReport& r, const ReplayReport& oracle) {
+    r.floor_race = oracle.race_misrank, r.floor_table = oracle.table_misrank;
+    r.excess_race = r.race_misrank - oracle.race_misrank, r.excess_table = r.table_misrank - oracle.table_misrank;
+}
+
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t, double tie) {
     return replay(cells, axes, t, params(t), tie);
 }
