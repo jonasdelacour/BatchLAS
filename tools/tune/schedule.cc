@@ -204,8 +204,8 @@ std::string budget_warning(double est_s, double budget_h) {
     if (budget_h <= 0 || est_s <= budget_h * 3600) return "";
     char b[200];
     std::snprintf(b, sizeof(b),
-                  "--budget %.2f h is below the starting lattice estimate %.2f h: the lattice still completes, "
-                  "refinement is skipped",
+                  "--budget %.2f h is below the estimate %.2f h (lattice and refinement): the lattice still "
+                  "completes, refinement stops when the budget is spent",
                   budget_h, est_s / 3600);
     return b;
 }

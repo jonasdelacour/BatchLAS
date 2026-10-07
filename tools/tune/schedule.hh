@@ -50,7 +50,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
 // potrf and trsm before posv; otherwise input order.
 std::vector<std::string> op_order(std::vector<std::string> ops);
 
-// Empty when the estimate fits the budget (or there is none); the lattice runs either way.
+// Empty when the estimate (lattice and refinement) fits the budget (or there is none); the lattice runs either way.
 std::string budget_warning(double est_s, double budget_h);
 
 // Ranked by rank() at tie 0.03; merging into `stored` keeps its unchanged candidates, drops removed ones.

@@ -258,7 +258,9 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
         const auto it = std::find_if(f.arms.begin(), f.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; });
         if (it != f.arms.end()) b.arms.push_back(std::move(*it));
         else b.arms.push_back({a, "error", "child: " + f.error, {}, {}, 0, 0});
+        b.alone.push_back(a);
     }
+    b.fallback = b.fallback || pool.empty();  // nothing ran on the worker
     std::stable_sort(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x, const ArmOutcome& y) {
         return std::find(arms.begin(), arms.end(), x.arm) < std::find(arms.begin(), arms.end(), y.arm);
     });

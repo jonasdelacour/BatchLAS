@@ -55,7 +55,7 @@ the ledger as tier `custom`, ranked below preview. With neither, the tuner stops
 | `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all`; tiered runs take potrf and trsm before posv. Gate and custom runs take one op |
 | `--tier` | none | `preview`, `coarse` or `deep`; see "Tiered mode" |
 | `--plan` | off | print the starting lattice's cells, skips with reasons and the time estimate, then exit; no GPU |
-| `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate exceeds H) |
+| `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate with refinement exceeds H) |
 | `--progress-fd N` | none | one JSON event per line on fd N; see "Tiered mode" |
 | `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table |
 | `--device-key sm_NN` | nvidia-smi compute capability of the first `--devices` GPU | the device `--plan` reads the ledger for |
@@ -99,8 +99,8 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   near-tie alternation (within the tie at both ends) refines nothing. The preview margin (runner-up within 10%) applies only
   between two round-0 cells of this run. `batch` refills only its own axis values, never a
   geometric midpoint. Refinement cells per op and dtype are capped at `refine_cap_factor` x
-  round-0 cells (preview 3.0, coarse 1.0, deep 2.0; round-0 cells counted whether measured now or
-  already current); past it the first cells in `refine_all_axes` order (flips, then margin hedges)
+  round-0 cells measured in this run (preview 3.0, coarse 1.0, deep 2.0; a resumed run whose
+  lattice is already current refines nothing); past it the first cells in `refine_all_axes` order (flips, then margin hedges)
   run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
@@ -127,7 +127,8 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   races the cell in a fresh child, whose result is recorded (progress `worker_restart`). A candidate
   whose `error` the fresh child reproduced in two consecutive cells is the candidate's own error: for
   the rest of the run that op and dtype race it alone in a fresh child per cell, the other candidates
-  on the worker. In a fresh child a failed
+  on the worker (all of them benched: the cell is a fallback). Arms raced alone are left out of the
+  audit's worker side. In a fresh child a failed
   child is retried once, then every arm is run alone, as below; a failure that leaves no `ok`, `bad`
   or `skipped` candidate writes no record, so the next run measures the cell again.
 - **Audit.** A worker cell with `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000` is raced again

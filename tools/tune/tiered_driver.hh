@@ -50,6 +50,7 @@ struct ArmBatch {
     std::string error;
     int worker_restarts = 0;  // the worker died on this cell and was restarted
     bool fallback = false;    // ... and the cell ran in a fresh child after all
+    std::vector<std::string> alone;  // arms raced alone in fresh children: not the worker's numbers
 };
 
 // The GPU seam: measure() is the default path, the persistent worker when persistent();

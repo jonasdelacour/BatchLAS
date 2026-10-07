@@ -2519,6 +2519,32 @@ TEST(TuneWorker, TwoConfirmedErrorsTakeAnArmOffTheWorker) {
     EXPECT_EQ(b.arms[1].status, "error");
 }
 
+TEST(TuneWorker, AllBenchedArmsAreAFallbackAndMarkedAlone) {
+    ArmErrors errs;
+    for (int i = 0; i < 2; ++i) errs.note("b", true);
+    int tries = 0;
+    auto attempt = [&](const std::vector<std::string>& arms) {
+        ++tries;
+        WorkerTry t{true, false, "", {}};
+        for (const std::string& a : arms) t.arms.push_back(arm(a, "ok", {1.0}));
+        return t;
+    };
+    auto fresh = [](const std::vector<std::string>& arms) {
+        ArmBatch b;
+        for (const std::string& a : arms) b.arms.push_back(arm(a, "ok", {2.0}));
+        return b;
+    };
+    ArmBatch b = race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_FALSE(b.fallback);
+    EXPECT_EQ(b.alone, (std::vector<std::string>{"b"}));
+    for (int i = 0; i < 2; ++i) errs.note("a", true);
+    b = race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_EQ(tries, 1) << "nothing left for the worker";
+    EXPECT_TRUE(b.fallback);
+    EXPECT_EQ(b.alone, (std::vector<std::string>{"a", "b"}));
+    ASSERT_EQ(b.arms.size(), 2u);
+}
+
 TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
@@ -2602,4 +2628,64 @@ TEST(TuneTieredDriver, AHashPickedFallbackCellDoesNotUseUpTheForcedAudit) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     EXPECT_EQ(m.fresh_keys.size(), 1u) << "fallback n=" << fallback_n;
     EXPECT_TRUE(std::find(m.fresh_keys.begin(), m.fresh_keys.end(), "n=" + std::to_string(fallback_n)) == m.fresh_keys.end());
+}
+
+TEST(TuneTieredDriver, ResumedCurrentLatticeAllowsNoRefinement) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.refine_cap_factor = 0;  // the first run measures the lattice only
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
+    o.refine_cap_factor = -1;
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    FakeMeasurer resumed;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
+    ::close(fd);
+    EXPECT_TRUE(resumed.keys.empty()) << "the cap base is round-0 cells measured, here none";
+    EXPECT_NE(read_file(events).find("\"lattice\": 0, \"refined\": 0, \"cap\": 0, \"dropped\": 1"), std::string::npos)
+        << read_file(events);
+}
+
+TEST(TuneTieredDriver, MarginRefinesLatticeBracketsOnly) {
+    // a wins everywhere, b 5% behind: every lattice bracket is a margin hedge, no midpoint re-triggers.
+    class CloseMeasurer : public FakeMeasurer {
+    public:
+        ArmBatch measure(const CellJob& j) override {
+            keys.push_back(key_arg(j.key));
+            ArmBatch b;
+            for (const std::string& a : j.arms) b.arms.push_back(arm(a, "ok", {a == "a" ? 1.0 : 1.05}));
+            return b;
+        }
+    };
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    CloseMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    EXPECT_EQ(sorted(m.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=2", "n=8", "n=32"}));
+}
+
+TEST(TuneTieredDriver, ArmsRacedAloneStayOutOfTheAuditsWarmSide) {
+    // Arm a ran alone in a fresh child and errored; the audit's fresh child times it fine.
+    class AloneMeasurer : public AuditMeasurer {
+    public:
+        ArmBatch measure(const CellJob& j) override {
+            ArmBatch b = AuditMeasurer::measure(j);
+            for (ArmOutcome& a : b.arms)
+                if (a.arm == "a") a.status = "error", a.ms.clear();
+            b.alone = {"a"};
+            return b;
+        }
+    };
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.audit_fraction = 0;
+    AloneMeasurer m;
+    m.disagree = false;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    EXPECT_EQ(m.fresh_keys, (std::vector<std::string>{"n=1"}));
+    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    EXPECT_EQ(l.runs.back().worker_mode.at("fakeop.float"), "worker");
 }

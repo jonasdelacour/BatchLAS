@@ -589,8 +589,8 @@ plan and the estimate counted the starting lattice only.
 3. `batch` is never bisected below its lattice spacing: it refills its own axis values (index
    mode in every tier) and never takes a geometric midpoint.
 4. Refinement cells per op and dtype are at most `refine_cap_factor` x round-0 cells (preview 3.0,
-   coarse 1.0, deep 2.0; `TierParams`). Round-0 cells are the starting lattice minus `skip:cap`,
-   whether measured now or already current. Midpoints come out flips first, then margin hedges; past
+   coarse 1.0, deep 2.0; `TierParams`). Round-0 cells are the starting lattice cells measured in
+   this run, so a resumed run whose lattice is already current refines nothing. Midpoints come out flips first, then margin hedges; past
    the cap the first ones run, refinement stops and the run reports it (`refine_cap` progress event,
    `refinement cap hit` line). `tune_replay` applies the same cap.
 5. The estimate counts refinement: ratio x the lattice cells measured now, at their mean estimate,

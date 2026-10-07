@@ -135,7 +135,7 @@ struct Job {
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     bool audited = false;  // until set, the next eligible worker cell is audited whatever the hash says
-    std::size_t lattice_cells = 0, refined = 0;  // the refinement cap's base and count
+    std::size_t lattice_cells = 0, refined = 0;  // the refinement cap's base (round-0 cells measured) and count
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
@@ -268,7 +268,10 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
 // A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
 void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
     const ArmBatch f = m_->measure_fresh(job);
-    const AuditResult a = audit_compare(warm.arms, f.arms, j.cands);
+    std::vector<ArmOutcome> on_worker;
+    for (const ArmOutcome& x : warm.arms)
+        if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end()) on_worker.push_back(x);
+    const AuditResult a = audit_compare(on_worker, f.arms, j.cands);
     const std::string od = j.spec->op() + "." + j.dtype;
     bool flipped = false;
     {
@@ -443,7 +446,6 @@ int TieredRun::go() {
         for (const PlannedCell& c : plans.back()) {
             est += c.est_s;
             to_measure += measurable(c) || c.reason == "skip:single";
-            j->lattice_cells += c.reason != "skip:cap";
             if (measurable(c)) est_measure += c.est_s, ++n_measure;
         }
         // Refinement cells follow the lattice cells measured now, at their mean estimate.
@@ -452,14 +454,14 @@ int TieredRun::go() {
         j->est_refine_cells = ratio * double(n_measure);
         const double s = n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;
-        std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x %zu round-0 cells\n",
+        std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x %zu round-0 cells measured\n",
                     j->est_refine_cells, ratio, history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(),
-                    cap_factor(), j->lattice_cells);
+                    cap_factor(), n_measure);
     }
     std::printf("== plan total: %zu cells to measure or probe; est %s lattice only, %s with refinement (~%.0f refinement "
                 "cells; %.2f s per child)\n", to_measure, hours(est).c_str(), hours(est + est_refine).c_str(), refine_cells,
                 o_.overhead_s);
-    if (const std::string w = budget_warning(est, o_.budget_h); !w.empty()) std::printf("warning: %s\n", w.c_str());
+    if (const std::string w = budget_warning(est + est_refine, o_.budget_h); !w.empty()) std::printf("warning: %s\n", w.c_str());
     std::fflush(stdout);
     emit(Json().str("ev", "plan").integer("cells", std::int64_t(to_measure)).num("est_s", est)
              .integer("refine_cells", std::int64_t(std::llround(refine_cells))).num("est_refine_s", est_refine)
@@ -468,7 +470,10 @@ int TieredRun::go() {
     if (!m_) throw std::logic_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
     t0_ = std::chrono::steady_clock::now();
-    for (std::size_t i = 0; i < jobs_.size(); ++i) jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
+    for (std::size_t i = 0; i < jobs_.size(); ++i) {
+        jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
+        jobs_[i]->lattice_cells = jobs_[i]->per_round[0];  // a resumed lattice of current cells allows no refinement
+    }
     for (int round = 1;; ++round) {
         std::size_t pending = 0;
         for (auto& j : jobs_) {
