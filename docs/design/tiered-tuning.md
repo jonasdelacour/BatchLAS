@@ -196,6 +196,44 @@ SYCL and CUDA init, libbatchlas static init, JIT cache load) on both boxes. If i
 raced cell, the worker is dropped and the engine keeps one process per cell, which removes the
 carve-out question.
 
+## Engine: measured per-child overhead
+
+Measured on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120), GPU 1 only, the other three idle, one
+measuring process at a time, 2026-10-07. The cell is potrf float `uplo=L,n=16,batch=8192`, run as
+20 sequential `batchlas_tune_impl --cell` children with the driver's environment
+(`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=1`), after one throwaway child per configuration
+to warm the JIT cache. Wall time is `time.perf_counter` around the child. Only this box was available;
+the 4090 box was not measured.
+
+| config | median s | p90 s |
+| --- | --- | --- |
+| (a) `time`, 1 arm (`tiny`), reps 1, warm 0 | 0.488 | 0.494 |
+| (b) `probe`, 1 arm, no timing | 0.488 | 0.492 |
+| (c) `time`, 6 float arms, reps 3, warm 0.2 | 1.802 | 1.809 |
+
+(a) and (b) are equal to the millisecond, and the kernel time summed over (a)'s reps is 0.02 ms, so
+the 0.49 s is entirely process start, SYCL and CUDA init, library static init, JIT-cache load and
+the verification launches. Start-up is therefore about 0.49 s per child with a 1% spread.
+(c) adds 1.31 s of in-child work: 6 candidates x 0.2 s warm-up = 1.2 s, and the 18 timed reps sum to
+0.7 ms. At this cell size the rep time is negligible and a raced cell is its warm-up top-up.
+
+The brief's rule compares the overhead with the measuring time of a raced preview cell. With the
+preview race at 4 live candidates the work is about 4 x 0.2 s = 0.8 s plus verification, so the
+child overhead of 0.49 s is about 60% of it; against (c)'s measured 1.31 s it is 37%. Both exceed
+25%, and the cell is small only in rep time: a larger cell adds rep seconds, but the warm-up
+dominates the old trsm data too (see "where the old tuner's time went"), so the ratio does not fall
+below the threshold at median cell size.
+
+Context from that section: the old driver ran three children per cell (one `jit` child, then two
+`time` passes). That is 3 x 0.49 s = 1.5 s of pure start-up per cell, 6.4 ks (1.8 GPU-h) for
+~4400 cells, against 16 GPU-h in total for the old trsm float run. A tiered run with one child per
+measured cell still pays 0.49 s x 4400 = 2.2 ks (0.60 GPU-h), as much as the whole preview estimate
+for trsm float (0.570 GPU-h, which assumes `--cell-overhead-s` = 0), so a per-cell process roughly
+doubles the preview cost. A persistent worker removes it.
+
+Decision: WORKER=yes. The per-child overhead (0.49 s median) is 37-60% of a raced preview cell's
+measuring time, above the 25% threshold. Task 8 runs.
+
 ## Engine: driver interface
 
 - `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep --dtype ... --devices ...` replaces the
