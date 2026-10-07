@@ -224,6 +224,9 @@ public:
             "src/ops/gemm/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // common "src/ops/gemm/gemm.cc"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gemm_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {

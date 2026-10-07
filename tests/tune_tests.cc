@@ -240,6 +240,24 @@ TEST(TuneHash, KernelBlockFromFileMergesDeps) {
     }
 }
 
+TEST(TuneHash, DepsCommonJoinsEveryFamilyButNotTheOpHash) {
+    const fs::path d = scratch("depscommon");
+    for (const char* f : {"k.hh", "cta.cc", "op.cc", "dep.cc"}) std::ofstream(d / f) << f;
+    const std::string spec = "// kernel-sources-begin\n\"k.hh\",\n// family: cta\n\"cta.cc\",\n// kernel-sources-end\n"
+                             "// kernel-deps-begin\n// common \"op.cc\"\n// common helpers \"not.cc\"\n"
+                             "// family: cta \"dep.cc\"\n// kernel-deps-end\n";
+    const KernelBlock b = parse_kernel_block(spec);
+    EXPECT_EQ(b.all, (std::vector<std::string>{"k.hh", "cta.cc"})) << "the deps block never moves the op-level hash";
+    EXPECT_EQ(b.deps_common, (std::vector<std::string>{"op.cc"})) << "only a bare '// common' line counts";
+    const std::vector<std::string> fams{"cta", "vendor"};
+    const auto h0 = family_hashes(d.string(), b, fams);
+    EXPECT_EQ(h0.at("cta"), *kernel_hash(d.string(), {"k.hh", "cta.cc", "op.cc", "dep.cc"}));
+    EXPECT_EQ(h0.at("vendor"), *kernel_hash(d.string(), {"k.hh", "op.cc"}));
+    std::ofstream(d / "op.cc") << "can_run edited";
+    const auto h1 = family_hashes(d.string(), b, fams);
+    for (const char* f : {"cta", "vendor"}) EXPECT_NE(h1.at(f), h0.at(f)) << f;
+}
+
 TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
     const fs::path d = scratch("famhash");
     std::ofstream(d / "common.hh") << "c";
@@ -301,6 +319,8 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     for (const char* f : {"tiled", "small", "reg", "wide"}) EXPECT_TRUE(block("gemm").family.count(f)) << f;
     EXPECT_TRUE(block("trsm").family.count("sg_left"));
     const KernelBlock posv = block("posv");
+    for (const char* op : {"gemm", "potrf", "posv", "trsm"})  // can_run lives there: every family depends on it
+        EXPECT_EQ(block(op).deps_common, std::vector<std::string>{"src/ops/" + std::string(op) + "/" + op + ".cc"}) << op;
     for (const char* f : {"cta", "blocked"}) {
         ASSERT_TRUE(posv.deps.count(f)) << f;
         const auto& d = posv.deps.at(f);
@@ -1509,6 +1529,17 @@ TEST(TuneLedger, PartlyStaleKeepsItsTier) {
     const auto best = best_records(l, now);
     ASSERT_EQ(best.size(), 1u);
     EXPECT_EQ(best.begin()->second->tier, Tier::deep) << "partly stale still counts at its tier";
+}
+
+TEST(TuneLedger, SkippedCandidateHashChangeKeepsTheCellCurrent) {
+    // vendor could not run at this cell: an edit to its family cannot change the ranking.
+    const CellRecord r = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "skipped")}, {"lpanel:panel=8"});
+    auto now = kHashes;
+    now["vendor"] = "v2";
+    EXPECT_EQ(freshness(r, now), Freshness::current);
+    EXPECT_TRUE(stale_candidates(r, now).empty());
+    const CellRecord bad = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "bad")}, {"lpanel:panel=8"});
+    EXPECT_EQ(freshness(bad, now), Freshness::partly_stale) << "a refused-by-verification candidate did run";
 }
 
 TEST(TuneLedger, AddedFamilyIsPartlyStale) {

@@ -119,7 +119,9 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
-  the changed or added families plus its stored winner and runner-up, at the stored record's
+  the changed or added families (a candidate stored `skipped`, which could not run there, is not
+  compared; the spec's `// common` deps line puts `<op>.cc`, where `can_run` lives, in every family)
+  plus its stored winner and runner-up, at the stored record's
   tier, and appends the merged record (`partial:<families>`; re-raced candidates ranked by their
   new times, the unchanged ones below them in stored order). A stale record, or one where every
   candidate is `error`, counts as missing: measured in full at the run's tier. A cell whose probe

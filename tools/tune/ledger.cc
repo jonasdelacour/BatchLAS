@@ -231,6 +231,7 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
     for (const CandResult& c : r.cands) {
         const std::string fam = family_of(c.cand);
         seen.insert(fam);
+        if (c.status == "skipped") continue;  // could not run there: its hash cannot change the ranking
         const auto it = family_hash.find(fam);
         if (it == family_hash.end() || it->second != c.hash) out.insert(fam);
     }
@@ -339,7 +340,8 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
             if (axes.empty()) key.push_back({n, rec->get(n)});
         for (const auto& [n, values] : axes) {
             const bool fixed = values.size() == 1 && std::find(names.begin(), names.end(), n) == names.end();
-            key.push_back({n, rec->has(n) || !fixed ? rec->get(n) : values[0]});
+            if (!rec->has(n) && !fixed) throw std::runtime_error(raw_jsonl + ": a record lacks grid axis '" + n + "'");
+            key.push_back({n, rec->has(n) ? rec->get(n) : values[0]});
         }
         if (kind == "pass") {
             pending[key][static_cast<int>(rec->number("attempt"))][rec->get("cand")].push_back(

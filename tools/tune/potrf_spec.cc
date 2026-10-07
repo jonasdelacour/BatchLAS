@@ -95,6 +95,7 @@ public:
         };
         // kernel-sources-end
         // kernel-deps-begin
+        // common "src/ops/potrf/potrf.cc"
         // family: tiny "src/extensions/tiny_device.hh"
         // family: blocked "src/extensions/symmetric_product_fold.hh" "src/sycl/trsm_native.hh"
         // kernel-deps-end

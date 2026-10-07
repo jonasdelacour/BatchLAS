@@ -115,22 +115,23 @@ std::vector<std::string> parse_kernel_list(std::string_view spec_source);
 
 // The same block split by family. Inside it a comment line `// family: <name>` opens that family's
 // section (reopening appends) and `// common` returns to common; paths before any marker are
-// common. `all` is every path in block order (the op-level `kernels=` hash). `deps` come from the
-// separate kernel-deps-begin/-end comment block (`// family: <name> "path" ...`): files a family
-// also depends on that are not in the block (posv's potrf/trsm kernels). CMake and CI never read it.
+// common. `all` is every path in block order (the op-level `kernels=` hash). The kernel-deps comment
+// block adds files outside it, never to `all`: `// family: <name> "path" ...` (`deps`, posv's potrf/trsm
+// kernels) and `// common "path" ...` (`deps_common`, the op's <op>.cc). CMake and CI never read it.
 struct KernelBlock {
     std::vector<std::string> all;
     std::vector<std::string> common;
     std::map<std::string, std::vector<std::string>> family;
     std::map<std::string, std::vector<std::string>> deps;
+    std::vector<std::string> deps_common;
 };
 KernelBlock parse_kernel_block(std::string_view spec_source);
 
 // parse_kernel_block of <repo>/<spec_file>; throws std::runtime_error naming the path if unreadable.
 KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file);
 
-// kernel_hash over common + family files + deps, per family; a family with no section hashes common
-// only. Throws std::runtime_error naming a missing file.
+// kernel_hash over common + family files + deps_common + deps, per family; a family with no section
+// hashes common and deps_common only. Throws std::runtime_error naming a missing file.
 std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
                                                  const std::vector<std::string>& families);
 

@@ -138,13 +138,19 @@ absent.
 
 **Per-candidate hashes.** A spec's `kernel-sources` block becomes `family -> files`, plus a common
 set (dispatch, `src/select/`) that every family depends on. A family's hash covers the common set
-plus its own files. `cmake/BatchLASTunedStaleness.cmake`, `.github/ci/check_tuned_tables.py` and
+plus its own files. The spec's `kernel-deps` comment block adds files outside the source list:
+`// family: <name> "path" ...` for one family, and `// common "path" ...` for every family. Each
+spec lists its `src/ops/<op>/<op>.cc` there, where `can_run` lives, so an edit to what can run
+stales every cell. Neither kind of line moves the op-level `kernels=` hash. `cmake/BatchLASTunedStaleness.cmake`, `.github/ci/check_tuned_tables.py` and
 the driver compute it the same way. The posv coupling becomes explicit: posv's families list the
 potrf and trsm families they call.
 
 **Which record counts.** Precedence is deep > coarse > preview > custom > transcribed.
 
-- A `cell` record is *current* when every candidate's hash matches the source tree.
+- A `cell` record is *current* when every candidate's hash matches the source tree. The hash of a
+  candidate stored as `skipped` (it could not run at that cell) is not compared: an edit to its
+  family cannot change the ranking, and a change to what can run goes through the hashed
+  `<op>.cc`.
 - It is *partly stale* when only some changed, or when the candidate list gained a family the
   record never raced. The next run of any tier re-races just those
   candidates against the stored winner and runner-up, at the stored record's tier, and appends a
@@ -176,7 +182,8 @@ stays byte-reproducible, and `--check` keeps re-deriving every table.
 (raced and dropped by the race). An eliminated candidate carries the median of the reps it did
 time, which the table prints; one with no median is left out of its row. A record is *stale* when
 the winner's hash differs or its family is gone, *partly stale* when another candidate's hash
-differs or a current family was never timed; an empty ranking has no winner to go stale.
+differs (a `skipped` one's is not compared) or a current family was never timed; an empty ranking
+has no winner to go stale.
 
 Results merge by device key (sm_89, sm_120), and the host is recorded. A deep sm_89 run on one 4090
 box counts for every 4090.
@@ -710,25 +717,25 @@ being wrong.
 `skip:cap` (0 to measure), and the run exits in 1.3 s without writing a run file.
 
 **Staleness.** One comment line appended to `src/sycl/trsm_sg_left.cc` (family `sg_left`), then
-`--tier coarse --plan`:
+`--tier coarse --plan`. This runs against the coarse ledger with its stored hashes rewritten to
+today's values: adding `<op>.cc` to every family changed every hash, and no hashed source file
+changed since the run. Every edit was reverted, with an empty `git diff`.
 
 | cells | count | why |
 |---|---|---|
 | measure (full) | 711 | `sg_left` was the stored winner, so the record is stale |
-| `partial:sg_left`, order <= 32 | 1157 | re-race `sg_left` plus the stored winner and runner-up |
-| `partial:sg_left`, order > 32 | 1612 | `sg_left` was `skipped` (pin refused) and is re-raced anyway |
-| current | 0 | |
+| `partial:sg_left` | 223 | side L, order <= 32: `sg_left` ran but lost; re-race it plus the stored winner and runner-up |
+| `skip:current` | 2546 | `sg_left` was `skipped` there (side R, or order > 32), so its hash is not compared |
+| `skip:cap` | 840 | |
 
-The edit was reverted, with an empty `git diff` and the same md5 as HEAD. A control edit to
-`src/extensions/potrf_lpanel.cc` gave the same shape on the potrf float preview ledger: 21 measure,
-69 `partial:lpanel` and 0 current, uplo=U cells included, where `lpanel` cannot run. No cell stays
-current because every record lists every candidate with its family hash, `skipped` ones included,
-and a changed family makes a record partly stale whatever that candidate's status was. This is
-conservative: an edit might change what can run. But it costs about 33 single-GPU minutes of
-needless re-races on trsm after an sg_left-only edit. The open refinement is to re-probe, not
-re-race, a changed family that was `skipped`, so it gets a fresh hash and status when it is still
-refused. Separately, `can_run` (`src/ops/trsm/trsm.cc`) is in no hashed source list, so a
-runnability change stales nothing.
+A first version compared every candidate's hash, `skipped` ones included. It planned 711 measure,
+2769 partial and 0 current: 1612 of those cells were above order 32, where `sg_left` cannot run,
+which is about 33 single-GPU minutes of useless re-races. Control edits:
+
+- `src/ops/trsm/trsm.cc` (`can_run`): all 3480 cells measure.
+- `src/extensions/potrf_lpanel.cc` on the potrf float preview ledger: 21 measure, 22
+  `partial:lpanel` and 47 current, every uplo=U cell among them (`lpanel` cannot run on Upper).
+  Before the rule it was 21 measure, 69 partial and 0 current.
 
 ## Tiered tuning: open risks
 

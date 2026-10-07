@@ -488,6 +488,23 @@ std::string family_marker(const std::string& line) {
     return line.substr(a, e - a);
 }
 
+// A kernel-deps line "// common" followed by nothing but quoted paths ("// common helpers" is prose).
+bool is_deps_common(const std::string& line) {
+    std::size_t c = line.find_first_not_of(" \t");
+    if (c == std::string::npos || line.compare(c, 2, "//") != 0) return false;
+    c = line.find_first_not_of(" \t", c + 2);
+    if (c == std::string::npos || line.compare(c, 6, "common") != 0) return false;
+    for (std::size_t i = c + 6; i < line.size(); ++i) {
+        if (line[i] == '"') {
+            i = line.find('"', i + 1);
+            if (i == std::string::npos) return false;
+        } else if (line[i] != ' ' && line[i] != '\t' && line[i] != '\r') {
+            return false;
+        }
+    }
+    return true;
+}
+
 // A line that is exactly "// common" (trailing words or a path on the line do not count).
 bool is_common_marker(const std::string& line) {
     const std::size_t a = line.find_first_not_of(" \t");
@@ -519,6 +536,8 @@ KernelBlock parse_kernel_block(std::string_view spec_source) {
         if (in_block == In::none) continue;
         const std::string fam = family_marker(line);
         if (in_block == In::deps) {
+            if (fam.empty() && is_deps_common(line))
+                for (std::string& p : quoted_paths(line)) out.deps_common.push_back(std::move(p));
             if (fam.empty()) continue;
             auto& v = out.deps[fam];
             for (std::string& p : quoted_paths(line)) v.push_back(std::move(p));
@@ -554,8 +573,9 @@ std::map<std::string, std::string> family_hashes(const std::string& repo, const 
     std::map<std::string, std::string> out;
     for (const std::string& f : families) {
         std::vector<std::string> paths = b.common;
-        for (const auto* m : {&b.family, &b.deps})
-            if (const auto it = m->find(f); it != m->end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
+        if (const auto it = b.family.find(f); it != b.family.end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
+        paths.insert(paths.end(), b.deps_common.begin(), b.deps_common.end());
+        if (const auto it = b.deps.find(f); it != b.deps.end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
         std::string missing;
         const auto h = kernel_hash(repo, paths, &missing);
         if (!h) throw std::runtime_error("kernel source missing for family '" + f + "': " + missing);

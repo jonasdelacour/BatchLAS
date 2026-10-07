@@ -780,8 +780,9 @@ def family_marker(line):
 def parse_kernel_block(text):
     """tools/tune/tune_core.cc parse_kernel_block: the kernel-sources block split by family
     ('// family: x' opens a section, '// common' returns to common) plus the kernel-deps comment
-    block ('// family: x "path" ...'). Returns {'all', 'common', 'family', 'deps'}."""
-    out = {"all": [], "common": [], "family": defaultdict(list), "deps": defaultdict(list)}
+    block ('// family: x "path" ...'; '// common "path" ...' for every family). Returns
+    {'all', 'common', 'family', 'deps', 'deps_common'}."""
+    out = {"all": [], "common": [], "family": defaultdict(list), "deps": defaultdict(list), "deps_common": []}
     state, section = "none", ""
     for line in text.split("\n"):
         if "kernel-sources-begin" in line:
@@ -801,6 +802,8 @@ def parse_kernel_block(text):
         if state == "deps":
             if fam:
                 out["deps"][fam] += quoted_paths(line)
+            elif re.fullmatch(r'\s*//\s*common(\s*"[^"]*")*\s*', line):
+                out["deps_common"] += quoted_paths(line)
             continue
         if fam:
             section = fam
@@ -825,9 +828,9 @@ def kernel_hash(paths):
 
 
 def family_hashes(repo, block, families):
-    """Per family: kernel_hash over common + the family's files + its deps."""
+    """Per family: kernel_hash over common + the family's files + deps_common + its deps."""
     assert repo == REPO
-    return {f: kernel_hash(block["common"] + block["family"].get(f, []) + block["deps"].get(f, []))
+    return {f: kernel_hash(block["common"] + block["family"].get(f, []) + block["deps_common"] + block["deps"].get(f, []))
             for f in families}
 
 
@@ -895,7 +898,8 @@ def stale_families(cell, family_hash):
     for c in cell["cands"]:
         fam = spelling_family(c["cand"])
         seen.add(fam)
-        if family_hash.get(fam) != c["hash"]:
+        # A candidate that could not run there (skipped) cannot change the ranking: its hash is ignored.
+        if c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
             out.add(fam)
     return out | (set(family_hash) - seen)
 
@@ -931,12 +935,18 @@ def ledger_identity(path):
     return tuple(parts)
 
 
+# Grid axes a tiered cell key carries that are not table keys (tools/tune/<op>_spec.cc axes()).
+HIDDEN_AXES = {"trsm": {"uplo", "diag"}}
+
+
 def key_tuple(spec, keyspec, key):
     """A record's (name, value) pairs -> the table key tuple (log keys int), or fail. An op with
     hidden grid axes (trsm's uplo and diag) projects through its tuner_key, which refuses a
-    record that varied them."""
+    record that varied them; any other extra or missing field fails."""
     given = dict(key)
-    if spec.tuner_key and set(given) != {n for n, _, _ in keyspec}:
+    names = {n for n, _, _ in keyspec}
+    extra = set(given) - names
+    if spec.tuner_key and names <= set(given) and extra and extra <= HIDDEN_AXES.get(spec.op, set()):
         out = spec.tuner_key(given)
         if out is None:
             raise SystemExit(f"ledger key {key} is not a {spec.op} table key")
@@ -1784,6 +1794,25 @@ def self_test_ledger():
         try:
             key_tuple(TRSM, parse_keys(tk), tuple(hidden[:5] + [("uplo", "U"), ("diag", "N")]))
             bad.append("self-test: ledger_trsm_varied_hidden_axis_is_refused -> accepted")
+        except SystemExit:
+            pass
+        # a skipped candidate (could not run there) whose family changed leaves the cell current; a ranked one does not
+        if freshness(read_cell(cell(r1, "deep", 64, hashes=dict(fh, blocked="old"))), fh) != "current" or \
+                freshness(read_cell(cell(r1, "deep", 64, hashes=dict(fh, cta="old"))), fh) != "partly_stale":
+            bad.append("self-test: ledger_skipped_candidate_hash_is_ignored")
+        # '// common "path"' in the deps block joins every family's hash but not the op-level list
+        blk = parse_kernel_block('// kernel-sources-begin\n"a.cc",\n// kernel-sources-end\n// kernel-deps-begin\n'
+                                 '// common "op.cc"\n// common helpers "x.cc"\n// family: f "d.cc"\n// kernel-deps-end\n')
+        if blk["all"] != ["a.cc"] or blk["deps_common"] != ["op.cc"] or blk["deps"]["f"] != ["d.cc"]:
+            bad.append(f"self-test: kernel_block_deps_common -> {blk}")
+        # only declared hidden axes project: gemm has none, so an extra field fails and a plain key reads as is
+        gk = (("ta", "N"), ("tb", "T"), ("layout", "packed"), ("m", "64"), ("n", "32"), ("k", "8"), ("batch", "128"))
+        got9 = key_tuple(GEMM, parse_keys(GEMM.keys), gk)
+        if got9 != ("N", "T", "packed", 64, 32, 8, 128):
+            bad.append(f"self-test: ledger_gemm_plain_key_reads_as_is -> {got9}")
+        try:
+            key_tuple(GEMM, parse_keys(GEMM.keys), gk + (("uplo", "L"),))
+            bad.append("self-test: ledger_gemm_extra_field_is_refused -> accepted")
         except SystemExit:
             pass
         # --check re-derives byte for byte

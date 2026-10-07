@@ -160,6 +160,9 @@ public:
             "src/ops/trsm/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // common "src/ops/trsm/trsm.cc"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/trsm_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {
