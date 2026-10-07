@@ -110,8 +110,11 @@ Across cells:
 
 ## Engine: the ledger and table generation
 
-**Ledger.** There is one append-only file per (op, dtype, device):
-`benchmarks/results/tuning/<op>.<dtype>.<device>.ledger.jsonl` (Git LFS).
+**Ledger.** There is one directory per (op, dtype, device),
+`benchmarks/results/tuning/ledger/<op>.<dtype>.<device>/`, with one file per run, `<run id>.jsonl`
+(Git LFS). A run only ever writes its own file, and readers take the union of the files. An
+append-only file in LFS cannot be merged, so two boxes tuning the same op would always conflict;
+one file per run cannot.
 
 | Record | Fields |
 | --- | --- |
@@ -119,7 +122,9 @@ Across cells:
 | `cell` | run id, tier, the key fields, `round` (0 = starting lattice), for each candidate: family hash, status (`ok`/`skipped`/`bad`/`error`), reason, median ms, interval, reps; the ranked tie set |
 | `audit` | run id, the cell key, persistent versus fresh-process medians and winners, verdict |
 
-Per-rep timings go to `<op>.<dtype>.<device>.<run id>.reps.jsonl`, written by deep runs only.
+Per-rep timings go to `<run id>.reps.jsonl` in the same directory, written by deep runs only. A
+truncated last line (a killed run) is ignored with a warning, so a cell is either fully recorded or
+absent.
 
 **Per-candidate hashes.** A spec's `kernel-sources` block becomes `family -> files`, plus a common
 set (dispatch, `src/select/`) that every family depends on. A family's hash covers the common set
@@ -130,11 +135,12 @@ potrf and trsm families they call.
 **Which record counts.** Precedence is deep > coarse > ultra > transcribed.
 
 - A `cell` record is *current* when every candidate's hash matches the source tree.
-- It is *partly stale* when only some changed. The next run of any tier re-races just those
+- It is *partly stale* when only some changed, or when the candidate list gained a family the
+  record never raced. The next run of any tier re-races just those
   candidates against the stored winner and runner-up, at the stored record's tier, and appends a
   merged record. Editing one kernel therefore keeps every deep cell deep, and costs a fraction of a
   retune.
-- It is *stale* when the stored winner's hash changed. The cell is re-raced at the record's tier.
+- It is *stale* when the stored winner's hash changed or the winner's family was removed. The cell is re-raced at the record's tier.
 
 **Table generation.** `scripts/sweep_to_table.py --ledger <file>` replaces `--tuner`. Its output
 stays byte-reproducible, and `--check` keeps re-deriving every table.
@@ -145,9 +151,12 @@ stays byte-reproducible, and `--check` keeps re-deriving every table.
   sit inside a region a deep run already resolved.
 - Transcribed rows survive only where nothing measured covers them.
 - The header reports the tier mix and the hashes:
-  `source=ledger:<file> tiers=deep:812,coarse:120,ultra:0,transcribed:0 kernels=<family>:<hash>,...`.
-- Each row ends in a tier tag (`@deep`), which the table parser (`src/select/`) learns to ignore.
+  `source=ledger:<dir> tiers=deep:812,coarse:120,ultra:0,transcribed:0 family_kernels=<family>:<hash>,...`.
+- Each row ends in a tier comment (`# deep`). Both table parsers (`src/select/select.cc` and
+  `sweep_to_table.py`) already strip a trailing `#` comment from a row, so neither changes.
   Provenance is then readable from `tuned/` without the UI.
+- The op-level `kernels=<hash>` header stays as it is, for the configure-time staleness check. The
+  per-family hashes go in a new `family_kernels=` header word.
 
 Results merge by device key (sm_89, sm_120), and the host is recorded. A deep sm_89 run on one 4090
 box counts for every 4090.
