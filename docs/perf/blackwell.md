@@ -9,11 +9,42 @@ float + cfloat). Worst batchlas/vendor time ratios: cfloat gemm 3.0x geomean (15
 32x32x1024), trsm float 1.5x (11x at n=32 q=8), getrs cfloat 1.8x (10x at nrhs=16),
 potrf cfloat 1.6x (9.5x at n=256), geqrf skinny 2-3.7x.
 
-> **Routing on this page is historical.** Every `RouteTable`, `preferred()`,
-> `native_tier_preferred` and `route_<op>.hh` clause quoted below was deleted by flat kernel
-> selection (phases 2-5, `docs/design/flat-kernel-selection.md`). Each op now takes the first
-> runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`. The kernels and the
-> measurements stand.
+> **Covers:** the sm_120 retune campaign on `worktree-blackwell-tuning`: kernel fixes, tuning
+> constants and per-architecture routing windows, each with its measurement, and which of them
+> reached `main`.
+> **Status:** measurement record. The kernels and fixes listed as on `main` below are current. The
+> branch's routing windows were never merged: they were hand-written `is_sm120_family(cuda_cc)`
+> clauses in the route-era routers (`RouteTable` `preferred()`, the vendor-free tier hook
+> `native_tier_preferred`, gemm's `select_kernel_variant`), which flat kernel selection replaced
+> with tables ([flat-kernel-selection.md](../design/flat-kernel-selection.md)). Each op on sm_120
+> now takes the first runnable entry of the nearest row of `tuned/<op>.<dtype>.sm_120.txt`; the
+> windows below are the evidence an sm_120 retune of those tables should reproduce.
+> **Machine:** threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), icpx 2026.0, CUDA 13.2.
+> **Measured:** campaign `cuda-20260930-112900` (2026-09-30) and the branch work packages that followed it.
+
+## Blackwell work on main and the sm_120 tables
+
+What each section below became on `main`, and what the shipped sm_120 table does for the same shapes
+(provenance per `tuned/README.md`: *measured* = timed by `tools/tune`, *converted* = forced-route sweeps,
+*transcribed* = an old router's order per grid cell, untimed; main's old routers read no architecture, so a
+transcribed sm_120 table holds the sm_89 decisions):
+
+| section | on `main` | sm_120 selection today |
+|---|---|---|
+| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:294`), `scripts/check_device_calls.py` | — |
+| [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/sycl/spmm_native.cc`) | `tuned/spmm.*.sm_120.txt`, transcribed: `direct` first for `transA=N` (cfloat: `transB=N` only) |
+| [compute-capability key](#compute-capability-key) | yes; it now names the table (`sm_120`) | — |
+| [syev retune](#syev-retune) | **no**: the sm_120 constants (blocked edge 768, nb 16, WY 32, per-type latrd min-n) are not on main; `BATCHLAS_LATRD_GRID_MIN_N` defaults to 768 everywhere | `tuned/syev.*.sm_120.txt`, transcribed `424a45bc` |
+| [potrf LPanel vector sB](#potrf-lpanel-vector-sb) | yes (`eb916865`, `43a15df7`) | `tuned/potrf.*.sm_120.txt`, **converted** from sweeps of `a1063892`, which includes the vector sB |
+| potrf LPanel auto window and native cap, Blocked nb/W | **no** (windows and the sm_120 `nb`/`W` were branch-only; `potrf_blocked_params` has no architecture term) | the converted rows: float `tiny` to n = 32, `lpanel` first at most cells 36..288, `vendor` or `blocked` above; cfloat `lpanel` first at n = 36 and, from 40 to 320, at the larger batches (`vendor` at the smaller ones; the switch lies between batch 512 and 8192, depending on n), `vendor` from 384 up |
+| [posv on sm_120](#posv-on-sm_120) | nothing to merge (no posv change) | `tuned/posv.*.sm_120.txt`, converted from `sm120_posv_sweep.jsonl` |
+| [LU getrs tiny](#lu-getrs-tiny) | **no** (getrs has no `tiny` family: `cta`, `blocked`, `vendor`) | `tuned/getrs.*.sm_120.txt`, transcribed (the same CSV as sm_89) |
+| [LU getrs fused](#lu-getrs-fused), [NR 1](#lu-getrs-fused-nr-1), [sm89 rows](#lu-getrs-fused-sm89-rows) | yes (`c9352406`): round-robin block solves, the `NR == 1` guard (`src/extensions/getrs_fused.cc:241-242`), the sm_120 register rows (`:125`) | as above: getrs's vendor-present sm_120 window is not in the table |
+| [LU getrf windows](#lu-getrf-windows), [native tier](#lu-getrf-native-tier), [gesv](#lu-gesv), [end to end](#lu-end-to-end), [getrs windows after the trsm fix](#getrs-windows-after-the-trsm-fix) | **no** (branch routing) | getrf: transcribed, same CSV as sm_89; gesv: transcribed `424a45bc` (`gesv.sm_120.csv`) |
+| [geqrf skinny panels](#geqrf-skinny-panels) | **no** (no `geqrf_skinny.cc` on main) | `tuned/geqrf.*.sm_120.txt`, transcribed, same CSV as sm_89 |
+| [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.cc:97`) | — |
+| [trsm sub-group Left kernel](#trsm-sub-group-left-kernel), [side right](#trsm-side-right-on-sm120) | the kernel: yes (P3.2b, candidate `sg_left`); the windows: no | float and double **measured** (`tuned/trsm.{float,double}.sm_120.txt`); cfloat and cdouble the sm_89 transcription relabelled, which never ranks `sg_left` |
+| [gemm](#gemm-native-register-tiled-selector) | the 16x16 and 32x32 wide NN tiles: yes (P3.2b; `wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`); the sm_120 selector windows: no | the sm_89 transcription relabelled: float rows rank `vendor` first on 11154 of 11226 rows and `small` on the other 72; neither small wide tile appears in any sm_120 row, so they run only when pinned |
 
 ## Result
 
@@ -65,8 +96,8 @@ Remaining losers (> 1.1): 25 cells in this campaign, 21 after the spmm fix below
   against 6.05/5.92/5.84/5.87 ms). The cfloat spmm row in the table above predates the fix.
 - cfloat gemm m=n=128..1024: 1.10-1.18 (gemm-7, the large-tile residual; not attempted).
 - cfloat potrf n=512 (Blocked) 1.48 and n=256 (LPanel) 1.16: the complex trailing update.
-  Under Auto, n=256 goes to the vendor.
-- syev cfloat n=1024 b64 1.50 (Auto already ships cuSOLVER) and float n=1024 b128
+  Under the branch's Auto, n=256 went to the vendor (main's converted cfloat row at n = 256 ranks `vendor` first to batch 512 and `lpanel` from 2048).
+- syev cfloat n=1024 b64 1.50 (Auto already shipped cuSOLVER on the branch) and float n=1024 b128
   two_stage 1.18 (SYEV-4: the sb2st chase is one work-group per matrix).
 - trmm float n=16 b32768 1.43 and float gemm 8x8x1024 1.12: not addressed.
 
@@ -230,10 +261,18 @@ over to the library.
 ## Compute-capability key
 
 Machine: threadripper02, 4x RTX PRO 6000 Blackwell Max-Q (sm_120), CUDA 13.2.
-Per-architecture windows key on `Device::cuda_compute_capability()` (`major*10+minor`
-parsed from the CUDA device's SYCL version string, memoized per device) through
-`dispatch::is_sm120_family(cc)` (120 <= cc < 130). A value of 0 means "not a CUDA
-device", and 0 and 89 keep the sm_89 windows. `tests/util_device_queue_tests.cc`
+`Device::cuda_compute_capability()` (`major*10+minor` parsed from the CUDA device's SYCL
+version string, memoized per device) is the selection device key: `select::describe`
+names a CUDA device `sm_<cc>` (`src/select/select.cc:214-215`), which picks the
+`tuned/<op>.<dtype>.sm_<cc>.txt` table, and a device with no table of its own borrows the
+nearest one with a one-time warning. A value of 0 means "not a CUDA device" (key `gpu`,
+`cpu`, `rocm` or `intel`). In the tuning branch the same value fed hand-written per-arch
+windows through `is_sm120_family(cc)` (120 <= cc < 130, 0 and 89 keeping the sm_89
+windows); flat selection dropped every one of those routing predicates when the kernels
+were ported (phase 3.2b), so the sm_120 decisions are now rows of the sm_120 tables.
+`is_sm120_family` survives in one place that is not routing: the per-architecture
+register charge of the fused getrs launch (`src/extensions/getrs_fused.cc:125`).
+`tests/util_device_queue_tests.cc`
 checks it against an independent oracle: every NVIDIA SYCL GPU is paired with its
 CUDA ordinal (the device name must match) and its value must equal the CUDA runtime's
 `prop.major*10+prop.minor`. CPU and non-NVIDIA devices must return 0. The family window
@@ -257,14 +296,18 @@ Work package SYEV-1/2/3/5. Machine as above, GPU 1 (headless, one measuring proc
 under a lock), build: icpx 2026.0 `-ffp-model=precise`, RelWithDebInfo, sm_120. BASE is
 branch `worktree-blackwell-tuning` @ 43b9f806. `syev_benchmark` avg ms, eigenvectors,
 Lower, `--warmup=3 --min_iters=8`, alternating A/B order, medians of 2-4 reps (per-rep
-spread under 1% unless noted). Every per-architecture value lives in
-`src/extensions/syev_arch_tuning.hh` or `syev.hh` and applies only to
-`is_sm120_family(cuda_cc)`; cc 0 and 89 keep the 4090 values.
+spread under 1% unless noted). On the branch every per-architecture value lived in
+`src/extensions/syev_arch_tuning.hh` or `syev.hh` and applied only to
+`is_sm120_family(cuda_cc)`; cc 0 and 89 kept the 4090 values. **None of this package is on
+`main`**: main has neither file, `BATCHLAS_LATRD_GRID_MIN_N` defaults to 768 on every device,
+and syev on sm_120 chooses from `tuned/syev.*.sm_120.txt`, transcribed from main's
+architecture-blind router at `424a45bc`. The measurements below are what an sm_120 syev
+retune (constants and table) would start from.
 
 ### syev float blocked-two-stage edge
 
-`syev_saturated_algorithm_for_n<float>` sent 449 <= n <= 1024 to two_stage (4090:
-two_stage 1.01x at 512, 1.15x at 640). On sm_120, with the panel and back-transform
+The route-era `syev_saturated_algorithm_for_n<float>` sent 449 <= n <= 1024 to two_stage
+(4090: two_stage 1.01x at 512, 1.15x at 640). On sm_120, with the panel and back-transform
 constants below, blocked wins through n = 768 at every batch, and two_stage wins at
 saturation from 896:
 
@@ -284,10 +327,10 @@ saturated comparison favours two_stage from 896 and the edge is n = 768
 (`kSyevSm120FloatBlockedMaxN`). BASE constants gave the same picture (blocked 1.43x at
 512, 1.19x at 640, 1.17x/1.06x at 768 b256/b512; two_stage 1.05x at 896 b512).
 
-The n = 1024 b = 128 campaign cell stays on two_stage (282.7 ms vs vendor 236.2): the
+The n = 1024 b = 128 campaign cell stayed on two_stage (282.7 ms vs vendor 236.2): the
 chase kernel runs one work-group per matrix (SYEV-4, not addressed), so two_stage is
-below saturation at batch 128. Blocked would tie the vendor there, but the window is
-keyed on n alone.
+below saturation at batch 128. Blocked would tie the vendor there, but the branch's window
+was keyed on n alone (a table keyed on `n` and `batch`, as `tuned/syev.*` is, can express it).
 
 ### syev panel and back-transform blocks
 
@@ -311,12 +354,13 @@ native:blocked unless noted, one knob at a time (the other at its default):
 | cfloat 768 b128 | 235.0 | **232.7** | 241.4 | 259.1 |
 | float 1024 b128 two_stage | 287.6 | **282.6** | - | 287.1 |
 
-So above n = 512, sm_120 uses nb = 16 (`kSm120SytrdBlockXlarge`) and a WY block of 32
-(`kSm120OrmqrBlockXlarge`). The only other consumer of `SYTRD_BLOCK_SIZE_XLARGE` is
-syev_blocked itself (the public `sytrd_blocked` defaults to `SYTRD_BLOCK_SIZE_MEDIUM`).
-`ORMQR_BLOCK_SIZE_XLARGE` also feeds the ormqr op, gesvd_blocked and syevx; rather than
-re-measure those, syev reads its own copy and the shared constant is unchanged (the
-campaign has no ormqr/orgqr cell above n = 512, and orgqr_blocked never read it).
+So above n = 512 the branch gave sm_120 nb = 16 (`kSm120SytrdBlockXlarge`) and a WY block of
+32 (`kSm120OrmqrBlockXlarge`); main keeps the sm_89 values (48 and 56) on every device. The only
+other consumer of `SYTRD_BLOCK_SIZE_XLARGE` is syev_blocked itself (the public `sytrd_blocked`
+defaults to `SYTRD_BLOCK_SIZE_MEDIUM`). `ORMQR_BLOCK_SIZE_XLARGE` also feeds the ormqr op,
+gesvd_blocked and syevx; rather than re-measure those, the branch's syev read its own copy and
+left the shared constant unchanged (the campaign has no ormqr/orgqr cell above n = 512, and
+orgqr_blocked never read it).
 Not changed: the complex 256 < n <= 512 bucket (32; the diagnosis saw 1.03x for 16, at
 the noise edge).
 
@@ -346,13 +390,13 @@ flops, so the grid barrier pays for itself earlier. The 4090 gate of 768 costs u
 
 #### latrd grid min-n: per-type brackets
 
-A second pass (review follow-up) re-bracketed every type under Auto, which is what ships
+A second pass (review follow-up) re-bracketed every type under Auto, which is what the branch shipped
 at these small batches, 4 alternating reps after a discarded pass, spread under 0.3%.
 It found one systematic effect: a grid panel of *exactly* the threshold n loses to the
 legacy kernel (cfloat 256 b8 with min-n 256: 11.48 ms against 11.41 ms at 257, 288 or
-BASE, in every rep), while the next panel size up already wins. So the constant is the
-largest n that stays legacy, and the grid path starts one above it
-(`kSm120LatrdLegacyMaxN`, grid for n > 320 / 256 / 256 / 128). Values below are ms,
+BASE, in every rep), while the next panel size up already wins. So the branch's constant is
+the largest n that stays legacy, and the grid path starts one above it
+(`kSm120LatrdLegacyMaxN`, grid for n > 320 / 256 / 256 / 128; not on main, see above). Values below are ms,
 the winner in bold; min-n = X means the grid runs for panels with n >= X:
 
 | cell | 256 | 257 | 288 | 320 | 384 | BASE (768) |
@@ -421,10 +465,11 @@ BASE build's libraries), first pass (min-n 320/320/256/256), and the per-type va
 The saturated cells do not reach the grid path (batch > 94), and they are unchanged
 between the two passes, as expected.
 
-All of these small-batch Auto cells are native and all still lose to the vendor by
-1.5-3x (vendor: cdouble 256 b8 19.5, cdouble 192 b8 10.7, double 384 b16 24.2, double
-256 b16 12.6, float 384 b32 9.7, cfloat 256 b8 6.0 ms). The native/vendor window is
-keyed on n alone and was chosen at saturation, so these cells are not addressed here.
+All of these small-batch Auto cells were native on the branch and all still lost to the
+vendor by 1.5-3x (vendor: cdouble 256 b8 19.5, cdouble 192 b8 10.7, double 384 b16 24.2,
+double 256 b16 12.6, float 384 b32 9.7, cfloat 256 b8 6.0 ms). The route-era native/vendor
+window was keyed on n alone and chosen at saturation, so these cells were not addressed; a
+measured sm_120 syev table, keyed on batch as well, is where they would be.
 
 Not changed: the grid residency cap (`resident_cap = MAX_COMPUTE_UNITS`, one work-group
 per SM). At batch 128 on 188 SMs it gives G = 1. Raising it needs a blocks-per-SM
@@ -455,7 +500,7 @@ Not changed by this package:
   sm_89 nb = 48 for n > 512. On sm_120 it therefore benchmarks a panel width that syev no
   longer uses; benchviz has no architecture input to key it on.
 * Small-batch Auto cells where the vendor is 1.5-3x faster (see the per-type brackets
-  above): the native/vendor window is keyed on n alone.
+  above): the route-era native/vendor window was keyed on n alone.
 
 Unchanged within 0.2% (the new code does not reach them): float 64/128/256 and cfloat
 64/128/256/512 at their campaign batches. Auto on cfloat 1024 b64 is the vendor both
@@ -478,13 +523,15 @@ n=512 b=512; cfloat half that). Routes were confirmed with `BATCHLAS_COVERAGE_OU
 `~/.claude/jobs/698ef31c/tmp/wp-potrf/` (`lp_ab_v1.csv`, `v2_ab.csv`, `final_ab.csv`,
 `nbw_base.csv`, `nbw2_base.csv`, `bw_new.csv`, `posv_base.csv`).
 
-**potrf routing below is historical.** Flat selection deleted `route_potrf.hh`, its sm_120 edges
-and its `native_tier_preferred` cap. potrf now takes the first runnable entry of the nearest row of
-`tuned/potrf.<dtype>.sm_120.txt`, converted from the sm_120 route sweeps
-([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)). The kernel and tuning-constant
-results stand. posv's `RouteTable` windows are deleted too: posv reads `tuned/posv.<dtype>.<device>.txt`
-([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)); the sm_120 posv tables are converted
-from the sm_120 posv seed sweep (`benchmarks/results/routing/sm120_posv_sweep.jsonl`).
+**What reached main.** The LPanel vector-sB kernel change did (below). The branch's sm_120
+routing (the LPanel auto-window edges and native-tier cap, both clauses of the deleted
+`route_potrf.hh`) and its sm_120 Blocked `nb`/`W` did not. On main potrf takes the first
+runnable entry of the nearest row of `tuned/potrf.<dtype>.sm_120.txt`, **converted** from the
+sm_120 forced-route sweeps of `a1063892` (which includes the vector sB;
+[potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)), so the LPanel/vendor edges
+are measured per cell rather than hand-cut, and the blocked driver runs the sm_89 `nb`/`W`.
+posv reads `tuned/posv.<dtype>.sm_120.txt`, converted from `benchmarks/results/routing/sm120_posv_sweep.jsonl`
+([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)).
 
 ### potrf LPanel vector sB
 
@@ -528,8 +575,8 @@ among them), every type.
 
 ### potrf LPanel auto window
 
-With a vendor present, `preferred()` sends 32 < n <= edge (Lower) to LPanel. On sm_120,
-measured on the new kernel, final routing:
+Branch routing, not on main. With a vendor present, the branch's `preferred()` sent
+32 < n <= edge (Lower) to LPanel. On sm_120, measured on the new kernel, its final edges were:
 
 - float edge 320: the Auto arm is r = 1.40 (128), 1.13 (256), 1.02 (288), 1.03 (320);
   pinned LPanel won in every rep from 224 to 320; at 352 LPanel is 0.72 (non-winner). n=192 at b=2048 ties (1.00, cuSOLVER is
@@ -538,14 +585,24 @@ measured on the new kernel, final routing:
   256 0.99 (non-winners). 144 and 160 are ties, not losses: the edge could sit anywhere in 128-160,
   and 128 is the conservative choice.
 
-sm_89 (and `cuda_cc` 0) keeps 256 for both types.
+sm_89 (and `cuda_cc` 0) kept 256 for both types. On main the converted sm_120 rows carry the
+edge instead: float `uplo=L` rows rank `lpanel:panel=8` first at most cells from 36 to 288
+(`vendor` at batch 128 from n = 112), split at 320 (`vendor` to batch 512, `lpanel` from 2048),
+and `vendor`/`blocked` from 384; cfloat rows rank it first from n = 40 to 320 at the larger
+batches and `vendor` at the smaller, with the batch at which LPanel takes over between 512 and 8192
+(n = 40: from 512; n = 64 and 256: from 2048; n = 96 and 128: from 8192, e.g. `n=128 batch=8192`
+`lpanel:panel=8` 2.477 ms against `vendor` 3.176), and `vendor` from 384 up. The sweep and these
+pinned grids broadly agree on float; on cfloat the sweep puts the edge on batch as well as n,
+which the branch's single edge at 128 could not express.
 
 ### potrf LPanel native tier cap
 
-The vendor-free walk (`native_tier_preferred`) had no LPanel order cap. On sm_120 float
-LPanel vs Blocked (retuned constants, ms): 288 1.66 vs 1.97, 320 2.16 vs 2.44, 352 1.91
-vs 1.55, 384 2.31 vs 1.77, 512 4.47 vs 3.49. So float LPanel stops at 320, and only when
-Blocked can take the shape. cfloat LPanel matches or beats Blocked to its ceiling (256
+Branch routing, not on main. The route-era vendor-free walk (`native_tier_preferred`) had no
+LPanel order cap. On sm_120 float LPanel vs Blocked (retuned constants, ms): 288 1.66 vs 1.97,
+320 2.16 vs 2.44, 352 1.91 vs 1.55, 384 2.31 vs 1.77, 512 4.47 vs 3.49. So the branch stopped
+float LPanel at 320, and only when Blocked could take the shape. (On main a vendor-free build takes
+the first non-vendor entry of the converted row, so the cap is wherever the sweep ranked
+`blocked` ahead of `lpanel`; the sweep ran main's `nb`/`W`, not the retuned ones above.) cfloat LPanel matches or beats Blocked to its ceiling (256
 2.18 vs 3.01, 288 2.09 vs 2.14, 320 2.60 vs 2.58, 368 1.92 vs 2.11), so it is not
 capped. The margin is real at 256 and 368 only; 288 and 320 are ties within noise,
 so "not capped" rests on LPanel never losing, not on it winning everywhere. This
@@ -567,8 +624,9 @@ The `BATCHLAS_POTRF_NB`/`_W` overrides on the BASE build, blocked vs vendor `r`:
 | 768 (128) | 1.06-1.07 | 0.90-0.92 | | 1.15-1.17 |
 | 1024 (128) | 1.26-1.29 | 1.01 | | 1.30-1.32 |
 
-W=64 wins at every order; nb=64 wins up to 512 and nb=128 above it, so sm_120 float uses
-nb 64 through n=512 and 128 above, W 64. The switch point is bracketed only by 512
+W=64 wins at every order; nb=64 wins up to 512 and nb=128 above it, so the branch gave sm_120
+float nb 64 through n=512 and 128 above, W 64 (not on main, whose `potrf_blocked_params` has no
+architecture term: every device runs the sm_89 pair). The switch point is bracketed only by 512
 (64 wins) and 768 (128 wins); 576-704 were not measured, so where in (512, 768) the
 crossover really lies is unknown and 512 is a guess. `PotrfBlockedTest.ResidualAboveTheCtaCeiling` judges
 each order against the blocking the driver uses at that order and asserts that the
@@ -585,8 +643,8 @@ update (the gemm package).
 
 ### posv on sm_120
 
-posv has no routing change of its own: its potrf sub-op resolves through the table
-above. Native walk, `r` BASE -> new: float n=512 nrhs=1 0.78 -> 1.17, nrhs=4 0.80 ->
+posv had no routing change of its own on the branch: its potrf sub-op resolved through the
+branch's windows above (on main, posv and its potrf leg each read their converted sm_120 tables). Native walk, `r` BASE -> new: float n=512 nrhs=1 0.78 -> 1.17, nrhs=4 0.80 ->
 1.16, nrhs=16 0.72 -> 0.99; n=256 nrhs=1 0.99 -> 1.14; n=128 nrhs=1 1.28 -> 1.39.
 
 The fused `posv=native:cta` cells in the trsm diagnosis (cfloat 32/1 1.35x and 64/4
@@ -609,7 +667,11 @@ is bad=0), reps 7-9, medians, 2 passes with alternating BASE/new order. BASE is
 
 ### LU getrs tiny
 
-`Algorithm::Tiny` (src/extensions/getrs_tiny.cc): one sub-group partition per matrix,
+**Branch-only kernel.** `getrs_tiny.cc` is not on main, and getrs there has no `tiny` family
+(`src/ops/getrs/choice.hh`: `cta`, `blocked`, `vendor`); the measurements below are the case for
+porting it as a candidate.
+
+The branch's `Algorithm::Tiny` (src/extensions/getrs_tiny.cc): one sub-group partition per matrix,
 lane r holds row r of op(A) and a chunk of RHS columns in registers. The permutation is
 a per-lane trace of the interchange list, and both substitutions are shuffle
 recurrences. There is no local memory and no work-group barrier. Two things decided
@@ -644,11 +706,11 @@ at six shapes. Tiny time / vendor time at batch 32768:
 | 32 | 0.22 | 0.32 | 0.36 | 0.38 | 0.45 | 0.53 | 0.51 | 0.50 |
 
 The closest small-batch cells are cfloat n32 nrhs64 b64 (0.186 vs 0.197 ms) and cfloat
-n8 nrhs16 b64 (0.0246 vs 0.0271). The window is therefore the tier's whole fit:
+n8 nrhs16 b64 (0.0246 vs 0.0271). The branch's window was therefore the tier's whole fit:
 `tiny_window = tiny_native = sm_120 && single precision && n <= tiny_max_n`. That is
-wider than the measured grid: n=1 and batch < 64 were never timed and are admitted
+wider than the measured grid: n=1 and batch < 64 were never timed and were admitted
 unmeasured (batch 1 is outside this project's scope, and n=1 is one division). fp64 was
-not measured, and it keeps the pre-Tiny walk.
+not measured and kept the pre-Tiny walk.
 
 ### LU getrs fused
 
@@ -672,12 +734,15 @@ registers, so the sm_89 row handed out a 768-lane launch that the driver refused
 (`FusedGetrsLaunchHoleAt48KiB`). On sm_120 the cap reads a probed row. The sm_89 rows
 are covered under [sm89 rows](#lu-getrs-fused-sm89-rows).
 
-Vendor-present window, added on sm_120 only: float nrhs <= 8 at n >= 256 (the
+The kernel change and the sm_120 register rows are on main (`c9352406`). The branch also added
+a vendor-present window on sm_120 only, which is **not** on main: float nrhs <= 8 at n >= 256 (the
 brackets are n=128 nrhs 8 at 0.63 vs 0.57 ms, a loss, and n=256 at 0.47 vs 0.66, a
 win); cfloat nrhs <= 4 at n >= 128 (n=64 0.93 vs 0.85 loses, n=128 0.69 vs 0.86 wins)
 and nrhs <= 8 at n >= 512 (n=256 1.38 vs 0.93 loses, n=512 1.20 vs 1.40 wins).
 These edges were later moved to float n >= 192 and cfloat n >= 96 / n >= 384, see
-[getrs windows after the trsm fix](#getrs-windows-after-the-trsm-fix).
+[getrs windows after the trsm fix](#getrs-windows-after-the-trsm-fix). On main the sm_120 getrs
+table is the sm_89 transcription (`cta` first at `n >= 32` with `nrhs <= 2`, float also `nrhs`
+3-4; [small-n-baseline.md](small-n-baseline.md#getrs)), so those nrhs 3-8 cells go to the vendor.
 
 ### LU getrs fused NR 1
 
@@ -787,7 +852,9 @@ nrhs 5-8 88 vs 72 + 8, and cfloat Trans nrhs 5-8 70 vs 56 + 8. An icpx build for
 
 ### LU getrf windows
 
-BASE build, 3 passes, ms, vendor / blocked (native tier in the next section):
+Branch routing, not on main: the sm_120 getrf table is the sm_89 transcription (the same
+`getrf.csv` for both devices). BASE build, 3 passes, ms, vendor / blocked (native tier in the
+next section):
 
 | cell | float | cfloat |
 |---|---|---|
@@ -804,24 +871,25 @@ BASE build, 3 passes, ms, vendor / blocked (native tier in the next section):
 | n192 b64    | 0.69 / 0.44 | 0.83 / 0.55 |
 | n256 b64    | 1.33 / 0.62 | 1.53 / 0.82 |
 
-The new window is blocked for n >= 192, or n >= 128 at batch >= 256, or n >= 48
+The branch's window was blocked for n >= 192, or n >= 128 at batch >= 256, or n >= 48
 (float) / 64 (cfloat) at batch >= 1024. The float n=65 tail-panel dip wins narrowly:
 3.06 vs 3.16 ms.
 
 The tiny window beats cuSOLVER at every measured order (vendor / tiny, b32768):
 float n4 0.0160/0.0095, n32 0.66/0.25; cfloat n4 0.0173/0.011, n8 0.034/0.024,
 n24 0.55/0.37, n25 0.60/0.41, n32 0.96/0.70, and cfloat n32 b1024 0.051/0.042. The
-window is therefore 4..32 for both types. The sm_89 window excluded cfloat 8 and 25..32
-as ties.
+branch's window was therefore 4..32 for both types. The sm_89 window excluded cfloat 8 and
+25..32 as ties, and the transcribed tables on both devices carry that sm_89 window (cfloat at batch 32768: `tiny` first at n = 16 and 24, `vendor` first at 4, 8, 25 and 32).
 
 ### LU getrf native tier
 
-This is `native_tier_preferred`, the vendor-free walk. On sm_89 CTA won n=64 by 1.13x
-(lu.md). On sm_120 blocked wins from float n=33 and cfloat n=40 at large batch (ms,
+The route-era vendor-free walk (`native_tier_preferred`); branch-only. On sm_89 CTA won n=64
+by 1.13x (lu.md). On sm_120 blocked wins from float n=33 and cfloat n=40 at large batch (ms,
 CTA / blocked): float n33 1.28/1.06, n48 2.38/1.37, n64 4.03/1.77, n72 8.75/3.30,
 n77 4.88/1.80 (b8192); cfloat n33 1.72/1.79 (CTA wins), n40 2.29/2.17, n48 3.08/2.56,
 n64 3.90/3.50. At batch 256 CTA still wins float n=48 (0.078/0.095) and ties at n=64,
-so the CTA ceiling drops to 32 (float) / 39 (cfloat) only at batch >= 1024.
+so the branch dropped the CTA ceiling to 32 (float) / 39 (cfloat) only at batch >= 1024. On
+main a vendor-free sm_120 build takes the first non-vendor entry of the transcribed sm_89 row.
 
 ### LU gesv
 
@@ -829,7 +897,8 @@ With the tiny getrs routed, the cfloat composition (tiny getrf + tiny getrs) bea
 fused gesv tiny kernel from n=4 (b32768, ms, fused / composed): n4 r1 0.022/0.019,
 n16 r4 0.257/0.160, n24 r4 0.827/0.654, n32 r1 1.02/0.89, n32 r4 1.27/1.03. It loses at
 n<=3, where the composed getrf is the vendor's (n3 r1 0.018/0.022, n2 r4 0.018/0.023).
-cfloat's fused window on sm_120 is therefore n <= 3. This supersedes the "widen to 32"
+The branch's cfloat fused window on sm_120 was therefore n <= 3 (branch-only, like the tiny
+getrs it depends on; main's sm_120 gesv table is transcribed from `424a45bc`). This supersedes the "widen to 32"
 proposal (LU-6d), which was measured before the tiny getrs existed. float keeps 32:
 fused and composed are within about 5% of each other, with the fused kernel ahead at
 nrhs=4. That is a screen, not a bracket: the float edge was not re-bracketed against
@@ -840,7 +909,7 @@ cuSOLVER's, and that composition was not timed.
 ### LU end to end
 
 The 76 LU cells of the campaign loser list, 2 passes, BASE vs new, Auto route (the
-shipped vendor-present route) and the pinned native walk, time/vendor:
+branch's vendor-present route, not main's) and the pinned native walk, time/vendor:
 
 - Auto geomean: 0.990 -> 0.534. Cells above 1.1x: 3 -> 0.
 - Native-walk geomean: 1.178 -> 0.544.
@@ -857,6 +926,11 @@ re-bracketing after the trsm package lands ([done](#getrs-windows-after-the-trsm
 is 1.05.
 
 ### getrs windows after the trsm fix
+
+Branch routing, not on main: every window in this section was an sm_120 clause of the deleted
+route-era getrs router, and main's sm_120 getrs table is the sm_89 transcription
+([LU getrs fused](#lu-getrs-fused)). The trsm kernels it was measured on are on main, so the grid
+is the evidence a measured sm_120 getrs table should reproduce.
 
 LU-3, measured after the trsm V1 ladder cap and the sub-group Left kernel landed
 (worktree-blackwell-tuning @ d776064b). Same machine, GPU 3, same build flags.
@@ -937,7 +1011,7 @@ the batch ladders move three edges down:
 float nrhs 5..8 wins at saturation from n=48, but between n=48 and n=128 it loses at
 batch 4096. That is the same mid-ladder shape the earlier n=128 bracket recorded.
 
-**Native tier (`native_tier_preferred`): unchanged.** The LU-3 diagnosis proposed CTA only
+**Native tier (the route-era `native_tier_preferred`): left unchanged.** The LU-3 diagnosis proposed CTA only
 for n >= 32 with nrhs <= 4, which would send nrhs 5..8 to the composition. Over the 119
 measured cells with n > 32 and nrhs <= 8, CTA is faster in 111. The composition wins by
 more than 5% only at float n48..64 nrhs 6..8 with batch >= 16384 (1.07-1.12) and at
@@ -953,8 +1027,8 @@ against composition 2.29 ms.
 gesv follows, because its composition calls the routed getrs. At saturated batch, gesv
 Auto vs the all-vendor composition goes cfloat n128 nrhs16 1.24, n512 nrhs16 2.03, float
 n48 nrhs16 1.66 and n512 nrhs64 2.94. With getrs pinned to the composition, cfloat n48
-nrhs16 would reach 1.29. The window leaves that to the vendor because of the mid-ladder
-loss above. `cuda_cc` 0 / 89 and fp64 route exactly as before.
+nrhs16 would reach 1.29. The branch's window left that to the vendor because of the mid-ladder
+loss above, and kept `cuda_cc` 0 / 89 and fp64 exactly as before.
 
 ## geqrf skinny panels
 
@@ -967,9 +1041,12 @@ time/vendor, so below 1 means faster than cuSOLVER. The campaign losses were all
 the native-pinned walk (benchviz's batchlas arm); Auto sent every one of them to the
 vendor, so the vendor build lost nothing before this package.
 
-Everything below applies only to `is_sm120_family(cuda_cc)` and to float and cfloat.
-cc 0 and 89, and fp64, keep BASE's behaviour; `SkinnyWindowIsSm120OnlyAndPicksOneTier`
-and `Sm120LeafWidthFollowsTileBytes` assert that.
+**Branch-only package.** Neither the skinny leg (`geqrf_skinny.cc`), the tile-bytes width rule
+nor the two windows is on main; main's sm_120 geqrf table is the sm_89 transcription (the same
+`geqrf.csv` for both devices), and main's `BATCHLAS_GEQRF_LEAF` has no `skinny` value. On the
+branch everything below applied only to `is_sm120_family(cuda_cc)` and to float and cfloat;
+cc 0 and 89, and fp64, kept BASE's behaviour, which `SkinnyWindowIsSm120OnlyAndPicksOneTier`
+and `Sm120LeafWidthFollowsTileBytes` asserted.
 
 ### geqrf: leaf width from tile bytes
 
@@ -1103,7 +1180,7 @@ bound can be spelled; MinBlocks = 1, because a tighter cap spilled the RP >= 8 b
 bought nothing measurable elsewhere (float 8x4: MB1 0.0118, MB4 0.0108, MB8 0.0107 ms;
 64x8 0.090/0.089/0.089).
 
-The leg is chosen inside the CTA launcher by `geqrf_skinny_preferred`, which is the route
+The leg was chosen inside the CTA launcher by `geqrf_skinny_preferred`, which was the route
 window below plus a batch gate: a lane holding >= 512 B of A (cfloat RP 8 with 8 columns,
 float RP 16 with 8 columns) needs batch >= 1024, below which the resident leaf wins.
 Skinny/resident, pinned with `BATCHLAS_GEQRF_LEAF`:
@@ -1120,12 +1197,14 @@ Skinny/resident, pinned with `BATCHLAS_GEQRF_LEAF`:
 | float 512x8 | 0.96 | 0.86 | 0.52 |
 | float 512x4 | 0.69 | 0.68 | 0.68 |
 
-`BATCHLAS_GEQRF_LEAF=resident|skinny` pins the leg (a pin that does not fit throws).
+On the branch `BATCHLAS_GEQRF_LEAF=resident|skinny` pinned the leg (a pin that did not fit threw).
 
 ### geqrf: the sm120 tall window
 
-`route_geqrf.hh` gains two sm_120-only clauses in `preferred()`, both before the order
-floor, both answering for exactly one native tier (`best_native_tier`):
+On the branch the route-era `route_geqrf.hh` gained two sm_120-only clauses in `preferred()`,
+both before the order floor, both answering for exactly one native tier (`best_native_tier`).
+Under flat selection the same decisions would be rows of a measured `tuned/geqrf.*.sm_120.txt`
+ranking a native family (`cta`, the tier the skinny leg was a leg of) first in these cells:
 
 - `geqrf_skinny_window`: float n <= 8 with m <= 256, or m <= 512 with n >= 2; cfloat
   n <= 8 with m <= 256; strictly tall (m > n). Square shapes stay with the tiny tier.
@@ -1147,7 +1226,7 @@ cfloat 257x8 (0.73) and 260x8 (0.75) win but sit between the skinny rows and the
 they were left to the vendor because 257x6 (0.95) and 260x5 (1.14) do not, and a
 per-n edge was not worth the extra clause.
 
-The window is keyed on shape alone, and it holds at small batch as well. Final build,
+The window was keyed on shape alone, and it holds at small batch as well. Final build,
 BASE vs new, ms: native is identical to BASE at b256 and b1024 (the batch gates) except
 where the skinny leg runs (b1024 float 400x8 0.061 -> 0.037, cfloat 256x8 0.058 -> 0.041),
 and Auto moves from the vendor to native:
@@ -1288,10 +1367,15 @@ rung and stayed within 3% (`~/.claude/jobs/698ef31c/tmp/wp-trsm/r_ortho.log`).
 
 ### trsm sub-group Left kernel
 
-> On the flat-selection line the kernel was ported pin-only in P3.2b (direct C++
-> entry `sycl_trsm::trsm_native_sg_left_dispatch`). The `trsm_left_use_sg` routing
-> and the sm_120 windows described below are not in that tree: routing is
-> deferred to flat selection (P3.3).
+> **On main.** The kernel was ported in P3.2b (`sycl_trsm::trsm_native_sg_left_dispatch`,
+> `src/sycl/trsm_sg_left.cc`) and P3.3 made it the trsm candidate `sg_left` (Left, order <= 32,
+> sub-group 32; `src/ops/trsm/choice.hh:15`). The branch's `trsm_left_use_sg` window below is
+> not on main. Instead the **measured** `tuned/trsm.float.sm_120.txt` (tuner, 2 passes x 16
+> reps) decides, and it reproduces the window's shape: at batch 32768, `side=L trans=N` rows
+> rank `sg_left` first for q <= 64 at order 8 and q <= 32 at orders 16 and 32, and `cta` (V1)
+> above those q. The cfloat and cdouble sm_120 tables are the sm_89 transcription relabelled,
+> which never ranks `sg_left`, so complex Left runs it only when pinned
+> (`BATCHLAS_TRSM_ROUTE=sg_left`; a pin above order 32 throws).
 
 `trsm_sg_left.cc` handles Side::Left at orders 1..32. Each lane is a (matrix, canonical
 row r) pair, so a sub-group holds 32/N matrices for the buckets N in {4, 8, 16, 32}.
@@ -1316,7 +1400,7 @@ Two register decisions, from `scripts/register_probe.sh` on the sm_120 link:
 - The kernel's TU is built with `-pragma-unroll-threshold=262144`. Without it, the
   unrolled variants put x[] on the stack.
 
-Kernel choice (`trsm_left_use_sg`): V1-capped time over sub-group time at batch 32768,
+The branch's kernel choice (`trsm_left_use_sg`): V1-capped time over sub-group time at batch 32768,
 so above 1 the sub-group kernel is faster (`f_win.csv`):
 
 | float n \ q | 8 | 16 | 24 | 32 | 48 | 64 | 128 |
@@ -1337,7 +1421,7 @@ so above 1 the sub-group kernel is faster (`f_win.csv`):
 | 24 | 1.31 | 1.28 | 1.01 | 1.33 | 1.08 | 1.28 | 1.06 |
 | 32 | 1.32 | 1.36 | 0.99 | 1.32 | 1.26 | 1.37 | 1.12 |
 
-The shipped window applies on sm_120 only; `cuda_cc` 0 and 89 keep V1 at every shape.
+The branch's window applied on sm_120 only; `cuda_cc` 0 and 89 kept V1 at every shape:
 
 - float: q <= 128 at n <= 4, q <= 64 at n <= 8, q <= 32 above.
 - cfloat: q <= 64 at n <= 4, q <= 32 at n <= 8, q <= 8 for n in 9..15, n = 16 at
@@ -1347,9 +1431,10 @@ Each edge is bracketed by the next measured column. Ties within 3% (float n8 q12
 cfloat n8 q24/q64, cfloat n24/n32 q24) go to whichever side the neighbouring cells
 favour. The cfloat n=16 island comes from V1, not from the new kernel: V1 at cfloat
 n16 q64 takes 0.91 ms, against 0.31 ms at n=12 and 1.48 ms at n=24 (same bucket,
-power-of-two ld). double and complex<double> were not measured and keep V1. The
-blocked driver's diagonal solves are 32-wide Left CTA calls, so they take the same
-kernel through `trsm_native_v1_buckets`.
+power-of-two ld). double and complex<double> were not measured and kept V1. On the branch the
+blocked driver's diagonal solves, 32-wide Left CTA calls, took the same kernel through
+`trsm_native_v1_buckets`; on main that function runs V1 only (`src/sycl/trsm_native.cc:312`),
+so the `blocked` family's diagonal solves do not reach `sg_left`.
 
 Tests (`TrsmNativeSgLeft.*`) call the kernel directly with a padded ld and batch
 stride and large finite poison. Three planted breaks were each rebuilt and run over all
@@ -1363,11 +1448,11 @@ tests, and the three strided/edge `TrsmNativeSgLeft` tests (`break2.log`). Endin
 step loop one row early turned red every test that reached the kernel (15), while the
 Right-side cases stayed green.
 
-These red sets were recorded before `RunTrsmNative` ran each Left case twice. It now
-runs V1 pinned (`allow_sg = false`) and then with the kernel choice. On sm_120 the
-choice sends small-q Left to this kernel, so V1's Left path stays covered on this box.
-`TrsmNativeCta.LadderRungsAreCappedByRhsCount` checks the ladder against literal
-(max_wg, CU, q, batch) cases.
+These red sets were recorded before the branch's `RunTrsmNative` ran each Left case twice
+(V1 pinned with `allow_sg = false`, then with the kernel choice), which kept V1's Left path
+covered on sm_120. On main the two are separate candidates, each pinned by spelling (`cta`,
+`sg_left`) in the trsm candidate tests. `TrsmNativeCta.LadderRungsAreCappedByRhsCount`
+(`tests/trsm_tests.cc:540`) checks the ladder against literal (max_wg, CU, q, batch) cases.
 
 ### trsm on sm_120: result
 
@@ -1416,11 +1501,12 @@ and Right cells, 6 Auto cells, and 7 posv/getrs cells, against BASE and cuBLAS
 float n32 q8 at 0.117 ms (cuBLAS 0.169) and cfloat n32 q8 at 0.335 ms (1.409). No cell
 moved against BASE in the wrong direction.
 
-`preferred()` is unchanged for Side::Left (Side::Right: next section). With the new
-kernel, native wins every measured Side::Left cell, so the diagnosis's interim small-q vendor window (trsm-interim-route-small-q) is
-not needed.
+The branch left the route-era `preferred()` unchanged for Side::Left (Side::Right: next
+section). With the new kernel, native wins every measured Side::Left cell, so the diagnosis's
+interim small-q vendor window (trsm-interim-route-small-q) was not needed; the measured sm_120
+float table agrees, ranking a native family first on every `side=L` row with order <= 32.
 
-posv (`factor_bench`): the native arm is the shipped native walk, which at these nrhs
+posv (`factor_bench`): the native arm is the branch's native walk, which at these nrhs
 is potrf plus two routed trsm. Ratios are vendor time over native time in one process,
 so above 1 BatchLAS is faster. BASE -> new:
 
@@ -1441,8 +1527,10 @@ new:
   1.26 -> 1.52.
 
 All 16 cells (n = 64..512, nrhs 16/64) now win; BASE lost 6. The getrs vendor-present
-windows for nrhs >= 16 at n > 32 (LU-3) still send these shapes to the vendor. They
-belong to the LU package, to re-bracket against these numbers.
+windows for nrhs >= 16 at n > 32 (LU-3) still sent these shapes to the vendor; the LU package
+re-bracketed them ([getrs windows after the trsm fix](#getrs-windows-after-the-trsm-fix)), on the
+branch only. On main the sm_120 getrs rows (the sm_89 transcription) still rank `vendor` first at
+nrhs >= 16.
 
 ### trsm side right on sm120
 
@@ -1459,15 +1547,20 @@ native / cuBLAS):
 | n20 q16 | | 0.042 / 0.040 | 0.063 / 0.059 | 0.112 / 0.099 | 0.210 / 0.178 |
 | n32 q20 | | 0.047 / 0.075 | 0.071 / 0.124 | 0.150 / 0.230 | 0.360 / 0.497 |
 
-On sm_120, `preferred()` therefore declines native for float Side::Right when
+On sm_120 the branch's `preferred()` therefore declined native for float Side::Right when
 order > 16, rows <= 8 and batch >= 4096. The edges are brackets against measured
 non-losers: order 16 (native 0.059 vs 0.072), rows 16 at n=32 (native wins up to b=16384),
-and batch 2048 (0.0276 vs 0.0298). `cuda_cc` 0 and 89 route as before. Auto, BASE ->
+and batch 2048 (0.0276 vs 0.0298). `cuda_cc` 0 and 89 routed as before. Auto, BASE ->
 new, ms (`f_rauto.csv`, cuBLAS in brackets): n32 q8 b32768 1.041 -> 0.162 (0.163),
 n32 q8 b4096 0.122 -> 0.039 (0.039), n20 q8 b4096 0.107 -> 0.031 (0.031), n16 q8
 b32768 0.277 -> 0.059 (0.072).
 
-The window has no upper order bound. The review re-measured orders above 32 at q <= 8
+On main the window is not code: the **measured** `tuned/trsm.float.sm_120.txt` decides, and its
+`side=R trans=N` rows (key `q` = B's rows) reproduce it: order 16 ranks `cta` first at every q,
+orders 20 and 24 rank `vendor` first at q <= 8, and order 32 at q = 8 ranks `cta` to batch 2048 and
+`vendor` from 8192, with `cta` at q = 16 at every batch.
+
+The branch's window had no upper order bound. The review re-measured orders above 32 at q <= 8
 and found that the vendor wins at every one, native / cuBLAS in ms
 (`~/.claude/jobs/698ef31c/tmp/review2-trsm/r_rbig.csv`):
 
@@ -1476,7 +1569,8 @@ and found that the vendor wins at every one, native / cuBLAS in ms
 - n128 q8 b16384: 1.330 / 0.855
 - n256 q4 b4096: 1.072 / 0.683
 
-Auto matched the vendor at each of them.
+Auto matched the vendor at each of them. The measured sm_120 table ranks `vendor` first at
+orders 48 and 64 with q = 8 at every batch.
 
 Not done: rows 9..16 at order 17..24, and at order 32 with batch 32768, still lose
 5-18% (n20 q16, n32 q16 b32768). A Side::Right sub-group kernel (each row of B is a
@@ -1500,30 +1594,35 @@ against the new libraries. Ratios are time/vendor. Kernel choice was checked wit
 > has run), so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
 > candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only;
 > `wide:m=64:n=64:k=16`, `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the
-> transposed fallback), and the measurements below are the hypotheses the
-> `tools/tune` sm_120 sweep tests. Kernel-name pins (`16x16x16wide`, ...) are
-> `BATCHLAS_GEMM_ROUTE` aliases now.
+> transposed fallback, `src/ops/gemm/choice.hh:80-86`), and the measurements below are the
+> hypotheses an sm_120 `tools/tune` gemm sweep would test; none has run. The old kernel names
+> (`16x16x16wide`, `32x32x16wide`, ...) are not pin words: `BATCHLAS_GEMM_ROUTE` takes only
+> `auto`, `native`, `vendor` or a spelling (`wide:m=16:n=16:k=16`), and an old kernel name throws.
 
 Everything below was keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
-(`src/sycl/gemm_kernels.cc`) on `worktree-blackwell-tuning`. cc 0 and cc 89 keep the 4090 ladder, which
-`GemmDispatchPolicyTest.Sm120SmallTilesAndTheirEdges` and
-`Sm120TransposedFallbackAndItsEdges` assert shape by shape. None of it changes
-`preferred()`: in a vendor build, Auto still sends complex and transposed float to
-cuBLAS. The consumers are the native walk, vendor-free builds and direct
-`gemm_custom` callers. The vendor-build factorizations are unchanged: potrf, getrf
-and geqrf in float, cfloat and cdouble at n=128-512 measured new/base 0.996-1.003.
+(`src/sycl/gemm_kernels.cc`) on `worktree-blackwell-tuning`. cc 0 and cc 89 kept the 4090 ladder,
+which the branch's `GemmDispatchPolicyTest.Sm120SmallTilesAndTheirEdges` and
+`Sm120TransposedFallbackAndItsEdges` asserted shape by shape. None of it changed the route-era
+`preferred()`: in a vendor build, Auto still sent complex and transposed float to cuBLAS. The
+consumers were the native walk, vendor-free builds and direct `gemm_custom` callers (`gemm_custom`
+was deleted in P3.4; every caller now goes through the public `gemm`). The vendor-build
+factorizations were unchanged: potrf, getrf and geqrf in float, cfloat and cdouble at n=128-512
+measured new/base 0.996-1.003.
 
 ### gemm small tiles
 
 > On the flat-selection line both tiles were ported pin-only in P3.2b, and P3.4 made
 > them the `wide:m=16:n=16:k=16` and `wide:m=32:n=32:k=16` candidates (NN only in
-> `can_run`). The sm_120 selector windows described below are not in that tree; the
-> sm_120 tuner sweep ranks the tiles instead.
+> `can_run`). The sm_120 selector windows described below are not on main, and no sm_120 gemm
+> sweep has ranked the tiles yet: the shipped sm_120 gemm tables (the sm_89 transcription) never
+> list them, so they run only under `BATCHLAS_GEMM_ROUTE=wide:m=16:n=16:k=16` or
+> `wide:m=32:n=32:k=16`.
 
 There are two new NN instantiations of the wide-scalar template
 (`launch_wide_transposed`, 64 threads each): 16x16 with a 2x2 thread tile and 32x32
-with a 4x4 thread tile (`Tiled16x16RegisterK16Wide`, `Tiled32x32RegisterK16Wide`).
-They are forceable as `16x16x16wide` and `32x32x16wide` (aliases of the spellings above). On the 4090 the only complex
+with a 4x4 thread tile (`Tiled16x16RegisterK16Wide`, `Tiled32x32RegisterK16Wide` on the branch).
+On the branch they were forceable by those kernel names; on main the spellings above are the only
+pins, and the old names throw. On the 4090 the only complex
 register kernel was the 64x64 tile, which at m=n=32 computes 3/4 padding.
 
 Windows (float and complex<float>; `fits16` = max(m,n) <= 16, or min(m,n) <= 8 with

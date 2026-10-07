@@ -17,7 +17,10 @@ against those shipped `.so`s. **Harness.** `benchmarks/factor_bench.cc` driven b
 Ratios are `vendor_ms / native_ms`; **> 1 means native wins**. Every row carries a
 `resolved_route` read back per arm from the dispatch-coverage instrument in a **separate
 process**, never inferred from the pin: `pin_parsed = 1` says the pin was understood, not
-that it took.
+that it took. (This grid was measured on 2026-09-10 under the route-era router, whose pins
+could parse and still fall through; under flat selection a pin that cannot run the shape
+throws. The `resolved_route` values below are the route-era names, `vendor:auto` and
+`native:<tier>`; today's coverage records the family spelling, `vendor`, `cta`, `blocked`.)
 
 **Size of the run.** 20 (op, type) grids, **2,784 timed rows / 1,392 paired cells**, all five
 ops on all four types. Every grid completed; nothing crashed, no route threw, and every op has
@@ -176,7 +179,7 @@ defensible float edge if only one number may be quoted.
 ## orgqr
 
 The vendor arm is a per-item `cusolverDnXorgqr` loop on an out-of-order sub-queue
-(`cublas.cc:1414-1419`), not a batched routine. Every ratio here means "beats the per-item
+(`orgqr_vendor` in `src/backends/cublas.cc`, its `batch > 1` branch), not a batched routine. Every ratio here means "beats the per-item
 loop"; none of them means "beats cuSOLVER".
 
 | shape (batch) | float | cfloat | double | cdouble |
@@ -216,6 +219,12 @@ artefact, and it does not cross either. That is
 what the plan's orgqr flip (native everywhere at `n <= 512`, every type) needs, and this grid
 gives it with no exception.
 
+What ships for it today: `tuned/orgqr.<dtype>.sm_89.txt` (keys `m:log n:log:2`, transcribed at
+`424a45bc`, untimed) ranks `blocked` first on every row with `m <= 512` and `vendor` first on
+every row with `m >= 513`, in all four types. So the square cells above and the `128x32`,
+`512x32` and `512x64` panels are `blocked`-first, while the `1024x128` cells, which this grid
+shows native winning at 1.63-2.91x, are `vendor`-first: an unflipped win, not a measured loss.
+
 **52 of the run's 60 discarded cells are here, and they are one-sided**: **all 52 are the
 native arm**, 49 of them at n <= 48, with `rel_sd` 0.10-0.12, while the vendor arm on the same
 cell reads 0.02-0.07. The pattern is that each native rep is preceded in the interleave by a vendor rep
@@ -225,10 +234,18 @@ wide arm, and re-measure orgqr single-arm before quoting one in a gate.
 
 ## getrs
 
-Two right-hand-side widths. `nrhs = 1` is inside shipped clause A of
-`route_getrs.hh:97` (deleted; getrs now reads `tuned/getrs.*.txt`) (`s.nrhs() <= 2`, **every type**, no order or batch bound); `nrhs = 4` is
-inside clause B (float only). Everything below therefore describes **live routed traffic in a
-vendor-present build**, not a hypothetical.
+Two right-hand-side widths. When this grid was measured, `nrhs = 1` was inside the route-era
+getrs clause A (`nrhs <= 2`, **every type**, no order or batch bound) and `nrhs = 4` inside
+clause B (float only), so everything below described **live routed traffic in a vendor-present
+build**, not a hypothetical.
+
+**Today** getrs chooses from `tuned/getrs.<dtype>.sm_89.txt`, transcribed at `424a45bc` from
+the router that carried the order floor measured below (untimed; `tuned/README.md`). Its rows
+rank `cta` (the fused kernel) first exactly where the two clauses, with that floor, put it:
+`n >= 32` with `nrhs <= 2` for every type, plus `nrhs` 3 and 4 for float; every row with
+`n <= 31`, and every row outside those `nrhs` limits, ranks `vendor` first (e.g. `n=31 nrhs=1`
+`vendor` first, `n=32 nrhs=1` `cta` first, `n=32 nrhs=3` `cta` first for float and `vendor`
+first for the other three types).
 
 | n (batch) | float | cfloat | double | cdouble |
 |---|---|---|---|---|
@@ -258,10 +275,11 @@ vendor-present build**, not a hypothetical.
 | 256 (b4096) | 1.72 | 1.39 | 1.20 | 1.88 |
 | 512 (b1024) | 1.53~ | 1.27~ | 2.75~ | 2.14 |
 
-(Bold marks a cell inside a shipped `preferred()` clause that loses. The `nrhs = 4` table omits
+(Bold marks a cell inside a clause shipped at the time of the run that loses; every bold cell is
+at `n <= 24`, below today's floor, so no sm_89 table row ranks `cta` first there. The `nrhs = 4` table omits
 the +1 rungs for width; they are in the CSV and change nothing.)
 
-At `nrhs = 1` and 32 <= n <= 512 the fused tier is the strongest native code on this page —
+At `nrhs = 1` and 32 <= n <= 512 the fused kernel (`cta`) is the strongest native code on this page —
 **1.25x to 3.99x, every type, every order, no losses** — and `docs/perf/lu.md` is right about
 that band. (The `nrhs = 4` columns for double and cdouble sit below 1.00 from n = 32 to 65;
 clause B is float-only, so those cells are measured, not routed.)
@@ -269,11 +287,11 @@ clause B is float-only, so those cells are measured, not routed.)
 **It is wrong below it.** Clause A and clause B together cover 266 measured cells here, and
 **32 of them lose**, all at n <= 24, worst **0.234 at cdouble n = 4 nrhs = 1 batch 32768**:
 float 9 losses (0.448 min), cfloat 4 (0.593), double 10 (0.521), cdouble 9 (0.234). `lu.md`
-records clause A as "286 cells, geomean 2.261, **min 1.116, zero losses**" and clause B as
+records clause A as "286 cells, geomean 2.261, <b>min 1.116, zero losses</b>" and clause B as
 "min 1.133, zero losses". **The losses are one-directional in batch**, which is what makes them
 a defect rather than noise: float n = 4 nrhs = 1 reads 1.504 / 1.073 / 0.709 / **0.521** at
 batch 8192 / 16384 / 32768 / 65536, and float n = 4 nrhs = 4 reads 0.658 / 0.448 / **0.302**
-over the last three. The clause has no order bound and no batch bound; the grid behind it
+over the last three. The clause then had no order bound and no batch bound; the grid behind it
 evidently had no n < 32 rung and no batch above ~16384. **A cheap P0 repair is an order floor
 on clause A and B** — the bracketing winner is n = 24 nrhs = 1 (1.11 float, 1.27 cfloat, 3.69
 double, 1.96 cdouble) — but the shape of the loss (deepening with batch at n = 4 while n = 17
@@ -296,7 +314,8 @@ rung, against the 1.11 the top-batch table quotes, so it cannot bracket the floo
 order where all four types clear the flip gate *and* stay clear above it, and the band below it is
 non-monotone — float passes at 8, fails at 9, 16, 17 and 24 — so no lower floor is defensible.
 Clause B takes the same floor on the same grid: float `nrhs = 4` reads 0.45 / 0.46 at n = 4 / 8 and
-1.07 / 1.10 at 17 / 24, clearing only from 32 (1.30).
+1.07 / 1.10 at 17 / 24, clearing only from 32 (1.30). That floor is what the transcribed getrs
+tables carry (above): the `n=31` rows rank `vendor` first and the `n=32` rows `cta`.
 
 The mechanism, and why the losses deepen with batch: the fused kernel gives one work-group to a
 matrix whose whole solve is a few dozen flops, so the work-group **is** the cost, while
@@ -332,7 +351,7 @@ one process per cell):
 | geqrf float 512 | 26.279 / 17.364 / 13.376 | **10.98** (b2048) | still -18%, **not saturated**, falling |
 
 The two n = 512 cells move in opposite directions and neither converges inside 24 GB. Quote
-potrf float 512 as **">= 1.19 and rising"** and geqrf float 512 as **"<= 13.4 and falling"**,
+potrf float 512 as <b>">= 1.19 and rising"</b> and geqrf float 512 as <b>"<= 13.4 and falling"</b>,
 not as point estimates. Two further mechanisms show up on the small orders and are worth
 knowing before reading a `~` there: the potrf CTA arm takes a one-off superlinear step exactly
 where the batch's working set crosses the 72 MB L2 (float n = 32 at b16384 = 67 MB reads x2.51
@@ -382,8 +401,11 @@ cuSOLVER `potrfBatched` float n = 128 b4096 1.0503 ms against a table whose rati
 `cta` 15.419 ms, `blocked` 9.349 ms, vendor 31.024 ms. `qr.md`'s order grid records
 "30.9 -> 15.4 ms (2.01x)" — the native number is the **CTA** time to four figures, while its own
 tier table two sections earlier records the *default* at that cell as blocked, 9.97 ms. The
-order grid's float `n = 128` row describes a route that has not been the default since
-`native_tier_preferred` shipped. **It explains that one row and no other**: `qr.md`'s own tier
+order grid's float `n = 128` row describes a choice that stopped being the default when the
+route-era vendor-free tier hook (`native_tier_preferred`) shipped, and is still not the default:
+the `form=sq n=128` row of `tuned/geqrf.float.sm_89.txt` ranks `tiny` (which cannot run at that
+order), then `blocked`, then `cta`, then `vendor`, where the `n=96` row ranks `cta` ahead of
+`blocked`. **It explains that one row and no other**: `qr.md`'s own tier
 table records the `cta` pin as "n/a" for cfloat at n >= 112 and for cdouble at n >= 80, so at
 those cells the prior's native arm was already the blocked driver, as ours is.
 
@@ -516,9 +538,14 @@ the timed loop, the per-arm workspace sizing and the per-arm untimed correctness
 all already iterated over `arms`, so they needed no change.
 
 The guards that make an added arm safe were also already there and are worth naming,
-because an arm whose pin does not parse measures whatever `automatic()` picks and says
-nothing about it: `pin_parsed_now()` is recorded per arm in the CSV's `pin_parsed`
-column, and the untimed residual/pivot gate runs per arm, so a fast wrong answer cannot
-be reported as a win. What is NOT guarded is an arm whose pin parses but whose route
-`supports()` refuses -- `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n=32 parses fine and then
-falls through to the vendor, so that cell must be excluded by the caller.
+because under the route-era pin grammar an arm whose pin did not parse measured whatever
+Auto picked and said nothing about it: `pin_parsed_now()` is recorded per arm in the CSV's
+`pin_parsed` column, and the untimed residual/pivot gate runs per arm, so a fast wrong answer
+cannot be reported as a win. What the route era did NOT guard was an arm whose pin parsed but
+whose route its support predicate refused -- `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n=32
+parsed fine and then fell through to the vendor, so that cell had to be excluded by the
+caller. Under flat selection both cases throw: an unparsable or uncompiled spelling, and a
+spelling whose `can_run` refuses the shape (getrf `tiny` holds cdouble only to n = 16,
+`src/ops/getrf/getrf.cc:48`), raise `std::invalid_argument` before anything is timed. Only the class
+words `native` and `vendor` still fall back to Auto (with a warning) when nothing of their
+class can run.

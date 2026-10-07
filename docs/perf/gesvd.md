@@ -428,7 +428,7 @@ With \f$k\f$ zero singular values the \f$2k\f$-dimensional null space of the Gol
 degenerate as a whole, and the selected columns' halves need not be mutually orthogonal.
 Two plausible fixes were implemented and measured wrong:
 
-- **Repair from the partner (\f$-\sigma\f$) column:** wrong for well-separated \f$\sigma\f$; both
+- <b>Repair from the partner (\f$-\sigma\f$) column:</b> wrong for well-separated \f$\sigma\f$; both
   partners have equal half-norms, the tie-break flips u's sign: 1.18 relative
   reconstruction error on a matrix with no zero singular values. Also fails at null-space
   dimension 3.

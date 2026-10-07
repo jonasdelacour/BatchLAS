@@ -45,6 +45,11 @@ using symm_vendor = Event(Queue&,
 /// `symm(ctx, A, B, C, SymmOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
 ///
+/// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
+/// `expand` (mirror `A`'s triangle into scratch leased from the queue's arena, then one
+/// strided-batched gemm) or `vendor` (the library's per-item `?symm` loop). Pin one with
+/// `BATCHLAS_SYMM_ROUTE` = `auto` | `native` | `vendor` | `expand`.
+///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `float` or `double`
 /// @param ctx    queue the work is enqueued on
@@ -57,6 +62,11 @@ using symm_vendor = Event(Queue&,
 /// @param uplo   which triangle of `A` holds the data
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
+/// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_SYMM_ROUTE` names
+///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
+///         instead fall back to the tuned choice with a warning)
+/// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
+///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
 ///         batch <= 65535 and an expansion scratch that fits (the `expand` choice;

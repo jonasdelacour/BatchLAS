@@ -48,6 +48,12 @@ using trmm_vendor = Event(Queue&,
 /// Also callable as `trmm(ctx, A, B, C, TrmmOptions<T>{...})`, with owning
 /// `Matrix` arguments, and without `Ba` (taken from `ctx.backend()`).
 ///
+/// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
+/// `triangular` (`Side::Left` only: row tiles that skip the zero half of `A`), `expand`
+/// (`op(A)` written densely into scratch leased from the queue's arena, then one
+/// strided-batched gemm) or `vendor` (the library's per-item `?trmm` loop). Pin one with
+/// `BATCHLAS_TRMM_ROUTE` = `auto` | `native` | `vendor` | `triangular` | `expand`.
+///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param ctx     queue the work is enqueued on
@@ -61,6 +67,11 @@ using trmm_vendor = Event(Queue&,
 /// @param diag    whether `A` has an implicit unit diagonal
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
+/// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_TRMM_ROUTE` names
+///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
+///         instead fall back to the tuned choice with a warning)
+/// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
+///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
 ///         batch <= 65535 and a shape the `triangular` tiles or the `expand`

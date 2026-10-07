@@ -235,8 +235,8 @@ than engineered around.
 ## gesvdj_cta: the reduce-scatter G3 trap
 
 The Gram phase computes `kGramChunk = P/2` dot products per chunk (16 at P=32) and scatters
-them across P lanes so that pair k lands in lanes 2k and 2k+1. **Scattering V values over L
-lanes needs \f$\log_2 V\f$ scatter steps plus \f$\log_2(L/V)\f$ all-reduce steps.** At P=32,
+them across P lanes so that pair k lands in lanes 2k and 2k+1. <b>Scattering V values over L
+lanes needs \f$\log_2 V\f$ scatter steps plus \f$\log_2(L/V)\f$ all-reduce steps.</b> At P=32,
 V=16 that is 4 + 1, not 5 + 0:
 
 ```cpp
@@ -350,7 +350,7 @@ two is exact); the overflow headroom argument above holds only for the first 32 
 
 ## gesvdj_cta: rank deficiency, Thin and m < n
 
-**Zero threshold relative to \f$\sigma_{\max}\f$ only:**
+<b>Zero threshold relative to \f$\sigma_{\max}\f$ only:</b>
 \f$\mathrm{tol}_0 = \mathtt{zero\_sigma\_multiplier}\cdot\varepsilon\cdot\sigma_{\max}\f$, in the
 unscaled domain. `gesvd_blocked.cc`'s \f$\varepsilon \max(1, \sigma_{\max})\f$ declares every
 \f$\sigma\f$ zero on a uniformly small input (\f$\sigma_{\max} = 10^{-10}\f$) and fabricates every U
@@ -373,7 +373,7 @@ produces, so a Thin request sets `left_cols = CC` and skips completion, except t
 numerically deficient column is still repaired. Thin and All differ on at most one side, so
 entry points canonicalise Thin to All whenever the shapes coincide.
 
-**m < n solves \f$A^H\f$, not \f$A^T\f$**, transposing at load time (the tile is a few KB, so this
+<b>m < n solves \f$A^H\f$, not \f$A^T\f$</b>, transposing at load time (the tile is a few KB, so this
 is free and avoids `gesvd_blocked`'s out-of-place transpose + recursion).
 \f$A^H = U' S V'^H\f$ gives \f$A = V' S U'^H\f$: the same role mapping as \f$m \ge n\f$, swapped
 between outputs. Solving \f$A^T\f$ gives \f$A = \overline{V'} S U'^T\f$, whose conjugations differ:

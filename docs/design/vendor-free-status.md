@@ -269,17 +269,22 @@ effort.
 
 ### Known wrong, deliberately deferred
 
-Preserved rather than fixed in passing, because each is a route change that needs its own
-measurement:
+Preserved rather than fixed in passing, because each was a route change that needed its own
+measurement. All but the last entry have since been closed or withdrawn; each says by what:
 
-* **`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.** `{Native, Auto}` passes
-  `syrk_use_cuda_custom`, fails every arm inside `syrk_cuda_custom`, and lands on the
-  `DiagFullGemm` fallback — **which writes both triangles**, clobbering the one the caller did
-  not name. **No test in the tree sets `BATCHLAS_SYRK_ROUTE`.**
-* **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**; the throw is
-  not guarded by `forced`.
-* **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
-  large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
+* ~~**`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.**~~ Closed (known-defects #8): in the
+  route era `{Native, Auto}` fell through `syrk_cuda_custom` to the `DiagFullGemm` fallback, which
+  wrote both triangles. Phase 5 deleted `DiagFullGemm`, and the level-3 flat-selection wave (#147)
+  deleted the hand-written dispatcher: `native` now takes the first runnable non-vendor family of
+  the `tuned/syrk.<dtype>.<device>.txt` row, which is `gram` or `triangular` (the tile kernels,
+  `src/ops/syrk/choice.hh:18-20`), never a both-triangles gemm.
+* ~~**`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for.**~~ Closed
+  (known-defects #9): the dispatcher and cuBLASDx are deleted, and `cublasdx` is an unknown
+  family, so a pin of it throws as a bad spelling.
+* ~~**`symm` has no `expansion_fits()` ceiling**~~ Closed by the level-3 flat-selection wave:
+  `expand`'s `can_run` calls `backend::detail::expansion_fits` (`src/ops/symm/symm.cc:52-55`), so
+  an expansion that does not fit is not runnable and Auto moves on to the next entry of the row
+  (or throws `NoRouteError` vendor-free).
 * ~~**`trsm`'s heterogeneous-batch correctness gate can never fire.**~~ Withdrawn: the field was
   written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
   the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while

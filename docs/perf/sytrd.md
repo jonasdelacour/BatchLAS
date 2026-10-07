@@ -439,7 +439,7 @@ cost the fast path.
   "for compiler/runtime usage") is an unmeasured guess.
 - **`BATCHLAS_LATRD_IMPL=%device`** is recorded as slower with no figures; re-measure before
   deleting or reviving it.
-- **Overlapping \f$Q_1 Q_2\f$ with `stedc`** (see the Q2 design above) needs an out-of-order
+- <b>Overlapping \f$Q_1 Q_2\f$ with `stedc`</b> (see the Q2 design above) needs an out-of-order
   queue; unmeasured.
 - The complex chase `__mulsc3` check and the retiling are tracked on the syev page
   ([syev: open debt, complex stage-2 occupancy](syev.md#syev-open-debt-complex-stage-2-occupancy)).

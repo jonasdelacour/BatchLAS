@@ -22,9 +22,9 @@
 // evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 namespace batchlas::backend::detail {
 
-// Expansion vs the per-batch vendor loop (symm/hemm). The constants are
-// deliberately more conservative than the measured loss region. TRMM does not
-// consult this. evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
+// hemm's expansion vs its per-item vendor loop (symm and trmm choose from tables now). The
+// constants are deliberately more conservative than the measured loss region.
+// evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
 constexpr int kExpandMinBatch = 4;
 constexpr int kExpandMinDim = 256;
 

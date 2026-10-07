@@ -75,7 +75,6 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 | `BATCHLAS_<OP>_ROUTE` | `routing.route(op)`, one slot per entry of `RoutingSettings::ops` | raw; trimmed and case-folded by the op's pin reader | `auto`, `native`, `vendor` or a choice spelling; see [route pins](#environment-route-pins-are-raw-strings) |
 | `BATCHLAS_TUNED_DIR` | `selection.tuned_dir` | raw, a directory path | a table file there (named op, type, device key, as `gemm.float.sm_89.txt`) replaces the built-in table of that name; other files are skipped with a warning |
 | `BATCHLAS_EXPAND_ROUTE` | `selection.expand_route` | raw, two agreeing parsers | `expand` or `loop` |
-| `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `selection.gemm_cublasdx_kernel` | raw | ~20 spellings; read for presence and value |
 | `BATCHLAS_GEMV_SEGT` | `selection.gemv_segt` | raw | `off`, `auto`, 2, 4, 8; must not be latched |
 | `BATCHLAS_GESVD_BIDIAG` | `selection.gesvd_bidiag` | raw | changes numerics, see [below](#environment-knobs-that-override-an-explicit-argument) |
 | `BATCHLAS_GETRF_LEAF` | `selection.getrf_leaf` | raw, re-read per call | `slm` or `reg` (default) |
@@ -177,8 +176,9 @@ Four slots (`hemm`, `herk`, `her2k`, `iluk`) were captured but read by nothing.
 to `{Auto, Auto}`, `gemm_variant_request()` to `GemmVariantRequest::Vendor`), kept apart because
 unifying them would have moved which kernel a bare `gemm()` ran. The legacy variables,
 `BATCHLAS_GEMM_SYCL_KERNEL` (~38 spellings, unset was `KernelVariant::Direct`) and
-`BATCHLAS_GEMM_EXPERIMENTAL` (unlocked five experimental GEMM variants) are no longer read, and
-neither are `BATCHLAS_SYEV_SMALL_KERNEL` (`cta`, `fused`, `cta_fused`, `jacobi`; its `is_set()`
+`BATCHLAS_GEMM_EXPERIMENTAL` (unlocked five experimental GEMM variants) are no longer read; nor,
+since the level-3 flat-selection wave deleted cuBLASDx, is `BATCHLAS_GEMM_CUBLASDX_KERNEL`
+(`selection.gemm_cublasdx_kernel`, ~20 spellings); and neither are `BATCHLAS_SYEV_SMALL_KERNEL` (`cta`, `fused`, `cta_fused`, `jacobi`; its `is_set()`
 separated "forced cta" from unset) or `BATCHLAS_SYEV_CTA_MAX_N` (`strtol`, rejected outside 0..32;
 24 for `complex<double>`, else 32 = off; [evidence](../perf/syev.md#syev-the-lobpcg-projected-solve-knob)),
 whose `Settings` fields were retired with them; see

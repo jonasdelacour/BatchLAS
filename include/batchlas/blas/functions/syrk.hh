@@ -43,6 +43,11 @@ using syrk_vendor = Event(Queue&,
 /// `syrk(ctx, A, C, SyrkOptions<T>{...})`, with owning `Matrix` arguments, and
 /// without `Ba` (taken from `ctx.backend()`).
 ///
+/// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
+/// `gram` (one tile covers `C`, n <= 128), `triangular` (`float` only: 128-wide tiles of the
+/// requested half) or `vendor` (the library's per-item `?syrk` loop). Pin one with
+/// `BATCHLAS_SYRK_ROUTE` = `auto` | `native` | `vendor` | `gram` | `triangular`.
+///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `float` or `double`
 /// @param ctx     queue the work is enqueued on
@@ -51,9 +56,14 @@ using syrk_vendor = Event(Queue&,
 /// @param alpha   scale of the product
 /// @param beta    scale of the input `C`
 /// @param uplo    which triangle of `C` is written
-/// @param transA  `Transpose::NoTrans` or `Transpose::Trans`
+/// @param transA  `Transpose::NoTrans` or `Transpose::Trans` (`ConjTrans` is accepted and means `Trans`)
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A` and `C` have the same batch size and conforming shapes per item.
+/// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_SYRK_ROUTE` names
+///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
+///         instead fall back to the tuned choice with a warning)
+/// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
+///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
 ///         batch <= 65535, and either `T` is `float` (the `triangular` tiles) or the

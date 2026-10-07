@@ -45,6 +45,11 @@ using syr2k_vendor = Event(Queue&,
 /// `syr2k(ctx, A, B, C, Syr2kOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
 ///
+/// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
+/// `triangular` (`float` only: both products fused into 128-wide tiles of the requested half)
+/// or `vendor` (the library's per-item `?syr2k` loop). Pin one with
+/// `BATCHLAS_SYR2K_ROUTE` = `auto` | `native` | `vendor` | `triangular`.
+///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `float` or `double`
 /// @param ctx     queue the work is enqueued on
@@ -57,6 +62,11 @@ using syr2k_vendor = Event(Queue&,
 /// @param transA  `Transpose::NoTrans` or `Transpose::Trans`, applied to `A` and `B`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item; k > 0.
+/// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_SYR2K_ROUTE` names
+///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
+///         instead fall back to the tuned choice with a warning)
+/// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
+///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, `float`, not `ConjTrans`,
 ///         with homogeneous operands and batch <= 65535 (the `triangular` tiles;

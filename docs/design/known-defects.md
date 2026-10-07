@@ -343,7 +343,7 @@ citation**.
 
 ### Provenance: the grid rewrite, not the small-n campaign
 
-The original filing said "**not caused by the small-n campaign (P0-P7)** — no `sytrd`, `latrd`,
+The original filing said "<b>not caused by the small-n campaign (P0-P7)</b> — no `sytrd`, `latrd`,
 `syr2k`, `her2k` or `steqr` source was modified by it". That sentence is **kept, but restated**,
 because the diagnosis moved the defect from "somewhere, possibly routing" to a specific pair of
 loops in a specific source file, and a blanket "no `latrd` source was modified" now reads as a

@@ -54,14 +54,17 @@ How the pieces fit:
   ([The vendor gate](#the-vendor-gate)).
 * **Nothing runnable** in a build without the op's library is reported by `select::pick` as
   `NoRouteError`, the per-op census [`vendor-free-status.md`](vendor-free-status.md) counts.
-* **Ops whose directory has no `choice.hh` still select by hand** inside `src/ops/<op>/` (on
-  2026-10-06 the level-3 ops in `src/ops/level3/`); their gates and windows are on
-  [`docs/perf/dispatch.md`](../perf/dispatch.md). The generated @ref selection_tables page lists
+* **Ops with no `choice.hh` still select by hand.** Since the level-3 flat-selection wave (#147)
+  these are only `hemm`, `herk` and `her2k` (entry points in `src/ops/level3/level3.cc`), whose
+  expand-or-vendor choice is written in `src/backends/cublas.cc`; it is recorded on
+  [`docs/perf/level3.md`](../perf/level3.md). The generated @ref selection_tables page lists
   exactly the ops that select from tables.
 
-The MathDx device libraries (cuBLASDx, cuSolverDx) count as vendor even though their kernels
-compile into our `.so`: the source is NVIDIA's and ships only for NVIDIA, so vendor independence has
-to be measurable without them (`BATCHLAS_VENDOR_LIBRARIES` in `cmake/BatchLASOptions.cmake`).
+The MathDx device libraries (cuBLASDx, cuSolverDx) counted as vendor even though their kernels
+compiled into our `.so`: the source is NVIDIA's and ships only for NVIDIA, so vendor independence had
+to be measurable without them. The level-3 flat-selection wave (#147) deleted every cuBLASDx path and
+the MathDx probe (MathDx was absent on both boxes, so none of it ever ran); the rule stands for any
+header-only vendor library added later.
 
 ## The vendor gate
 
@@ -95,7 +98,7 @@ When nothing serves a call, `select::throw_no_vendor_route<T>` records a coverag
 switch that would restore it, and deliberately not the backend, which `NoRouteError` carries but
 discards when formatting.
 
-A separate question is "is the native kernel **linked**": `select::level3_tile_route_available<B, T>`,
+A separate question is whether the native kernel is **linked**: `select::level3_tile_route_available<B, T>`,
 which is `B == Backend::CUDA && (std::is_same_v<T, float> || bool(BATCHLAS_HAS_CUBLAS))`. Four sites
 in `src/extensions/` and one in the coverage table used to spell this `B == Backend::CUDA`, which is
 wrong in the vendor-free build — the backend is still `Backend::CUDA` and the tile TUs are not
@@ -108,10 +111,13 @@ Four sites in `src/extensions/` used to ask "is the tile kernel linked" as `B ==
 with the comment "Not a statement about CUDA the vendor -- it is where the kernel is wired." The
 comment was right and the expression wrong: the tile kernels are portable SYCL (verified by compiling
 `triangular_expand.hh` and the `*_tiles.hh` family standalone at `-fsycl-targets=spir64_x86_64`);
-they live in `{symm,syrk,syr2k,trmm}_custom_dispatch.cc`, which `src/backends/CMakeLists.txt`
+at the time they lived in `{symm,syrk,syr2k,trmm}_custom_dispatch.cc`, which `src/backends/CMakeLists.txt`
 compiled only with cuBLAS because their dispatch terminated in `*_vendor_cuda_raw`. With
 `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` the backend is still `Backend::CUDA`, the tile TUs were not
-compiled, and every such site claimed a kernel that was not linked.
+compiled, and every such site claimed a kernel that was not linked. (The level-3 flat-selection
+wave, #147, deleted those dispatchers: the kernels are now launched from
+`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`, built unconditionally into `batchlas_dispatch_obj`, and
+each native `can_run` carries a `kWired = B == Backend::CUDA` term, e.g. `src/ops/trmm/trmm.cc:54`.)
 
 WP1 S7 recorded that the header's own prediction was wrong. It said that once WP1 freed the four TUs
 the predicate "becomes true for every backend -- and that is the only edit needed". A bare `true`
@@ -129,9 +135,11 @@ would have been wrong in two directions:
 
 Hence the second template parameter: the answer varies per (backend, scalar). Vendor-present
 behaviour is unchanged by construction (with `BATCHLAS_HAS_CUBLAS` true it is true for every T on
-CUDA); only the vendor-free float case moved, which was the WP1 gain. The level-3 work in flight
-(the level-3 ops gaining `choice.hh` files) may change where these kernels are wired; the predicate's
-contract, "linked for this (backend, scalar)", is what callers rely on.
+CUDA); only the vendor-free float case moved, which was the WP1 gain. The level-3 four have since
+moved to flat selection (#147) and their own `can_run` decides their public entry points; the
+predicate survives for the internal callers that ask "is a tile kernel linked for this (backend,
+scalar)" before calling one directly (`ortho.cc`, `ormqr_blocked.cc`, `sytrd_blocked.cc`, and the
+coverage table in `src/select/coverage.cc`), and that contract is what they rely on.
 
 Code site: `select::level3_tile_route_available` in `src/select/vendor.hh` (formerly
 `include/batchlas/blas/dispatch/route_compiled.hh`).
@@ -384,7 +392,7 @@ only if every TU in the process agrees, which a library cannot enforce on its co
 | `scripts/route_diff.sh capture\|compare` | prove a change moved **no selection decision** | treats a capture with **zero `reached` rows as a hard error**, not as "nothing changed" — the instrument has produced a correct header with no rows twice, for unrelated reasons, and both times it looked clean |
 | `scripts/coverage_merge.sh` | collapse the per-pid shards a `ctest` run produces | sums `calls`, de-duplicates the identical `linked` block every process emits |
 | `scripts/facade_symbol_check.sh` | prove the public entry points are **not** defined in a vendor component | matches **Itanium mangling directly**: `nm -C` silently fails to demangle concept-constrained templates and would report `symm`/`herk` as missing when present |
-| `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs this machine never compiles | the gate is "**exactly one** expected error" (a `get_native<ext_oneapi_hip>` overload this CUDA-only DPC++ lacks); anything else is a real defect. It forces the CUDA macros off, exercising the per-library `#if` structure nothing else here builds. The ROCm headers live under `/opt/rocm/include/roc*/`, a subdirectory, which is why a naive probe reads them as absent |
+| `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs this machine never compiles | the gate is **exactly one** expected error (a `get_native<ext_oneapi_hip>` overload this CUDA-only DPC++ lacks); anything else is a real defect. It forces the CUDA macros off, exercising the per-library `#if` structure nothing else here builds. The ROCm headers live under `/opt/rocm/include/roc*/`, a subdirectory, which is why a naive probe reads them as absent |
 | `scripts/register_probe.sh` | register/spill residency of the SYCL device link | replays a target's `link.txt` verbatim, so the flags stay exactly the real build's; **fails loudly** when the named target has no `link.txt` rather than silently probing the default library |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op; the tag names a borrowed table, an override or the last resort |
 
@@ -413,9 +421,9 @@ Per-op performance debts live on the `docs/perf/` pages. These belong to the ven
 1. **`route_diff.sh compare` applies no backend filter**, so `AUTO` rows from pure-layer tests inflate
    every diff.
 2. **`Backend::INTEL` is hard-wired false and oneMKL cannot be tested here**; only the dead branch that
-   produced undefined references was removed. ROCm is reachable only through `rocm_syntax_check.sh`,
-   and MathDx-present boxes (`BATCHLAS_HAS_CUBLASDX 0` here) are untestable in this tree — statements
-   about them are stated, not verified.
+   produced undefined references was removed. ROCm is reachable only through `rocm_syntax_check.sh`;
+   statements about it are stated, not verified. (MathDx-present boxes were the other untestable
+   case until #147 deleted cuBLASDx.)
 3. **The runtime `BATCHLAS_NO_VENDOR=1` enforcement knob was never built.** Call sites that reach
    `backend::*_vendor` or a `*_vendor_or_throw` shim directly (for example the `syev` calls in
    `src/extra/cond.cc`, `src/extra/norm.cc` and `src/extensions/syevx_lobpcg.cc`) bypass the public
@@ -433,7 +441,7 @@ Resolved since the route era: `Route::library` (an output the resolver never wro
 `Route`; the static coverage table's `trsm` row reads `true` (WP3); the claims of a
 `BATCHLAS_ENABLE_COVERAGE` build option went with `route_resolve.hh`; the two known-wrong forced
 level-3 routes (`BATCHLAS_SYRK_ROUTE=native`, `BATCHLAS_SYR2K_ROUTE=native`) were fixed by the level-3
-pin words ([`docs/perf/dispatch.md`](../perf/dispatch.md#the-level-3-pin-words)).
+pin words and are now ordinary flat-selection pins ([`docs/perf/dispatch.md`](../perf/dispatch.md#the-level-3-pin-words)).
 
 ## History: the RouteTable layer
 

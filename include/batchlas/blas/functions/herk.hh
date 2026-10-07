@@ -46,6 +46,13 @@ using herk_vendor = Event(Queue&,
 /// `herk(ctx, A, C, HerkOptions<T>{...})`, with owning `Matrix` arguments, and
 /// without `Ba` (taken from `ctx.backend()`).
 ///
+/// Not table-selected. On `Backend::CUDA` the cuBLAS backend chooses by a fixed rule between one
+/// strided-batched gemm into scratch folded into the `uplo` triangle and a per-item
+/// `cublas?herk` loop (the loop also serves a scratch that does not fit);
+/// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop` pins it. `BATCHLAS_SYRK_ROUTE=gram` opts a GPU
+/// call into syrk's conjugating Gram tile kernel where it admits the shape (measured slower; kept
+/// for testing). The host backend runs the per-item `cblas_?herk` loop.
+///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
 /// @param ctx     queue the work is enqueued on
@@ -57,10 +64,12 @@ using herk_vendor = Event(Queue&,
 /// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A` and `C` have the same batch size and conforming shapes per item.
+/// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
+///         backend checks inside its deferred host task and throws std::runtime_error there)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS
 ///         for `Ba`: herk has no native implementation.
 /// @note Not instantiated for `Backend::ROCM`.
-/// @see syrk, her2k, HerkOptions, @ref md_docs_2cpp-api
+/// @see syrk, her2k, HerkOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
 /// @ingroup blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event herk(Queue& ctx,

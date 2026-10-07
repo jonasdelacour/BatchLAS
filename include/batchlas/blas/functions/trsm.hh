@@ -144,7 +144,7 @@ inline void trsm_validate_params(
 ///         when no native kernel can run the shape
 /// @note On `Backend::NETLIB`, `alpha == 0` still reads `B`, so a NaN in `B`
 ///       survives (known defect 5, @ref md_docs_2design_2known-defects).
-/// @see trmm, TrsmOptions, @ref md_docs_2perf_2trsm, @ref md_docs_2cpp-api
+/// @see trmm, TrsmOptions, @ref perf_trsm, @ref md_docs_2cpp-api
 /// @ingroup blas3
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm(Queue& ctx,

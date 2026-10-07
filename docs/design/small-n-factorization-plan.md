@@ -13,6 +13,17 @@ measurement work; it is not. Every number below that is not marked
 and lives either in `docs/perf/*.md` or at tag `perf-evidence/vendor-independence`
 (`git show perf-evidence/vendor-independence:experiments/<path>`).
 
+**Route vocabulary.** This plan was written against the route layer that
+flat kernel selection deleted (@ref design_flat_selection): `RouteTable`
+order arrays in `route_<op>.hh`, `supports()`, `preferred()` and the
+vendor-free hook `native_tier_preferred`. Every such name below describes
+that deleted code. Today a former `supports()` term is a `can_run` term in
+`src/ops/<op>/<op>.cc`, and a former `preferred()` window or tier hook is
+the ranking in the rows of `tuned/<op>.<dtype>.<device>.txt`. Because
+`select::choose` takes the first runnable entry of a single row for both the
+vendor-present and the vendor-free walk, the R8b defect below cannot recur
+in that form.
+
 Ratios are `vendor_ms / native_ms`; **>1 means native wins**. "Large batch"
 means the saturating batch for the order (>= 2048 at n <= 64, >= 512 at n = 512).
 

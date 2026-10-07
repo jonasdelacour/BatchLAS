@@ -1,29 +1,51 @@
-# GEMM: the native tiers, the Auto flip, and the strided-ld routing defect (WP2, WP3 S16)
+# GEMM: the flat-selection choices, the transcribed sm_89 rows, and the evidence behind them {#perf_gemm}
+
+> **Covers:** `gemm`'s choices (`direct`, `tiled`, `small`, `reg`, `wide`, `vendor`), what the shipped `tuned/gemm.*` tables rank first
+> and why, the kernels' own measurements, the strided-`ld` defect, and the configure-time subgroup workspace budget.
+> **Status:** current. gemm selects through flat kernel selection since P3.4 (@ref design_flat_selection); every table is
+> transcribed and untimed, so the windows measured below are still what Auto runs on sm_89.
+> **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda, unless a section says otherwise.
+> **Measured:** WP2 E3–E6 and WP3 S16 (2026), the 128×128 rework and the small kernels 2026-09-26/27, P6 (wide transposed tiles).
 
 All measurements: RTX 4090 / sm_89, one dedicated GPU via `experiments/gpu_guard.sh`, warm SYCL JIT (`--warmup=5`), median of 3, **both β=0 and
 β=1**, unless a row says otherwise. Sanity anchors: vendor SGEMM must reach 45–48 TFLOP/s at 512³ (a number near 80 is TF32, not FP32); vendor
 DGEMM must never exceed ~1.45 TFLOP/s, since a 4090 is 1/64 FP64.
 
+What Auto runs on sm_89, in one paragraph: **double** ranks a native kernel first at every shape with batch ≥ 64 and k ≥ 2
+(`tiled`, `direct` for the small squares, `wide:m=64:n=64:k=16` on large packed squares); **float** ranks `small` first on NN squares up to
+48 at batch ≥ 64 and the vendor everywhere else; **complex** ranks the vendor first everywhere. Each of those is the transcription of a
+measured window on this page, and the families' order below the vendor is what a vendor-free build or `BATCHLAS_GEMM_ROUTE=native` runs.
+
 ## What ships
 
 ### Choices (flat selection, P3.4)
 
-gemm decides in `src/ops/gemm/gemm.cc` (`docs/design/flat-kernel-selection.md` §12 "Phase 3.4"): public `gemm()` -> `choose()` ->
+gemm decides in `src/ops/gemm/gemm.cc` (`docs/design/flat-kernel-selection.md` §12 "Phase 3.4"): public `gemm()` -> `select::run` (`gemm.cc:172-180`) ->
 `std::visit` -> one launcher. There is no `RouteTable<Op::gemm>`, no `select_kernel_variant` and no vendor-TU re-route any more. The
 vocabulary is `src/ops/gemm/choice.hh`, in tie-break order:
 
-| spelling | launcher (`src/sycl/gemm_kernels.cc`) | scalars | `can_run` beyond the common term |
+| spelling | launcher (`src/sycl/gemm_kernels.cc`) | scalars | `can_run` beyond the common term (`src/ops/gemm/gemm.cc`) |
 |---|---|---|---|
-| `direct` | `gemm_direct`, one work-item per C element (old `Direct`) | all | `max_wg >= 64` |
-| `tiled` | `gemm_tiled`, the 16x16 shared tile (old `Tiled16`) | all | `max_wg >= 256` |
-| `small` | `gemm_small`, `small_batched.hh` (the NB buckets and the float NN 33..56 tiled leg) | float, double | `max(m,n,k) <= 64`, `max_wg >= small_wg` (128 lanes; 144 or 196 for float NN 33..56) |
-| `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, the register-tiled family (`register_128x128.hh` for 128·128·8) | float | the (ta, tb) form is instantiated for that config (table below), `max_wg >=` its thread count |
-| `wide:m=..:n=..:k=..` | `gemm_wide`, the 16-byte-granule tiles (`register_64x64_k16_wide.hh`, `register_wide_transposed.hh`) | all | the form is instantiated; a real `Trans` is served by a `ConjTrans` instantiation, a complex `Trans` is not |
-| `vendor` | `backend::gemm_vendor` | all | a level-3 vendor library is linked |
+| `direct` | `gemm_direct`, one work-item per C element (old `Direct`) | all | `grid && d.max_wg >= kDirectWg` (64), `:103` |
+| `tiled` | `gemm_tiled`, the 16x16 shared tile (old `Tiled16`) | all | `grid && d.max_wg >= kTiledWg` (256), `:104` |
+| `small` | `gemm_small`, `small_batched.hh` (the NB buckets and the float NN 33..56 tiled leg) | float, double | `native && small_fits<T>(d, nn, max(m,n,k))`, `:105-108`: real, `max(m,n,k) <= 64`, `max_wg >= small_wg` (128 lanes; 144 or 196 for float NN 33..56), and sub-group 32 except on the float NN tiled leg (`choice.hh:115-120`) |
+| `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, the register-tiled family (`register_128x128.hh` for 128·128·8) | float | `grid`, a `reg_configs` entry with these fields, `reg_form(*cfg, ta, tb)` (the form is instantiated, table below) and `max_wg >= cfg->threads()`, `:109-115` |
+| `wide:m=..:n=..:k=..` | `gemm_wide`, the 16-byte-granule tiles (`register_64x64_k16_wide.hh`, `register_wide_transposed.hh`) | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`:76-81`: a real `Trans` is served by a `ConjTrans` instantiation, a complex `Trans` is not) and `max_wg >= cfg->threads()`, `:116-120` |
+| `vendor` | `backend::gemm_vendor` | all | `d.has_vendor`, `:121` |
 
-The common native term is `(is_gpu || !has_vendor_blas) && precision == Default && m, n, k > 0 && batch >= 1` with no heterogeneous
-operand. The first clause keeps a CPU queue with a host BLAS on the vendor (maintainer decision) while a vendor-free host queue keeps the
-native kernels as its only gemm, as before. Candidates: float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
+The common native term is `gemm.cc:97-101`:
+
+```cpp
+const bool device = d.is_gpu || !d.has_vendor;
+const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
+                    A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
+const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
+```
+
+`device` keeps a CPU queue with a host BLAS on the vendor (maintainer decision) while a vendor-free host queue keeps the native kernels as
+its only gemm. `grid` is the CUDA grid-z ceiling: `direct`, `tiled`, `reg` and `wide` put the batch in SYCL dimension 0, so a batch above
+65535 (`kMaxGridBatch`, `choice.hh:104`) is servable natively only by `small` (`GemmCandidates.GridCeilingIsACanRunTerm`). Candidates
+(`choice.hh:123-144`): float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
 
 **The fold.** 43 `KernelVariant`s became 18 configurations. Forms are after the real-scalar C->T fold:
 
@@ -46,8 +68,8 @@ native kernels as its only gemm, as before. Candidates: float 19, double 9 (no `
 
 **Deleted, with no alias (a pin on the old name throws):** the four pin-only `Tiled128x32RegisterK32{S1U1,S2U2,S2U2TT8x4,S2U2TT4x8}` and the
 five experimental `Tiled128x32RegisterK32{Persistent,SplitK4,S1U4}` and `Tiled128x64RegisterK32LargeTT4x8{,U2}`, with
-`src/sycl/gemm/persistent.hh`, `src/sycl/gemm/split_k.hh` and the `BATCHLAS_GEMM_EXPERIMENTAL` gate. cuBLASDx is no longer reachable from
-gemm (its TUs still compile for the level-3 ops).
+`src/sycl/gemm/persistent.hh`, `src/sycl/gemm/split_k.hh` and the `BATCHLAS_GEMM_EXPERIMENTAL` gate. gemm lost its cuBLASDx path in P3.4,
+and the level-3 fused cuBLASDx kernels went with the level-3 four's move to flat selection (#147); no cuBLASDx source is left in the tree.
 
 **Derived inside the launcher, never a field or a `can_run` term:** the transpose instantiation, the aligned vs predicated leg (the defect
 of [The strided ld defect and the routing fix](#the-strided-ld-defect-and-the-routing-fix) cannot recur by construction), the `small`
@@ -55,116 +77,104 @@ bucket, and TR/TC/stages (`reg_configs` in `choice.hh`). Each launcher throws wh
 
 **Correctness, new in P3.4.** Before it, 18 NN-only register variants silently computed NN when forced onto a transposed call (`launch_reg`
 took no transpose), and every launcher fell back to `Tiled16`/`Direct` on a form it lacked. `can_run` now lists exactly the instantiated
-forms, so such a pin throws and Auto skips the entry.
+forms, so such a pin throws and Auto skips the entry (`GemmCandidates.TransposedPinOnAMissingInstantiationThrows` and
+`CanRunEqualsLaunch` in `tests/gemm_candidates_tests.cc`).
 
 Which one runs is the first runnable entry of the nearest row of `tuned/gemm.<dtype>.<device>.txt`, keyed
 `ta:exact tb:exact layout:exact m:log n:log k:log batch:log` (ConjTrans folds to `T` for real scalars; `layout=packed` when A, B and C are
 contiguous with 16-byte-aligned bases, else `strided`; every log key weighs 1, since work ~ m·n·k·batch). The last resort is `direct`,
 then `vendor` (the CPU and `precision != Default`). gemm takes no workspace. A heterogeneous batch is split into homogeneous items
-before `choose()` in every build, and each item makes its own choice (vendor builds used to loop on the vendor).
+before `select::run` in every build (`gemm.cc:156-164`), and each item makes its own choice (vendor builds used to loop on the vendor).
 
-**sm_89 and sm_120 are transcribed.** `tuned/gemm.*.sm_89.txt` are the old decision (the `route_gemm.hh` `preferred()` window, the
-`gemm_use_sycl_custom` re-route in the cuBLAS TU, and `select_kernel_variant`) evaluated at every grid cell by
-`tools/transcribe/gemm_transcribe.cc` (deleted in phase 5), untimed (`tuned/README.md`). Each row is the old kernel, then its old forced-name fallback
-(`reg`/`wide` -> `tiled`, `small` -> `direct`), then the other of `tiled`/`direct`, with `vendor` first where the old route was the vendor
-and last otherwise. What the rows say: float, `small` leads the 30 NN squares up to 48 and everything else is `vendor` first, then the old
-native kernel; double, native everywhere (`tiled` 4395 rows, `direct` 102, `wide:m=64:n=64:k=16` 15); complex, `vendor` first everywhere.
-So the windows on the rest of this page still decide what Auto runs on sm_89 (34 of 34 cross-checked cells chose the parent's kernel).
-`tuned/gemm.*.sm_120.txt` are the same CSV written for sm_120 (`--transcribe ... --device sm_120`; the transcriber reads no device
-fact), so sm_120 no longer borrows but still runs what the 4090 router chose, until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`)
-replaces them. No gemm sweep was run (maintainer, 2026-10-05: no new measurement before the phase-5 merge).
+**sm_89 and sm_120 are transcribed, not timed.** Every `tuned/gemm.*.txt` is headed `source=transcribed:424a45bc`: the pre-P3.4
+decision evaluated at every cell of the `choice.hh` grid plus edge rows (`tuned/README.md` gives the provenance and the transcriber).
+Each row is the old kernel's spelling, then its old forced-name fallback (`reg`/`wide` -> `tiled`, `small` -> `direct`), then the other of
+`tiled`/`direct` (plus `small` for a real `max(m,n,k) <= 64`), with `vendor` first where the old route was the vendor and last otherwise.
+[The next section](#gemm-what-the-transcribed-sm_89-rows-rank-first) gives the per-dtype counts, read off the tables, and which
+measured window each one encodes; 34 of 34 live cross-checked cells chose the parent's kernel. `tuned/gemm.*.sm_120.txt` are the same CSV
+written for sm_120 (`--transcribe ... --device sm_120`; the transcriber reads no device fact), so sm_120 does not borrow but still runs
+what the 4090 decision chose, until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`) replaces them. No gemm sweep was run (maintainer,
+2026-10-05: no new measurement before the phase-5 merge).
 
-**Callers.** symm, syrk and syr2k (float custom dispatch) already called the public `gemm`; the six `gemm_vendor` calls left in
-`src/backends/cublas.cc` (hemm x2, herk, her2k, trmm x2) now do too, so they get the table's choice rather than the deleted re-route. The
-potrf, geqrf and getrf blocked drivers' default trailing-update seam is the public `gemm` (`with_backend`), not `gemm_custom`, which no
-longer exists.
+**Callers.** Every library gemm goes through the public `gemm` and its table: the blocked drivers' trailing-update seams (`potrf.cc:75`,
+`getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77` under `src/ops/`), the level-3 `expand` families (`src/ops/symm/symm.cc:81-83`,
+`src/ops/trmm/trmm.cc:90-91`), and the hemm, herk and her2k expansions left in `src/backends/cublas.cc` (`:221`, `:225`, `:381`, `:447`).
+`gemm_custom` and the cuBLAS TU's `gemm_use_sycl_custom` re-route no longer exist, so no caller can reach a kernel the table did not
+choose.
 
 ### Pins and environment
 
 * `BATCHLAS_GEMM_ROUTE`: `auto`, `native`, `vendor` or a spelling (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`, `small`). A
-  spelling names a config and the form comes from the call. The old kernel names (`128x128x8`, `tiled16`, `64x64x16tn`, ...) and router
+  spelling names a config and the form comes from the call. `native` walks the nearest row skipping `vendor` (the "native walk" this page
+  refers to), `vendor` takes the vendor. The old kernel names (`128x128x8`, `tiled16`, `64x64x16tn`, ...) and router
   words (`register_tiled`, `sycl`, `custom`, `vendor:auto`) were aliases until flat selection phase 5 and now throw, like any spelling the
-  shape cannot run; `native` and `vendor` fall back to Auto with a warning.
+  shape cannot run (`GemmCandidates.UnknownAndDeletedPinsThrow`); only `native` and `vendor` with nothing runnable in their class fall
+  back to Auto with a warning.
 * `BATCHLAS_GEMM_VARIANT`, `BATCHLAS_GEMM_SYCL_KERNEL` and `BATCHLAS_GEMM_EXPERIMENTAL` are read by nothing.
 * Observing: `BATCHLAS_SELECT_TRACE=1` prints the key, the choice and the runner-up; the coverage `reached` row's `chosen_algo` is the
   spelling; `BATCHLAS_KERNEL_TRACE=1` still names the kernel, which is the only place the derived aligned/predicated leg is visible.
 
-## The old router (deleted in P3.4)
+## GEMM: what the transcribed sm_89 rows rank first
 
-Kept because it is what the sm_89 tables transcribe, and because the evidence below brackets its windows. File:line citations to
-`route_gemm.hh` and to the selector in `gemm_kernels.cc` on this page are to the parent tree (`git show 424a45bc:<path>`).
+Read off `tuned/gemm.<dtype>.sm_89.txt` (all four headed `source=transcribed:424a45bc`), counting the first entry of every row, and the
+first entry other than `vendor` (what the native walk and a vendor-free build take). The real tables carry edge rows at batch 1, 63 and 64
+and, for double, k = 1 and 2, so the old batch and k edges survive nearest-row lookup; the complex tables have batch 128, 2048 and 32768
+only. `GemmTranscribedTable.Sm89RowsHoldTheOldPreference` and `Sm89BracketsTheOldVendorEdges` (`tests/gemm_candidates_tests.cc`) pin
+representative rows and both sides of each edge.
 
-### The route arms
+| dtype | rows | ranked first | first native entry |
+|---|---|---|---|
+| float | 11226 | `vendor` 11154; `small` 72 (NN squares 1, 2, 4, 8, 16, 24, 32, 40, 48 at batch 64, 128, 2048, 32768, both layouts) | `tiled` 5244, `reg:m=128:n=128:k=8:u=1` 2172, `small` 1392, `reg:m=128:n=32:k=32:u=1` 1068, `direct` 792, `reg:m=32:n=32:k=8:u=1` 312, `reg:m=32:n=128:k=16:u=1` 120, `reg:m=128:n=32:k=16:u=1` 120, `reg:m=64:n=64:k=16:u=1` 6 |
+| double | 12672 | `tiled` 6956, `vendor` 5440, `direct` 256, `wide:m=64:n=64:k=16` 20 | `tiled` 12078, `direct` 564, `wide:m=64:n=64:k=16` 30 |
+| cfloat, cdouble (identical) | 7464 each | `vendor` 7464 | `tiled` 3972, `wide:m=32:n=128:k=16` 1146, `wide:m=128:n=32:k=16` 1146, `wide:m=64:n=64:k=16` 1014, `direct` 186 |
 
-`kGemmOrder` (`include/batchlas/blas/dispatch/route_gemm.hh:12-15`) had exactly two arms:
+What each count encodes, checked row by row against the old predicate (0 exceptions in every line below):
 
-| Origin | Algorithm | notes |
+| rows | first entry | the measured window it transcribes |
 |---|---|---|
-| `Native` | `RegisterTiled` | the SYCL kernel family in `src/sycl/gemm/`; `Algorithm::Auto` is also accepted by `supports()` |
-| `Vendor` | `Auto` | cuBLAS / rocBLAS / MKL; `supports()` is unconditionally true |
+| double, batch ≥ 64 and k ≥ 2 (7232 rows) | native: `tiled` 6956, `direct` 256, `wide` 20 | [Double, the only fully native window](#double-the-only-fully-native-window), any shape and form |
+| double, batch 1 or 63, or k = 1 (5440 rows) | `vendor` | the `batch >= 64` floor and [the `k >= 2` boundary](#double-the-only-fully-native-window) |
+| double NN, max(m,n,k) ≤ 24; transposed, ≤ 32 | native `direct` | the Direct/Tiled16 boundary at 24 (NN) and the transposed exit at 32 |
+| double NN packed squares 256–1024 (20 rows) | `wide:m=64:n=64:k=16` | the old `min_dim >= 256` aligned arm of [the wide scalar kernel](#the-wide-scalar-kernel); never on `strided` |
+| float NN squares ≤ 48, batch ≥ 64 (72 rows) | `small` | [the small tiled kernel](#the-small-tiled-kernel) window (was `max_dim <= 32`, widened to 48) |
+| every other float row | `vendor` | [Float NN at max_dim 32](#float-nn-at-max_dim-32): the removed NN 128..512 and transposed windows, and 49–56 (`56³` β=1 is 1.08×) |
+| float NN with max(m,n,k) ≥ 128, k ≥ 8, min(m,n) ≥ 64 and (min(m,n) ≥ 128 or k < 128) (2172 rows) | native `reg:m=128:n=128:k=8:u=1`, both layouts | the shape-only gate of [the strided-ld routing fix](#the-strided-ld-defect-and-the-routing-fix) |
+| float transposed with m ≥ 128, n ≥ 32, k ≥ 128 (1068 rows) | native `reg:m=128:n=32:k=32:u=1`; other transposed `tiled`, or `small` at max ≤ 32 | the transposed register exit (measured 0.34–0.55× of cuBLAS, so vendor first) |
+| complex NN with min(m,n,k) ≥ 32 (1014 rows per type) | native `wide:m=64:n=64:k=16` | [the CTA count gate for complex](#the-cta-count-gate-for-complex); every grid row has ≥ 128 CTAs |
+| complex NC with m ≥ 128, n ≥ 32, k ≥ 8; CN with m ≥ 32, n ≥ 128, k ≥ 8 (1146 rows each) | native `wide:m=128:n=32:k=16`; `wide:m=32:n=128:k=16` | [wide-scalar transposed tiles](#wide-scalar-transposed-tiles), against `Tiled16` only |
+| every complex row | `vendor` | [Complex is refused](#complex-is-refused) |
 
-`supports()` (`route_gemm.hh:19-32`) is **correctness only**: `precision == Default`, `m,n,k > 0`. Since WP2 C2 a heterogeneous batch is
-*supported* natively — the facade walks the batch (`src/backends/gemm_heterogeneous.hh`), each member homogeneous by construction — and is
-refused by `preferred()` instead. Conflating correctness with speed is the trap the split at `route_gemm.hh:3-5` prevents: a window inside
-`supports()` leaves a 1024³ float GEMM at batch 256 with no route at all vendor-free.
+**The rows are exact on the grid and approximate off it.** The phase-5 review found the first native entry differs from the old selector
+on ~6.7% of random off-grid double shapes and ~31.7% of float ones, because the double Direct/Tiled16 and the float register-tile edges are
+bracketed only on squares, and a `wide`/`reg` row transcribed at an aligned packed point also serves a packed non-multiple shape, which
+runs the predicated leg the old selector never chose (`tuned/README.md`; double 304³ b64 now `wide:m=64:n=64:k=16`, was Tiled16). None
+of it is timed. The CTA gate is also only partly representable: the complex grid has no batch below 128, so a batch-8 complex NN call
+takes the batch-128 row and its native walk ranks `wide` first where the CTA ladder measured a loss against `Tiled16` (cfloat 33×61×33 b8
+0.56×, cdouble 129×96×129 b8 0.79×, cdouble 33×61×33 b64 0.93×; nearest rows 32³ or 32×64×32 b128 and 128³ b128, computed with the
+log-distance rule over the shipped tables, not traced). In a cuBLAS build the vendor leads those rows, so this costs only the native walk and vendor-free builds.
 
-The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:88-91`). GEMM used to be the one op defaulting to a *forced*
-Vendor; WP2 E6 removed that asymmetry.
-
-### GEMM: the preferred window as implemented
-
-Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:34-67`, in order of evaluation:
-
-```
-r.origin == Native, supports(r,s), s.is_gpu, !s.heterogeneous_batch      :35-40
-complex<float>, complex<double>              -> false                    :43-44
-s.batch < 64                                 -> false                    :48
-float :  s.m == s.n && s.n == s.k                                        :51
-         transA == NoTrans && transB == NoTrans                          :54
-         max_dim <= 48                       -> true, else false         (was 32; see the small tiled kernel)
-double:  s.k >= 2                            -> the whole predicate      :62
-anything else                                -> false                    :64
-```
-
-Read plainly: **native is preferred only for `double` (any shape, any transpose form, `k >= 2`, `batch >= 64`, GPU, homogeneous) and for `float`
-NN squares with `max_dim <= 48`** (32 until 2026-09-27, see [The small tiled kernel](#the-small-tiled-kernel)). Complex is `false` at every shape. `preferred()` returning false never makes a route ineligible — vendor-free,
-`resolve_route` still falls back to any *supported* native route (`route_resolve.hh:18-62`), so every narrowing below costs a vendor-free build
-nothing.
-
-Two sources disagree with the shipped predicate, and the code wins: `experiments/wp2_e6/README.md` and `route_env.hh:88` describe the flip's
-double half as "square, n=4..512", and `scripts/gemm_demand.py:50-68` transcribes `m == n == k && max_dim <= 512` with no `k >= 2`. Both are the
-pre-E5 predicate; E5 landed after E6 and removed squareness and the bound. (Historical: `gemm_demand.py` no longer carries a
-`preferred()` copy since P3.4; it reports issued demand by the choice actually taken.)
-
-### The kernel selector is the second gate
-
-`preferred()` picked an *Origin*; `select_kernel_variant` (`src/sycl/gemm_kernels.cc:450-557`) picked the kernel, and it was the gate that
-decided throughput. Its whole register ladder for float sat inside `if constexpr (is_same_v<T,float>)`. Reachable exits (each one is now a
-`reg`/`wide`/`small`/`tiled`/`direct` entry in the transcribed sm_89 rows):
-
-| condition | variant | line |
-|---|---|---|
-| transposed, float, `m>=128 && n>=32 && k>=128` | `Tiled128x32RegisterK32{TN,NT,TT}` | :471-482 |
-| transposed, anything else | `max_dim <= 32 ? Direct : Tiled16` | :483 |
-| float NN, `m,n,k >= 128` and 128×128 fast path | `Tiled128x128RegisterK8` | :520 |
-| float NN, `m,n,k >= 128`, squareish, aligned | `Tiled128x32RegisterK32S2U1Aligned` / `Tiled128x64RegisterK32Large{,U2}` | :523-533 |
-| float NN, `max_dim>=128 && k>=8 && mn_min>=64 && (mn_min>=128 \|\| k<128)` | `Tiled128x128RegisterK8` | :578 |
-| float NN, remaining ladder | `128x32K16`, `32x128K16`, `64x64K16`, `64x64`, `32x32`, then `max_dim<=48 ? Direct : Tiled16` | :582-597 |
-| non-float NN, `min_dim >= 256` and wide fast path | `Tiled64x64RegisterK16Wide` | :641-645 |
-| complex NN, `min_dim >= 32 && ctas >= 64` (cfloat) / `>= 128` (cdouble) | `Tiled64x64RegisterK16Wide` | :694-703 |
-| double, otherwise | `max_dim <= 24 ? Direct : Tiled16` | :725 |
-| cfloat / cdouble, otherwise | `max_dim <= 64 ? Direct : Tiled16` | :728 |
-
-Consequence, and the reason `preferred()` refuses complex: **a widened `preferred()` for complex does not route complex to a register kernel, it
-routes it to `Tiled16`** — 3.2–7.1× slower than cuBLAS. Required order: port the kernel → widen the selector → widen the predicate.
-Under flat selection the three steps collapse into one: a timed table row ranks `wide` against `vendor` directly.
+**Before flat selection** (deleted in P3.4; @ref design_flat_selection §12 "Phase 3.4"), gemm chose in two stages.
+`RouteTable<Op::gemm>` in `include/batchlas/blas/dispatch/route_gemm.hh` had two arms, `Native/RegisterTiled` and `Vendor/Auto`;
+`supports()` was correctness only and `preferred()` held the measured window (native for double at `batch >= 64 && k >= 2`, for float NN
+squares to 48 at `batch >= 64`, never for complex, GPU and homogeneous batch only). Then `select_kernel_variant` in
+`src/sycl/gemm_kernels.cc` picked the native kernel from 43 `KernelVariant`s, and it, not `preferred()`, decided throughput: widening
+`preferred()` for complex would have routed complex to `Tiled16`, not to a register kernel. A third reader, `gemm_use_sycl_custom` in the
+cuBLAS TU, re-routed internal callers. The transcriber evaluated exactly that composition, so the windows are now rows; the two stages and
+the ordering problem between them ("port the kernel, widen the selector, widen the predicate") collapse into one ranked row. Line citations
+to the deleted files on this page are to the parent tree (`git show 424a45bc:<path>`). Two older sources described a different double
+window (`experiments/wp2_e6/README.md`, "square, n=4..512"): that is the pre-E5 predicate; E5 removed squareness and the bound, and the
+rows transcribe the post-E5 one.
 
 ## GEMM: evidence for each boundary
 
-These are the measurements behind the old windows, and so behind the transcribed sm_89 rows. A timed table replaces a row only when
-`tools/tune` sweeps that device.
+These are the measurements behind the transcribed sm_89 rows: each subsection names the rows it decides. A timed table replaces a row
+only when `tools/tune` sweeps that device, and the sweep must re-bracket the edges below rather than inherit them.
 
 ### Double, the only fully native window
+
+**Decides:** every `tuned/gemm.double.sm_89.txt` row with batch ≥ 64 and k ≥ 2 ranks a native entry first (7232 rows: `tiled` 6956,
+`direct` 256, `wide:m=64:n=64:k=16` 20), every row at batch 1 or 63 or at k = 1 ranks `vendor` first (5440). There is no squareness,
+form or size term: all four real forms (a double `ConjTrans` folds to `T`) and every size on the grid lead native.
 
 `double`, square NN, batch 512 (batch 4096 for n ≤ 32), spreads 0.0–0.3%, GFLOP/s:
 
@@ -208,7 +218,10 @@ The contrast with float is a **ceiling argument, not luck**: cuBLAS DGEMM sits a
 88–98%, at every size from 4 to 2048. That is also why the window has no upper size bound — a gap from a size-independent mechanism needs no size
 cutoff, and a cliff at 2048 would itself be the unjustified number.
 
-**The `max_dim <= 24` Direct/Tiled16 boundary** (`gemm_kernels.cc:553`), double, GFLOP/s:
+**The `max_dim <= 24` Direct/Tiled16 boundary** (the old selector's double exit, `gemm_kernels.cc:627` in the parent tree). In the rows it
+is the `direct`/`tiled` split: double NN rows with max(m,n,k) ≤ 24 rank `direct` first, the n = 32 squares `tiled`; transposed rows keep the
+old transposed exit at 32 (`direct` through max 32). The grid has 24 and 32 but no 25–31, so an off-grid shape between them takes whichever
+row is nearer in log distance. Double, GFLOP/s:
 
 | n | batch | Direct | Tiled16 | winner |
 |---|---|---|---|---|
@@ -251,31 +264,38 @@ n=640 0.90–0.94×, n=768 0.91–0.94×, n=1024 0.97×.
 n=64..768 it is 48 of 48 losses, 0.23–0.55×, worst at n=96 (0.23×). This is not a fallback effect: TN runs its dedicated `register_128x32_k32_tn`
 kernel, traced and confirmed. The transposed register family plateaus near 15–18 TFLOP/s while cuBLAS SGEMM reaches 45+.
 
+**Decides:** `tuned/gemm.float.sm_89.txt` ranks `vendor` first in 11154 of 11226 rows; the 72 others are the NN squares up to 48 at
+batch ≥ 64, which rank `small`. Below the vendor the rows keep the old kernel order: the transposed rows above (m ≥ 128, n ≥ 32,
+k ≥ 128) list `reg:m=128:n=32:k=32:u=1` as their first native entry, the NN rows 128..512 `reg:m=128:n=128:k=8:u=1`.
+
 ### Complex is refused
 
-`preferred()` returns false for complex at every shape. The reason was the selector: the only complex register arm was
-`Tiled64x64RegisterK16Wide`, reachable at `min_dim >= 256` + aligned NN or through the CTA gate below; everything else fell to `Tiled16`,
-measured 3.2–7.1× slower than cuBLAS (cdouble 0.386–0.392 vs 1.238–1.246 TFLOP/s; cfloat 6.6–6.9 vs 45–49 TFLOP/s). The route equivalence test
-asserts complex never moves under the flip.
+**Decides:** all 7464 rows of `tuned/gemm.cfloat.sm_89.txt` and of `tuned/gemm.cdouble.sm_89.txt` rank `vendor` first, at every shape,
+form, layout and batch.
 
-P6 added two more complex register arms (the transposed panel tiles) and **the refusal still stands** — this time on its own measurement, not
-for want of a kernel: see [Wide-scalar transposed tiles](#wide-scalar-transposed-tiles). Since P3.4 the refusal is data: every complex
-sm_89 row lists `vendor` first.
+The reason, when the window was set, was the kernel that the native side would have run: the only complex register kernel was
+`Tiled64x64RegisterK16Wide` (now `wide:m=64:n=64:k=16`), reached at `min_dim >= 256` on aligned NN or through the CTA gate below, and
+everything else ran `Tiled16` (now `tiled`), measured 3.2–7.1× slower than cuBLAS (cdouble 0.386–0.392 vs 1.238–1.246 TFLOP/s; cfloat
+6.6–6.9 vs 45–49 TFLOP/s). The route equivalence test of the time asserted complex never moved under the flip.
+
+P6 added two more complex register tiles (the transposed panel tiles, now `wide:m=128:n=32:k=16` and `wide:m=32:n=128:k=16`) and **the
+refusal still stands**, this time on its own measurement, not for want of a kernel: see
+[Wide-scalar transposed tiles](#wide-scalar-transposed-tiles). Under flat selection the question is a single row comparison, `wide` against
+`vendor`, and a timed complex table is what would reopen it.
 
 ### The Auto flip
 
-WP2 E6 changed `legacy_unset_default(Op::gemm)` from a forced `{Vendor, Auto}` to `{Auto, Auto}`. Route diff, checked field by field: **262
-decisions moved, 0 regressions** — added decisions that are not native: 0; native decisions lost: 0; complex decisions moved: 0; double moved
-27–28 per transpose form across all 9 forms; float moved 11, **NN only**. That float moved in NN only is direct confirmation the float narrowing
-was load-bearing: without it, float would have moved in all nine forms at 0.34–0.55×. E5's own diff was a further 81 decisions, all double, all
-vendor→native, zero regressions, zero complex.
+WP2 E6 changed gemm's unset default from a forced `{Vendor, Auto}` to `{Auto, Auto}`, so an unpinned call took the measured window instead
+of the vendor. Route diff, checked field by field: **262 decisions moved, 0 regressions** — added decisions that are not native: 0; native
+decisions lost: 0; complex decisions moved: 0; double moved 27–28 per transpose form across all 9 forms; float moved 11, **NN only**. That
+float moved in NN only is direct confirmation the float narrowing was load-bearing: without it, float would have moved in all nine forms at
+0.34–0.55×. E5's own diff was a further 81 decisions, all double, all vendor→native, zero regressions, zero complex.
 
-The flip changes nothing in a vendor-free build (the Vendor default was never reached there; failing set verified byte-identical) and nothing for
-explicit requests — a vendor pin (then `BATCHLAS_GEMM_VARIANT=vendor`, now `BATCHLAS_GEMM_ROUTE=vendor`) is the escape hatch if a future cuBLAS turns a cell around. That is
-not hypothetical; see the aged-out parity claim below.
-
-Vocabulary trap, historical: the old `BATCHLAS_GEMM_VARIANT=native` meant the raw vendor call, not BatchLAS's own kernel. The variable is
-no longer read (flat selection phase 5); `BATCHLAS_GEMM_ROUTE=vendor` is the escape hatch.
+Under flat selection there is no separate unset default: unset and `BATCHLAS_GEMM_ROUTE=auto` both read the table, and the transcribed rows
+are the post-flip decision. The flip changed nothing in a vendor-free build (the vendor default was never reached there; failing set
+verified byte-identical). `BATCHLAS_GEMM_ROUTE=vendor` is the escape hatch if a future cuBLAS turns a cell around, and that is not
+hypothetical; see the aged-out parity claim below. (Vocabulary trap of the time: the old `BATCHLAS_GEMM_VARIANT=native` meant the raw
+vendor call. That variable is read by nothing now, and `native` means BatchLAS's own kernels.)
 
 ### The 128x128 float kernel
 
@@ -330,9 +350,13 @@ compute-bound cells move ±5% run to run and arm *order* matters — the arm tha
 experiment. The harness now rotates the order every rep. At 512³ b4096 the per-process benchmark gave 0.997 while the in-process harness
 with 0.5 s samples gave 1.089 on the same build and a 77 °C GPU: the cross-process ratio drifts with temperature, the interleaved one less.
 
-**Routing is unchanged above 48, deliberately.** The aligned leg clears the 1.11× gate at 512–2048 on both betas, but 384 β=1 (0.99–1.02),
-768 β=1 (1.07 in one run) and the predicated leg at 512 ld+1 (0.89–0.94) do not, and a `preferred()` window cannot see alignment without
-becoming the leg-predicate routing gate. The sub-views factorisations pass are exactly the predicated case.
+**The float rows above 48 keep `vendor` first, deliberately.** The aligned leg clears the 1.11× gate at 512–2048 on both betas, but 384 β=1
+(0.99–1.02), 768 β=1 (1.07 in one run) and the predicated leg at 512 ld+1 (0.89–0.94) do not, and the old `preferred()` window could not see
+alignment without becoming the leg-predicate routing gate. The sub-views factorisations pass are exactly the predicated case. A timed
+table can do what the window could not: `layout` is a table key (`packed` = A, B, C contiguous with 16-byte bases), so a sweep may rank
+`reg:m=128:n=128:k=8:u=1` first on `packed` rows and keep `vendor` on `strided` ones without any leg term in `can_run`. Note the key is
+coarser than the leg: `packed` does not test divisibility by the tile, so a packed ragged shape runs the predicated leg (320³ and 544³
+above, 0.93–1.01×).
 
 `src/sycl/gemm/register_128x128.hh` — 128×128×8 macro tile, 8×8 accumulators (64 per thread), 256 threads. Ported from
 `experiments/sycl_vs_cuda/`, which settled the premise directly: the same SGEMM body compiled by nvcc and by DPC++ produces **the same SASS inner
@@ -353,9 +377,9 @@ In-tree, event-timed, β=1, GFLOP/s:
 | 512×64×512 b512 | 20298 | 16208 | 17822 | 87.8% |
 | 1024³ b64 | 45870 | 24038 | 44062 | 96.1% |
 
-**The predicated leg was unlocked by E4.** The selector used to hand squareish float that failed the 128×128 fast path to the generic 128×32×32
-route, behind a comment saying the predicated path had never been benchmarked against it. Measured (square NN, batch 512, 96 for n ≥ 544, both
-betas, GFLOP/s):
+**The predicated leg was unlocked by E4.** The old selector handed squareish float that failed the 128×128 fast path to the generic
+128×32×32 kernel, behind a comment saying the predicated path had never been benchmarked against it. Measured (square NN, batch 512, 96 for
+n ≥ 544, both betas, GFLOP/s):
 
 | n | 160 | 192 | 224 | 320 | 544 | 672 | 800 | 1056 |
 |---|---|---|---|---|---|---|---|---|
@@ -364,8 +388,8 @@ betas, GFLOP/s):
 | gain | 1.67× | 1.84× | 1.93× | 2.07× | 2.03× | 2.11× | 2.14× | 2.21× |
 
 The gain **grows with n**, which is what a per-tile predication cost looks like against a route whose throughput has plateaued. It moves the
-bucket from 0.36–0.51× to 0.72–0.84× of cuBLAS — still a loss, which is why `preferred()` does not claim it, but it halves the damage
-vendor-free. The unaligned-`ld` cases gain most: n=256 ld+2 7 237 → 23 966 (**3.31×**), n=512 ld+2 8 399 → 36 862 (**4.39×**) — the shape class
+bucket from 0.36–0.51× to 0.72–0.84× of cuBLAS — still a loss, which is why the float rows keep `vendor` first there, but it halves the
+damage vendor-free, where `reg:m=128:n=128:k=8:u=1` is the first native entry of those rows. The unaligned-`ld` cases gain most: n=256 ld+2 7 237 → 23 966 (**3.31×**), n=512 ld+2 8 399 → 36 862 (**4.39×**) — the shape class
 BatchLAS's own factorisations hand to `gemm`, since a panel is a sub-view carrying its parent's `ld`. Only the *generic* leg changed; the aligned
 leg is a different tuned route and was never in the measurement.
 
@@ -384,7 +408,7 @@ Against cuBLAS and against a faithful standalone replica of the in-tree `Tiled16
 | `complex<float>` | 7.0–7.7× | 0.98–1.08× CGEMM |
 | `complex<double>` | 3.56–3.60× | 1.12× ZGEMM |
 | `double` | 1.01–1.08× | 1.07–1.15× DGEMM |
-| `float` | — | **0.85–0.93× SGEMM**, so float never routes here |
+| `float` | — | **0.85–0.93× SGEMM**, so no float row ranks `wide` |
 
 Registers / spill, sm_89: 55/56 (float), 72/76 (double), 72/80 (cfloat), 132/134 (cdouble), **zero spill in all 16 entries**; after the
 device-scalar types were lifted to `src/sycl/device_scalar.hh`, `scripts/register_probe.sh` still reports 56 / 76 / 80 / 132. Caveat from the
@@ -401,7 +425,12 @@ the fragment loads across the barrier; a native LLVM vector type for the whole-g
 element accesses; `std::complex` never reaching device code (POD `Cx<R>`, multiply as four `fma`s — kills `__mulsc3`/`__muldc3` and the Annex-G
 isnan branch); shared strides exactly `TileM`/`TileN`, m fastest-varying in the epilogue.
 
-**How often the `min_dim >= 256` arm fires, measured rather than assumed:** 46 of 7223 real non-float gemm calls, **0.64%** — after removing the
+In the tables this kernel is `wide:m=64:n=64:k=16`. It is ranked first only in the 20 double NN `packed` square rows 256–1024 (batch
+≥ 64), the old `min_dim >= 256` aligned arm; it is the first native entry of the complex NN rows with min(m,n,k) ≥ 32 (the CTA gate below)
+behind `vendor`. An off-grid packed shape that is not a multiple of 64 near those double rows runs its predicated leg, which is untimed
+(open debts).
+
+**How often the old `min_dim >= 256` arm fired, measured rather than assumed:** 46 of 7223 real non-float gemm calls, **0.64%** — after removing the
 2312 synthetic probe rows that `route_gemm_equivalence_tests.cc` (deleted in P3.4) fed straight to the resolver. With probes left in it looks like 3.56%, and
 every probe hit is a large square aligned shape, i.e. exactly the cells a new tile wants credit for. Restricted to `max(m,n) >= 128`, 91.6% are
 blocked by `k < 256` and 69% by a transpose. Structural, not test sizing: the dominant internal GEMM is a panel update (large m, large n, small
@@ -410,8 +439,12 @@ relaxation rescues it: zero calls are blocked by the k floor alone.**
 
 ### The CTA count gate for complex
 
-`gemm_kernels.cc:539-548` admits complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`, with `kMinCtas` 64 for `complex<float>`
-and 128 for `complex<double>`, where `ctas = ceil(m/64)*ceil(n/64)*batch`.
+The old selector (`gemm_kernels.cc:615-621` in the parent tree) admitted complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`,
+with `kMinCtas` 64 for `complex<float>` and 128 for `complex<double>`, where `ctas = ceil(m/64)*ceil(n/64)*batch`. In the transcribed
+complex tables it is the first native entry: `wide:m=64:n=64:k=16` in exactly the 1014 NN rows per type with min(m,n,k) ≥ 32, `tiled` or
+`direct` in the other 462. Every row sits behind `vendor`, and because the complex grid's smallest batch is 128 every row clears both CTA
+floors, so the batch half of the gate is not encoded (see
+[what the rows rank first](#gemm-what-the-transcribed-sm_89-rows-rank-first)).
 
 Forced-wide vs the route it replaces, at saturation, both betas, geomean over 116 refused cells: **cfloat 3.98×, cdouble 2.90×**, null controls
 1.000. That number is *not* the gate: it is measured in a regime the newly-captured call sites never enter — every demand shape the relaxation
@@ -434,22 +467,25 @@ batch, and cdouble needs twice the CTAs because its 32 KB of shared memory caps 
 Re-indexed by CTA count instead of batch, the eight crossovers collapse onto two: cfloat `ctas >= 64` admits 26 clean cells, **worst 1.08×, zero
 losses**; cdouble `ctas >= 128` admits 24 cells, **worst 1.08×, zero losses**. Every bound has a measured counterexample on the other side:
 
-* cfloat just below 64 CTAs: 129×96×129 b8 = 48 CTAs, **0.79× loss**.
+* cfloat just below 64 CTAs: 129×96×129 b8 = 48 CTAs, **0.79× loss**. (As recorded in the source. The ladder above reads that cell 1.02
+  for cfloat and 0.79 for cdouble, so the bullet's type is in doubt; cfloat 33×61×33 b32 = 32 CTAs, 0.75×, is an unambiguous cfloat loss
+  below 64.)
 * cdouble just below 128: 33×61×33 b64 = 64 CTAs, **0.93× loss**.
 * 64 CTAs is genuinely ambiguous for cdouble — it holds that 0.93× loss *and* a 1.31× win (96×64×96 b32). 128 is chosen to admit no loss and
   knowingly gives up a real 1.37× (129×96×129 b16). Conservative on purpose.
 * `min_dim >= 32` is needed independently: the CTA gate alone would admit tiny shapes at huge batch, and 16×16×16 loses 0.71× (cfloat) / 0.28×
   (cdouble), while 32³ wins 2.28× / 1.05×.
 
-The `min_dim >= 256` arm is kept ahead of this one so nothing routing to the kernel today stops doing so; 256³b4 and 512³b1 were verified
-unchanged by trace.
+The old `min_dim >= 256` arm was kept ahead of this one so nothing that already routed to the kernel stopped doing so; 256³b4 and 512³b1
+were verified unchanged by trace at the time.
 
 ### Wide-scalar transposed tiles
 
-`src/sycl/gemm/register_wide_transposed.hh` — the P6 family, now **measured**. Four variants, 4 types, 16 kernels. Two of them were
-**selected** for complex transposed shapes in `select_kernel_variant`; `preferred()` was **unchanged**, so in a build with cuBLAS present
-complex still routed to the vendor. (P3.4: they are the `wide` configs 64·64·16, 128·32·16 and 32·128·16, ordinary candidates; the
-transcribed sm_89 rows keep exactly this split.) That split is the result, not a staging step: see "the window that was refused" below.
+`src/sycl/gemm/register_wide_transposed.hh` — the P6 family, now **measured**. Four variants, 4 types, 16 kernels; they are the
+`wide:m=64:n=64:k=16` CN/NC instantiations, `wide:m=128:n=32:k=16` (NC) and `wide:m=32:n=128:k=16` (CN). In the complex sm_89 rows the two
+panel tiles are the **first native entry** of the transposed rows they fit and **`vendor` is ranked first** everywhere, so a cuBLAS build
+runs the vendor and the native walk or a vendor-free build runs the tiles. That split is the result, not a staging step: the tiles beat
+`Tiled16` and do not beat cuBLAS on the shapes the drivers issue (see "the window that was refused" below).
 
 Raw csvs: `benchmarks/results/p6_gemm_{nc_potrf_shapes_complex,nc_potrf_shapes_real,cn_geqrf_shapes_complex,bracket_cells,ragged_tile_sweep}.csv`
 plus `benchmarks/results/p6_e2e_before.csv` (the shipping state) and
@@ -468,11 +504,11 @@ coalesced in all four forms. Conjugation is applied once per element at the stag
 
 | driver | call | logical shape | form | (nb, W) by scalar |
 |---|---|---|---|---|
-| `potrf_blocked.cc:370` | `A22 -= L21 L21^H` | m_trailing × W × nb | `NoTrans/ConjTrans` | float (128,128), double & cfloat (96,32), cdouble (64,16) |
-| `potrf_blocked.cc:357` | the W×W diagonal fold | W × W × nb | `NoTrans/ConjTrans` | same |
-| `geqrf_blocked.cc:277` | `W1 = V^H A22` | nb × n2 × m_panel | `ConjTrans/NoTrans` | nb = 32, or 16 for double |
-| `geqrf_blocked.cc:282` | `W2 = T^H W1` | nb × n2 × nb | `ConjTrans/NoTrans` | same |
-| `geqrf_blocked.cc:286` | `A22 -= V W2` | m × n2 × nb | `NoTrans/NoTrans` | already served by the NN wide kernel |
+| `potrf_blocked.cc:357` | `A22 -= L21 L21^H` | m_trailing × W × nb | `NoTrans/ConjTrans` | float (128,128), double & cfloat (96,32), cdouble (64,16) |
+| `potrf_blocked.cc:343` | the W×W diagonal fold | W × W × nb | `NoTrans/ConjTrans` | same |
+| `geqrf_blocked.cc:288` | `W1 = V^H A22` | nb × n2 × m_panel | `ConjTrans/NoTrans` | nb = 32, or 16 for double |
+| `geqrf_blocked.cc:292` | `W2 = T^H W1` | nb × n2 × nb | `ConjTrans/NoTrans` | same |
+| `geqrf_blocked.cc:296` | `A22 -= V W2` | m × n2 × nb | `NoTrans/NoTrans` | already served by the NN wide kernel |
 
 Every complex transposed shape in the tree has a dimension of 16 or 32. The tiles match a panel width instead:
 `64x64x16wide_cn` and `64x64x16wide_nc` (general), `128x32x16wide_nc` (potrf trailing + fold at W = 32), `32x128x16wide_cn`
@@ -514,8 +550,8 @@ Ratios are **in time**, `arm_ms / native_ms`; > 1 means the tile wins. Batch 102
 
 **Read the two rows against each other and the whole result is there.** Against `Tiled16` the tile wins broadly, for both complex types.
 Against cuBLAS only complex<double> ever clears R8's 1.11× bar, complex<float> tops out at 1.069×, and `double` **loses to `Tiled16`**
-(0.92–1.00×) — which is already 1.03–1.11× of cuBLAS on these shapes, so for `double` there is nothing to win and the selector leaves it
-alone. That double row is the clearest single negative result in the grid.
+(0.92–1.00×) — which is already 1.03–1.11× of cuBLAS on these shapes, so for `double` there is nothing to win, and no double row ranks
+these tiles (the double transposed rows lead with `tiled` or `direct`). That double row is the clearest single negative result in the grid.
 
 #### Saturation, and where it is not reached (R8a)
 
@@ -572,29 +608,34 @@ which leave a mostly-empty trailing column tile. Re-measured at those:
 
 The "1.13× window" is visible **only at exact tile multiples**. cuBLAS's ratio is flat in raggedness because it tiles the output
 differently; this kernel pays the full cost of a quarter-full trailing tile. `t_native <= 0.90 t_vendor` is therefore not met on the
-population the drivers actually generate, and the route is left alone. cfloat is the same story one notch lower (0.824–0.958 ragged).
+population the drivers actually generate, and `vendor` stays first. cfloat is the same story one notch lower (0.824–0.958 ragged).
 
 **Against `Tiled16` raggedness costs almost nothing** (1.68–3.52× cdouble, 1.68–2.42× cfloat across the same ragged sweep), which is why the
-**selector** row ships and the **route** row does not. `Tiled16` is one accumulator per thread; a partly-empty 128-wide tile still does far
-more work per load than that.
+tiles are the rows' first **native** entry and not their first entry. `Tiled16` is one accumulator per thread; a partly-empty 128-wide tile
+still does far more work per load than that.
 
 The general lesson, and it generalises past this kernel: **a macro-tiled kernel must be swept at sizes that are NOT multiples of its own
 tile**, or the sweep measures the kernel's best case and calls it the average. Bracketing on size alone does not catch it — every cell in the
 first grid was bracketed, and every bracket was itself tile-aligned.
 
-#### What ships
+#### Wide transposed tiles: what the complex rows rank
 
-What shipped until P3.4: `select_kernel_variant` (`src/sycl/gemm_kernels.cc`), complex only, via `wide_transposed_tile_for` in
-`gemm_kernels.hh`: `NoTrans/ConjTrans` with `m >= 128 && n >= 32` → `128x32x16wide_nc`; `ConjTrans/NoTrans` with `m >= 32 && n >= 128` →
-`32x128x16wide_cn`; both need `k >= 8` and `ctas >= 64` for the tile in question. Everything else is `Tiled16`, unchanged.
+In `tuned/gemm.cfloat.sm_89.txt` and `tuned/gemm.cdouble.sm_89.txt`, read row by row (0 exceptions):
 
-This was reachable in a **vendor-free or ROCm build**, and under a forced `BATCHLAS_GEMM_VARIANT=sycl` — `preferred()` refused complex, so
-a complex shape in a cuBLAS build never reached it. That is the honest scope: the deliverable is the vendor-independence build, worth
-**1.68–3.52×** there, and nothing at all in the vendor build.
+| rows (per type) | first entry | first native entry |
+|---|---|---|
+| NC (`NoTrans/ConjTrans`) with m ≥ 128, n ≥ 32, k ≥ 8: 1146 | `vendor` | `wide:m=128:n=32:k=16` |
+| CN (`ConjTrans/NoTrans`) with m ≥ 32, n ≥ 128, k ≥ 8: 1146 | `vendor` | `wide:m=32:n=128:k=16` |
+| the other NC and CN rows: 330 each | `vendor` | `tiled` (300) or `direct` (30) |
+| NT, TN, CT (a complex `Trans`): 3036 | `vendor` | `tiled` or `direct`; `can_run`'s `wide_form` refuses a complex `Trans` on every `wide` config |
 
-Since P3.4 the selector row and `wide_transposed_tile_for` are gone. The tiles are `wide:m=128:n=32:k=16` and `wide:m=32:n=128:k=16`; the
-transcribed sm_89 complex rows list `vendor` first and then this row's old choice, so the native walk (`BATCHLAS_GEMM_ROUTE=native`) and a
-vendor-free build still take these tiles where the row above did (exactly on grid cells; off the grid the nearest row decides).
+The old selector's `ctas >= 64` term holds on every complex row, since the grid's smallest batch is 128. So the scope is unchanged from
+P6: the tiles run in a **vendor-free or ROCm build** and under `BATCHLAS_GEMM_ROUTE=native` (or a spelling pin), and a cuBLAS build runs
+the vendor. The deliverable is the vendor-independence build, worth **1.68–3.52×** there, and nothing at all in the vendor build. The rows
+match the old choice exactly on grid cells; off the grid the nearest row decides.
+
+Before P3.4 this was a `select_kernel_variant` row behind `wide_transposed_tile_for` in `gemm_kernels.hh` (parent tree), with a
+`preferred()` that refused complex; both are deleted.
 
 #### Register residency
 
@@ -672,11 +713,12 @@ Not established:
 * **The 16-wide tiles are still not built**, so potrf complex<double> (W = 16) and geqrf double (nb = 16) reach no register kernel. The
   n = 16 cell measured **1.789× of Tiled16** — a win the vendor-free build is leaving on the table — but on one cell, and potrf's `(nb, W)`
   and a 16-wide tile are one coupled piece of work.
-* **No upper bound on m, n or k is measured** for the selector window; the largest cells are 1024×1024×512.
+* **No upper bound on m, n or k is measured** for the rows that rank these tiles; the largest cells are 1024×1024×512.
 * **The `k` edge is bracketed at 1 and 8 only**; `k` in 2..7 is unmeasured and refused.
-* **`float` transposed is not routed to these tiles**, although it beats `Tiled16` by 1.25–2.71× on the NC shapes. It was not A/B'd against
-  the existing `Tiled128x32RegisterK32{TN,NT,TT}` family, which owns `m >= 128 && n >= 32 && k >= 128` for float, and a selector row that
-  cannot say which of the two is better is not a row worth writing.
+* **No float row ranks these tiles**, although float beats `Tiled16` by 1.25–2.71× on the NC shapes. They were not A/B'd against
+  `reg:m=128:n=32:k=32:u=1` (the old `Tiled128x32RegisterK32{TN,NT,TT}`), the first native entry of the float transposed rows with
+  m ≥ 128, n ≥ 32, k ≥ 128, and a row that cannot say which of the two is better is not a row worth writing. Both are float candidates
+  (`wide` serves a real `Trans` through its `ConjTrans` instantiation), so a float tuner sweep times them against each other.
 * **The plan's premise that "float transposed is 0.23–0.55× across 48 of 48 cells" does not describe this demand.** On the panel shapes the
   drivers issue, float native reads **0.71–1.24×** of cuBLAS. That figure came from a square grid.
 * **The plan's acceptance bar ("≥ 0.9× cuBLAS") is on the wrong side of R8 by 1.23×.** R8 needs `t_native <= 0.90 t_vendor`, i.e. ≥ 1.11×.
@@ -688,8 +730,10 @@ Every operand `trsm` hands GEMM is a sub-view carrying its parent's leading dime
 V2 issues at order 512 (float, q=1024, batch 512), native/vendor ms at the real `ld`: the three outer shapes m=128 n=1024 k={128,256,384} measure
 1.53/0.96, 2.73/1.31 and 3.78/1.63 (**0.62×, 0.48×, 0.43×**), the three inner shapes m=32 n=1024 k={32,64,96} measure 0.406/0.235, 0.680/0.335
 and 0.887/0.426 (**0.58×, 0.49×, 0.48×**). The same native shapes at `ld == rows` take 0.98, 2.35, 3.49 and 0.248, 0.356, 0.487 ms — 0.86–0.98×
-of the vendor on the inner shapes. **cuBLAS barely moves, and no square benchmark can see this.** (Routing those trailing updates through `RouteTable<Op::gemm>` instead of calling `gemm_custom`
-directly took the n=512 solve from 18.8 ms to **11.19 ms** against a 14.28 ms vendor `trsm`, with no kernel change.)
+of the vendor on the inner shapes. **cuBLAS barely moves, and no square benchmark can see this.** (At the time, routing those trailing
+updates through the gemm router instead of calling the native `gemm_custom` directly took the n=512 solve from 18.8 ms to **11.19 ms**
+against a 14.28 ms vendor `trsm`, with no kernel change. Today trsm's seam, `src/ops/trsm/trsm.cc:77`, calls the public `gemm`, so the
+trailing update takes whatever the gemm table ranks first.)
 
 **ncu, on m=128 n=1024 k=128 b512 β=1, pad 0 vs pad 384:** every transaction counter is byte-identical — 2,097,152 load requests, 33,554,432
 sectors, **16.00 sectors/request** in both, identical DRAM sectors, identical instructions, 119 registers, zero spill. A per-SASS-instruction
@@ -706,10 +750,11 @@ coalesced load — and those 16 streams are `ldb*4` bytes apart. It is a **slope
 Footprint is ruled out: 4× the allocation at `ld == rows` costs nothing (18 001 vs 17 571 GFLOPS) while the same footprint with a stride costs
 the full 1.57×.
 
-**The fix that worked was routing, not a kernel change.** `can_use_128x128_fast_path` is a *leg* predicate — the dispatcher re-evaluates it and
-picks `<true>`/`<false>` itself — but the selector used it as a *routing* gate, so failing it did not demote a call to the predicated leg, it
-handed the call to an entirely different, much slower kernel. Routing by what the kernel can run (`gemm_kernels.cc:501`) is worth **geomean 1.74×
-/ 1.75×** (pad 0 / pad 384) over 12 shapes, moving native from 0.58× → 0.99× of cuBLAS at `ld == rows` and 0.54× → 0.93× strided:
+**The fix that worked was routing, not a kernel change.** `can_use_128x128_fast_path` was a *leg* predicate — the dispatcher re-evaluated it
+and picked `<true>`/`<false>` itself — but the old selector also used it as a *routing* gate, so failing it did not demote a call to the
+predicated leg, it handed the call to an entirely different, much slower kernel. Routing by what the kernel can run (a shape-only gate,
+`gemm_kernels.cc:575` in the parent tree) is worth **geomean 1.74× / 1.75×** (pad 0 / pad 384) over 12 shapes, moving native from 0.58× →
+0.99× of cuBLAS at `ld == rows` and 0.54× → 0.93× strided:
 
 1024×1024×64 b128 ld1408 3.187 → 1.337 ms (2.38×), 1000×1024×128 b128 ld1384 2.954 → 1.569 ms (1.88×), 1024×1024×16 b128 2.622 → 1.232 ms
 (2.13×), 128×128×8 b512 0.074 → 0.030 ms (2.43×). It also subsumes the `ld % 4 != 0` cliff (pad 1: 1.874 → 1.003 ms), because that branch does
@@ -718,14 +763,18 @@ wash-to-loss); `mn_min >= 128 when k >= 128` — the tuned routes it would displ
 64×1024×512 b256 0.64/0.62, while at `k < 128` 128×128 wins even at `mn_min = 64` (1024×64×64 1.80×, 64×1024×64 1.59–1.81×); `max_dim >= 128` —
 64×64×64 is a wash (1.02×); `k >= 8` — it is the kernel's TileK, and 1024×1024×8 wins 2.00×.
 
-**Reach, stated honestly in the code:** with cuBLAS present this changes no runtime at all, because float's `preferred()` window requires `m == n
-== k`, so every shape the gate captures resolves to the vendor (coverage: 79 native float gemm calls against 102,791 vendor). The deliverable is
-the vendor-free and ROCm builds, and making a future `preferred()` flip *arguable*. At 0.93× it is not yet arguable.
+**Reach:** with cuBLAS present this changes no runtime at all. The float sm_89 rows the gate covers all rank `vendor` first (the old float
+window was NN squares only), so every shape the gate captures runs the vendor (coverage at the time: 79 native float gemm calls against
+102,791 vendor). The deliverable is the vendor-free and ROCm builds and the native walk, and making a future float `packed` row that ranks
+the kernel first *arguable*. At 0.93× strided it is not yet arguable.
 
-**Since P3.4 the gate is not code.** The leg is derived inside `gemm_reg` (`RegCfg::aligned_leg` says which configs have an unpredicated
-leg; the launcher checks the layout per call), and `can_run` never consults an alignment predicate. The shape-only routing the fix
-introduced survives as data: the transcriber evaluated the old selector on `layout=strided` cells (ld = rows + 1, odd batch stride, which
-fails every aligned-leg predicate) as well as `packed` ones, so the sm_89 rows reproduce it on both layouts.
+**Since P3.4 the gate is not code.** The leg is derived inside `gemm_reg` (`RegCfg::aligned_leg`, `src/ops/gemm/choice.hh:52-71`, says
+which configs have an unpredicated leg; the launcher checks the layout per call), and `can_run` never consults an alignment predicate, so
+the leg-as-gate defect cannot recur. The shape-only gate survives as data: the transcriber evaluated the old selector on `layout=strided`
+cells (ld = rows + 1, odd batch stride, which fails every aligned-leg predicate) as well as `packed` ones, and
+`reg:m=128:n=128:k=8:u=1` is the first native entry of exactly the 2172 float NN rows that satisfy it (`max(m,n,k) >= 128 && k >= 8 &&
+min(m,n) >= 64 && (min(m,n) >= 128 || k < 128)`), 936 `packed` and 1236 `strided`, and of no other row. Every candidate's *correctness*
+on a parent-`ld` panel update is pinned by `GemmCandidates.ParentLdPanelUpdate`; its speed there is the timed table's job.
 
 ## Negative results
 
@@ -741,8 +790,9 @@ fails every aligned-leg predicate) as well as `packed` ones, so the sm_89 rows r
   512²×32); a 16-deep k slab (0.95× at 256³ before the L2 hint, 0.97–0.99× at 512³; dominated after it); cap 3 per CU (8.8× slower).
 * **Packing B into contiguous scratch.** Pays at the same roofline the kernel already achieves; loses harder as m grows.
 * **The WP3 mechanism for the `ld` defect.** WP3 blamed `register_tiled_common.hh` — odd tile strides `TileM+1`/`TileK+1`, `[n][k]` B staging, a
-  read-modify-write epilogue, a contiguity predicate every sub-view fails. **Those shapes never execute that file**: they route to
-  `Tiled128x128RegisterK8` with `AlignedFastPath = true` in *both* columns, and `can_use_128x128_fast_path` never tests contiguity. The effect is
+  read-modify-write epilogue, a contiguity predicate every sub-view fails. **Those shapes never executed that file**: they ran
+  `Tiled128x128RegisterK8` (now `reg:m=128:n=128:k=8:u=1`) with `AlignedFastPath = true` in *both* columns, and the leg predicate
+  `can_use_128x128_fast_path` (`register_128x128.hh`) never tests contiguity. The effect is
   beta-independent and B-only, which refutes the epilogue story directly. Confirm which kernel runs before theorising about why it is slow — the
   second time in this campaign a named mechanism belonged to code that was not executing.
 * **The wide-scalar tile for float.** 0.85–0.93× of cuBLAS SGEMM. Halving the thread tile to fit wide scalars costs float exactly what the
@@ -757,27 +807,29 @@ fails every aligned-leg predicate) as well as `packed` ones, so the sm_89 rows r
   consumer part. It *is* the discriminator for float (the 128×128 kernel's whole thesis), which is why the two kernels have different shapes.
 * **A bare `min_dim >= 32` floor for the complex relaxation** (`routing_proposal/`, kept unapplied). Exactly what the 2.90–3.98× geomean argues
   for, and it would have regressed every shape it newly captured — see the 12-of-12 losses above.
-* **Two float `preferred()` windows** — NN 128..512 and the entire transposed window; see [Float NN at max_dim 32](#float-nn-at-max_dim-32). And
-  `preferred()` for float on the non-square demand shapes: 0 of 36 cells win (0.22–0.51×), which is why E5 is a double-only widening.
+* **Two float native windows** (the old `preferred()`'s NN 128..512 and its entire transposed window); see
+  [Float NN at max_dim 32](#float-nn-at-max_dim-32). And a native window for float on the non-square demand shapes: 0 of 36 cells win
+  (0.22–0.51×), which is why E5 was a double-only widening. The float rows rank `vendor` first on all of them.
 
 ## Correctness findings
 
 * **Nine transposed launchers computed the wrong answer for `ConjTrans`** (fixed in `f236575`). They hard-wire OpA/OpB, and `ConjTrans` is a
   distinct enum value (NoTrans=0, Trans=1, ConjTrans=2), so a launcher instantiated `<Trans, NoTrans>` silently dropped the conjugation and
-  returned a plausible matrix. **How it hid:** unreachable from `select_kernel_variant` but forceable by name via `BATCHLAS_GEMM_SYCL_KERNEL` —
-  exactly how a benchmark compares variants, so it produced a valid-looking timing for an incorrect result. **Why the existing test could not
-  fail:** the pre-existing ConjTrans case is 18×14×12 and cannot reach a 64×64 macro tile at all — blind by construction. **The guard now:**
-  `ForcedTransposedLauncherRejectsMismatchedTransposeForm` (`tests/gemm_tests.cc:2534`) forces `64x64x16tn` on a 96×96×80 CN shape at α=2, β=−1,
-  referencing `Tiled16` and *not* the vendor — a vendor reference is inert in a vendor-free build, where the fallback would be the kernel under
-  test. CN is 789 of 2245 `complex<float>` calls in the demand capture. (P3.4: `64x64x16tn` is now an alias of
-  `reg:m=64:n=64:k=16:u=1`, whose form comes from the call, and that test is part of the pending `gemm_tests.cc` rewrite.)
+  returned a plausible matrix. **How it hid:** unreachable from the old selector but forceable by name via the old
+  `BATCHLAS_GEMM_SYCL_KERNEL` — exactly how a benchmark compares variants, so it produced a valid-looking timing for an incorrect result.
+  **Why the existing test could not fail:** the pre-existing ConjTrans case is 18×14×12 and cannot reach a 64×64 macro tile at all — blind
+  by construction. **The guard now:** `ForcedTransposedLauncherRejectsMismatchedTransposeForm` (`tests/gemm_tests.cc:1513`) pins
+  `reg:m=64:n=64:k=16:u=1` (the old `64x64x16tn`; a spelling's form comes from the call) on a 96×96×80 CN shape and checks it against
+  `Tiled16`, *not* the vendor — a vendor reference is inert in a vendor-free build, where the fallback would be the kernel under test — and
+  expects every NN-only config's pin on a transposed form to throw. CN is 789 of 2245 `complex<float>` calls in the demand capture.
 * **Eighteen NN-only register variants computed NN on a transposed call** (fixed in P3.4). `launch_reg` took no transpose, so a variant
-  forced by name onto a TN/NT/TT/C call returned the NN product with no error. **How it hid:** the selector only chose them for NN, and the
-  forcing path is exactly what a benchmark uses. **The guard now:** `can_run` lists the instantiated forms per config (`reg_form`,
-  `wide_form` in `src/ops/gemm/gemm.cc`), a pin on any other form throws, and each launcher throws on a form it does not instantiate.
+  forced by name onto a TN/NT/TT/C call returned the NN product with no error. **How it hid:** the old selector only chose them for NN, and
+  the forcing path is exactly what a benchmark uses. **The guard now:** `can_run` lists the instantiated forms per config (`reg_form`,
+  `wide_form`, `src/ops/gemm/gemm.cc:76-86`), a pin on any other form throws, and each launcher throws on a form it does not instantiate.
   The tuner's verification sees the same defect class: with the 128·32·16 NT launcher deliberately running NN code, `gemm_spec.cc` marked
   that arm alone `bad` (0.52) on a square cell, and exactly one gtest went red
-  (`GemmTest/4.BatchedGemmForcedSyclRegister128x32K16NTKernel`). The `can_run` guard itself awaits `gemm_candidates_tests.cc`.
+  (`GemmTest/4.BatchedGemmForcedSyclRegister128x32K16NTKernel`). The `can_run` guard itself is tested for every config by
+  `GemmCandidates.TransposedPinOnAMissingInstantiationThrows` and `CanRunEqualsLaunch` (`tests/gemm_candidates_tests.cc`).
 * **Three heterogeneous-batch semantics existed only inside cuBLAS-gated code**: `m == 0` / `n == 0` members are *skipped*, a `k == 0` member is
   not a GEMM but `C := beta*C`, and an all-skipped batch must still return a valid `Event`. Vendor-free they did not exist — all 17 remaining
   vendor-free `gemm_tests` failures were heterogeneous batch. The loop is now `src/backends/gemm_heterogeneous.hh` with the per-item terminal as
@@ -791,14 +843,15 @@ fails every aligned-leg predicate) as well as `packed` ones, so the sm_89 rows r
 * **A β=0 microbenchmark is structurally blind to an epilogue defect.** The first in-tree 128×128 version scored 26.0 TFLOP/s against the
   standalone kernel's 41: its epilogue had m as the *slow*-varying thread index, so with `beta != 0` the read of C became one scattered
   transaction per lane. Making m fastest-varying took it to 41.1. Measure both betas on both arms, always.
-* **The route equivalence test asserts its own exception list.** `tests/route_gemm_equivalence_tests.cc` pins the decision against a transcribed
-  replica of the legacy behaviour, with `ReplicaIsFaithful` so the replica cannot drift and pass vacuously. The four intended divergences (C2
-  heterogeneous widening, E4 float narrowing, E6 default flip, E5 double widening) are classified and **counted separately** — one boolean would
-  let a divergence vanish from the grid while another kept the count non-zero. E6's exception is paired with `UnsetNowMeansAuto*`, asserting
-  *positively* that unset and `"auto"` agree on every shape in the grid. **Deleted in P3.4** with `route_gemm.hh`; the transcribed sm_89
-  tables are the old decision itself, re-derived by `scripts/sweep_to_table.py --check` from `tuned/transcribed/gemm.sm_89.csv`, and a
-  34-cell live cross-check against the parent binary (kernel trace plus coverage, Auto and `ROUTE=native`) chose the same kernel in every
-  cell.
+* **An equivalence test must assert its own exception list.** The deleted `tests/route_gemm_equivalence_tests.cc` pinned the old decision
+  against a transcribed replica of the legacy behaviour, with `ReplicaIsFaithful` so the replica could not drift and pass vacuously. The four
+  intended divergences (C2 heterogeneous widening, E4 float narrowing, E6 default flip, E5 double widening) were classified and **counted
+  separately** — one boolean would let a divergence vanish from the grid while another kept the count non-zero — and E6's exception was
+  paired with `UnsetNowMeansAuto*`, asserting *positively* that unset and `"auto"` agree on every shape in the grid. It went with
+  `route_gemm.hh` in P3.4. Its role is now split: the transcribed sm_89 tables are the old decision itself, re-derived by
+  `scripts/sweep_to_table.py --check` from `tuned/transcribed/gemm.sm_89.csv`; a 34-cell live cross-check against the parent binary
+  (kernel trace plus coverage, Auto and `ROUTE=native`) chose the same kernel in every cell; and `GemmTranscribedTable.*` pins
+  representative rows and edges in ctest.
 
 ## The subgroup workspace budget
 
@@ -932,37 +985,30 @@ MKL backend that returns needs that distinction back.
 
 ### GEMM: the route adapter and its environment readers
 
-*Historical.* The adapter below, `route_gemm.hh`, `gemm_use_sycl_custom`, `gemm_variant_request()` and
-`tests/route_gemm_equivalence_tests.cc` were deleted in P3.4: gemm now chooses through `src/ops/gemm/` and its
-`tuned/gemm.*` tables like every other op (see [the flat-selection choices](#choices-flat-selection-p34)), and
-`BATCHLAS_GEMM_VARIANT` is no longer read. The section is kept because it records why the vendor-free facade could
-reuse the routing logic at all.
+*Historical: everything this section describes was deleted in P3.4 or in flat selection phase 5.* Today the public `gemm`
+(`src/ops/gemm/gemm.cc`) validates the views, builds the table key and calls `select::run`, and the only environment reader is the
+`BATCHLAS_GEMM_ROUTE` pin through the settings snapshot ([the flat-selection choices](#choices-flat-selection-p34)). What is left of
+`src/backends/gemm_variant.hh` is two pure helpers (`gemm_has_heterogeneous_batch`, `gemm_batch_dimensions_compatible`). The record is
+kept because the GEMV page cites it for the include rule below, and because three of its decisions carried over.
 
-The second half of `src/backends/gemm_variant.hh` turns the views plus the environment into the two pure inputs
-`dispatch::resolve_gemm_route()` wants, and nothing else. The decision lives in `include/batchlas/blas/dispatch/route_gemm.hh`, split three ways
-(environment read / correctness / measured window) per [the vendor-independence design](../design/vendor-independence.md), and is proven
-route-identical to the code it replaced by `tests/route_gemm_equivalence_tests.cc`. It was deliberately wired at the one definition of
-`gemm_use_sycl_custom` rather than at the call sites, because the other callers (the MKL and rocBLAS backends) could not be compiled on the
-development machine: substituting at the definition moved every call site at once and left the unbuildable ones textually untouched.
+Before P3.4 the second half of `gemm_variant.hh` turned the views plus the environment into the two pure inputs of
+`dispatch::resolve_gemm_route()`: the decision lived in `route_gemm.hh`, split three ways (environment read / correctness / measured
+window) per [the vendor-independence design](../design/vendor-independence.md), and `tests/route_gemm_equivalence_tests.cc` proved it
+route-identical to the code it replaced. It was wired at the one definition of `gemm_use_sycl_custom` rather than at the call sites,
+because the MKL and rocBLAS callers could not be compiled on the development machine. What carried over:
 
-**Includability.** WP1 S5 removed `../linalg-impl.hh` from this header: it was the only include that reached CUDA (it includes
-`<cuda_runtime.h>` under `BATCHLAS_HAS_CUDA_BACKEND`), and nothing in the header needs it — `MatrixView`, `get_effective_dims`, `Queue` and
-`DeviceType` all come from the portable public headers. Dropping it made the whole adapter (`gemm_op_shape`, `gemm_route_request`, `gemm_route`,
-`gemm_use_sycl_custom`) includable from the vendor-free facade, which is how the facade's `gemm` gained a native arm without duplicating any
-routing logic. The other route builders (`gemv_route.hh`, `spmm_route.hh`) are included by the same facade and carry the same rule: never add
-`src/queue.hh` or `<sycl/sycl.hpp>`.
-
-**`gemm_op_shape` returns `nullopt`** when the three views disagree (batch sizes, `k != k_b`, `m != C.rows()`, `n != C.cols()`). `OpShape` is a
-POD of scalars and cannot represent disagreement, and disagreement is exactly what the old `gemm_custom_problem_supported` checks tested; absence
-reaches the same outcome, since the old predicate returned false and a caller with no shape takes the vendor. `gemv_op_shape`,
-`spmm_op_shape` and `trsm_op_shape` follow the same pattern.
-
-**`BATCHLAS_GEMM_VARIANT` has two readers** with two vocabularies and two unset defaults: `dispatch::parse_route_env(Op::gemm)` reaches it
-through the legacy table and defaults to `{Auto, Auto}`, while `gemm_variant_request()` defaults to `Vendor` (and maps `native` to the raw CUDA
-path, the opposite of the canonical `native`). Both read the **same** captured string (`settings().routing.legacy_route(Op::gemm)`), so they can
-no longer be handed different values. Unifying the two defaults would change which kernel a bare `gemm()` call runs and is deliberately not
-done. *(Stale, corrected 2026-09-30: the comment on `gemm_route_request` said GEMM's unset default was `Vendor`, "unlike the four level-3 ops'
-Auto"; since WP2 E6 the canonical unset default is `{Auto, Auto}` for every op, see the route arms at the top of this page.)*
+* **Includability.** WP1 S5 removed `../linalg-impl.hh` from the adapter (it reached `<cuda_runtime.h>` under
+  `BATCHLAS_HAS_CUDA_BACKEND`), which made the adapter includable from the vendor-free facade; that is how the facade's `gemm` gained a
+  native arm without duplicating routing logic. The rule it set for route builders, never add `src/queue.hh` or `<sycl/sycl.hpp>`, is the
+  rule the GEMV page records for `gemv_route.hh`. The same split survives as `choice.hh` being SYCL-free so tests and the tuner can include
+  it.
+* **Disagreeing views.** `gemm_op_shape` returned `nullopt` when the three views disagreed (batch sizes, `k != k_b`, `m != C.rows()`,
+  `n != C.cols()`), which sent the call to the vendor. Since P3.4 the public `gemm` throws `invalid_argument` on the same disagreement
+  before choosing (`ops::gemm::validate`, `gemm.cc:44-52`), under every pin (`GemmCandidates.MismatchedViewsThrowUnderEveryPin`).
+* **Two readers, one string.** `BATCHLAS_GEMM_VARIANT` had two readers with two vocabularies and two unset defaults
+  (`dispatch::parse_route_env` defaulting to `{Auto, Auto}`, `gemm_variant_request()` defaulting to `Vendor` and mapping `native` to the
+  raw CUDA path); both read the same captured string, so they could not be handed different values. Flat selection has one reader and one
+  vocabulary, and the variable is read by nothing.
 
 ### GEMM: the register-tiled launcher table
 
@@ -1006,16 +1052,14 @@ trsm and its column scale is the potf2, and unifying them would move one of the 
 ## Open debts
 
 * **Complex is still vendor-dependent in a cuBLAS build, and that is now a measured result rather than a gap.** The transposed wide-scalar
-  kernel exists (`register_wide_transposed.hh`), is tested, and is **selected** for complex transposed shapes — but only against `Tiled16`,
-  because a `preferred()` window for complex<double> was measured and **refused**: it cleared R8 only at tile-aligned sizes and ran at
-  0.64–0.99× of cuBLAS on the ragged `n` the blocked drivers actually issue. The vendor-free and ROCm builds gain 1.68–3.52×; the vendor
-  build gains nothing. The 16-wide tiles that potrf complex<double> and geqrf double need are still not built, and the n = 16 cell measured
-  1.79× of `Tiled16` unexploited. See above.
-* ~~`scripts/gemm_demand.py`'s `preferred()` replica has drifted~~ — **paid**. `scripts/gemm_demand.py:50-77` now transcribes the shipped
-  predicate exactly (float NN square `max_dim <= 32`; double `k >= 2`, no squareness, no upper bound). Verified against
-  `route_gemm.hh` rather than re-asserted (and since widened to `max_dim <= 48` with it). P3.4 deleted `route_gemm.hh` and, with it,
-  the script's replica: `gemm_demand.py` now reports demand by the choice taken, and the predicate lives on only in the transcribed sm_89
-  rows.
+  tiles exist (`register_wide_transposed.hh`), are tested, and are the first native entry of the complex NC and CN rows they fit — but every
+  complex row ranks `vendor` first, because a native-first window for complex<double> was measured and **refused**: it cleared R8 only at
+  tile-aligned sizes and ran at 0.64–0.99× of cuBLAS on the ragged `n` the blocked drivers actually issue. The vendor-free and ROCm builds
+  gain 1.68–3.52×; the vendor build gains nothing. The 16-wide tiles that potrf complex<double> and geqrf double need are still not built
+  (`wide_configs` has no 16-wide panel tile), and the n = 16 cell measured 1.79× of `Tiled16` unexploited. See above.
+* ~~`scripts/gemm_demand.py`'s `preferred()` replica has drifted~~ — **paid**, then made moot: the replica was brought in line with the
+  shipped predicate, and P3.4 deleted both. `gemm_demand.py` now reports demand by the choice taken, and the predicate lives on only in the
+  transcribed sm_89 rows.
 * **The double window deliberately reaches past its measurements.** No upper size bound; largest measured 2048³. The FP64-ceiling argument is an
   argument, not a measurement, above 2048.
 * ~~**`scripts/route_diff.sh` records resolver `Route`s, not `KernelVariant`s**~~ — **paid by P3.4.** The kernel is the choice, and the
@@ -1023,13 +1067,18 @@ trsm and its column scale is the potf2, and unifying them would move one of the 
   the derived aligned/predicated leg is still invisible to it (use `BATCHLAS_KERNEL_TRACE=1`). One trap remains: `tools/tune --gate`'s
   parent probe reads a pre-P3.4 binary's gemm coverage as `native:register_tiled`, which now means "the best native entry"; gate gemm
   against an old-choice CSV built from the kernel trace instead.
-* ~~**`SelectSyclKernelVariantForTest` hard-codes `Matrix<float>`**~~ — the selector and both test hooks are deleted in P3.4, together
-  with the 52 selector and route-adapter cases of `gemm_tests.cc`. Their replacement is `AutoReadsEveryKeyField`-style table tests per
-  dtype in the pending `gemm_candidates_tests.cc`; until it lands the double `max_dim <= 24` boundary, the complex CTA gate and the
-  `min_dim >= 256` arm are guarded only by `scripts/sweep_to_table.py --check` against the transcriber CSV.
+* ~~**`SelectSyclKernelVariantForTest` hard-codes `Matrix<float>`**~~ — **paid by P3.4.** The selector, both test hooks and the 52 selector
+  and route-adapter cases of `gemm_tests.cc` are deleted; `tests/gemm_candidates_tests.cc` replaces them (`AutoReadsEveryKeyField`,
+  `AutoReadsTheSm89TranscribedTable`, `GemmTranscribedTable.*`). Those pin representative rows per dtype and both sides of the old vendor
+  edges (batch 63/64, double k 1/2, float 48/49), but not the double `max_dim <= 24` Direct/Tiled16 edge or the complex `min_dim >= 32`
+  edge of the CTA gate; those two are guarded only by `scripts/sweep_to_table.py --check` against the transcriber CSV.
+* **The complex batch edge of the CTA gate is not in the table.** The complex grid's smallest batch is 128, so a complex NN call at
+  batch below 128 takes a batch-128 row and its native walk ranks `wide:m=64:n=64:k=16` where the gate measured losses (0.17–0.96× of
+  `Tiled16`). Invisible in a cuBLAS build (vendor first); a vendor-free build pays it. Batch below 128 is outside this project's tuning
+  target, so the fix is a grid edge row, not a kernel.
 * **The wide kernel's predicated leg has never been timed against `Tiled16`.** It is correct (round-off on 70×53×37). The old routing
   gated it on the aligned fast path, but since P3.4 Auto reaches it: the table key has no divisibility term, so a packed non-multiple
-  shape near a transcribed `wide` row (double 304³ b64, syev double n=300's update) runs the predicated leg where main ran `Tiled16`.
+  shape near a transcribed `wide` row (double 304³ b64, syev double n=300's update) runs the predicated leg where the pre-P3.4 selector ran `Tiled16`.
   No timing of that choice exists (spec §12 Phase 3.4, "Fast-path divisibility is not a key").
 * **The 12-cell subset behind the 1.74× / 1.75× routing geomean is not identified in the preserved data.**
   `experiments/wp4_gemm_ld/routing/summary.csv` holds 15 cells (geomean 1.51 / 1.53 over all of them); the four quoted cells reproduce from
@@ -1104,15 +1153,17 @@ Batch 32768 unless noted, `BM_GEMM` square NN, beta = 0, ms:
 | 48 | 1.524 | 6.087 (Tiled16) | 1.741 | 0.88x (was 0.25x) |
 | 64 | 2.419 | 2.612 (32x32 reg) | 2.365 | **1.02x** (was 0.93x) |
 
-Routed for float: every `max_dim <= 32` shape (NN and transposed), and NN squares-ish
-with `min_dim > 32` up to 64. Non-square shapes above 32 keep their previous kernels:
-the panel-update shapes (large m, n, small k) are unmeasured here, and the kernel pads
-m and n to the bucket. double measured at parity with Direct / Tiled16 (fp64 is
-compute-bound at 1/64 rate) and is not routed. `preferred()` is untouched: only float
-NN `max_dim <= 32` was already native. (These selector windows are now the `small`
-entries of the transcribed sm_89 rows; double rows never lead with `small`.)
+What the float sm_89 rows do with it: `small` is the first native entry of every float
+row with max(m,n,k) ≤ 32, NN (948 rows) and transposed (168), and of the NN squares-ish
+rows with `min_dim > 32` up to 64 (276). Non-square shapes above 32 keep their previous
+kernels (`direct` or `tiled` first native): the panel-update shapes (large m, n, small k)
+are unmeasured here, and the kernel pads m and n to the bucket. double measured at parity
+with Direct / Tiled16 (fp64 is compute-bound at 1/64 rate), so `small` is a double
+candidate that no double row ranks first. Whether the vendor or `small` leads a float row
+is the window of the next section: at this kernel's landing only float NN
+`max_dim <= 32` led native.
 
-The selector comment summarised the table as: 1.8–8× over `Direct` at batch 32768, and
+The old selector comment summarised the table as: 1.8–8× over `Direct` at batch 32768, and
 2.1–3.5× over `Tiled16` / 1.1× over the 32×32 register tile on the squares above 32.
 
 The NB = 64 bucket is shared-load bound (one broadcast `ld.shared` per FMA); 40..48
@@ -1160,13 +1211,16 @@ staged `[k][m]` and B as stored, both in local memory, and a 4×4 register tile 
 | 40, 64 / 1024 | 1.34 / 1.81 | b256: 1.75 |
 
 57..64 keeps the NB = 64 kernel: the tiled NB = 64 variant measured 0.89–0.91× at 64³ β=0 against the old kernel's 0.99×, and ties at β=1.
-**`preferred()` widened from `max_dim <= 32` to `<= 48`** (float, square NN, batch ≥ 64): every 33..48 cell clears 1.11× on both betas from
-batch 64 up. 49..56 is routed to the tiled kernel by the selector but not preferred, because 56³ β=1 is 1.08×.
+**The native-first float window was widened from `max_dim <= 32` to `<= 48`** (float, square NN, batch ≥ 64; then `preferred()`): every
+33..48 cell clears 1.11× on both betas from batch 64 up. 49..56 runs the tiled kernel natively but stays vendor first, because 56³ β=1 is
+1.08×.
 
 Not measured: non-square NN shapes with min_dim ≤ 32 and max 33..56 (the old selector sent them to Direct / Tiled16, and the transcribed
 sm_89 rows still do).
 
-Since P3.4 this window is data: `small` leads the 30 float NN square rows up to 48 in `tuned/gemm.float.sm_89.txt` (sizes 8-48 x 3
-batches x 2 layouts). The grid has no 56, so off-grid squares take the nearest row: 49..55 the 48 row (`small`, where the old window
-sent them to the vendor), 56 the 64 row (`vendor`, then `small`). Those cells are for the sm_89 gate to time; nothing measured them.
-The kernel's (NB/4)² work-group is an exact `can_run` term (`small_wg` in `choice.hh`).
+**In the table:** `small` is ranked first in exactly 72 rows of `tuned/gemm.float.sm_89.txt`, the NN squares 1, 2, 4, 8, 16, 24, 32, 40
+and 48 at batch 64, 128, 2048 and 32768, both layouts (the grid squares 8–48 plus the transcriber's edge rows). The squares 49, 56 and 64
+and every square at batch 1 or 63 rank `vendor` first with `small` second, so the 48/49 and 63/64 edges are bracketed in the table itself
+(`GemmTranscribedTable.Sm89BracketsTheOldVendorEdges`: 48³ `small`, 49³ and 52³ `vendor`, 32³ b16 `vendor`, b64 `small`). The kernel's
+(NB/4)² work-group and its sub-group-32 need outside the tiled leg are exact `can_run` terms (`small_wg`, `small_fits` in `choice.hh`;
+`GemmCanRun.SmallNeedsSubGroup32OutsideTheFloatTiledLeg`).

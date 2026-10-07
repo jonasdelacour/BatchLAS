@@ -31,7 +31,7 @@ conservative. Most of the obvious moves in here have already been made and measu
 | [ortho.md](ortho.md) | `ortho` (the Gram product and the algorithm rules) | n/a — no table of its own; the Gram product goes through `syrk` (real, small `k`) or `gemm`, and host devices force Householder |
 | [iluk.md](iluk.md) | `iluk` (ILU(k) numeric phase and apply) | n/a — no vendor arm; host vs device numeric path chosen on batch size inside `src/extensions/iluk.cc` |
 | [tuning.md](tuning.md) | the `tuning_params.hh` constants and `BATCHLAS_TUNE_*` overrides | n/a — kernel parameters, not a routing choice |
-| [gesvd.md](gesvd.md) | `gesvd` | **yes** — `native:jacobi` for real max(m,n) <= 32 and all complex general input, `native:blocked` above, `native:cta` for Hermitian input |
+| [gesvd.md](gesvd.md) | `gesvd` | **yes** — `jacobi` for real general max(m,n) <= 32 and complex general input up to its ceiling, `blocked` above for real general input, `cta` for square Hermitian input to n = 32 (transcribed tables) |
 
 ## Two rules these pages are written to
 
@@ -136,12 +136,12 @@ file before the commit rather than after. The fix is `git lfs install` then
 ## All evidence pages
 
 @subpage md_docs_2perf_2dispatch "Dispatch"
-@subpage md_docs_2perf_2gemm "GEMM"
-@subpage md_docs_2perf_2gemv "GEMV"
+@subpage perf_gemm "GEMM"
+@subpage perf_gemv "GEMV"
 @subpage md_docs_2perf_2level3 "Level 3 (symm, hemm, syrk, herk, syr2k, her2k, trmm)"
-@subpage md_docs_2perf_2trsm "TRSM"
+@subpage perf_trsm "TRSM"
 @subpage md_docs_2perf_2potrf "Cholesky (potrf, posv)"
-@subpage md_docs_2perf_2lu "LU (getrf, getrs, getri, gesv)"
+@subpage perf_lu "LU (getrf, getrs, getri, gesv)"
 @subpage md_docs_2perf_2qr "QR (geqrf, orgqr, ormqr)"
 @subpage md_docs_2perf_2spmm "SpMM"
 @subpage perf_syev "syev"

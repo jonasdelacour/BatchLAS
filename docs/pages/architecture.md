@@ -9,7 +9,7 @@ rests on a measurement, the page links the evidence in @ref perf_evidence.
 | --- | --- |
 | @subpage design_flat_selection "Flat kernel selection" | How every op picks the kernel that runs: families, per-device tuned tables, `select::choose`, pins, rules R1-R8. Developer API: @ref selection; inventory: @ref selection_tables. |
 | @subpage md_docs_2extending "Extending BatchLAS" | Adding an op or an entry point: `src/ops/<op>/`, tables, tuner spec, tests. |
-| @subpage md_docs_2design_2vendor-independence "Vendor independence" | The vendor seam, the vendor-free build and the coverage instrument; the RouteTable layer it replaced, as history. |
+| @subpage md_docs_2design_2vendor-independence "Vendor independence" | The vendor seam, the vendor-free build and the coverage instrument; the RouteTable layer flat kernel selection replaced, as history. |
 | @subpage md_docs_2design_2vendor-free-status "Vendor-free status" | Where the vendor-free build stands. |
 
 ## Core model and API
