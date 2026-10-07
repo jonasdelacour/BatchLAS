@@ -298,7 +298,8 @@ CandResult summarize(const std::string& cand, const std::vector<PassInfo>& ps) {
 }  // namespace
 
 void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root,
-                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier) {
+                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier,
+                    const std::vector<std::pair<std::string, std::vector<std::string>>>& axes) {
     std::ifstream f(raw_jsonl);
     if (!f) throw std::runtime_error("cannot open " + raw_jsonl);
     std::vector<std::string> names, cands;
@@ -334,7 +335,12 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
         if (kind != "pass" && kind != "cell") continue;
         if (!w) throw std::runtime_error(raw_jsonl + ": record before meta");
         CellKey key;
-        for (const std::string& n : names) key.push_back({n, rec->get(n)});
+        for (const std::string& n : names)
+            if (axes.empty()) key.push_back({n, rec->get(n)});
+        for (const auto& [n, values] : axes) {
+            const bool fixed = values.size() == 1 && std::find(names.begin(), names.end(), n) == names.end();
+            key.push_back({n, rec->has(n) || !fixed ? rec->get(n) : values[0]});
+        }
         if (kind == "pass") {
             pending[key][static_cast<int>(rec->number("attempt"))][rec->get("cand")].push_back(
                 {rec->get("status"), rec->get("reason"), rec->number("median_ms"), static_cast<int>(rec->number("reps"))});

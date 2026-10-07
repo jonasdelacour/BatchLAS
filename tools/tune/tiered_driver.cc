@@ -642,7 +642,7 @@ int import_raw_main(const std::string& repo, const std::string& ledger_root, con
     const OpSpec* spec = find_spec(op);
     if (!spec) throw std::runtime_error(raw + ": no spec for op '" + op + "'");
     const auto op_hash = kernel_hash(repo, spec->kernel_sources());
-    import_schema1(raw, ledger_root, current_hashes(repo, *spec, dtype), op_hash.value_or(""));
+    import_schema1(raw, ledger_root, current_hashes(repo, *spec, dtype), op_hash.value_or(""), Tier::deep, spec->axes());
     std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_dir(ledger_root, op, dtype, device).c_str(),
                 op_hash && *op_hash == meta->get("kernels") ? "" : " (kernels changed since: hashes are legacy:<kernels>)");
     return 0;

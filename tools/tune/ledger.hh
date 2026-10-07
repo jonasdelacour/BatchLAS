@@ -82,8 +82,11 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash);
 
 // Schema-1 raw sweep -> one run file at `tier` (a custom run records itself this way); hashes are
-// "legacy:<kernels>" unless `kernels` == `op_hash_now`.
+// "legacy:<kernels>" unless `kernels` == `op_hash_now`. A cell's key is the meta's table keys, or,
+// when `axes` (the spec's grid axes) is given, every axis in its order, as the tiered driver keys
+// cells: a hidden axis (trsm's uplo, diag) missing from a record takes its axis's only value.
 void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root,
-                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier = Tier::deep);
+                    const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier = Tier::deep,
+                    const std::vector<std::pair<std::string, std::vector<std::string>>>& axes = {});
 
 }  // namespace batchlas::tune

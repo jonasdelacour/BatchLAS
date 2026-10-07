@@ -815,7 +815,8 @@ int Driver::tune() {
                 if (std::find(fams.begin(), fams.end(), c.substr(0, c.find(':'))) == fams.end())
                     fams.push_back(c.substr(0, c.find(':')));
             const auto fh = family_hashes(o_.repo, spec_.kernel_block(o_.repo), fams);
-            import_schema1(path, o_.ledger, fh, kernel_hash(o_.repo, spec_.kernel_sources()).value_or(""), Tier::custom);
+            import_schema1(path, o_.ledger, fh, kernel_hash(o_.repo, spec_.kernel_sources()).value_or(""), Tier::custom,
+                           spec_.axes());
             std::printf("== recorded as a custom run under %s\n", ledger_dir(o_.ledger, spec_.op(), dtype, device_).c_str());
         } catch (const std::exception& e) {
             die(std::string("ledger: ") + e.what());

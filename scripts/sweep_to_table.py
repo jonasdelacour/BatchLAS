@@ -931,9 +931,16 @@ def ledger_identity(path):
     return tuple(parts)
 
 
-def key_tuple(keyspec, key):
-    """A record's (name, value) pairs -> the table key tuple (log keys int), or fail."""
+def key_tuple(spec, keyspec, key):
+    """A record's (name, value) pairs -> the table key tuple (log keys int), or fail. An op with
+    hidden grid axes (trsm's uplo and diag) projects through its tuner_key, which refuses a
+    record that varied them."""
     given = dict(key)
+    if spec.tuner_key and set(given) != {n for n, _, _ in keyspec}:
+        out = spec.tuner_key(given)
+        if out is None:
+            raise SystemExit(f"ledger key {key} is not a {spec.op} table key")
+        return out
     if set(given) != {n for n, _, _ in keyspec}:
         raise SystemExit(f"ledger key {key} does not match the '# keys:' fields {[n for n, _, _ in keyspec]}")
     return tuple(int(given[n]) if is_log else given[n] for n, is_log, _ in keyspec)
@@ -959,7 +966,7 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
     current = [c for c in ledger.cells if freshness(c, family_hash) != "stale"]
     log_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if is_log]
     exact_pos = [i for i, (_, is_log, _) in enumerate(keyspec) if not is_log]
-    lattice = {i: sorted({key_tuple(keyspec, c["key"])[i] for c in current}) for i in log_pos}
+    lattice = {i: sorted({key_tuple(spec, keyspec, c["key"])[i] for c in current}) for i in log_pos}
     cand_rows = []
     for key, c in best_records(ledger.cells, family_hash).items():
         entries = []
@@ -972,7 +979,7 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
         if not entries and c["ranked"]:
             entries = [(name, None) for name in c["ranked"]]
         if entries:
-            cand_rows.append((key_tuple(keyspec, key), c["tier"], entries))
+            cand_rows.append((key_tuple(spec, keyspec, key), c["tier"], entries))
     cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
     def near(a, b, stride):
         return all(a[i] == b[i] for i in exact_pos) and all(
@@ -1768,6 +1775,17 @@ def self_test_ledger():
         rows7 = [ledger_text(spec, "float", "sm_0", read_ledger(led7), led7, None, ac)[0].splitlines()[3:] for ac in (False, True)]
         if rows7 != [[], ["uplo=L n=64 nrhs=1 batch=128 | cta 2.000 | tiny 1.000 # deep"]]:
             bad.append(f"self-test: ledger_assume_current_reads_stored_hashes -> {rows7}")
+        # trsm cells carry the hidden uplo/diag axes; they project to the table key, and a varied one is refused
+        tk = TRSM.keys
+        hidden = [("side", "L"), ("trans", "N"), ("order", "8"), ("q", "4"), ("batch", "128"), ("uplo", "L"), ("diag", "N")]
+        got8 = key_tuple(TRSM, parse_keys(tk), tuple(hidden))
+        if got8 != ("L", "N", 8, 4, 128):
+            bad.append(f"self-test: ledger_trsm_hidden_axes_project_to_the_table_key -> {got8}")
+        try:
+            key_tuple(TRSM, parse_keys(tk), tuple(hidden[:5] + [("uplo", "U"), ("diag", "N")]))
+            bad.append("self-test: ledger_trsm_varied_hidden_axis_is_refused -> accepted")
+        except SystemExit:
+            pass
         # --check re-derives byte for byte
         out = os.path.join(d, "out")
         os.makedirs(out)

@@ -1730,6 +1730,36 @@ TEST(TuneLedger, ImportSchema1BuildsADeepRunFromPassRecords) {
     EXPECT_EQ(c.cells[0].tier, Tier::custom);
 }
 
+TEST(TuneLedger, ImportSchema1KeysCellsByTheGridAxesLikeTheDriver) {
+    // trsm's uplo/diag are grid axes but not table keys; the driver's cell keys carry them, so an
+    // import keyed by the table keys alone would never match a tiered cell.
+    TempDir d;
+    const std::string raw = (d.path / "raw.jsonl").string();
+    {
+        std::ofstream o(raw);
+        o << Json().str("kind", "meta").integer("schema", 1).str("op", "trsm").str("dtype", "float").str("device", "sm_89")
+                 .str("device_name", "RTX").str("batchlas", "abc").str("kernels", "k1").str("date", "2026-09-01")
+                 .str("keys", "n:log:3 batch:log").str("candidates", "cta").integer("passes", 1).line();
+        const CellKey with_u{{"n", "16"}, {"batch", "256"}, {"uplo", "U"}}, without{{"n", "32"}, {"batch", "256"}};
+        for (const CellKey& k : {with_u, without}) {
+            o << Json().str("kind", "pass").key(k).integer("pass", 1).integer("attempt", 0).str("cand", "cta")
+                     .str("status", "ok").str("reason", "").num("median_ms", 1.0).integer("reps", 4).line();
+            o << Json().str("kind", "cell").key(k).integer("round", 0).str("status", "ok").str("reason", "")
+                     .integer("final_attempt", 0).str("ranked", "cta").line();
+        }
+    }
+    const std::map<std::string, std::string> now{{"cta", "c9"}};
+    const std::vector<std::pair<std::string, std::vector<std::string>>> axes{
+        {"uplo", {"L"}}, {"n", {"16", "32"}}, {"batch", {"256"}}};
+    import_schema1(raw, d.str(), now, "k1", Tier::deep, axes);
+    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    ASSERT_EQ(l.cells.size(), 2u);
+    std::set<std::string> keys;
+    for (const CellRecord& c : l.cells) keys.insert(key_arg(c.key));
+    EXPECT_EQ(keys, (std::set<std::string>{"uplo=U,n=16,batch=256", "uplo=L,n=32,batch=256"}))
+        << "every axis in axis order; a missing fixed axis takes its only value";
+}
+
 TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
     TempDir d;
     write_run(d, Tier::coarse, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
