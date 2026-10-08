@@ -69,7 +69,7 @@ Which kernel runs for a shape is decided by flat kernel selection (developer doc
 @defgroup config Configuration, environment and tuning
 @brief Runtime settings captured from the environment and the tuning constants.
 
-@defgroup device Device-side group BLAS
+@defgroup device_blas Device-side group BLAS
 @brief In-kernel work-group and sub-group BLAS templates (`#include <batchlas/blas/device.hh>`, needs `-fsycl`).
 
 @defgroup internal_helpers Kernel helpers (installed, not API)

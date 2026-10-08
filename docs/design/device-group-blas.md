@@ -5,7 +5,7 @@
 Function templates in `namespace batchlas::device` (`#include <batchlas/blas/device.hh>`) that run
 **inside** a SYCL kernel. A work-item group computes **one** operation on **one** matrix or vector.
 There is no queue, event or batching here: the kernel picks the batch item (`view.batch_item(b)`) and
-synchronises. The API reference is the @ref device group.
+synchronises. The API reference is the @ref device_blas group.
 
 ## Device group BLAS: what is provided
 

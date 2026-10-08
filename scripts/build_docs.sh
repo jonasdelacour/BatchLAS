@@ -45,6 +45,7 @@ if command -v dot >/dev/null 2>&1; then BATCHLAS_DOCS_HAVE_DOT=YES; else BATCHLA
 export BATCHLAS_VERSION BATCHLAS_DOCS_OUT BATCHLAS_DOCS_GENERATED BATCHLAS_DOCS_WARN_AS_ERROR BATCHLAS_DOCS_HAVE_DOT
 
 "$doxygen" docs/Doxyfile
+python3 docs/tools/gen_site_assets.py --site "$out"
 python3 docs/tools/check_doc_anchors.py --xml "$out/xml"
 
 n=$(wc -l < "$out/doxygen-warnings.log" | tr -d ' ')
