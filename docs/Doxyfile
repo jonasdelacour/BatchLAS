@@ -49,6 +49,10 @@ EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = YES
 EXTRACT_LOCAL_CLASSES  = NO
 EXTRACT_ANON_NSPACES   = NO
+# API pages open with the detailed docs (DoxygenLayout.xml drops the summary lists), so every
+# member needs a detailed entry even when it only has a brief.
+ALWAYS_DETAILED_SEC    = YES
+REPEAT_BRIEF           = YES
 HIDE_UNDOC_MEMBERS     = NO
 HIDE_UNDOC_CLASSES     = NO
 HIDE_FRIEND_COMPOUNDS  = YES

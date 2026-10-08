@@ -103,15 +103,25 @@
     var contents = document.querySelector("div.contents");
     if (!contents) return;
     var heads = contents.querySelectorAll(
-      "h1.doxsection, h2.doxsection, h2.groupheader");
-    var items = [];
+      "h1.doxsection, h2.doxsection, h2.groupheader, h2.memtitle");
+    var items = [], seen = {};
     heads.forEach(function (h) {
-      var a = h.querySelector("a.anchor[id]") || h.querySelector("a[id]");
-      var id = a ? a.id : h.id;
+      var member = h.classList.contains("memtitle");
+      /* A member's anchor is the element just before its heading. */
+      var a = member ? h.previousElementSibling : (h.querySelector("a.anchor[id]") || h.querySelector("a[id]"));
+      var id = a && a.id ? a.id : h.id;
       if (!id) return;
-      var text = h.textContent.replace(/\s+/g, " ").trim();
+      var text = h.textContent.replace(/◆/g, "").replace(/\s+/g, " ").trim();
+      if (member) {
+        /* Overloads share one entry: "syev() [2/4]" -> "syev()". */
+        text = text.replace(/\s*\[\d+\/\d+\]$/, "");
+        if (seen[text]) return;
+        seen[text] = true;
+      } else {
+        seen = {};
+      }
       if (!text) return;
-      var level = h.classList.contains("groupheader") ? 1 : (h.tagName === "H1" ? 1 : 2);
+      var level = member ? 2 : (h.classList.contains("groupheader") || h.tagName === "H1" ? 1 : 2);
       items.push({ id: id, text: text, level: level, head: h });
     });
     if (items.length < 2) { document.documentElement.classList.add("bl-no-toc"); return; }
@@ -348,6 +358,37 @@
       }).catch(function () { /* offline: keep the version only */ });
   }
 
+  /* Doxygen lays a prototype out as a table (types and names in separate columns), which wraps
+     mid-identifier in a narrow column. Rewrite each one as a code block: template line, then
+     "ret name(first param," and one indented line per further parameter, links preserved. */
+  function tidy(html) {
+    return html.replace(/&nbsp;|\u00a0/g, " ").replace(/\s+/g, " ").replace(/&lt;\s+/g, "&lt;").replace(/\s+&gt;/g, "&gt;")
+      .replace(/\s+,/g, ",").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")").trim();
+  }
+
+  function prettyPrototypes() {
+    document.querySelectorAll("div.memproto").forEach(function (proto) {
+      var table = proto.querySelector("table.memname");
+      if (!table) return;
+      var lines = [];
+      table.querySelectorAll("tr").forEach(function (tr) {
+        var line = tidy(Array.prototype.map.call(tr.children, function (td) { return td.innerHTML; }).join(" "));
+        if (!line) return;
+        if (/^\)/.test(line) && lines.length) lines[lines.length - 1] += line;
+        else lines.push(line);
+      });
+      if (!lines.length) return;
+      for (var i = 1; i < lines.length; ++i) lines[i] = "    " + lines[i];
+      var tmpl = proto.querySelector(".memtemplate");
+      var labels = Array.prototype.map.call(proto.querySelectorAll("span.mlabel"), function (s) {
+        return '<span class="mlabel">' + s.innerHTML + "</span>";
+      }).join("");
+      proto.innerHTML = '<pre class="bl-proto">' + (tmpl ? tidy(tmpl.innerHTML) + "\n" : "") + lines.join("\n") + "</pre>" +
+        (labels ? '<div class="bl-proto-labels">' + labels + "</div>" : "");
+      proto.classList.add("bl-proto-done");
+    });
+  }
+
   /* Doxygen puts the breadcrumb inside the sticky bar; it belongs above the page title. */
   function moveBreadcrumb() {
     var np = document.getElementById("nav-path"), hd = document.querySelector("div.header");
@@ -365,6 +406,7 @@
   }
 
   function init() {
+    prettyPrototypes();
     moveBreadcrumb();
     buildNav();
     buildToc();
