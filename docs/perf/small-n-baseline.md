@@ -1,57 +1,43 @@
-# Native factorizations at n = 4..512: the committed baseline grid
+# Small-n factorization baseline
 
-The P0 baseline of `docs/design/small-n-factorization-plan.md`. Every later plan (P1-P7) is
-gated on a number from this page, so it is the one grid that has to be reproducible rather
-than merely quotable — and the last section of this page is the list of places where the
-number already in `docs/perf` no longer is.
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-09-10
 
-**Box.** 2x RTX 4090 (sm_89, 128 SM, 24 GB, 72 MB L2), driver 595.84. GPU 1 throughout
-(GPU 1 does not drive the display), one harness on the card at a time, every process through
-`benchmarks/gpu_guard.sh 1`. No run exited 5. **Date.** 2026-09-10, 01:21-11:20 CEST.
-**Build.** `build/presets/dev-tests`, `CMAKE_BUILD_TYPE=RelWithDebInfo`, DPC++ at
-`/opt/dpcpp-cuda`, `-fsycl-targets=nvidia_gpu_sm_89`, CUDA 13.2 (V13.2.86), cuSOLVER
-12.2.0.11 and cuBLAS from that toolkit; the harness TU itself compiles `-O2 -DNDEBUG`
-against those shipped `.so`s. **Harness.** `benchmarks/factor_bench.cc` driven by
-`benchmarks/run_factor_grid.sh`; raw rows in `benchmarks/results/factor_baseline_<op>_<type>.csv`.
+Native versus vendor timings for potrf, getrf, geqrf, orgqr and getrs at n = 4..512, all four
+types. The routing windows in `tuned/` for these ops and the gates in
+`docs/design/small-n-factorization-plan.md` rest on these numbers.
 
-Ratios are `vendor_ms / native_ms`; **> 1 means native wins**. Every row carries a
-`resolved_route` read back per arm from the dispatch-coverage instrument in a **separate
-process**, never inferred from the pin: `pin_parsed = 1` says the pin was understood, not
-that it took. (This grid was measured on 2026-09-10 under the route-era router, whose pins
-could parse and still fall through; under flat selection a pin that cannot run the shape
-throws. The `resolved_route` values below are the route-era names, `vendor:auto` and
-`native:<tier>`; today's coverage records the family spelling, `vendor`, `cta`, `blocked`.)
+## Run setup
 
-**Size of the run.** 20 (op, type) grids, **2,784 timed rows / 1,392 paired cells**, all five
-ops on all four types. Every grid completed; nothing crashed, no route threw, and every op has
-a vendor arm for every type.
+- **Box:** 2x RTX 4090 (sm_89, 128 SM, 24 GB, 72 MB L2), driver 595.84. GPU 1 throughout, one
+  harness on the card at a time, each process run through `benchmarks/gpu_guard.sh 1`.
+- **Build:** `build/presets/dev-tests`, `RelWithDebInfo`, DPC++ at `/opt/dpcpp-cuda`,
+  `-fsycl-targets=nvidia_gpu_sm_89`, CUDA 13.2 (V13.2.86), cuSOLVER 12.2.0.11.
+- **Harness:** `benchmarks/factor_bench.cc`, driven by `benchmarks/run_factor_grid.sh`. Scope: 20
+  (op, type) grids, 2,784 timed rows, 1,392 paired cells. Every grid completed and no route threw.
 
-**Discards.** **61 rows in 60 cells** were flagged `bad=1` by the harness, all for one reason,
-`relsd` (relative sd >= 10% over 7 interleaved reps). They stay in the CSVs and are excluded
-from every ratio here. **52 of the 60 are `orgqr`** — see that section; the rest are 5 `getrs`,
-2 `getrf`, 1 `geqrf`, all at n <= 8 where the call is 20-60 us. **Three further cells are
-excluded by hand**, because the harness has no gate that can see them:
+Ratios are `vendor_ms / native_ms`. **> 1 means native wins.** Each row carries a
+`resolved_route` read back per arm from the coverage instrument in a separate process.
+`pin_parsed = 1` means the pin parsed, not that it ran. The CSVs use route-era spellings
+(`vendor:auto`, `native:<tier>`); current coverage records `vendor`, `cta` and `blocked`.
 
-| cell | arrays | native ms, previous rung -> this rung |
-|---|---|---|
-| `orgqr` cdouble 1024x128 b8192 | 48 GB | 1,822.6 -> 15,553.2 (**x8.5** for a x2 batch) |
-| `geqrf` cdouble 1024x128 b8192 | 32 GB | 951.6 -> 3,581.0 (x3.8) |
-| `orgqr` cdouble 512x64 b16384 | 24 GB | 858.7 -> 3,203.6 (x3.7) |
+## Discards
 
-These oversubscribe 24 GB of device memory and measure UVM paging, not the kernel. `rel_sd` is
-0.001-0.008 on all three — thrashing is *consistent*, so a variance gate cannot catch it. The
-matching cfloat and double cells at 24 GB are clean (x1.97-1.99) and are kept.
+61 rows in 60 cells are flagged `bad=1` (relative sd >= 10% over 7 interleaved reps). They stay
+in the CSVs and are excluded from every ratio here: 52 orgqr (see [orgqr](#orgqr)), 5 getrs,
+2 getrf and 1 geqrf, all at n <= 8 where a call takes 20-60 us.
+
+Three more cells are excluded by hand: `orgqr` cdouble 1024x128 b8192 (48 GB), `geqrf` cdouble
+1024x128 b8192 (32 GB) and `orgqr` cdouble 512x64 b16384 (24 GB). They oversubscribe the card and
+measure UVM paging, and their `rel_sd` (0.001-0.008) passes the variance gate.
 
 ## How to read the grid
 
-Three batches per order — half, nominal, double the `SAT_LADDER` value of `docs/perf/lu.md`.
-The tables quote the **top** batch of each ladder, the most saturated reading taken, and mark a
-cell `~` when the ratio moved more than 5% between the nominal and the top batch. **A `~` cell
-is not saturated**: the number is the best reading available, not a converged one. `~` is the
-common case here, and the reason is mechanical — see [Saturation](#saturation).
+Three batches per order: half, nominal and double the `SAT_LADDER` value of `docs/perf/lu.md`.
+The tables quote the **top** batch of each ladder. A `~` marks a cell whose time moved more than
+5% between the nominal and top batch. Cells read `ratio (native route)`.
 
-Cells read `ratio (native route)`; the vendor arm resolved `vendor:auto` on every row of all
-20 grids.
+> **Warning:** a `~` cell is not saturated. Its number is the best reading available, not a
+> converged one. `~` is common here; see [Saturation](#saturation).
 
 ## potrf
 
@@ -59,7 +45,6 @@ Cells read `ratio (native route)`; the vendor arm resolved `vendor:auto` on ever
 |---|---|---|---|---|
 | 4 (b32768) | 1.94 (cta) | 1.14~ (cta) | 0.86 (cta) | 0.97 (cta) |
 | 8 (b32768) | 2.10 (cta) | 1.21~ (cta) | 1.07 (cta) | 1.36 (cta) |
-| 9 (b32768) | 1.39 (cta) | 0.68~ (cta) | 0.46 (cta) | 0.51 (cta) |
 | 16 (b32768) | 1.64 (cta) | 0.66~ (cta) | 0.63 (cta) | 0.72 (cta) |
 | 17 (b32768) | 2.70 (cta) | 1.47~ (cta) | 0.94 (cta) | 1.53 (cta) |
 | 24 (b32768) | 2.07~ (cta) | 1.38~ (cta) | 0.96 (cta) | 1.43 (cta) |
@@ -70,75 +55,48 @@ Cells read `ratio (native route)`; the vendor arm resolved `vendor:auto` on ever
 | 65 (b8192) | 1.21~ (cta) | 0.72~ (cta) | 1.06 (cta) | 1.29 (cta) |
 | 96 (b8192) | 0.63~ (cta) | 0.45~ (cta) | 0.52 (cta) | 0.51 (blocked) |
 | 128 (b8192) | 0.43~ (cta) | 0.53~ (blocked) | 0.46 (blocked) | 0.58 (blocked) |
-| 129 (b4096) | 0.56~ (cta) | 0.58~ (blocked) | 0.75 (blocked) | 0.75 (blocked) |
-| 192 (b4096) | 0.68~ (blocked) | 0.71~ (blocked) | 0.69 (blocked) | 0.73 (blocked) |
 | 256 (b4096) | 0.85~ (blocked) | 0.92~ (blocked) | 0.83 (blocked) | 0.82 (blocked) |
-| 384 (b1024) | 0.94~ (blocked) | 0.91~ (blocked) | 0.94 (blocked) | 0.88 (blocked) |
 | 512 (b1024) | 1.19~ (blocked) | 1.08~ (blocked) | 0.99 (blocked) | 0.90 (blocked) |
 
-**float** wins n <= 48 (1.08 at 48 — but that cell is `~` and reads 0.94 one rung lower, so 33
-is the last unambiguous win; bracketed by 0.95 at 64), loses through the CTA band with a
-minimum of **0.43 at n = 128**, and recovers on the blocked driver to 0.85 at 256, 0.94 at 384
-and **1.19 at 512** — the first potrf cell above 1.00 that the record does not contain, and it
-is still rising (1.33 at b2048, 1.50 at b4096). **cfloat** wins only at 4, 8, 17, 24, 33 and
-512. **double** and **cdouble** win nowhere above n = 33 except 65 (1.06 / 1.29) and lose least
-at 384 (0.94 / 0.88). All four types are below 1.00 across 96 <= n <= 384.
-
-**The order ladder is not smooth and the 2^k rungs are the worst ones.** Every type reads
-higher at 17 than at 16 and higher at 33 than at 32 — float 1.64 -> 2.70 and 1.30 -> 1.84,
-cdouble 0.72 -> 1.53 and 1.01 -> 1.55 — and higher at 65 than at 64 (float 0.95 -> 1.21, double
-0.54 -> 1.06). n = 9 is the exception in the other direction (float 2.10 -> 1.39). The `+1`
-neighbours the ladder exists to probe are worth up to 2.1x, and a boundary read off powers of
-two alone would be wrong at every type.
+- **float** wins at n <= 33 (33 is the last unambiguous win; 0.95 at 64 brackets the edge). Minimum
+  **0.43 at n = 128**; it recovers on the blocked driver: **1.19 at 512**, still rising (see
+  [Saturation](#saturation)).
+- **cfloat** wins at 4, 8, 17, 24, 33 and 512. **double** and **cdouble** win nowhere above
+  n = 33 except 65. All four types are below 1.00 for 96 <= n <= 384.
+- **The 2^k rungs read high.** Every type reads higher at 17 than at 16, 33 than at 32 and 65 than
+  at 64 (up to 2.1x). Read the `+1` neighbours; a boundary taken from powers of two is wrong.
 
 ## getrf
 
 | n (batch) | float | cfloat | double | cdouble |
 |---|---|---|---|---|
 | 4 (b32768) | 0.21~ (cta) | *dropped* | 0.07~ (cta) | 0.06~ (cta) |
-| 8 (b32768) | 0.26~ (cta) | 0.22~ (cta) | 0.11 (cta) | 0.12~ (cta) |
-| 9 (b32768) | 0.46~ (cta) | 0.50 (cta) | 0.23 (cta) | 0.56 (cta) |
-| 16 (b32768) | 0.47~ (cta) | 0.67~ (cta) | 0.27~ (cta) | 0.61 (cta) |
-| 17 (b32768) | 0.49 (cta) | 0.38 (cta) | 0.24 (cta) | 0.33 (cta) |
-| 24 (b32768) | 0.52 (cta) | 0.46~ (cta) | 0.26 (cta) | 0.36 (cta) |
 | 32 (b16384) | 0.55 (cta) | 0.55~ (cta) | 0.29~ (cta) | 0.41 (cta) |
 | 33 (b16384) | 1.13 (cta) | 1.06 (cta) | 0.20 (blocked) | 0.50 (cta) |
-| 48 (b16384) | 1.27 (cta) | 1.09 (cta) | 0.25~ (blocked) | 0.41 (cta) |
 | 64 (b16384) | 1.63 (cta) | 0.82 (cta) | 0.31 (blocked) | 0.43 (cta) |
 | 65 (b8192) | 0.83 (cta) | 0.62 (cta) | 0.18~ (blocked) | 0.32 (cta) |
-| 96 (b8192) | 0.92 (cta) | 0.50 (cta) | 0.25~ (blocked) | 0.36 (blocked) |
 | 128 (b8192) | 0.72 (cta) | 0.46~ (blocked) | 0.28~ (blocked) | 0.40 (blocked) |
-| 129 (b4096) | 0.87~ (cta) | 0.54 (blocked) | 0.30~ (blocked) | 0.40 (blocked) |
 | 192 (b4096) | 0.91~ (blocked) | 0.79~ (blocked) | 0.52~ (blocked) | 0.50 (blocked) |
 | 256 (b4096) | 1.19~ (blocked) | 1.06 (blocked) | 0.68~ (blocked) | 0.57 (blocked) |
-| 384 (b1024) | 1.91~ (blocked) | 1.41~ (blocked) | 0.92 (blocked) | 0.69~ (blocked) |
 | 512 (b1024) | 2.17~ (blocked) | 1.60~ (blocked) | 0.75~ (blocked) | 0.74 (blocked) |
 
-**float** wins in two disjoint windows, 33 <= n <= 64 (1.13 / 1.27 / 1.63) and n >= 256
-(1.19 / 1.91 / 2.17), bracketed on all four edges by 0.55 at 32, 0.83 at 65, 0.91 at 192 and
-nothing above 512. **cfloat** repeats the shape one third lower: 33..48 (1.06 / 1.09, with
-0.82 at 64 already inside the dip) and n >= 256. **double never wins at any order**, from 0.07
-at n = 4 to 0.92 at 384; **cdouble** likewise, 0.06 to 0.74.
+Full grid: `benchmarks/results/factor_baseline_getrf_<type>.csv`.
 
-**The n = 32/33 step is a vendor cliff, not a native one.** At float b16384 cuBLAS costs
-0.3159 ms at n = 32 and 1.3634 ms at n = 33 — **4.3x for a 6% larger matrix** — while native
-goes 0.5730 -> 1.2069. cuBLAS `getrfBatched` has a small-square special path that ends at 32,
-and it is the strongest vendor code in this whole page: at n <= 32 native is 0.21-0.67x of it
-for the 32-bit types and 0.06-0.27x for the 64-bit ones. The other end of the range is the
-mirror image: at n = 4, batch 32768, cuBLAS costs 14.6 us against native's 67.9 us for a cell
-whose DRAM roof is 1.1 us. **This is the P1 target, stated as a number: 0.21x at float n = 4
-and 0.55x at float n = 32.**
+- **float** wins at 33..64 (1.13 to 1.63) and n >= 256 (1.19 at 256, 2.17 at 512). Edges: 0.55 at
+  32, 0.83 at 65, 0.91 at 192. Nothing above 512 was measured.
+- **cfloat** wins at 33..48 (1.06 / 1.09; 0.82 at 64 is inside the dip) and at n >= 256.
+- **double** and **cdouble** never win (0.06 to 0.92).
+- **Vendor cliff at 32/33.** At float b16384 cuBLAS costs 0.3159 ms at n = 32 and 1.3634 ms at
+  n = 33: **4.3x for a 6% larger matrix**. Native goes 0.5730 -> 1.2069 ms. At n <= 32 native is
+  0.21-0.67x of the vendor for the 32-bit types and 0.06-0.27x for the 64-bit types.
+- **Small end.** At n = 4, batch 32768, cuBLAS costs 14.6 us and native 67.9 us, against a DRAM
+  roof of 1.1 us. Target for the small-n plan: **0.21x at float n = 4 and 0.55x at float n = 32.**
 
 ## geqrf
 
 | shape (batch) | float | cfloat | double | cdouble |
 |---|---|---|---|---|
-| 4 (b32768) | 0.17~ (cta) | 0.14~ (cta) | 0.03~ (cta) | 0.03~ (cta) |
 | 8 (b32768) | 0.08~ (cta) | *dropped* | 0.02~ (cta) | 0.04~ (cta) |
-| 9 (b32768) | 0.12 (cta) | 0.11~ (cta) | 0.03~ (cta) | 0.04 (cta) |
-| 16 (b32768) | 0.22~ (cta) | 0.22 (cta) | 0.07 (cta) | 0.11 (cta) |
-| 17 (b32768) | 0.23~ (cta) | 0.26~ (cta) | 0.07 (cta) | 0.11 (cta) |
-| 24 (b32768) | 0.36 (cta) | 0.43 (cta) | 0.10 (cta) | 0.16 (cta) |
 | 32 (b16384) | 0.73~ (cta) | 0.62~ (cta) | 0.21 (cta) | 0.33 (cta) |
 | 33 (b16384) | 0.76~ (cta) | 0.69~ (cta) | 0.22 (cta) | 0.34 (cta) |
 | 48 (b16384) | 1.02~ (cta) | 1.74~ (cta) | 0.32~ (cta) | 0.45 (cta) |
@@ -146,161 +104,98 @@ and 0.55x at float n = 32.**
 | 65 (b8192) | 2.46~ (cta) | 2.31 (cta) | 0.66~ (blocked) | 0.57 (cta) |
 | 96 (b8192) | 2.69~ (cta) | 2.28 (cta) | 1.16~ (blocked) | 0.49 (blocked) |
 | 128 (b8192) | 3.64~ (blocked) | 3.79 (blocked) | 1.76~ (blocked) | 0.68 (blocked) |
-| 129 (b4096) | 3.20 (blocked) | 3.32~ (blocked) | 1.61 (blocked) | 0.58 (blocked) |
 | 192 (b4096) | 5.38~ (blocked) | 5.71~ (blocked) | 2.47 (blocked) | 1.06 (blocked) |
-| 256 (b4096) | 7.57 (blocked) | 7.51~ (blocked) | 3.23 (blocked) | 1.50~ (blocked) |
-| 384 (b1024) | 11.67~ (blocked) | 9.42~ (blocked) | 4.46~ (blocked) | 1.67~ (blocked) |
 | 512 (b1024) | 13.38~ (blocked) | 10.52~ (blocked) | 4.96~ (blocked) | 1.89~ (blocked) |
 | 128x32 (b16384) | 2.23~ (cta) | 3.79~ (cta) | 0.68~ (cta) | 0.68 (cta) |
 | 512x32 (b16384) | 2.68 (cta) | 3.39~ (blocked) | 1.58 (blocked) | 2.16 (blocked) |
 | 512x64 (b16384) | 3.18 (blocked) | 4.10~ (blocked) | 2.37 (blocked) | 1.73 (blocked) |
-| 1024x128 (b8192) | 7.16~ (blocked) | 5.09 (blocked) | 6.42~ (blocked) | *excluded* (2.96 at b4096) |
 
-The widest spread of any op: **0.02x to 13.4x**. Native wins from n >= 48 for float (1.02,
-bracketed by 0.76 at 33) and cfloat (1.74, bracketed by 0.69), from **n >= 96 for double**
-(1.16, bracketed by 0.66 at 65) and from **n >= 192 for cdouble** (1.06, bracketed by 0.58 at
-129), and the margin grows monotonically with n from there. Below the crossover it is not close
-— 0.08x at float n = 8, 0.02x at double n = 8 — because the CTA kernel reduces a length-8
-column over a work-group sized for the trailing update.
+`1024x128` (b8192) is excluded: cdouble reads 1.691 there and is paging (2.956 at b4096 and
+2.130 at b2048 are kept). Full grid: `benchmarks/results/factor_baseline_geqrf_<type>.csv`.
 
-**Tall panels are the shape the callers issue, and they cross over earlier.** At 512x32 and
-512x64 every type wins, cdouble included (2.16 / 1.73), where square cdouble at those n loses
-0.33 / 0.52. 128x32 is the exception: float 2.23 and cfloat 3.79 against double 0.68 and
-cdouble 0.68 — the only tall cells either 64-bit type loses. `1024x128` for cdouble is the
-oversubscribed cell excluded above (its b8192 reading, 1.691, is paging); the two rungs below it
-read 2.130 and 2.956 and are kept.
-
-**The P0 flip this supports**, restated against these numbers rather than the plan's: float and
-cfloat `n >= 48`, double `n >= 96`, cdouble `n >= 192` — each with the bracketing non-winner
-named above. That is one rung earlier than the plan proposed for float/cfloat/double and two
-for cdouble. The float n = 48 cell is 1.02 and moving (0.94 at b4096), so `n >= 64` is the
-defensible float edge if only one number may be quoted.
+- **Spread:** 0.02x to 13.4x, the widest of any op. Below the crossover native is not close
+  (0.02x at double n = 8): the CTA kernel reduces a length-8 column over a work-group sized for the
+  trailing update.
+- **Square crossovers:** float n >= 48 (1.02; 0.76 at 33), cfloat n >= 48 (1.74; 0.69 at 33),
+  double n >= 96 (1.16; 0.66 at 65), cdouble n >= 192 (1.06; 0.58 at 129 in the CSV).
+- **Tall panels cross earlier.** 512x32 and 512x64 win for every type, cdouble included (2.16 /
+  1.73). Exception: 128x32 is float 2.23 and cfloat 3.79, against double 0.68 and cdouble 0.68.
+- **Flip gates supported:** float and cfloat `n >= 48`, double `n >= 96`, cdouble `n >= 192`. The
+  float n = 48 cell is 1.02 and moving (0.94 at b4096), so `n >= 64` is the defensible float edge
+  if only one number may be quoted.
 
 ## orgqr
 
-The vendor arm is a per-item `cusolverDnXorgqr` loop on an out-of-order sub-queue
-(`orgqr_vendor` in `src/backends/cublas.cc`, its `batch > 1` branch), not a batched routine. Every ratio here means "beats the per-item
-loop"; none of them means "beats cuSOLVER".
+The vendor arm is a per-item `cusolverDnXorgqr` loop on an out-of-order sub-queue (the
+`batch > 1` branch of `orgqr_vendor` in `src/backends/cublas.cc`), not a batched routine.
+
+> **Note:** every orgqr ratio means "beats the per-item loop". None means "beats cuSOLVER".
 
 | shape (batch) | float | cfloat | double | cdouble |
 |---|---|---|---|---|
-| 4 (b32768) | *dropped* | *dropped* | *dropped* | 197.48~ |
-| 8 (b32768) | *dropped* | *dropped* | *dropped* | 126.90~ |
-| 9 (b32768) | *dropped* | *dropped* | *dropped* | 95.18 |
 | 16 (b32768) | 209.57 | 172.40 | 97.72 | 42.25 |
-| 17 (b32768) | 180.94~ | 131.24 | 90.94~ | 33.99 |
-| 24 (b32768) | 112.98~ | 71.90~ | 75.59 | 20.86 |
-| 32 (b16384) | *dropped* | 36.98 | 49.80~ | 13.39 |
 | 33 (b16384) | 60.53 | 33.93 | 59.45~ | 20.27 |
-| 48 (b16384) | 43.53~ | 26.18~ | 37.41 | 17.10 |
 | 64 (b16384) | 27.10~ | 15.09~ | 27.09 | 11.31 |
-| 65 (b8192) | 24.93 | 16.38 | 33.34 | 12.73 |
-| 96 (b8192) | 18.87~ | 10.67 | 22.09~ | 9.69 |
 | 128 (b8192) | 9.47 | 5.29 | 12.27 | 6.57~ |
-| 129 (b4096) | 12.80~ | 8.69~ | 19.76~ | 6.49 |
-| 192 (b4096) | 10.17 | 5.78 | 11.41~ | 6.41 |
 | 256 (b4096) | 5.30 | 4.04 | 8.46 | 4.75 |
-| 384 (b1024) | 4.29 | 3.08 | 5.67 | 3.46 |
 | 512 (b1024) | 3.64 | 2.54 | 4.61 | 2.77 |
-| 128x32 (b16384) | 25.91~ | 14.74 | 23.35~ | 11.23 |
-| 512x32 (b16384) | 7.95 | 4.91 | 8.62 | 3.31 |
 | 512x64 (b16384) | 2.71 | 1.95 | 4.93 | *excluded* (2.71 at b8192) |
 | 1024x128 (b8192) | 1.73 | 1.63 | 2.91 | *excluded* (2.72 at b4096) |
 
-Every native route is `native:blocked`. **Native wins every square cell that was kept**, all
-four types, from 2.54x (cfloat n = 512) to 209.6x (float n = 16), falling monotonically with n.
+Full grid, including the `*dropped*` small-n cells: `benchmarks/results/factor_baseline_orgqr_<type>.csv`.
 
-**No kept cell loses, anywhere in the op.** Over 210 kept cells the minimum is **1.58** (cfloat
-`1024x128` b2048) and the maximum 501.2 (cdouble n = 4 b8192). The single sub-1.00 reading in
-the raw data, cdouble `1024x128` b8192 at 0.892, is the 48 GB oversubscribed cell excluded
-above — its own two lower rungs read 2.687 and 2.719, so it is paging, not a crossover. The
-other excluded cdouble cell, `512x64` b16384, reads 1.643 against 2.674 / 2.709 below it: same
-artefact, and it does not cross either. That is
-what the plan's orgqr flip (native everywhere at `n <= 512`, every type) needs, and this grid
-gives it with no exception.
-
-What ships for it today: `tuned/orgqr.<dtype>.sm_89.txt` (keys `m:log n:log:2`, transcribed at
-`424a45bc`, untimed) ranks `blocked` first on every row with `m <= 512` and `vendor` first on
-every row with `m >= 513`, in all four types. So the square cells above and the `128x32`,
-`512x32` and `512x64` panels are `blocked`-first, while the `1024x128` cells, which this grid
-shows native winning at 1.63-2.91x, are `vendor`-first: an unflipped win, not a measured loss.
-
-**52 of the run's 60 discarded cells are here, and they are one-sided**: **all 52 are the
-native arm**, 49 of them at n <= 48, with `rel_sd` 0.10-0.12, while the vendor arm on the same
-cell reads 0.02-0.07. The pattern is that each native rep is preceded in the interleave by a vendor rep
-that dispatched `batch` separate cuSOLVER calls across an out-of-order sub-queue; the harness's
-`q->wait()` bounds the *main* queue. Treat every orgqr number on this page as a median with a
-wide arm, and re-measure orgqr single-arm before quoting one in a gate.
+- Every native route is `blocked`. Native wins every kept cell, all four types, falling with n:
+  from 2.54x (cfloat n = 512) to 209.6x (float n = 16, b32768). This supports the orgqr flip
+  (native at every `n <= 512`, every type) with no exception.
+- **No kept cell loses.** The minimum over 210 kept cells is **1.58** (cfloat `1024x128` b2048).
+  The excluded paging cells read below 1.00 (cdouble `1024x128` b8192 at 0.892) and are the same
+  artefact as the excluded `512x64` cell.
+- **Shipped table:** `tuned/orgqr.<dtype>.sm_89.txt` ranks `blocked` first for `m <= 512` and
+  `vendor` first for `m >= 513`. The `1024x128` cells, where native wins 1.63-2.91x, are
+  vendor-first: an unflipped win, not a measured loss.
+- **Discards.** All 52 orgqr discards are on the native arm (`rel_sd` 0.10-0.12, vendor 0.02-0.07).
+  Each native rep follows a vendor rep that dispatched `batch` cuSOLVER calls on an out-of-order
+  sub-queue, which the harness's `q->wait()` does not bound. Re-measure single-arm before quoting
+  an orgqr number in a gate.
 
 ## getrs
 
-Two right-hand-side widths. When this grid was measured, `nrhs = 1` was inside the route-era
-getrs clause A (`nrhs <= 2`, **every type**, no order or batch bound) and `nrhs = 4` inside
-clause B (float only), so everything below described **live routed traffic in a vendor-present
-build**, not a hypothetical.
+Two right-hand-side widths: `nrhs <= 2` (route-era clause A, every type) and `nrhs = 4` (clause B,
+float only). Both carried live traffic when this grid was measured.
 
-**Today** getrs chooses from `tuned/getrs.<dtype>.sm_89.txt`, transcribed at `424a45bc` from
-the router that carried the order floor measured below (untimed; `tuned/README.md`). Its rows
-rank `cta` (the fused kernel) first exactly where the two clauses, with that floor, put it:
-`n >= 32` with `nrhs <= 2` for every type, plus `nrhs` 3 and 4 for float; every row with
-`n <= 31`, and every row outside those `nrhs` limits, ranks `vendor` first (e.g. `n=31 nrhs=1`
-`vendor` first, `n=32 nrhs=1` `cta` first, `n=32 nrhs=3` `cta` first for float and `vendor`
-first for the other three types).
+Today getrs chooses from `tuned/getrs.<dtype>.sm_89.txt` (transcribed at `424a45bc`, untimed).
+`cta` ranks first for `n >= 32` with `nrhs <= 2` (every type) and `nrhs` 3-4 (float). `vendor`
+ranks first everywhere else: `n=31 nrhs=1` is vendor-first, `n=32 nrhs=1` is cta-first, and
+`n=32 nrhs=3` is cta-first for float and vendor-first for the other three types.
 
 | n (batch) | float | cfloat | double | cdouble |
 |---|---|---|---|---|
 | **nrhs = 1** | | | | |
 | 4 (b32768) | **0.71**~ | **0.59**~ | **0.52**~ | **0.23**~ |
 | 8 (b32768) | 1.12 | **0.69**~ | **0.98**~ | **0.41**~ |
-| 9 (b32768) | 1.02~ | **0.83**~ | **0.97**~ | **0.82** |
 | 16 (b32768) | 1.04~ | 3.76 | **0.99** | 2.00 |
 | 17 (b32768) | **0.76**~ | 1.38 | **0.92** | 2.04 |
-| 24 (b32768) | 1.11~ | 1.27~ | 3.69 | 1.96 |
 | 32 (b16384) | 2.29 | 1.40~ | 3.86 | 2.17 |
-| 48 (b16384) | 1.94~ | 1.60 | 3.99 | 2.48 |
 | 64 (b16384) | 1.65~ | 1.25 | 3.95~ | 2.66 |
-| 96 (b8192) | 2.04 | 1.63~ | 3.31 | 2.49 |
-| 128 (b8192) | 1.75~ | 1.56 | 2.95 | 2.53~ |
-| 192 (b4096) | 2.15 | 1.47 | 2.46~ | 2.15 |
-| 256 (b4096) | 1.93 | 1.36 | 2.16~ | 1.99 |
-| 384 (b1024) | 1.90~ | 1.45~ | 1.92~ | 1.73~ |
 | 512 (b1024) | 1.73~ | 1.35~ | 1.73~ | 1.60~ |
 | **nrhs = 4** | | | | |
 | 4 (b32768) | **0.45**~ | 0.35~ | 0.12~ | 0.07~ |
-| 8 (b32768) | **0.46**~ | 0.38~ | 0.26~ | 0.18~ |
-| 16 (b32768) | 1.64 | 1.84 | 0.56~ | 0.53 |
 | 32 (b16384) | 1.30 | 1.03~ | 0.85 | 0.58 |
-| 64 (b16384) | 1.51~ | 1.27~ | 0.94 | 0.71 |
-| 128 (b8192) | 1.74 | 1.60~ | 1.11 | 1.23 |
-| 256 (b4096) | 1.72 | 1.39 | 1.20 | 1.88 |
 | 512 (b1024) | 1.53~ | 1.27~ | 2.75~ | 2.14 |
 
-(Bold marks a cell inside a clause shipped at the time of the run that loses; every bold cell is
-at `n <= 24`, below today's floor, so no sm_89 table row ranks `cta` first there. The `nrhs = 4` table omits
-the +1 rungs for width; they are in the CSV and change nothing.)
+Bold marks a cell inside a shipped clause that loses. Every bold cell is at `n <= 24`, below the
+floor. Full grid: `benchmarks/results/factor_baseline_getrs_<type>.csv`.
 
-At `nrhs = 1` and 32 <= n <= 512 the fused kernel (`cta`) is the strongest native code on this page —
-**1.25x to 3.99x, every type, every order, no losses** — and `docs/perf/lu.md` is right about
-that band. (The `nrhs = 4` columns for double and cdouble sit below 1.00 from n = 32 to 65;
-clause B is float-only, so those cells are measured, not routed.)
+- **Above the floor.** At `nrhs = 1` and 32 <= n <= 512, `cta` wins every type with no losses
+  (1.25x to 3.99x). The `nrhs = 4` cells for double and cdouble sit below 1.00 from n = 32 to 65;
+  clause B is float-only, so those cells are measured, not routed.
+- **Below the floor.** Clauses A and B cover 266 measured cells. **32 lose**, all at n <= 24, worst
+  **0.234** (cdouble n = 4, nrhs = 1, batch 32768). `docs/perf/lu.md` records clauses A and B as
+  zero-loss; this grid contradicts that below n = 32. The losses grow with batch: float n = 4,
+  nrhs = 1 reads 1.504 at b8192 and 0.521 at b65536.
 
-**It is wrong below it.** Clause A and clause B together cover 266 measured cells here, and
-**32 of them lose**, all at n <= 24, worst **0.234 at cdouble n = 4 nrhs = 1 batch 32768**:
-float 9 losses (0.448 min), cfloat 4 (0.593), double 10 (0.521), cdouble 9 (0.234). `lu.md`
-records clause A as "286 cells, geomean 2.261, <b>min 1.116, zero losses</b>" and clause B as
-"min 1.133, zero losses". **The losses are one-directional in batch**, which is what makes them
-a defect rather than noise: float n = 4 nrhs = 1 reads 1.504 / 1.073 / 0.709 / **0.521** at
-batch 8192 / 16384 / 32768 / 65536, and float n = 4 nrhs = 4 reads 0.658 / 0.448 / **0.302**
-over the last three. The clause then had no order bound and no batch bound; the grid behind it
-evidently had no n < 32 rung and no batch above ~16384. **A cheap P0 repair is an order floor
-on clause A and B** — the bracketing winner is n = 24 nrhs = 1 (1.11 float, 1.27 cfloat, 3.69
-double, 1.96 cdouble) — but the shape of the loss (deepening with batch at n = 4 while n = 17
-bounces 0.878 / 0.755 / 0.922) says the floor should be measured, not guessed.
-
-**The floor was measured, and it is 32.** The paragraph above asks for a measured floor rather
-than a guessed one; this is the table that answers it. Same 20 grids, `nrhs = 1`, but read at the
-**worst rung of each order's batch ladder** instead of at the top rung — the statistic that decides
-whether a clause has a loss anywhere inside it:
+**The floor is 32.** This table reads each order at the **worst** rung of its batch ladder, the
+statistic that shows whether a clause has a loss anywhere inside it (`nrhs = 1`):
 
 | T | n=4 | n=8 | n=16 | n=17 | n=24 | n=32 | n=48 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -309,37 +204,23 @@ whether a clause has a loss anywhere inside it:
 | double | 0.52 | 0.98 | 0.99 | 0.87 | 3.66 | 3.77 | 3.74 |
 | cdouble | 0.23 | 0.41 | 2.00 | 2.02 | 1.93 | 2.13 | 2.46 |
 
-Read this way the bracketing winner named above dissolves: **n = 24 is 0.95 for float** at its worst
-rung, against the 1.11 the top-batch table quotes, so it cannot bracket the floor. 32 is the first
-order where all four types clear the flip gate *and* stay clear above it, and the band below it is
-non-monotone — float passes at 8, fails at 9, 16, 17 and 24 — so no lower floor is defensible.
-Clause B takes the same floor on the same grid: float `nrhs = 4` reads 0.45 / 0.46 at n = 4 / 8 and
-1.07 / 1.10 at 17 / 24, clearing only from 32 (1.30). That floor is what the transcribed getrs
-tables carry (above): the `n=31` rows rank `vendor` first and the `n=32` rows `cta`.
+- 32 is the first order where all four types clear the flip gate and stay clear above it. Below
+  it the band is non-monotone, so no lower floor is defensible. Clause B has the same floor
+  (float `nrhs = 4` clears from 32).
 
-The mechanism, and why the losses deepen with batch: the fused kernel gives one work-group to a
-matrix whose whole solve is a few dozen flops, so the work-group **is** the cost, while
-`cublas?getrsBatched` keeps its per-item work inside one kernel and pays no such floor. P2 of the
-small-n plan is what reclaims the band — a fused factor-and-solve kernel holding the matrix in
-registers has no work-group floor to pay. The full write-up, with the correction it forces on the
-"min 1.116, zero losses" reading, is `docs/perf/lu.md` §[`getrs` order floor
-evidence](lu.md#getrs-order-floor-evidence).
+**Mechanism.** The fused kernel gives one work-group to a matrix whose solve is a few dozen flops,
+so the work-group is the cost; `cublas?getrsBatched` has no such floor. Full write-up:
+[`getrs` order floor evidence](lu.md#getrs-order-floor-evidence) in `docs/perf/lu.md`.
 
 ## Saturation
 
-**The `SAT_LADDER` inherited from `docs/perf/lu.md` does not saturate these ops.** Of the 442
-cells with a clean nominal and top rung, **201 (45%) moved more than 5% on the last doubling**. The cause is not statistical: at potrf
-float n >= 96 the **native arm is exactly linear in batch and the vendor arm is superlinear**,
-so the ratio has no fixed point inside the ladder at all.
+The `SAT_LADDER` inherited from `docs/perf/lu.md` does not saturate these ops. Of 442 cells with a
+clean nominal and top rung, **201 (45%) moved more than 5% on the last doubling**. The cause is
+not statistical. At potrf float n >= 96 the native arm is linear in batch and the vendor arm is
+superlinear (n = 128: native x1.99 per doubling, cuSOLVER x2.24-2.35; n = 512: x2.08-2.10 against
+x2.32-2.36), so the ratio has no fixed point inside the ladder.
 
-| potrf float | native, per doubling | cuSOLVER, per doubling |
-|---|---|---|
-| n = 128, b 2048 -> 4096 -> 8192 | x1.99, x1.99 | x2.24, x2.35 |
-| n = 256, b 1024 -> 2048 -> 4096 | x2.13, x2.03 | x2.37, x2.52 |
-| n = 512, b 256 -> 512 -> 1024 | x2.10, x2.08 | x2.32, x2.36 |
-
-Four cells were carried past the ladder to find the fixed point (same guard, same binary,
-one process per cell):
+Extensions past the ladder, one process per cell:
 
 | cell | ladder | extension | verdict |
 |---|---|---|---|
@@ -347,205 +228,99 @@ one process per cell):
 | potrf float 256 | 0.620 / 0.687 / 0.851 | 0.916 (b8192) | still +7.6%, **not saturated** |
 | potrf float 512 | 0.948 / 1.045 / 1.187 | 1.330 (b2048), **1.503** (b4096) | still +13%, **not saturated**, rising |
 | geqrf float 128 | 3.175 / 3.322 / 3.643 | **3.618** (b16384) | saturated at b16384, -0.7% |
-| geqrf float 256 | 8.735 / 7.393 / 7.573 | 7.775 (b8192) | +2.7%, effectively flat |
 | geqrf float 512 | 26.279 / 17.364 / 13.376 | **10.98** (b2048) | still -18%, **not saturated**, falling |
 
-The two n = 512 cells move in opposite directions and neither converges inside 24 GB. Quote
-potrf float 512 as <b>">= 1.19 and rising"</b> and geqrf float 512 as <b>"<= 13.4 and falling"</b>,
-not as point estimates. Two further mechanisms show up on the small orders and are worth
-knowing before reading a `~` there: the potrf CTA arm takes a one-off superlinear step exactly
-where the batch's working set crosses the 72 MB L2 (float n = 32 at b16384 = 67 MB reads x2.51
-against x1.77 on the rung below; n = 48 at b8192 = 75 MB reads x2.56), and below n ~ 16 both
-arms are launch-bound, so the ratio there is a ratio of dispatch overheads (see the next
-section).
+Quote potrf float 512 as **">= 1.19 and rising"** and geqrf float 512 as **"<= 13.4 and falling"**,
+not as point estimates. Neither converges inside 24 GB.
+
+Two small-order effects also affect `~` cells: the potrf CTA arm steps superlinearly when the
+batch's working set crosses the 72 MB L2 (float n = 32 at b16384 reads x2.51 against x1.77 one
+rung below), and below n ~ 16 both arms are launch-bound.
 
 ## Where this baseline disagrees with the record
 
-66 cells on this page have a per-cell number already recorded in `docs/perf/{potrf,lu,qr}.md`.
-**43 reproduce within 15%. 23 do not.** Every disagreement is below, at the prior's own batch; `*` marks the two rows where the
-prior's batch (4096) is not on this ladder for that order and the nearest rung, 8192, is used —
-the ratio there is flat to 1% across 4096..32768, so the substitution changes nothing.
-The vendor arm reproduces the record to three significant figures wherever the record states a
-vendor time — cuBLAS `getrfBatched` float n = 512 b512 49.67 ms against a recorded 49.73;
-`geqrfBatched` float n = 256 b2048 121.61 against 121.4 and n = 512 b512 370.83 against 370.9;
-cuSOLVER `potrfBatched` float n = 128 b4096 1.0503 ms against a table whose ratio implies 1.10
-— so **no disagreement here is the vendor moving.**
+Of 66 cells with a per-cell number in `docs/perf/{potrf,lu,qr}.md`, **43 reproduce within 15% and
+23 do not**. Every disagreement is at the prior's own batch. The vendor arm reproduces every vendor
+time the record states to three significant figures, so no disagreement is the vendor moving.
 
 | op | type | n | batch | prior | now | delta | explanation |
 |---|---|---:|---:|---:|---:|---:|---|
 | geqrf | float | 128 | 4096 | 2.01 | 3.32 | +65% | **tier.** The prior is the CTA time; the shipped default is Blocked |
-| geqrf | cfloat | 128 | 4096 | 3.04 | 3.71 | +22% | unexplained (CTA cannot serve this order for cfloat) |
-| geqrf | cdouble | 128 | 4096 | 0.52 | 0.69 | +32% | unexplained (CTA cannot serve this order for cdouble) |
-| geqrf | float | 256 | 2048 | 5.62 | 7.39 | +32% | unexplained (blocked driver; three causes ruled out) |
-| geqrf | cfloat | 256 | 2048 | 5.11 | 6.85 | +34% | unexplained, same |
-| geqrf | cdouble | 256 | 2048 | 0.84 | 1.32 | +57% | unexplained, same |
-| geqrf | float | 512 | 512 | 12.18 | 17.36 | +43% | unexplained, same |
-| geqrf | cfloat | 512 | 512 | 8.87 | 13.08 | +47% | unexplained, same |
-| geqrf | cdouble | 512 | 512 | 1.41 | 2.49 | +77% | unexplained, same |
+| geqrf | float | 256 | 2048 | 5.62 | 7.39 | +32% | unexplained (blocked driver) |
 | orgqr | float | 32 | 8192 | 123.2 | 52.9 | -57% | vendor per-item loop ~2.3x cheaper per item |
-| orgqr | double | 32 | 8192 | 114.1 | 45.1 | -60% | same |
-| orgqr | cfloat | 32 | 8192 | 65.1 | 38.2 | -41% | same |
-| orgqr | float | 128 | 4096 | 17.1 | 9.35 | -45% | same |
-| orgqr | double | 128 | 4096 | 30.8 | 12.0 | -61% | same |
-| orgqr | cfloat | 128 | 4096 | 10.6 | 5.23 | -51% | same |
-| orgqr | float | 256 | 2048 | 9.5 | 5.32 | -44% | same |
-| orgqr | double | 256 | 2048 | 15.3 | 8.21 | -46% | same |
-| orgqr | cfloat | 256 | 2048 | 5.8 | 3.96 | -32% | same |
-| orgqr | double | 512 | 512 | 6.0 | 4.52 | -25% | same |
-| orgqr | cdouble | 256 | 2048 | 3.4 | 4.66 | +37% | unexplained; cdouble moves the *other* way |
-| orgqr | cdouble | 512 | 512 | 1.7 | 2.75 | +62% | unexplained, same |
-| potrf | float | 8 | 8192* | 2.75 | 2.08 | -24% | see below — does not reproduce on any instrument |
-| potrf | cfloat | 8 | 8192* | 1.79 | 1.43 | -20% | same |
+| potrf | float | 8 | 8192* | 2.75 | 2.08 | -24% | see [The potrf n = 8 finding](#the-potrf-n--8-finding) |
 
-**geqrf at n = 128 is a tier mismatch, and it is exact.** Pinning the arm at that cell:
-`cta` 15.419 ms, `blocked` 9.349 ms, vendor 31.024 ms. `qr.md`'s order grid records
-"30.9 -> 15.4 ms (2.01x)" — the native number is the **CTA** time to four figures, while its own
-tier table two sections earlier records the *default* at that cell as blocked, 9.97 ms. The
-order grid's float `n = 128` row describes a choice that stopped being the default when the
-route-era vendor-free tier hook (`native_tier_preferred`) shipped, and is still not the default:
-the `form=sq n=128` row of `tuned/geqrf.float.sm_89.txt` ranks `tiny` (which cannot run at that
-order), then `blocked`, then `cta`, then `vendor`, where the `n=96` row ranks `cta` ahead of
-`blocked`. **It explains that one row and no other**: `qr.md`'s own tier
-table records the `cta` pin as "n/a" for cfloat at n >= 112 and for cdouble at n >= 80, so at
-those cells the prior's native arm was already the blocked driver, as ours is.
+`*` The prior's batch (4096) is not on this ladder; the nearest rung (8192) is used.
 
-**geqrf everywhere else is not that**, because CTA cannot serve those orders at all
-(`m*n > cta_max_elems`) and both arms resolved as they do today. Ruled out: the tier (above);
-the vendor arm (reproduces exactly); and the **trailing GEMM route** — forcing
-`BATCHLAS_GEMM_ROUTE=vendor` under the native arm changes it by 0.1% at all three of n = 128 /
-256 / 512, so the default already is the vendor-GEMM configuration and a GEMM change cannot be
-the story. What is left is the blocked driver itself (panel, `larft`, `pack_v`, schedule),
-which is 1.31x faster at n = 256 and 1.43x at n = 512 than `order.csv` records. Not isolated
-further; this run had no bisection budget.
+The other geqrf rows (+22% to +77%, n = 128..512) are unexplained; the orgqr cdouble rows at 256
+and 512 move the other way (+37%, +62%).
 
-**orgqr's vendor arm halved at n <= 256 and did not move at n = 512.** That is the signature of
-a per-item *launch* cost, not a per-item work cost: at n = 32 the loop is nearly pure launch
-overhead (54 us/item today), at n = 512 each item's own kernel hides it (486 us/item), and only
-the small end moved. Driver 595.84 is the obvious candidate and this run cannot test it —
-`qr.md` records no absolute vendor time at these cells. The cdouble rows moving the *opposite*
-way (+37%, +62%) are unexplained and are the one place where the pattern breaks.
+**geqrf n = 128 is a tier mismatch, and it is exact.** Pinned: `cta` 15.419 ms, `blocked` 9.349 ms,
+vendor 31.024 ms (float). `docs/perf/qr.md` records "30.9 -> 15.4 ms (2.01x)"; its native number is
+the CTA time, while its own tier table gives the default at that cell as blocked, 9.97 ms. The
+`form=sq n=128` row of `tuned/geqrf.float.sm_89.txt` ranks `tiny` (which cannot run at this
+order), then `blocked`, then `cta`, then `vendor`.
+
+**The other geqrf cells (+22% to +77%) are not explained.** Ruled out: the tier, the vendor arm
+(it reproduces exactly), and the trailing GEMM route (forcing `BATCHLAS_GEMM_ROUTE=vendor` moves
+the native arm by 0.1% at n = 128 / 256 / 512). Left: the blocked driver itself, which runs 1.31x
+faster at n = 256 and 1.43x faster at n = 512 than `order.csv` records. Not isolated further.
+
+**orgqr's vendor arm halved at n <= 256 and did not move at n = 512.** That is the signature of a
+per-item launch cost: about 54 us per item at n = 32, against 486 us at n = 512, where each item's
+own kernel hides it. Driver 595.84 is a candidate, but this run cannot test it.
 
 ## The potrf n = 8 finding
 
-`docs/perf/potrf.md` records **2.75x** at float n = 8, batch 4096, and
-`experiments/wp4_potrf/README.md` §4 is where it comes from. This run reads **2.08-2.18x**, and
-the number does not reproduce on any instrument, on either card, at any pin.
+`docs/perf/potrf.md` records **2.75x** at float n = 8, batch 4096, from the CTA-vs-cuSOLVER table
+in `experiments/wp4_potrf/README.md` §4. This grid reads **2.08-2.18x**. The number does not
+reproduce on any instrument, card or pin.
 
 | instrument | card | vendor ms | native ms | ratio |
-|---|---|---|---|---|
+|---|---|---:|---:|---:|
 | archived `realpotrf.cpp`, `BATCHLAS_POTRF_ROUTE` pinned | GPU 1 | 0.0284 | 0.0130 | **2.18** |
-| archived `realpotrf.cpp`, same | GPU 0 (the card §4 used) | 0.0292 | 0.0134 | **2.18** |
-| archived `realpotrf.cpp`, unpinned (build resolves) | GPU 1 | 0.0260 | — | — |
-| `factor_bench`, one arm per process | GPU 1 | 0.0261 | 0.0143 | 1.83 |
 | `factor_bench`, interleaved | GPU 1 | 0.0255 | 0.0121 | 2.10 |
 | `factor_bench`, the grid, b8192 / 16384 / 32768 | GPU 1 | 0.0395 / 0.0588 / 0.1024 | 0.0190 / 0.0284 / 0.0488 | 2.08 / 2.07 / 2.10 |
 
-The archived harness is the one whose source the P0 harness was ported from; it was rebuilt
-verbatim (`git show perf-evidence/vendor-independence:experiments/wp4_potrf/phase2_ab/realpotrf.cpp`)
-against today's `.so`s. **Its controls reproduce §4 exactly** — n = 48 reads 1.227 against a
-recorded 1.26, n = 128 reads 0.364 against 0.36, n = 32 reads 1.820 against 1.85 — and
-`factor_bench` agrees with it to within 0.3% at both control orders. The disagreement is
-confined to the two smallest rows of that table (n = 8, and n = 16 at 1.63 against 1.88).
+Ruled out:
 
-Ruled out, in the order they were tested:
+- **The harness.** The archived instrument, rebuilt from `git show perf-evidence/vendor-independence:experiments/wp4_potrf/phase2_ab/realpotrf.cpp`, reproduces the §4 controls, and `factor_bench` agrees with it to 0.3%.
+- **The route, kernel, card and vendor library.** Coverage shows `cta` and `vendor` on every row. `src/extensions/potrf_cta_device.hh` matches the tag. GPU 0 gives 2.18. `libcusolver.so.12.2.0.11` predates both campaigns.
+- **Saturation.** The ratio is flat at 2.07-2.10 over batch 8192-32768. No batch reads 2.75.
 
-* **The new harness.** The archived instrument reads the same thing.
-* **The route.** Coverage readback gives `native:cta` and `vendor:auto` on every row, which is
-  what §4's table assumes, and the archived harness's unpinned run resolves to the vendor time.
-* **The kernel.** `src/extensions/potrf_cta_device.hh` is character-identical to the tag once
-  comments are stripped; `potrf_cta.cc` differs only in which exception types five `throw`s
-  construct.
-* **The card.** GPU 0, which §4 used (`experiments/gpu_guard.sh 0`), gives 2.18 — the same as
-  GPU 1.
-* **The vendor library.** `libcusolver.so.12.2.0.11`, installed 2026-05-08, predates both
-  campaigns.
-* **Saturation.** The ratio is flat at 2.07-2.10 over batch 8192-32768, and a linear fit of the
-  ladder gives vendor `18.5 us + 2.56 ns/matrix` against native `9.07 us + 1.21 ns/matrix`:
-  **marginal ratio 2.11, intercept ratio 2.04.** There is no batch at which this cell reads
-  2.75.
+The cell is dispatch-bound: at n = 8, batch 4096, more than 80% of both arms is per-call launch
+latency (DRAM roof 2.2 us, native 13 us, vendor 28 us).
 
-What that leaves is the character of the cell rather than a defect. At n = 8, batch 4096 the
-DRAM roof is 2.1 MB / 950 GB/s = **2.2 us**, against 13 us native and 28 us vendor: **more than
-80% of both arms is per-call dispatch and launch latency**, which is also why this is the most
-context-sensitive number in the whole probe — the same cell reads 1.83 / 2.10 / 2.18 / 2.18
-across four process configurations, a 19% spread, while n = 48 reads 1.227 / 1.228 / 1.230, a
-0.3% spread. `docs/perf/README.md`'s own rule ("an unsaturated ratio measures overhead, not the
-algorithm") applies to it.
+**No raw data backs the prior.** `experiments/wp4_potrf/` at the evidence tag has no
+CTA-vs-cuSOLVER grid. The n = 8 and n = 16 rows of that table should be replaced by the numbers on
+this page; the rest reproduces.
 
-**And there is no raw data behind the prior.** `experiments/wp4_potrf/` at the evidence tag
-holds 25 CSVs; every one belongs to the SLM capacity study, the register probes, or the Phase 2
-blocked campaign. **§4's table — the CTA-vs-cuSOLVER grid, all four types, n = 8..155 — has no
-archived CSV, and neither §4 nor `potrf.md` names the harness that produced it.** It is the
-only per-cell table in the potrf record that cannot be re-derived from the archive. The
-conclusion this page records is therefore: *the n = 8 and n = 16 rows of that table are not
-reproducible and should be replaced by the numbers here*; the rest of it reproduces and stands.
+## Warm-up order and the variance gate
+
+The harness warms up on a time budget (`WARM_S` per arm) and discards the warm-up reps. A cold
+first run (SYCL JIT plus cold clocks) fabricated a **3.7x** result in this repository.
+
+The warm-up runs in the same arm order as the timed loop. With a per-arm warm-up, the first timed
+rep of arm 0 came in **2.2x slow every time** (0.0567 ms against a steady 0.0261 at potrf float
+n = 8) and tripped the `rel_sd` gate on a stable cell.
+
+## The arms list
+
+`--arms=` splits on commas exactly and rejects an empty list. (It once matched by substring, so
+`--arms=vendor` silently dropped the native arm.) Each arm name is its own route pin, recorded in
+the CSV `pin_parsed` column, and the residual and pivot gate runs per arm.
+
+An arm whose pin cannot run the shape throws `std::invalid_argument` before anything is timed. For
+example, `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n = 32 throws (`src/ops/getrf/getrf.cc:48`).
 
 ## Raw data
 
 | what | path |
 |---|---|
 | the 20 grids, every row including the discarded ones | `benchmarks/results/factor_baseline_<op>_<type>.csv` |
-| the harness | `benchmarks/factor_bench.cc` |
-| the ladder driver and the GPU guard | `benchmarks/run_factor_grid.sh`, `benchmarks/gpu_guard.sh` |
-| the archived instrument used to re-test the potrf n = 8 prior | `git show perf-evidence/vendor-independence:experiments/wp4_potrf/phase2_ab/realpotrf.cpp` |
+| the harness, ladder driver and GPU guard | `benchmarks/factor_bench.cc`, `benchmarks/run_factor_grid.sh`, `benchmarks/gpu_guard.sh` |
+| the archived potrf n = 8 instrument | `git show perf-evidence/vendor-independence:experiments/wp4_potrf/phase2_ab/realpotrf.cpp` |
 | the prior tables this page compares against | `docs/perf/potrf.md` §"CTA kernel measured against cuSOLVER", `docs/perf/qr.md` §"geqrf order and batch grid" and §"orgqr grid", `docs/perf/lu.md` §"Negative results" 4 |
 
-The saturation extensions, the tier pins and the GEMM-route probe in this page were run one
-process per cell through the same guard and are not in the CSVs; they are quoted inline with
-both arms' absolute times so they can be re-run from the text.
-
-## Warm-up order and the variance gate
-
-Method detail behind the `relsd` discards of [How to read the grid](#how-to-read-the-grid), moved
-out of `benchmarks/factor_bench.cc` so the gate can be audited from this page. The harness warms up
-**time-based** (a `WARM_S` budget per arm, so the warm-up loop runs for `WARM_S x arms`) and
-**discards** the warm-up reps: a cold first run — SYCL JIT plus cold clocks — has fabricated a
-**3.7x** result in this repository.
-
-The warm-up is also **interleaved**, in the same arm order the timed loop uses, and that is measured
-rather than stylistic. With a per-arm warm-up (all of arm 0, then all of arm 1) the first *timed* rep
-of arm 0 is the only one in the run not preceded by an arm-1 call, and it came in **2.2x slow every
-time** — **0.0567 ms against a steady 0.0261** at `potrf` float n = 8 — which alone pushed the vendor
-arm's `rel_sd` to **0.27** and tripped the gate on a cell whose median was perfectly stable. Warming
-in the timed loop's own order removes it.
-
-The consequence for reading the grid: a `relsd` discard on this page is a property of the *route*, not
-an artefact of the first rep, because no arm in the timed loop has an unwarmed neighbour position. The
-0.0261 ms steady reading is the same `factor_bench`, one-arm-per-process vendor time quoted in
-[The potrf n = 8 finding](#the-potrf-n--8-finding).
-
-## The arms list
-
-`benchmarks/factor_bench.cc` originally supported exactly two arms, `vendor` and
-`native`, with `--route=` applied to the second, and matched `--arms=` by
-`std::string::find`. Two defects followed from that, and the register-resident tier's
-A/B could not be run through it at all.
-
-**The substring match is the recorded `--name` trap in another costume.**
-`--arms=native` asked for one arm and got one, but only because `find("vendor")` missed;
-`--arms=vendor` silently dropped the native arm. Neither spelling is an error and
-neither prints a warning -- the CSV simply comes back with one row where the caller
-expected two, and a script that ratios row 0 against row 1 reads whatever came next.
-`--arms=` now splits on commas EXACTLY and rejects an empty list.
-
-**Two arms cannot express a three-tier comparison.** Comparing `vendor`, `cta` and
-`tiny` needed either two processes ratioing through a shared vendor arm -- which
-reintroduces precisely the clock drift the in-process interleave exists to remove -- or
-this change. `Cfg` now carries a `std::vector<std::string>` of arm names, each name is
-its own route pin (`--route=` still overrides the pin of the arm literally named
-`native`, which is the two-arm form every existing script uses), and the warm-up loop,
-the timed loop, the per-arm workspace sizing and the per-arm untimed correctness re-run
-all already iterated over `arms`, so they needed no change.
-
-The guards that make an added arm safe were also already there and are worth naming,
-because under the route-era pin grammar an arm whose pin did not parse measured whatever
-Auto picked and said nothing about it: `pin_parsed_now()` is recorded per arm in the CSV's
-`pin_parsed` column, and the untimed residual/pivot gate runs per arm, so a fast wrong answer
-cannot be reported as a win. What the route era did NOT guard was an arm whose pin parsed but
-whose route its support predicate refused -- `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n=32
-parsed fine and then fell through to the vendor, so that cell had to be excluded by the
-caller. Under flat selection both cases throw: an unparsable or uncompiled spelling, and a
-spelling whose `can_run` refuses the shape (getrf `tiny` holds cdouble only to n = 16,
-`src/ops/getrf/getrf.cc:48`), raise `std::invalid_argument` before anything is timed. Only the class
-words `native` and `vendor` still fall back to Auto (with a warning) when nothing of their
-class can run.
+The saturation extensions, tier pins and GEMM-route probe are not in the CSVs; their times are
+quoted inline.

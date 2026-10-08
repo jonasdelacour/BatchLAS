@@ -1,77 +1,112 @@
-# TRSM: the CTA kernel, the blocked driver, and the barrier that was missing (WP3) {#perf_trsm}
+# TRSM {#perf_trsm}
 
-> **Covers:** native batched `trsm` (families `cta`, `sg_left`, `blocked`, `vendor`), the WP3 measurements behind
-> the tables in `tuned/trsm.*.txt`, the rejected designs, and the correctness record.
-> **Status:** current. Selection is flat (`src/ops/trsm/`, since P3.3); the WP3 grids predate it and are the
-> evidence the transcribed sm_89 tables reproduce.
-> **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda, unless a section says otherwise.
-> **Measured:** WP3 steps 9-16 (2026-08-19/20); tables transcribed 2026-10-04 (sm_89), tuned 2026-10-05 (sm_120 float, double).
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · WP3 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-05 (sm_120)
 
-Native batched `trsm`: two SYCL kernels from WP3 plus the later `sg_left` kernel, a routing window measured on an RTX 4090, and a wrong-answer bug that the whole work package's benchmark grid was measured on top of. Read [the open debts](#trsm-open-debts) before trusting any ratio here. Shipped code is authoritative for *what*; `WP3_TRSM_SPEC.md`, `WP3_TRSM_SPEC_CORRECTIONS.md` and `experiments/wp3*` for *why*.
+Native batched `trsm` on the GPU: the `cta` (V1), `blocked` (V2) and `sg_left` kernels, the routing
+tables that choose among them, and the measurements behind those tables. The page gives the
+decisions, the numbers they rest on, and the rejected alternatives.
 
----
+> **Warning:** the grids below were measured on a kernel that returned wrong answers until the group
+> barrier was added on 2026-08-21. Read [open debts](#trsm-open-debts) before trusting any ratio here.
 
-## What ships
+## Choices and routing {#choices-flat-selection-p33}
 
-### Choices (flat selection, P3.3)
-
-trsm decides in `src/ops/trsm/trsm.cc` ([Phase 3.3, trsm](../design/flat-kernel-selection.md#phase-33-trsm) in @ref design_flat_selection). The vocabulary is `src/ops/trsm/choice.hh:14-19`, in tie-break order. `can_run` (`src/ops/trsm/trsm.cc:45-61`) is correctness only; every native family shares the term `d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 && A.batch_size() >= 1` (`trsm.cc:47-48`):
+Routing is in `src/ops/trsm/trsm.cc`. The choice vocabulary is `src/ops/trsm/choice.hh:14-19`, in
+tie-break order. `can_run` (`trsm.cc:45-61`) is correctness only. Every native family also requires
+`d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 && A.batch_size() >= 1`
+(`trsm.cc:47-48`).
 
 | spelling | implementation | `can_run` beyond the common term |
 |---|---|---|
 | `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) (`trsm.cc:49-53`) |
-| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([the sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) (`trsm.cc:54-57`) |
+| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) (`trsm.cc:54-57`) |
 | `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1` (`trsm.cc:58`) |
 | `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked (`d.has_vendor`, `trsm.cc:59`) |
 
-Which one runs is the first runnable entry of the nearest row of `tuned/trsm.<dtype>.<device>.txt`, keyed `side:exact trans:exact order:log:2 q:log batch:log` (`choice.hh:26-27`; q = `B.cols()` for Side::Left, `B.rows()` for Right; ConjTrans folds to `T`; uplo and diag are not keys). The last resort is `blocked`, then `vendor` (the CPU: no native family runs there). trsm takes no workspace. An `A.batch_size() != B.batch_size()` call throws `invalid_argument` in `trsm_validate_params`; before P3.3 it went to the vendor silently.
+Selection takes the first runnable entry of the nearest row of `tuned/trsm.<dtype>.<device>.txt`
+(@ref selection_tables). The key is `side:exact trans:exact order:log:2 q:log batch:log`
+(`choice.hh:26-27`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
+folds to `T`. uplo and diag are not keys. The last resort is `blocked`, then `vendor`. The CPU has no
+native family. trsm takes no workspace. `A.batch_size() != B.batch_size()` throws `invalid_argument`
+in `trsm_validate_params`.
 
-What the tables say (`tuned/README.md` has the provenance, @ref selection_tables the generated per-op summary; grid `choice.hh:31-34`, batch from 128 up):
+### What the tables say
+
+Grid: batch from 128 up (`choice.hh:31-34`). Provenance is in `tuned/README.md`.
 
 | table | source | first entry |
 |---|---|---|
-| `trsm.<all four>.sm_89.txt` | **transcribed, untimed** (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32, `blocked \| vendor` on all 2400 rows above: **native first everywhere**, `sg_left` in no row |
-| `trsm.{cfloat,cdouble}.sm_120.txt` | the same sm_89 transcription, relabelled | the same |
-| `trsm.float.sm_120.txt` | **measured** (tuner, `benchmarks/results/tuning/trsm.float.sm_120.jsonl`) | order <= 32: Left `sg_left` 876 / `cta` 310 rows, Right `cta` 921 / `vendor` 92; above 32: Left `blocked` 601 / `vendor` 538, Right `blocked` 645 / `vendor` 469 |
-| `trsm.double.sm_120.txt` | **measured** (`trsm.double.sm_120.jsonl`) | order <= 32: Left `sg_left` 587 / `cta` 523 / `vendor` 15 / `blocked` 1, Right `cta` 898 / `vendor` 95; above 32: Left `blocked` 874 / `vendor` 144, Right `blocked` 905 / `vendor` 56 |
+| `trsm.<all four>.sm_89.txt` | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32; `blocked \| vendor` on all 2400 rows above. `sg_left` in no row |
+| `trsm.{cfloat,cdouble}.sm_120.txt` | the sm_89 transcription, relabelled | the same |
+| `trsm.float.sm_120.txt` | measured (`benchmarks/results/tuning/trsm.float.sm_120.jsonl`) | order <= 32: Left `sg_left` 876 / `cta` 310 rows, Right `cta` 921 / `vendor` 92; above 32: Left `blocked` 601 / `vendor` 538, Right `blocked` 645 / `vendor` 469 |
+| `trsm.double.sm_120.txt` | measured (`trsm.double.sm_120.jsonl`) | order <= 32: Left `sg_left` 587 / `cta` 523 / `vendor` 15 / `blocked` 1, Right `cta` 898 / `vendor` 95; above 32: Left `blocked` 874 / `vendor` 144, Right `blocked` 905 / `vendor` 56 |
 
-So on sm_89 `sg_left` runs only when pinned, and the vendor runs only where nothing native can (a heterogeneous batch, a CPU queue). The sm_120 measurement is on [the Blackwell page](blackwell.md#trsm-on-sm_120-result).
+On sm_89, `sg_left` runs only when pinned. The vendor runs only where no native family can: a
+heterogeneous batch, or a CPU queue. The sm_120 result is on the
+[Blackwell page](blackwell.md#trsm-on-sm_120-result).
 
-**Before flat selection** the decision was `include/batchlas/blas/dispatch/route_trsm.hh` (a `supports()`/`preferred()` route table, now `can_run` and the tables) fed by a shape builder, `trsm_op_shape` in `src/backends/trsm_route.hh`; both were deleted in P3.3. The old `preferred()` chose native for every type, side and order at batch >= 8, except `float` + `Side::Right` at batch 8-127 above order 32. The transcriber (`tools/transcribe/trsm_transcribe.cc`, deleted in phase 5) evaluated it at every grid cell, and both exceptions sit below the grid's smallest batch (128), so they are not in the tables: calls at batch < 8 that went to the vendor now run native (the potrf panel at small batch and the 8 facade tests in `trsm_tests.cc` among them); see [the batch floor](#the-batch-floor) and debt 5.
+The removed router (`route_trsm.hh`, deleted in flat selection P3.3) chose native for every type,
+side and order at batch >= 8, except `float` with `Side::Right` at batch 8-127 above order 32. Those
+calls lie below the table's smallest batch. See [the batch floor](#the-batch-floor).
 
-Two windows in the exploration notes were never what shipped:
+### The shape builder and the field mapping {#the-shape-builder-and-the-field-mapping}
 
-* the notes record `float && Side::Left -> order <= 16` (step 9), then `order <= 128` (step 12), then `order <= 128 || q*batch < 524288` (step 13). The final `preferred()` was unconditional `return true` for it; step 16 deleted the work threshold.
-* spec §10 proposed one `trsm_use_native()` predicate carrying `batch*q < 8*CU*32 -> vendor`. Nothing like it shipped — see [the starvation guard](#rejected-the-starvation-guard).
+* **Key.** `key_of` (`trsm.cc:36-39`) builds `side`, `trans` (ConjTrans folds to `T`, since the
+  kernels differ only in a conjugation), `order` = `A.rows()`, `q` = `rhs_count` and `batch` =
+  `A.batch_size()`.
+* **`can_run`** reads the views directly and never dereferences `data_ptr()`. Device facts (`is_gpu`,
+  `has_sg32`, `max_wg`, `has_vendor`) come from the memoized `select::describe`.
+* **Coverage row.** `trsm.cc:96-97` maps `m = B.rows()`, `n = B.cols()`, `k` = triangular order, plus
+  transA, uplo, side and diag. `select::run` fills in the backend that actually ran.
 
-### The shape builder and the field mapping
+### Tuning knobs and environment {#tuning-knobs-and-environment}
 
-Before P3.3 a shape builder, `trsm_op_shape` in `src/backends/trsm_route.hh`, was the only layer allowed to query the device or read the environment, and it filled an `OpShape` that both the route table and the coverage row read. Both files are deleted. Its jobs are now split inside `src/ops/trsm/trsm.cc`, and only device facts reach the decision, through the memoized `select::describe` (`select::Device`):
-
-* **The selection key** is `key_of` (`trsm.cc:36-39`): `side` (`L`/`R`), `trans` (`N`/`T`; ConjTrans folds to `T`, the kernels differ only in a conjugation), `order` = `A.rows()`, `q` = the right-hand-side count (`rhs_count`: `B.cols()` for Side::Left, `B.rows()` for Right) and `batch` = `A.batch_size()`. uplo and diag are not keys.
-* **`can_run`** reads the views directly: the heterogeneous-batch term (`A.is_heterogeneous() || B.is_heterogeneous()`, the field the old builder wrote as `s.heterogeneous_batch`), `order >= 1`, `q >= 1`, batch >= 1, and the device facts `is_gpu`, `has_sg32`, `max_wg` and `has_vendor`. It never dereferences `data_ptr()`.
-* **The coverage `reached` row** keeps the old mapping (`trsm.cc:96-97`: `m = B.rows()`, `n = B.cols()`, `k` = the triangular order, plus transA, uplo, side and diag) and carries the real backend, filled by `select::run`, instead of `AUTO`, which retires open debt 18.
-
-### Tuning knobs and environment
-
-* `BATCHLAS_TRSM_ROUTE` — a pin: `auto`, `native`, `vendor`, or a spelling (`cta`, `sg_left`, `blocked`). `native` takes the first non-vendor entry of the row that can run (on sm_89: `cta` at order <= 32, `blocked` above). A spelling the shape cannot run (`cta` or `sg_left` above order 32, `sg_left` on Side::Right) **throws** `invalid_argument`, and so does an unknown word, including the old `native:cta` / `native:blocked` aliases (removed in flat selection phase 5); `native` and `vendor` fall back to Auto with a warning when nothing of their class can run. **`BATCHLAS_TRSM_VARIANT` is read by nothing.** The spec instructs pinning the native path with that variable, which would pin nothing.
-* `BATCHLAS_TRSM_OUTER_NB` — V2's outer block width; a **tuning** knob, never a selection one (`trsm_outer_block` in `trsm_native.cc`). Default 128 for `Side::Left`, `cta_max_n` (32) for `Side::Right`, rounded down to a whole number of CTA blocks. **Read per call, never latched** (`trsm_outer_block`): once a function-local static caches the first process-wide answer, a later change is invisible and an A/B harness, or the knob's own test, silently measures the default arm twice and passes. The `settings()` snapshot is re-read on reload, so a per-call read sees a `ScopedEnvVar`; a static would destroy that again. A value of 0 means unset, and the side-dependent default is applied at the read. *(Stale until 2026-09-30: this bullet said the parse was cached in a function-local static and fixed by the first blocked call; the code reads per call.)*
+* `BATCHLAS_TRSM_ROUTE` takes `auto`, `native`, `vendor`, or a spelling (`cta`, `sg_left`,
+  `blocked`). `native` takes the first non-vendor runnable entry (sm_89: `cta` at order <= 32,
+  `blocked` above). A spelling the shape cannot run (`cta` or `sg_left` above order 32, `sg_left` on
+  `Side::Right`) and an unknown word throw `invalid_argument`. `native` and `vendor` fall back to
+  Auto with a warning when nothing of their class can run. The old `native:cta` and `native:blocked`
+  aliases are gone.
+* `BATCHLAS_TRSM_VARIANT` is read by nothing. Setting it pins nothing.
+* `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width, a tuning knob and not a selection one
+  (`trsm_outer_block`, `trsm_native.cc`). The default is 128 for `Side::Left` and `cta_max_n` (32) for
+  `Side::Right`, rounded down to whole CTA blocks. A value of 0 means unset. It is read per call and
+  never latched. A function-local static would hide a later change, so an A/B harness or a
+  `ScopedEnvVar` test would silently measure one arm twice.
 
 ---
 
-## Design: V1, V2 and the canonical fold
+## Design: V1, V2 and the canonical fold {#design-v1-v2-and-the-canonical-fold}
 
-**V1** (the `cta` family; `Algorithm::CTA` in the old route vocabulary): one work-group per matrix and rhs slice, one work-item per independent solve, the solution vector resident in that thread's registers as `T x[N]`, the canonical triangle staged once into SLM and broadcast (every thread reads the same `Lc(s,t)` at each step, so bank layout is irrelevant). The 24 canonical `(side, uplo, transA, diag)` cases fold into one recurrence via `canonicalise()` (`src/sycl/trsm_canonical.hh:19`, shared with `sg_left`); the index map is `rho(s) = fwd ? s : order-1-s`.
+**V1** (`cta`): one work-group per matrix and rhs slice, one work-item per independent solve. The
+solution vector lives in registers as `T x[N]`. The canonical triangle is staged once into SLM and
+broadcast. The 24 canonical `(side, uplo, transA, diag)` cases fold into one recurrence through
+`canonicalise()` (`src/sycl/trsm_canonical.hh:19`, shared with `sg_left`). The index map is
+`rho(s) = fwd ? s : order-1-s`.
 
-**V2** (the `blocked` family; `Algorithm::Blocked` in the old vocabulary): a host-side two-level driver. The outer level blocks at `OUTER_NB` and issues a trailing GEMM; each outer panel is then solved by the inner `nb = cta_max_n = 32` loop against its own, much shorter prefix. V1 is literally V2's panel solve, so the crossover is a capacity, not a tuned guess.
+**V2** (`blocked`): a host-side two-level driver. The outer level blocks at `OUTER_NB` and issues a
+trailing GEMM. Each outer panel is solved by the inner `nb = cta_max_n = 32` loop, which is V1, against
+its own shorter prefix. The crossover is a capacity limit, not a tuned choice.
 
-The grid is `batch * ceil(q/WG)`, never batch alone — the guard against this repo's recurring batch-only-parallelism defect. The work-group ladder walks `{256,128,64,32}` and takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.hh:36-46`; since the sm_120 retune it also skips a rung that would leave over half its lanes without a rhs column, [the ladder cap](blackwell.md#trsm-v1-ladder-cap)). It cannot exceed 256: the worst instantiation is `complex<double>` N=32 at 226 registers, and `226*256 = 57,856` against the hard 65,536-registers-per-block limit — 12% headroom as WP3 counted it. That is a `static_assert`, not a comment (`trsm_native.cc:94`); it now checks the tighter per-sub-partition bound (`resident::sm89_fits`: 2 x 32 x 232 = 14,848 of 16,384 per sub-partition), see [the LU page](lu.md#the-register-cap-that-binds-is-per-sub-partition).
+The grid is `batch * ceil(q/WG)`, never batch alone. The work-group ladder walks `{256,128,64,32}` and
+takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.hh:36-46`).
+On sm_120 it also skips a rung that leaves over half its lanes without an rhs column
+([ladder cap](blackwell.md#trsm-v1-ladder-cap)).
 
-**Diagonal-block inversion is rejected at every tier** (spec §2.4, survived the verification pass). The "free for ortho" licence compares a trsm *residual* bound against a CholQR *orthogonality* bound; restated in orthogonality currency the inverted variant contributes at the same order as the existing term with an unbounded constant, and any constant above ~2 flips Chol2 from recovering to not. This retires the plan's Risk 4 for `trsm` rather than measuring it.
+The work-group size cannot exceed 256. The worst instantiation, `complex<double>` at N=32, uses 226
+registers: `226*256 = 57,856` of 65,536 per block. The enforced check is the tighter per-sub-partition
+bound, `resident::sm89_fits` (2 x 32 x 232 = 14,848 of 16,384;
+[the LU page](lu.md#the-register-cap-that-binds-is-per-sub-partition)). It is a `static_assert` at
+`trsm_native.cc:94`.
 
-### The register gate and the CTA capacity
+Diagonal-block inversion is rejected at every tier; see [Negative results](#trsm-negative-results).
 
-The gate is `stack frame == 0` **AND** `0 spill bytes` **AND** `registers * WG <= 65536`, measured with `scripts/register_probe.sh`, which replays the shared library's `link.txt`. A per-TU `-Xcuda-ptxas -v` is reported "argument unused" — device code is AOT-compiled to a cubin at the *shared-library device link* — so grepping such a log for "spill" finds nothing and reads as "no spill". That is a phantom measurement whichever gate you use.
+### The register gate and the CTA capacity {#the-register-gate-and-the-cta-capacity}
+
+The gate is: stack frame == 0, 0 spill bytes, and `registers * WG <= 65536`. Measure it with
+`scripts/register_probe.sh`, which replays the shared library's `link.txt`. A per-TU
+`-Xcuda-ptxas -v` log is not a valid measurement. Device code is compiled at the shared-library device
+link, so such a log reports "argument unused" and no spill whatever the kernel does.
 
 | type | N=8 | N=16 | N=32 | regs*256 at N=32 |
 |---|---|---|---|---|
@@ -80,11 +115,15 @@ The gate is `stack frame == 0` **AND** `0 spill bytes` **AND** `registers * WG <
 | complex\<float\> | 50 | 86 | 148 | 37,888 |
 | complex\<double\> | 74 | 138 | 226 | **57,856** |
 
-Zero frame and zero spill in all 24 kernels (4 types x 3 buckets x 2 sides). N=64 fails: float 119 regs / **256 B frame**, double 145 regs / **512 B frame**, both with **zero spill**. 256 B is 64 floats and 512 B is 64 doubles — `x[]` itself in local memory, which voids V1's entire thesis. **Read the frame column, not the spill column**: a spill-only check passes N=64 while the design is void. The spec's "256 B/thread register cliff" is falsified (`gemm_kernels.cc:696-705`: an 8x8 double tile at 208 registers, `complex<float>` at 247, both spill-free; only `complex<double>` spills there, and only 3.4 KB), and the corrections document's "gate on spill, not frame" is wrong *for this kernel*, where the only thing that can be on the stack is the accumulator. The spec predicted `n_cta(float) = 64` and reached the right answer (32) only through a fallback instruction whose stated mechanism does not occur.
+All 24 kernels (4 types x 3 buckets x 2 sides) have zero frame and zero spill. **Read the frame
+column, not the spill column.** N=64 fails: float 119 registers with a **256 B frame**, double 145
+registers with a **512 B frame**, both with zero spill. A 256 B frame is 64 floats, so `x[]` itself is
+in local memory, which defeats V1's design.
 
-### The `Side::Left` staging tile
+### The `Side::Left` staging tile {#the-sideleft-staging-tile}
 
-For `Side::Left` thread `u` owns column `u`, so at step `s` the lanes of a warp read `B(rho(s), u0+lane)` — addresses `ldb` apart. ncu, float, n=32, q=1024, batch=512:
+For `Side::Left`, thread `u` owns column `u`. At step `s` the lanes of a warp read
+`B(rho(s), u0+lane)`, addresses `ldb` apart. ncu, float, n=32, q=1024, batch=512:
 
 | | load sec/req | store sec/req | DRAM vs analytic floor | kernel time |
 |---|---|---|---|---|
@@ -92,17 +131,31 @@ For `Side::Left` thread `u` owns column `u`, so at step `s` the lanes of a warp 
 | Left, after | **5.13** | **4.00** | — | **0.145 ms** |
 | Right (never staged) | 5.13 (1.28x) | 4.00 | 0.75x | 0.141 ms |
 
-The spec named the right factor at the wrong level. It predicted "8x over-fetch on read and write-allocate", which reads as DRAM traffic; DRAM measures **0.75-0.85x of the analytic floor `2*q*n*sizeof(T)*batch`, i.e. below it** — the bytes a lane skips at step `s` are the bytes it wants at steps `s+1..s+7`, still in cache when it gets there. The defect is entirely LSU/L1 transaction count. Same fix either way, but "short of DRAM bandwidth" aims the obvious responses (vectorised loads, wider tiles) at the wrong resource, and that misreading has already cost this repo one panel kernel.
+The defect is LSU/L1 transaction count, not DRAM. DRAM traffic is 0.75-0.85x of the analytic floor
+`2*q*n*sizeof(T)*batch`, because the bytes a lane skips at step `s` are read at steps `s+1..s+7` from
+cache. Vectorised loads and wider tiles aim at the wrong resource.
 
-**Staging is gated to the real types, by measurement** (`trsm_stage_left`, `trsm_native.cc:58`). Applied to complex it costs register residency: `complex<float>` N=32 gains a **464 B** frame and `complex<double>` a **232 B** one, both zero-spill, because the nested round loop stops fully unrolling for wide bodies. And complex cannot benefit — over-fetch is `32/sizeof(T)` lanes per sector, so a 16-byte scalar is capped at 2x. **float is the only type that loses precisely because 32/4 = 8.** With the gate, complex measures 1.00-1.01x either way and all 24 kernels are back to zero frame.
+Staging is gated to float (`trsm_stage_left`, `trsm_native.cc:58`). For complex it costs registers:
+`complex<float>` N=32 gains a 464 B frame and `complex<double>` a 232 B one. Complex also cannot gain
+more than 2x, since over-fetch is `32/sizeof(T)` lanes per sector. Float loses only because 32/4 = 8.
+With the gate, complex measures 1.00-1.01x. Tile height is 16 for `sizeof(T) <= 4` and 8 otherwise.
+The row stride is `NB_STAGE + 1`, which keeps the read-out conflict-free.
 
-Tile height is 16 for `sizeof(T) <= 4` and 8 otherwise; row stride is `NB_STAGE + 1`, and that padding is what makes the read-out conflict-free. The spec's §4.1 size formula allocated `NB_STAGE * WG`, which at `WG=128, NB_STAGE=16` indexes `15 + 127*17 = 2174` into a 2048-element allocation: **127 elements past the end**.
+### The two-level blocked driver {#the-two-level-blocked-driver}
 
-### The two-level blocked driver
+With the old `nb = 32` outer block, every trailing GEMM at n=512 had one dimension pinned at 32. GEMM
+intensity then tops out near `2w/sizeof(T)` = 16 flop/byte for float, against a machine balance of
+about 42 on the RTX 4090. The traffic model below counts B elements per batch item, in units of q at
+n=512 (ideal 1024):
 
-V2's outer block used to be `nb = trsm_cta_max_n<T>() = 32`. At n=512 that is 16 blocks, so every trailing GEMM had one dimension pinned at 32. GEMM arithmetic intensity with a dimension pinned at `w` tends to `2w/sizeof(T)` flop/byte = 16 for float, against an RTX 4090 machine balance of ~42 — **93.75% of the solve's flops ran bandwidth-bound by construction** on a problem that at n=512 is intrinsically compute-bound (51 flop/byte). The left-looking re-read factor `(p-1)/2` compounds it: 7.5x at n=512. Traffic model, B elements per batch item in units of q at n=512, ideal 1024: NB=32 -> 5824 (5.7x); **NB=128, nb=32 -> 4096 (4.0x, ships)**; NB=128, nb=64 -> 3328; NB=128, nb=128 -> 2560.
+| OUTER_NB, nb | traffic | |
+|---|---|---|
+| 32 | 5824 (5.7x) | |
+| **128, 32** | **4096 (4.0x)** | **shipped** |
+| 128, 64 | 3328 | |
+| 128, 128 | 2560 | |
 
-The width is **side-dependent, measured not aesthetic**. `OUTER_NB` sweep on float, worst cell per order, `vendor_ms/native_ms`:
+The width is side-dependent, and the sweep is measured. Float, worst cell per order, `vendor_ms/native_ms`:
 
 | order | Left nb32 | nb64 | nb128 | nb256 | Right nb32 | nb64 | nb128 | nb256 |
 |---|---|---|---|---|---|---|---|---|
@@ -110,23 +163,38 @@ The width is **side-dependent, measured not aesthetic**. `OUTER_NB` sweep on flo
 | 256 | 0.75 | 0.78 | **0.87** | 0.75 | 1.01 | 0.94 | **0.83** | 1.01 |
 | 512 | 0.58 | 0.74 | **0.76** | 0.75 | 1.07 | 0.92 | **0.82** | 0.91 |
 
-Widening helps Left at every large order and **hurts Right at every large order**, turning two winning Right cells into losses: Left's update is `C(nb x q)`, Right's is `C(q x nb)`, so at the time of the sweep they landed in different clauses of the native gemm kernel selector (`select_kernel_variant`, deleted in P3.4; gemm now picks from `tuned/gemm.*.txt`, see [gemm's choices](gemm.md#choices-flat-selection-p34)), and widening also shortened the inner updates' `k` below the `k >= 128` gate float's transposed fast paths then required. The side split is a measurement and stands; whether today's gemm tables reproduce the mechanism has not been re-measured. One number for both sides would have to be 32, discarding everything the two-level driver buys. `nb256` degenerating to `nb32` at order 256 (0.75 vs 0.75; 1.01 vs 1.01) is the internal check that the knob does what it says.
+Widening helps Left at every large order and hurts Right at every large order. Left's update is
+`C(nb x q)` and Right's is `C(q x nb)`. The two land in different clauses of the gemm kernel selector
+of the time, and wider `nb` shortens the inner `k` below the `k >= 128` gate. Whether today's gemm
+tables reproduce this mechanism has not been re-measured. `nb256` matching `nb32` at order 256 (0.75
+vs 0.75; 1.01 vs 1.01) confirms the knob does what it says.
 
-The notes present this sweep as "on float", but `nb_sweep.csv` also carries `complex<float>`, and recomputed it is **nearly insensitive to the knob**: 6.91-6.97x at order 128, 7.82-8.10x at 256, 17.67-18.59x at 512 (one 27.41x outlier at nb256). So the side split is a float-only effect, and the shipped side-dependent default is applied to all four types on float's evidence alone. `double` and `complex<double>` were never in this sweep.
+The side split is a float-only measurement. `nb_sweep.csv` also holds `complex<float>`, which is nearly
+insensitive to the knob: 6.91-6.97x at order 128, 7.82-8.10x at 256, 17.67-18.59x at 512, with one
+27.41x outlier at nb256. `double` and `complex<double>` were never swept. The shipped side-dependent
+default applies to all four types on float evidence alone.
 
 ---
 
-## The measured grid
+## The measured grid {#the-measured-grid}
 
-All ratios are `vendor_ms / native_ms`; **>1 means native is faster**. RTX 4090, one card held exclusive by `experiments/gpu_guard.sh`, warmup ahead of every timed iteration (no cold-JIT number), `bench::pristine(B)` restored between iterations because trsm is in place, and the two legs of every pair differ **only** in `BATCHLAS_TRSM_ROUTE`.
+All ratios are `vendor_ms / native_ms`; **>1 means native is faster**. Runs were on RTX 4090, one card
+held exclusive by `experiments/gpu_guard.sh`, with warmup before every timed iteration.
+`bench::pristine(B)` is restored between iterations, because trsm is in place. The two legs of each pair
+differ only in `BATCHLAS_TRSM_ROUTE`. A ratio is quoted only at saturation: the top batch's GFLOP/s is
+within 1.15x of the batch below it, per `(type, side, n, q)`.
 
-### The step-9 grid
+### Step-9 grid
 
-The grid is `benchmarks/trsm_benchmark.cc`'s `TrsmOrthoSizes`: n in {8,16,32,64,128,256} x q in {256,1024,4096} x batch in {128,512,2048}, all four types, both sides. **Not** a square RHS — the library never issues one. The two real call sites (`ortho.cc:171`, `:260`) pass a k x k Cholesky factor as A and an m x k basis as B, so the triangular order is small and the other extent large. Coverage capture confirms it against what the suite issues: `n=10 q=256 batch=1` (4880 calls), `n=10 q=20` (4800), `n=12 q=36 batch=3` (2392), `n=5 q=64 batch=3` (3258) — every one `Side::Right, Lower, Trans, NonUnit`, every one inside V1's capacity of 32.
+The grid is `TrsmOrthoSizes` in `benchmarks/trsm_benchmark.cc`: n in {8,16,32,64,128,256} x q in
+{256,1024,4096} x batch in {128,512,2048}, all four types, both sides. The library never issues a square
+RHS. Real calls pass a k x k factor as A and an m x k basis as B, so the triangular order is small. The
+suite's calls are all `Side::Right, Lower, Trans, NonUnit` inside V1's capacity of 32.
 
-**Nine of the spec's 54 cells are dropped**, by a 6 GB cap rather than by the card: recomputed from `trsm_grid_bytes()` the nine ask 6.4-70.9 GB, and only two of them (70.9 and 34.9 GB) actually exceed this box's 24 GB. (Both the benchmark comment and the step-9 README say "do not fit in 24 GB"; the arithmetic says the cap is what drops the other seven.) The grid *prints* every dropped cell; a grid that shrinks quietly reads exactly like one that covered everything. The cap is computed for `complex<double>` and applied to all types so the type columns stay comparable. An earlier draft of the cap table omitted the harness's pristine copy of B and understated every row by ~2x — read the figures off `trsm_grid_bytes()`, do not re-derive them.
+Nine of the 54 cells are dropped by a 6 GB per-cell cap, computed for `complex<double>` and applied to
+all types. The grid prints each dropped cell. Read byte counts from `trsm_grid_bytes()`.
 
-Saturation is enforced per `(type, side, n, q)`: a ratio is quoted only if the top batch's GFLOP/s is within 1.15x of the batch below. Step 9, min-max over all measured cells at each order, recomputed from the committed CSVs:
+Min-max ratio over all saturated cells at each order:
 
 | type | side | order 8 | 32 | 128 | 256 |
 |---|---|---|---|---|---|
@@ -135,17 +203,23 @@ Saturation is enforced per `(type, side, n, q)`: a ratio is quoted only if the t
 | complex\<double\> | Right | 3.96-9.87 | 3.76-14.35 | 1.33-5.30 | **1.20**-4.74 |
 | complex\<double\> | Left | 2.27-6.07 | 2.86-10.39 | 3.52-5.12 | 3.49-4.66 |
 | complex\<float\> | Right | **1.01**-1.52 | 1.42-3.84 | 4.99-6.30 | 5.51-8.01 |
-| complex\<float\> | Left | 1.06-1.40 | 2.71-3.50 | 6.54-15.85 | 8.20-<b>21.91</b> |
+| complex\<float\> | Left | 1.06-1.40 | 2.71-3.50 | 6.54-15.85 | 8.20-**21.91** |
 | float | Right | 1.62-4.59 | 2.21-3.61 | **0.97**-1.58 | 1.02-1.63 |
 | float | Left | 1.61-3.58 | **0.70**-0.87 | 0.71-0.79 | **0.57**-0.63 |
 
-Saturated subsets as ranked in the notes: double 32/32 cells won (1.39x-9.62x), `complex<double>` 30/30 (1.20x-4.66x), `complex<float>` 30/30 (1.01x-21.91x), float/Right 18/18 (1.54x-4.59x), float/Left **6 of 16**. The one losing region is exactly where §3.4 predicted, and `double` at the same shapes wins 1.39-6.37x — same kernel, same access pattern, opposite verdict, because cuBLAS's double triangular path is weak enough that the over-fetch never decides the race. That is why the decision is per type and not one number: the old router carried per-type clauses, and the tables are per dtype (`tuned/trsm.<dtype>.<device>.txt`). The step-16 grid below later removed the float/Left loss, which is why the sm_89 transcription is native-first for every type.
+Saturated wins: double 32/32 (1.39-9.62x), complex<double> 30/30 (1.20-4.66x), complex<float> 30/30
+(1.01-21.91x), float/Right 18/18 (1.54-4.59x). Float/Left wins 6 of 16. The double path wins 1.39-6.37x
+at the same float/Left shapes, because cuBLAS's double triangular path is weak enough that the
+over-fetch never decides the race. That is why the decision is per type, and why the tables are per
+dtype. The step-16 grid later removed the float/Left loss.
 
-### The batch floor
+### The batch floor {#the-batch-floor}
 
-The old router had a batch floor, `if (s.batch < 8) return false;` (vendor below batch 8), derived from `starved.sh`, batch in {1,8,32} x q in {32,128}, n in {8,32,128}, run on GPU 1 while the saturated sweep owned GPU 0. It was deleted in P3.3 and is not in the tables (see [what the tables say](#choices-flat-selection-p33)): the tables start at batch 128, and nearest-row lookup sends every smaller batch to the batch-128 rows. The measurement:
-
-All rows below are the **q = 32** leg (the q = 128 leg is in the same CSVs and tells the same story, except where noted):
+The removed router had `if (s.batch < 8) return false;`, which sent batch < 8 to the vendor. It came from
+`starved.sh`, a profile over batch {1,8,32} x q {32,128} x n {8,32,128}. The script's own header says
+the numbers are launch-overhead dominated and must not be ranked. The floor was deleted in P3.3. The
+tables start at batch 128, and smaller batches take the batch-128 rows. Ratios at q = 32 (the q = 128
+leg tells the same story unless noted):
 
 | type, side, order | batch=1 | batch=8 | batch=32 |
 |---|---|---|---|
@@ -158,24 +232,33 @@ All rows below are the **q = 32** leg (the q = 128 leg is in the same CSVs and t
 | double Right n=8 | 1.131 | 2.932 | 2.915 |
 | complex\<double\> Right n=32 | 3.536 | 9.975 | 39.767 |
 
-The old floor sat at the **first measured win**, not at a round number: batch=1 loses at every order >= 32 for both real types, and batch=8 wins at every order **except float at 128**, which stays a loss (0.740-0.810x on both sides at batch 8 and 32) — that residue is what the float/`Side::Right` order clause below encoded. Float/`Side::Left` had **no** such clause and preferred native there, on the strength of the saturated grid at batch >= 128; the only evidence in `[8,127]` is this profile, and it says 0.756-0.780x. Bracketed on both sides for float and double at orders 32 and 128.
+The old floor sat at the first measured win. Batch=1 loses at every order >= 32 for both real types.
+Batch=8 wins at every order except float at 128, which stays a loss (0.740-0.810x on both sides at batch
+8 and 32). The floor was type-blind and over-broad. Over both q legs, `double` at order 8 wins
+1.09-1.15x at batch=1, `complex<float>` wins 1.29-12.8x at batch=1, and `complex<double>` wins
+2.1-11.1x at batch=1.
 
-Two caveats. (1) `starved.sh` says in its own header: *"PROFILE ONLY, NOT FOR RANKING… every number this produces is dominated by launch overhead; a ratio read off it is an overhead ratio and must not be quoted as an algorithm result."* The floor was nevertheless derived from exactly these numbers. (2) The floor was **type-blind and demonstrably over-broad**: recomputed over both q legs, `double` at order 8 wins **1.09-1.15x** at batch=1, `complex<float>` wins 1.29-12.8x at batch=1 at every order measured, and `complex<double>` wins **2.1-11.1x** at batch=1 (2.1-2.9x at order 8, rising to 7.0-11.1x at order 128) — and the old `preferred()` handed all of them to the vendor.
+Below batch 8, sm_89 now runs `cta` (order <= 32) or `blocked`. That recovers the complex and
+double-order-8 wins. It also sends the real-type batch=1 losses to native, and nothing has re-measured
+those; see [debt 5](#trsm-open-debts). On sm_120 the float and double tables are measured at batch 128,
+and their nearest rows decide. For float at q = 32 they rank `vendor` first at orders 64 and 128 on both
+sides, and native (`sg_left` Left, `cta` Right) at order 32.
 
-**What runs below batch 8 now.** On sm_89 every row is native-first, so these calls run `cta` (order <= 32) or `blocked`. That recovers the complex and double-order-8 wins above, and it also sends the measured real-type batch=1 losses (0.229-0.852x at orders 32 and 128) to native; nothing has re-measured them since, and per caveat (1) this profile cannot rank them either way. On sm_120 the float and double tables are measured at batch 128, and their nearest rows decide: for float at q = 32 they rank `vendor` first at orders 64 and 128 on both sides, and native (`sg_left` Left, `cta` Right) at order 32.
+### float, Side::Right: the order clause
 
-### `float`, `Side::Right`: the only order clause
+The removed router's rule was `return s.batch >= 128 || order <= 32;`, which sent batch 8-127 above
+order 32 to the vendor.
 
-The old router's float/`Side::Right` rule was `return s.batch >= 128 || order <= 32;` (vendor at batch 8-127 above order 32).
+* Bracketed: at batch 8 and 32, order 128 measures 0.740-0.810x (a loss) and order 32 measures
+  1.157-2.108x (a win). The clause kept the winner and dropped the loser.
+* Unbracketed: order 64 was never measured below batch 128. The 32/64 cut point is an interpolation.
+* Today sm_89 runs `blocked` there. The sm_120 measured table ranks `vendor` first at order 64 and 128
+  for small q.
 
-* **Bracketed below:** at batch 8 and 32, order 128 measures 0.740-0.810 (loss) while order 32 measures 1.157-2.108 (win). The clause kept the winner and dropped the loser.
-* **Unbracketed:** **order 64 was never measured at any batch below 128.** The 32/64 cut point interpolated between a measured win at 32 and a measured loss at 128 — treat it as unverified.
-* Inside the window the old router knowingly accepted one small loss (below).
-* Deleted with the floor in P3.3, because it lies below the tables' smallest batch. On sm_89 float `Side::Right` above order 32 at batch 8-127 now runs `blocked` (the batch-128 rows, `blocked | vendor`); on sm_120 the measured float table ranks `vendor` first at those rows for small q (order 64 and 128 at q = 32), which is the clause's verdict reached by measurement rather than transcription.
+### The final grid after the routed trailing GEMM {#the-final-grid-after-the-routed-trailing-gemm}
 
-### The final grid after the routed trailing GEMM
-
-Step 16's grid (`experiments/wp3_s16/baseline.csv`) covers orders 8..512, both sides, **float and `complex<float>` only**. Worst clean cell per order (relative sd <= 10%):
+Step 16's grid (`experiments/wp3_s16/baseline.csv`) covers orders 8 to 512, both sides, **float and
+`complex<float>` only**. Worst clean cell per order (relative sd <= 10%):
 
 | | 8 | 16 | 32 | 64 | 128 | 256 | 512 |
 |---|---|---|---|---|---|---|---|
@@ -184,11 +267,13 @@ Step 16's grid (`experiments/wp3_s16/baseline.csv`) covers orders 8..512, both s
 | complex\<float\> Left | 1.05 | 1.41 | 2.64 | 4.69 | 11.21 | 16.62 | 51.70 |
 | complex\<float\> Right | 1.01 | 1.03 | 1.35 | 1.90 | 8.49 | 15.31 | 19.64 |
 
-Recomputed from the committed CSV, the file holds **224 vendor/native pairs, all clean, of which 223 win**. The deleted route header and the plan both said "167 of 168": the substantive claim (exactly one losing cell) reproduces, **the cell count does not**, and no committed artefact explains the 168.
+The file holds 224 clean vendor/native pairs, and 223 win. The single loser is float / Right / order 512 /
+q=256 / batch=128, at 0.9787, 0.9776 and 0.9832 over three longer repeats. It is the smallest-work cell
+at that order (~1.0 ms), and its neighbours win 1.30-1.38x. No router clause was fitted to it, so the
+sm_89 row is `blocked | vendor` like its neighbours. The deleted notes said "167 of 168"; that count does
+not reproduce from committed data.
 
-The single non-winner is float / `Side::Right` / order 512 / q=256 / batch=128, at **0.9787, 0.9776, 0.9832** over three explicit repeats with a longer window (`recheck-{native,vendor}-{1,2,3}.csv`). It is the smallest-work cell at that order (~1.0 ms total) and its neighbours win 1.30-1.38x. No router clause was fitted to it — the clause would be narrower than the noise floor of most of this table — so the sm_89 row for that cell is `blocked | vendor` like its neighbours.
-
-Progression of the float/`Side::Left` losing region, from the committed baselines:
+The float/Left losing region, by grid:
 
 | grid | clean pairs | losing cells | worst |
 |---|---|---|---|
@@ -196,11 +281,17 @@ Progression of the float/`Side::Left` losing region, from the committed baseline
 | step 13, after | 179 | 8 (float/Left, orders 256 and 512) | 0.760 |
 | step 16, after routing the trailing GEMM | 224 | 1 (float/Right 512/256/128) | 0.995 |
 
-The step-13 residue is **exactly** `q*batch >= 524288`: all 8 losing cells satisfy it and no cell below it loses. That is why step 13's predicate was a *work* threshold and not an order cap — order 512 wins at `q*batch = 32768` (1.23x) while order 256 loses at `q*batch = 524288` (0.90x). Neither side is bandwidth-bound there (11-26% of DRAM peak), so it was re-read amplification escaping L2, not a bandwidth wall. Step 16 deleted the threshold by fixing the cause.
+All 8 step-13 losers satisfy `q*batch >= 524288`, and no cell below that loses. That is why step 13 used a
+work threshold and not an order cap. Neither side is DRAM-bound there (11-26% of peak), so the cause was
+re-read amplification escaping L2. The cause was not in trsm. V2 called `sycl_gemm::gemm_custom`, the
+native entry point, which bypassed gemm's routing. Step 16 injects the **routed** gemm instead.
+`trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/sycl/trsm_native.hh:64-70`), and the
+`blocked` arm of `launch` (`src/ops/trsm/trsm.cc:69-79`) passes the public `gemm`. At n=512, q=1024,
+batch=512, float, the solve went from 18.8 ms to 11.19 ms, against the vendor's 14.28 ms. The injected
+GEMM has no per-call cost: cuBLAS uses `cublasGemmStridedBatchedEx`, and the solve issues 15 GEMM calls.
 
-**The cause was not in trsm.** V2 called `sycl_gemm::gemm_custom` — the native kernel entry point — which bypassed gemm's routing entirely, so every trailing update took the native GEMM whether or not it was better. Step 16 injected the **routed** gemm instead, and that is what ships: `trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/sycl/trsm_native.hh:64-70`), and the `blocked` arm of `launch` (`src/ops/trsm/trsm.cc:69-79`) passes the public `gemm`, which selects its own kernel from `tuned/gemm.*.txt` (vendor or native). At n=512, q=1024, batch=512 the solve went **18.8 ms -> 11.19 ms** against the vendor's 14.28 ms. Injection rather than an include keeps the kernel TU free of the selection layer. An empty callable used to mean `gemm_custom`; since P3.3 an empty one throws `invalid_argument` (`gemm_custom` itself was deleted in P3.4), and in the vendor-free build the public gemm runs a native kernel anyway. No per-call cost: cuBLAS GEMM uses `cublasGemmStridedBatchedEx`, so unlike the trsm vendor path there are no pointer arrays to build and no device drain, at 15 GEMM calls per solve.
-
-**And the reason it mattered is the leading dimension.** Every operand trsm hands GEMM is a sub-view carrying its parent's `ld` — a 128-row C with `ld = 512`. The six shapes V2 issues at order 512 (float, q=1024, batch=512):
+**Leading dimension.** Every operand trsm hands GEMM is a sub-view that carries its parent's `ld`. The six
+shapes V2 issues at order 512 (float, q=1024, batch=512):
 
 | shape | native, ld==rows | native, real ld | vendor, real ld | vendor/native |
 |---|---|---|---|---|
@@ -211,197 +302,255 @@ The step-13 residue is **exactly** `q*batch >= 524288`: all 8 losing cells satis
 | inner k=64 | 0.356 | 0.680 | 0.335 | **0.49x** |
 | inner k=96 | 0.487 | 0.887 | 0.426 | **0.48x** |
 
-cuBLAS barely moves. **Strided is the only case trsm ever issues, so a square-matrix GEMM benchmark structurally could not have found this.** Caveat: padded operands were allocated uninitialized while unpadded ones used `::Random`; after that was fixed the reference cell moved 0.34%, so the effect is not a data artefact.
+Strided operands are the only case trsm issues, so a square-matrix GEMM benchmark cannot find this. The
+padded and unpadded operands were first initialised differently. After that was fixed, the reference cell
+moved 0.34%, so the effect is not a data artefact. The mechanism is in [Refuted mechanisms](#trsm-negative-results).
 
 ### End-to-end through `ortho`
 
-A kernel win is not a library win: a 2.16x kernel win in this repo once turned into an 11% gesvd loss. Both A/Bs ran with the route **unset**, so the old router's `preferred()` of that step is what selected (on sm_89 the tables now transcribe its final, step-16 form).
+Both A/Bs ran with the route unset, so the default selection is what ran.
 
-* **`Side::Right` (step 9)** — `ortho` at m in {1024,4096}, k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: **80 cells, 80 at or above parity, 1.147x-2.719x**, within 4.4% of the forced-native leg. (The deleted route header rounded the top to 2.69x; the committed CSVs give 2.719x.)
-* **`Side::Left` (step 12)** — `ortho_benchmark` hardcoded `Transpose::NoTrans` and `ortho.cc:174` and `:260` select the trsm side from exactly that flag, so **the whole `Side::Left` half of the table had never been exercised through a real caller**. `arg4` now selects it. Route unset: 80 cells, best 2.385x, worst **0.986x**, 7 cells fractionally below parity (all >= 0.986). Forced native at order 256 loses 0.783x, and the default correctly tracks the vendor there (4.08 ms default vs 4.07 vendor, 4.35 native) — the step-12 predicate (`order <= 128` for float/Left) declining native was visible end to end. The step-16 router, and so the sm_89 table, ranks native first at order 256 as well; that choice has not been through this A/B (debt 8). *The notes report "80/80 at or above parity, worst 0.99x"; that is a rounding of 0.986.*
+* **`Side::Right`** (step 9): `ortho` at m in {1024,4096}, k in {16..256}, batch in {128,512}, Chol2 and
+  ShiftChol3. 80 cells, all at or above parity, 1.147x-2.719x. Within 4.4% of forced native.
+* **`Side::Left`** (step 12): 80 cells, best 2.385x, worst 0.986x, with 7 cells fractionally below parity.
+  Forced native at order 256 loses 0.783x. The default tracks the vendor there (4.08 ms default, 4.07 ms
+  vendor, 4.35 ms native), so the float/Left predicate of step 12 declined native where it should. The
+  sm_89 table now ranks native first at order 256. That choice has not been through this A/B.
 
-Neither A/B has been re-run since step 12, and steps 13 and 16 changed V2 for every type.
+Neither A/B has been re-run since step 12 ([debt 8](#trsm-open-debts)).
 
 ---
 
-## Negative results
+## Negative results {#trsm-negative-results}
 
-### Rejected: the cooperative CTA solve (V3)
+| Alternative | Result | Verdict |
+|---|---|---|
+| Cooperative CTA solve, V3 (`experiments/wp3_s14/v3_cooperative_kernel.patch`, not in tree) | Registers fit (float 106 at N=128, zero spill). Float `Side::Left` worst cell at order 128 goes 1.18x to 0.80x; order 64 goes to 0.39x; orders 256 and 512 move 0.02x despite a predicted 1.6x traffic cut. The traffic model counts bytes, not the serial recurrence's critical path | Rejected |
+| Diagonal-block inversion | The "free for ortho" argument compares a trsm residual bound with a CholQR orthogonality bound. Any constant above ~2 flips Chol2 from recovering to not (spec §2.4) | Rejected before building |
 
-Built, measured, **rejected**; kept as `experiments/wp3_s14/v3_cooperative_kernel.patch`, not in the tree, because the device link is this project's long pole. W=8 work-items cooperate on one solve, thread `w` owning canonical rows `{w, w+W, …}` and holding `NL = N/W` accumulators, each `x_s` exchanged by a sub-group shuffle. **The register premise was right**: N=128, W=8, zero frame and zero spill — float **106 registers**, fewer than V1 needs at N=32 (114); double 136, `complex<float>` 139, `complex<double>` 174. The loop order is the whole trick: a runtime `acc[t/W]` forces local memory, a scan costs 2x, and block distribution is 7x load-imbalanced at W=8; cyclic distribution with the local index outermost makes the owner index compile-time and executes only needed FMAs. Coalescing came from the lane map (`w = lane % W`, so eight lanes read eight consecutive rows of one column — one 32 B sector), so V3 needed no staging tile. That same map is **wrong for `Side::Right`**, which wants consecutive columns: V3 was deliberately `Side::Left`-only, which is also the only side with a measured gap. Re-applying the patch also needs `dev_select` and `fma_acc_neg` in `src/sycl/device_scalar.hh`.
+Float `Side::Left` worst cell, V3 against V1 (81 cells clean in both runs; per-cell CSVs were deleted
+before aggregation):
 
-| float `Side::Left`, worst cell clean in both runs | 8 | 16 | 32 | **64** | **128** | 256 | 512 |
+| order | 8 | 16 | 32 | **64** | **128** | 256 | 512 |
 |---|---|---|---|---|---|---|---|
 | step 13 (V1 + two-level blocking) | 1.59 | 1.72 | 1.77 | **1.48** | **1.18** | 0.86 | 0.76 |
 | step 14 (V3 cooperative) | 1.59 | 1.72 | 1.80 | **0.39** | **0.80** | 0.84 | 0.77 |
 
-`Side::Right` is unaffected (1.61->1.62, 3.36->3.44, 1.55->1.55, 1.23->1.24), confirming the side gating held. The decisive cell is order 128, where V3 fits exactly with zero padding waste and still goes 1.18x -> 0.80x: the kernel is intrinsically ~1.5x slower at equal order. Order 64, padded to 128 (4x the arithmetic), collapses to 0.39x. At 256 and 512, where V3 removes the entire inner blocking level and the traffic model predicts 4096 -> 2560 q-units (1.6x), the measurement moves by **0.02x**. **The traffic model counts bytes and does not count the critical path**: V3's recurrence is N dependent shuffle-scale-FMA steps, while V1 fills 32 steps with independent FMAs and lets well-tuned parallel GEMMs carry the rest. Trading parallel GEMM work for serial in-kernel recurrence loses even when it removes DRAM traffic — the same shape as the earlier `cta-large-n` rejection (85-211x slower).
+`Side::Right` is unaffected. V3 was `Side::Left`-only, and its lane map is wrong for `Side::Right`.
 
-The comparison is restricted to the **81 cells clean (relative sd <= 10%) in both runs**, so it is like-for-like. The per-cell CSVs for this run **did not survive** (deleted after analysis, before aggregation; the summary was never written because a rebuild interrupted the run). The table above is the record, not a derivation from committed data.
+### Rejected: the N=64 CTA bucket {#rejected-the-n64-cta-bucket}
 
-### Rejected: the N=64 CTA bucket
+Re-tested after the staging tile, because the tile had cut float `Side::Left` from 114 to 53 registers.
+It still fails, and by more: float N=64 Left is 72 registers with a **456 B frame**, and N=64 Right is
+119 registers with a **256 B frame**, both zero spill. There is deliberately no N=64 bucket.
+`smallest_bucket_ge` returns **0** above 32.
 
-Re-tested rather than assumed, because the staging tile had cut float `Side::Left` from 114 registers to 53 and the arithmetic that killed N=64 no longer described the kernel. **It still fails, and by more**: float N=64 Left 72 registers / **456 B frame**, N=64 Right 119 registers / **256 B frame**, zero spill in both. Left is worse than Right because the tile's own live state competes with the accumulator rather than paying for it. There is deliberately no N=64 bucket, and `smallest_bucket_ge` returns **0** above 32 rather than the next power of two.
+### Rejected: `OUTER_NB` of 128 for `Side::Right` {#rejected-outer_nb-of-128-for-sideright}
 
-### Rejected: `OUTER_NB` of 128 for `Side::Right`
+`OUTER_NB = 128` on `Side::Right` regresses orders 256 and 512 from 1.01 and 1.07 to 0.83 and 0.82.
+Right keeps the single-level schedule. See the sweep in [the two-level blocked driver](#the-two-level-blocked-driver).
 
-See the sweep in `### the-two-level-blocked-driver`: `OUTER_NB = 128` on `Side::Right` regresses orders 256 and 512 from 1.01 and 1.07 to 0.83 and 0.82. Right keeps the single-level schedule.
+### Rejected: the starvation guard {#rejected-the-starvation-guard}
 
-### Rejected: the starvation guard
-
-Spec §10's `batch*q < 8*CU*32 -> vendor` is **refuted by measurement, not merely unimplementable**. At batch=8, q=32 the product is 256 against its own threshold of 32,768, and native wins those cells 2.2-2.4x — the guard would have handed back every one. It was *also* unimplementable as written: `OpShape::compute_units` (`route.hh:166` at the time) had zero writers and zero readers and read 0 (`OpShape` went with the route layer; see debt 13). It dies on the measurement first. The kill criterion stated in advance — *"if native real trsm exceeds 1.10x vendor at the saturated ortho shape, real stays vendor-first and only complex flips"* — **did not fire**: double won every cell on both sides and float won every `Side::Right` cell.
-
-### Rejected: diagonal-block inversion
-
-See `## design-v1-v2-and-the-canonical-fold`. Rejected on the accuracy argument before anything was built.
+Spec §10's `batch*q < 8*CU*32 -> vendor` is refuted by measurement. At batch=8, q=32 the product is 256
+against a threshold of 32,768, and native wins those cells 2.2-2.4x. The guard would have handed back
+every one of them. The criterion stated in advance (real trsm above 1.10x vendor at the saturated ortho
+shape keeps real on the vendor) did not fire. Double won every cell on both sides, and float won every
+`Side::Right` cell.
 
 ### Refuted mechanisms
 
-Two mechanisms this work package published were later **measured wrong**.
+* **The strided-`ld` collapse is not in `register_tiled_common.hh`.** The shapes never execute that file.
+  The selector sent them to the 128x128 register kernel, and the dispatcher re-evaluated the same predicate
+  to pick the aligned leg. ncu shows every transaction counter identical between packed and strided
+  operands. The loss is exposed global-load latency on operand **B alone** (barrier stall 1.552 to 7.703).
+  It is beta-independent, which refutes the epilogue explanation. Double-buffering the k-loop and packing
+  B were both measured and gained nothing. What worked was routing: a leg predicate used as a route gate
+  sent the call to a slower kernel. Routing gained a geomean 1.74x/1.75x (native 0.58x to 0.99x of cuBLAS
+  packed; 0.54x to 0.93x strided), but changed no sm_89 runtime. The old float NN window required `m==n==k`.
+  See [the strided-ld defect](gemm.md#the-strided-ld-defect-and-the-routing-fix).
+* **"The inner blocking level does not matter"** (step 14) was wrong. It was masked by V3's slowness. nsys
+  puts the inner GEMMs at 7.83 ms, 42% of the solve for 20% of the flops.
 
-**1. Step 16 blamed `src/sycl/gemm/register_tiled_common.hh`** for the strided-`ld` collapse — odd tile strides `TileM+1`/`TileK+1` defeating 16-byte alignment, B staged `[n][k]`, a read-modify-write epilogue writing columns 4096 B apart, and `is_contiguous_dense_matrix`, which every sub-view fails. **Those shapes never execute that file.** The gemm kernel selector of the time, `select_kernel_variant` (`gemm_kernels.cc:481-483` in the step-16 tree; deleted in P3.4, see [gemm's choices](gemm.md#choices-flat-selection-p34)), sent the outer shapes to `Tiled128x128RegisterK8`, and the dispatcher re-evaluated the same predicate to pick `AlignedFastPath = true` in *both* columns of the table above (`:878-886` then). `can_use_128x128_fast_path` (`src/sycl/gemm/register_128x128.hh` at the time) never tested contiguity — only `m%128`, `n%128`, `k%8`, a 16-byte-aligned base, `ld%4==0` and `stride%4==0`, all of which a strided sub-view satisfies. ncu: every transaction counter is byte-identical between packed and strided (16.00 load sectors/request, identical DRAM sectors, identical instructions, 119 registers, zero spill; `dram__cycles_active` differs by 0.3%). The loss is **entirely exposed global-load latency** — barrier stall 1.552 -> 7.703, long_scoreboard 8.755 -> 11.740 — it belongs to operand **B alone** (padding A costs 1.003x, C 1.056x, B **1.552x**), it is a slope monotonic in stride from 512 B to 4096 B rather than a cliff, and it is beta-independent (+0.564 ms at beta=1, +0.603 ms at beta=0), which refutes the epilogue story directly. Two fixes were **built and measured dead**: double-buffering the k-loop (127 registers, occupancy preserved, barriers halved, incidentally fixing a split-`LDG` defect — 33.55M -> 25.17M global load sectors, exactly cuBLAS's count — recovering **no time at all**, 1.564 ms against a 1.547 baseline); and packing B into contiguous scratch (the kernel is at 89% of roofline when packed, so the pack is paid at that same roofline; it loses everywhere and harder as m grows). What worked was **routing**: `can_use_128x128_fast_path` was a *leg* predicate the dispatcher evaluated again, so using it as a *routing* gate did not demote the call to the predicated leg — it handed it to an entirely different, much slower kernel. The fix of the time was a shape-only gate in the selector (`gemm_kernels.cc:500-503` then) that did not consult the alignment predicate at all (and so also subsumed the `ld%4 != 0` cliff). Under flat selection the rule survives as a design rule: gemm's aligned/predicated leg is derived inside the launcher and is never a family field, key or `can_run` term ([the strided-ld defect](gemm.md#the-strided-ld-defect-and-the-routing-fix)). Routing by what the kernel can run was worth geomean **1.74x/1.75x** (native 0.58x -> 0.99x of cuBLAS packed, 0.54x -> 0.93x strided) — *unverified: the 12-shape subset those geomeans average over was named in `gemm_kernels.cc:500-549` and is in `docs/perf/gemm.md` but is not identified in the preserved `experiments/wp4_gemm_ld/routing/` data, so the figure cannot be recomputed* and with cuBLAS present it **changed no runtime at all**: the old gemm router's float NN native window (`route_gemm.hh`) required `m==n==k`, so 79 native float gemm calls against 102,791 vendor. A vendor-free and ROCm win. (The sm_89 gemm tables transcribe that router, `tuned/README.md`.)
-
-**2. Step 14 concluded the inner blocking level did not matter**, because replacing it wholesale changed nothing. Wrong, and masked: the cooperative solve was slow in its own way, so removing the inner level and adding a slower diagonal solve cancelled out. nsys puts the inner GEMMs at **7.83 ms, 42% of the solve for 20% of the flops**.
-
-**The general lesson, twice in one work package: confirm which kernel runs before theorising about why it is slow.**
+The lesson, twice over: confirm which kernel runs before explaining why it is slow.
 
 ---
 
 ## Correctness findings
 
-### The missing group barrier
+### The missing group barrier {#the-missing-group-barrier}
 
-**WP3's trsm returned wrong answers**, found during WP4 Phase 2 while looking for something else. V1 stages the canonical triangle into SLM with a loop strided by `lane`, so element `idx` is written by lane `idx % wg`; the loop immediately after has lane `s` read `sLc[tri_idx(s,s)]` — a *different lane's write* for nearly every `s` — with nothing in between. `sDiv[0]` had the same problem: lane 0 zeroes it before the staging loop and any lane may store 1 into it after. **One `sycl::group_barrier` is the entire fix** (`src/sycl/trsm_native.cc:184`; landed `c7d6d91`, 2026-08-21, dated in debt 1).
-
-A/B, barrier deleted and the shared library rebuilt (the `.so` relink *is* the AOT device compile, so this is a real rebuild):
+V1 staged the canonical triangle into SLM with a loop strided by `lane`. Lane `s` then read
+`sLc[tri_idx(s,s)]`, a value written by a different lane, with no barrier in between. `sDiv[0]` had the same
+problem. The fix is one `sycl::group_barrier` (`src/sycl/trsm_native.cc:184`), commit `c7d6d91`, 2026-08-21.
 
 | | max relative diff vs vendor | items wrong | native residual |
 |---|---|---|---|
-| deleted | **6.05e+16** | 127 / 128 | 8.0e+05 |
-| restored | 4.27e-07 | 0 / 128 | 2.38e-07 (= vendor) |
+| barrier deleted | **6.05e+16** | 127 / 128 | 8.0e+05 |
+| barrier restored | 4.27e-07 | 0 / 128 | 2.38e-07 (= vendor) |
 
-Vendor-free potrf, n=1024 batch=256, float and double: before the barrier, 61-75 of 256 items came back `info != 0` non-deterministically, the failing column always `== 1 (mod nb)` — the first column of a panel, i.e. a diagonal block the previous panel's bad L21 had already destroyed. After, 0/256 over every rep at batch up to 1024.
+The blocked potrf driver was also affected. Vendor-free potrf at n=1024, batch=256 returned `info != 0`
+for 61-75 of 256 items before the fix, always at a panel's first column. After it, 0/256 fail over every
+rep up to batch 1024.
 
-**How it hid.** The ladder picks the first `cand` in `{256,128,64,32}` with `bs*ceil(q/cand) >= 4*CU` (512 on this box). Every trsm test uses `bs <= 3, q <= 257`, so every one lands on **wg = 32** — a single sub-group, executing the two loops in lock step, the one width where the race cannot express itself. An unsynchronised cross-sub-group read-after-write in SLM is UB that NVIDIA hardware hides at exactly the width every small-batch test picks. The blocked potrf panel solve does not sit there: n=1024, batch=256 gives q=896 and wg=256, eight sub-groups, and the race fires.
+**How it hid.** The ladder picks wg=32 for every trsm test, which uses `bs <= 3, q <= 257`. That is a
+single sub-group, which executes both loops in lock step. The race needs more than one sub-group. The
+blocked potrf panel solve at n=1024, batch=256 gives wg=256, and the race fires there.
 
-### The bucket ladder that truncated
+**The shipped regression test was vacuous.** It called V1 directly at n=16 and passed with the barrier
+deleted. The reproducer goes through V2: order **48** (final V1 block of order 16), q=976, batch=128.
+Orders whose final block lands in the N=16 bucket (48, 77, 80, 109) fail 90-128 of 128 items, while 32,
+33, 64, 65, 96 and 155 pass. The guard is `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
+(`tests/trsm_tests.cc:561`). It was verified red with the barrier deleted.
 
-`smallest_bucket_ge` used to return 64 for any `n > 32`, and the dispatch switch's `default:` label collapsed 64 onto the N=32 instantiation — so a **33-order solve silently solved the leading 32x32 system and left the last row of B untouched**. Nothing caught it: the staging pad test (`s >= n`) cannot fire when `N < n`, the recurrence simply stops early, and the store loop writes only the rows it computed. It was unreachable through the facade because the CTA route's capability check capped the order (today `cta`'s `can_run` term `order <= trsm_cta_max_n<T>()`, `trsm.cc:53`), but the direct entry is exactly what V2 calls on its diagonal blocks. It now returns 0 and V1 **throws** rather than truncating (`TrsmNativeCta.OverCapacityThrowsRatherThanTruncating`).
+### The bucket ladder that truncated {#the-bucket-ladder-that-truncated}
 
-### Blind and vacuous guards
+`smallest_bucket_ge` returned 64 for any `n > 32`, and the dispatch `default:` label mapped 64 onto the
+N=32 instantiation. An order-33 solve therefore solved the leading 32x32 system and left the last row of B
+untouched. Nothing caught it. Now `smallest_bucket_ge` returns 0 and V1 throws
+(`TrsmNativeCta.OverCapacityThrowsRatherThanTruncating`). The facade caps order through `cta`'s `can_run`,
+but V2 calls the direct entry on its diagonal blocks.
 
-* **The regression test shipped with the barrier fix was itself vacuous.** It called V1 directly at n=16, q=1024, bs=128, cleared the work-group ladder, *asserted* that it had — and still passed **green, twice**, with the barrier deleted and the library rebuilt. Clearing the ladder is necessary and **not sufficient**. The reproducing configuration goes through V2: order **48** (so the final V1 block is order 16), **q=976, batch=128**. Orders whose final V1 block lands in the N=16 bucket (48, 77, 80, 109) failed 90-128 of 128 items deterministically while 32, 33, 64, 65, 96 and 155 were clean, so an order dividing evenly would have been another silent pass. That is `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly` (`tests/trsm_tests.cc:561`), which asserts the rung *and* drives the reproducing shape, and was verified red with the barrier deleted. Fifth recorded blind guard in this repository, and the first written in the same change as the fix it guards.
-* **Every blocked test stopped at order 100.** With `OUTER_NB = 128` that is a *single* panel, so all of them took `LO == 0` and the outer level never ran — they passed unchanged against the two-level driver while proving nothing about it. `TwoLevelPanelStructure` now uses 129 (two panels, second one element wide), 256 (two full), 300 (two plus a ragged 44) and 384 (three full).
-* **Alpha is applied exactly once, and there are two distinct ways to get it wrong.** For blocks `i > 0` alpha arrives through the trailing GEMM's **beta**, not through V1; the natural `beta = 1` computes `B_i - sum` where `alpha*B_i - sum` is required — correct at block 0, wrong at every later block, and invisible to any `alpha == 1` test. With two levels a block in panel `p > 0` is touched by the outer gemm, an inner gemm, and the solve: three chances, exactly one right. Both levels have their own test; mutation-tested, outer-beta breaks 4 tests and inner-beta 9.
-* **Complex is where `ConjTrans` and the complex reciprocal first become visible.** For a real scalar `ConjTrans` is identical to `Trans`, so every real cell is blind to it, and `Canonical::do_conj` was written by `canonicalise()` and read by nothing until complex arrived. The test *data* is what makes it visible: `tri_fill` gives every element a non-zero imaginary part that is a different function of `(r,c)` than the real part, so the triangle is neither real, nor symmetric, nor Hermitian. The reciprocal is Smith's overflow-safe form — the textbook `conj(d)/|d|^2` silently returns 0 for inputs whose true reciprocal is representable.
-* **The oracle is an independent multiply-back, not the in-tree reference.** The netlib and cuBLAS backends (at WP3, `netlib_lapack.cc:470-472` and `cublas.cc:1134-1136`) fold the 24 canonical cases identically, i.e. they are *one* implementation; checking against either would validate the fold against itself.
-* **The documented test command runs zero tests and exits 0.** `ctest -L blas -L ortho` — repeated `-L` is an AND and no test carries two component labels: **Total Tests: 0, exit 0**, a silent false green under a section whose entire correctness argument rests on those targets running. One `-L` with a backslash-escaped pipe is *also* 0. The working form is one `-L` with a bare quoted pipe: `ctest -L 'blas|ortho'` -> 20 tests (15 + 5).
-* **`BATCHLAS_TRSM_OUTER_NB` is tested for correctness under whatever value is live**, not for a particular schedule. The reason recorded at WP3 was that a schedule assertion would pass or fail on gtest's ordering, not on the code. *(That reason, that `trsm_outer_block` caches the parse in a function-local static, is stale: it now reads `settings()` per call, see Tuning knobs and environment above, so a schedule assertion under a `ScopedEnvVar` has become possible and is not yet written.)*
+### Testing traps
 
-Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59 passing with the failing set byte-identical to the WP2 baseline (the remainder are the NETLIB parameterisations — the CTA kernel is a GPU kernel and the old `supports()`, now the `d.is_gpu` term of the native `can_run` (`trsm.cc:47`), correctly refuses a CPU device).
-
----
-
-## TRSM: what the spec got wrong
-
-`WP3_TRSM_SPEC.md` was written against a pre-WP1/WP2 tree; `WP3_TRSM_SPEC_CORRECTIONS.md` records 27 findings that survived adversarial refutation. Beyond the items already covered (the SLM size overrun, the `n_cta` derivation, the starvation guard, the ctest command):
-
-* **The three routing hook points no longer exist.** The spec routes at `cublas.cc:1594`, `rocblas.cc:138`, `netlib_lapack.cc:404`. WP1 left exactly one public `trsm`, the facade; the backends own `trsm_vendor` only. One hook, in the facade, **before** the vendor-available test — anything after it is unreachable in the vendor-free build WP3 exists for. That hoist also fixed netlib's long-missing `trsm_validate_params` for every backend in one edit.
-* **`parse_cublasdx_variant_request` and `TrsmVariant` were deleted by WP0.** (Their tombstone comment in `src/backends/route_common.hh` went in phase 5.)
-* **A single `trsm_use_native()` bool cannot express what the vendor-free build needs.** Mixing env read, correctness and speed into one predicate means every real-type cell and everything below the starvation cut has *no route at all* without a vendor, and the facade throws. Flat selection keeps the two apart by construction: `can_run` is correctness only and speed lives in the table, so a vendor-free build skips the `vendor` entry and takes the next runnable one, or the last resort `blocked`. The route-table era pinned this with `RouteTrsm.SupportedButNotPreferredIsTheWholePoint` (in `tests/route_vocabulary_tests.cc`, since deleted); today `TrsmCandidates.VendorFreeLastResortIsBlocked` (`tests/trsm_candidates_tests.cc:880`) holds it.
-* **`TriangularTransform` is in `batchlas::device`, not `batchlas::device::detail`** — a compile error if the spec's §6.1 citation is transcribed.
-* **The link-time budget fires with zero trsm code** and names a target with no link step: `batchlas_sycl_obj` is an OBJECT library; the link unit is the shared library, and it measured **43.9 s** before WP3 added anything. Make any such budget a delta.
-
----
-
-## TRSM: open debts
-
-1. **The entire WP3 performance grid was measured on a kernel that could return wrong answers — and the 2026-09-15 dating pass CLEARED NOTHING.** The recorded caveat is that *"`preferred()` windows above `q*batch ~ 65k` were measured on a racing kernel and have not been re-run"*. It is likely worse: the smallest cell in `TrsmOrthoSizes` is q=256, batch=128, i.e. `q*batch = 32768`, and the ladder rule (`bs*ceil(q/cand) >= 4*CU`, `4*CU = 512`) selects **wg = 64** there — two sub-groups. By that rule **no cell in the shipped grid ran at the single-sub-group width where the race provably cannot fire.** That is an inference from the ladder arithmetic, not a re-run. Because the sm_89 tables transcribe the router those grids justified, the taint carries into every sm_89 row; the sm_120 float and double tables are the only post-barrier trsm timings (2026-10-05, [the Blackwell page](blackwell.md#trsm-on-sm_120-result)).
-
-    **The dating, done 2026-09-15.** The fix is `sycl::group_barrier(it.get_group());` at `src/sycl/trsm_native.cc:212` at the time of the dating (the page previously cited `:211`; `:184` today). It was added by `c7d6d91`, **2026-08-21 14:14:03 +0200**, *"wp4 phase 2: the blocked potrf driver -- and the missing barrier it found in WP3"*. Dates are taken from the history reachable from the tag `perf-evidence/vendor-independence`, because the copies of these commits on `main` (`f2a0f58` WP3, `a86d318` WP4) all carry the identical author date `2026-09-05 16:36:21 +0200` — a squash artefact that cannot order anything. Against that, the add-dates of every evidence set this page quotes, at the tag:
-
-    | evidence set | sections it backs | added | vs. the barrier |
-    |---|---|---|---|
-    | `experiments/wp3_s9/{left,right}-*.csv` | `### the-step-9-grid` | 2026-08-19 18:45 | **before** |
-    | `experiments/wp3_s9/starved-*.csv` | `### the-batch-floor` | 2026-08-19 18:45 | **before** |
-    | `experiments/wp3_s9/ortho-*.csv` | `### end-to-end-through-ortho`, Right | 2026-08-19 18:45 | **before** |
-    | `experiments/wp3_s12/` | `### the-sideleft-staging-tile`, ortho Left | 2026-08-19 20:17 | **before** |
-    | `experiments/wp3_s13/` | the two-level blocking progression | 2026-08-19 22:10 | **before** |
-    | `experiments/wp3_s14/` | `### rejected-the-cooperative-cta-solve-v3` | 2026-08-19 23:38 | **before** |
-    | `experiments/wp3_s16/` | `### the-final-grid-after-the-routed-trailing-gemm` | 2026-08-20 05:57 | **before** |
-    | `experiments/wp4_gemm_ld/` | the strided-`ld` re-diagnosis | 2026-08-20 13:05 | **before** |
-
-    Every one predates the barrier by 1-2 days, so **the caveat taints every ratio on this page**, not a subset of the grids, and there is no later grid to fall back on. Two consequences worth being explicit about. (a) This page previously said *"nothing on this page except `### the-batch-floor` has been re-measured post-fix"*; that sentence is withdrawn — the starved CSVs behind the batch floor were added once, 2026-08-19, and never modified, so **no committed artefact for the batch floor postdates the barrier either**. If a post-fix re-measurement of it happened, it was not committed and cannot be dated. (b) **There are no trsm CSVs under `benchmarks/results/` at all** — that directory holds only the small-n factorization campaign, whose earliest file is `gesvd_vs_gesvdj_rtx4090.csv` (2026-08-06) and whose factorization grids start 2026-09-10, all post-barrier. trsm appears there only indirectly, as a composed leg of `posv`; see debt 17.
-2. **`double` and `complex<double>` were last measured at step 9** — orders 8..256 only, before the `Side::Left` staging tile, before two-level blocking, and before the routed trailing GEMM, all three of which change V2 for every type. The sm_89 tables rank native first for both, at every order, on that evidence (transcribed from the old unconditional `preferred()`). Steps 13, 14 and 16 measured **float and `complex<float>` only**. The sm_120 double table is the first post-step-9 double measurement; `complex<double>` has none on either device.
-3. **No order above 512 has ever been measured on sm_89, for any type**, and nothing bounds the order: `blocked`'s `can_run` has no order term, and the tables' grid runs to order 1024, with larger orders going to the nearest (order-1024, `blocked`-first on sm_89) row. The step-9 grid stopped at 256 because of the harness's 6 GB per-cell cap (not because anything changes in kind); steps 13-16 reached 512 for float and `complex<float>` only.
-4. **float at batch in `[8,127]` is barely measured at all above order 32.** The tables start at batch 128, so every call below it takes the batch-128 row: native (`blocked`) on sm_89 on both sides. The only data in that band is the starved profile, which puts order 128 at **0.740-0.810x** on both sides (`Side::Left` alone: **0.756-0.780x**) (and forbids ranking from itself); for `Side::Right` order 64 was never run at any batch below 128, so the old `order <= 32` cut was an interpolation. The saturated grid starts at batch 128.
-5. **Below batch 8 the decision has flipped and neither side of it is measured at saturation.** The old floor of 8 rested on a profile its own script forbids ranking from, and was type-blind (`double` at order 8 and both complex types measurably win at batch=1 and went to the vendor anyway). Since P3.3 those calls run native on sm_89 — including the real-type batch=1 cells the same profile puts at 0.229-0.852x (see [the batch floor](#the-batch-floor)).
-6. **Every complex "vendor" ratio on this page is native against another BatchLAS kernel.** `trsm_vendor` in `src/backends/cublas.cc` (the complex branch from `:654`) diverts *both* complex types to a hand-written sequential per-RHS SYCL substitution; `cublasCtrsmBatched`/`cublasZtrsmBatched` at `:764` are unreachable. The `vendor` family therefore runs that substitution for complex, and the transcribed tables rank it last. The diversion rests on an uncited comment about NaNs under SYCL/USM interop. This is why complex shows 8-52x at large order. **It is not a vendor-independence result**, and settling whether the diversion is still warranted has been open since step 13.
-7. **`complex<float>`/`Side::Right` at orders 8-16 (1.01-1.05x) are roofline ties, not defects** — native runs at **88.5-90.5% of the 1008 GB/s DRAM peak** and the ceiling is 1.12-1.18x. The same orders at small `q*batch` fit in L2, are not DRAM-bound, and win 1.25-2.04x.
-8. **The end-to-end `ortho` A/B has not been re-run since step 12**, i.e. before two-level blocking and before the routed trailing GEMM.
-9. **The step-16 cell count does not reconcile.** The deleted route header and the plan said "167 of 168"; the committed `baseline.csv` holds 224 clean pairs with 1 loser. The conclusion is unchanged; the published count is not reproducible from committed data.
-10. **`experiments/wp3_s14`'s per-cell CSVs were deleted before aggregation.** The V3 rejection table is a written record, not a derivation from data.
-11. **The residual native-GEMM strided-`ld` slope is unexplained.** Routing recovered 1.74x/1.75x geomean and got native to 0.93x of cuBLAS strided; the rest is exposed load latency on operand B, monotonic in stride, with two candidate fixes measured dead. At 0.93x ranking the native gemm above the vendor in gemm's strided rows is arguable, not winning.
-12. ~~**trsm's `heterogeneous_batch` correctness gate can never fire.**~~ **Withdrawn 2026-09-15: the premise is false in the working tree.** This debt said `trsm_op_shape` never wrote the field. It did — `trsm_op_shape` in `src/backends/trsm_route.hh` set `s.heterogeneous_batch = A.is_heterogeneous() || B.is_heterogeneous();`, added in response to the filing that was then never retired, and writer and gate (`route_trsm.hh:43`) agreed. Tracked as [`../design/known-defects.md`](../design/known-defects.md) entry 7, closed there on the same basis. *(Source inspection.)* Both files were deleted in P3.3; the term is now the native `can_run`'s `!A.is_heterogeneous() && !B.is_heterogeneous()` (`trsm.cc:47`), and the guard the debt asked for is armed: `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc:686`) pins every native family on a heterogeneous `A` and on a heterogeneous `B`, expects each pin to throw, expects Auto to take `vendor`, and expects `NoRouteError` vendor-free. The vendor's own `can_run` lacks the term and runs at the full storage order ([known-defects 12](../design/known-defects.md#defect-12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
-13. ~~**`OpShape::compute_units` is still dead.**~~ **Closed by deletion:** `OpShape` went with the route layer. The device facts an occupancy rule would need are on `select::Device` (`select::describe`), and a speed rule belongs in the tables, never in `can_run`.
-14. **`MatrixView::operator()(Slice,Slice)` passing the parent pointer array** (`matrix.hh:1008`) — reported, deliberately untouched since step 13. V2 works around it by passing the parent's `ld` **and** `stride` explicitly at every sub-view construction, because the constructor defaults `stride` to `ld*cols` when 0 is passed and every batch item after the first would otherwise read the wrong matrix.
-15. **WP3 makes no extension vendor-free.** `ortho_tests` is blocked by `potrf`, `geqrf`, `orgqr` and `syev`; `cond_tests` and `inverse_tests` by `syev`, `getrf` and `getri`. The honest claim is that WP3 removes `trsm` from the vendor-dependency list. There is no CPU trsm.
-16. **The test suite exercises native trsm only because the batch floor is gone.** Every trsm call the suite issues runs at batch <= 5. Under the old router that was below the floor of 8, so the route diffs across steps 9, 12 and 13 showed zero moved library decisions (the only changed rows were the route-table test recording its own resolver calls). Since P3.3 those calls take the batch-128 rows and run `cta`/`blocked` on sm_89, which exposed known-defects #13 (complex<double> single-rhs trailing gemm in cuBLASLt) and was the plan's risk K3. A change to what the tables rank first must still be validated by an A/B through a real caller.
-
-17. **The composed `posv` fallback is 1.5-5.6x slower under `Auto` legs than with its legs pinned to the vendor, and the part that is not `potrf` is ~20x.** Found by the small-n factorization campaign (P2/P9), 2026-09-14. `posv` and `gesv` have **no vendor family of their own**: their `blocked` family is a *composition* of sub-ops that each select for themselves, so "the vendor arm" and "the native arm" are the same `posv` route under two different sub-op pinnings (`benchmarks/factor_bench.cc:458-486`). For `posv` those pins are `{POTRF=vendor, TRSM=vendor}` and `{POTRF=tiny, TRSM=cta}`; the arm literally named `blocked` pins the **outer** route only and leaves both legs to `Auto`.
-
-    **The measurement, already on disk.** `benchmarks/results/p2_posv_float.csv` (committed in `1d352e5`, 2026-09-14), float, `n = 17`, `batch = 16384`, 7 reps, medians, every row `bad = 0`, and **every arm's residual is 3.4e-08 to 5.0e-08** — this is a cost finding, not a correctness one. **Variance, stated as read and not rounded into a blanket:** the eight rows of this block span `rel_sd` 0.0004 to 0.0035, and the row that exceeds 0.002 is the **`tiny` arm at `nrhs = 1` (0.0035)** — the only one. (An earlier draft of this paragraph said "every row `rel_sd <= 0.002`"; that was false as written.) The three rows the argument below actually rests on are all inside 0.002 at both `nrhs`: `blocked` 0.0007 / 0.0005, vendor-pinned 0.0009 / 0.0019, native-pinned 0.0004 / 0.0008; `tiny` reads 0.0035 / 0.0011. Nothing here is near the 10% discard threshold, so the conclusion is unaffected — but the figure is 0.0035, not 0.002:
-
-    | `nrhs` | `nrhs*batch` | `tiny` (fused) | `blocked` (Auto legs) | vendor-pinned legs | native-pinned legs |
-    |---:|---:|---:|---:|---:|---:|
-    | 1 | 16,384 | 0.172186 ms | **1.323346** | 0.256094 | 1.230026 |
-    | 4 | 65,536 | 0.239649 ms | **1.325243** | 0.316300 | 1.230784 |
-
-    `Auto` lands within 7.6% of the native-pinned composition and **5.17x** above the vendor-pinned one at `nrhs = 1` (4.19x at `nrhs = 4`). Across the whole file — `n` in {4,8,9,16,17,24,32}, `batch` in {8192,16384,32768}, `nrhs` in {1,4}, so `nrhs*batch` from 8,192 to 131,072 — **all 42 cells are above parity**, from 1.50x (`n=8, nrhs=1, batch=8192`) to **5.56x** (`n=17, nrhs=1, batch=32768`: 2.613705 vs 0.469815). The largest gaps cluster at `n` in {9, 17, 24}; the gap is not monotonic in `n`, `nrhs` or `batch`, so do not fit a window to it from this grid.
-
-    **How much of the composed arm is NOT `potrf`.** Standalone `potrf`, float, same `n=17, batch=16384`: **0.200091 ms** vendor and **0.106518 ms** tiny (`benchmarks/results/p9_potrf_tiny.csv`, 2026-09-14; the older `factor_baseline_potrf_float.csv`, 2026-09-10, gives 0.201426 vendor and 0.076478 for `native:cta`). Subtracting:
-
-    * vendor-pinned composition: `0.256094 - 0.200091 = 0.056 ms` is not `potrf` — **22%** of the arm.
-    * native-pinned composition: `1.230026 - 0.106518 = 1.124 ms` is not `potrf` — **91%** of the arm (94% against the `native:cta` figure).
-
-    So the non-`potrf` remainder of the composition — the two triangular solves plus whatever the composition itself costs — is about **20x** more expensive with native legs than with vendor legs at this cell, while standalone native `potrf` is 1.9-2.6x *faster* than standalone vendor `potrf` at exactly the same shape. The fast leg is being swamped by the rest.
-
-    **The signature, confirmed in the same CSV.** The composed arms barely move with `nrhs` while the vendor-pinned arm scales with it: at `n=17, batch=16384`, `blocked` goes 1.323346 -> 1.325243 (**+0.14%**) and native-pinned 1.230026 -> 1.230784 (**+0.06%**) for a 4x increase in right-hand sides, while vendor-pinned goes 0.256094 -> 0.316300 (**+23.5%**). Same shape at `n=16, batch=32768`: `blocked` +0.4%, vendor-pinned **+67%**. The signature is clean at `n <= 17` and **fades by order 32**, where the vendor-pinned arm is itself flat in `nrhs` (`n=32, batch=32768`: 1.000539 -> 0.991953) — so do not state it as universal.
-
-    **Scope: `posv` only, on this evidence.** `benchmarks/results/p2_gesv_float.csv` at the same cell shows no such gap — `n=17, batch=16384`: vendor-pinned 0.178368 vs native-pinned 0.177860 at `nrhs=1`, 0.260309 vs 0.241190 at `nrhs=4`. Whatever this is, it does not reproduce through `getrf`+`getrs`.
-
-    **One hypothesis, and its falsifier.** *Hypothesis:* the composed arm's cost is the two triangular solves, and the native `trsm` arm at order ~17 with `q = nrhs` and batch in the tens of thousands costs essentially a fixed amount per batch item, independent of `q` — one work-group per matrix, with `q` riding free — which would account for both the ~20x remainder and the flatness in `nrhs`. That is this repository's recurring batch-only-parallelism shape, and if it is right the decision to revisit is the sm_89 table's `cta | blocked | vendor` row at order <= 32, transcribed from the old router's unconditional native preference, which had no `q` term. The table's `q` key can express the fix once a tuner sweep times those rows; the sm_120 measured tables already do (Left order <= 32 is mostly `sg_left` there), and the P3.3 smoke saw `sg_left` lead Left order-16 q=4 by 2.2x over `cta`. *Falsifier:* a standalone `trsm` A/B at order 17, in the side/transpose the `posv` blocked fallback actually issues, `q` in {1,4,16,64}, `batch = 16384`, `BATCHLAS_TRSM_ROUTE=cta` against `=vendor`, interleaved in one process. Flat in `q` and ~20x the vendor at `q=1` confirms it; tracking the vendor at those shapes refutes it and moves the cost into the composition itself (workspace, the pristine copy, per-leg dispatch), exonerating `trsm`. **Neither has been run**, and no `trsm`-specific measurement of these shapes exists.
-
-    **Not explained by debt 1.** These CSVs are from 2026-09-14, long after the barrier (2026-08-21), and the cell is `q*batch = 16,384`, below the `~65k` the racing-kernel caveat is about.
-
-18. ~~**`trsm_op_shape` never set `s.backend`**~~, so every trsm coverage row read `Backend::AUTO` and the vendor-free burn-down was unreadable for trsm (recorded 2026-09-30 from a note in the deleted `gemv_route.hh`, whose builder did set it; see [the GEMV shape builder contract](gemv.md#gemv-the-shape-builder-contract)). **Resolved by flat selection, P3.3:** `trsm_op_shape` is deleted, and `select::run` fills the backend of the coverage row `src/ops/trsm/trsm.cc` builds; `TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags` (`tests/trsm_candidates_tests.cc:917`) checks it. See [The shape builder and the field mapping](#the-shape-builder-and-the-field-mapping).
+* **Every blocked test stopped at order 100**, which is a single panel with `OUTER_NB = 128`. The outer level
+  never ran. `TwoLevelPanelStructure` uses 129, 256, 300 and 384 instead.
+* **Alpha is applied exactly once.** For blocks `i > 0`, alpha arrives through the trailing GEMM's beta. The
+  natural `beta = 1` is wrong at every later block and invisible to any `alpha == 1` test. Mutation tests:
+  outer beta breaks 4 tests, inner beta breaks 9.
+* **Complex exposes ConjTrans and the reciprocal.** For real scalars ConjTrans equals Trans, so real cells
+  cannot see it. `tri_fill` gives every element a nonzero imaginary part. The complex reciprocal uses Smith's
+  form, since the textbook `conj(d)/|d|^2` returns 0 for representable results.
+* **The oracle is an independent multiply-back.** The netlib and cuBLAS backends fold the 24 cases the same
+  way, so checking against either validates the fold against itself.
+* **`ctest -L blas -L ortho` runs zero tests and exits 0.** Repeated `-L` is an AND. Use
+  `ctest -L 'blas|ortho'`, which runs 20 tests.
 
 ---
 
-## Raw evidence
+## Open debts {#trsm-open-debts}
 
-Raw data is preserved at the git tag `perf-evidence/vendor-independence`, retrievable with `git show perf-evidence/vendor-independence:<path>`.
+1. **Every grid predates the barrier.** The WP3 grids (steps 9 to 16), the batch-floor profile, the ortho A/Bs
+   and the strided-ld re-diagnosis were all added 2026-08-19/20. The barrier landed 2026-08-21. Every ratio on
+   this page may reflect the racing kernel. The 2026-09-15 dating pass cleared nothing. The smallest grid cell
+   (q=256, batch=128) runs wg=64 under the ladder rule. No measured cell is confirmed at single-sub-group width,
+   and that is an inference from the ladder arithmetic, not a re-run. The sm_89 tables transcribe these grids,
+   so the taint carries into them. The only post-barrier trsm timings are the sm_120 float and double tables
+   (2026-10-05; [Blackwell page](blackwell.md#trsm-on-sm_120-result)). No trsm CSVs exist under
+   `benchmarks/results/`, and the batch-floor profile has never been re-measured.
+2. **`double` and `complex<double>` were last measured at step 9** (orders 8 to 256), before the staging tile,
+   two-level blocking and the routed GEMM. Those change V2 for every type. The sm_89 native-first rows for both
+   rest on that evidence and the transcribed old `preferred()`. `complex<double>` has no post-step-9
+   measurement on either device.
+3. **No order above 512 has been measured on sm_89, for any type.** `blocked`'s `can_run` has no order term.
+   The tables run to order 1024, and larger orders take the order-1024 row (blocked first on sm_89).
+4. **float at batch 8-127 is barely measured above order 32.** The tables start at batch 128, so these calls
+   take the batch-128 rows. The only data is the starved profile (order 128 at 0.740-0.810x on both sides,
+   `Side::Left` at 0.756-0.780x), which cannot rank. Order 64 was never run below batch 128, so the old
+   `order <= 32` cut was an interpolation.
+5. **Below batch 8 the decision flipped, and neither side is measured at saturation.** The old floor of 8 was
+   type-blind. Since P3.3 those calls run native on sm_89, including the real-type batch=1 cells that the profile
+   puts at 0.229-0.852x.
+6. **Every complex "vendor" ratio is native against another BatchLAS kernel.** `trsm_vendor` in
+   `src/backends/cublas.cc` (the complex branch from `:654`) diverts both complex types to a hand-written
+   sequential per-RHS SYCL substitution. `cublasCtrsmBatched` and `cublasZtrsmBatched` (`:764`) are unreachable.
+   The diversion rests on an uncited comment about NaNs under SYCL/USM interop. The 8-52x complex ratios at
+   large order are not a vendor-independence result. Whether the diversion is still warranted is open.
+7. **complex<float> `Side::Right` at orders 8-16 (1.01-1.05x) is a roofline tie, not a defect.** Native runs at
+   88.5-90.5% of the 1008 GB/s DRAM peak. The ceiling is 1.12-1.18x. At small `q*batch` the data fits in L2,
+   and those cells win 1.25-2.04x.
+8. **The end-to-end `ortho` A/B has not been re-run since step 12**, before two-level blocking and the routed GEMM.
+9. **The step-16 cell count does not reconcile.** The committed `baseline.csv` holds 224 clean pairs with one
+   loser, not "167 of 168". The conclusion is unchanged.
+10. **`experiments/wp3_s14`'s per-cell CSVs were deleted before aggregation.** The V3 table is a record, not a
+    derivation from data.
+11. **The residual strided-`ld` slope is unexplained.** Routing reached 0.93x of cuBLAS on strided operands. The
+    rest is exposed load latency on operand B, monotonic in stride. Ranking native above vendor in gemm's
+    strided rows is arguable, not a win.
+12. ~~**Heterogeneous-batch gate.**~~ Withdrawn 2026-09-15: the gate is armed. The native `can_run` has the term
+    (`trsm.cc:47`), and `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc:686`)
+    pins it. The vendor's `can_run` lacks the term ([known-defects 12](../design/known-defects.md#defect-12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
+13. ~~**`OpShape::compute_units` is dead.**~~ Closed: `OpShape` was deleted with the route layer. A speed rule
+    belongs in the tables, never in `can_run`.
+14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`matrix.hh:1008`). Reported and
+    left alone. V2 passes the parent's `ld` and `stride` at every sub-view, because the constructor defaults
+    `stride` to `ld*cols` when 0 is passed.
+15. **No extension is vendor-free through WP3.** `ortho_tests` is blocked by `potrf`, `geqrf`, `orgqr` and `syev`.
+    `cond_tests` and `inverse_tests` are blocked by `syev`, `getrf` and `getri`. There is no CPU trsm.
+16. **The suite exercises native trsm only because the batch floor is gone.** Every trsm call the suite issues has
+    batch <= 5. A change to the top rows of a table must be validated by an A/B through a real caller.
+17. **The composed `posv` fallback is 1.5-5.6x slower under Auto legs than under vendor-pinned legs.** The
+    non-`potrf` part is about 20x. `posv` and `gesv` have no vendor family of their own. Their `blocked`
+    family composes sub-ops that select for themselves. The arm named `blocked` pins only the outer route, so
+    both legs stay on Auto. The pins for the other arms are `{POTRF=vendor, TRSM=vendor}` and
+    `{POTRF=tiny, TRSM=cta}` (`benchmarks/factor_bench.cc:458-486`).
+
+    Data: `benchmarks/results/p2_posv_float.csv` (float, n=17, batch=16384, 7 reps, all `bad = 0`, residuals
+    3.4e-08 to 5.0e-08). `rel_sd` is at most 0.0035, and the rows the argument rests on are all at or below
+    0.002. Times are in ms:
+
+    | `nrhs` | `tiny` (fused) | `blocked` (Auto legs) | vendor-pinned legs | native-pinned legs |
+    |---:|---:|---:|---:|---:|
+    | 1 | 0.172186 | **1.323346** | 0.256094 | 1.230026 |
+    | 4 | 0.239649 | **1.325243** | 0.316300 | 1.230784 |
+
+    Across n in {4,8,9,16,17,24,32}, batch in {8192,16384,32768} and nrhs in {1,4}, all 42 cells are above
+    parity. The range is 1.50x (n=8, nrhs=1, batch=8192) to 5.56x (n=17, nrhs=1, batch=32768). The gap is not
+    monotonic in n, nrhs or batch.
+
+    Standalone float `potrf` at n=17, batch=16384 takes 0.200091 ms vendor and 0.106518 ms `tiny`
+    (`benchmarks/results/p9_potrf_tiny.csv`). So the non-`potrf` remainder is 0.056 ms (22%) of the vendor-pinned
+    arm and 1.124 ms (91%) of the native-pinned arm, about 20x. Native `potrf` is 1.9-2.6x faster than vendor
+    `potrf` at this shape. The composed arm barely moves with nrhs: `blocked` rises 0.14% and native-pinned
+    0.06% for 4x the right-hand sides. Vendor-pinned rises 23.5%. The signature is clean at n <= 17 and fades
+    by order 32. `gesv` shows no gap at the same cell (`benchmarks/results/p2_gesv_float.csv`), so this is
+    specific to `posv`.
+
+    **Hypothesis.** The composed cost is the two triangular solves. The native trsm at order ~17 costs roughly a
+    fixed amount per batch item, independent of q, because one work-group per matrix carries q for free. If so,
+    the sm_89 row `cta | blocked | vendor` at order <= 32 is the thing to revisit, since it has no q term.
+    **Falsifier, not yet run:** a standalone trsm A/B at order 17, in the side and transpose that the `posv`
+    fallback issues, with q in {1,4,16,64} and batch=16384, `BATCHLAS_TRSM_ROUTE=cta` against `=vendor`,
+    interleaved in one process. Flat in q, and about 20x the vendor at q=1, confirms the hypothesis. Tracking the
+    vendor refutes it and moves the cost into the composition itself.
+18. ~~**`trsm_op_shape` never set `s.backend`.**~~ Resolved by flat selection: the coverage row carries the backend
+    (`TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags`, `tests/trsm_candidates_tests.cc:917`).
+
+---
+
+## Raw evidence {#trsm-raw-evidence}
+
+Raw data is at the git tag `perf-evidence/vendor-independence`, readable with
+`git show perf-evidence/vendor-independence:<path>`.
 
 | topic | path |
 |---|---|
-| step-9 routing grid, all four types, both sides | `experiments/wp3_s9/{left,right}-{vendor,native}.csv`, `sweep.sh`, `analyse.py`, `README.md` |
-| the batch floor (profile only, never ranked) | `experiments/wp3_s9/starved-*.csv`, `starved.sh` |
-| end-to-end `ortho` A/B, `Side::Right`, route unset | `experiments/wp3_s9/ortho-{vendor,native,default}.csv`, `ortho_ab.sh` |
-| `Side::Left` staging tile: ncu profile, before/after grid, register exclusion | `experiments/wp3_s12/README.md`, `left-{vendor,native}.csv`, `profile.sh`, `left_sweep.sh` |
+| step-9 routing grid, all four types, both sides | `experiments/wp3_s9/{left,right}-{vendor,native}.csv`, `sweep.sh`, `analyse.py` |
+| batch-floor profile (never ranked) | `experiments/wp3_s9/starved-*.csv`, `starved.sh` |
+| end-to-end `ortho` A/B, `Side::Right` | `experiments/wp3_s9/ortho-{vendor,native,default}.csv`, `ortho_ab.sh` |
+| `Side::Left` staging tile: ncu profile, grid | `experiments/wp3_s12/` (`profile.sh`, `left_sweep.sh`, `left-*.csv`) |
 | end-to-end `ortho` A/B, `Side::Left` | `experiments/wp3_s12/ortho-left-{vendor,native,default}.csv`, `ortho_left_ab.sh` |
-| two-level blocking, the `OUTER_NB` sweep, orders to 512 | `experiments/wp3_s13/{baseline-before,baseline,nb_sweep}.csv`, `README.md` |
-| the rejected cooperative CTA solve (V3) | `experiments/wp3_s14/README.md`, `v3_cooperative_kernel.patch`, `measure.py` |
-| routed trailing GEMM; isolated GEMM shapes at `ld==rows` vs the real `ld` | `experiments/wp3_s16/baseline.csv`, `{outer,inner}{,pad}-{vendor,native}.csv`, `trailing_shapes.sh`, `outer_ld.sh`, `recheck-*` |
-| the strided-`ld` re-diagnosis and the routing fix | `experiments/wp4_gemm_ld/` |
-| the GPU exclusivity guard used by every sweep | `experiments/gpu_guard.sh` |
-| verification pass behind `WP3_TRSM_SPEC_CORRECTIONS.md` | `experiments/wp3/verification_pass_raw.md` |
+| two-level blocking, `OUTER_NB` sweep, orders to 512 | `experiments/wp3_s13/{baseline-before,baseline,nb_sweep}.csv` |
+| rejected cooperative CTA solve (V3) | `experiments/wp3_s14/` (`v3_cooperative_kernel.patch`, `measure.py`) |
+| routed trailing GEMM; isolated shapes at `ld==rows` vs real `ld` | `experiments/wp3_s16/baseline.csv`, `{outer,inner}{,pad}-{vendor,native}.csv`, `recheck-*` |
+| strided-`ld` re-diagnosis and routing fix | `experiments/wp4_gemm_ld/` |
+| GPU exclusivity guard | `experiments/gpu_guard.sh` |
+| verification pass behind the spec corrections | `experiments/wp3/verification_pass_raw.md` |
 
-Sweep CSVs are `name,arg0,arg1,arg2,iterations,avg_ms,stddev_ms,GFLOPS,Time (us) / matrix` with `arg0 = n` (triangular order), `arg1 = q`, `arg2 = batch`. **GFLOPS uses the real-arithmetic convention `n^2 q` for all four types**, so complex understates by 4x by construction — compare `avg_ms` across types, never GFLOPS. The step-13/14/16 `baseline.csv` files are aggregated: `type,side,route,n,q,batch,ms,sd_pct`, one row per leg, `sd_pct <= 10` the cleanliness gate.
+Sweep CSVs have the columns `name,arg0,arg1,arg2,iterations,avg_ms,stddev_ms,GFLOPS,Time (us) / matrix`, with
+`arg0 = n`, `arg1 = q` and `arg2 = batch`. GFLOPS uses `n^2 q` for all four types, so complex is understated
+4x by construction. Compare `avg_ms` across types, never GFLOPS. The step-13/14/16 `baseline.csv` files have the
+columns `type,side,route,n,q,batch,ms,sd_pct`, and `sd_pct <= 10` is the cleanliness gate.
 
-Two measurement traps that cost real time. `gpu_guard.sh` samples *foreign* processes at the start and end of a run, so **two copies of your own sweep script** queued behind a co-tenant are invisible to it — that produced 22 of 180 cells at 10-103% relative sd while the guard reported the run clean, and the drivers now take a `flock` and delete any leg with a cell above 10% sd (a clean leg has 0 of 180). And a contaminated profile once nearly added a bogus gate: the first post-tile profile showed order 8 regressing 0.023 -> 0.028 ms and a staging gate on order was about to be written; on the clean grid order 8 is **1.01-1.04x** and there was nothing to protect.
+**Measurement notes.**
 
-Three more that are designed *around* rather than fixed, all visible in the harness:
-
-* **`--name` matches by substring.** The starved rows are registered as `BM_TRSM_StarvedRight`, not the obvious `BM_TRSM_OrthoRightStarved`, because the latter would be selected by every `--name=BM_TRSM_OrthoRight` run and fold profile-only rows into the saturated grid they exist to be excluded from (`benchmarks/trsm_benchmark.cc:152-155`).
-* **An unparsed route variable measured the default twice.** Under the old router a typo in `BATCHLAS_TRSM_ROUTE` ran both legs on the same route and reported a ratio of 1.0 as a finding — the precedent is `BATCHLAS_SYEV_PROVIDER=TWOSTAGE` silently parsing as `Auto` — so the harness shouted when the value was not understood. That trap is closed at the source: a select pin that is not a known spelling, or cannot run the shape, throws `invalid_argument` at the first call. `trsm_announce_route_env()` (`benchmarks/trsm_benchmark.cc:94-107`) still prints the pin once per process so a log records which leg it is.
-* **`ncu --kernel-name` matches the mangled name.** `regex:TrsmCtaKernel` matches nothing and ncu then profiles the run without emitting a single metric row, which looks exactly like a kernel that does no memory traffic; `--kernel-name-base demangled` is what makes the readable name the thing being matched (`experiments/wp3_s12/profile.sh`).
+* `gpu_guard.sh` samples foreign processes only at the start and end of a run. Two copies of your own sweep
+  queued behind a co-tenant are invisible to it, and produced 22 of 180 cells at 10-103% sd. The drivers now
+  take a `flock` and drop any leg with a cell above 10% sd.
+* Harness rows are registered as `BM_TRSM_StarvedRight`, not `BM_TRSM_OrthoRightStarved`, because `--name`
+  matches by substring and the latter would pull profile-only rows into the saturated grid
+  (`benchmarks/trsm_benchmark.cc:152-155`).
+* `trsm_announce_route_env()` (`benchmarks/trsm_benchmark.cc:94-107`) prints the pin once per process, so a log
+  records which leg it measured. An unknown pin throws at the first call.
+* `ncu --kernel-name` matches the mangled name. `regex:TrsmCtaKernel` matches nothing, and ncu then emits no
+  metrics. Use `--kernel-name-base demangled` (`experiments/wp3_s12/profile.sh`).

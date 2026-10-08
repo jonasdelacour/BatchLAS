@@ -132,8 +132,6 @@ GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_HEADER            = docs/theme/header.html
 HTML_EXTRA_STYLESHEET  = docs/theme/doxygen-awesome/doxygen-awesome.css \
-                         docs/theme/doxygen-awesome/doxygen-awesome-sidebar-only.css \
-                         docs/theme/doxygen-awesome/doxygen-awesome-sidebar-only-darkmode-toggle.css \
                          docs/theme/batchlas.css
 HTML_EXTRA_FILES       = docs/theme/doxygen-awesome/doxygen-awesome-darkmode-toggle.js \
                          docs/theme/doxygen-awesome/doxygen-awesome-fragment-copy-button.js \
@@ -145,11 +143,11 @@ HTML_COPY_CLIPBOARD    = NO
 HTML_DYNAMIC_SECTIONS  = YES
 HTML_CODE_FOLDING      = YES
 HTML_INDEX_NUM_ENTRIES = 1
-DISABLE_INDEX          = NO
+DISABLE_INDEX          = YES
 GENERATE_TREEVIEW      = YES
 FULL_SIDEBAR           = NO
 TREEVIEW_WIDTH         = 300
-PAGE_OUTLINE_PANEL     = NO
+PAGE_OUTLINE_PANEL     = YES
 SEARCHENGINE           = YES
 SERVER_BASED_SEARCH    = NO
 GENERATE_LATEX         = NO
