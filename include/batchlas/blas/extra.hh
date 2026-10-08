@@ -84,6 +84,7 @@ namespace batchlas
     /// Instantiated only for T in {float, double} with MatrixFormat::Dense; any other
     /// combination is a link error, not a compile error.
     /// @return size in bytes for the `workspace` argument of cond()
+    /// @ingroup api_extra_lowlevel
     template <Backend B, typename T, MatrixFormat MF>
     BATCHLAS_API size_t cond_buffer_size(Queue &ctx,
                                          const MatrixView<T, MF> &A,

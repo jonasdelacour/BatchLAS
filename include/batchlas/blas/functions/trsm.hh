@@ -47,7 +47,7 @@ using trsm_vendor = Event(Queue&,
 /// @param transA  NoTrans, Trans or ConjTrans
 /// @param diag    Diag::NonUnit or Diag::Unit
 /// @throws batchlas::invalid_argument naming the first violated requirement
-/// @ingroup api_blas3
+/// @ingroup api_blas3_lowlevel
 template <typename T>
 inline void trsm_validate_params(
                         const MatrixView<T, MatrixFormat::Dense>& A,

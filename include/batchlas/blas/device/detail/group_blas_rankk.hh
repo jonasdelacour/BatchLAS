@@ -507,6 +507,7 @@ inline constexpr void syrk(const Group& group,
 /// @param extent           n, the order of `C`
 /// @param contract_extent  k
 /// @return element count, or 0 when no staged path applies (then pass `nullptr`)
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent,
@@ -519,6 +520,7 @@ inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -590,6 +592,7 @@ inline constexpr void herk(const Group& group,
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent,
@@ -602,6 +605,7 @@ inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -675,6 +679,7 @@ inline constexpr void syr2k(const Group& group,
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                       int extent,
@@ -687,6 +692,7 @@ inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -759,6 +765,7 @@ inline constexpr void her2k(const Group& group,
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                       int extent,
@@ -771,6 +778,7 @@ inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo
 /// @param extent order of the matrix
 /// @param contract_extent contraction length k
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,

@@ -41,7 +41,7 @@ using gesv_buffer_size = size_t(Queue&,
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()` and equal
 /// batch sizes.
 /// @throws batchlas::invalid_argument if any check fails
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // Stricter than getrs_validate_params on purpose: getrs routes a non-conforming
 // pair to the vendor, but gesv has none, so it would report the wrong cause.
 template <typename T>
@@ -109,7 +109,7 @@ BATCHLAS_API Event gesv(Queue& ctx,
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the operands
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend Back, typename T>
 BATCHLAS_API size_t gesv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,

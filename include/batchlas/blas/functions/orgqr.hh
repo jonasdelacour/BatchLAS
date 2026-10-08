@@ -48,7 +48,7 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 /// served by the vendor kernel, the only one whose `can_run` admits it
 /// (src/ops/orgqr/orgqr.cc). The length of `tau` is checked by the option overloads.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup api_qr
+/// @ingroup api_qr_lowlevel
 // Deliberately no n <= m check: rejecting such a view is a user-visible behaviour change.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
@@ -91,7 +91,7 @@ BATCHLAS_API Event orgqr(Queue& ctx,
                          Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that orgqr() needs for this shape on this queue.
-/// @ingroup api_qr
+/// @ingroup api_qr_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,

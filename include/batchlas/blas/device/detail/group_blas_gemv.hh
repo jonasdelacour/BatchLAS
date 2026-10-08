@@ -233,6 +233,7 @@ inline constexpr void gemv(const Group& group,
 /// @param rows rows of `A`
 /// @param cols columns of `A`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int rows,
@@ -245,6 +246,7 @@ inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param rows rows of `A`
 /// @param cols columns of `A`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t gemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int rows,

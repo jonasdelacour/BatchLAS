@@ -154,7 +154,7 @@ private:
 };
 
 /// @brief Swaps the storage of two vectors without copying; found by ADL.
-/// @ingroup api_matrix
+/// @ingroup api_matrix_lowlevel
 template <typename T>
 inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
     lhs.swap(rhs);

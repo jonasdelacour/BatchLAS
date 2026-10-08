@@ -47,7 +47,7 @@ using getri_vendor_buffer_size = size_t(Queue&,
 
 /// @brief Validates A for getri_buffer_size(): non-negative extents only.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // Runs before choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
 // Two arities because the query takes A alone and getri's key and can_run are
 // functions of A alone; neither checks squareness, agreement of A and C, or the
@@ -64,7 +64,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 
 /// @brief Validates A and C for the positional getri(): non-negative extents only.
 /// @throws batchlas::invalid_argument on negative extents of A or C
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& C) {
@@ -126,7 +126,7 @@ inline Event getri(Queue& ctx,
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.
 ///
 /// Takes A alone: the kernel choice, and therefore the size, depends only on A.
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);

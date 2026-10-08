@@ -55,7 +55,7 @@ using getrs_vendor_buffer_size = size_t(Queue&,
 /// overloads; on this path a non-conforming pair fails every native can_run and
 /// goes to the vendor.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // Runs before selection in src/ops/getrs/getrs.cc reads A.rows()/B.cols().
 // Deliberately minimal; rejecting more would change a working call into an error.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
@@ -106,7 +106,7 @@ BATCHLAS_API Event getrs(Queue& ctx,
                         Span<std::byte> work_space);
 
 /// @brief Workspace, in bytes, that getrs() needs for these operands on this queue.
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,

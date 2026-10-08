@@ -36,7 +36,7 @@ namespace csr_generators {
 ///                        (values still differ); false: one pattern per item
 /// @return an owning CSR Matrix; `nnz()` is the same for every item
 /// @throws batchlas::invalid_argument if n <= 0 or batch_size <= 0
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <typename T>
 BATCHLAS_API Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
                                                                       float density,
