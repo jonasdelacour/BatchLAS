@@ -5,23 +5,18 @@
 
 # BatchLAS
 
-BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA, ROCm and netlib BLAS/LAPACK. The repository currently contains the C++ library, an optional pybind11-based Python package, a broad unit-test suite, benchmark executables and tuning scripts.
+BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA,
+ROCm and netlib BLAS/LAPACK. The repository holds the C++ library, an optional pybind11 Python
+package, a unit-test suite, benchmarks and tuning scripts.
 
-## Current Status
-
-- SYCL is mandatory for building the library.
-- The project builds as `C++20` and defaults to `RelWithDebInfo`.
-- The installed CMake package exports `BatchLAS::batchlas` plus the component
-  libraries it is built from. Link the umbrella target; the components are not
-  independently linkable.
-- The repository includes active work on dense factorizations, spectral routines, orthogonalization, sparse eigensolvers, and performance benchmarking.
-- Recommended development entry points are the CMake presets in `CMakePresets.json`.
+- SYCL is mandatory. The project builds as C++20 and defaults to `RelWithDebInfo`.
+- The installed CMake package exports `BatchLAS::batchlas`. Link the umbrella target; the
+  component libraries are not independently linkable.
+- The CMake presets in `CMakePresets.json` are the recommended entry point.
 
 ## Documentation
 
-The full documentation is a Doxygen site built from this repository: the API
-reference generated from `include/`, plus every page under `docs/`. Build it
-with Doxygen 1.18 or newer:
+The documentation is a Doxygen site (Doxygen 1.18 or newer) built from `include/` and `docs/`:
 
 ```bash
 sh scripts/build_docs.sh                  # writes build/docs/html/index.html
@@ -30,31 +25,25 @@ cmake -S . -B build -DBATCHLAS_BUILD_DOCS=ON
 cmake --build build --target batchlas_docs
 ```
 
-Either way the site lands in `build/docs/html/index.html` (the script takes
-another output directory as its argument; set `DOXYGEN=/path/to/doxygen` if it is
-not on `PATH`). Every page is also plain Markdown and reads fine on GitHub.
+The script takes an output directory as its argument; set `DOXYGEN=/path/to/doxygen` if Doxygen
+is not on `PATH`. Every page is also plain Markdown. Code comments cite pages as
+`evidence: docs/<page>.md#<anchor>`.
 
-`docs/` is more than a manual: it is the project's database of measurements,
-design decisions and their rationale, which code comments cite as
-`evidence: docs/<page>.md#<anchor>` instead of carrying lab notes inline.
-
-| directory | what lives there |
+| directory | contents |
 | --- | --- |
 | `docs/guide/` | how to use a feature |
-| `docs/design/` | design decisions and architecture records, including [known defects](../docs/design/known-defects.md) |
-| `docs/algorithms/` | the mathematics and derivations behind the kernels |
-| `docs/perf/` | the evidence layer: routing windows, measured grids, rejected alternatives ([index](../docs/perf/README.md)) |
-| `docs/developer/` | process and tooling, including [the documentation conventions](../docs/developer/documentation.md) |
+| `docs/design/` | design decisions and architecture, including [known defects](../docs/design/known-defects.md) |
+| `docs/algorithms/` | mathematics and derivations behind the kernels |
+| `docs/perf/` | routing windows, measured grids, rejected alternatives ([index](../docs/perf/README.md)) |
+| `docs/developer/` | process and tooling, including [documentation conventions](../docs/developer/documentation.md) |
 
-The site also generates a *Results database* page over the raw grids in
-`benchmarks/results/` and an *Evidence index* of every code comment that cites a
-page. The C++ calling conventions are in [docs/cpp-api.md](../docs/cpp-api.md) and
-running the tests is covered in [tests/README.md](../tests/README.md).
+C++ calling conventions: [docs/cpp-api.md](../docs/cpp-api.md). Running tests:
+[tests/README.md](../tests/README.md).
 
 ## Using the C++ API
 
-The backend comes from the `Queue`, options are structs with defaults, and
-workspaces are leased from a per-queue arena, so a call is usually one line:
+The backend comes from the `Queue`, options are structs with defaults, and workspaces are leased
+from a per-queue arena:
 
 ```cpp
 #include <batchlas.hh>                 // the umbrella header
@@ -66,8 +55,7 @@ potrf(ctx, A.view(), {.uplo = Uplo::Upper});
 ctx.wait();                            // results are not readable before this
 ```
 
-There is also a `batchlas::linalg` convenience layer with value-returning and
-elementwise operations:
+The `batchlas::linalg` layer has value-returning and elementwise operations:
 
 ```cpp
 auto X = linalg::solve(ctx, A.view(), B.view());   // A X = B
@@ -76,88 +64,55 @@ auto P = linalg::multiply(ctx, A.view(), B.view());  // Hadamard, not matmul
 ctx.wait();                                        // required before reading X, e, P
 ```
 
-Three things that are easy to get wrong and are covered in full in
-[docs/cpp-api.md](../docs/cpp-api.md):
+- **Matrices are column-major**, and every pointer given to a `MatrixView` must be
+  device-accessible (USM). A `std::vector` compiles and then aborts on a GPU backend.
+- **Entry points enqueue and return.** Nothing is readable until `ctx.wait()` or a wait on the
+  returned `Event`.
+- **A `Queue` is single-threaded.** Use one `Queue` per thread; sharing one corrupts its
+  workspace arena.
 
-- **Matrices are column-major**, and every pointer you hand to a `MatrixView`
-  must be device-accessible (USM). A `std::vector` compiles and then aborts the
-  process on a GPU backend.
-- **Entry points enqueue and return.** Nothing is readable until `ctx.wait()`
-  (or a wait on the returned `Event`).
-- **A `Queue` is single-threaded.** Use one `Queue` per thread; sharing one
-  across threads corrupts its workspace arena.
-
-See **[docs/cpp-api.md](../docs/cpp-api.md)** for the data-layout and memory
-contract, the full conventions, and the workspace-lifetime caveat on
-out-of-order queues; **[docs/extending.md](../docs/extending.md)** covers adding
-entry points to the library itself. A complete, buildable external consumer
-lives in [`examples/consumer/`](../examples/consumer/README.md).
+Details: [docs/cpp-api.md](../docs/cpp-api.md). Adding entry points to the library:
+[docs/extending.md](../docs/extending.md). A buildable external consumer:
+[`examples/consumer/`](../examples/consumer/README.md).
 
 ## Performance
 
-The thing to know before the numbers: **`Auto` routes per routine, per `n`, per
-batch size**, between BatchLAS's own kernels and the vendor library (cuSOLVER /
-cuBLAS where available). Adopting BatchLAS therefore should not make you slower
-than the vendor loop you have today — where the vendor wins for a shape, that is
-the path `Auto` takes.
+`Auto` routes per routine, per `n` and per batch size between BatchLAS kernels and the vendor
+library (cuSOLVER / cuBLAS where available). Where the vendor wins for a shape, `Auto` takes the
+vendor path.
 
-Two measurements that are committed in this repository, with their conditions,
-rather than a headline number:
+Committed measurements (RTX 4090, float, large batch, CUDA backend):
 
-- **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (measured
-  2026-08-07, µs per matrix, median of 5, harness-default block size, one
-  process on the device): at `n = 320, batch = 819` BatchLAS's blocked solver
-  runs at 67.8 µs vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585`
-  it is 195.3 vs 400.6 (**2.1x**). The vendor wins at large `n` — an earlier
-  sweep has it 1.65x ahead at `n = 2048`, on a row flagged as not saturated —
-  and `Auto` routes there accordingly (the routing it justified ships as the
-  `tuned/syev.float.*.txt` rows). The full grids, including the
-  corrections that superseded earlier ones, are on the
-  [syev evidence page](../docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
-- **`gesvd` vs `cusolverDnXgesvdjBatched`, float, RTX 4090**
-  (`benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`): at `n = 8, batch = 16384`
-  BatchLAS's one-sided Jacobi SVD is 0.0064 µs/matrix vs 0.339 µs/matrix; at
-  `n = 32, batch = 16384` it is 0.468 vs 0.768. Conditions and the rest of the
-  grid are on the [gesvd evidence page](../docs/perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix).
+| routine | shape | BatchLAS | vendor | ratio |
+| --- | --- | --- | --- | --- |
+| `syev`, eigenvectors | `n = 320, batch = 819` | 67.8 µs/matrix | 203.0 (cuSOLVER) | 3.0x |
+| `syev`, eigenvectors | `n = 448, batch = 585` | 195.3 µs/matrix | 400.6 (cuSOLVER) | 2.1x |
+| `gesvd` (one-sided Jacobi) | `n = 8, batch = 16384` | 0.0064 µs/matrix | 0.339 (`cusolverDnXgesvdjBatched`) | 53x |
+| `gesvd` (one-sided Jacobi) | `n = 32, batch = 16384` | 0.468 µs/matrix | 0.768 (`cusolverDnXgesvdjBatched`) | 1.6x |
 
-Both of those are single-machine numbers from the "Tested platforms" table below,
-at large batch. Ratios measured on an *unsaturated* device are mostly overhead
-and do not transfer; if the numbers matter to your decision, run them yourself —
-see [Benchmarks and Tuning](#benchmarks-and-tuning) for how to build the suite,
-and `benchmarks/results/` for the committed raw output.
+- `syev` was measured 2026-08-07 (median of 5, harness-default block size, one process on the
+  device). The vendor wins at large `n`: an earlier sweep has it 1.65x ahead at `n = 2048`, on a
+  row flagged as not saturated. Grids: [syev evidence](../docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
+- `gesvd` raw data: `benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`. Grids:
+  [gesvd evidence](../docs/perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix).
+- Ratios measured on an unsaturated device are mostly overhead and do not transfer. Re-run on
+  your own machine: see [Benchmarks and Tuning](#benchmarks-and-tuning).
 
 ## Implemented Surface Area
 
-The public C++ headers under `include/` currently expose these main groups of functionality.
-
-### Dense BLAS and Factorization
-
-- `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`
-- `hemm`, `herk`, `her2k` (complex Hermitian forms)
-- `potrf`, `getrf`, `getrs`, `getri`
-- `geqrf`, `orgqr`, `ormqr`
-- `syev`, `gesvd`
-
-### Sparse and Spectral Extensions
-
-- `spmm`
-- `syevx` for partial symmetric eigensolves
-- `lanczos`
-- `steqr`, `stedc`, and related tridiagonal helpers
-- `ritz_values`
-- `iluk` preconditioning support
-
-### Orthogonalization and Utilities
-
-- `ortho` with multiple orthogonalization algorithms
-- matrix generators and structured constructors
-- norms, condition numbers, transpose, and related helpers
-
-### Python Package
-
-When `BATCHLAS_BUILD_PYTHON=ON`, the repository builds a `batchlas` Python package with NumPy dense-array support and SciPy sparse wrappers for the supported public APIs. The Python facade also exposes convenience helpers such as `available_backends()`, `available_devices()`, and `compiled_features()`, plus elementwise arithmetic (`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`) over batched dense arrays.
-
-Twelve self-checking example notebooks covering the whole Python surface live in `python/examples/`. They are committed with output from a reference run, so they render on GitHub without executing anything:
+- **Dense BLAS:** `gemm`, `gemv`, `symm`, `syrk`, `syr2k`, `trmm`, `trsm`; complex Hermitian
+  forms `hemm`, `herk`, `her2k`.
+- **Factorizations and solvers:** `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `ormqr`,
+  `syev`, `gesvd`.
+- **Sparse and spectral:** `spmm`, `syevx` (partial symmetric eigensolves), `lanczos`, `steqr`,
+  `stedc` and related tridiagonal helpers, `ritz_values`, `iluk`.
+- **Utilities:** `ortho` (several algorithms), matrix generators, norms, condition numbers,
+  transpose.
+- **Python:** with `BATCHLAS_BUILD_PYTHON=ON` the build produces a `batchlas` package with NumPy
+  dense-array support, SciPy sparse wrappers, `available_backends()`, `available_devices()`,
+  `compiled_features()` and elementwise arithmetic (`add`, `subtract`, `multiply`, `divide`,
+  `axpby`, `scale`). Twelve self-checking notebooks in `python/examples/` are committed with
+  output; see `python/examples/README.md`.
 
 ```bash
 cd python/examples
@@ -165,100 +120,65 @@ PYTHONPATH=../../build/python jupyter lab            # open them
 PYTHONPATH=../../build/python python3 run_all.py     # execute and check all twelve
 ```
 
-See `python/examples/README.md` for the index, the array/batching conventions, and current known issues.
-
 ## Repository Layout
 
 - `include/`: public C++ headers
 - `src/`: library implementation and backend/component targets
-- `tests/`: GoogleTest-based unit tests and smoke-test subset
-- `benchmarks/`: performance and accuracy benchmark executables
-- `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
-- `scripts/`: benchmark campaign helpers and result-processing scripts
-- `playground/`: Python reference implementations that the band-reduction and sb2st
-  sources and tests cite
-- `docs/`: the documentation site's pages — the C++ API guide (`docs/cpp-api.md`),
-  user guides, design records, algorithm notes and the performance evidence
-  (see [Documentation](#documentation)); `docs/Doxyfile` and `docs/theme/` build it
+- `tests/`: GoogleTest unit tests and smoke-test subset
+- `benchmarks/`: performance and accuracy benchmarks
+- `python/`: pybind11 bindings, Python facade, tests, `examples/`
+- `scripts/`: benchmark campaign and result-processing helpers
+- `playground/`: Python reference implementations cited by the band-reduction and sb2st sources
+- `docs/`: documentation pages; `docs/Doxyfile` and `docs/theme/` build the site
 - `examples/`: a minimal external CMake consumer
-- `evaluation/`: the tuning and perf-regression harnesses; not part of the build
-  and not installed
+- `evaluation/`: tuning and perf-regression harnesses; not built, not installed
 
 ## Requirements
 
-Minimum build requirements:
+- CMake 3.17+ (3.21+ for `cmake --preset`; `CMakePresets.json` is schema version 3)
+- A C++20 compiler with SYCL support (a DPC++/Clang-family compiler; the CMake logic targets
+  IntelLLVM/Clang-style SYCL compilers)
+- oneDPL headers, a hard dependency (several sources include `<oneapi/dpl/...>`). The build looks
+  under `/opt/intel/oneapi/dpl/latest/include`; set `ONEDPL_ROOT` otherwise.
+- Optional: CUDA Toolkit (NVIDIA), ROCm (AMD), LAPACKE and CBLAS (netlib host backend), Python 3 +
+  pybind11 + NumPy + SciPy (Python bindings)
 
-- CMake 3.17+ (3.17 is what `find_package(CUDAToolkit)` needs; 3.21+ if you want
-  the `cmake --preset` workflow, since `CMakePresets.json` is schema version 3)
-- A C++20 compiler with SYCL support — in practice a DPC++/Clang-family compiler
-- A SYCL runtime/toolchain discoverable by CMake
-- oneDPL headers. Several sources include `<oneapi/dpl/...>` unconditionally, so
-  this is a hard dependency, not an option. The build looks for it under
-  `/opt/intel/oneapi/dpl/latest/include` today.
+> **Warning:** the SYCL compiler must have a backend for your GPU vendor. Stock Intel oneAPI
+> `icpx` has no CUDA adapter: on an NVIDIA machine it configures cleanly, prints
+> `-- Using SYCL targets: spir64_x86_64`, and builds a **CPU-only** library without warning. Use the
+> Codeplay *oneAPI for NVIDIA GPUs* plugin on top of oneAPI, or a self-built `intel/llvm`
+> configured with `--cuda`. `sycl-ls` must list a `[cuda:gpu]` entry.
 
-**Your SYCL compiler must have a backend for your GPU vendor.** This is the
-single most common way to get a working build that quietly does the wrong thing:
-stock Intel oneAPI `icpx` has no CUDA adapter, so on an NVIDIA machine it
-configures cleanly, prints `-- Using SYCL targets: spir64_x86_64`, and builds a
-**CPU-only** library with no warning. For NVIDIA you need a CUDA-capable DPC++:
-the Codeplay *oneAPI for NVIDIA GPUs* plugin on top of oneAPI, or a self-built
-`intel/llvm` configured with `--cuda`. Verify before building — `sycl-ls` must
-list a `[cuda:gpu]` entry.
-
-Common optional dependencies:
-
-- CUDA Toolkit for NVIDIA backends
-- ROCm for AMD backends
-- LAPACKE and CBLAS for the netlib host backend
-- Python 3, pybind11, NumPy, and SciPy for Python bindings
-
-Notes:
-
-- SYCL support is not optional in the current build system.
-- The CMake logic is primarily written around IntelLLVM/Clang-style SYCL compilers.
-- The default build type is `RelWithDebInfo`, not `Debug`.
-
-For a Linux-oriented environment setup with package suggestions and oneAPI notes, see the
-[agent environment guide](../docs/developer/agent-guide.md).
+Package suggestions and oneAPI notes: [agent environment guide](../docs/developer/agent-guide.md).
 
 ### Tested platforms
 
-Only one configuration is exercised regularly, and CI now gates that one
-configuration and no other. `.github/workflows/ci.yml` runs static checks on
-GitHub-hosted runners (list files, the exported package at source level, the
-public headers — a hosted runner has no SYCL compiler, so nothing is configured
-or compiled there), plus a **self-hosted GPU job on the Primary machine** that
-configures with CUDA required, builds every library and test binary, runs
-`ctest`, installs the package and checks the generated export. A nightly job on
-the same runner adds the slow suites, the out-of-tree consumer packaging test
-and a vendor-free build. Everything outside the Primary row is still untested
-rather than known-good — CI adds no coverage there.
+Only the Primary configuration is exercised regularly; everything else is untested rather than
+known-good. `.github/workflows/ci.yml` runs static checks on GitHub-hosted runners (no SYCL
+compiler there, so nothing is configured or compiled) and a self-hosted GPU job on the Primary
+machine: configure with CUDA required, build all libraries and tests, `ctest`, install, check the
+export. A nightly job on that runner adds slow suites, the consumer packaging test and a
+vendor-free build.
 
 | | Compiler | CUDA | GPU / arch | OS | Status |
 | --- | --- | --- | --- | --- | --- |
 | Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Library, tests and benchmarks built and run here daily |
 | CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export and public headers only; nothing configured, compiled or run |
 | CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
-| CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** — see the warning above. Not built by CI |
-| AMD / ROCm | — | — | — | — | Code paths exist; not built or run by anyone here |
-| macOS / Windows | — | — | — | — | Untested; no attempt made |
+| CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** (see the warning above). Not built by CI |
+| AMD / ROCm | — | — | — | — | Code paths exist; not built or run |
+| macOS / Windows | — | — | — | — | Untested |
 
-Other NVIDIA architectures should work — the build detects the local GPU and can
-be pointed elsewhere with `-DBATCHLAS_NVIDIA_ARCH=sm_XX` — but nothing but
-`sm_89` has been run.
+Other NVIDIA architectures should work: the build detects the local GPU, and
+`-DBATCHLAS_NVIDIA_ARCH=sm_XX` overrides it. Only `sm_89` has been run.
 
-Because `main` is not green (four known test failures), the GPU job compares
-each run against a checked-in ledger, `tests/known-failures.txt`, rather than
-against `ctest`'s exit code. See **[docs/ci.md](../docs/ci.md)** for the full
-coverage table, how to stand the self-hosted runner up, how to retire a
-known-failure entry, and the environment trap that makes a runner build a
-CPU-only library and report green.
+`main` has known test failures, so the GPU job diffs each run against the ledger
+`tests/known-failures.txt` instead of using `ctest`'s exit code. See
+**[docs/ci.md](../docs/ci.md)** for coverage, self-hosted runner setup and retiring a ledger entry.
 
 ## Build
 
 ### Recommended Preset Workflow
-
-Configure and build using the checked-in presets:
 
 ```bash
 export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"   # the presets set no job count
@@ -266,24 +186,19 @@ cmake --preset dev
 cmake --build --preset dev
 ```
 
-The build presets deliberately do not hardcode a job count (it used to be 20,
-which oversubscribes a small machine and undersubscribes a large one). Set
-`CMAKE_BUILD_PARALLEL_LEVEL` once as above, or pass `--parallel N` per build.
-
-Useful presets currently provided:
+Presets:
 
 - `dev`: default `RelWithDebInfo` library build
-- `dev-tests`: library build with the full test suite enabled
-- `fast-dev`: library build plus the smoke-test subset
-- `benchmarks`: benchmark build with tuning support enabled
-- `cuda`: optional CUDA-enabled build when the environment supports it
-- `dev-gpu` / `dev-gpu-tests`: fast iteration; drops the `native_cpu` SYCL
-  target (`BATCHLAS_CPU_TARGET=none`), which took 13-25% off a cold build of
-  the default target on one 4-GPU box. **GPU coverage only**: roughly half of every typed test
-  suite is not instantiated, and `ctest` still reports green. Use `dev-tests` or
-  `cuda` for the pre-push gate, plus a vendor-free tree
-  (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) at that final gate only. When `sycl-ls`
-  lists `[cuda:gpu]`, `scripts/ctest_gpus.sh` runs one test per GPU slot (`tests/README.md`).
+- `dev-tests`: library plus the full test suite
+- `fast-dev`: library plus the smoke-test subset
+- `benchmarks`: benchmark build with tuning support
+- `cuda`: CUDA-enabled build when the environment supports it
+- `dev-gpu` / `dev-gpu-tests`: drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`);
+  13-25% off a cold build of the default target on one 4-GPU box. **GPU coverage only**: about
+  half of every typed test suite is not instantiated and `ctest` still reports green. Use
+  `dev-tests` or `cuda` for the pre-push gate, plus a vendor-free tree
+  (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) at that gate only. With a `[cuda:gpu]` in `sycl-ls`,
+  `scripts/ctest_gpus.sh` runs one test per GPU slot (`tests/README.md`).
 
 ### Manual Configuration
 
@@ -299,47 +214,30 @@ cmake --build build -j"$(nproc)"
 
 Common CMake options:
 
-- `BATCHLAS_BUILD_TESTS`: build unit tests
-- `BATCHLAS_BUILD_BENCHMARKS`: build benchmark executables
-- `BATCHLAS_BUILD_PYTHON`: build the Python package
-- `BATCHLAS_ENABLE_CUDA`: `AUTO` (default; enable the cuBLAS/cuSOLVER backend
-  when the SYCL runtime exposes a CUDA device), `ON` (require it — configure
-  fails if `sycl-ls` shows no `[cuda:gpu]`) or `OFF`. Plain booleans still work.
-  A build directory configured before this became a tri-state carries the old
-  `BATCHLAS_ENABLE_CUDA:BOOL` entry; the first re-configure migrates it (`OFF`,
-  which used to be overridden silently, becomes `AUTO`; `ON` stays `ON`) and
-  says so. Pass `-DBATCHLAS_ENABLE_CUDA=OFF` if you really want it off
-- `BATCHLAS_CUDA_DEVICE_LINE_INFO`: pass `--generate-line-info` to the NVPTX
-  backend in Debug/RelWithDebInfo builds, for `ncu`/Nsight (default `OFF`; it has
-  been observed to fail CUDA JIT program builds)
-- `BATCHLAS_STRIP_RELWITHDEBINFO_G`: drop the toolchain's `-g` from
-  `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds
-  `-gline-tables-only` itself, and full DWARF in the device images has been
-  observed to fail CUDA JIT program builds)
-- `ONEDPL_ROOT`: root of a oneDPL installation, when it is not on the default
-  search path — see Requirements. The build fails at configure time without it
-- `BATCHLAS_ENABLE_ROCM`: enable ROCm backend support even if no AMD GPU is auto-detected
-- `BATCHLAS_ENABLE_NETLIB`: enable the host netlib backend
-- `BATCHLAS_ENABLE_TUNING`: enable tuning targets; intended for benchmark builds
-- `BATCHLAS_CPU_TARGET`: override SYCL CPU target selection (`auto`, `native_cpu`, `spir64_x86_64`, `none`)
-- `BATCHLAS_TEST_TARGET_SET`: choose `all` or `smoke`
-- `BATCHLAS_AMD_ARCH`: override ROCm target architecture
-- `BATCHLAS_NVIDIA_ARCH`: override CUDA target architecture
-- `BATCHLAS_USE_CCACHE`: cache compilations with ccache when available on `PATH` or in
-  `~/.local/bin` (default `ON`; a `CMAKE_CXX_COMPILER_LAUNCHER` you set yourself wins)
-- `BATCHLAS_CCACHE_SHARE_ACROSS_TREES`: let sibling checkouts and worktrees share
-  cache entries (default `ON`; turn off for source-level debugging)
-- `BATCHLAS_CCACHE_BASEDIR`: ccache base directory (default: the deepest common
-  parent of the source and build directories, or `$HOME` if that is `/`)
-- `BATCHLAS_TEST_GPUS`: GPUs written to `<build>/ctest_resources.json` for
-  `scripts/ctest_gpus.sh` (`auto` = `nvidia-smi --list-gpus`, a count, or `0` to
-  disable; needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error)
-- `BATCHLAS_TEST_GPU_SLOTS`: concurrent GPU tests per device under `scripts/ctest_gpus.sh`
-- `BATCHLAS_SYCL_LINK_JOBS`: parallelism for the SYCL device link (default `4`, `1` disables)
+| option | meaning |
+| --- | --- |
+| `BATCHLAS_BUILD_TESTS` | build unit tests |
+| `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables |
+| `BATCHLAS_BUILD_PYTHON` | build the Python package |
+| `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without a `[cuda:gpu]` in `sycl-ls`) or `OFF`. A cache entry from the old boolean option is migrated on the first re-configure (`OFF` becomes `AUTO`, `ON` stays `ON`); pass `-DBATCHLAS_ENABLE_CUDA=OFF` to force off |
+| `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
+| `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
+| `ONEDPL_ROOT` | root of a oneDPL installation not on the default search path; configure fails without oneDPL |
+| `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
+| `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |
+| `BATCHLAS_ENABLE_TUNING` | enable tuning targets; for benchmark builds |
+| `BATCHLAS_CPU_TARGET` | SYCL CPU target: `auto`, `native_cpu`, `spir64_x86_64`, `none` |
+| `BATCHLAS_TEST_TARGET_SET` | `all` or `smoke` |
+| `BATCHLAS_AMD_ARCH` | override ROCm target architecture |
+| `BATCHLAS_NVIDIA_ARCH` | override CUDA target architecture |
+| `BATCHLAS_USE_CCACHE` | cache compilations with ccache when on `PATH` or in `~/.local/bin` (default `ON`; your own `CMAKE_CXX_COMPILER_LAUNCHER` wins) |
+| `BATCHLAS_CCACHE_SHARE_ACROSS_TREES` | let sibling checkouts and worktrees share cache entries (default `ON`; turn off for source-level debugging) |
+| `BATCHLAS_CCACHE_BASEDIR` | ccache base directory (default: deepest common parent of source and build directories, or `$HOME` if that is `/`) |
+| `BATCHLAS_TEST_GPUS` | GPUs written to `<build>/ctest_resources.json` for `scripts/ctest_gpus.sh`: `auto` (`nvidia-smi --list-gpus`), a count, or `0` to disable. Needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error |
+| `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` |
+| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the SYCL device link (default `4`, `1` disables) |
 
 ## Test
-
-Build tests and run them with either the preset or a manual build:
 
 ```bash
 cmake --preset dev-tests
@@ -347,19 +245,9 @@ cmake --build --preset dev-tests
 ctest --test-dir build/presets/dev-tests --output-on-failure
 ```
 
-The `fast-dev` preset builds only the smoke subset:
-
-- `util_span_tests`
-- `util_vector_tests`
-- `matrix_tests`
-- `mempool_tests`
-- `backend_dispatch_tests`
-- `options_api_tests`
-- `linalg_layer_tests`
-
-None of those covers a specific algorithm, so `fast-dev` is not the preset to
-iterate in. To work on one algorithm, use a full tree and build only the binary
-you care about — the library plus that one test, and nothing else:
+`fast-dev` builds only the smoke subset (`util_span_tests`, `util_vector_tests`, `matrix_tests`,
+`mempool_tests`, `backend_dispatch_tests`, `options_api_tests`, `linalg_layer_tests`). None covers
+a specific algorithm. To iterate on one algorithm, build the library plus that one test:
 
 ```bash
 cmake --build build/presets/dev-tests --target stedc_tests -j"$(nproc)"
@@ -375,29 +263,25 @@ ctest --test-dir build/presets/dev-tests
 
 ## Benchmarks and Tuning
 
-The repository contains a large benchmark suite under `benchmarks/`, including BLAS kernels, QR/SVD paths, eigensolvers, band reduction, and sparse workflows. A typical benchmark build looks like this:
+Benchmarks (BLAS kernels, QR/SVD, eigensolvers, band reduction, sparse) live in `benchmarks/`:
 
 ```bash
 cmake --preset benchmarks
 cmake --build --preset benchmarks
 ```
 
-With `BATCHLAS_BUILD_BENCHMARKS=ON` (the preset above, or `-D`/`ccmake` in a
-hand-configured tree) the benchmark executables are part of the default `all`
-target, so a plain `cmake --build build` builds them. They are 61 heavy
-translation units, so leave the option OFF in trees you iterate on. To build
-only the benchmarks, or just one:
+With `BATCHLAS_BUILD_BENCHMARKS=ON` the 61 benchmark translation units join the default `all`
+target, so leave the option `OFF` in trees you iterate on. To build only them, or one:
 
 ```bash
 cmake --build build --target batchlas_benchmarks -j"$(nproc)"   # all of them
 cmake --build build --target gemm_benchmark -j"$(nproc)"        # just one
 ```
 
-The `scripts/` directory contains campaign helpers and result-processing scripts. Tuning support is wired through `BATCHLAS_ENABLE_TUNING`.
+`scripts/` has campaign helpers and result processing. Tuning is enabled by
+`BATCHLAS_ENABLE_TUNING`.
 
 ## Python Bindings
-
-Enable the Python package like this:
 
 ```bash
 cmake -S . -B build \
@@ -406,21 +290,15 @@ cmake -S . -B build \
   -DBATCHLAS_BUILD_TESTS=ON
 
 cmake --build build -j"$(nproc)"
-```
-
-The build places the importable package under `build/python`, so a build-tree import looks like:
-
-```bash
 PYTHONPATH="$PWD/build/python" python3 -c "import batchlas; print(batchlas.available_backends())"
 ```
 
-The extension module is built with pybind11 and linked against the installed or in-tree `BatchLAS::batchlas` target.
+The importable package lands in `build/python`. The pybind11 extension links against the
+installed or in-tree `BatchLAS::batchlas`.
 
 ## Consuming BatchLAS from CMake
 
-A complete, buildable example of everything in this section lives in
-[`examples/consumer/`](../examples/consumer/README.md) — start from that rather than from the
-snippets below.
+A buildable example lives in [`examples/consumer/`](../examples/consumer/README.md).
 
 ### The short version
 
@@ -438,8 +316,6 @@ cmake --build build -j"$(nproc)"
 LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:$LD_LIBRARY_PATH ./build/my_app
 ```
 
-and in your `CMakeLists.txt`:
-
 ```cmake
 cmake_minimum_required(VERSION 3.17)
 project(my_app CXX)
@@ -450,74 +326,58 @@ add_executable(my_app main.cc)
 target_link_libraries(my_app PRIVATE BatchLAS::batchlas)
 ```
 
-Substitute your own DPC++ prefix for `/opt/dpcpp-cuda` throughout. If you do not
-know which compiler a given install was built with, look for
-`CMAKE_CXX_COMPILER` in the `CMakeCache.txt` of the build tree it came from.
+Substitute your DPC++ prefix for `/opt/dpcpp-cuda`. The compiler an install was built with is
+`CMAKE_CXX_COMPILER` in the `CMakeCache.txt` of its build tree.
 
 ### Four things that will bite you if you skip them
 
-**1. The whole consuming project must use the same SYCL compiler.** Not "a C++20
-compiler", and not just the targets that touch BatchLAS. Clang encodes C++20
-`requires` clauses into mangled names and GCC (and Clang < 16) does not, so
-`Matrix`'s constrained constructors get *different symbol names* under the two
-compilers. The failure is at link time and does not mention BatchLAS or
-constraints:
+**1. The whole consuming project must use the same SYCL compiler.** Clang encodes C++20
+`requires` clauses into mangled names; GCC and Clang < 16 do not. `Matrix`'s constrained
+constructors therefore get different symbol names, and the link fails without mentioning BatchLAS
+or constraints:
 
 ```
 undefined reference to `batchlas::Matrix<float, (batchlas::MatrixFormat)0>::Matrix<...>(int, int, int, int, int)'
 ```
 
-`nm` will show you a symbol that looks like the one you want — the clang mangling
-carries an extra `Q...` component for the requires-clause. There is no consumer-side
-workaround; pass `-DCMAKE_CXX_COMPILER=` pointing at the same compiler.
+The clang symbol carries an extra `Q...` component for the requires-clause. There is no
+consumer-side workaround; set `-DCMAKE_CXX_COMPILER=` to the same compiler.
 
-**2. `-fsycl` is your business, not the package's.** The exported target does not
-force SYCL flags onto your translation units. That is deliberate: the public
-BatchLAS headers keep `<sycl/sycl.hpp>` out on purpose, so a TU that only calls
-the documented API compiles without `-fsycl` and without paying for a device
-compilation pass. But if a TU of yours includes `<batchlas/blas/device.hh>`, includes
-`<sycl/sycl.hpp>`, or writes its own kernels, it needs the flags and you add them
-yourself:
+**2. `-fsycl` is not added by the package.** The public headers keep `<sycl/sycl.hpp>` out, so a
+TU that only calls the documented API compiles without `-fsycl`. A TU that includes
+`<batchlas/blas/device.hh>` or `<sycl/sycl.hpp>`, or writes its own kernels, needs the flags,
+with the same `-fsycl-targets` value the library was built with:
 
 ```cmake
 target_compile_options(my_app PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
 target_link_options(my_app PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
 ```
 
-Use the same `-fsycl-targets` value the library was built with; mixing them is not
-a configuration anyone has tested.
-
-**3. The install is AOT-pinned to the GPU architecture it was built for.** Device
-code is compiled ahead of time for the arch detected at configure time (`sm_89`
-on the reference machine), so an install tree is not portable to a different GPU
-generation. Copying it to another card gives a *runtime* error —
-`No kernel named ... was found` — not a build error. Rebuild for the target
-machine, overriding detection if needed:
+**3. The install is AOT-pinned to the GPU architecture it was built for** (`sm_89` on the
+reference machine, detected at configure time). On a different GPU generation it fails at run time
+with `No kernel named ... was found`. Rebuild for the target, overriding detection if needed; the
+build also records the CUDA toolkit it found:
 
 ```bash
 cmake -S . -B build -DBATCHLAS_NVIDIA_ARCH=sm_80
 ```
 
-The same applies to CUDA: the build records the CUDA toolkit it found.
-
-**4. `LD_LIBRARY_PATH` must cover the DPC++ runtime.** BatchLAS's own libraries
-carry a `RUNPATH` to the install prefix, but the SYCL runtime does not follow —
-if DPC++ lives outside the ldconfig search path, your binary dies with
+**4. `LD_LIBRARY_PATH` must cover the DPC++ runtime.** BatchLAS's libraries carry a `RUNPATH` to
+the install prefix; the SYCL runtime does not follow. If DPC++ is outside the ldconfig path, the
+binary dies with
 
 ```
 error while loading shared libraries: libsycl.so.9: cannot open shared object file
 ```
 
-Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib` for interactive use. For containers
-and CI the more robust fix is to drop a file in `/etc/ld.so.conf.d/` and run
-`ldconfig`, because the SYCL runtime also `dlopen`s its UR adapters by bare
-soname and those are not covered by any RPATH you could set on your binary.
+Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib`. For containers and CI, add a file to
+`/etc/ld.so.conf.d/` and run `ldconfig`: the SYCL runtime `dlopen`s its UR adapters by bare soname,
+which no RPATH on your binary covers.
 
 ### Where the headers land
 
-Everything installs under `<prefix>/include/batchlas/`, plus the single umbrella
-file `<prefix>/include/batchlas.hh`. `batchlas` is the only name BatchLAS claims
-in your include root, and every public header is spelled `<batchlas/...>`:
+Everything installs under `<prefix>/include/batchlas/` plus the umbrella
+`<prefix>/include/batchlas.hh`; nothing else in your include root:
 
 ```cpp
 #include <batchlas.hh>                        // umbrella
@@ -525,12 +385,10 @@ in your include root, and every public header is spelled `<batchlas/...>`:
 #include <batchlas/util/sycl-device-queue.hh>
 ```
 
-BatchLAS installs nothing outside `<prefix>/include/batchlas/` and
-`<prefix>/include/batchlas.hh`, and `cmake --install` never removes files. If a
-`blas/`, `util/` or `internal/` directory in `<prefix>/include` is left over
-from an earlier BatchLAS install, it shadows the current headers. Check that it
-is ours before removing it — under a shared prefix such as `/usr/local` those
-names may belong to another package:
+`cmake --install` never removes files. A leftover `blas/`, `util/` or `internal/` directory in
+`<prefix>/include` from an earlier install shadows the current headers. Check it is ours before
+removing it, since under a shared prefix such as `/usr/local` those names may belong to another
+package:
 
 ```bash
 ls <prefix>/include/blas
@@ -538,28 +396,23 @@ ls <prefix>/include/blas
 
 ### What the package does and does not give you
 
-- It exports `BatchLAS::batchlas` and the generated configuration headers the
-  public interface needs.
-- `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported;
-  the components are not independently linkable. Link the umbrella target.
-- The library is shipped as several `.so` files without an `SOVERSION`, and
-  there is no released tag yet. Pin to a commit, not to a version.
+- It exports `BatchLAS::batchlas` and the generated configuration headers the public interface
+  needs.
+- `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported; link the umbrella
+  target.
+- The library ships as several `.so` files without an `SOVERSION`, and there is no released tag.
+  Pin to a commit.
 
 ## Development Notes
 
-- The top-level `batchlas` target is an interface facade over split component libraries.
-- Each op's entry point, choices and launchers live in `src/ops/<op>/`; the shared
-  selection machinery (table lookup, vendor availability, trace and coverage) is in
-  `src/select/`, and the per-device tables it reads are in `tuned/`. The design is
+- `batchlas` is an interface facade over split component libraries.
+- Each op's entry point, choices and launchers live in `src/ops/<op>/`; table lookup, vendor
+  availability, trace and coverage are in `src/select/`; per-device tables are in `tuned/`. Design:
   [docs/design/flat-kernel-selection.md](../docs/design/flat-kernel-selection.md).
-- Implementation notes, measurements and design rationale live in the documentation
-  site, not in markdown files outside `docs/`: `docs/perf/` for routing windows and measured
-  grids, `docs/design/` for design decisions and known defects, `docs/algorithms/`
-  for the mathematics, `docs/developer/` for process and tooling, and
-  [docs/extending.md](../docs/extending.md) for adding entry points. The
-  [agent environment guide](../docs/developer/agent-guide.md) is the working guide for
-  the build, testing and measurement rules.
+- Notes and measurements live in `docs/`, not in Markdown elsewhere: `docs/perf/`, `docs/design/`,
+  `docs/algorithms/`, `docs/developer/` and [docs/extending.md](../docs/extending.md). Build,
+  testing and measurement rules: [agent environment guide](../docs/developer/agent-guide.md).
 
 ## License
 
-BatchLAS is licensed under the MIT License. See `LICENSE` for the full text.
+BatchLAS is licensed under the MIT License. See `LICENSE`.

@@ -1,88 +1,61 @@
 # Performance regression evaluation {#perf_regression}
 
-This folder contains lightweight evaluation tooling for BatchLAS.
+Lightweight evaluation tools: a CUDA FP32 perf-regression runner and an STEQR accuracy sampler.
 
 ## Perf regression (CUDA FP32)
 
-The perf runner executes two existing minibench benchmarks:
-- `stedc_benchmark` (both recursive and `stedc_flat` variants via the `flat` arg)
-- `steqr_benchmark`
+`evaluation/perf_eval.py` runs `stedc_benchmark` (recursive and `stedc_flat` via the `flat` arg)
+and `steqr_benchmark`, records a JSON baseline, and compares later runs against it.
 
-It records a JSON baseline and can compare later runs against that baseline.
+**Prerequisites:** the benchmarks are built (`build/benchmarks/stedc_benchmark` and
+`build/benchmarks/steqr_benchmark` exist) and the CUDA backend is enabled.
 
-### Prereqs
+| Task | Command |
+|---|---|
+| Record baseline | `python3 evaluation/perf_eval.py --record` |
+| Check for regressions | `python3 evaluation/perf_eval.py --check` |
 
-- Build the benchmarks (so `build/benchmarks/stedc_benchmark` and `build/benchmarks/steqr_benchmark` exist)
-- CUDA backend enabled in your build
+- The baseline is written to `evaluation/baselines/perf_cuda_fp32.json`. It snapshots the GPU
+  model, driver, CUDA toolkit and NVHPC version into `meta.environment`.
+- `--check` fails if any metric regresses by more than 5 %, or if the CUDA/NVHPC environment
+  differs from the baseline metadata.
 
-### Record a baseline
+### Options
 
-Run:
+| Option | Effect |
+|---|---|
+| `--tolerance 0.10` | Regression tolerance (default 5 %) |
+| `--build-dir <path>` | Build directory to use |
+| `--cases evaluation/perf_cases.json` | Override the cases (raw positional minibench args) |
+| `--trace evaluation/trace.json` | Emit a Chrome trace |
+| `--allow-env-mismatch` | Ignore toolchain/hardware mismatch |
+| `--kernel-trace-dir evaluation/trace/kernels` | Kernel-level traces (see below) |
 
-- `python3 evaluation/perf_eval.py --record`
+### Kernel-level traces
 
-This writes the default baseline to:
+SYCL event profiling produces a kernel/command-level Chrome trace. Use the runner's option, or set
+the variables on any executable that uses `Queue`:
 
-- `evaluation/baselines/perf_cuda_fp32.json`
+```sh
+BATCHLAS_KERNEL_TRACE=1
+BATCHLAS_KERNEL_TRACE_PATH=path/to/kernels.trace.json
+```
 
-When recording, the runner now snapshots CUDA/NVIDIA toolchain metadata (GPU model,
-driver, CUDA toolkit, and NVHPC version when available) into `meta.environment`.
-
-### Check for regressions
-
-Run:
-
-- `python3 evaluation/perf_eval.py --check`
-
-By default it fails if any metric regresses by more than 5%.
-It also fails by default if the current CUDA/NVHPC environment does not match
-the baseline metadata, to keep comparisons fair after toolkit upgrades.
-
-### Common options
-
-- Change tolerance: `--tolerance 0.10` (10%)
-- Use a different build dir: `--build-dir /path/to/build`
-- Override cases: `--cases evaluation/perf_cases.json`
-- Emit a Chrome trace: `--trace evaluation/trace.json`
-- Temporarily ignore toolchain/hardware mismatch: `--allow-env-mismatch`
-
-### Kernel-level traces (SYCL event profiling)
-
-BatchLAS can emit a kernel/command-level Chrome trace using SYCL event profiling.
-
-Options:
-
-- Via perf runner (recommended):
-	- `python3 evaluation/perf_eval.py --check --kernel-trace-dir evaluation/trace/kernels`
-
-- Or manually via env vars when running any executable that uses `Queue`:
-	- `BATCHLAS_KERNEL_TRACE=1`
-	- `BATCHLAS_KERNEL_TRACE_PATH=path/to/kernels.trace.json`
-
-### Default cases
-
-The default cases are defined in:
-
-- `evaluation/perf_cases.json`
-
-Each case provides the raw positional minibench args passed to the executable.
+Default cases are in `evaluation/perf_cases.json`.
 
 ## Accuracy evaluation (STEQR)
 
-The accuracy sampler generates random tridiagonal matrices, compares STEQR/STEQR_CTA
-eigenvalues against a NETLIB double reference, and writes one CSV row per matrix.
-You can then plot a heatmap of log10(relative error) vs log10(condition number).
+`steqr_accuracy` samples random tridiagonal matrices, compares STEQR and STEQR_CTA eigenvalues
+against a NETLIB double reference, and writes one CSV row per matrix. Plot a heatmap of
+log10(relative error) against log10(condition number).
 
-### Build the sampler
+Build it with the benchmarks (target `steqr_accuracy`). Example, CUDA float, STEQR_CTA:
 
-- Ensure the benchmarks are built (the new target is `steqr_accuracy`)
+```sh
+./build/benchmarks/steqr_accuracy --impl=steqr_cta --backend=CUDA --type=float --n=32 \
+    --samples=20000 --batch=256 --log10-cond-min=0 --log10-cond-max=12 \
+    --output=output/accuracy/steqr_accuracy.csv
+```
 
-### Generate a dataset
-
-- Example (CUDA, float, STEQR_CTA):
-	- `./build/benchmarks/steqr_accuracy --impl=steqr_cta --backend=CUDA --type=float --n=32 --samples=20000 --batch=256 --log10-cond-min=0 --log10-cond-max=12 --output=output/accuracy/steqr_accuracy.csv`
-
-### Notes
-
-- The sampler always uses NETLIB double for the reference solve, so the host backend must be enabled.
-- Complex types map to their real component for STEQR accuracy (use float/double to be explicit).
+- The reference solve always uses NETLIB double, so the host backend must be enabled.
+- Complex types map to their real component for STEQR accuracy; use float or double explicitly.

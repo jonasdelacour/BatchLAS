@@ -1,12 +1,9 @@
 # Results and evidence database {#results_index}
 
-All three pages below are generated from the tree on every documentation build, so
-they cannot drift from it.
+Generated from the tree on every documentation build. To add results, see @ref documentation_conventions.
 
-| Page | What it answers |
+| Page | What you find there |
 | --- | --- |
-| @subpage results_database "Results database" | Which raw measurement files exist, what they measured, where and when, and which evidence pages distil them. |
-| @subpage selection_tables "Kernel selection tables" | For every op: the kernel families it can run, the keys its tables are matched on, and for each dtype and device which family ranks first where, and whether that table was measured or transcribed. |
-| @subpage evidence_index "Evidence index" | For every cited section of an evidence page, which code, tests and build files depend on it. Check it before renaming or deleting a section. |
-
-To add results, see @ref documentation_conventions.
+| @subpage results_database "Results database" | Raw measurement files: what, where, when, and the evidence pages that distil them. |
+| @subpage selection_tables "Kernel selection tables" | Per op: kernel families, table keys, and per dtype and device which family ranks first where; measured or transcribed. |
+| @subpage evidence_index "Evidence index" | Per cited evidence section: the code, tests and build files that depend on it. Check before renaming or deleting a section. |

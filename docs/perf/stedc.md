@@ -1,545 +1,310 @@
 # STEDC: the divide-and-conquer merge {#perf_stedc}
 
-**Covers:** the performance work on the `stedc` merge path: the Nsight Compute profile of the
-fused CTA merge kernel, partition-parallel rescale and normalize, the work-group width retune,
-the deflation-aware back-transform GEMM, what was tried and reverted, the open eigenvalues-only
-item, the literature, and the validation protocol for any change here.
-**Status:** mostly current; stale parts are marked inline. This page is the distilled form of the
-August 2026 research log (formerly `STEDC_MERGE_OPTIMIZATION.md`).
-**Machine:** RTX 4090 (sm_89), CUDA backend, GPU 1 (`CUDA_VISIBLE_DEVICES=1`).
-**Measured:** 2026-08-01 (commits `296a5aba`, `2a65e165`, `6c2664a7`, `d4e057f1`); the
-syev-side retune quoted in [stedc: current tuning values](#stedc-current-tuning-values) on
-2026-08-07.
+> **Status:** mostly current · RTX 4090 (sm_89), CUDA, GPU 1 · measured 2026-08-01; `syev` tuning
+> re-measured 2026-08-07
 
-The mathematics of the leaf solver is in @ref algo_steqr. The Nsight Compute recipe for this
-kernel is agent tooling kept at `.github/skills/nvidia-kernel-profiling/references/batchlas-stedc.md`.
+This page covers the performance work on the `stedc` merge path: the merge-kernel profile, the
+partition-parallel rescale and normalize, the work-group width, the deflation-aware back-transform
+GEMM, rejected alternatives, open debts, and the validation protocol. The leaf-solver mathematics is
+in @ref algo_steqr; the live tuning values are in `include/batchlas/tuning_params.hh`. Each section's
+status line marks what is stale.
 
 ## stedc: merge kernel profile
 
-`stedc_benchmark --backend=CUDA --type=float 256 256 16 0 32 1` under Nsight Compute, before any
-of the work below:
-
-| Metric | `StedcFusedCtaMerge<CUDA, float, 32>` |
-| --- | --- |
-| Duration | 101.50 us |
-| SM throughput | 8.80% |
-| Memory throughput | 8.80% |
-| DRAM throughput | 0.14% |
-| Registers/thread | 78 |
-| Block size | 32 |
-| Grid size | 256 |
-| Theoretical occupancy | 50.00% |
-| Achieved occupancy | 3.96% |
-| Waves per SM | 0.08 |
-
-Share of total GPU time: `SteqrCTAKernel` 35.7%, `StedcFusedCtaMerge` 30.3%,
-`Matrix::Identity` 13.9%, `PermutedCopyKernel` 5.4%, `ampere_sgemm_128x128_nn` 4.9%.
-
-**The merge kernel is neither compute- nor bandwidth-bound; it is serialization/latency-bound.**
-Achieved occupancy is about 1/12 of theoretical, which points at serialization inside the kernel
-rather than at launch geometry alone.
+Nsight Compute, `stedc_benchmark --backend=CUDA --type=float 256 256 16 0 32 1`, before the changes
+below (`StedcFusedCtaMerge<CUDA, float, 32>`): 101.5 us, 8.8% SM throughput, 0.14% DRAM throughput,
+78 registers, 3.96% achieved occupancy against 50% theoretical. The merge is serialization- and
+latency-bound, not compute- or bandwidth-bound.
 
 ## stedc: partition-parallel rescale and normalize
 
-Status: **done**. End-to-end gain on the CTA path 4-9% on its own, depending on n (about 5.5% in
-the matched-settings attribution, see
-[stedc: end-to-end merge speedup](#stedc-end-to-end-merge-speedup)).
+Status: **done**. End-to-end gain on the CTA path is 4-9%, depending on n (about 5.5% at matched
+settings, see [stedc: end-to-end merge speedup](#stedc-end-to-end-merge-speedup)).
 
-`maybe_rescale_vectors` and `normalize_vectors` (`src/extensions/stedc_merge_cta.cc`) each looped
-`for eid = 0 .. dd-1` with a whole-work-group `reduce_over_group` plus a `group_barrier` per
-index. The root solve just above them was already partition-parallel
-(`for root_ix = part_id; root_ix < dd; root_ix += parts_per_wg`), so the kernel went wide for the
-secular solve and then collapsed to one column at a time for `2*dd` barrier-separated steps.
+`maybe_rescale_vectors` and `normalize_vectors` (`src/extensions/stedc_merge_cta.cc`) looped over
+`eid = 0 .. dd-1` with a whole-work-group reduction and a barrier per index. Both loops are
+independent per index, so the CTA variant runs one index per sub-group partition, concurrently, with
+one `group_barrier(wg)` between the phases. The WG variant (`WorkgroupAdapter`, `(0, 1)`) is
+bit-identical to the old code and is kept as the A/B reference.
 
-Both loops are embarrassingly parallel:
+> **Warning:** Narrowing the reduction group makes each serial Löwner product 8x longer going from
+> width 32 to width 4. At n = 64 the naive product overflowed or underflowed and poisoned the
+> eigenvalues. The product is accumulated as a (mantissa, exponent) pair with `frexp` renormalization.
 
-- **rescale**, index `eid`: reads row `eid` of `Q` (not written in this phase), writes only
-  `v(eid)`;
-- **normalize**, index `eig`: reads all of `v`, reads and writes only column `eig` of `Q`.
+> **Warning:** `dd` is rarely a multiple of `parts_per_wg`. A plain `eid < dd` bound lets some
+> partitions leave early, while the sub-group shuffles need every lane. Both loops run a uniform trip
+> count and mask the work.
 
-Both are now templated on a reduction adapter and a `(first, stride)` index range:
+Narrowing the reduction reassociates both sums. That is safe because neither involves cancellation,
+but orthogonality must still be validated
+([stedc: validation protocol for merge changes](#stedc-validation-protocol-for-merge-changes)).
 
-- the CTA variant passes `PartitionAdapter` with `(part_id, parts_per_wg)` for both loops: one
-  index per sub-group partition, all concurrent, no work-group barrier inside either loop. One
-  `group_barrier(wg)` separates the phases (rescale reads `Q` and writes `v`; normalize overwrites
-  `Q` and reads `v`);
-- the WG variant passes `WorkgroupAdapter` with `(0, 1)`, bit-identical to the old behaviour and
-  kept as the A/B reference path.
+### Rejected: recomputed denominators
 
-Supporting changes: `reduce_product` and a no-op/barrier `sync()` on both adapters, and
-`nrm2_column`, an adapter-generic Blue's-scaled 2-norm mirroring `internal::nrm2` in
-`src/math-helpers.hh` (three accumulators reduced as scalars rather than a `sycl::vec<R,3>`,
-componentwise identical).
+Recomputing the rescale denominators from shared memory removes a global store but adds two shared
+arrays, which cut occupancy. Batch 256, float, ms:
 
-Two hazards created by narrowing the reduction group were fixed along the way and are kept:
+| n | partition-parallel | with recompute | control: + 2 unused shared arrays |
+| --- | --- | --- | --- |
+| 64 | 0.840 | 0.981 | 0.990 |
+| 256 | 4.698 | 5.112 | 5.190 |
+| 512 | 12.704 | 13.807 | 14.105 |
 
-- **Löwner product range.** A lane multiplies `dd/width` factors before any reduction, so going
-  from width 32 to width 4 makes each serial product 8x longer, and it can leave float range: at
-  n = 64 the naive product overflowed to Inf or underflowed to 0, which poisoned v, then Q, then
-  the eigenvalues, and the resulting invalid sort permutation faulted downstream in
-  `permuted_copy`. The product is accumulated as a (mantissa, exponent) pair with `frexp`
-  renormalization, which keeps the mantissa in [0.5, 1) at any width. Rescaling is
-  by exact powers of two, so wherever the naive product was in range the result is bit-for-bit the
-  same.
-- **Uniform trip counts.** `dd` is rarely a multiple of `parts_per_wg` (deflation makes it
-  arbitrary). A plain `eid < dd` bound lets some partitions leave the loop while others are still
-  in it, and the reductions are sub-group shuffles that need every lane of the warp. Both loops
-  iterate a uniform number of times and mask the work.
-
-**Numerical note.** Narrowing the reduction group reassociates both reductions. That is safe
-because neither involves cancellation: the Löwner reduction is a product of ratios and `nrm2` a
-sum of squares, so only benign relative error accumulates. This differs from the failed "fast
-path" in the fused merge kernel ([stedc: the rejected private-pole fast path](#stedc-the-rejected-private-pole-fast-path)),
-which changed where the poles were stored during the solve and produced a bimodal orthogonality
-distribution.
-Orthogonality must still be validated, not assumed; see
-[stedc: validation protocol for merge changes](#stedc-validation-protocol-for-merge-changes).
+The regression is shared-memory footprint, not the recompute. Any revisit must add no shared memory:
+keep `tau` plus a 1-byte origin selector, or stage the shifts in global scratch.
 
 ## stedc: the dd == 1 secular-solve fault
 
-Status: **fixed**. Making `normalize_vectors` partition-parallel surfaced
-`CUDA_ERROR_ILLEGAL_ADDRESS` in the merge kernel. The cause was pre-existing.
+Status: **fixed**. Making `normalize_vectors` partition-parallel exposed `CUDA_ERROR_ILLEGAL_ADDRESS`
+in the merge kernel; the cause predates the change. `solve_root_ext_generic` computed `prev = dd - 2`
+and dereferenced `d_prob(prev)` unconditionally. When a subproblem deflates to `dd == 1`, `prev` is
+-1, outside the shared window.
 
-`solve_root_ext_generic` computed `prev = dd - 2` and dereferenced `d_prob(prev)`
-unconditionally. When a merge subproblem deflates down to `dd == 1`, `prev` is `-1`. `d_prob`
-aliases the shared-memory `d_local` through a generic pointer, so the negative offset resolves
-outside the shared window and faults instead of reading garbage. The work-group path made the
-same out-of-range access (confirmed by device assert) but happened not to fault under its
-register and shared-memory layout; the partition version changed the layout enough to make it
-fatal.
+Fix: solve the single-pole case in closed form. With one pole, \f$x = d_0 + \rho z_0^2\f$, so the CTA
+solver returns `{d_prob(0), rho * z0 * z0}` before computing `prev`. The non-CTA `sec_solve_ext_roc`
+(`src/extensions/stedc_secular.cc`) gets the same guard.
 
-Fix: solve the single-pole case in closed form. With one pole the secular equation
-\f$1/\rho + z_0^2/(d_0 - x) = 0\f$ gives \f$x = d_0 + \rho z_0^2\f$, so the CTA solver returns
-`{d_prob(0), rho * z0 * z0}` before computing `prev` (`stedc_merge_cta.cc`, `solve_root_ext_generic`).
-The non-CTA `sec_solve_ext_roc` in `src/extensions/stedc_secular.cc` had the identical bug
-(`prev_index = dd - 2`) and is fixed the same way. That path updates `D` in place, so the guard
-also writes the denominator \f$D_0 - x = -\rho z_0^2\f$, matching what the CTA path's
-`(d - origin) - tau` produces and what `apply_shift_to_poles` leaves in the general case.
-
-**How it was found.** `compute-sanitizer` cannot attach ("CUDA initialized before the
-Sanitizer"), because SYCL initializes CUDA first. The bounds checks in
-`KernelMatrixView`/`VectorView::at` are compiled out by `NDEBUG`, so the tool that worked was a
-rebuild with device asserts on:
+To find such faults, `compute-sanitizer` cannot attach (SYCL initializes CUDA first). Rebuild with
+device asserts on instead:
 
 ```bash
 cmake -B build-assert -S . -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g -UNDEBUG" ...
 ```
 
-CMake puts `-DNDEBUG` in `$DEFINES`, and the rule is `$DEFINES $INCLUDES $FLAGS`, so `-UNDEBUG`
-in the flags wins. The device assert then names the function and the index.
+`-UNDEBUG` in the flags overrides the `-DNDEBUG` in `$DEFINES`.
 
 ### stedc: the heavy-deflation test gap
 
-Status: **fixed, but the guard is weak**. The gap was not partition width:
-`StedcTest.FusedCtaPartitionWidths` already covered \f$P = 4, 8, 16, 32\f$ at n = 64. It was the
-deflation regime: plain random tridiagonals essentially never deflate a subproblem to `dd == 1`.
-`StedcTest.FusedCtaConditionedHeavyDeflation` (`tests/stedc_tests.cc`) builds matrices with
-`random_hermitian_tridiagonal_with_log10_cond_metric` at log10 cond 1, 3 and 5 and runs all four
-widths, mirroring the `stedc_acc` case that exposed the bug. It reproduced
-`CUDA_ERROR_ILLEGAL_ADDRESS` with the fix reverted and passed with it.
+Status: **fixed; the guard is weak**. Random tridiagonals almost never deflate a subproblem to
+`dd == 1`. `StedcTest.FusedCtaConditionedHeavyDeflation` (`tests/stedc_tests.cc`) uses
+log10 condition 1, 3 and 5 across all four widths, and reproduced the fault with the fix reverted.
 
-**Trap (still open):** the test asserts only that eigenvalues are finite and sorted, never
-accuracy or orthogonality. "The tests pass" is weaker evidence than it looks, for this fix and for
-the merge-variant choice below. Its comment also says the tuning tables select
-`secular_threads_per_root = 4` for n <= 64; they now select 8 (`STEDC_THREADS_PER_ROOT_*` in
-`include/batchlas/tuning_params.hh`).
-
-## stedc: recomputing denominators costs occupancy
-
-Status: **tried, reverted (regression)**.
-
-The idea: `maybe_rescale_vectors` read `Q_bid(eid, j)` with `j` strided across lanes, an
-`ld`-stride row walk of a column-major matrix and the only uncoalesced access in the kernel. That
-value is exactly `secular_denominator(d_eid, origin_j, tau_j)`, so it can be recomputed from shared
-memory instead. That also removes `write_denominator_column`'s global store and folds the 2-norm
-into the write pass. It was implemented, verified bit-identical, and is 5-10% slower
-(batch 256, float, ms):
-
-| n | partition-parallel only | with recompute | control: partition-parallel + 2 unused shared arrays |
-| --- | --- | --- | --- |
-| 64 | 0.840 | 0.981 | 0.990 |
-| 256 | 4.698 | 5.112 | 5.190 |
-| 512 | 12.704 | 13.807 | 14.105 |
-
-The control column decides it: the same code with the two extra `local_accessor`s allocated and
-written but never read is just as slow. The whole regression is shared-memory footprint; the
-recompute itself is worth about 1-2% (it beats the control at every size) but cannot pay for the
-occupancy. Storing `origin` and `tau` per root doubles shared usage from
-\f$2 \cdot n_{loc} \cdot \mathrm{sizeof}(T)\f$ to \f$4 \cdot n_{loc} \cdot \mathrm{sizeof}(T)\f$,
-which at 32 threads per work-group halves the blocks resident per SM.
-
-**The lesson generalizes:** this kernel runs at 0.14% DRAM throughput. Removing global traffic
-buys nothing, while anything that grows shared memory costs occupancy, the binding constraint.
-Optimizations here should reduce resident state, not trade memory for arithmetic. If revisited,
-add no shared memory: keep `tau` plus a 1-byte origin-pole selector, or stage the shifts in global
-scratch (coalesced, L1-resident, no occupancy cost). Expected upside is the 1-2% above.
+> **Warning:** The test asserts only that eigenvalues are finite and sorted, never accuracy or
+> orthogonality. Strengthen it before trusting the merge-variant choice on new hardware.
 
 ## stedc: the work-group multiplier after the barriers went
 
-Status: **done**; the values have since been re-chosen through `syev`
-(see [stedc: current tuning values](#stedc-current-tuning-values)).
+Status: **done**; the values were later re-chosen through `syev` (see
+[stedc: current tuning values](#stedc-current-tuning-values)).
 
-`STEDC_WG_MULTIPLIER_*` went from 1 / 1 / 2 / 2 / 4 to 8 for every size class. This was the
-largest single win, and it exists only because the partition-parallel loops removed the barriers
-(n = 64, batch 256, float, ms):
+`STEDC_WG_MULTIPLIER_*` went from 1 / 1 / 2 / 2 / 4 to 8 for every size class. This was the largest
+single win, and it exists only because the partition-parallel loops removed the barriers. n = 64,
+batch 256, float, ms: baseline 0.919 / 0.877 at multiplier 1 / 8, partition-parallel 0.880 / 0.729 at
+multiplier 1 / 8 (multiplier 4: 0.740). On the baseline, widening past 4 hurts, because a wide group
+reducing over `dd` elements wastes lanes; with partition-parallel loops the extra width becomes extra
+concurrent columns.
 
-| multiplier | baseline (serial rescale/normalize) | partition-parallel |
-| --- | --- | --- |
-| 1 | 0.919 | 0.880 |
-| 4 | 0.850 | 0.740 |
-| 8 | 0.877 (worse than 4) | 0.729 |
+> **Warning:** `choose_wg_size` clamped only to the device's `max_work_group_size` (1024). At about 80
+> registers per work-item, 1024 work-items do not launch and the call throws. It now also clamps to
+> `kernel_device_specific::work_group_size` (`kernel_max_work_group_size` in `stedc_merge_cta.cc`),
+> which caps the kernel at 768 work-items (6 warps per sub-partition).
 
-On the baseline, widening past 4 hurts: a wide work-group reducing over only `dd` elements wastes
-most of its lanes. With partition-parallel loops the extra width becomes extra concurrent
-columns. 16 was also tried: marginally better at n = 64, worse at n >= 256.
-
-**Trap fixed here: launch ceiling.** `choose_wg_size` clamped only against the device's
-`max_work_group_size` (1024). At about 80 registers per work-item, 1024 work-items do not launch,
-and the call throws:
-
-```
-Exceeded the number of registers available on the hardware.
-The kernel uses 80 registers per work-item for a total of 1024 work-items.
-```
-
-It now also clamps to `kernel_device_specific::work_group_size` for the specific kernel
-(`kernel_max_work_group_size` in `stedc_merge_cta.cc`), so an aggressive multiplier degrades to the
-largest launchable size. The log explained the failure as 81,920 registers against a 65,536 file;
-the correct bound is per sub-partition (16,384 each), which caps the kernel at 6 warps per
-sub-partition, 768 work-items, as the comment above `choose_wg_size` records.
-
-**Benchmark trap.** `stedc_benchmark` used to substitute fixed fallbacks
-(`threads_per_root = 32`, `wg_multiplier = 1`) for 0 arguments, so it measured a configuration
-the library never runs by default. It now passes non-positive values through and `StedcParams`
-resolves them from the tuning tables, so `stedc_benchmark ... <n> 256 16 2 0 0` measures what a
-real caller such as `syev` gets. Also: **argument 3 selects the merge variant** (`-1` Auto,
-`0` Baseline, `1` Fused, `2` FusedCta). An early measurement used `0`, the Baseline 3-kernel path,
-which does not run this code at all, and produced a spurious result.
+> **Note:** `stedc_benchmark` passes non-positive arguments through, and `StedcParams` resolves them
+> from the tuning tables. Argument 3 selects the merge variant: `-1` Auto, `0` Baseline, `1` Fused,
+> `2` FusedCta. Variant 0 runs the 3-kernel path, which does not exercise this code.
 
 ## stedc: deflation-aware back-transform GEMM
 
-Status: **done**, gated at \f$n \ge 512\f$ (`stedc_deflation_gemm_min_n`,
-`src/extensions/stedc.cc`).
+Status: **done**, gated at \f$n \ge 512\f$ (`stedc_deflation_gemm_min_n`, `src/extensions/stedc.cc`).
 
-`stedc.cc` issued a full dense \f$n \times n \times n\f$ GEMM per merge level. `Qprime` is
-identity-filled and only its first `n_reduced` columns carry secular eigenvectors, so as a block
-it is \f$M = [W \mid I]\f$. Permuting columns commutes with the product:
+Each merge level issued a dense \f$n \times n \times n\f$ GEMM. `Qprime` is identity beyond its first
+`n_reduced` columns, so as a block it is \f$M = [W \mid I]\f$, and
+\f$A M = [\, A W \mid A_{:,\,dd:} \,]\f$. Only the first \f$dd\f$ columns need a GEMM; the sort is applied
+after the multiply.
 
-\f[
-A \, M_{:,\pi} = (A M)_{:,\pi},
-\qquad
-A M = [\, A W \mid A_{:,\,dd:} \,],
-\f]
+- **Kept on cuBLAS.** `dd` varies per item. A batch-wide \f$dd_{\max}\f$ keeps one uniform call and stays
+  exact: for an item with \f$dd < dd_{\max}\f$, the extra columns of \f$M\f$ are identity columns.
+- **No extra workspace.** \f$A\f$ goes into `temp_Q`, which frees `eigvects` for the narrow result.
 
-so the sort can be applied after the multiply, and the deflated columns of the product are
-columns of \f$A\f$ that need no multiply. Only the first \f$dd\f$ columns need a GEMM.
-
-**Kept on cuBLAS.** `dd` varies per batch item, and a per-item GEMM would be ragged, dropping off
-the vendor batched kernel onto the heterogeneous path. A single batch-wide \f$dd_{\max}\f$ keeps
-one uniform batched call and is still exact: for an item with \f$dd < dd_{\max}\f$, columns
-\f$dd .. dd_{\max}-1\f$ of \f$M\f$ really are identity columns. No extra workspace: \f$A\f$ goes
-into `temp_Q`, which frees `eigvects` for the narrow GEMM result, folded back over \f$A\f$'s head.
-
-How much deflates (random tridiagonals, batch 64):
-
-| merge size | mean `dd` | kept | min-max |
-| --- | --- | --- | --- |
-| 256 | 43.8 | 17.1% | 25-61 |
-| 128 | 43.9 | 34.3% | 19-69 |
-| 64 | 41.3 | 64.5% | 21-57 |
-| 32 | 29.0 | 90.6% | 10-32 |
-
-Deflation is heaviest where the GEMM is most expensive, and the batch is homogeneous enough that
-\f$dd_{\max}\f$ is close to the mean.
+Deflation on random tridiagonals, batch 64: merge size 256 keeps 17.1% of the columns (mean `dd`
+43.8); merge size 32 keeps 90.6% (mean `dd` 29.0).
 
 ### stedc: the deflation GEMM threshold
 
-The catch is a host sync: \f$dd_{\max}\f$ must be known on the host to size the GEMM, which
-stalls the enqueue pipeline. Feature off vs on, interleaved, idle GPU, batch 256, float, ms:
+The catch is a host sync to learn \f$dd_{\max}\f$, which stalls enqueue. Feature off vs on, idle GPU,
+batch 256, float, ms:
 
 | n | off | on | gain |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | 256 | 3.998 | 4.020 | -0.5% (noise) |
 | 512 | 11.166 | 10.525 | +5.8% |
 | 1024 | 39.388 | 29.937 | +24.0% |
 
-Hence the gate at n >= 512. Below it the recursion has many small merge nodes and the syncs cost
-more than the saved flops; a threshold of 128 regressed n = 256 by about 5%. A second guard,
-`stedc_deflation_gemm_max_kept_fraction = 0.75`, skips the narrow path unless deflation removed
-at least 25% of the columns, so weak deflation cannot lose more than the one sync.
-
-**Not done, deliberately:** LAPACK's `dlaed2`/`dlaed3` `CTOT` split of the non-deflated columns
-into two blocks (a further ~2x). It would split the one uniform GEMM into two with per-item widths,
-the ragged shape that leaves the vendor kernel.
+The gate is n >= 512; a threshold of 128 regressed n = 256 by about 5%. A second guard,
+`stedc_deflation_gemm_max_kept_fraction = 0.75`, skips the narrow path unless deflation removed at
+least 25% of the columns. LAPACK's `dlaed2`/`dlaed3` `CTOT` split would gain a further ~2x, but it
+splits the uniform GEMM into ragged calls and leaves the vendor kernel; not done.
 
 ## stedc: eigenvalues-only still builds eigenvectors
 
 Status: **open inside `stedc`; avoided by `syev`**.
 
-`stedc` has no `NoEigenVectors` branch between the recursion and the back-transform GEMM: the
-merges consume the leaves' eigenvectors, so every merge and back-transform runs whatever `jobz`
-says. In `src/extensions/stedc.cc` the level driver (`stedc_levels_impl`) never reads `jobz`
-(its workspace sizing discards it with `(void)jobz`), and the recursive driver (`stedc_impl`)
-only forwards it to the leaf `steqr_dispatch`. The `syev` tiers
-work around it rather than fix it: `syev_blocked` and `syev_two_stage` call `stebz` (bisection)
-for values-only and always call `stedc` with `EigenVectors` (see the NOTE in
-`src/extensions/syev_blocked.cc`). A direct `stedc(..., NoEigenVectors, ...)` caller still pays
-for vectors. **Unverified hazard:** because the recursive driver passes the caller's `jobz` to the
-leaf solve while every merge consumes leaf eigenvectors, a direct
-`stedc(..., NoEigenVectors, ...)` on the recursive driver may merge from vectors that were never
-computed; this needs a test before it is filed as a defect. The matching algorithm is boundary-row divide and conquer
+`stedc` has no `NoEigenVectors` branch. Merges consume the leaves' eigenvectors, so every merge and
+back-transform runs whatever `jobz` says. The level driver (`stedc_levels_impl`) never reads `jobz`.
+The recursive driver (`stedc_impl`) forwards it only to the leaf `steqr_dispatch`. `syev_blocked` and
+`syev_two_stage` avoid this: they use `stebz` (bisection) for values-only.
+
+> **Warning:** Unverified hazard. A direct `stedc(..., NoEigenVectors, ...)` on the recursive driver
+> may merge from vectors that were never computed. This needs a test before it is filed as a defect.
+
+The matching algorithm is boundary-row divide and conquer
 ([stedc: literature on the merge](#stedc-literature-on-the-merge), Zhan & Zhang).
 
 ## stedc: the level-synchronous driver
 
-`src/extensions/stedc.cc` has two drivers over one size-uniform merge. The merge takes P
-independent sub-problems of size s whose halves are already solved and combines each into one
-size-s eigendecomposition. The recursive driver calls it with P = batch (one tree node at a
-time): it walks the merge tree depth-first, so the \f$2^l\f$ sibling merges at level l are
-enqueued one after another, each with only `batch` work-groups. Near the leaves that is nowhere
-near enough work to fill a GPU, and the tree costs \f$O(2^L)\f$ launches.
+`src/extensions/stedc.cc` has two drivers over one size-uniform merge that combines P independent
+subproblems of size s pairwise.
 
-The level-synchronous ("flattened") driver turns the tree inside out: every node at a level is
-merged by one launch over `nodes * batch` work-groups, so launches drop to \f$O(L)\f$ and the
-narrowest level is the widest in the batch dimension. To keep every level size-uniform (one
-strided-batched GEMM and one work-group-per-node kernel per level), the problem is padded from n
-to \f$N = \text{leaf}\cdot 2^L\f$ with a diagonal tail above the input's Gershgorin bound; the
-padded eigenvalues sort last and their eigenvectors stay in the padded subspace, so the answer is
-the leading n × n block. Padding is nil whenever \f$2^L\f$ divides n. Padding costs
-\f$(N/n)^3\f$ in the top-level GEMM, which is why the planner prefers the tree that pads least, but
-only below the leaf cap ([stedc: the leaf cap at the sub-group width](#stedc-the-leaf-cap-at-the-sub-group-width)).
+- **Recursive driver:** P = batch, one tree node at a time, depth-first. The \f$2^l\f$ sibling merges at
+  level l run one after another, each with only `batch` work-groups. Cost is \f$O(2^L)\f$ launches.
+- **Level-synchronous driver:** all nodes of a level are merged by one launch over `nodes * batch`
+  work-groups, so launches drop to \f$O(L)\f$. To keep levels size-uniform, n is padded to
+  \f$N = \text{leaf}\cdot 2^L\f$ with a diagonal tail above the Gershgorin bound; padded eigenvalues sort
+  last. Padding costs \f$(N/n)^3\f$ in the top-level GEMM, so the planner prefers the tree that pads least,
+  subject to the leaf cap.
 
-Two layout choices were measured (RTX 4090, undated):
-
-- **Merges write into their parent's sub-blocks.** A node's accumulated eigenvector block is
-  diag(left child, right child). Every merge writes its result directly into its parent's two
-  diagonal sub-blocks (even and odd children as two strided-batched calls, since both halves of
-  a batched view stay affine with doubled stride), leaving only the off-diagonal zero blocks to
-  materialise; deflation's Givens rotations need those because they mix columns across the split.
-  One extra launch per level, about 2/3 of the assembly traffic saved: at worst neutral and up to
-  5% ahead of copying.
-- **Leaves are copied, not written in place.** Writing the leaves into their parents' sub-blocks
-  doubles the leading dimension of every leaf block, and the coalescing that costs the CTA STEQR
-  kernel outweighs the copy: 10% slower at n = 64.
+Layout choices (RTX 4090): merges write into their parent's sub-blocks (one extra launch per level,
+about 2/3 less assembly traffic, up to 5% faster than copying). Leaves are copied, not written in
+place: doubling the leaf leading dimension made the CTA STEQR kernel 10% slower at n = 64.
 
 ## stedc: the leaf cap at the sub-group width
 
-`plan_stedc_levels` (`src/extensions/stedc_levels_plan.hh`) never lets a leaf exceed the tuned
-threshold, which is the device sub-group width: `steqr` takes the fast `steqr_cta` path only for
-n ≤ that width and falls to `steqr_wg` above it, about 14× slower one step over the edge (batch
-10416, eigenvectors: n = 32 0.26 µs, n = 36 3.76 µs, n = 40 4.87 µs, n = 80 54.4 µs). The
-recursive driver got this for free by bisecting; the planner has to state it. Weighting leaf width
-against padding instead of bounding it is what regressed n = 320 and 640 (leaf 40 chosen over leaf
-20, 3.25× and 1.51× on `syev`): the padding term dominates the score, so a zero-padding wide leaf
-always won. The plan lives in its own header so host-only tests can assert on it, because a bad
-leaf is a performance defect that produces correct eigenvalues. Full history and the threshold
+`plan_stedc_levels` (`src/extensions/stedc_levels_plan.hh`) never lets a leaf exceed the device
+sub-group width. `steqr` uses `steqr_cta` only up to that width and falls to `steqr_wg` above it,
+about 14x slower one step past the edge (batch 10,416, eigenvectors: n = 32 0.26 us, n = 36 3.76 us,
+n = 40 4.87 us).
+
+Weighting leaf width against padding instead regressed `syev` at n = 320 and 640 (3.25x and 1.51x),
+because the padding term dominates and a zero-padding wide leaf always won. History and threshold
 sweep: [syev: the stedc merge-variant and leaf-cliff regression](syev.md#syev-the-stedc-merge-variant-and-leaf-cliff-regression).
 
 ## stedc: the absolute deflation tolerance
 
 Deflation uses LAPACK's absolute tolerance \f$\mathrm{tol} = 8\varepsilon\max(\|D\|_\infty, \|z\|_\infty)\f$
-for both small-\f$|z|\f$ deflation and eigenvalue-proximity (Givens) deflation, computed before the
-Givens loop. The previous code used a relative tolerance \f$64\varepsilon\max(1, |D_j|, |D_{j+1}|)\f$
-for proximity deflation, which massively under-deflated clustered small-magnitude eigenvalues and
-produced pairs of near-parallel eigenvectors (good residual, bad orthogonality): a bimodal
-orthogonality distribution. An earlier fix had promoted the Löwner-rescale ratio product to double
-to suppress that distribution; once the tolerance was corrected, native-T accumulation matched
-double to the reported digits (residual, orthogonality and relative error, n = 16..256), and the
-double accumulation was reverted. Undated.
+for both small-\f$|z|\f$ and eigenvalue-proximity deflation. The earlier relative tolerance
+\f$64\varepsilon\max(1, |D_j|, |D_{j+1}|)\f$ under-deflated clustered small eigenvalues and produced
+near-parallel eigenvectors: good residuals, bad orthogonality, bimodal orthogonality distribution.
+After the fix, native-T accumulation matched double to the reported digits (n = 16 to 256).
 
 ## stedc: the rejected private-pole fast path
 
-The fused merge kernel (`src/extensions/stedc_merge_kernels.cc`) initialises each column j of
-`Q_bid` with the poles and runs the secular solver in place on column k, so
-`apply_shift_to_poles` updates `Q_bid(:, k)` directly. A previous "fast path" kept the poles in a
-private `T d_priv[128]` array and copied back to `Q_bid` after the solve. It produced a bimodal
-orthogonality distribution for float STEDC at n ≤ 64 against the baseline 3-kernel path; the
-in-place form matches the baseline exactly. Undated.
+The fused merge kernel (`src/extensions/stedc_merge_kernels.cc`) initializes each column of `Q_bid`
+with the poles and runs the secular solver in place. A variant that kept the poles in a private
+`T d_priv[128]` array and copied back after the solve gave a bimodal orthogonality distribution for
+float n <= 64. The in-place form matches the baseline exactly.
 
 ## stedc: convergence reporting through info
 
-Every secular root solver computes whether its iteration met the tolerance. Before per-item
-status existed, that flag was destroyed: `sec_solve_ext_roc` ended in `(void)converged;` and
-`sec_solve_roc` in `assert(converged && ...)`, which is a no-op in a release device build, so a
-root that hit the iteration cap returned a silently wrong eigenvalue. In one solver the two exit
-reasons (tolerance met, budget exhausted) were a single condition and could not be told apart;
-they are now split, and only the tolerance arm is convergence. The flag is an out-parameter,
-**not defaulted**: the solvers are `SYCL_EXTERNAL`, so the flag is threaded from every call site
-by hand, and a default would let a new call site drop the status silently. The partition solvers
-carry it in their result struct instead, so the six thin wrappers needed no signature change.
-Reports from several threads of one item go through an atomic `fetch_max`, which is exactly the
-"did any root fail" reduction.
+Every secular root solver reports whether its iteration met tolerance. Only the tolerance exit counts
+as convergence; a root that hit the iteration cap used to return a silently wrong eigenvalue.
 
-The public `stedc` clears `info` once and everything below only raises it, which lets the
-recursive driver's two half-solves and the level driver's L merges accumulate into the same slots.
-A caller that runs `stedc` more than once over the same items in one operation (for example
-`gesvd`'s two tridiagonal solves) must call the no-clear entry point. The recursive driver's leaf
-goes through `steqr_dispatch` for the same reason: calling the public `steqr` there had dropped
-leaf non-convergence for every shape that reaches that driver. The level driver's single leaf
-call solves \f$2^L \cdot \text{batch}\f$ problems, so it gets its own per-leaf status array,
-folded down afterwards (leaf j belongs to item \f$j / 2^L\f$), sized unconditionally so a
-workspace sized without `info` is not too small for a call made with it.
+- The flag is an out-parameter with no default, so a new call site cannot drop the status silently.
+- Reports from several threads of one item merge through an atomic `fetch_max`.
+- The public `stedc` clears `info` once. Callers that run `stedc` more than once on the same items
+  (for example `gesvd`'s two tridiagonal solves) must use the no-clear entry point.
 
-The host-backend choice between device and host secular routines is asked as "is the queue a GPU
-device" (`is_gpu`), not `B != Backend::NETLIB`: the reason the host path exists is that the host
-runtime cannot safely invoke the ROCm-style root routines inside SYCL kernels, a property of the
-device. The outcome is unchanged today, since NETLIB is the only backend on a host device.
+The device-versus-host choice between secular routines tests `is_gpu`, not `B != Backend::NETLIB`:
+the host runtime cannot safely invoke the ROCm-style root routines inside SYCL kernels.
 
 ## stedc: open debts
 
 - **`max_sec_iter` does not reach one exit arm.** In `stedc_secular.cc` the tolerance/budget split
-  uses a hardcoded iteration literal (100) on one arm; `StedcParams::max_sec_iter` does not reach
-  it.
-- **Direct eigenvalues-only calls** still build eigenvectors, and the recursive driver's jobz
-  forwarding is an unverified hazard; see
-  [stedc: eigenvalues-only still builds eigenvectors](#stedc-eigenvalues-only-still-builds-eigenvectors).
+  uses a hardcoded 100 on one arm.
+- **Direct eigenvalues-only calls** still build eigenvectors
+  ([eigenvalues-only still builds eigenvectors](#stedc-eigenvalues-only-still-builds-eigenvectors)).
 - **The heavy-deflation test** asserts only finite and sorted
   ([the heavy-deflation test gap](#stedc-the-heavy-deflation-test-gap)).
 
-## stedc: what is already good
-
-The secular root solver (`solve_root_roc_generic` in `stedc_merge_cta.cc`) is the rocSOLVER
-middle-way / fixed-weight hybrid with bound-clamped steps and a proper
-\f$|f| \le \varepsilon \cdot \mathrm{err}\f$ convergence exit: the literature-recommended scheme
-(Li's middle way, Gu-Eisenstat stability). Leave it alone.
-
 ## stedc: literature on the merge
 
-- **Gu & Eisenstat, "A Stable and Efficient Algorithm for the Rank-One Modification of the
-  Symmetric Eigenproblem", SIMAX 1994.** <https://epubs.siam.org/doi/10.1137/S089547989223924X>.
-  The Löwner-based eigenvector formula used here; stable eigenvectors without extended precision.
-- **Jakovčević Stor, Slapničar & Barlow, "Forward stable eigenvalue decomposition of rank-one
-  modifications of diagonal matrices", arXiv:1405.7537.** <https://arxiv.org/pdf/1405.7537>.
-  Every eigenvalue and every eigenvector component to high relative accuracy in O(n). Could remove
-  the `enable_rescale` pass entirely, which would beat the reverted denominator recompute if it
-  holds up. Not tried.
-- **Liao, Li, Xia et al., "New fast divide-and-conquer algorithms for the symmetric tridiagonal
-  eigenvalue problem", arXiv:1510.04591.** <https://arxiv.org/abs/1510.04591>. The rank-one
-  eigenvector matrix is Cauchy-like with off-diagonally low rank; HSS gives
-  \f$O(N^2 r)\f$ instead of \f$O(N^3)\f$, reported >6x over MKL on large matrices with few
-  deflations. Relevant to a large-n path only, not batched small n.
+The secular root solver (`solve_root_roc_generic` in `stedc_merge_cta.cc`) is the rocSOLVER middle-way
+/ fixed-weight hybrid with bound-clamped steps and a \f$|f| \le \varepsilon \cdot \mathrm{err}\f$ exit.
+It follows the literature-recommended scheme; leave it alone.
+
+- **Gu & Eisenstat, "A Stable and Efficient Algorithm for the Rank-One Modification of the Symmetric
+  Eigenproblem", SIMAX 1994.** <https://epubs.siam.org/doi/10.1137/S089547989223924X>. The
+  Löwner-based eigenvector formula used here.
+- **Jakovčević Stor, Slapničar & Barlow, arXiv:1405.7537.** <https://arxiv.org/pdf/1405.7537>. Relative
+  accuracy for every eigenvalue and eigenvector component in O(n). Could remove the `enable_rescale`
+  pass. Not tried.
+- **Liao, Li, Xia et al., arXiv:1510.04591.** <https://arxiv.org/abs/1510.04591>. HSS compression of the
+  Cauchy-like eigenvector matrix, \f$O(N^2 r)\f$ instead of \f$O(N^3)\f$. Relevant to large n only.
 - **Zhan & Zhang, "Reducing Internal State in Eigenvalue-Only Divide-and-Conquer Tridiagonal
-  Eigensolvers", arXiv:2605.26599 (May 2026).** <https://arxiv.org/pdf/2605.26599>. Boundary-row
-  D&C: the conquer phase needs only selected boundary rows/columns, not the accumulated
-  eigenvector matrix; memory goes from quadratic to linear and the matrix update disappears.
-  Targets the open eigenvalues-only item.
-- **FMM-accelerated secular evaluation** (Gu-Eisenstat lineage). Evaluating the secular function
-  at all roots at once is a Cauchy matvec, \f$O(dd \log dd)\f$ instead of \f$O(dd^2)\f$; our
-  per-iteration `evaluate_roc_secular` is \f$O(dd)\f$ per root. Probably not worth it below
-  \f$dd \approx 512\f$.
+  Eigensolvers", arXiv:2605.26599.** <https://arxiv.org/pdf/2605.26599>. Boundary-row D&C: memory drops
+  from quadratic to linear and the matrix update disappears. Targets the open eigenvalues-only item.
+- **FMM-accelerated secular evaluation.** A Cauchy matvec, \f$O(dd \log dd)\f$ instead of
+  \f$O(dd^2)\f$; probably not worth it below \f$dd \approx 512\f$.
 - **LAPACK** [dlaed2](https://netlib.org/lapack/explore-3.2-html/dlaed2.f.html) and
-  [dlaed3](https://www.netlib.org/lapack/explore-3.2-html/dlaed3.f.html): the `CTOT` block
-  partitioning discussed under the deflation GEMM.
+  [dlaed3](https://www.netlib.org/lapack/explore-3.2-html/dlaed3.f.html): the `CTOT` partitioning.
 - **[rocSOLVER tuning guide](https://rocm.docs.amd.com/projects/rocSOLVER/en/develop/reference/tuning.html)**:
-  our solver follows their STEDC scheme; useful for minimum-block-size heuristics.
+  the STEDC scheme this solver follows.
 
-## stedc: where the remaining headroom is
+## stedc: current tuning values
 
-As of the log (2026-08-01): the partition-parallel loops and the multiplier addressed the merge
-kernel's serialization and occupancy, and the deflation GEMM addressed the back-transform. The
-recompute control experiment shows the merge kernel is limited by resident state, not memory
-traffic, so further merge work should cut registers or shared memory rather than restructure data
-flow. The largest remaining item is eigenvalues-only.
+The live values are in `include/batchlas/tuning_params.hh`.
 
-**Superseded:** the log closed with "`SteqrCTAKernel` is now the biggest single kernel at ~25%
-of GPU time and has not been looked at". It has since been: the lockstep series in
-[STEQR: the CTA tridiagonal solver](../perf/steqr.md) (flat solver, full-warp partition, tuned
-multiplier) measured `stedc` float n = 64 with \f$P = 32\f$ leaves at 1.14 (random) / 1.09 (graded)
-over the previous `main`; see [Cumulative result](../perf/steqr.md#cumulative-result).
+- **`STEDC_MERGE_VARIANT_*` = 2 (FusedCta)** for every size class. Commit `3072ea6` moved it to 1
+  (Fused), claiming FusedCta was 2-12% slower; re-tested at `0bb92fb`, that did not hold. FusedCta was
+  11-35% faster than Fused on `stedc` for n = 64 to 640 on both drivers, and passed all 16 CUDA
+  `stedc_tests` in both precisions, plus `syev` suites. Variant 1 caused a 1.24-1.37x `syev` regression
+  at power-of-two n. The NaN seen under FusedCta was a symptom of a deadlock in the same kernel, since
+  fixed.
+
+  > **Warning:** The heavy-deflation test caveat applies to this verdict. Strengthen that test before
+  > trusting variant 2 on hardware it has not been measured on.
+
+- **`STEDC_THREADS_PER_ROOT_*` = 8 and `STEDC_WG_MULTIPLIER_*` = 8.** These were chosen through `syev`,
+  not the `stedc` benchmark, which disagrees with its consumer (its own sweep picked multiplier 2-4 and
+  threads-per-root 4-8). Through `syev`, ms, everything else fixed:
+
+| syev n | wgm=2 | wgm=4 | wgm=8 | tpr=4 | tpr=8 | tpr=16 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 64 | 0.9987 | 0.9225 | 0.9227 | 0.9937 | 0.9229 | 0.9422 |
+| 256 | 23.067 | 22.110 | 21.383 | 21.557 | 21.332 | 21.330 |
+| 1024 | 903.40 | 900.12 | 903.01 | 902.35 | 904.74 | 903.35 |
+
+  Adopting `stedc`'s own winners would cost `syev` 2.7% at n = 256 and up to 7.6% at n = 64. At n >= 512
+  every value is within noise.
+
+- **`STEDC_RECURSION_THRESHOLD_*` = 32.** This is the CTA leaf-size invariant (a leaf of 33 or more
+  falls from `steqr_cta` to `steqr_wg`), not a tuning constant.
 
 ## stedc: validation protocol for merge changes
 
-Check **orthogonality**, not just residuals. Two regressions passed residual checks while
-producing a bimodal orthogonality distribution for float STEDC at n <= 64:
+Check **orthogonality**, not just residuals. Two regressions passed residual checks while producing a
+bimodal orthogonality distribution for float STEDC at n <= 64:
 [the private-pole fast path](#stedc-the-rejected-private-pole-fast-path) and
-[the relative deflation tolerance](#stedc-the-absolute-deflation-tolerance).
+[the absolute deflation tolerance](#stedc-the-absolute-deflation-tolerance).
 
 - `tests/stedc_tests.cc`: the correctness gate (with the weak heavy-deflation guard noted above).
-- `benchmarks/orthogonality_accuracy.cc`, `benchmarks/eigensolver_accuracy.cc`: compare the
-  *distribution*, not only the max, against the work-group reference, deliberately kept
-  bit-identical: `stedc_merge_fused_wg` (the `WorkgroupAdapter` kernel `StedcFusedWgMerge`,
-  which `FusedCta` falls back to when `secular_threads_per_root` exceeds the sub-group size) or
-  the `Baseline` 3-kernel path. (The log called it `StedcMergeVariant::FusedWg`; no such
-  enumerator exists, the enum is `Auto`, `Baseline`, `Fused`, `FusedCta`.)
-- `benchmarks/stedc_benchmark.cc`: timing; re-profile with the `ncu` recipe in the skill
-  reference to confirm occupancy moved.
+- `benchmarks/orthogonality_accuracy.cc` and `benchmarks/eigensolver_accuracy.cc`: compare the
+  *distribution*, not only the max, against the bit-identical reference (`StedcFusedWgMerge`, or the
+  `Baseline` 3-kernel path).
+- `benchmarks/stedc_benchmark.cc`: timing. Re-profile with the `ncu` recipe in
+  `.github/skills/nvidia-kernel-profiling/references/batchlas-stedc.md` to confirm occupancy moved.
 
-**Measurement hygiene.** The box has two RTX 4090s and other jobs may be running; a contended GPU
-inflated an early reading of this work from 5.5% to 8.6%. Pin to an idle device
-(`CUDA_VISIBLE_DEVICES=1`) and check
+Accuracy results: `stedc_acc --backend=CUDA --samples=64`, float and double, n = 16 to 512, 0.00000
+Fail% everywhere. Orthogonality \f$\|Z^T Z - I\|_F / n\f$, float, `--samples=256`, baseline / with the
+change: n = 16 1.21899e-07 / 1.21899e-07; n = 32 9.36432e-08 / 9.38560e-08; n = 64 7.41322e-08 /
+7.44386e-08. Results are bit-identical across the partition-parallel loops, the denominator recompute
+and the multiplier change.
+
+**Measurement hygiene.** The box has two RTX 4090s and other jobs may run on them. A contended GPU once
+inflated this work's gain from 5.5% to 8.6%. Pin an idle device (`CUDA_VISIBLE_DEVICES=1`) and check
 `nvidia-smi --query-compute-apps=pid,process_name --format=csv` before trusting a number.
-
-## stedc: merge correctness results
-
-`stedc_acc --backend=CUDA --samples=64`, float and double, n = 16..512: 0.00000 Fail% everywhere,
-residual and orthogonality at machine-epsilon level. Results were bit-identical across the
-partition-parallel loops, the denominator recompute and the multiplier change: the refactors are
-numerically exact, and the work-group width does not enter the per-column math because the
-reductions are partition-local.
-
-Orthogonality \f$\|Z^T Z - I\|_F / n\f$, float, `--samples=256`:
-
-| n | baseline | with the change |
-| --- | --- | --- |
-| 16 | 1.21899e-07 | 1.21899e-07 |
-| 32 | 9.36432e-08 | 9.38560e-08 |
-| 64 | 7.41322e-08 | 7.44386e-08 |
-
-`stedc_tests` CUDA 44 passed; `syev_tests` 8/8, `syev_cta_tests` 28/28, `syev_blocked_tests`
-32/32. Pre-existing failures at the time, reproduced identically with the changes reverted:
-8 `FlatTraceCollapsesByDepth[Ragged]` in `stedc_tests` and 4 `steqr_tests` failures on the host
-(CPU) backend. **Historical:** `FlatTraceCollapsesByDepth` no longer exists in
-`tests/stedc_tests.cc`; the current accepted failures are in `tests/known-failures.txt`.
 
 ## stedc: end-to-end merge speedup
 
-End-to-end `stedc`, batch 256, float, idle GPU, with tuning-resolved parameters as a real caller
-gets them (`stedc_benchmark ... <n> 256 16 2 0 0`), ms:
+End-to-end `stedc`, batch 256, float, idle GPU, tuning-resolved parameters (`stedc_benchmark ... <n> 256 16 2 0 0`), ms:
 
 | n | baseline (main) | this work | speedup |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | 64 | 0.930 | 0.782 | 15.9% |
 | 128 | 2.042 | 1.633 | 20.0% |
 | 256 | 4.885 | 3.967 | 18.8% |
 | 512 | 13.144 | 11.162 | 15.1% |
 
-Attribution at matched settings (multiplier 1, so partition-parallel loops alone): 0.933 to 0.882
-ms at n = 64 and 4.948 to 4.676 ms at n = 256, about 5.5%. The rest is the multiplier change,
-which the loops made possible. The deflation GEMM only engages at n >= 512.
-
-## stedc: current tuning values
-
-The live values are in `include/batchlas/tuning_params.hh`; read them there, not here.
-At the time of writing:
-
-- `STEDC_MERGE_VARIANT_*` = 2 (FusedCta) for every size class. A commit (`3072ea6`) had moved it
-  to 1 (Fused), claiming FusedCta was wrong and 2-12% slower. Re-tested at `0bb92fb`, neither
-  held: with variant 2 forced all 16 CUDA `stedc_tests` passed in both precisions, plus
-  `syev_tests` 8/8, `syev_blocked_tests` 44/44 and `syev_two_stage_tests` 20/20 (the one red
-  test on the dev box, `StedcTest/1.BatchedMatrices`, is double + NETLIB, i.e. the host OpenBLAS
-  dgemm, not `stedc`). FusedCta was 11-35% faster than Fused on `stedc` across n = 64..640 on
-  both drivers; variant 1 was the whole cause of a 1.24x-1.37x `syev` regression at power-of-two
-  n. The NaN seen under FusedCta (in `FusedCtaConditionedHeavyDeflation`) was a symptom of a
-  deadlock in the same kernel, since fixed, not a separate defect in the partition root solve.
-  The heavy-deflation test caveat above applies to this verdict: strengthen that test before
-  trusting variant 2 on hardware it has not been measured on.
-- `STEDC_THREADS_PER_ROOT_*` = 8 and `STEDC_WG_MULTIPLIER_*` = 8, chosen through `syev`, not
-  through the `stedc` benchmark, which disagrees with its consumer. The 2026-08-07 sweep picked
-  multiplier 2-4 and threads-per-root 4-8 on `stedc` alone; through `syev` with everything else
-  fixed (ms):
-
-| syev n | wgm=2 | wgm=4 | wgm=8 | tpr=4 | tpr=8 | tpr=16 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 64 | 0.9987 | 0.9225 | 0.9227 | 0.9937 | 0.9229 | 0.9422 |
-| 128 | 4.626 | 4.535 | 4.514 | 4.518 | 4.469 | 4.534 |
-| 256 | 23.067 | 22.110 | 21.383 | 21.557 | 21.332 | 21.330 |
-| 512 | 151.54 | 151.46 | 151.84 | 151.63 | 151.62 | 151.67 |
-| 1024 | 903.40 | 900.12 | 903.01 | 902.35 | 904.74 | 903.35 |
-
-Adopting `stedc`'s own winners cost `syev` 2.7% at n = 256. The `stedc` benchmark measures the
-merge in isolation, while `syev` pays for the whole tridiagonal solve. Below n = 512 the
-difference is real (up to 7.6% at n = 64); at n >= 512 every value is within noise.
-
-- `STEDC_RECURSION_THRESHOLD_*` = 32: the CTA leaf-size invariant (a leaf of 33+ falls from
-  `steqr_cta` to `steqr_wg`), not a tuning constant.
+At matched settings (multiplier 1, so the partition-parallel loops alone), the gain is about 5.5%
+(0.933 to 0.882 ms at n = 64, 4.948 to 4.676 ms at n = 256). The rest is the multiplier change, which
+the loops made possible. The deflation GEMM engages only at n >= 512.
