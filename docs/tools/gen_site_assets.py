@@ -27,6 +27,12 @@ API_KINDS = ("class", "struct", "union", "namespace", "concept")
 VERSIONED = ("batchlas.css", "bl-site.js", "bl-nav.js")
 # Pages whose Doxygen title is a file name rather than a heading.
 RENAMES = {"README": "Overview and install"}
+# Tab labels for the top-level sections (the page titles are too long for a tab row).
+TAB_LABELS = {
+    "index.html": "Home", "guide_index.html": "User guide", "group__api.html": "API reference",
+    "architecture_index.html": "Architecture", "algorithms_index.html": "Algorithms",
+    "perf_evidence.html": "Performance", "results_index.html": "Results", "developer_index.html": "Developer",
+}
 
 SECTION_HEAD = re.compile(
     r'<a class="anchor" id="([^"]+)"></a>\s*(?:</p>\s*)?'
@@ -94,6 +100,8 @@ def build_nav(xml_dir):
             {"t": "All files", "u": "files.html"},
         ])
         nav.insert(2, api)
+    for node in nav:
+        node["s"] = TAB_LABELS.get(node["u"], node["t"])
     return nav
 
 
@@ -110,21 +118,54 @@ def contents_of(doc):
     return SKIP_BLOCKS.sub(" ", doc[start:end if end > start else len(doc)])
 
 
+MEMPROTO = re.compile(r'<div class="memproto">(.*?)</div>\s*<div class="memdoc">(.*?)(?=<a id="[^"]+" name="[^"]+"></a>\s*<h2 class="memtitle">|<h2 class="groupheader">|$)', re.S)
+MEMTEMPLATE = re.compile(r'<div class="memtemplate">(.*?)</div>', re.S)
+MEMNAME_ROW = re.compile(r'<table class="memname">(.*?)</table>', re.S)
+ROW = re.compile(r"<tr>(.*?)</tr>", re.S)
+DEFINED_AT = re.compile(r"Definition at line \d+ of file \S+ \.?")
+MLABEL = re.compile(r'<span class="mlabel">(.*?)</span>', re.S)
+
+
+def signature(raw):
+    """Rebuild a member's prototype as text: template line, then one line per parameter."""
+    m = MEMPROTO.search(raw)
+    if not m:
+        return "", text_of(raw)
+    proto, doc = m.group(1), m.group(2)
+    lines = [text_of(t) for t in MEMTEMPLATE.findall(raw[:m.start(1)] + proto)]
+    table = MEMNAME_ROW.search(proto)
+    rows = [text_of(r) for r in ROW.findall(table.group(1))] if table else [text_of(proto)]
+    rows = [r for r in rows if r]
+    for i, r in enumerate(rows):
+        lines.append(r if i == 0 else "    " + r)
+    labels = [text_of(l) for l in MLABEL.findall(proto)]
+    sig = "\n".join(lines)
+    sig = re.sub(r"\s+([,)])", r"\1", sig).replace("( ", "(")
+    sig = re.sub(r" ?< ?", "<", sig)
+    sig = re.sub(r"(?<!-) >", ">", sig)
+    if labels:
+        sig += "  [" + ", ".join(labels) + "]"
+    return sig, DEFINED_AT.sub("", text_of(doc)).strip()
+
+
 def sections(doc, name):
-    """Split one page into (anchor, heading, text) records in document order."""
+    """Split one page into (anchor, heading, text, signature) records in document order."""
     body = contents_of(doc)
     cuts = []
-    for rx, idg, tg in ((INLINE_HEAD, 2, 3), (GROUP_HEAD, 1, 2), (MEMBER_HEAD, 1, 2)):
+    for rx, idg, tg, member in ((INLINE_HEAD, 2, 3, False), (GROUP_HEAD, 1, 2, False), (MEMBER_HEAD, 1, 2, True)):
         for m in rx.finditer(body):
-            cuts.append((m.start(), m.end(), m.group(idg) or "", text_of(m.group(tg)).lstrip("\u25c6 ")))
+            title = text_of(m.group(tg)).lstrip("\u25c6 ")
+            cuts.append((m.start(), m.end(), m.group(idg) or "", title, member))
     cuts.sort()
     out = []
-    prev_end, prev_id, prev_title = 0, "", ""
-    for start, end, anchor, title in cuts:
-        out.append((prev_id, prev_title, text_of(body[prev_end:start])))
-        prev_end, prev_id, prev_title = end, anchor, title
-    out.append((prev_id, prev_title, text_of(body[prev_end:])))
-    return [(a, t, x) for a, t, x in out if x or t]
+    prev_end, prev_id, prev_title, prev_member = 0, "", "", False
+    for start, end, anchor, title, member in cuts + [(len(body), len(body), None, None, False)]:
+        raw = body[prev_end:start]
+        sig, text = signature(raw) if prev_member else ("", text_of(raw))
+        if text or prev_title:
+            out.append((prev_id, prev_title, text, sig))
+        prev_end, prev_id, prev_title, prev_member = end, anchor, title, member
+    return out
 
 
 def build_search(html_dir, xml_dir):
@@ -139,14 +180,13 @@ def build_search(html_dir, xml_dir):
         with open(path, encoding="utf-8", errors="replace") as fh:
             doc = fh.read()
         ptitle = page_title(doc) or refid
-        for anchor, title, text in sections(doc, name):
-            records.append({
-                "p": ptitle,
-                "t": title,
-                "u": name + ("#" + anchor if anchor else ""),
-                "x": text[:4000],
-                "k": 1 if kind in API_KINDS else 0,
-            })
+        api = kind in API_KINDS or refid.startswith("group__")
+        for anchor, title, text, sig in sections(doc, name):
+            rec = {"p": ptitle, "t": title, "u": name + ("#" + anchor if anchor else ""), "x": text[:3000], "k": 1 if api else 0}
+            if sig:
+                rec["s"] = sig[:1200]
+                rec["k"] = 2
+            records.append(rec)
     return records
 
 

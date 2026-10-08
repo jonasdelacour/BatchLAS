@@ -1,5 +1,5 @@
-/* BatchLAS site chrome: left navigation, "on this page" table of contents and full-text
-   search. Data comes from bl-nav.js and bl-search.js, which docs/tools/gen_site_assets.py
+/* BatchLAS site chrome: section tabs, the current section's navigation, the "on this page"
+   table of contents and full-text search. Data comes from bl-nav.js and bl-search.js, which docs/tools/gen_site_assets.py
    writes after Doxygen runs. Plain script (no modules) so the site also works from file://. */
 (function () {
   "use strict";
@@ -48,16 +48,54 @@
 
   function buildNav() {
     if (!window.BL_NAV) return;
+    var roots = window.BL_NAV;
+    var section = roots.filter(containsHere)[0] || null;
+    if (!section && /^(class|struct|union|namespace|concept|group__|.*_8h)/.test(here)) {
+      section = roots.filter(function (r) { return r.u === "group__api.html"; })[0] || null;
+    }
+    var home = !section || section.u === "index.html";
+    buildTabs(roots, section);
+
     var nav = el("nav", "bl-nav");
-    nav.setAttribute("aria-label", "Documentation");
-    nav.appendChild(el("div", "bl-nav-title", "BatchLAS documentation"));
-    nav.appendChild(navList(window.BL_NAV, 0));
+    nav.setAttribute("aria-label", "Section");
+    /* Desktop: only the current section's pages; the tabs choose the section. */
+    var scoped = el("div", "bl-nav-scoped");
+    if (!home) {
+      var head = el("a", "bl-nav-title", section.t);
+      head.href = section.u;
+      if (section.u === here) head.classList.add("bl-current");
+      scoped.appendChild(head);
+      if (section.c) scoped.appendChild(navList(section.c, 0));
+    }
+    /* Narrow screens have no tab row, so the drawer carries the whole tree. */
+    var full = el("div", "bl-nav-full");
+    full.appendChild(el("div", "bl-nav-title", "BatchLAS documentation"));
+    full.appendChild(navList(roots, 0));
+    nav.appendChild(scoped);
+    nav.appendChild(full);
     document.body.appendChild(nav);
-    var cur = nav.querySelector(".bl-current");
-    if (cur) cur.scrollIntoView({ block: "center" });
+    if (home) document.documentElement.classList.add("bl-no-nav");
+    var cur = scoped.querySelector(".bl-nav-link.bl-current");
+    if (cur && cur.offsetTop > nav.clientHeight * 0.6) nav.scrollTop = cur.offsetTop - nav.clientHeight / 3;
     var scrim = el("div", "bl-scrim");
     scrim.addEventListener("click", function () { document.documentElement.classList.remove("bl-nav-open"); });
     document.body.appendChild(scrim);
+  }
+
+  function buildTabs(roots, section) {
+    var bar = document.querySelector("#titlearea");
+    if (!bar) return;
+    var tabs = el("nav", "bl-tabs");
+    tabs.setAttribute("aria-label", "Sections");
+    var inner = el("div", "bl-tabs-inner");
+    roots.forEach(function (r) {
+      var a = el("a", "bl-tab", r.s || r.t);
+      a.href = r.u;
+      if (section && r.u === section.u) a.classList.add("bl-active");
+      inner.appendChild(a);
+    });
+    tabs.appendChild(inner);
+    bar.appendChild(tabs);
   }
 
   /* ------------------------------------------------------- table of contents */
@@ -126,7 +164,7 @@
     s.src = "bl-search.js" + (window.BL_SEARCH_V ? "?v=" + window.BL_SEARCH_V : "");
     s.onload = function () {
       index = (window.BL_SEARCH || []).map(function (r) {
-        return { r: r, t: r.t.toLowerCase(), p: r.p.toLowerCase(), x: r.x.toLowerCase() };
+        return { r: r, t: r.t.toLowerCase(), p: r.p.toLowerCase(), x: r.x.toLowerCase(), s: (r.s || "").toLowerCase() };
       });
       waiters.splice(0).forEach(function (w) { w(index); });
     };
@@ -162,19 +200,27 @@
     return n;
   }
 
+  function symbolOf(s) {
+    return s.toLowerCase().replace(/\s*\[\d+\/\d+\]$/, "").replace(/\(\)$/, "").replace(/^batchlas::/, "").trim();
+  }
+
   function search(q) {
     var terms = q.toLowerCase().split(/[^\w:~]+/).filter(Boolean);
-    if (!terms.length) return [];
+    if (!terms.length) return { pages: [], terms: [] };
+    var sym = symbolOf(q);
     var pages = {}, order = [];
     index.forEach(function (e) {
       var score = 0;
       for (var i = 0; i < terms.length; ++i) {
         var t = terms[i];
-        var s = (e.t.indexOf(t) >= 0 ? 12 : 0) + (e.p.indexOf(t) >= 0 ? 4 : 0) + count(e.x, t);
+        var s = (e.t.indexOf(t) >= 0 ? 12 : 0) + (e.p.indexOf(t) >= 0 ? 4 : 0) + count(e.x, t) + (e.s && e.s.indexOf(t) >= 0 ? 2 : 0);
         if (!s) return;
         score += s;
       }
-      if (e.r.k) score *= 0.6;
+      var name = symbolOf(e.r.t);
+      if (name === sym) score += 80;
+      else if (name.indexOf(sym) === 0) score += 20;
+      if (e.r.k === 1) score *= 0.5;
       var key = e.r.u.split("#")[0];
       var pg = pages[key];
       if (!pg) { pg = pages[key] = { title: e.r.p, url: key, hits: [], best: 0 }; order.push(pg); }
@@ -183,43 +229,50 @@
     });
     order.forEach(function (pg) {
       pg.hits.sort(function (a, b) { return b.score - a.score; });
-      pg.rank = pg.best + Math.min(pg.hits.length, 10) * 0.5;
+      pg.rank = pg.best + Math.min(pg.hits.length, 10) * 0.3;
     });
     order.sort(function (a, b) { return b.rank - a.rank; });
     return { pages: order, terms: terms };
   }
 
   var ICON_PAGE = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm4 18H6V4h7v5h5v11zM8 12h8v2H8zm0 4h8v2H8z"/></svg>';
+  var ICON_API = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="m9.4 16.6-4.6-4.6 4.6-4.6L8 6l-6 6 6 6zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6z"/></svg>';
+  var SHOWN = 3;
+
+  function hitLink(h, terms) {
+    var r = h.e.r;
+    var a = el("a", "bl-sr-section" + (r.s ? " bl-sr-api" : ""));
+    a.href = r.u;
+    var out = "";
+    if (r.t) out += '<span class="bl-sr-stitle">' + highlight(r.t, terms) + "</span>";
+    if (r.s) out += '<pre class="bl-sr-sig">' + highlight(r.s, terms) + "</pre>";
+    if (r.x) out += '<span class="bl-sr-text">' + highlight(r.s ? r.x.slice(0, 240) + (r.x.length > 240 ? " …" : "") : snippet(r.x, h.e.x, terms), terms) + "</span>";
+    a.innerHTML = out;
+    return a;
+  }
 
   function renderResults(box, q) {
     var res = search(q);
     box.innerHTML = "";
     if (!q.trim()) { box.appendChild(el("div", "bl-sr-meta", "Type to start searching")); return; }
-    var pages = res.pages || [];
+    var pages = res.pages;
     box.appendChild(el("div", "bl-sr-meta", pages.length ? pages.length + " matching document" + (pages.length === 1 ? "" : "s") : "No matching documents"));
     pages.slice(0, 40).forEach(function (pg) {
       var item = el("div", "bl-sr-item");
-      var first = pg.hits[0].e;
+      var api = pg.hits[0].e.r.k > 0;
       var head = el("a", "bl-sr-page");
       head.href = pg.url;
-      head.innerHTML = ICON_PAGE + "<span>" + highlight(pg.title, res.terms) + "</span>";
+      head.innerHTML = (api ? ICON_API : ICON_PAGE) + "<span>" + highlight(pg.title, res.terms) + "</span>";
       item.appendChild(head);
-      function sectionLink(h) {
-        var a = el("a", "bl-sr-section");
-        a.href = h.e.r.u;
-        a.innerHTML = (h.e.r.t ? '<span class="bl-sr-stitle">' + highlight(h.e.r.t, res.terms) + "</span>" : "") +
-          '<span class="bl-sr-text">' + highlight(snippet(h.e.r.x, h.e.x, res.terms), res.terms) + "</span>";
-        return a;
-      }
-      item.appendChild(sectionLink(pg.hits[0]));
-      if (pg.hits.length > 1) {
-        var more = el("button", "bl-sr-more", (pg.hits.length - 1) + " more on this page");
-        more.type = "button";
+      pg.hits.slice(0, SHOWN).forEach(function (h) { item.appendChild(hitLink(h, res.terms)); });
+      if (pg.hits.length > SHOWN) {
         var rest = el("div", "bl-sr-rest");
-        pg.hits.slice(1, 12).forEach(function (h) { rest.appendChild(sectionLink(h)); });
-        more.addEventListener("click", function () { item.classList.toggle("bl-sr-expanded"); });
-        item.appendChild(more);
+        pg.hits.slice(SHOWN, 20).forEach(function (h) { rest.appendChild(hitLink(h, res.terms)); });
+        var more = el("button", "bl-sr-more", (pg.hits.length - SHOWN) + " more on this page");
+        more.type = "button";
+        more.addEventListener("click", function () { item.classList.add("bl-sr-expanded"); });
         item.appendChild(rest);
+        item.appendChild(more);
       }
       box.appendChild(item);
     });
