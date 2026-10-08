@@ -137,18 +137,19 @@ HTML_EXTRA_FILES       = docs/theme/doxygen-awesome/doxygen-awesome-darkmode-tog
                          docs/theme/doxygen-awesome/doxygen-awesome-fragment-copy-button.js \
                          docs/theme/doxygen-awesome/doxygen-awesome-paragraph-link.js \
                          docs/theme/doxygen-awesome/doxygen-awesome-interactive-toc.js \
-                         docs/theme/doxygen-awesome/doxygen-awesome-tabs.js
+                         docs/theme/doxygen-awesome/doxygen-awesome-tabs.js \
+                         docs/theme/bl-site.js
 HTML_COLORSTYLE        = LIGHT
 HTML_COPY_CLIPBOARD    = NO
 HTML_DYNAMIC_SECTIONS  = YES
 HTML_CODE_FOLDING      = YES
 HTML_INDEX_NUM_ENTRIES = 1
 DISABLE_INDEX          = YES
-GENERATE_TREEVIEW      = YES
+GENERATE_TREEVIEW      = NO
 FULL_SIDEBAR           = NO
 TREEVIEW_WIDTH         = 300
-PAGE_OUTLINE_PANEL     = YES
-SEARCHENGINE           = YES
+PAGE_OUTLINE_PANEL     = NO
+SEARCHENGINE           = NO
 SERVER_BASED_SEARCH    = NO
 GENERATE_LATEX         = NO
 GENERATE_XML           = YES
