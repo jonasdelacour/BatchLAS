@@ -330,3 +330,23 @@ div.contents div.textblock ul li a.el, div.contents .contents li { overflow-wrap
 div.contents a, div.contents a.el { overflow-wrap: anywhere; white-space: normal; }
 div.contents ul li, div.contents ul li a.el { white-space: normal !important; }
 div.contents li, div.contents p { overflow-wrap: anywhere; }
+
+/* Declaration boxes: the background belongs to the whole declaration (template row + signature
+   row), not to each cell, so a wrapped signature stays inside its box. */
+table.memberdecls tr[class^="memitem"] { background: var(--bl-code-bg); }
+table.memberdecls tr[class^="memitem"] td,
+table.memberdecls tr[class^="memitem"] td.memTemplParams {
+    background: transparent !important; border: 0 !important; border-radius: 0 !important; box-shadow: none !important;
+}
+table.memberdecls tr[class^="memdesc"], table.memberdecls tr[class^="memdesc"] td { background: transparent !important; border: 0 !important; }
+table.memberdecls tr[class^="memdesc"] { margin-bottom: 10px; }
+
+/* Prototypes rewritten as code blocks by bl-site.js. */
+div.memproto.bl-proto-done { padding: 0; }
+pre.bl-proto {
+    margin: 0; padding: 12px 16px; background: transparent; border: 0; white-space: pre; overflow-x: auto;
+    font: 13.5px/1.55 var(--font-family-monospace); color: var(--bl-fg);
+}
+pre.bl-proto a.el { white-space: pre; overflow-wrap: normal; }
+.bl-proto-labels { padding: 0 16px 10px; }
+.bl-proto-labels .mlabel { margin-right: 6px; }
