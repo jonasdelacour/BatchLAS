@@ -263,7 +263,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 | Failing test names, vendor and vendor-free trees | Match the base for each migrated op. Each deliberate break of an op file turned a narrow, named set red. |
 | Off-grid data gate (random points, old router vs nearest row plus `can_run`) | 100% agreement for the phase-5 ops and the level-3 four, on sm_89 or sm_120. Dropping threshold rows fails the gate. Not run for gemm. |
 | Coverage of Auto calls, old vs new build | Same `reached` row as the old build, except the deliberate changes listed under each op. |
-| Live timing, potrf on sm_120 | 120 off-grid cells: 54 chose the same kernel. 33 changed and were timed in two reversed passes: 0 FAIL, worst 1.014× (cdouble n=44, batch 8192). The rest were 0.60 to 0.994×. |
+| Live timing, potrf on sm_120 | 120 off-grid cells: 54 chose the same kernel. 33 changed and were timed in two reversed passes: 0 FAIL, worst 1.014× (cdouble n=44, batch 8192), the others 0.60 to 0.994×. The remaining 33 were not timed: 32 exceed 12 GiB, and n²·batch ≥ 2³¹ aborts in `factor_bench` on any route. |
 | Live timing, potrf on sm_89 | Open. The sm_89 tables are sparse and have no current `lpanel` timings. |
 
 **Acceptance gate for a migrated op:**

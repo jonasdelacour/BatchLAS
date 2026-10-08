@@ -11,7 +11,7 @@
 /// The user guide, with a field/variable/default table per group, is the "Configuration"
 /// section of @ref md_docs_2cpp-api.
 /// @see @ref design_environment
-/// @ingroup config
+/// @ingroup api_config
 // Move where the STRING comes from, never how it is parsed (seven boolean dialects coexist).
 // evidence: docs/design/environment.md#environment-move-the-string-not-the-parser
 
@@ -29,7 +29,7 @@ namespace batchlas {
 ///
 /// Distinguishes "unset" from "set to the empty string", and hands back a `const char*` so a
 /// migrated call site keeps the parser it already has.
-/// @ingroup config
+/// @ingroup api_config
 // Unset vs empty is load-bearing: the TRACE_PATH fall-through, and the route pin reader treats
 // a set-but-empty BATCHLAS_<OP>_ROUTE as unset.
 class EnvValue {
@@ -78,7 +78,7 @@ private:
 /// value means `auto`. A value the op does not understand throws `std::invalid_argument`; only
 /// `native` and `vendor` warn and fall back to `auto` when nothing in that class can run the call.
 /// The selection layer is described in docs/design/flat-kernel-selection.md.
-/// @ingroup config
+/// @ingroup api_config
 struct RoutingSettings {
     /// @brief The ops that read a route variable, by their `<op>` spelling.
     static constexpr std::array<std::string_view, 19> ops{
@@ -114,7 +114,7 @@ private:
 ///
 /// Every field changes which code path executes. `syevx_algorithm` and `syevx_preconditioner`
 /// override an explicit SyevxParams field, and `gesvd_bidiag` changes numerics.
-/// @ingroup config
+/// @ingroup api_config
 // evidence: docs/design/environment.md#environment-knobs-that-override-an-explicit-argument
 struct SelectionSettings {
     /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route of hemm, herk
@@ -246,7 +246,7 @@ struct SelectionSettings {
 /// Where the call site's default is a function of n, the scalar type, an argument or a device
 /// property, the field is a sentinel (0, `std::nullopt` or an unset EnvValue) and the default
 /// stays at the call site. Fields with a constant default carry it.
-/// @ingroup config
+/// @ingroup api_config
 // Never materialise a function-valued default here: it pins a tuned curve at one point.
 // evidence: docs/design/environment.md#environment-geometry-defaults-stay-at-the-call-site
 struct GeometrySettings {
@@ -374,7 +374,7 @@ struct GeometrySettings {
 /// Three of these name a filesystem path the library opens for writing (the kernel trace and
 /// the coverage output from `atexit` handlers, the band-reduction dump via
 /// `create_directories()`); an embedding application can clear them with configure().
-/// @ingroup config
+/// @ingroup api_config
 // evidence: docs/design/environment.md#environment-files-written-from-the-environment
 struct DiagnosticsSettings {
     /// `BATCHLAS_QUEUE_PROFILING` or `BATCHLAS_BENCH_PROFILING` (env_truthy, ORed): enable SYCL
@@ -446,7 +446,7 @@ struct DiagnosticsSettings {
 /// Unless the library was built with the CMake option `BATCHLAS_ALLOW_UNSAFE_ENV=ON` (default
 /// OFF), the environment cannot move these fields in their unsafe direction: they keep their safe
 /// values and each such variable produces one warning on stderr. configure() is not gated.
-/// @ingroup config
+/// @ingroup api_config
 // evidence: docs/design/environment.md#environment-the-unsafe-group-and-its-gate
 struct UnsafeSettings {
     /// `BATCHLAS_SKIP_POINTER_CHECKS`: disables the per-argument USM reachability check that turns
@@ -481,7 +481,7 @@ struct UnsafeSettings {
 /// s.diagnostics.dump_bandr1.step = false;
 /// batchlas::configure(s);
 /// @endcode
-/// @ingroup config
+/// @ingroup api_config
 struct Settings {
     RoutingSettings routing{};          ///< Route pins (`BATCHLAS_<OP>_ROUTE`).
     SelectionSettings selection{};      ///< Kernel and algorithm selection.
@@ -497,7 +497,7 @@ struct Settings {
 /// @return a reference valid for the life of the process. Its contents change under configure()
 ///         and detail::reload_settings(), so do not cache fields across a call that could do
 ///         either, and never hoist a field into a function-local static.
-/// @ingroup config
+/// @ingroup api_config
 BATCHLAS_API const Settings& settings();
 
 /// @brief Install `s` as the settings, for an embedding application that wants to stop
@@ -511,7 +511,7 @@ BATCHLAS_API const Settings& settings();
 /// @pre No batchlas::Queue has been constructed yet in this process.
 /// @throws batchlas::api_misuse (a `std::runtime_error`) if a Queue already exists; nothing is
 ///         changed.
-/// @ingroup config
+/// @ingroup api_config
 // evidence: docs/design/environment.md#environment-configure-sets-the-base-not-a-lock
 BATCHLAS_API void configure(const Settings& s);
 
@@ -524,17 +524,17 @@ namespace detail {
 /// @warning A raw `::setenv` does not reach it. A reload between a `*_buffer_size()` query and
 ///          its solve can under-size the workspace. Not thread-safe with respect to concurrent
 ///          settings() readers: call it from a test body or benchmark setup only.
-/// @ingroup config
+/// @ingroup api_config
 // evidence: docs/design/environment.md#environment-what-a-settings-reload-does-not-cover
 BATCHLAS_API void reload_settings();
 
 /// @brief Latch recording that a Queue exists, which closes configure(). Called only by Queue's
 /// constructors.
-/// @ingroup config
+/// @ingroup api_config
 BATCHLAS_API void note_queue_constructed() noexcept;
 
 /// @brief True once note_queue_constructed() has been called.
-/// @ingroup config
+/// @ingroup api_config
 BATCHLAS_API bool queue_constructed() noexcept;
 
 }  // namespace detail

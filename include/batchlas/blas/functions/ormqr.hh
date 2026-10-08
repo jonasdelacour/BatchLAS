@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched application of Q from geqrf reflectors (ormqr/unmqr) and its workspace query.
-/// @ingroup qr
+/// @ingroup api_qr
 
 #include <batchlas/export.hh>
 #include <algorithm>
@@ -96,7 +96,7 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 /// @throws batchlas::NoRouteError if no native kernel can run (e.g. a CPU queue) and
 ///         the vendor library was not built in
 /// @see OrmqrOptions
-/// @ingroup qr
+/// @ingroup api_qr
 // Defined in src/ops/ormqr/ormqr.cc, which picks the kernel (flat selection).
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr(Queue& ctx,
@@ -113,7 +113,7 @@ BATCHLAS_API Event ormqr(Queue& ctx,
 /// Makes the same kernel choice and block width as ormqr() from the same inputs, so
 /// the result is valid for a call with the same arguments and @p block_size_hint.
 /// `evidence: docs/perf/qr.md#ormqr-one-route-resolution-for-the-call-and-its-size-query`
-/// @ingroup qr
+/// @ingroup api_qr
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -128,7 +128,7 @@ BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
 namespace batchlas::backend {
 
 /// @brief Vendor arm of ormqr() (cuSOLVER / rocSOLVER / LAPACKE); not for direct use.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -139,7 +139,7 @@ BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 Span<std::byte> workspace);
 
 /// @brief Workspace query of the vendor arm of ormqr().
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,

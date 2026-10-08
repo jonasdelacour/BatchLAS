@@ -44,7 +44,7 @@ inline constexpr void dispatch_trmv(const Group& group,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Triangular matrix-vector product \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$, `A` triangular.

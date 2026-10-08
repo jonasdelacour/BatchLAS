@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Link facts for `if constexpr` gates: is an op's vendor library compiled in for a
-/// backend, and is the native level-3 tile kernel linked. @ingroup selection
+/// backend, and is the native level-3 tile kernel linked. @ingroup api_selection
 
 #include "coverage.hh"
 
@@ -15,7 +15,7 @@
 #include <type_traits>
 
 namespace batchlas::select {
-/// @addtogroup selection
+/// @addtogroup api_selection
 /// @{
 
 inline constexpr bool kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS;

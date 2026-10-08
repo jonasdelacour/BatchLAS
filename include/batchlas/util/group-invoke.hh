@@ -5,7 +5,7 @@
 ///
 /// Installed with the rest of `include/batchlas` (the install rule copies the
 /// tree wholesale); no public header includes it. Not a stable interface.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 #include <sycl/sycl.hpp>
 
@@ -35,7 +35,7 @@ inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
 
 } // namespace detail
 
-/// @addtogroup internal_helpers
+/// @addtogroup api_internal_helpers
 /// @{
 
 /// @brief Calls `fn(args...)` on the group's leader work-item only.

@@ -50,7 +50,7 @@ The `ld < rows` check catches an argument-order trap. The batch is the third arg
 `Matrix(rows, cols, batch)` but the sixth of `MatrixView(data, rows, cols, ld, stride, batch)`, so
 `MatrixView<float> V(p, n, n, batch)` means `ld = batch` and throws when `batch < n`.
 
-Unchecked on purpose: null data and zero extents (shape-only views are the argument to about 37
+Unchecked on purpose: null data and zero extents (shape-only views are passed to about 37
 `*_buffer_size` queries), and `stride >= ld * cols`. Two in-repo sites violate the last one, the
 transposed CGS view in `src/extensions/ortho.cc` (see [known defects](known-defects.md)) and a sizing
 dummy in `syevx_lobpcg`. A throw would break both.

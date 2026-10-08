@@ -42,7 +42,7 @@ inline constexpr void dispatch_ger(const Group& group,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Rank-1 update \f$ A := A + \alpha\,\tilde{x}\,\tilde{y}^{T} \f$, with \f$\tilde{x}\f$, \f$\tilde{y}\f$ optionally conjugated.

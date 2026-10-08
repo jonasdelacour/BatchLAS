@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief trmm: triangular, expand, vendor. evidence: docs/perf/level3.md @ingroup selection_ops
+/// @brief trmm: triangular, expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

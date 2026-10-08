@@ -5,12 +5,12 @@ window. These pages record the measurements behind each window: the grid that se
 the alternatives that were rejected, and the open debts. Read an op's page before widening its
 window or adding a tier.
 
-Since flat selection ([`../design/flat-kernel-selection.md`](../design/flat-kernel-selection.md)),
+Since flat selection ([../design/flat-kernel-selection.md](../design/flat-kernel-selection.md)),
 each op ranks its kernels from `tuned/<op>.<dtype>.<device>.txt`. Where a page quotes a
-`preferred()` or `supports()` predicate with a `file:line`, that predicate is deleted. Its window
+`preferred()` or `supports()` predicate with its source line number, that predicate is deleted. Its window
 lives on as table rows.
 
-| page | ops | does anything route natively by default? |
+| Page | Ops | Does anything route natively by default? |
 |---|---|---|
 | [dispatch.md](dispatch.md) | the `BATCHLAS_<OP>_ROUTE` words, the vendor gate, the coverage instrument, level-3 boundaries | n/a (the mechanism) |
 | [gemm.md](gemm.md) | `gemm` | **yes**: `double` broadly, `float` NN squares at `max_dim <= 32`; complex never |
@@ -100,22 +100,41 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 ## perf index: all evidence pages
 
 @subpage md_docs_2perf_2dispatch "Dispatch"
+
 @subpage perf_gemm "GEMM"
+
 @subpage perf_gemv "GEMV"
+
 @subpage md_docs_2perf_2level3 "Level 3 (symm, hemm, syrk, herk, syr2k, her2k, trmm)"
+
 @subpage perf_trsm "TRSM"
+
 @subpage md_docs_2perf_2potrf "Cholesky (potrf, posv)"
+
 @subpage perf_lu "LU (getrf, getrs, getri, gesv)"
+
 @subpage md_docs_2perf_2qr "QR (geqrf, orgqr, ormqr)"
+
 @subpage md_docs_2perf_2spmm "SpMM"
+
 @subpage perf_syev "syev"
+
 @subpage perf_syevx "syevx"
+
 @subpage perf_steqr "steqr"
+
 @subpage perf_stedc "stedc"
+
 @subpage perf_sytrd "sytrd (tridiagonal and band reduction)"
+
 @subpage perf_ortho "ortho"
+
 @subpage perf_iluk "ILU(k)"
+
 @subpage perf_gesvd "gesvd"
+
 @subpage md_docs_2perf_2small-n-baseline "Small-n factorization baseline"
+
 @subpage perf_tuning "Tuning constants"
+
 @subpage md_docs_2perf_2blackwell "Blackwell (sm_120) retune"

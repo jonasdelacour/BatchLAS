@@ -241,8 +241,9 @@ per-block mirroring, the warp-legality prep, the flat solver, the full-warp part
 the tuned multiplier. The interleaved Q tile and small-n routing did not ship. Every eigenvalue is
 bitwise identical to `main`; eigenvectors match up to sign and the order inside mirrored blocks.
 
-Public API, library defaults, 3 interleaved rounds. Ratio = `main` / final (above 1 is faster). The
-last column is this section's multiplier alone:
+Public API, library defaults, 3 interleaved rounds, medians. Ratio = `main` / final (above 1 is faster).
+Spreads are at most 3% except where a parenthesised spread is given (the n = 4 graded V cell, 14-18%);
+the n = 4 rows sit near launch overhead. The last column is this section's multiplier alone:
 
 | case | batch | random N | graded N | random V | graded V | multiplier alone (V, random / graded) |
 |---|---|---|---|---|---|---|

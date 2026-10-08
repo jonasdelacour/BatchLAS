@@ -52,7 +52,7 @@ plus the 4 sm_89 potrf tables. The other 130 replay an old router.
 
 `--check` fails on any difference, the header date included, hence `--date`. The posv sweep
 resumed after guard refusals. Its OpSpec sets `dedupe_latest`, so a later kept row replaces an
-earlier one for the same (cell, arm, pass). Details are in the routing README.
+earlier one for the same (cell, arm, pass). Details are in `benchmarks/results/routing/README.md`.
 
 ### Transcribed tables
 

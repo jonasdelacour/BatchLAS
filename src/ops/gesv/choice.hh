@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief gesv: tiny, blocked. `evidence: docs/perf/lu.md#the-fused-gesv-tier` @ingroup selection_ops
+/// @brief gesv: tiny, blocked. `evidence: docs/perf/lu.md#the-fused-gesv-tier` @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

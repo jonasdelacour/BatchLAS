@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief spmm: direct, vendor. evidence: docs/perf/spmm.md @ingroup selection_ops
+/// @brief spmm: direct, vendor. evidence: docs/perf/spmm.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

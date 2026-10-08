@@ -16,7 +16,7 @@
 ///       batchlas::NoRouteError (`<batchlas/no_route.hh>`) derives from `std::runtime_error` only.
 ///       None of them matches `catch (const batchlas::exception&)`.
 /// @see @ref design_error_model
-/// @ingroup errors
+/// @ingroup api_errors
 // Every class here must carry BATCHLAS_API even with no out-of-line member, or catch-by-type
 // breaks under -fvisibility=hidden; a throw/catch test on x86-64 cannot detect it.
 // evidence: docs/design/symbol-visibility.md#symbol-visibility-exception-typeinfo-must-be-exported
@@ -32,7 +32,7 @@ namespace batchlas {
 ///
 /// `catch (const batchlas::exception& e)` matches every class in this header and nothing else.
 /// Read the text with message(); the tag deliberately has no what().
-/// @ingroup errors
+/// @ingroup api_errors
 // Tag rules, each fails SILENTLY if broken: (1) never derive from std::exception, (2) every leaf
 // inherits it virtually (only via detail::exception_bridge), (3) never declare what().
 // evidence: docs/design/error-model.md#error-model-the-three-tag-base-rules
@@ -55,7 +55,7 @@ namespace detail {
 ///
 /// The single spelling of that inheritance, so rule 2 of the tag cannot be broken per class.
 /// @tparam StdBase the `std::` exception type the leaf extends
-/// @ingroup errors
+/// @ingroup api_errors
 template <typename StdBase>
 class BATCHLAS_API exception_bridge : public StdBase, public virtual exception {
 public:
@@ -73,7 +73,7 @@ public:
 ///
 /// Not retryable: fix the call. Derives from `std::invalid_argument`, which pybind11 maps to
 /// Python's `ValueError`.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API invalid_argument : public detail::exception_bridge<std::invalid_argument> {
 public:
     explicit invalid_argument(const std::string& what_arg)
@@ -87,7 +87,7 @@ public:
 /// Thrown only by `MatrixView::at(row, col, batch)` and `batch_item(i)`. Not retryable. Kept
 /// separate from invalid_argument because `std::out_of_range` is what pybind11 maps to Python's
 /// `IndexError`.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API out_of_range : public detail::exception_bridge<std::out_of_range> {
 public:
     explicit out_of_range(const std::string& what_arg)
@@ -100,7 +100,7 @@ public:
 ///
 /// Catch a child to say which reason. Derives from `std::runtime_error` (Python `RuntimeError`),
 /// and every runtime class stays inside it. Nothing throws a bare `error` today.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API error : public detail::exception_bridge<std::runtime_error> {
 public:
     explicit error(const std::string& what_arg)
@@ -118,7 +118,7 @@ public:
 ///
 /// Not retryable as asked, but a different kernel pin, backend, scalar type or shape may succeed:
 /// this is the class to catch to fall back to another algorithm.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API unsupported : public error {
 public:
     explicit unsupported(const std::string& what_arg) : error(what_arg) {}
@@ -134,7 +134,7 @@ public:
 /// Sometimes retryable, and the only class where a retry can be right: a transient launch failure
 /// or an allocation lost to another process may clear. A status code that repeats is a real
 /// fault; do not loop.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API device_error : public error {
 public:
     explicit device_error(const std::string& what_arg) : error(what_arg) {}
@@ -149,7 +149,7 @@ public:
 /// Retry smaller: re-query `*_buffer_size()` and pass a buffer that size, or cut the batch,
 /// since a batched solve's workspace scales with the batch.
 /// @see @ref design_workspace
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API workspace_error : public error {
 public:
     explicit workspace_error(const std::string& what_arg) : error(what_arg) {}
@@ -166,7 +166,7 @@ public:
 /// @note The exception is batch-wide: it says some item failed, not which. Pass the optional
 ///       per-item `info` span (`syev`, `syevx`, `gesvd`, `steqr`, `stedc`) to learn which.
 /// @see @ref design_error_model
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API convergence_error : public error {
 public:
     explicit convergence_error(const std::string& what_arg) : error(what_arg) {}
@@ -181,7 +181,7 @@ public:
 /// the message, which names the op and the two things that disagreed.
 /// @note The exception: gesv and posv throw it for an empty or heterogeneous batch, which no
 ///       kernel serves.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API internal_error : public error {
 public:
     explicit internal_error(const std::string& what_arg) : error(what_arg) {}
@@ -196,7 +196,7 @@ public:
 ///
 /// Not retryable as-is: reorder the calls or confine the object to one thread. Distinct from
 /// invalid_argument because no argument is wrong.
-/// @ingroup errors
+/// @ingroup api_errors
 class BATCHLAS_API api_misuse : public error {
 public:
     explicit api_misuse(const std::string& what_arg) : error(what_arg) {}

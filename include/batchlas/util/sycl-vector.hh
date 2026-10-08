@@ -17,7 +17,7 @@ namespace batchlas {
 /// Span<T>, which is how it is passed to entry points. Growth reallocates, so
 /// any Span or pointer taken earlier is invalidated.
 /// @tparam T  element type (trivially copyable: growth uses memcpy)
-/// @ingroup matrix
+/// @ingroup api_matrix
 template <typename T>
 struct BATCHLAS_API UnifiedVector
 {
@@ -154,7 +154,7 @@ private:
 };
 
 /// @brief Swaps the storage of two vectors without copying; found by ADL.
-/// @ingroup matrix
+/// @ingroup api_matrix
 template <typename T>
 inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
     lhs.swap(rhs);

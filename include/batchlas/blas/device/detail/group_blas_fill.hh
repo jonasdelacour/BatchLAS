@@ -4,7 +4,7 @@
 
 namespace batchlas::device {
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Sets every element of `x` to `value`, cooperatively across `group`.

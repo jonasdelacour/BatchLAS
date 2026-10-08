@@ -17,10 +17,10 @@
 
 /// @file
 /// @brief Option-struct spellings of the dense BLAS and LAPACK-style entry points.
-/// @ingroup options
+/// @ingroup api_options
 
 /**
- * @addtogroup options
+ * @addtogroup api_options
  * @details
  * Each entry point here takes its non-matrix arguments as one designated-initialiser
  * struct, so a call names only what differs from the defaults:
@@ -131,7 +131,7 @@ inline void require_info_span(const char* fn, size_t have, size_t batch_size) {
 
 }  // namespace detail
 
-/// @addtogroup options
+/// @addtogroup api_options
 /// @{
 
 // ---- dense BLAS ------------------------------------------------------------
@@ -262,7 +262,7 @@ concept DenseMatrixLike = requires { typename dense_scalar<std::remove_cvref_t<M
 
 #define BATCHLAS_DENSE_VIEW(T) MatrixView<T, MatrixFormat::Dense>
 
-/// @addtogroup options
+/// @addtogroup api_options
 /// @{
 
 // ---- dense BLAS ------------------------------------------------------------
@@ -618,7 +618,7 @@ namespace detail {
 enum class EmptyBracesAreAmbiguous {};
 }  // namespace detail
 
-/// @addtogroup options
+/// @addtogroup api_options
 /// @{
 
 /// @brief Deleted: makes `potrf<B>(ctx, A, {}, ws)` ambiguous. Write `PotrfOptions{}`.

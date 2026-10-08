@@ -10,7 +10,7 @@
 /// @file
 /// @brief BumpAllocator, the linear sub-allocator over a workspace span, and workspace_bytes().
 /// @see @ref design_workspace
-/// @ingroup workspace
+/// @ingroup api_workspace
 
 namespace batchlas {
 
@@ -25,7 +25,7 @@ namespace batchlas {
 /// @warning Size a workspace with measuring() and required_bytes(), never by re-summing
 ///          allocation_size() by hand: the capacity check uses the rounded size while the cursor
 ///          advances by the raw size, so an exactly simulated total is too small.
-/// @ingroup workspace
+/// @ingroup api_workspace
 // evidence: docs/design/workspace.md#workspace-the-bumpallocator-alignment-trap
 struct BumpAllocator {
     /// @brief A pool over `byte_size` bytes starting at `data`.
@@ -187,7 +187,7 @@ struct BumpAllocator {
 ///      views over what it allocates, but never reads or writes workspace memory, never launches
 ///      a kernel, and asks nested size queries about the caller's views only.
 /// @see @ref design_workspace
-/// @ingroup workspace
+/// @ingroup api_workspace
 template <typename Fn>
 inline size_t workspace_bytes(Fn&& layout) {
     auto sizer = BumpAllocator::measuring();

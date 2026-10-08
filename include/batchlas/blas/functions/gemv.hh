@@ -59,7 +59,7 @@ using gemv_vendor = Event(Queue&,
 /// @note No argument validation is done up front: a shape the native kernels
 ///       refuse goes to the vendor library, which reports it.
 /// @see GemvOptions, @ref md_docs_2cpp-api
-/// @ingroup blas2
+/// @ingroup api_blas2
 template <Backend B, typename T>
 BATCHLAS_API Event gemv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -81,7 +81,7 @@ namespace batchlas::backend {
 ///
 /// Not an entry point: batchlas::gemv calls it when it selects the `vendor`
 /// kernel family. Same arguments and semantics as batchlas::gemv.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event gemv_vendor(Queue& ctx,
                                const MatrixView<T,MatrixFormat::Dense>& A,

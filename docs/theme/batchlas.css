@@ -275,3 +275,52 @@ address.footer img { filter: grayscale(1); opacity: 0.7; }
 /* API index pages: topic links read as names, not code; the summary links duplicate the TOC. */
 table.memberdecls a.el[href^="group__"] { font-family: var(--font-family); font-size: 15px; }
 div.header div.summary { display: none; }
+
+/* Member declaration lists: Doxygen sizes the return-type column to the widest return type in the
+   whole table, which pushed every signature right and out of the column. One flex row per
+   declaration instead, wrapping long prototypes inside the content width. */
+table.memberdecls { display: block; width: 100%; max-width: 100%; }
+table.memberdecls > tbody { display: block; }
+table.memberdecls tr { display: flex; flex-wrap: wrap; align-items: baseline; }
+table.memberdecls tr.heading, table.memberdecls tr.heading td { display: block; width: 100%; }
+table.memberdecls td.memItemLeft, table.memberdecls td.memTemplItemLeft {
+    flex: 0 0 auto; width: auto !important; max-width: 100%; white-space: normal; text-align: left;
+}
+table.memberdecls td.memItemRight, table.memberdecls td.memTemplItemRight {
+    flex: 1 1 18rem; min-width: 0; overflow-wrap: anywhere;
+}
+table.memberdecls td.memTemplParams { flex: 1 1 100%; overflow-wrap: anywhere; }
+table.memberdecls td.mdescLeft { display: none; }
+table.memberdecls td.mdescRight { flex: 1 1 100%; min-width: 0; padding-left: 12px; padding-bottom: 10px; }
+table.memberdecls td.memSeparator { display: none; }
+/* Detailed prototypes and any other wide Doxygen table scroll inside the column. */
+div.memproto, div.memdoc, table.fieldtable, table.params, table.directory, div.contents table.doxtable { max-width: 100%; overflow-x: auto; }
+div.contents { min-width: 0; }
+
+/* Breadcrumb (rebuilt above the page title by bl-site.js; Doxygen's own copy sits in the bar). */
+#top #nav-path { display: none; }
+nav.bl-crumbs { padding-top: 16px; font-size: 12.8px; color: var(--bl-fg-3); }
+nav.bl-crumbs a { color: var(--bl-fg-2) !important; text-decoration: none !important; }
+nav.bl-crumbs a:hover { color: var(--bl-link) !important; }
+.bl-crumb-sep { margin: 0 6px; }
+nav.bl-crumbs + div.headertitle { padding-top: 4px; }
+
+/* Inline code (paths, flags, long expressions) wraps instead of running past the column. */
+div.contents p .tt, div.contents li .tt, div.contents dd .tt, div.contents td .tt, div.contents blockquote .tt,
+div.contents p code, div.contents li code, div.contents td code {
+    white-space: normal; overflow-wrap: anywhere; word-break: normal;
+}
+table.memberdecls a.el, div.contents table.directory a.el { overflow-wrap: anywhere; }
+
+/* Nothing may widen the page: wide blocks scroll inside their own box. */
+div.contents div.fragment, div.contents pre.fragment { max-width: 100%; overflow-x: auto; box-sizing: border-box; }
+div.contents mjx-container[display="true"], div.contents .MathJax_Display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+div.contents table.directory { display: block; max-width: 100%; overflow-x: auto; }
+html, body { overflow-x: clip; }
+.bl-nav a.bl-nav-link, .bl-toc a { overflow-wrap: anywhere; }
+table.classindex a.el, div.contents table.classindex td { overflow-wrap: anywhere; }
+table.memberdecls td, table.memberdecls tr { box-sizing: border-box; max-width: 100%; }
+div.contents a.el { overflow-wrap: anywhere; }
+table.memberdecls td { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }
+table.memberdecls td.memItemRight, table.memberdecls td.memTemplItemRight { flex: 1 1 14rem !important; }
+div.contents div.memproto { overflow-x: auto !important; max-width: 100%; }

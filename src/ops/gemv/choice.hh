@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief gemv: cta, direct, vendor. evidence: docs/perf/gemv.md @ingroup selection_ops
+/// @brief gemv: cta, direct, vendor. evidence: docs/perf/gemv.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

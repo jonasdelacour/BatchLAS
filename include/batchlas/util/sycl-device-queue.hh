@@ -18,7 +18,7 @@
 /// Every entry point enqueues on a Queue and returns an Event immediately; results are readable
 /// only after waiting on the Event or the Queue. See "Devices and queues" and "Synchronisation and
 /// threading" in @ref md_docs_2cpp-api.
-/// @ingroup core
+/// @ingroup api_core
 
 // error.hh first, so every header that reaches a Queue sees the exception hierarchy; it is
 // dependency-free, so this cannot form a cycle.
@@ -30,7 +30,7 @@
 namespace batchlas {
 
 /// @brief Synchronous or asynchronous execution policy.
-/// @ingroup core
+/// @ingroup api_core
 enum class Policy
 {
     SYNC,   ///< Wait for completion.
@@ -38,7 +38,7 @@ enum class Policy
 };
 
 /// @brief The kind of SYCL device.
-/// @ingroup core
+/// @ingroup api_core
 enum class DeviceType
 {
     CPU,            ///< A CPU device.
@@ -49,7 +49,7 @@ enum class DeviceType
 };
 
 /// @brief Device vendor, parsed from the SYCL vendor string by str_to_vendor().
-/// @ingroup core
+/// @ingroup api_core
 enum class Vendor
 {
     AMD,     ///< AMD.
@@ -61,7 +61,7 @@ enum class Vendor
 
 // to_string() must share the enums' namespace or ADL will not find it.
 /// @brief Name of a Policy value.
-/// @ingroup core
+/// @ingroup api_core
 inline constexpr std::string_view to_string(Policy v) {
     switch (v) {
         case Policy::SYNC: return "SYNC";
@@ -71,7 +71,7 @@ inline constexpr std::string_view to_string(Policy v) {
 }
 
 /// @brief Name of a DeviceType value.
-/// @ingroup core
+/// @ingroup api_core
 inline constexpr std::string_view to_string(DeviceType v) {
     switch (v) {
         case DeviceType::CPU: return "CPU";
@@ -84,7 +84,7 @@ inline constexpr std::string_view to_string(DeviceType v) {
 }
 
 /// @brief Name of a Vendor value.
-/// @ingroup core
+/// @ingroup api_core
 inline constexpr std::string_view to_string(Vendor v) {
     switch (v) {
         case Vendor::AMD: return "AMD";
@@ -99,21 +99,21 @@ inline constexpr std::string_view to_string(Vendor v) {
 // One overload per enum, NOT a constrained template: the concrete parameter is what wins partial
 // ordering against the enum-streaming template in blas/enums.hh; a template here would tie.
 /// @brief Stream a Policy by name.
-/// @ingroup core
+/// @ingroup api_core
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
     return os << to_string(value);
 }
 
 /// @brief Stream a DeviceType by name.
-/// @ingroup core
+/// @ingroup api_core
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, DeviceType value) {
     return os << to_string(value);
 }
 
 /// @brief Stream a Vendor by name.
-/// @ingroup core
+/// @ingroup api_core
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Vendor value) {
     return os << to_string(value);
@@ -122,7 +122,7 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 /// @brief Classify a SYCL vendor string (case-insensitive substring match).
 /// @param v the vendor string, e.g. from `sycl::info::device::vendor`
 /// @return the matching Vendor, or Vendor::OTHER
-/// @ingroup core
+/// @ingroup api_core
 inline Vendor str_to_vendor(std::string&& v) {
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v.find("amd") != std::string::npos || v.find("advanced micro devices") != std::string::npos) {
@@ -140,7 +140,7 @@ inline Vendor str_to_vendor(std::string&& v) {
 
 /// @brief A device property queryable with Device::get_property(); each maps to the SYCL
 /// `sycl::info::device` descriptor of the same name.
-/// @ingroup core
+/// @ingroup api_core
 enum class DeviceProperty
 {
     MAX_WORK_GROUP_SIZE,         ///< Maximum work-group size.
@@ -159,7 +159,7 @@ enum class DeviceProperty
 
 /// @brief True for consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121).
 /// @param cuda_cc a value of Device::cuda_compute_capability()
-/// @ingroup core
+/// @ingroup api_core
 // evidence: docs/perf/blackwell.md
 constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
 
@@ -170,7 +170,7 @@ constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc <
 /// Queue ctx(gpus.at(1));          // the second GPU
 /// Queue cpu("cpu");               // the first CPU device
 /// @endcode
-/// @ingroup core
+/// @ingroup api_core
 struct BATCHLAS_API Device{
     /// @brief Every device of `type`, in the SYCL runtime's order.
     static std::vector<Device> get_devices(DeviceType type);
@@ -251,7 +251,7 @@ struct EventImpl;
 /// needed to order work across an out-of-order Queue, a second Queue sharing the context, or raw
 /// SYCL (see `<batchlas/sycl_interop.hh>`). The type is `[[nodiscard]]`: discard one deliberately
 /// with `(void)`. Movable, not copyable.
-/// @ingroup core
+/// @ingroup api_core
 // Per-member BATCHLAS_API is forced (GCC rejects [[nodiscard]] plus a GNU attribute on the
 // class-key). evidence: docs/design/symbol-visibility.md#symbol-visibility-event-carries-per-member-exports
 struct [[nodiscard]] Event {
@@ -295,7 +295,7 @@ struct QueueImpl;
 ///          thread other than the owner. Use one Queue per thread, or hand one over with
 ///          attach_to_current_thread().
 /// @see "Synchronisation and threading" in @ref md_docs_2cpp-api
-/// @ingroup core
+/// @ingroup api_core
 struct BATCHLAS_API Queue{
 
     /// @brief A Queue on Device::default_device(), in-order, backend AUTO.

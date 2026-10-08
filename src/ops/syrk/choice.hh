@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief syrk: gram, triangular, vendor. evidence: docs/perf/level3.md @ingroup selection_ops
+/// @brief syrk: gram, triangular, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

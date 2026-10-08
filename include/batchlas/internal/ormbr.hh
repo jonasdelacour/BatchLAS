@@ -16,7 +16,7 @@
 /// mismatched batch sizes or orders, a bad `vect` or a short / strided `tau`,
 /// and batchlas::unsupported for `Transpose::Trans` with complex T and `'P'`
 /// (use `ConjTrans`).
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 #include <batchlas/export.hh>
 #include <batchlas/blas/enums.hh>

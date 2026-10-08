@@ -22,7 +22,7 @@ The tree uses seven incompatible boolean dialects, and the parsers stay as they 
 | Dialect | Accepts |
 | --- | --- |
 | `env_truthy` | exactly `1`, `true`, `TRUE`, `on`, `ON` |
-| case-folding variant | the above, case-insensitive, plus `yes` |
+| case-folding variant | the `env_truthy` set, case-insensitive, plus `yes` |
 | first character | `1`, `t`, `T`, `y`, `Y` (`true` works, `on` does not) |
 | inverted first character | on unless the first character is `0`, `n`, `N`, `f`, `F` |
 | `atoi != 0` | `true` is false |
@@ -55,7 +55,7 @@ distinct: `BATCHLAS_KERNEL_TRACE_PATH` falls through to `BATCHLAS_TRACE_PATH` on
 | `BATCHLAS_ORMQR_IMPL` | `device` | unset | Only `device` has an effect. |
 | `BATCHLAS_ORMQR_WY` | `gemm`, `trmm`, `measured` | measured gate | Overrides the measured gate. |
 | `BATCHLAS_ORTHO_GRAM` | `gemm` | unset | Only `gemm` has an effect. |
-| `BATCHLAS_SB2ST_BACK_WAVE` | `0`, `false`, `off`, `no`, `n`, `disable`, `disabled` disable (case-insensitive) | on | Wave back-transform. Fails open. |
+| `BATCHLAS_SB2ST_BACK_WAVE` | Any of `0`, `false`, `off`, `no`, `n`, `disable`, `disabled` (case-insensitive) turns it off | on | Wave back-transform. Fails open. |
 | `BATCHLAS_SB2ST_SUBGROUP` | `auto`, `on`, `off` | `auto` | Forced `on` throws when kd > 32 or there is no sub-group of 32. |
 | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `givens` | unset | Read by the solve and by the sizing query. |
 | `BATCHLAS_SYEVX_ALGORITHM` | method name | `SyevxParams::method` | Overrides the explicit method. An unrecognised value parses to `Auto`. |

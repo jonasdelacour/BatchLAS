@@ -343,7 +343,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
    about 0.5 ms at n = 1024) was never run.
 5. **`Uplo::Upper` is unimplemented in the blocked driver** (`can_run` refuses it, `potrf.cc:50-53`). Ways out: mirror as
    syev does, or use a transposed schedule.
-6. **The WP3 trsm windows** were measured on the racing kernel above `q*batch ~ 65k` and not re-run. They survive as
+6. **The trsm windows** were measured on the racing kernel above `q*batch ~ 65k` and not re-run. They survive as
    untimed rows of `tuned/trsm.*.sm_89.txt`.
 7. **The out-of-order-queue defect cannot be made to fail on this box.** Five dependent edges are guarded by
    `if (!ctx.in_order()) ctx.wait()`; no test builds an out-of-order `Queue`.
@@ -354,7 +354,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 11. **The accuracy test is loose.** The residual bound `4*n*eps` is looser than the true worst case `(0.2, 1] * n * eps`;
     a defect that costs less than about 4x in accuracy passes.
 12. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower.** 112 of 216 cases skip (host backends of a GPU kernel).
-13. **The Phase 2 route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
+13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
     (`src/extensions/potrf_lpanel_device.hh:158-167`) measured green at batch 1024 to 16384, because the eight dependent

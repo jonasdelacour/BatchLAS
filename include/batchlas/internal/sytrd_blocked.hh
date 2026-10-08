@@ -7,7 +7,7 @@
 /// tree wholesale); no public header includes it. Not a stable interface.
 /// sytrd_blocked_buffer_size() repeats the documented declaration in
 /// `batchlas/blas/extensions.hh` without its default `block_size`.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 #include <batchlas/export.hh>
 #include <batchlas/blas/matrix.hh>
@@ -41,7 +41,7 @@ BATCHLAS_API size_t sytrd_blocked_buffer_size(Queue& ctx,
 /// @throws batchlas::invalid_argument on a non-square A, short d/e/tau, a batch
 ///         mismatch or an out-of-order @p ctx
 /// @throws batchlas::unsupported for `Uplo::Upper` (only Lower is implemented)
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API Event sytrd_blocked(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,

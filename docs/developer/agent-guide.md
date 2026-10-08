@@ -413,7 +413,7 @@ boxes.
   `can_run` ever admit it? Look for hard `return false` and for terms naming a different family's
   type list.
 - **Read the predicate, not the comment.** Comments describing routing windows drift.
-  `docs/perf/<op>.md` quotes each `can_run` term and window with `file:line` and gives bracketing
+  `docs/perf/<op>.md` quotes each `can_run` term and window with its file and line number and gives bracketing
   evidence. Several hundred source comments cite `evidence: docs/<page>.md#anchor`, so renaming a
   heading breaks them; `check_evidence_anchors.py` catches this and requires every cited slug to be
   unique across `docs/` (Doxygen numbers repeated headings site-wide). Give a cited heading

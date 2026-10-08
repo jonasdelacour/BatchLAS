@@ -287,7 +287,7 @@ inline constexpr void dispatch_symm(const Exec& exec,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Symmetric matrix-matrix product \f$ C := \alpha\,A\,B + \beta\,C \f$ (Left) or \f$ C := \alpha\,B\,A + \beta\,C \f$ (Right), reading only the `UploV` triangle of `A`.

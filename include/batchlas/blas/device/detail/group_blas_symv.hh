@@ -248,7 +248,7 @@ inline void dispatch_symv(const Group& group,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Symmetric matrix-vector product \f$ y := \alpha\,A\,x + \beta\,y \f$, reading only the `UploV` triangle of `A`.

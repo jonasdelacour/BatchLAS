@@ -70,7 +70,7 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 /// @note On `Backend::ROCM` a real `T` with `ConjTrans` is suspected to give wrong
 ///       results (known defect 4, @ref md_docs_2design_2known-defects); use `Trans`.
 /// @see spmm_buffer_size, @ref md_docs_2perf_2spmm
-/// @ingroup sparse
+/// @ingroup api_sparse
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API Event spmm(Queue& ctx,
                  const MatrixView<T, MFormat>& A,
@@ -100,7 +100,7 @@ BATCHLAS_API Event spmm(Queue& ctx,
 /// @param transB  the spmm call's `transB`
 /// @return required workspace size in bytes (may be 0)
 /// @throws batchlas::dispatch::NoRouteError under the same conditions as spmm
-/// @ingroup sparse
+/// @ingroup api_sparse
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
                                      const MatrixView<T, MFormat>& A,
@@ -122,7 +122,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of spmm (cuSPARSE, rocSPARSE, host).
 ///
 /// Not an entry point: batchlas::spmm calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API Event spmm_vendor(Queue& ctx,
                                const MatrixView<T, MFormat>& A,
@@ -135,7 +135,7 @@ BATCHLAS_API Event spmm_vendor(Queue& ctx,
                                Span<std::byte> workspace);
 
 /// @brief Workspace bytes spmm_vendor needs; called by batchlas::spmm_buffer_size.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_vendor_buffer_size(Queue& ctx,
                                             const MatrixView<T, MFormat>& A,

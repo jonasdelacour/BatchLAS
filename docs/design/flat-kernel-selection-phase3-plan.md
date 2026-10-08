@@ -1,13 +1,13 @@
 # Flat selection: phase 3 plan {#design_flat_selection_phase3_plan}
 
-> **Status:** historical, superseded by @ref design_flat_selection (section 12 "As built",
-> section 13 "Phase 3 decisions").
+> **Status:** historical, superseded by @ref design_flat_selection (§12 "Per-op families",
+> §13 "Design decisions").
 
 Phase 3 moved posv, trsm and gemm from the old route tables to flat selection
 (`src/ops/<op>/choice.hh`, ranked by `tuned/<op>.*.txt`). This page records the planned family
 sets, `can_run` clauses, table sources and gate method. Every PR it planned has landed. Where the
 build departed from this plan, the maintainer decisions in @ref design_flat_selection govern.
-Its file:line references describe a tree that no longer exists.
+Its file-and-line references describe a tree that no longer exists.
 
 ## 1. Families and `can_run`
 
@@ -93,7 +93,7 @@ variant per shape against vendor only.
 | A. Measure on sm_120 with existing harnesses | Used for posv only. Trsm and gemm had no harness that met the protocol. |
 | B. Pull the tuner core forward (P3.2) | Adopted. It is the only route for trsm and gemm. |
 | C. Borrow sm_120 tables on sm_89 | Rejected. It inverts sm_89 tuning. |
-| D. **Transcribe old routing** as untimed ranked rows | **Adopted for sm_89.** Example: posv in the tiny window gives `tiny - \| cta - \| blocked -`. Header `source=transcribed:<sha>`. |
+| D. **Transcribe old routing** as untimed ranked rows | **Adopted for sm_89.** Example: posv in the tiny window gives `tiny -`, then `cta -`, then `blocked -`. Header `source=transcribed:<sha>`. |
 | E. Measure on sm_89 | Deferred. Estimated 15 h for posv, 22 h for trsm, 60-80 h for gemm on the shared box. |
 
 Transcription uses a host-only generator linked against the parent build, run before the old code
@@ -148,7 +148,7 @@ Correctness gates per op: the op's `_tests`, its `_candidates_tests`, `tuned_tab
 | K5. symm, syrk, syr2k and trmm called `gemm_vendor` directly and lost native gemm | Route them through the public `gemm` (decided, see below). |
 | K7. A multi-GPU sweep breaks the one-process-per-box rule | Re-measure a sample single-GPU. |
 
-Maintainer answers, from @ref design_flat_selection section 13:
+Maintainer answers (2026-10-04), recorded here; the resulting rules are in @ref design_flat_selection §13:
 
 - **Q1 (transcribed sm_89 tables): yes.** Until a retune on the 4090.
 - **Q4 (blackwell kernels): before trsm and gemm,** as kernels only, with the `is_sm120_family` and

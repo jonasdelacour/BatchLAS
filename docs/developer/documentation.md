@@ -146,16 +146,17 @@ pointer.
 /// @return       event of the last enqueued kernel
 /// @pre  a.rows() == a.cols()
 /// @throws batchlas::Error if the workspace is too small
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 ```
 
 - `/** ... */` and `/*! ... */` are equivalent. `JAVADOC_AUTOBRIEF` is on, so the first sentence
   is the brief. Use `///<` for a trailing member comment.
 - The Doxyfile defines the aliases `@invariant`, `@trap` and `@evidence{label}`.
-- Every public entity belongs to a group, defined in `docs/pages/api_groups.dox`: `core`,
-  `matrix`, `enums`, `options`, `blas2`, `blas3`, `factorizations`, `qr`, `eigen`, `tridiag`,
-  `svd`, `sparse`, `extra`, `linalg`, `dispatch`, `workspace`, `errors`, `config`, `device`,
-  `internal_helpers`, all nested under `api`.
+- Every public entity belongs to a group, defined in `docs/pages/api_groups.dox`: `%api_core`,
+  `%api_matrix`, `%api_enums`, `%api_options`, `%api_blas2`, `%api_blas3`, `%api_factorizations`,
+  `%api_qr`, `%api_eigen`, `%api_tridiag`, `%api_svd`, `%api_sparse`, `%api_extra`, `%api_linalg`,
+  `%api_dispatch`, `%api_workspace`, `%api_errors`, `%api_config`, `%api_device_blas`,
+  `%api_internal_helpers`, all nested under `%api_reference`.
 - Add `@ingroup <id>` to the declaration, or wrap a run of declarations in `@addtogroup <id>`
   ... `@{` ... `@}`. Add a new group to `api_groups.dox`, not in a header.
 
@@ -172,15 +173,15 @@ pointer.
 
 ### Documenting an op's choices
 
-`src/ops/<op>/choice.hh` is the op's selection vocabulary (see @ref selection and
+`src/ops/<op>/choice.hh` is the op's selection vocabulary (see @ref api_selection and
 @ref design_flat_selection). It is on the site (the Doxyfile lists `src/ops` in `INPUT`;
 `FILE_PATTERNS` matches no `.cc`) but lives in `src/`, so its doc comments count toward the 18%
 ceiling. Trailing `///<` comments are scored as code, so the pattern below documents the whole
 vocabulary in about four comment lines. A new op copies it and needs no page edits: the
-`selection_ops` group lists whatever files add themselves to it.
+`%api_selection_ops` group lists whatever files add themselves to it.
 
 1. **File block, two lines.** `/// @file`, then
-   `/// @brief <op>: <family>, <family>, .... evidence: docs/perf/<page>.md @ingroup selection_ops`.
+   `/// @brief <op>: <family>, <family>, .... evidence: docs/perf/<page>.md @ingroup %api_selection_ops`.
    The brief names the families in candidate order, the evidence pointer names the op's
    `docs/perf/` page. Keep the line within 120 columns; drop the anchor before dropping the group.
 2. **Field-less family**: one trailing `///<` on its `struct X : select::NoFields<"x"> {};` line:
@@ -211,7 +212,7 @@ vocabulary in about four comment lines. A new op copies it and needs no page edi
    is still checked.
 8. **Helpers next to the vocabulary** (`can_run.hh`, `vendor.hh`, sizing helpers such as
    `geqrf.hh`) get the same two-line file block, or a function doc ending in
-   `@ingroup selection_ops`.
+   `@ingroup %api_selection_ops`.
 9. **`<op>.cc` is not on the site.** Its comments stay plain: a 2-4 line header (the op, R1, which
    family runs which driver), `// Correctness only (R3)` above `can_run` naming what each clause
    guards, `// Exactly the chosen family's need (R5)` above the workspace visitor, and invariants

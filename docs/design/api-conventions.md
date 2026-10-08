@@ -144,11 +144,11 @@ caller's USM, written in place.
 
 ## api conventions: the linalg layer
 
-- Value-returning, backend from the Queue, workspace from the arena: `linalg::`.
+- Value-returning, backend from the Queue, workspace from the arena: `batchlas::linalg`.
   Out-parameter, caller's workspace: `batchlas::`.
-- Qualify every forwarding alias as `::batchlas::`. An unqualified `inv` inside `linalg::inv`
-  recurses forever. Inside `linalg`, `detail::` means `linalg::detail`, so write
-  `::batchlas::detail::require_square`.
+- Qualify every forwarding alias as `\::batchlas::`. An unqualified `inv` inside `linalg::inv`
+  recurses forever. Inside `batchlas::linalg`, `detail::` means `linalg::detail`, so write
+  `\::batchlas::detail::require_square`.
 - Pivots and workspace come from the arena or move into the result. A local `UnifiedVector` is
   freed before the kernels that read it run. `linalg::svd` waits before returning, because
   `~Matrix` frees USM without waiting.
@@ -163,7 +163,7 @@ caller's USM, written in place.
 Do not flatten the branch.
 
 - `gesv` chooses between its fused `tiny` kernel and the `blocked` composition through its own
-  table (`src/ops/gesv/gesv.cc`). Do not copy that choice into `linalg`.
+  table (`src/ops/gesv/gesv.cc`). Do not copy that choice into `batchlas::linalg`.
 - `gesv` throws `batchlas::internal_error` on an empty problem (`n`, `nrhs` or `batch` < 1)
   before selection, as `solve_spd` does.
 

@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief gesvd: jacobi, cta, blocked, vendor. evidence: docs/perf/gesvd.md @ingroup selection_ops
+/// @brief gesvd: jacobi, cta, blocked, vendor. evidence: docs/perf/gesvd.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

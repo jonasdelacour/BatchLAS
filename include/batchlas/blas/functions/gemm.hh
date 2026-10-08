@@ -60,7 +60,7 @@ using gemm_vendor = gemm<T>;
 ///         when no native kernel can run the call (a non-Default `precision`,
 ///         or a degenerate homogeneous m, n or k of zero).
 /// @see GemmOptions, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Back, typename T>
 BATCHLAS_API Event gemm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -83,7 +83,7 @@ namespace batchlas::backend {
 ///
 /// Not an entry point: batchlas::gemm calls it when it selects the `vendor`
 /// kernel family. Same arguments and semantics as batchlas::gemm.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event gemm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,

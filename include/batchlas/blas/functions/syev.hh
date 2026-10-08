@@ -76,7 +76,7 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  *         fall back to the tuned choice with a warning)
  * @see @ref selection_tables (which family ranks first where), @ref perf_syev,
  *      @ref md_docs_2cpp-api (convergence status)
- * @ingroup eigen
+ * @ingroup api_eigen
  */
 template <Backend B, typename T>
 BATCHLAS_API Event syev(Queue& ctx,
@@ -92,7 +92,7 @@ BATCHLAS_API Event syev(Queue& ctx,
 // evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
 /**
  * @brief syev() without the convergence status (`info` empty).
- * @ingroup eigen
+ * @ingroup api_eigen
  */
 template <Backend B, typename T>
 inline Event syev(Queue& ctx,
@@ -109,7 +109,7 @@ inline Event syev(Queue& ctx,
  *
  * Makes the same kernel choice as the call, so the size is for the tier that will
  * run. `info` does not affect it.
- * @ingroup eigen
+ * @ingroup api_eigen
  */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
@@ -129,7 +129,7 @@ namespace batchlas::backend {
 /**
  * @brief The vendor solver's syev (cuSOLVER, rocSOLVER or a LAPACKE loop), as syev()'s
  *        `vendor` family calls it; same contract as syev(), with `info_out` as `info`.
- * @ingroup dispatch
+ * @ingroup api_dispatch
  */
 template <Backend B, typename T>
 BATCHLAS_API Event syev_vendor(Queue& ctx,
@@ -140,7 +140,7 @@ BATCHLAS_API Event syev_vendor(Queue& ctx,
                                Span<std::byte> workspace,
                                Span<int32_t> info_out = Span<int32_t>());
 
-/** @brief Workspace, in bytes, for backend::syev_vendor(). @ingroup dispatch */
+/** @brief Workspace, in bytes, for backend::syev_vendor(). @ingroup api_dispatch */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& descrA,

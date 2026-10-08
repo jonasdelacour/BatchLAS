@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief syev: cta, cta_fused, jacobi, blocked, two_stage, vendor. evidence: docs/perf/syev.md @ingroup selection_ops
+/// @brief syev: cta, cta_fused, jacobi, blocked, two_stage, vendor. evidence: docs/perf/syev.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

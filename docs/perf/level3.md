@@ -489,4 +489,4 @@ not committed; the numbers on this page come from the distilled notes and the ro
 | the 73-call-site substitution survey; sytrd syr2k trailing update; ortho gram and WY-factor rejections | `experiments/GEMM_TO_LEVEL3_SURVEY.md` |
 | syrk and syr2k crossover drivers | `experiments/syrk_sweep.sh`, `experiments/syrk_kskew.sh`, `experiments/syr2k_sweep.sh` |
 | herk/her2k expand-vs-loop driver; the exclusive-GPU guard | `experiments/herk_crossover.sh`, `experiments/gpu_guard.sh` |
-| WP1 design pass; vendor-free failing set and `NoRouteError` census | `WP1_LEVEL3_SPEC.md`, `VENDOR_FREE_BASELINE.md` |
+| Design pass; vendor-free failing set and `NoRouteError` census | `WP1_LEVEL3_SPEC.md`, `VENDOR_FREE_BASELINE.md` |

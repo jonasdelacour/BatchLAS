@@ -282,7 +282,8 @@ and the `__CLANG_OFFLOAD_BUNDLE` sections in the object). There is no host-only 
 
 A hosted job would pay several GB of oneAPI apt and a device pass over 95 TUs, to build a CPU-only
 library that cannot catch a CUDA-backend compile error. It becomes worthwhile with a second
-self-hosted machine or a prebuilt toolchain container with a warm ccache. Reasoning: foot of `ci.yml`.
+self-hosted machine or a prebuilt toolchain container with a warm ccache. Reasoning: the comment at
+the foot of `ci.yml`.
 
 ## Troubleshooting
 

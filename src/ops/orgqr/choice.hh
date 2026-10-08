@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief orgqr: blocked, vendor. `evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling` @ingroup selection_ops
+/// @brief orgqr: blocked, vendor. `evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling` @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

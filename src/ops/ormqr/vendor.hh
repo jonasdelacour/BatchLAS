@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief The ormqr vendor call for callers that bypass selection, gated on the library. @ingroup selection_ops
+/// @brief The ormqr vendor call for callers that bypass selection, gated on the library. @ingroup api_selection_ops
 // Without the library the call is never instantiated (no symbol to link); it throws NoRouteError instead.
 
 #include <batchlas/blas/functions/ormqr.hh>

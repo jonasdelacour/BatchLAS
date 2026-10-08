@@ -5,7 +5,7 @@
 Batched SVD uses one-sided Jacobi (`gesvdj_cta`) up to n = 64 (complex\<double\> with vectors up
 to 32). Above that it bidiagonalises with `gebrd`, solves the bidiagonal problem with `bdsdc` on
 the batched `stedc`, and back-transforms with `ormbr`. This page gives the design rules, the
-kernel's local-memory and scaling rules, and the traps. Measurements are in @ref perf_gesvd.
+kernel's local-memory and scaling rules, and the traps. Measurements are in @ref perf_gesvd "the GESVD performance page".
 
 ## gesvd design: why one-sided Jacobi
 
@@ -144,8 +144,8 @@ the cap, and both the kernel guard `gesvdj_cta_max_dim` and `can_run` read it. O
 ## gesvdj_cta: the reduce-scatter G3 trap
 
 The Gram phase computes `kGramChunk = P/2` dot products per chunk and scatters them so that pair k
-lands in lanes 2k and 2k+1. **Scattering V values over L lanes takes \f$\log_2 V\f$ scatter steps
-plus \f$\log_2(L/V)\f$ all-reduce steps.** At P=32, V=16 that is 4 + 1, not 5 + 0:
+lands in lanes 2k and 2k+1. **Scattering V values over L lanes** takes \f$\log_2 V\f$ scatter steps
+plus \f$\log_2(L/V)\f$ all-reduce steps. At P=32, V=16 that is 4 + 1, not 5 + 0:
 
 ```cpp
 for (step = 0; step < 4; ++step) {        // masks 16, 8, 4, 2
@@ -201,7 +201,7 @@ underflowing norm gives \f$\sigma = 0\f$ and fabricates a U column.
   \f$\kappa \ge 10^4\f$.
 - **Exact norms** are recomputed at the start of every sweep. Termination requires **two consecutive**
   zero-rotation sweeps (`zero_sweeps >= 2`), and `info` tests exactly that predicate.
-- **\f$\sigma\f$ comes from A**: a final exact column norm times \f$1/\beta\f$. Reading it from
+- **Singular values come from A**: \f$\sigma_i\f$ is a final exact column norm times \f$1/\beta\f$. Reading it from
   `Nrm_local` reintroduces the normal-equations defect.
 - **Sort descending** with a parallel rank sort that breaks ties on index. Do not also reverse
   indices.
@@ -226,7 +226,7 @@ remain. The branch is gated on a warp-uniform predicate.
 **Thin** (`SvdVectors::Thin`) sets `left_cols = CC` and skips completion. A numerically deficient
 column is still repaired.
 
-**m < n solves \f$A^H\f$**, transposed at load time. Solving \f$A^T\f$ instead gives
+**m < n** solves \f$A^H\f$, transposed at load time. Solving \f$A^T\f$ instead gives
 \f$\overline{V'} S U'^T\f$, whose conjugations are invisible in real arithmetic and wrong for complex.
 
 ## gesvdj_cta: traps and dead ends

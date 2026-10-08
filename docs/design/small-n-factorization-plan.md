@@ -5,7 +5,7 @@
 Decision record for the campaign that makes native batched factorizations (potrf, getrf, geqrf,
 gesv, posv, orgqr) competitive with cuBLAS and cuSOLVER at n = 4..512. It records the baseline
 verdict, the design rules, what was decided, what shipped, and what is still open. Measured grids
-are in `docs/perf/small-n-baseline.md`; per-op evidence is in `docs/perf/{potrf,lu,qr}.md`.
+are in `docs/perf/small-n-baseline.md`; per-op evidence is in the potrf, lu and qr pages under `docs/perf/`.
 
 Ratios are `vendor_ms / native_ms`; above 1 means native wins. "Large batch" means the saturating
 batch for the order (>= 2048 at n <= 64, >= 512 at n = 512). Measured 2026-09-10 on the
@@ -89,7 +89,7 @@ Targets and kill criteria as set in the plans (float, large batch, vs vendor):
 - P2: fused gesv or posv >= 3x over getrf+getrs at n <= 32 (nrhs 1). Kill: fused below 1.15x over the
   two-launch arm at n = 32, nrhs = 1.
 - P3: lpanel >= 1.2x at n in {64, 96, 128, 192}. Kill: below 0.9x at n = 128. Set `native_tier_preferred`
-  from the grid.
+  from the grid (the field has since been removed; see P7).
 - P4: getrf >= 1.0x at 96 and 128; >= 1.3x at 64; >= 1.5x at 256. Kill: below 0.9x at n = 128 after the
   recursive step.
 - P5: tall panels 128x32 and 512x32 >= 3x; double geqrf n = 64 >= 1.0x. Kill: the fused apply slower than

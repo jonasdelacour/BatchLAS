@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched Cholesky factorization (potrf) and its workspace query.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 
 #include <batchlas/export.hh>
 #include <cstdint>
@@ -51,7 +51,7 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 /// Called by the public potrf() before the selection key is built.
 /// @throws batchlas::invalid_argument on negative extents, a non-square A or an
 ///         invalid @p uplo.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
@@ -84,7 +84,7 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A     batch of n x n matrices to be factorized
 /// @param uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf()
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
@@ -121,7 +121,7 @@ BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
 ///         vendor library was not built in
 /// @see PotrfOptions for the option-struct spelling; its checked overloads
 ///      validate the info span, and its arena overloads lease the workspace.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
 template <Backend B, typename T>
 BATCHLAS_API Event potrf(Queue& ctx,
@@ -131,7 +131,7 @@ BATCHLAS_API Event potrf(Queue& ctx,
                      Span<int32_t> info);
 
 /// @brief potrf() without per-item status (`info` not requested).
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types, which cannot
 // carry default arguments, so a default would not be part of the instantiation.
 template <Backend B, typename T>
@@ -148,7 +148,7 @@ inline Event potrf(Queue& ctx,
 namespace batchlas::backend {
 
 /// @brief Vendor arm of potrf(); called by the public potrf(), not by users.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 // Declaration only: the public potrf lives in src/ops/potrf/potrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
@@ -160,7 +160,7 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of potrf().
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T,MatrixFormat::Dense>& A,

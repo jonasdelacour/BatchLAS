@@ -560,7 +560,7 @@ float NN rows that satisfy it (936 packed, 1236 strided), and of no other row.
 | Padding the B tile stride to 132 | −1–2% | Dead |
 | Skipping the last-slab reload; `st.global.cs` C stores; 16-deep k slab | neutral; 0.982 → 0.982; 0.95× at 256³ before the L2 hint, dominated after it | Dead |
 | Packing B into contiguous scratch | pays at the same roofline, loses as m grows | Dead |
-| WP3 mechanism for the `ld` defect (epilogue, odd tile strides) | The shapes never ran that file; they ran `Tiled128x128RegisterK8` with the aligned leg in both columns | Refuted; confirm the running kernel first |
+| Mechanism for the `ld` defect (epilogue, odd tile strides) | The shapes never ran that file; they ran `Tiled128x128RegisterK8` with the aligned leg in both columns | Refuted; confirm the running kernel first |
 | Wide-scalar tile for float | 0.85–0.93× of cuBLAS SGEMM | Dead |
 | 128×128 8×8 tile for wide scalars | double 208 registers, cfloat 247, zero spill; cdouble spills 3.4 KB and fails to launch (208 × 512 > 65 536 registers) | Not launchable for cdouble |
 | `complex-split` candidate | matches the 64×64 tile at 247 registers, 1 block/SM | Not landed; 64×64 is the only candidate with no unlaunchable or spilling config |

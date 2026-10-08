@@ -72,7 +72,7 @@ using her2k_vendor = Event(Queue&,
 ///         for `Ba`: her2k has no native implementation.
 /// @note Not instantiated for `Backend::ROCM`.
 /// @see syr2k, herk, Her2kOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event her2k(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -94,7 +94,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of her2k (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::her2k calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event her2k_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,

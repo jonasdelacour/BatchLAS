@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched LU factorization with partial pivoting (getrf) and its workspace query.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 
 #include <batchlas/export.hh>
 #include <cstdint>
@@ -50,7 +50,7 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 /// refuses a non-square view, which sends it to the vendor rather than rejecting
 /// it (in a vendor-free build: batchlas::NoRouteError).
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
 // Deliberately no squareness or pivots-length check; adding either is a
 // user-visible behaviour change.
@@ -102,7 +102,7 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @throws batchlas::NoRouteError if no native kernel can run the shape and the
 ///         vendor library was not built in
 /// @note The workspace size does not depend on whether @p info is requested.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
 template <Backend B, typename T>
 BATCHLAS_API Event getrf(Queue& ctx,
@@ -112,7 +112,7 @@ BATCHLAS_API Event getrf(Queue& ctx,
                          Span<int32_t> info);
 
 /// @brief getrf() without per-item status (`info` not requested).
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend B, typename T>
 inline Event getrf(Queue& ctx,
@@ -126,7 +126,7 @@ inline Event getrf(Queue& ctx,
 /// @param ctx  queue the factorization will run on (kernel selection reads its device)
 /// @param A    batch of n x n matrices to be factorized
 /// @return bytes to pass as the `work_space` span of getrf()
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);
@@ -138,7 +138,7 @@ namespace batchlas::backend {
 
 /// @brief Vendor arm of getrf(); called by getrf() when it selects the `vendor`
 ///        kernel family, not by users.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 // DECLARATION ONLY: the public getrf is defined in src/ops/getrf/getrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
@@ -150,7 +150,7 @@ BATCHLAS_API Event getrf_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of getrf().
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A);

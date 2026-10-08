@@ -10,7 +10,7 @@
 /// calls them for every typed field. The accepted sets are the contract: widening one would
 /// change how every existing call site reads the same strings.
 /// @see @ref design_environment
-/// @ingroup config
+/// @ingroup api_config
 
 namespace batchlas {
 
@@ -23,7 +23,7 @@ BATCHLAS_API void reload_settings();
 /// @brief True when `v` is exactly one of `1`, `true`, `TRUE`, `on`, `ON`.
 /// @param v the variable's value (`std::getenv(...)`), not its name; `nullptr` means unset
 /// @return false for an unset variable and for every other spelling
-/// @ingroup config
+/// @ingroup api_config
 // Takes the VALUE. A name-taking overload once existed and made env_truthy("BATCHLAS_X") silently
 // always false. evidence: docs/design/environment.md#environment-the-shared-parsers-in-envhh
 inline bool env_truthy(const char* v) {
@@ -38,7 +38,7 @@ inline bool env_truthy(const char* v) {
 /// distinguish "forced off" from "not specified".
 /// @param v the variable's value, or `nullptr` when unset
 /// @return false for an unset variable and for every other spelling
-/// @ingroup config
+/// @ingroup api_config
 // A knob that wants "Off"/"No" must case-fold its own value (sytrd_sb2st_hh.cc does); do not
 // fold that helper back into this one.
 inline bool env_falsy(const char* v) {
@@ -51,7 +51,7 @@ inline bool env_falsy(const char* v) {
 /// @param name     the variable's name
 /// @param fallback returned when the variable is unset or `std::stoi` rejects it
 /// @return the parsed value; note that `std::stoi` accepts a numeric prefix (`"16x"` is 16)
-/// @ingroup config
+/// @ingroup api_config
 inline int env_int_or(const char* name, int fallback) {
     const char* v = std::getenv(name);
     if (!v) return fallback;
@@ -68,14 +68,14 @@ inline int env_int_or(const char* name, int fallback) {
 /// count is meaningless at zero or below.
 /// @param name     the variable's name
 /// @param fallback returned when unset, unparseable or non-positive
-/// @ingroup config
+/// @ingroup api_config
 inline int env_positive_int_or(const char* name, int fallback) {
     const int v = env_int_or(name, fallback);
     return v > 0 ? v : fallback;
 }
 
 /// @brief The value of environment variable `name`, or `fallback` when it is unset or empty.
-/// @ingroup config
+/// @ingroup api_config
 inline std::string env_string_or(const char* name, const std::string& fallback) {
     const char* v = std::getenv(name);
     if (!v || !*v) return fallback;
@@ -98,7 +98,7 @@ inline std::string env_string_or(const char* name, const std::string& fallback) 
 ///          or benchmark setup, never inside a parallel region. Do not let one straddle a
 ///          `*_buffer_size()` query and its solve.
 /// @see @ref design_environment
-/// @ingroup config
+/// @ingroup api_config
 // Name borrowed so no heap allocation lands inside timed benchmark lambdas.
 // evidence: docs/design/environment.md#environment-scopedenvvar
 class ScopedEnvVar {

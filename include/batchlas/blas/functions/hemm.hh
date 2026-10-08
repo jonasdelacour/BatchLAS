@@ -70,7 +70,7 @@ using hemm_vendor = Event(Queue&,
 ///         for `Ba`: hemm has no native implementation.
 /// @note Not instantiated for `Backend::ROCM` (rocBLAS has no wrapper here).
 /// @see symm, HemmOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event hemm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -92,7 +92,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of hemm (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::hemm calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event hemm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,

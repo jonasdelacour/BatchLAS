@@ -74,7 +74,7 @@ using symm_vendor = Event(Queue&,
 /// @note `Backend::ROCM` and `Backend::MKL` are served by src/extensions/symm.cc
 ///       (symmetrize a copy of `A`, then gemm), outside the tuned selection.
 /// @see hemm, SymmOptions, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, RealScalar T>
 BATCHLAS_API Event symm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -96,7 +96,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of symm (cuBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::symm calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, RealScalar T>
 BATCHLAS_API Event symm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,

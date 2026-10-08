@@ -73,7 +73,7 @@ ctx.wait();                                        // required before reading X,
 
 Details: [docs/cpp-api.md](../docs/cpp-api.md). Adding entry points to the library:
 [docs/extending.md](../docs/extending.md). A buildable external consumer:
-[`examples/consumer/`](../examples/consumer/README.md).
+[examples/consumer/](../examples/consumer/README.md).
 
 ## Performance
 
@@ -298,7 +298,7 @@ installed or in-tree `BatchLAS::batchlas`.
 
 ## Consuming BatchLAS from CMake
 
-A buildable example lives in [`examples/consumer/`](../examples/consumer/README.md).
+A buildable example lives in [examples/consumer/](../examples/consumer/README.md).
 
 ### The short version
 
