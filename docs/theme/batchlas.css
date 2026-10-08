@@ -324,3 +324,9 @@ div.contents a.el { overflow-wrap: anywhere; }
 table.memberdecls td { min-width: 0 !important; max-width: 100% !important; margin-left: 0 !important; margin-right: 0 !important; }
 table.memberdecls td.memItemRight, table.memberdecls td.memTemplItemRight { flex: 1 1 14rem !important; }
 div.contents div.memproto { overflow-x: auto !important; max-width: 100%; }
+div.contents div.directory { max-width: 100%; overflow-x: auto; }
+div.contents mjx-container { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+div.contents div.textblock ul li a.el, div.contents .contents li { overflow-wrap: anywhere; }
+div.contents a, div.contents a.el { overflow-wrap: anywhere; white-space: normal; }
+div.contents ul li, div.contents ul li a.el { white-space: normal !important; }
+div.contents li, div.contents p { overflow-wrap: anywhere; }
