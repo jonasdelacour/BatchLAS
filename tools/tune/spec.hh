@@ -7,6 +7,7 @@
 
 #include "tune_core.hh"
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -54,6 +55,9 @@ public:
     // Bytes of the op's inputs at a cell (the 4 GiB cap) and the key §6.2 bisects.
     virtual double bytes(const std::string& dtype, const CellKey& key) const = 0;
     virtual std::string refine_key() const { return "n"; }
+    // The matrix extents a cell allocates (rows/cols of every operand); --max-dim caps their max. Default:
+    // every integer-valued key but `batch`. Override where an extent is derived rather than keyed.
+    virtual std::vector<std::int64_t> dims(const std::string& dtype, const CellKey& key) const;
     // §6.4: repo-relative kernel sources (the kernel-sources block CI and CMake read too).
     virtual std::vector<std::string> kernel_sources() const = 0;
     virtual std::string spec_file() const = 0;

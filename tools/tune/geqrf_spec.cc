@@ -146,6 +146,10 @@ public:
         if (out.empty()) throw std::invalid_argument("geqrf: the --grid filters leave no cell of the declared grid");
         return out;
     }
+    std::vector<std::int64_t> dims(const std::string&, const CellKey& k) const override {  // m derives from (form, n, aspect)
+        const int n = int(key_int(k, "n"));
+        return {rows_of(*key_get(k, "form"), n, int(key_int(k, "aspect"))).value_or(n), n};
+    }
     double bytes(const std::string& dtype, const CellKey& k) const override {  // A0, A (tau is k per item)
         const int n = int(key_int(k, "n"));
         const double m = double(rows_of(*key_get(k, "form"), n, int(key_int(k, "aspect"))).value_or(n));

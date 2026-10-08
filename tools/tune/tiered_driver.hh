@@ -18,6 +18,7 @@ struct TieredOpts {
     std::vector<std::string> dtypes;
     std::vector<int> devices;
     Tier tier = Tier::preview;
+    std::int64_t max_dim = 2048;  // 0 = off: skip:dim above this matrix dimension
     double budget_h = 0, cap_gib = 4, overhead_s = kChildOverheadS;
     double audit_fraction = -1;     // < 0: the tier's
     double refine_cap_factor = -1;  // < 0: the tier's

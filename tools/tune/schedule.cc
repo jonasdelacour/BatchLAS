@@ -104,7 +104,8 @@ double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<st
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
-                                    const std::map<CellKey, std::vector<std::string>>* runnable) {
+                                    const std::map<CellKey, std::vector<std::string>>* runnable,
+                                    std::int64_t max_dim) {
     const TimeIndex idx(l);
     const auto best = best_records(l, family_hash);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
@@ -115,6 +116,11 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
         c.tier = tier;
         const double bytes = spec.bytes(key);
         auto finish = [&] { out.emplace_back(bytes, std::move(c)); };
+        if (max_dim > 0 && spec.max_dim && spec.max_dim(key) > max_dim) {
+            c.reason = "skip:dim";
+            finish();
+            continue;
+        }
         if (bytes > cap) {
             c.reason = "skip:cap";
             finish();

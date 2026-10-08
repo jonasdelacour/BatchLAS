@@ -775,6 +775,10 @@ eliminates an arm whose median paired ratio to the leader exceeds 4.0 (`kGrossLo
 (`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
 cells, and before this rule each of its timed rounds cost minutes.
 
+## Engine: matrix-dimension cap
+
+`--max-dim N` (default 2048 for tiered runs, 0 = off) is a maintainer rule: no cell is measured with a matrix dimension above N, whatever its bytes. `OpSpec::dims` returns the extents a cell allocates (default: every integer key but `batch`; geqrf overrides it because its `m` is derived from `form`, `n` and `aspect`), and `plan_round` plans a larger cell as `skip:dim` before the byte cap, so refinement never measures one either.
+
 ## Engine: dominance carry-forward
 
 An arm eliminated at more than 10x the winner's median (`kDominanceRatio`, `schedule.hh`) is not

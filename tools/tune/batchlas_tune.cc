@@ -77,6 +77,7 @@ struct Opts {
     std::optional<Tier> tier;      // --tier; the protocol flags below make the run tier custom
     std::string custom_flag;       // the first protocol flag seen (custom tier, the two-pass path)
     double budget_h = 0, overhead_s = kChildOverheadS;
+    std::int64_t max_dim = -1;  // --max-dim; unset: 2048 for tiered runs, off for custom
     bool plan = false, status = false, ledger_given = false;  // custom runs touch a ledger only when given
     int progress_fd = -1;
     std::string ledger, import_raw, device_key;
@@ -775,7 +776,10 @@ int Driver::tune() {
                 Cell& c = cells[k];
                 c.key = k;
                 c.round = round;
-                if (spec_.bytes(dtype, k) > cap) c.skip = "cap: " + fmt(spec_.bytes(dtype, k) / cap * o_.cap_gib) + " GiB";
+                const auto dm = spec_.dims(dtype, k);
+                if (o_.max_dim > 0 && !dm.empty() && *std::max_element(dm.begin(), dm.end()) > o_.max_dim)
+                    c.skip = "dim: " + std::to_string(*std::max_element(dm.begin(), dm.end()));
+                else if (spec_.bytes(dtype, k) > cap) c.skip = "cap: " + fmt(spec_.bytes(dtype, k) / cap * o_.cap_gib) + " GiB";
                 else todo.push_back(&c);
             }
             std::printf("== %s %s %s round %d: %zu cells (%zu over the cap)\n", spec_.op().c_str(), dtype.c_str(),
@@ -1041,7 +1045,7 @@ void usage() {
         "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
-        "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --cell-timeout 1800 --no-guard --guard-wait 300\n"
+        "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
         "         --util-ceiling 5 --allow-idle-foreign\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
@@ -1075,6 +1079,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.tier = *o.tier;
     t.budget_h = o.budget_h;
     t.cap_gib = o.cap_gib;
+    t.max_dim = o.max_dim < 0 ? 2048 : o.max_dim;
     t.overhead_s = o.overhead_s;
     t.audit_fraction = o.audit_fraction;
     t.plan = o.plan;
@@ -1143,6 +1148,7 @@ int main(int argc, char** argv) {
         else if (f == "--no-worker") o.worker = false;
         else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
         else if (f == "--cap-gib") o.cap_gib = std::stod(val());
+        else if (f == "--max-dim") o.max_dim = std::stoll(val());
         else if (f == "--cell-timeout") o.cell_timeout = std::stod(val());
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());

@@ -24,11 +24,12 @@ inline constexpr double kModelBytesPerS = 500e9;
 struct PlanSpec {  // plain data, so tests need no OpSpec
     std::vector<std::string> candidates;  // the full current list, in tie order
     std::function<double(const CellKey&)> bytes;
+    std::function<std::int64_t(const CellKey&)> max_dim;  // empty = no extents known (never skip:dim)
 };
 
 struct PlannedCell {
     CellKey key;
-    std::string reason;  // "" = measure, "skip:current", "skip:single", "skip:cap", "partial:<fams>"
+    std::string reason;  // "" = measure, "skip:current", "skip:single", "skip:cap", "skip:dim", "partial:<fams>"
     std::vector<std::string> arms;
     double est_s = 0;
     Tier tier = Tier::preview;            // a partial re-race keeps the stored record's tier
@@ -45,7 +46,8 @@ double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<st
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
-                                    const std::map<CellKey, std::vector<std::string>>* runnable = nullptr);
+                                    const std::map<CellKey, std::vector<std::string>>* runnable = nullptr,
+                                    std::int64_t max_dim = 0);  // > 0: a cell with a larger matrix dimension is skip:dim
 
 // op -> the ops whose tables its timings read. evidence: docs/design/tiered-tuning.md#engine-op-order-over-all-19-ops
 const std::map<std::string, std::vector<std::string>>& op_dependencies();

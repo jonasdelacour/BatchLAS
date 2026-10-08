@@ -95,6 +95,7 @@ neither mode, the tuner stops and asks.
 | `--refine-ratio`, `--no-refine` | 1.1 | custom: §6.2 bisection stops when hi/lo < ratio |
 | `--no-jit` | off | custom: skip the throwaway JIT pass |
 | `--cap-gib` | 4 | skip cells whose matrices exceed this |
+| `--max-dim` | 2048 tiered, off custom | `skip:dim`: no cell with a matrix dimension (m, n, k, order, q, nrhs, derived rows; never `batch`) above this; 0 = off |
 | `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | the idle guard; see "Guard" |
@@ -130,7 +131,7 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   run stopped by Ctrl-C or `--budget` after its lattice refines on the next run, within the same
   total; past it the first cells in `refine_all_axes` order (flips, then margin hedges)
   run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
-- **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a
+- **Per cell** (`plan_round`): a dimension over `--max-dim` is `skip:dim` (checked first, `OpSpec::dims`); over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
   the changed or added families (a candidate stored `skipped`, which could not run there, is not
   compared; the spec's `// common` deps line puts `<op>.cc`, where `can_run` lives, in every family)

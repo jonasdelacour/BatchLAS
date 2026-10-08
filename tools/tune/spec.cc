@@ -22,6 +22,23 @@ const OpSpec* find_spec(std::string_view op) {
 
 std::vector<const OpSpec*> all_specs() { return registry(); }
 
+std::vector<std::int64_t> OpSpec::dims(const std::string& dtype, const CellKey& key) const {
+    static_cast<void>(dtype);
+    std::vector<std::int64_t> out;
+    for (const auto& [name, value] : key) {
+        if (name == "batch") continue;
+        std::size_t used = 0;
+        std::int64_t v = 0;
+        try {
+            v = std::stoll(value, &used);
+        } catch (const std::exception&) {
+            continue;  // exact keys (uplo, form, trans) are words
+        }
+        if (used == value.size()) out.push_back(v);
+    }
+    return out;
+}
+
 KernelBlock OpSpec::kernel_block(const std::string& repo) const { return kernel_block_from_file(repo, spec_file()); }
 
 std::map<std::string, std::vector<std::string>> OpSpec::family_sources(const std::string& repo) const {

@@ -131,7 +131,7 @@ struct Job {
     std::vector<CellKey> next;
     std::map<CellKey, CellRecord> mine;
     std::map<CellKey, std::vector<std::string>> runnable;
-    std::set<CellKey> planned;  // never planned twice in a run: a skip:cap midpoint would come back forever
+    std::set<CellKey> planned;  // never planned twice in a run: a skip:cap or skip:dim midpoint would come back forever
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
@@ -141,7 +141,11 @@ struct Job {
     std::vector<std::size_t> per_round;  // cells measured per round
     std::vector<DominanceLoss> losses;   // this run's > kDominanceRatio losses
     PlanSpec plan_spec() const {
-        return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); }};
+        return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); },
+                [s = spec, d = dtype](const CellKey& k) {
+                    const auto v = s->dims(d, k);
+                    return v.empty() ? std::int64_t(0) : *std::max_element(v.begin(), v.end());
+                }};
     }
 };
 
@@ -213,7 +217,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
 
 std::vector<PlannedCell> TieredRun::plan(Job& j) {
     j.planned.insert(j.next.begin(), j.next.end());
-    return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable);
+    return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable,
+                      o_.max_dim);
 }
 
 void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {

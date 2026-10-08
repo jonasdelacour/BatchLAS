@@ -2402,6 +2402,62 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0) << "--plan needs no measurer";
 }
 
+namespace {
+
+// m is derived (4 n), as geqrf's and orgqr's extents are: the keys alone name only n.
+class DerivedDimsSpec : public FakeSpec {
+public:
+    std::string op() const override { return "derivedop"; }
+    std::vector<std::int64_t> dims(const std::string&, const CellKey& k) const override { return {4 * key_int(k, "n"), key_int(k, "n")}; }
+};
+
+std::int64_t max_of(const std::vector<std::int64_t>& v) { return v.empty() ? 0 : *std::max_element(v.begin(), v.end()); }
+
+}  // namespace
+
+TEST(TuneMaxDim, DefaultDimsTakeEveryIntegerKeyButBatch) {
+    const FakeSpec s;
+    const CellKey k{{"uplo", "L"}, {"n", "64"}, {"nrhs", "3"}, {"batch", "99999"}, {"form", "tall"}};
+    EXPECT_EQ(s.dims("float", k), (std::vector<std::int64_t>{64, 3})) << "words and batch are no extent";
+    EXPECT_EQ(max_of(s.dims("float", {{"n", "4096"}, {"batch", "2"}})), 4096);
+}
+
+TEST(TuneMaxDim, DerivedDimsCapOnTheDerivedExtent) {
+    const DerivedDimsSpec s;
+    const CellKey k{{"n", "1024"}, {"batch", "8"}};
+    EXPECT_EQ(max_of(s.dims("float", k)), 4096) << "n alone is under 2048, the derived m is not";
+    PlanSpec ps = plan_spec(kTwo);
+    ps.max_dim = [&](const CellKey& c) { return max_of(s.dims("float", c)); };
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {k}, Ledger{}, kHashes, 4, 0, nullptr, 2048)[0].reason, "skip:dim");
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {nkey(512)}, Ledger{}, kHashes, 4, 0, nullptr, 2048)[0].reason, "")
+        << "4 x 512 = 2048 is allowed";
+}
+
+TEST(TuneMaxDim, PlanRoundMarksSkipDimBeforeCapAndLeavesTheRestAlone) {
+    PlanSpec ps = plan_spec(kTwo);
+    ps.max_dim = [](const CellKey& k) { return key_int(k, "n"); };
+    const auto plan = plan_round(ps, Tier::coarse, {nkey(2048), nkey(2049), nkey(64, 1 << 20)}, Ledger{}, kHashes,
+                                 1e-9, 0, nullptr, 2048);
+    std::map<std::string, std::string> why;
+    for (const PlannedCell& c : plan) why[key_arg(c.key)] = c.reason;
+    EXPECT_EQ(why["n=2049,batch=1024"], "skip:dim");
+    EXPECT_EQ(why["n=2048,batch=1024"], "skip:cap") << "2048 is not above the limit; the byte cap still applies";
+    EXPECT_EQ(why["n=64,batch=1048576"], "skip:cap") << "batch is no dimension";
+    for (const PlannedCell& c : plan) if (c.reason == "skip:dim") EXPECT_TRUE(c.arms.empty());
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {nkey(4096)}, Ledger{}, kHashes, 4, 0)[0].reason, "")
+        << "max_dim 0 is off";
+}
+
+TEST(TuneMaxDim, TieredRunNeverMeasuresACellOverTheLimit) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.max_dim = 8;
+    FakeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ASSERT_FALSE(m.keys.empty());
+    for (const std::string& k : m.keys) EXPECT_LE(std::stoi(k.substr(2)), 8) << k;
+}
+
 TEST(TuneSchedule, AllErrorRecordCountsAsMissing) {
     Ledger l;
     CellRecord failed = cell_rec({cres("lpanel:panel=8", "h1", "error"), cres("vendor", "v1", "error")}, {});
