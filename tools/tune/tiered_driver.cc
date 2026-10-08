@@ -7,9 +7,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -139,6 +142,14 @@ struct Job {
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
+    // Scheduler state, under TieredRun::sq_. `queue` points into `plan`, which is replaced only
+    // once the round is drained and nothing of it runs (the next round depends on its results).
+    std::vector<PlannedCell> plan;
+    std::deque<const PlannedCell*> queue;
+    std::size_t running = 0;
+    int round = 0;
+    bool planning = false, done = false;
+    double wall = 0;
     PlanSpec plan_spec() const {
         return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); },
                 [s = spec, d = dtype](const CellKey& k) {
@@ -162,6 +173,12 @@ private:
     std::vector<std::unique_ptr<Job>> jobs_;
     std::mutex mu_;
     std::chrono::steady_clock::time_point t0_;
+    std::mutex sq_;  // the cell queues; taken before mu_, never inside it
+    std::condition_variable cv_;
+    std::atomic<std::size_t> budget_left_{0};
+    std::vector<double> gpu_max_;  // per GPU: the largest per-item footprint since its last carve-out restart
+    std::vector<const Job*> gpu_job_;
+    std::size_t restarts_ = 0, switch_restarts_ = 0, switches_ = 0;
 
     void emit(const Json& j);
     void build(const std::string& op, const std::string& dtype);
@@ -170,7 +187,10 @@ private:
     double cap_factor() const { return o_.refine_cap_factor >= 0 ? o_.refine_cap_factor : params(o_.tier).refine_cap_factor; }
     std::pair<std::size_t, std::size_t> cap_base(const Job& j) const;
     void cap(Job& j, std::vector<PlannedCell>& plan);
-    std::size_t measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted);
+    std::size_t stage(Job& j);
+    void advance(Job& j);
+    void gpu_loop(std::size_t g);
+    void note_pop(std::size_t g, const Job& j, const PlannedCell& c);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
     void record(Job& j, const CellRecord& r, Tier tier);
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
@@ -359,11 +379,13 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     if (worker && !b.fallback && b.error.empty() && pick) audit(j, job, b);
 }
 
-std::size_t TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted) {
+// Records j.plan's skip:single cells and queues the rest sorted by (per-item footprint, bytes), so
+// every GPU popping the queue runs ascending footprints: the carve-out order. Returns the cells queued.
+std::size_t TieredRun::stage(Job& j) {
     std::vector<const PlannedCell*> todo;
-    for (const PlannedCell& c : plan) {
+    for (const PlannedCell& c : j.plan) {
         if (c.reason == "skip:single") {
-            record(j, single_record(c.key, round, c.arms.empty() ? "" : c.arms[0], j.cands, j.fh), c.tier);
+            record(j, single_record(c.key, j.round, c.arms.empty() ? "" : c.arms[0], j.cands, j.fh), c.tier);
             emit(Json().str("ev", "cell_done").str("op", j.spec->op()).str("dtype", j.dtype).key(c.key)
                      .str("ranked", join(c.arms, "|")).str("tier", to_string(c.tier)));
         } else if (c.reason.empty() || c.reason.rfind("partial:", 0) == 0) {
@@ -371,22 +393,79 @@ std::size_t TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& pla
         }
     }
     std::printf("== %s %s %s round %d (%s): %zu of %zu cells to measure\n", j.spec->op().c_str(), j.dtype.c_str(),
-                id_.device.c_str(), round, to_string(o_.tier).c_str(), todo.size(), plan.size());
+                id_.device.c_str(), j.round, to_string(o_.tier).c_str(), todo.size(), j.plan.size());
     std::fflush(stdout);
-    // Round-robin shards; each GPU's share runs in ascending per-item footprint (the carve-out order).
-    std::vector<std::vector<const PlannedCell*>> shares(o_.devices.size());
-    for (std::size_t i = 0; i < todo.size(); ++i) shares[i % shares.size()].push_back(todo[i]);
-    for (auto& s : shares) sort_for_worker(s, [&](const CellKey& k) { return j.spec->bytes(j.dtype, k); });
-    std::vector<std::thread> workers;
-    for (std::size_t g = 0; g < o_.devices.size(); ++g)
-        workers.emplace_back([&, g] {
-            for (const PlannedCell* c : shares[g]) {
-                if (budgeted && over_budget()) return;
-                measure_one(j, *c, o_.devices[g], round);
-            }
-        });
-    for (auto& w : workers) w.join();
+    sort_for_worker(todo, [&](const CellKey& k) { return j.spec->bytes(j.dtype, k); });
+    j.per_round.push_back(todo.size());
+    std::lock_guard<std::mutex> lock(sq_);
+    j.queue.assign(todo.begin(), todo.end());
     return todo.size();
+}
+
+// The job's round is fully recorded: refine, plan and queue the next one, or finish the job.
+// Runs without sq_; no other thread touches j meanwhile (its queue is empty and nothing of it runs).
+void TieredRun::advance(Job& j) {
+    for (;;) {
+        if (j.capped) j.next.clear();
+        else refine(j);
+        if (!j.next.empty() && over_budget()) budget_left_ += j.next.size(), j.next.clear();
+        if (j.next.empty()) break;
+        j.plan = plan(j);
+        cap(j, j.plan);
+        ++j.round;
+        if (stage(j) > 0) return;
+    }
+    j.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
+    std::lock_guard<std::mutex> lock(sq_);
+    j.done = true;
+}
+
+// Under sq_. Mirrors WorkerGate's rule to count the carve-out restarts the pop order costs.
+void TieredRun::note_pop(std::size_t g, const Job& j, const PlannedCell& c) {
+    const double fp = item_footprint(j.spec->bytes(j.dtype, c.key), c.key);
+    const bool moved = gpu_job_[g] && gpu_job_[g] != &j;
+    switches_ += moved;
+    gpu_job_[g] = &j;
+    if (fp < gpu_max_[g]) ++restarts_, switch_restarts_ += moved, gpu_max_[g] = fp;
+    else gpu_max_[g] = std::max(gpu_max_[g], fp);
+}
+
+// One thread per GPU: the next cell of the earliest job (op order) with queued cells. A job whose
+// round is drained but still running waits for its stragglers while this GPU works on later jobs.
+void TieredRun::gpu_loop(std::size_t g) {
+    std::unique_lock<std::mutex> lk(sq_);
+    for (;;) {
+        Job* j = nullptr;
+        for (auto& x : jobs_)
+            if (!x->queue.empty()) {
+                j = x.get();
+                break;
+            }
+        if (!j) {
+            if (std::all_of(jobs_.begin(), jobs_.end(), [](const auto& x) { return x->done; })) return;
+            cv_.wait(lk);
+            continue;
+        }
+        const PlannedCell* c = j->queue.front();
+        j->queue.pop_front();
+        if (j->round == 0 || !over_budget()) {  // round 0 is never budgeted
+            note_pop(g, *j, *c);
+            ++j->running;
+            const int round = j->round;
+            lk.unlock();
+            measure_one(*j, *c, o_.devices[g], round);
+            lk.lock();
+            --j->running;
+        }
+        if (j->queue.empty() && j->running == 0 && !j->planning && !j->done) {
+            j->planning = true;
+            lk.unlock();
+            advance(*j);
+            lk.lock();
+            j->planning = false;
+            cv_.notify_all();
+        }
+    }
 }
 
 bool measurable(const PlannedCell& c) { return c.reason.empty() || c.reason.rfind("partial:", 0) == 0; }
@@ -466,15 +545,14 @@ int TieredRun::go() {
             }
             build(op, dtype);
         }
-    std::vector<std::vector<PlannedCell>> plans;
     double est = 0, est_refine = 0, refine_cells = 0;
     std::size_t to_measure = 0;
     for (auto& j : jobs_) {
-        plans.push_back(plan(*j));
-        print_plan(*j, plans.back(), o_.plan);
+        j->plan = plan(*j);
+        print_plan(*j, j->plan, o_.plan);
         double est_measure = 0;
         std::size_t n_measure = 0;
-        for (const PlannedCell& c : plans.back()) {
+        for (const PlannedCell& c : j->plan) {
             est += c.est_s;
             to_measure += measurable(c) || c.reason == "skip:single";
             if (measurable(c)) est_measure += c.est_s, ++n_measure;
@@ -503,35 +581,29 @@ int TieredRun::go() {
     if (!m_) throw std::logic_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
     t0_ = std::chrono::steady_clock::now();
-    for (std::size_t i = 0; i < jobs_.size(); ++i) jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
-    for (int round = 1;; ++round) {
-        std::size_t pending = 0;
-        for (auto& j : jobs_) {
-            if (j->capped) j->next.clear();
-            else refine(*j);
-            pending += j->next.size();
-        }
-        if (pending == 0) break;
-        if (over_budget()) {
-            std::printf("== budget %.2f h spent: %zu refinement cells left for a later run\n", o_.budget_h, pending);
-            break;
-        }
-        for (auto& j : jobs_) {
-            if (j->next.empty()) continue;
-            std::vector<PlannedCell> p = plan(*j);
-            cap(*j, p);
-            j->per_round.push_back(measure_round(*j, p, round, true));
-        }
-    }
-    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
+    for (auto& j : jobs_)
+        if (stage(*j) == 0) advance(*j);
+    gpu_max_.assign(o_.devices.size(), 0);
+    gpu_job_.assign(o_.devices.size(), nullptr);
+    std::vector<std::thread> gpus;
+    for (std::size_t g = 0; g < o_.devices.size(); ++g) gpus.emplace_back([this, g] { gpu_loop(g); });
+    for (auto& t : gpus) t.join();
+    if (budget_left_ > 0)
+        std::printf("== budget %.2f h spent: %zu refinement cells left for a later run\n", o_.budget_h,
+                    budget_left_.load());
     for (auto& j : jobs_) {
         std::string rounds;
         for (std::size_t n : j->per_round) rounds += (rounds.empty() ? "" : ",") + std::to_string(n);
         const std::size_t refined = std::accumulate(j->per_round.begin() + 1, j->per_round.end(), std::size_t(0));
         std::printf("== summary %s %s: measured %zu lattice + %zu refinement cells, per round %s; planned ~%.0f "
                     "refinement%s; wall %.1f s\n", j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], refined,
-                    rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", wall);
+                    rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", j->wall);
     }
+    std::printf("== summary workers: %zu (op, dtype) switches; %zu carve-out restarts by footprint order, %zu of "
+                "them at a switch\n", switches_, restarts_, switch_restarts_);
+    std::fflush(stdout);
+    emit(Json().str("ev", "schedule").integer("switches", std::int64_t(switches_))
+             .integer("restarts", std::int64_t(restarts_)).integer("switch_restarts", std::int64_t(switch_restarts_)));
     for (auto& j : jobs_) {
         if (!j->writer) continue;
         std::printf("== wrote %s/%s.jsonl: %zu cells\n", j->dir.c_str(), run_id_.c_str(), j->mine.size());

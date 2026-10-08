@@ -853,6 +853,23 @@ In a multi-op run, an (op, dtype) pair the spec refuses (symm, syrk and syr2k ar
 skipped with one printed `== note: skipping <op> <dtype>: ...` line. A single-op run still refuses
 it.
 
+## Engine: pipelined cell queues across op and dtype jobs
+
+The driver used to shard each round round-robin over the GPUs and join every GPU at the end of each
+(op, dtype) round, so one GPU finishing gemm float's largest round-2 cells left the other three
+idle; over 19 ops, 4 dtypes and several rounds those tails cost hours. Now each job's round is one
+queue sorted by (per-item footprint, bytes), and one thread per GPU (`gpu_loop` in
+`tiered_driver.cc`) pops the next cell of the earliest job, in op order, that has queued cells.
+Every GPU therefore still runs ascending footprints within a job's round, and the carve-out restart
+rule is unchanged; moving to another job usually costs a restart, which the summary line and the
+`schedule` progress event count. A job's next round is planned by whichever thread records its last
+cell, never earlier, because refinement reads that round's results; until then the job waits for
+its stragglers while idle GPUs work on later jobs. Pipelining does not break the op order's
+dependencies: during one run a composed op times against the library's embedded tables, not the
+ledger, so an earlier op's unfinished rounds change nothing it measures. Host tests
+(`TuneTieredPipeline.*`) check no wait behind a straggler, ascending footprints per GPU and round,
+planning only after the round's last record, and records identical to a one-GPU run.
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps

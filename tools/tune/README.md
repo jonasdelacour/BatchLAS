@@ -118,8 +118,13 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   axes; gemm's demand-driven grid is subsampled by key hash) for every op and dtype, in op order.
   Then refinement rounds (`refine_all_axes`, the tier's mode and margin) over every cell the
   ledger and this run ranked inside the requested grid, until no midpoint is left, `--budget`
-  is spent or the refinement cap is hit. Within a round each GPU takes cells round-robin in
-  ascending input bytes.
+  is spent or the refinement cap is hit. Rounds are per (op, dtype) job, and the GPUs are
+  pipelined across jobs: each round is one queue sorted by (per-item footprint, bytes), every GPU
+  pops the next cell of the earliest job (op order) that has queued cells, and a job's next round
+  is planned only once all of its current round's cells are recorded. A GPU never waits for
+  another job's straggler; the summary counts the (op, dtype) switches and the carve-out restarts
+  the pop order costs (progress `schedule`). See docs/design/tiered-tuning.md, "Engine: pipelined
+  cell queues across op and dtype jobs".
 - **Refinement rules** (docs/design/tiered-tuning.md, "Engine: refinement convergence rules").
   A bracket is a flip when its two winners differ and, at either end, the other end's winner is
   more than the 3% tie slower (or cannot win there: not runnable, or eliminated without a median);
@@ -197,7 +202,8 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
   `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
-  `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`, `{"ev":"done"}`.
+  `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`,
+  `{"ev":"schedule","switches":s,"restarts":r,"switch_restarts":k}`, `{"ev":"done"}`.
 
 ## Protocol (§6.3) and where it lives
 

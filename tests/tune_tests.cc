@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,10 +26,12 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <random>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace batchlas::tune;
@@ -2796,6 +2799,148 @@ TEST(TuneTieredDriver, AuditMatchKeepsTheWorkerAndReportsRestarts) {
     const std::string ev = read_file(events);
     EXPECT_EQ(count_of(ev, "\"ev\": \"worker_restart\""), 1u) << ev;
     EXPECT_NE(ev.find("\"restarts\": 1"), std::string::npos) << ev;
+}
+
+namespace {
+
+// Thread-safe, several GPUs, uneven per-cell sleeps; float n=`slow_n` is the straggler.
+class PipeMeasurer : public CellMeasurer {
+public:
+    struct Call {
+        std::string dtype, key;
+        int gpu = 0;
+        double footprint = 0, t0 = 0, t1 = 0;
+        std::size_t done_before = 0;  // this dtype's cell_done events when the cell started
+    };
+    fs::path events;
+    int slow_n = -1;
+    std::mutex mu;
+    std::vector<Call> calls;
+    ArmBatch measure(const CellJob& j) override {
+        Call c{j.dtype, key_arg(j.key), j.gpu, j.footprint, now(), 0, 0};
+        if (!events.empty()) c.done_before = count_of(read_file(events), "\"cell_done\", \"op\": \"fakeop\", \"dtype\": \"" + j.dtype + "\"");
+        const std::int64_t n = key_int(j.key, "n");
+        const bool slow = j.dtype == "float" && n == slow_n;
+        std::this_thread::sleep_for(std::chrono::milliseconds(slow ? 400 : 2 + (n * 7 + std::int64_t(j.dtype.size()) * 3) % 5 * 3));
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const double t = a == "a" ? 1.0 : n <= 10 ? 0.5 : 2.0;
+            b.arms.push_back(arm(a, "ok", {t, t, t}));
+        }
+        c.t1 = now();
+        std::lock_guard<std::mutex> lock(mu);
+        calls.push_back(c);
+        return b;
+    }
+
+private:
+    const std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
+    double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
+};
+
+// (dtype, key) -> (round, ranked) from a run's ledgers.
+std::map<std::pair<std::string, std::string>, std::pair<int, std::string>> records_of(const TempDir& ledger, const std::vector<std::string>& dtypes) {
+    std::map<std::pair<std::string, std::string>, std::pair<int, std::string>> out;
+    for (const std::string& d : dtypes)
+        for (const CellRecord& c : read_ledger(ledger_dir(ledger.str(), "fakeop", d, "sm_fake")).cells) {
+            std::string ranked;
+            for (const std::string& r : c.ranked) ranked += r + "|";
+            out[{d, key_arg(c.key)}] = {c.round, ranked};
+        }
+    return out;
+}
+
+const std::vector<std::string> kPipeDtypes{"float", "double", "cfloat"};
+
+TieredOpts pipe_opts(const TempDir& repo, const TempDir& ledger, std::vector<int> devices, Tier tier = Tier::preview) {
+    TieredOpts o = fake_opts(repo, ledger, tier);
+    o.dtypes = kPipeDtypes;
+    o.devices = std::move(devices);
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneTieredPipeline, IdleGpusRunLaterJobsWhileAStragglerFinishesItsRound) {
+    TempDir repo, ledger;
+    TieredOpts o = pipe_opts(repo, ledger, {0, 1, 2, 3});
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    PipeMeasurer m;
+    m.events = events;
+    m.slow_n = 64;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    double slow_end = 0;
+    for (const auto& c : m.calls)
+        if (c.dtype == "float" && c.key == "n=64") slow_end = c.t1;
+    ASSERT_GT(slow_end, 0.3);
+    std::size_t later = 0;
+    for (const auto& c : m.calls)
+        if (c.dtype != "float") {
+            ++later;
+            EXPECT_LT(c.t1, slow_end) << c.dtype << " " << c.key << ": waited for float's straggler";
+        }
+    EXPECT_EQ(later, 16u) << "double and cfloat: 4 lattice + 4 refinement cells each";
+    const auto recs = records_of(ledger, kPipeDtypes);
+    for (const auto& c : m.calls) {
+        const int round = recs.at({c.dtype, c.key}).first;
+        std::size_t earlier = 0;
+        for (const auto& [k, r] : recs) earlier += k.first == c.dtype && r.first < round;
+        EXPECT_GE(c.done_before, earlier) << c.dtype << " " << c.key << " round " << round
+                                          << " started before every earlier-round cell was recorded";
+    }
+    EXPECT_NE(read_file(events).find("\"ev\": \"schedule\", \"switches\": "), std::string::npos);
+}
+
+TEST(TuneTieredPipeline, EachGpuRunsAscendingFootprintsWithinAJobRound) {
+    TempDir repo, ledger;
+    TieredOpts o = pipe_opts(repo, ledger, {0, 1}, Tier::coarse);
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    PipeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    const auto recs = records_of(ledger, kPipeDtypes);
+    std::map<int, std::vector<const PipeMeasurer::Call*>> per_gpu;
+    std::vector<PipeMeasurer::Call> calls = m.calls;
+    std::sort(calls.begin(), calls.end(), [](const auto& a, const auto& b) { return a.t0 < b.t0; });
+    for (const auto& c : calls) per_gpu[c.gpu].push_back(&c);
+    ASSERT_EQ(per_gpu.size(), 2u);
+    std::size_t restarts = 0, same = 0;
+    for (const auto& [gpu, seq] : per_gpu) {
+        double max = 0;
+        for (std::size_t i = 0; i < seq.size(); ++i) {
+            restarts += seq[i]->footprint < max;
+            max = seq[i]->footprint < max ? seq[i]->footprint : std::max(max, seq[i]->footprint);
+            if (i == 0 || seq[i]->dtype != seq[i - 1]->dtype) continue;
+            const int r0 = recs.at({seq[i - 1]->dtype, seq[i - 1]->key}).first, r1 = recs.at({seq[i]->dtype, seq[i]->key}).first;
+            if (r0 != r1) continue;
+            ++same;
+            EXPECT_GE(seq[i]->footprint, seq[i - 1]->footprint) << "gpu" << gpu << " " << seq[i]->dtype << " round " << r1;
+        }
+    }
+    EXPECT_GE(same, 6u) << "the coarse lattice's 7 cells per dtype split over two GPUs";
+    EXPECT_NE(read_file(events).find("\"restarts\": " + std::to_string(restarts) + ","), std::string::npos)
+        << "the summary counts the carve-out restarts the pop order costs";
+}
+
+TEST(TuneTieredPipeline, RecordsMatchTheSingleGpuRun) {
+    TempDir repo, one, four;
+    TieredOpts o = pipe_opts(repo, one, {0});
+    PipeMeasurer m1;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m1), 0);
+    o = pipe_opts(repo, four, {0, 1, 2, 3});
+    PipeMeasurer m4;
+    m4.slow_n = 16;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m4), 0);
+    const auto a = records_of(one, kPipeDtypes), b = records_of(four, kPipeDtypes);
+    EXPECT_EQ(a, b);
+    ASSERT_EQ(a.size(), 24u);
+    for (const std::string& d : kPipeDtypes)
+        for (const char* k : {"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}) EXPECT_TRUE(a.count({d, k})) << d << " " << k;
 }
 
 TEST(TuneSchedule, WorkerShareRunsInAscendingPerItemFootprint) {
