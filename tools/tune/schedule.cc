@@ -441,37 +441,4 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
     return r;
 }
 
-std::vector<DominanceLoss> dominance_losses(const CellRecord& r, double bytes, double ratio) {
-    std::vector<DominanceLoss> out;
-    if (r.ranked.empty()) return out;
-    const std::string& winner = r.ranked.front();
-    double best = NAN;
-    for (const CandResult& c : r.cands)
-        if (c.cand == winner) best = c.median_ms;
-    if (!(best > 0)) return out;
-    for (const CandResult& c : r.cands)
-        if (c.status == "eliminated" && std::isfinite(c.median_ms) && c.median_ms > ratio * best)
-            out.push_back({c.cand, winner, r.key, bytes});
-    return out;
-}
-
-// `big` lies beyond `small`: equal non-integer keys and batch, and either larger along `refine_key`
-// with every other key equal, or every other integer key >= with more bytes. Batch never carries a
-// loss: a one-group-per-matrix kernel that starves at small batch catches up.
-bool beyond(const CellKey& small, double small_bytes, const CellKey& big, double big_bytes, const std::string& refine_key) {
-    if (small.size() != big.size()) return false;
-    bool all_ge = true, refine_only = true, refine_larger = false;
-    for (std::size_t i = 0; i < small.size(); ++i) {
-        const KV &s = small[i], &b = big[i];
-        if (s.name != b.name) return false;
-        if (s.value == b.value) continue;
-        if (!is_int(s.value) || !is_int(b.value) || s.name == "batch") return false;
-        const bool ge = std::stoll(b.value) >= std::stoll(s.value);
-        all_ge = all_ge && ge;
-        if (s.name == refine_key) refine_larger = ge;
-        else refine_only = false;
-    }
-    return (refine_only && refine_larger) || (all_ge && big_bytes > small_bytes);
-}
-
 }  // namespace batchlas::tune

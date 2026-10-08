@@ -896,7 +896,8 @@ def read_cell(rec):
         raise ValueError(f"unknown tier '{rec['tier']}'")
     key = tuple(tuple(kv.split("=", 1)) for kv in rec["key"].split(","))
     names = [n for n in rec["cands"].split("|") if n]
-    cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""), "median": rec.get(f"m{i}")}
+    cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""),
+              "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}")}
              for i, n in enumerate(names)]
     return {"run_id": rec["run_id"], "tier": rec["tier"], "key": key, "date": rec.get("date", ""),
             "ranked": [r for r in rec.get("ranked", "").split("|") if r], "cands": cands}
@@ -908,7 +909,10 @@ def stale_families(cell, family_hash):
         fam = spelling_family(c["cand"])
         seen.add(fam)
         # A candidate that could not run there (skipped) cannot change the ranking: its hash is ignored.
-        if c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
+        # A dominated skip (the removed carry-forward) was never tried there: stale, as in C++.
+        if c["status"] == "skipped" and c.get("reason", "").startswith("dominated:"):
+            out.add(fam)
+        elif c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
             out.add(fam)
     return out | (set(family_hash) - seen)
 
@@ -1854,6 +1858,14 @@ def self_test_ledger():
         rows10 = ledger_text(spec, "float", "sm_0", read_ledger(fix), fix, None, True)[0].splitlines()[3:]
         if rows10 != ["uplo=L n=64 nrhs=1 batch=128 | tiny 1.000 | cta 2.000 # preview"]:
             bad.append(f"self-test: ledger_all_error_record_counts_as_no_record -> {rows10}")
+        # a dominated skip (removed carry-forward) is partly stale, its family stale; a refused pin is
+        # not. Shared with tune_tests' TuneSchedule.ADominatedSkipIsPartlyStaleAndReRacedAgainstTheTopTwo.
+        fixd = os.path.join(REPO, "tests", "data", "ledger_dominated", "posv.float.sm_0")
+        dom = read_ledger(fixd).cells
+        fhd = {"tiny": "htiny", "cta": "hcta", "blocked": "hblocked"}
+        gotd = [(sorted(stale_families(c, fhd)), freshness(c, fhd)) for c in dom]
+        if gotd != [(["blocked"], "partly_stale"), ([], "current")]:
+            bad.append(f"self-test: ledger_dominated_skip_is_partly_stale -> {gotd}")
         # --ledger refuses to overwrite a timed non-ledger table unless --replace-timed
         tabs = os.path.join(d, "tabs")
         os.makedirs(tabs)

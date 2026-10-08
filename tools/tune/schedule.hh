@@ -90,16 +90,6 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);
 
-// evidence: docs/design/tiered-tuning.md#engine-dominance-carry-forward
-inline constexpr double kDominanceRatio = 10.0;
-struct DominanceLoss {
-    std::string arm, winner;
-    CellKey key;
-    double bytes = 0;
-};
-std::vector<DominanceLoss> dominance_losses(const CellRecord& r, double bytes, double ratio = kDominanceRatio);
-bool beyond(const CellKey& small, double small_bytes, const CellKey& big, double big_bytes, const std::string& refine_key);
-
 // Refinement cells per lattice cell: this ledger's refined / round-0 records at `tier` (<= cap_factor), else cap_factor x 0.5.
 double refine_ratio_estimate(const Ledger& l, Tier tier, double cap_factor, bool* from_history = nullptr);
 

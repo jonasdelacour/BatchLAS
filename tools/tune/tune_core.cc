@@ -735,4 +735,16 @@ std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vect
     return fresh;
 }
 
+std::optional<std::string> query_with_backoff(const std::function<std::optional<std::string>()>& query, double wait_s,
+                                              const std::function<void(double)>& sleep_s, double first_s, double max_s) {
+    double waited = 0;
+    for (double step = first_s;; step = std::min(2 * step, max_s)) {
+        if (auto out = query()) return out;
+        if (waited >= wait_s) return std::nullopt;
+        const double d = std::min(step, wait_s - waited);
+        sleep_s(d);
+        waited += d;
+    }
+}
+
 }  // namespace batchlas::tune

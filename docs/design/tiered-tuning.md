@@ -154,7 +154,8 @@ potrf and trsm families they call.
 - A `cell` record is *current* when every candidate's hash matches the source tree. The hash of a
   candidate stored as `skipped` (it could not run at that cell) is not compared: an edit to its
   family cannot change the ranking, and a change to what can run goes through the hashed
-  `<op>.cc`.
+  `<op>.cc`. A candidate skipped with reason `dominated:<key>` was never tried there, so
+  its family is stale whatever its hash ("Engine: dominance carry-forward removed").
 - It is *partly stale* when only some changed, or when the candidate list gained a family the
   record never raced. The next run of any tier re-races just those
   candidates against the stored winner and runner-up, at the stored record's tier, and appends a
@@ -193,7 +194,7 @@ included: an eliminated candidate that fails verification is `bad` and is left o
 that passes carries the median of the reps it did time, which the table prints; one with no median
 is left out of its row. A record is *stale* when
 the winner's hash differs or its family is gone, *partly stale* when another candidate's hash
-differs (a `skipped` one's is not compared) or a current family was never timed; an empty ranking
+differs (a `skipped` one's is not compared, unless its reason is `dominated:`) or a current family was never timed; an empty ranking
 has no winner to go stale.
 
 Results merge by device key (sm_89, sm_120), and the host is recorded. A deep sm_89 run on one 4090
@@ -779,29 +780,37 @@ cells, and before this rule each of its timed rounds cost minutes.
 
 `--max-dim N` (default 2048 for tiered runs, 0 = off) is a maintainer rule: no cell is measured with a matrix dimension above N, whatever its bytes. `OpSpec::dims` returns the extents a cell allocates (default: every integer key but `batch`; geqrf overrides it because its `m` is derived from `form`, `n` and `aspect`), and `plan_round` plans a larger cell as `skip:dim` before the byte cap, so refinement never measures one either.
 
-## Engine: dominance carry-forward
+## Engine: dominance carry-forward removed
 
-An arm eliminated at more than 10x the winner's median (`kDominanceRatio`, `schedule.hh`) is not
-timed at cells *beyond* that cell in the same run, op and dtype. Beyond means: the same value of
-every non-integer key and of `batch`, and either larger along the op's `refine_key()` with every
-other key equal, or every other integer key at least as large with more `bytes()` (geqrf's
-`aspect`, ormqr's `k`). Batch never carries a loss: a one-work-group-per-matrix kernel that starves
-at small batch catches up at large batch. The arm is recorded `skipped`, reason
-`dominated:<key of the losing cell>`, and the progress stream gets
-`{"ev":"dominated",<op, dtype, key>,"cand":c,"winner":w,"at":"<key>"}`.
+Until 2026-10-08 an arm eliminated at more than 10x the winner's median was not timed at cells
+*beyond* that cell in the same run, op and dtype (larger along `refine_key()`, or every other
+integer key at least as large with more bytes), and was recorded `skipped`, reason
+`dominated:<key of the losing cell>`. It was removed after it fired thousands of times in the
+sm_120 deep run (`trsm cdouble vendor` 569 cells, `symm double vendor` 660; also gemm, syrk,
+syr2k, trmm, geqrf):
 
-The hold assumes the arm it lost to is still in the race. If that winner does not run at the new
-cell (`skipped`, `bad` or `error`), the cell is raced again with every arm. Without this, syev's
-vendor, 10x behind `cta` at n <= 32, would never be timed above 32, where `cta` cannot run and the
-vendor may win. Holds live in memory for one run only, and the ledger's `skipped` status keeps the
-arm's hash out of the staleness check, like any arm that could not run.
+- It assumed an arm that loses by 10x keeps losing as the cell grows. That is false at a
+  vendor/native crossover: the vendor arm loses on launch overhead at small sizes and wins at large
+  ones, which is exactly the edge the tables must place.
+- "Beyond" crossed lines: a loss at one `aspect` or other key carried to cells with a different
+  one, where the ranking need not be related.
+- Its motivation, a geqrf vendor call of many minutes on a float tall n=1024 aspect=256 cell, is gone
+  with the matrix-dimension cap above.
 
-The case it exists for is geqrf: a float tall n=1024 aspect=256 cell (m = 262144, batch 2) hit the
-1800 s worker timeout in a preview run. Where a smaller neighbour along n or aspect has already
-lost to the vendor arm by more than 10x, the large cell does not time it. The worker takes each
-GPU's share of a round in ascending per-item footprint, so on one GPU the smaller cell runs first;
-across GPUs, or a smaller cell measured in a later round, the hold applies only from the next cell
-on.
+What stays is the in-race gross-loser rule (ratio > 4 after one round), which only uses data from
+the same cell. A ledger record that still holds a `dominated:` skip is *partly stale*: the skipped
+arm's family counts as stale whatever its hash, so the next run re-races exactly those arms against
+the stored winner and runner-up at the stored tier and writes a merged record (`stale_candidates`,
+`ledger.cc`, and `stale_families` in `sweep_to_table.py`; shared fixture
+`tests/data/ledger_dominated`).
+
+## Engine: guard retries a failed nvidia-smi query
+
+The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer reset
+GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed guard query
+(`--query-compute-apps` or the utilization sample) is now retried after 5 s, doubling to 60 s,
+until `--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry;
+only then does the run stop (`query_with_backoff`, `tune_core.hh`).
 
 ## Engine: repeat crashers are dropped
 

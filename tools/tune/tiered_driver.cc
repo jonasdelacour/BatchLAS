@@ -139,7 +139,6 @@ struct Job {
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
-    std::vector<DominanceLoss> losses;   // this run's > kDominanceRatio losses
     PlanSpec plan_spec() const {
         return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); },
                 [s = spec, d = dtype](const CellKey& k) {
@@ -304,44 +303,12 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const double bytes = j.spec->bytes(j.dtype, c.key);
     CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(bytes, c.key)};
     bool worker = false;
-    std::vector<DominanceLoss> held;  // arms not timed here: they lost by > kDominanceRatio below
     {
         std::lock_guard<std::mutex> lock(mu_);
         job.arms = seed_order(j.mine, c.key, c.arms);
         worker = m_->persistent() && !j.fresh;
-        for (const std::string& a : job.arms)
-            for (const DominanceLoss& l : j.losses)
-                if (l.arm == a && std::find(job.arms.begin(), job.arms.end(), l.winner) != job.arms.end() &&
-                    beyond(l.key, l.bytes, c.key, bytes, j.spec->refine_key())) {
-                    held.push_back(l);
-                    break;
-                }
     }
-    std::vector<std::string> timed;
-    for (const std::string& a : job.arms)
-        if (std::none_of(held.begin(), held.end(), [&](const DominanceLoss& l) { return l.arm == a; })) timed.push_back(a);
-    if (timed.empty()) held.clear(), timed = job.arms;
-    const std::vector<std::string> all_arms = std::exchange(job.arms, timed);
     ArmBatch b = worker ? m_->measure(job) : m_->measure_fresh(job);
-    // A hold stands only while the arm it lost to ran here; otherwise the cell is raced in full.
-    auto ran = [&](const std::string& w) {
-        return std::any_of(b.arms.begin(), b.arms.end(),
-                           [&](const ArmOutcome& x) { return x.arm == w && (x.status == "ok" || x.status == "eliminated"); });
-    };
-    if (std::any_of(held.begin(), held.end(), [&](const DominanceLoss& l) { return !ran(l.winner); })) {
-        std::printf("[gpu%d] %s %s %s: a dominating arm did not run, racing every arm\n", gpu, op.c_str(), j.dtype.c_str(),
-                    key_text(c.key).c_str());
-        held.clear();
-        job.arms = all_arms;
-        b = worker ? m_->measure(job) : m_->measure_fresh(job);
-    }
-    for (const DominanceLoss& l : held) {
-        b.arms.push_back({l.arm, "skipped", "dominated:" + key_arg(l.key), {}, {}, 0, 0});
-        std::printf("[gpu%d] %s %s %s: %s not timed, dominated by %s at %s\n", gpu, op.c_str(), j.dtype.c_str(),
-                    key_text(c.key).c_str(), l.arm.c_str(), l.winner.c_str(), key_text(l.key).c_str());
-        emit(Json().str("ev", "dominated").str("op", op).str("dtype", j.dtype).key(c.key).str("cand", l.arm)
-                 .str("winner", l.winner).str("at", key_arg(l.key)));
-    }
     if (b.worker_restarts > 0)
         emit(Json().str("ev", "worker_restart").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
                  .integer("restarts", b.worker_restarts).boolean("fallback", b.fallback));
@@ -354,8 +321,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
             b.arms.push_back({a, "error", "child: " + b.error, {}, {}, 0, 0});
     // A child failure with no definitive arm is not a result: no record, so the next run measures the cell.
     if (!b.error.empty() && std::none_of(b.arms.begin(), b.arms.end(), [](const ArmOutcome& a) {
-            return a.status == "ok" || a.status == "eliminated" || a.status == "bad" ||
-                   (a.status == "skipped" && a.reason.rfind("dominated:", 0) != 0);
+            return a.status == "ok" || a.status == "eliminated" || a.status == "bad" || a.status == "skipped";
         })) {
         std::printf("[gpu%d] %s %s %s r%d ERROR %s (not recorded)\n", gpu, op.c_str(), j.dtype.c_str(),
                     key_text(c.key).c_str(), round, b.error.c_str());
@@ -370,8 +336,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
         auto& live = j.runnable[c.key];
         live.clear();
         for (const ArmOutcome& a : b.arms)
-            if (a.status != "skipped" || a.reason.rfind("dominated:", 0) == 0) live.push_back(a.arm);
-        for (DominanceLoss& l : dominance_losses(r, bytes)) j.losses.push_back(std::move(l));
+            if (a.status != "skipped") live.push_back(a.arm);
     }
     record(j, r, c.tier);
     std::string summary;

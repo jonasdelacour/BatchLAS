@@ -134,7 +134,7 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 - **Per cell** (`plan_round`): a dimension over `--max-dim` is `skip:dim` (checked first, `OpSpec::dims`); over `--cap-gib` is `skip:cap`; a current record at the same or a
   higher tier is `skip:current`; a partly stale one at the same or a higher tier re-races only
   the changed or added families (a candidate stored `skipped`, which could not run there, is not
-  compared; the spec's `// common` deps line puts `<op>.cc`, where `can_run` lives, in every family)
+  compared, but one skipped `dominated:` by the removed carry-forward is stale; the spec's `// common` deps line puts `<op>.cc`, where `can_run` lives, in every family)
   plus its stored winner and runner-up, at the stored record's
   tier, and appends the merged record (`partial:<families>`; re-raced candidates ranked by their
   new times, the unchanged ones below them in stored order). A stale record, or one where every
@@ -155,12 +155,11 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
 - **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`)
   pin that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of
   timing Auto under the vendor's name.
-- **Dominance carry-forward.** An arm eliminated at more than 10x the winner's median is not timed,
-  for the rest of the run, at cells of the same op and dtype beyond that cell: equal non-integer
-  keys and batch, and larger along `refine_key()` (all else equal) or every other integer key >= with
-  more bytes. It is recorded `skipped`, reason `dominated:<key>`. If the arm it lost to does not run
-  at the new cell, the cell is raced again with every arm
-  (docs/design/tiered-tuning.md, "Engine: dominance carry-forward").
+- **No dominance carry-forward.** Every arm is timed at every cell. The removed rule (an arm
+  eliminated at > 10x not timed at larger cells) skipped arms at vendor/native crossovers; a
+  ledger record still holding a `dominated:<key>` skip is partly stale, and the next run re-races
+  those arms against the stored winner and runner-up
+  (docs/design/tiered-tuning.md, "Engine: dominance carry-forward removed").
 - **Worker.** Each GPU gets one `batchlas_tune_impl --worker` (3 s clock warm-up kernel at start),
   fed its share of a round in ascending per-item footprint (bytes / batch) and restarted before a
   cell smaller than one it has run. Between cells the guard checks for foreign compute processes
@@ -197,7 +196,6 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
   `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
-  `{"ev":"dominated",<op, dtype, key fields>,"cand":c,"winner":w,"at":"<key of the losing cell>"}`,
   `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
   `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`, `{"ev":"done"}`.
 

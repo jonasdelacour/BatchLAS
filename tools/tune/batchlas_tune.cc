@@ -465,14 +465,28 @@ private:
     void convert(const std::string& jsonl);
 };
 
+// A failed nvidia-smi query (a GPU reset elsewhere in the box) retries with backoff for --guard-wait.
+std::optional<std::string> retried(int gpu, const std::string& what, double wait_s,
+                                   const std::function<std::optional<std::string>()>& query) {
+    return query_with_backoff(query, wait_s, [&](double s) {
+        std::fprintf(stderr, "batchlas_tune: nvidia-smi %s failed on GPU %d; retrying in %.0f s\n", what.c_str(), gpu, s);
+        std::this_thread::sleep_for(std::chrono::duration<double>(s));
+    });
+}
+
 AppScan Driver::apps(int gpu) {
     const std::string id = "nvidia-smi --id=" + std::to_string(gpu);
-    std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
-    const auto rc = out.rfind("rc=");
-    if (rc == std::string::npos || out.substr(rc) != "rc=0")
-        die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi (--no-guard measures without the guard)");
-    out.resize(rc);
-    AppScan scan = scan_compute_apps(out, long(::getpid()));
+    const auto got = retried(gpu, "--query-compute-apps", o_.guard_wait, [&]() -> std::optional<std::string> {
+        std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
+        const auto rc = out.rfind("rc=");
+        if (rc == std::string::npos || out.substr(rc) != "rc=0") return std::nullopt;
+        out.resize(rc);
+        return out;
+    });
+    if (!got)
+        die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi after " + fmt(o_.guard_wait, "%.0f") +
+            " s of retries (--no-guard measures without the guard)");
+    AppScan scan = scan_compute_apps(*got, long(::getpid()));
     if (scan.self) die("the driver holds a CUDA context on GPU " + std::to_string(gpu) + ": start it via the launcher");
     const std::string w = std::to_string(worker_pid(gpu));
     scan.foreign.erase(std::remove(scan.foreign.begin(), scan.foreign.end(), w), scan.foreign.end());
@@ -480,11 +494,17 @@ AppScan Driver::apps(int gpu) {
 }
 
 double Driver::utilization(int gpu) {
-    const std::string util = capture("nvidia-smi --id=" + std::to_string(gpu) +
-                                     " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
-    if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos)
-        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "'); --no-guard skips the guard");
-    return std::stod(util);
+    std::string util;
+    const auto got = retried(gpu, "--query-gpu=utilization.gpu", o_.guard_wait, [&]() -> std::optional<std::string> {
+        util = capture("nvidia-smi --id=" + std::to_string(gpu) +
+                       " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
+        if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+        return util;
+    });
+    if (!got)
+        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "') after " + fmt(o_.guard_wait, "%.0f") +
+            " s of retries; --no-guard skips the guard");
+    return std::stod(*got);
 }
 
 // The foreign pids this child runs beside (always empty in strict mode).

@@ -233,6 +233,11 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
     for (const CandResult& c : r.cands) {
         const std::string fam = family_of(c.cand);
         seen.insert(fam);
+        // A dominated skip was never tried there (removed carry-forward): stale, re-raced.
+        if (c.status == "skipped" && c.reason.rfind("dominated:", 0) == 0) {
+            out.insert(fam);
+            continue;
+        }
         if (c.status == "skipped") continue;  // could not run there: its hash cannot change the ranking
         const auto it = family_hash.find(fam);
         if (it == family_hash.end() || it->second != c.hash) out.insert(fam);
