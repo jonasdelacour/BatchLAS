@@ -80,6 +80,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(MatrixFormat v) {
         switch (v) {
             case MatrixFormat::Dense:       return "Dense";
@@ -119,6 +120,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Backend v) {
         switch (v) {
             case Backend::AUTO:   return "AUTO";
@@ -147,6 +149,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(BackendLibrary v) {
         switch (v) {
             case BackendLibrary::CUBLAS:    return "CUBLAS";
@@ -171,6 +174,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Transpose v) {
         switch (v) {
             case Transpose::NoTrans:   return "NoTrans";
@@ -187,6 +191,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(JobType v) {
         switch (v) {
             case JobType::EigenVectors:   return "EigenVectors";
@@ -218,6 +223,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SvdVectors v) {
         switch (v) {
             case SvdVectors::None: return "None";
@@ -232,6 +238,7 @@ namespace batchlas {
     /// @param m    rows of the input
     /// @param k    min(m, n)
     /// @return m for All, k for Thin, 0 for None (nothing is written)
+    /// @ingroup api_enums_lowlevel
     inline constexpr int64_t svd_u_cols(SvdVectors job, int64_t m, int64_t k) {
         return job == SvdVectors::All ? m : (job == SvdVectors::Thin ? k : 0);
     }
@@ -241,6 +248,7 @@ namespace batchlas {
     /// @param n    columns of the input
     /// @param k    min(m, n)
     /// @return n for All, k for Thin, 0 for None (nothing is written)
+    /// @ingroup api_enums_lowlevel
     inline constexpr int64_t svd_vh_rows(SvdVectors job, int64_t n, int64_t k) {
         return job == SvdVectors::All ? n : (job == SvdVectors::Thin ? k : 0);
     }
@@ -256,6 +264,7 @@ namespace batchlas {
     /// @trap Call once per entry point and pass the result on: a `*_buffer_size` and
     ///       its run path must canonicalise identically, or the workspace is sized
     ///       for a different computation than the one performed.
+    /// @ingroup api_enums_lowlevel
     inline constexpr SvdVectors canonical_jobu(SvdVectors job, int64_t m, int64_t k) {
         return (job == SvdVectors::Thin && k == m) ? SvdVectors::All : job;
     }
@@ -266,6 +275,7 @@ namespace batchlas {
     /// @param k    min(m, n)
     /// @return All if @p job is Thin and k == n, otherwise @p job
     /// @see canonical_jobu() for the calling rule.
+    /// @ingroup api_enums_lowlevel
     inline constexpr SvdVectors canonical_jobvh(SvdVectors job, int64_t n, int64_t k) {
         return (job == SvdVectors::Thin && k == n) ? SvdVectors::All : job;
     }
@@ -279,6 +289,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Uplo v) {
         switch (v) {
             case Uplo::Upper: return "Upper";
@@ -294,6 +305,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Diag v) {
         switch (v) {
             case Diag::NonUnit: return "NonUnit";
@@ -309,6 +321,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Side v) {
         switch (v) {
             case Side::Left:  return "Left";
@@ -324,6 +337,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SortOrder v) {
         switch (v) {
             case SortOrder::Ascending:  return "Ascending";
@@ -339,6 +353,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(ApplyOrder v) {
         switch (v) {
             case ApplyOrder::Forward:  return "Forward";
@@ -373,6 +388,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxAlgorithm v) {
         switch (v) {
             case SyevxAlgorithm::Auto:          return "Auto";
@@ -401,6 +417,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxSelect v) {
         switch (v) {
             case SyevxSelect::Extremal: return "Extremal";
@@ -419,6 +436,7 @@ namespace batchlas {
     /// otherwise `None`. Unlike SyevxAlgorithm, **the environment variable only
     /// supplies the default** and never overrides an explicit request.
     ///
+    /// @ingroup api_enums_lowlevel
     /// The two Jacobi forms are different operators. `Jacobi` approximates A^{-1},
     /// so, like ILU(k), it is valid only for the smallest eigenpairs and
     /// `find_largest` is rejected with it; on a batch item whose diagonal is not
@@ -436,6 +454,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(SyevxPreconditioner v) {
         switch (v) {
             case SyevxPreconditioner::Auto:          return "Auto";
@@ -460,6 +479,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(OrthoAlgorithm v) {
         switch (v) {
             case OrthoAlgorithm::Chol2:          return "Chol2";
@@ -491,6 +511,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(ComputePrecision v) {
         switch (v) {
             case ComputePrecision::Default: return "Default";
@@ -510,6 +531,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(VectorOrientation v) {
         switch (v) {
             case VectorOrientation::Row:    return "Row";
@@ -528,6 +550,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(NormType v) {
         switch (v) {
             case NormType::Frobenius: return "Frobenius";
@@ -549,6 +572,7 @@ namespace batchlas {
     };
 
     /// @brief Spelling of @p v as in source.
+    /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Layout v) {
         switch (v) {
             case Layout::RowMajor: return "RowMajor";
@@ -563,6 +587,7 @@ namespace batchlas {
     /// @param os     output stream
     /// @param value  enumerator to print
     /// @return @p os
+    /// @ingroup api_enums_lowlevel
     // Templated on the stream so this header needs only <iosfwd>; it is pulled into device code.
     // Constrained on to_string so an enum without a printer gets no operator<< rather than a broken one.
     template <typename CharT, typename Traits, typename E>

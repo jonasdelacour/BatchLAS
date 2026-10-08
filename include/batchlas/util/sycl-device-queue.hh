@@ -61,7 +61,7 @@ enum class Vendor
 
 // to_string() must share the enums' namespace or ADL will not find it.
 /// @brief Name of a Policy value.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(Policy v) {
     switch (v) {
         case Policy::SYNC: return "SYNC";
@@ -71,7 +71,7 @@ inline constexpr std::string_view to_string(Policy v) {
 }
 
 /// @brief Name of a DeviceType value.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(DeviceType v) {
     switch (v) {
         case DeviceType::CPU: return "CPU";
@@ -84,7 +84,7 @@ inline constexpr std::string_view to_string(DeviceType v) {
 }
 
 /// @brief Name of a Vendor value.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 inline constexpr std::string_view to_string(Vendor v) {
     switch (v) {
         case Vendor::AMD: return "AMD";
@@ -99,21 +99,21 @@ inline constexpr std::string_view to_string(Vendor v) {
 // One overload per enum, NOT a constrained template: the concrete parameter is what wins partial
 // ordering against the enum-streaming template in blas/enums.hh; a template here would tie.
 /// @brief Stream a Policy by name.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
     return os << to_string(value);
 }
 
 /// @brief Stream a DeviceType by name.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, DeviceType value) {
     return os << to_string(value);
 }
 
 /// @brief Stream a Vendor by name.
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Vendor value) {
     return os << to_string(value);
@@ -122,7 +122,7 @@ std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>&
 /// @brief Classify a SYCL vendor string (case-insensitive substring match).
 /// @param v the vendor string, e.g. from `sycl::info::device::vendor`
 /// @return the matching Vendor, or Vendor::OTHER
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 inline Vendor str_to_vendor(std::string&& v) {
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v.find("amd") != std::string::npos || v.find("advanced micro devices") != std::string::npos) {
@@ -159,7 +159,7 @@ enum class DeviceProperty
 
 /// @brief True for consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121).
 /// @param cuda_cc a value of Device::cuda_compute_capability()
-/// @ingroup api_core
+/// @ingroup api_core_lowlevel
 // evidence: docs/perf/blackwell.md
 constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
 

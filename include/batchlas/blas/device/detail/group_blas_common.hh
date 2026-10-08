@@ -52,6 +52,7 @@ struct DeviceBlasLaunchInfo {
 
 /// @brief Launch description for a call that receives a `sycl::group`.
 /// @param local_size  work-items in the executor; clamped to at least 1
+/// @ingroup api_device_blas_lowlevel
 inline constexpr DeviceBlasLaunchInfo make_group_launch_info(int local_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), 1, DeviceBlasLaunchKind::Group};
 }
@@ -59,6 +60,7 @@ inline constexpr DeviceBlasLaunchInfo make_group_launch_info(int local_size) {
 /// @brief Launch description for a call that receives a `sycl::nd_item<1>`.
 /// @param local_size     work-group size; clamped to at least 1
 /// @param subgroup_size  sub-group size the kernel runs with; clamped to at least 1
+/// @ingroup api_device_blas_lowlevel
 inline constexpr DeviceBlasLaunchInfo make_nd_item_1d_launch_info(int local_size, int subgroup_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem1D};
 }
@@ -66,6 +68,7 @@ inline constexpr DeviceBlasLaunchInfo make_nd_item_1d_launch_info(int local_size
 /// @brief Launch description for a call that receives a `sycl::nd_item<3>` (tiled output).
 /// @param local_size     work-group size; the register-tiled paths require 256
 /// @param subgroup_size  sub-group size the kernel runs with; clamped to at least 1
+/// @ingroup api_device_blas_lowlevel
 inline constexpr DeviceBlasLaunchInfo make_nd_item_3d_launch_info(int local_size, int subgroup_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem3D};
 }
@@ -179,6 +182,7 @@ struct SymmetricRankKTransform {
 /// @param y      output vector
 /// @param alpha  scale of the product
 /// @param beta   scale of the input `y`
+/// @ingroup api_device_blas_lowlevel
 template <typename T>
 inline constexpr MatrixVectorOperand<T> make_matvec_operand(const VectorView<T>& x,
                                                             const VectorView<T>& y,
@@ -192,6 +196,7 @@ inline constexpr MatrixVectorOperand<T> make_matvec_operand(const VectorView<T>&
 /// @param c      output matrix
 /// @param alpha  scale of the product
 /// @param beta   scale of the input `C`
+/// @ingroup api_device_blas_lowlevel
 template <typename T>
 inline constexpr MatrixMatrixOperand<T> make_matmat_operand(const KernelMatrixView<T, MatrixFormat::Dense>& b,
                                                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
@@ -204,6 +209,7 @@ inline constexpr MatrixMatrixOperand<T> make_matmat_operand(const KernelMatrixVi
 /// @param c      square output matrix
 /// @param alpha  scale of the product
 /// @param beta   scale of the input `C`
+/// @ingroup api_device_blas_lowlevel
 template <typename T>
 inline constexpr RankKOperand<T> make_rankk_operand(const KernelMatrixView<T, MatrixFormat::Dense>& c,
                                                     T alpha = T(1),
@@ -215,6 +221,7 @@ inline constexpr RankKOperand<T> make_rankk_operand(const KernelMatrixView<T, Ma
 /// @param y      right vector
 /// @param a      matrix updated in place
 /// @param alpha  scale of the outer product
+/// @ingroup api_device_blas_lowlevel
 template <typename T>
 inline constexpr Rank1UpdateOperand<T> make_rank1_update_operand(const VectorView<T>& y,
                                                                  const KernelMatrixView<T, MatrixFormat::Dense>& a,

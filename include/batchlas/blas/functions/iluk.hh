@@ -128,7 +128,7 @@ struct ILUKPreconditioner {
 /// host and reads `M.lu`'s row offsets and column indices.
 /// @param M  factor whose `lu`, `n` are set; its schedule fields are overwritten
 /// @throws batchlas::invalid_argument if `M.n <= 0`
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <typename T>
 BATCHLAS_API void iluk_build_level_schedule(ILUKPreconditioner<T>& M);
 
@@ -164,7 +164,7 @@ BATCHLAS_API ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
 /// @return required workspace size in bytes
 /// @throws batchlas::invalid_argument for a non-square `A`, out-of-range params,
 ///         or `validate_batch_sparsity == false` with a batch of more than one
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t iluk_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::CSR>& A,
@@ -228,7 +228,7 @@ Event iluk_apply(Queue& ctx,
 }
 
 /// @brief Bytes of workspace iluk_apply needs; currently always 0.
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t iluk_apply_buffer_size(Queue& ctx,
                                            const ILUKView<T>& M,
@@ -236,7 +236,7 @@ BATCHLAS_API size_t iluk_apply_buffer_size(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& out);
 
 /// @brief iluk_apply_buffer_size on an owning factor; forwards `M.view()`.
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <Backend B, typename T>
 size_t iluk_apply_buffer_size(Queue& ctx,
                               const ILUKPreconditioner<T>& M,

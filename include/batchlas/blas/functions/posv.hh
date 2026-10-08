@@ -42,7 +42,7 @@ using posv_buffer_size = size_t(Queue&,
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()`, equal batch
 /// sizes and a valid @p uplo.
 /// @throws batchlas::invalid_argument if any check fails
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // Stricter than potrf's validator on purpose: with no vendor arm, a
 // non-conforming pair would otherwise surface as a misleading "no route" error.
 template <typename T>
@@ -112,7 +112,7 @@ BATCHLAS_API Event posv(Queue& ctx,
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the operands
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend Back, typename T>
 BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,

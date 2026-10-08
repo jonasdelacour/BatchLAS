@@ -50,7 +50,7 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 /// refuses a non-square view, which sends it to the vendor rather than rejecting
 /// it (in a vendor-free build: batchlas::NoRouteError).
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
 // Deliberately no squareness or pivots-length check; adding either is a
 // user-visible behaviour change.
@@ -126,7 +126,7 @@ inline Event getrf(Queue& ctx,
 /// @param ctx  queue the factorization will run on (kernel selection reads its device)
 /// @param A    batch of n x n matrices to be factorized
 /// @return bytes to pass as the `work_space` span of getrf()
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A);

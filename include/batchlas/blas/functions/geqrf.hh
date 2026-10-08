@@ -47,7 +47,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 /// Checks only non-negative extents. Rectangular A of either orientation is
 /// valid; the length of @p tau is checked by the option overloads.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup api_qr
+/// @ingroup api_qr_lowlevel
 // Runs in src/ops/geqrf/geqrf.cc before the selection key reads A.rows()/A.cols().
 // Deliberately no squareness check (rectangular A is the point of geqrf), no
 // m >= n check (can_run sends a wide view to the vendor, which serves it) and no
@@ -93,7 +93,7 @@ BATCHLAS_API Event geqrf(Queue& ctx,
                          Span<std::byte> work_space);
 
 /// @brief Workspace, in bytes, that geqrf() needs for this shape on this queue.
-/// @ingroup api_qr
+/// @ingroup api_qr_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
                                       const MatrixView<T,MatrixFormat::Dense>& A,

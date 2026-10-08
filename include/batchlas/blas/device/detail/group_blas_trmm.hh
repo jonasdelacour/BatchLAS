@@ -401,6 +401,7 @@ inline constexpr void trmm(const Group& group,
 /// @param col_extent  columns of `C`
 /// @param aliased     `B` and `C` overlap; the call then takes no staged path, so this returns 0
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -419,6 +420,7 @@ inline constexpr std::size_t trmm_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param col_extent columns of `C`
 /// @param aliased `B` and `C` overlap; the call then takes no staged path, so this returns 0
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Side SideV = Side::Left,

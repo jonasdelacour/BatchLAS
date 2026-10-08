@@ -180,14 +180,14 @@ namespace batchlas {
                          OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
                          size_t iterations = 2);
 
-    /** @brief Required workspace, in bytes, for ortho(); arguments as for the call itself. */
+    /** @brief Required workspace, in bytes, for ortho(); arguments as for the call itself. @ingroup api_qr_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Transpose transA,
                          OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
-    /** @brief Required workspace, in bytes, for the external-basis ortho(); same arguments. */
+    /** @brief Required workspace, in bytes, for the external-basis ortho(); same arguments. @ingroup api_qr_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -305,6 +305,7 @@ namespace batchlas {
      * @brief Required workspace, in bytes, for syevx(); arguments as for the call minus
      *        the workspace. Unlike the solve, this accepts `SyevxSelect::Value`: sizing
      *        writes no counts.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t syevx_buffer_size(Queue& ctx,
@@ -315,7 +316,7 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
                              const SyevxParams<T>& params = SyevxParams<T>());
 
-    /** @brief syevx_buffer_size() on an owning `A` without eigenvectors. */
+    /** @brief syevx_buffer_size() on an owning `A` without eigenvectors. @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline size_t syevx_buffer_size(Queue& ctx,
                 const Matrix<T, MFormat>& A,
@@ -329,6 +330,7 @@ namespace batchlas {
     /**
      * @brief syevx_buffer_size() with the solve's `m` argument, which is ACCEPTED AND
      *        IGNORED, so a value-range caller writes sizing and solve with one argument list.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline size_t syevx_buffer_size(Queue& ctx,
@@ -343,7 +345,7 @@ namespace batchlas {
         return syevx_buffer_size<B,T,MFormat>(ctx, A, W, neigs, jobz, V, params);
     }
 
-    /** @brief The `m`-taking syevx_buffer_size() on an owning `A`; `m` is ignored. */
+    /** @brief The `m`-taking syevx_buffer_size() on an owning `A`; `m` is ignored. @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline size_t syevx_buffer_size(Queue& ctx,
                 const Matrix<T, MFormat>& A,
@@ -384,6 +386,7 @@ namespace batchlas {
      * @param il,iu       SyevxParams::il / iu (Index only; iu < 0 means n-1)
      * @param order       SyevxParams::order (Index and Value only)
      * @return the normalised request
+     * @ingroup api_eigen_lowlevel
      */
     BATCHLAS_API SyevxResolvedRange syevx_resolve_range(int64_t n,
                                                         size_t neigs,
@@ -395,6 +398,7 @@ namespace batchlas {
 
     /// @brief syevx_resolve_range() reading the range fields from `params`; distinguished
     ///        from the 7-argument form by arity.
+    /// @ingroup api_eigen_lowlevel
     template <typename T>
     inline SyevxResolvedRange syevx_resolve_range(int64_t n,
                                                   size_t neigs,
@@ -422,6 +426,7 @@ namespace batchlas {
      *         `method`, with a non-extremal range. The same request made through
      *         `BATCHLAS_SYEVX_ALGORITHM` degrades to `Direct` with a one-time warning.
      * @see @ref perf_syevx for the measured thresholds behind the choice
+     * @ingroup api_eigen_lowlevel
      */
     BATCHLAS_API SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                                                        int64_t n,
@@ -441,6 +446,7 @@ namespace batchlas {
      * @param find_largest An environment default of `Jacobi` degrades to `None` when this
      *        is true; an explicit request is returned as is (syevx() rejects it earlier).
      * @return the preconditioner family syevx() will build or use
+     * @ingroup api_eigen_lowlevel
      */
     SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
                                                     bool iluk_configured,
@@ -458,6 +464,7 @@ namespace batchlas {
      *        `m[b] > neigs` is the truncation signal; the LOWEST `neigs` are kept.
      *
      * Other parameters as for syevx().
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API Event syevx_direct(Queue& ctx,
@@ -474,6 +481,7 @@ namespace batchlas {
     /**
      * @brief `syevx_direct` without the `m` output; `Extremal` and `Index` only.
      *        Distinguished from the form above by ARITY, so no `{}` trap can fire.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx_direct(Queue& ctx,
@@ -492,6 +500,7 @@ namespace batchlas {
     /**
      * @brief Required workspace, in bytes, for syevx_direct(). Takes no `m`: sizing writes
      *        no counts, and this path's workspace is range-independent.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t syevx_direct_buffer_size(Queue& ctx,
@@ -517,6 +526,7 @@ namespace batchlas {
      * @throws batchlas::invalid_argument for `neigs == 0`, an out-of-range index block,
      *         `vl >= vu`, a too-short `m`, or an out-of-order Queue
      * @see syevx_direct_subset_supported()
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API Event syevx_direct_subset(Queue& ctx,
@@ -530,7 +540,7 @@ namespace batchlas {
                              const SyevxParams<T>& params,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief `syevx_direct_subset` without the `m` output; arity-disambiguated as above. */
+    /** @brief `syevx_direct_subset` without the `m` output; arity-disambiguated as above. @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx_direct_subset(Queue& ctx,
                 const MatrixView<T, MFormat>& A,
@@ -550,6 +560,7 @@ namespace batchlas {
      *
      * Sizing writes no counts, but it is NOT range-independent: a `Value` range needs
      * room for up to n eigenvalues per item, so the sizes come from syevx_resolve_range().
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t syevx_direct_subset_buffer_size(Queue& ctx,
@@ -560,7 +571,7 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& V,
                              const SyevxParams<T>& params);
 
-    /** @brief Whether `syevx_direct_subset` supports this scalar type and format. */
+    /** @brief Whether `syevx_direct_subset` supports this scalar type and format. @ingroup api_eigen_lowlevel */
     template <typename T, MatrixFormat MFormat>
     inline constexpr bool syevx_direct_subset_supported() {
         return MFormat == MatrixFormat::Dense && std::is_same_v<T, typename base_type<T>::type>;
@@ -573,6 +584,7 @@ namespace batchlas {
      * Iterates a block of `neigs` (+ SyevxParams::extra_directions) vectors until the
      * residuals meet the tolerances or SyevxParams::iterations is reached; optionally
      * preconditioned by ILU(k) for the smallest eigenpairs. Parameters as for syevx().
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API Event syevx_lobpcg(Queue& ctx,
@@ -585,7 +597,7 @@ namespace batchlas {
                              const SyevxParams<T>& params,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syevx_lobpcg(). */
+    /** @brief Required workspace, in bytes, for syevx_lobpcg(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t syevx_lobpcg_buffer_size(Queue& ctx,
                              const MatrixView<T, MFormat>& A,
@@ -602,6 +614,7 @@ namespace batchlas {
      *
      * The polynomial degree is SyevxParams::filter_degree (0 picks a default).
      * Parameters as for syevx().
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API Event syevx_filtered(Queue& ctx,
@@ -614,7 +627,7 @@ namespace batchlas {
                              const SyevxParams<T>& params,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syevx_filtered(). */
+    /** @brief Required workspace, in bytes, for syevx_filtered(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t syevx_filtered_buffer_size(Queue& ctx,
                              const MatrixView<T, MFormat>& A,
@@ -660,7 +673,7 @@ namespace batchlas {
         return lanczos<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
     }
 
-    /** @brief Required workspace, in bytes, for lanczos(); arguments as for the call itself. */
+    /** @brief Required workspace, in bytes, for lanczos(); arguments as for the call itself. @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t lanczos_buffer_size(Queue& ctx,
                      const MatrixView<T, MFormat>& A,
@@ -707,7 +720,7 @@ namespace batchlas {
                      size_t n,
                      size_t batch_size);
 
-    /** @brief Required workspace, in bytes, for tridiagonal_solver(). */
+    /** @brief Required workspace, in bytes, for tridiagonal_solver(). @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
 
@@ -715,6 +728,7 @@ namespace batchlas {
      * @brief One or more implicit Francis QR sweeps over a batch of tridiagonals (d, e).
      * @warning Declared only: the library defines and instantiates no `francis_sweep`, so a
      *          call fails at link time.
+     * @ingroup api_tridiag_lowlevel
      */
     template <typename T>
     BATCHLAS_API Event francis_sweep(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1, T zero_threshold = std::numeric_limits<T>::epsilon());
@@ -777,6 +791,7 @@ namespace batchlas {
      *
      * @trap `params` is REQUIRED, not defaulted: it is the only argument carrying `T`, and
      *       defaulting it silently drops the queue-deducing overload. Pass `StebzParams<T>{}`.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API size_t stebz_buffer_size(Queue& ctx,
@@ -861,6 +876,7 @@ namespace batchlas {
      * Sizes on the capacity `k`, so the `counts` overload needs no sizing entry of its own.
      * @trap `params` is REQUIRED, as for stebz_buffer_size(): it is the only argument
      *       carrying `T`.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API size_t stein_buffer_size(Queue& ctx,
@@ -958,6 +974,7 @@ namespace batchlas {
      * @throws batchlas::invalid_argument unless 1 <= n <= 32
      * @throws batchlas::convergence_error if `BATCHLAS_STEQR_CTA_CHECK` is set and an item
      *         ran out of sweeps (the check waits on the queue; unset, nothing is thrown)
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event steqr_cta(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
@@ -967,12 +984,12 @@ namespace batchlas {
                                  const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>(),
                                  Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for steqr(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for steqr(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <typename T>
     BATCHLAS_API size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                                          const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
 
-    /** @brief Required workspace, in bytes, for steqr_cta(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for steqr_cta(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <typename T>
     BATCHLAS_API size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                                               const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
@@ -998,6 +1015,7 @@ namespace batchlas {
      * @brief CTA-optimized symmetric tridiagonal reduction (SYTD2-style), n <= 32.
      *        Overwrites A with the tridiagonal and reflector storage and returns (d,e)
      *        plus reflector scalars in tau. `ws` is unused, kept for API compatibility.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event sytrd_cta(Queue& ctx,
@@ -1019,6 +1037,7 @@ namespace batchlas {
      * @param wg_hint work-group size hint; 0 lets the implementation choose
      * @param fuse_trailing_update fold the panel's share of the trailing update into the
      *        kernel
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
@@ -1040,6 +1059,7 @@ namespace batchlas {
      *  - tau_panel = TAU(Slice(j0, j0 + ib))
      *  - w_panel = Wmat({j0, SliceEnd()}, {0, ib})
      * e_panel/tau_panel size must match w_panel.cols().
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
@@ -1065,7 +1085,7 @@ namespace batchlas {
                                      const Span<std::byte>& ws,
                                      int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
 
-    /** @brief Required workspace, in bytes, for sytrd_blocked(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for sytrd_blocked(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_blocked_buffer_size(Queue& ctx,
                                                   const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1083,6 +1103,7 @@ namespace batchlas {
      * Band storage (AB), shape (kd+1) x n:
      *  - `Uplo::Lower`: AB(1+i-j,j) = A(i,j) for j<=i<=min(n,j+kd).
      *  - `Uplo::Upper`: AB(kd+1+i-j,j) = A(i,j) for max(1,j-kd)<=i<=j.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event sytrd_sy2sb(Queue& ctx,
@@ -1093,7 +1114,7 @@ namespace batchlas {
                                    int32_t kd,
                                    const Span<std::byte>& ws);
 
-    /** @brief Required workspace, in bytes, for sytrd_sy2sb(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for sytrd_sy2sb(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_sy2sb_buffer_size(Queue& ctx,
                                                 const MatrixView<T, MatrixFormat::Dense>& a_in,
@@ -1108,6 +1129,7 @@ namespace batchlas {
      *
      * Band storage (AB) is as for `sytrd_sy2sb`. `d_out` (n) and `e_out` (n-1) are always
      * real-valued; `tau_out` (n-1) is unused downstream and is set to 0.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event sytrd_sb2st(Queue& ctx,
@@ -1120,7 +1142,7 @@ namespace batchlas {
                                    const Span<std::byte>& ws,
                                    int32_t block_size);
 
-    /** @brief Required workspace, in bytes, for sytrd_sb2st(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for sytrd_sb2st(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_sb2st_buffer_size(Queue& ctx,
                                                 const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1190,7 +1212,7 @@ namespace batchlas {
                                                         const Span<std::byte>& ws,
                                                         SytrdBandReductionParams params);
 
-    /** @brief Required workspace, in bytes, for sytrd_band_reduction() with one block size. */
+    /** @brief Required workspace, in bytes, for sytrd_band_reduction() with one block size. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_band_reduction_buffer_size(Queue& ctx,
                                                          const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1201,7 +1223,7 @@ namespace batchlas {
                                                          int32_t kd,
                                                          int32_t block_size);
 
-    /** @brief Required workspace, in bytes, for the schedule-parameter sytrd_band_reduction(). */
+    /** @brief Required workspace, in bytes, for the schedule-parameter sytrd_band_reduction(). @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_band_reduction_buffer_size(Queue& ctx,
                                                          const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1224,6 +1246,7 @@ namespace batchlas {
      * @brief Debug/testing hook: execute exactly one BANDR1 “chase step”. Not a stable
      *        public API. `ab_in` is lower-band with rows == kd+1, `abw_out` lower-band
      *        with rows == kd_work+1 (kd_work from params). In-order queue, Lower only.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event sytrd_band_reduction_single_step(Queue& ctx,
@@ -1234,7 +1257,7 @@ namespace batchlas {
                                                         const Span<std::byte>& ws,
                                                         SytrdBandReductionParams params);
 
-    /** @brief Required workspace, in bytes, for sytrd_band_reduction_single_step(). */
+    /** @brief Required workspace, in bytes, for sytrd_band_reduction_single_step(). @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
                                                                      const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1243,7 +1266,7 @@ namespace batchlas {
                                                                      int32_t kd,
                                                                      SytrdBandReductionParams params);
 
-    /** @brief LAPACK-named alias (HB2ST) of sytrd_sb2st(); identical arguments. */
+    /** @brief LAPACK-named alias (HB2ST) of sytrd_sb2st(); identical arguments. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     inline Event hetrd_hb2st(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1257,7 +1280,7 @@ namespace batchlas {
         return sytrd_sb2st<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, block_size);
     }
 
-    /** @brief LAPACK-named alias of sytrd_sb2st_buffer_size(). */
+    /** @brief LAPACK-named alias of sytrd_sb2st_buffer_size(). @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     inline size_t hetrd_hb2st_buffer_size(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
@@ -1286,6 +1309,7 @@ namespace batchlas {
      * only to pin a tier. As in syev(), `a_in`'s `uplo` triangle is read, `eigenvalues`
      * gets n real values per item, and `info` is the per-item convergence status or empty.
      * @see @ref perf_syev (small-n kernel choice)
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_cta(Queue& ctx,
@@ -1298,7 +1322,7 @@ namespace batchlas {
                                 size_t cta_wg_size_multiplier = 0,
                                 Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syev_cta(). */
+    /** @brief Required workspace, in bytes, for syev_cta(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t syev_cta_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1312,6 +1336,7 @@ namespace batchlas {
      * within the reassociation that fusing implies. Unlike syev_cta, A is left untouched
      * when jobz == NoEigenVectors. `ws` is accepted for API symmetry and ignored.
      * cta_wg_size_multiplier == 0 picks a tuned value per scalar type and width.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_cta_fused(Queue& ctx,
@@ -1324,7 +1349,7 @@ namespace batchlas {
                                       size_t cta_wg_size_multiplier = 0,
                                       Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syev_cta_fused(). */
+    /** @brief Required workspace, in bytes, for syev_cta_fused(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t syev_cta_fused_buffer_size(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1361,6 +1386,7 @@ namespace batchlas {
      * positive definite input; indefinite matrices are solved correctly but do not inherit
      * the bound. Overwrites A with eigenvectors when jobz == EigenVectors and leaves it
      * untouched otherwise; `ws` is accepted for API symmetry and ignored.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_jacobi_cta(Queue& ctx,
@@ -1372,7 +1398,7 @@ namespace batchlas {
                                        JacobiParams<T> params = JacobiParams<T>(),
                                        Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syev_jacobi_cta(). */
+    /** @brief Required workspace, in bytes, for syev_jacobi_cta(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t syev_jacobi_cta_buffer_size(Queue& ctx,
                                                     const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1384,6 +1410,7 @@ namespace batchlas {
      *        sytrd_blocked -> stedc -> ormqr_blocked. Overwrites A with eigenvectors when
      *        jobz == EigenVectors. `Uplo::Upper` input is first mirrored into the lower
      *        triangle, in place, and then takes the Lower path.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_blocked(Queue& ctx,
@@ -1395,7 +1422,7 @@ namespace batchlas {
                                     StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
                                     Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syev_blocked(); the same for either `uplo`. */
+    /** @brief Required workspace, in bytes, for syev_blocked(); the same for either `uplo`. @ingroup api_eigen_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t syev_blocked_buffer_size(Queue& ctx,
                                                  const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1410,6 +1437,7 @@ namespace batchlas {
      *        BATCHLAS_SYEV_TWO_STAGE_KD). `Uplo::Upper` input is mirrored into the lower
      *        triangle first, as in syev_blocked().
      * @see @ref perf_syev for where syev() routes to it
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_two_stage(Queue& ctx,
@@ -1421,7 +1449,7 @@ namespace batchlas {
                                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
                                       Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for syev_two_stage(). */
+    /** @brief Required workspace, in bytes, for syev_two_stage(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t syev_two_stage_buffer_size(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1442,6 +1470,7 @@ namespace batchlas {
      * `e` its n-1 superdiagonal entries (real), and the reflectors defining `Q` and `P`
      * are left in `A` with their scalars in `tauq` and `taup`, as in LAPACK `?gebrd`.
      * @see @ref perf_gesvd (where the unblocked form stops paying)
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gebrd_unblocked(Queue& ctx,
@@ -1454,6 +1483,7 @@ namespace batchlas {
     /**
      * @brief CTA-parallel small-matrix GEBRD for real square matrices, `1 <= n <= 32`,
      *        where one CTA cooperatively reduces one matrix to upper bidiagonal form.
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gebrd_cta(Queue& ctx,
@@ -1467,6 +1497,7 @@ namespace batchlas {
     /**
      * @brief Blocked GEBRD for real square dense matrices: DLABRD-style panel + GEMM.
      *        Output layout as for gebrd_unblocked().
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gebrd_blocked(Queue& ctx,
@@ -1478,7 +1509,7 @@ namespace batchlas {
                                      const Span<std::byte>& ws,
                                      int32_t block_size = 16);
 
-    /** @brief Required workspace, in bytes, for gebrd_blocked(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for gebrd_blocked(); arguments as for the call. @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gebrd_blocked_buffer_size(Queue& ctx,
                                                   const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1498,6 +1529,7 @@ namespace batchlas {
      * @param ws                   at least bdsqr_buffer_size() bytes
      * @param sort_desc            sort the singular values (and vectors) in descending order
      * @param info                 per-item convergence status, or empty; see @ref md_docs_2cpp-api
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event bdsqr(Queue& ctx,
@@ -1511,6 +1543,7 @@ namespace batchlas {
     /**
      * @brief bdsqr() that also accumulates the rotations: `u <- u * Q`, `vh <- P^T * vh`.
      *        Other parameters as for the values-only form.
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event bdsqr(Queue& ctx,
@@ -1523,14 +1556,14 @@ namespace batchlas {
                              bool sort_desc = true,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for bdsqr(). */
+    /** @brief Required workspace, in bytes, for bdsqr(). @ingroup api_svd_lowlevel */
     template <typename T>
     BATCHLAS_API size_t bdsqr_buffer_size(Queue& ctx,
                                           const VectorView<T>& d,
                                           const VectorView<T>& e,
                                           Span<T> singular_values_out);
 
-    /** @brief bdsqr_buffer_size() for the vector-accumulating form; `u` and `vh` do not change it. */
+    /** @brief bdsqr_buffer_size() for the vector-accumulating form; `u` and `vh` do not change it. @ingroup api_svd_lowlevel */
     template <typename T>
     inline size_t bdsqr_buffer_size(Queue& ctx,
                                     const VectorView<T>& d,
@@ -1553,6 +1586,7 @@ namespace batchlas {
      * seed them with the identity if the trailing columns matter. Workspace is dominated
      * by a `2n x 2n` eigenvector matrix per batch item. Parameters as for bdsqr().
      * @see @ref design_gesvd, section "gesvd design: why bdsdc goes through Golub-Kahan"
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event bdsdc(Queue& ctx,
@@ -1563,7 +1597,7 @@ namespace batchlas {
                              bool sort_desc = true,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief bdsdc() that also writes the leading n x n blocks of `u` and `vh`. */
+    /** @brief bdsdc() that also writes the leading n x n blocks of `u` and `vh`. @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API Event bdsdc(Queue& ctx,
                              const VectorView<T>& d,
@@ -1575,7 +1609,7 @@ namespace batchlas {
                              bool sort_desc = true,
                              Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for bdsdc(); `want_vectors` selects the overload. */
+    /** @brief Required workspace, in bytes, for bdsdc(); `want_vectors` selects the overload. @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t bdsdc_buffer_size(Queue& ctx,
                                           const VectorView<T>& d,
@@ -1599,6 +1633,7 @@ namespace batchlas {
      *         other than `'Q'`/`'P'`, or a short or strided `tau`
      * @throws batchlas::unsupported for `Transpose::Trans` with complex `T` and `'P'`
      *         (use `ConjTrans`)
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event ormbr(Queue& ctx,
@@ -1611,7 +1646,7 @@ namespace batchlas {
                              const Span<std::byte>& ws,
                              int32_t block_size = 32);
 
-    /** @brief Required workspace, in bytes, for ormbr(); arguments as for the call. */
+    /** @brief Required workspace, in bytes, for ormbr(); arguments as for the call. @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t ormbr_buffer_size(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1629,6 +1664,7 @@ namespace batchlas {
      * @pre in-order Queue
      * @throws batchlas::invalid_argument for an out-of-order Queue or mis-shaped outputs
      * @throws batchlas::unsupported for complex input (use the Hermitian overload)
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_blocked(Queue& ctx,
@@ -1644,6 +1680,7 @@ namespace batchlas {
     /**
      * @brief gesvd_blocked() for Hermitian input: only the `hermitian_uplo` triangle of
      *        `a_in` is read.
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_blocked(Queue& ctx,
@@ -1657,7 +1694,7 @@ namespace batchlas {
                                      const Span<std::byte>& ws,
                                      Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for gesvd_blocked(). */
+    /** @brief Required workspace, in bytes, for gesvd_blocked(). @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
                                                   const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1667,7 +1704,7 @@ namespace batchlas {
                                                   SvdVectors jobu,
                                                   SvdVectors jobvh);
 
-    /** @brief Required workspace, in bytes, for the Hermitian gesvd_blocked(). */
+    /** @brief Required workspace, in bytes, for the Hermitian gesvd_blocked(). @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
                                                   const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1690,6 +1727,7 @@ namespace batchlas {
      *         V^H, or an out-of-order Queue
      * @throws batchlas::unsupported for complex input (use the Hermitian overload)
      * @see @ref perf_gesvd
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_cta(Queue& ctx,
@@ -1702,7 +1740,7 @@ namespace batchlas {
                                  const Span<std::byte>& ws,
                                  Span<int32_t> info = Span<int32_t>());
 
-    /** @brief gesvd_cta() for Hermitian input: only the `hermitian_uplo` triangle is read. */
+    /** @brief gesvd_cta() for Hermitian input: only the `hermitian_uplo` triangle is read. @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_cta(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a_in,
@@ -1715,7 +1753,7 @@ namespace batchlas {
                                  const Span<std::byte>& ws,
                                  Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for gesvd_cta(). */
+    /** @brief Required workspace, in bytes, for gesvd_cta(). @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
                                               const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1725,7 +1763,7 @@ namespace batchlas {
                                               SvdVectors jobu,
                                               SvdVectors jobvh);
 
-    /** @brief Required workspace, in bytes, for the Hermitian gesvd_cta(). */
+    /** @brief Required workspace, in bytes, for the Hermitian gesvd_cta(). @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
                                               const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1782,6 +1820,7 @@ namespace batchlas {
      * @throws batchlas::invalid_argument for a size above the cap or undersized outputs
      * @throws batchlas::unsupported if the device has no sub-group size 32
      * @see @ref design_gesvd, @ref perf_gesvd
+     * @ingroup api_svd_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvdj_cta(Queue& ctx,
@@ -1795,7 +1834,7 @@ namespace batchlas {
                                   GesvdjParams<T> params = GesvdjParams<T>(),
                                   Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for gesvdj_cta() (currently 0: all state is in local memory). */
+    /** @brief Required workspace, in bytes, for gesvdj_cta() (currently 0: all state is in local memory). @ingroup api_svd_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t gesvdj_cta_buffer_size(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& a,
@@ -1815,7 +1854,7 @@ namespace batchlas {
      *
      * Overwrites `c_in` with `op(Q) * C` (`Side::Left`) or `C * op(Q)` (`Side::Right`),
      * using the first `k` reflectors.
-     * @ingroup api_qr
+     * @ingroup api_qr_lowlevel
      */
     template <Backend B, typename T>
     BATCHLAS_API Event ormqx_cta(Queue& ctx,
@@ -1900,7 +1939,7 @@ namespace batchlas {
                          JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
                          Span<int32_t> info = Span<int32_t>());
 
-    /** @brief Required workspace, in bytes, for stedc(). */
+    /** @brief Required workspace, in bytes, for stedc(). @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
 
@@ -1909,6 +1948,7 @@ namespace batchlas {
      *        and not a link error.
      * @deprecated Use stedc_buffer_size(); the `*_buffer_size` naming rule is in
      *             @ref md_docs_2cpp-api.
+     * @ingroup api_tridiag_lowlevel
      */
     template <Backend B, typename T>
     [[deprecated("renamed to stedc_buffer_size")]]
@@ -1983,7 +2023,7 @@ namespace batchlas {
     }
 
 
-    /** @brief Required workspace size, in bytes, for ritz_values(). */
+    /** @brief Required workspace size, in bytes, for ritz_values(). @ingroup api_eigen_lowlevel */
     template <Backend B, typename T, MatrixFormat MFormat>
     BATCHLAS_API size_t ritz_values_buffer_size(Queue& ctx,
                                               const MatrixView<T, MFormat>& A,
@@ -1993,6 +2033,7 @@ namespace batchlas {
     /**
      * @brief Old name of ritz_values_buffer_size() (view arguments).
      * @deprecated Use ritz_values_buffer_size(); kept so out-of-tree callers get a warning.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     [[deprecated("renamed to ritz_values_buffer_size")]]
@@ -2006,6 +2047,7 @@ namespace batchlas {
     /**
      * @brief Old name of ritz_values_buffer_size() (owning arguments).
      * @deprecated Use ritz_values_buffer_size(); kept so out-of-tree callers get a warning.
+     * @ingroup api_eigen_lowlevel
      */
     template <Backend B, typename T, MatrixFormat MFormat>
     [[deprecated("renamed to ritz_values_buffer_size")]]
@@ -2040,7 +2082,7 @@ namespace batchlas {
                      const MatrixView<T, MatrixFormat::Dense>& Ainv,
                      Span<std::byte> workspace);
 
-    /** @brief Required workspace size, in bytes, for inv(). */
+    /** @brief Required workspace size, in bytes, for inv(). @ingroup api_extra_lowlevel */
     template <Backend B, typename T>
     BATCHLAS_API size_t inv_buffer_size(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A);
@@ -2053,7 +2095,7 @@ namespace batchlas {
     BATCHLAS_API Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A);
 
-    /** @brief The allocating inv() on an owning `A`. */
+    /** @brief The allocating inv() on an owning `A`. @ingroup api_extra_lowlevel */
     template <Backend B, typename T>
     inline Matrix<T, MatrixFormat::Dense> inv_matrix(Queue& ctx,
         const Matrix<T, MatrixFormat::Dense>& A) {
@@ -2171,7 +2213,7 @@ BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_buffer_size)
 /**
  * @brief Queue-deducing form of the old stedc_workspace_size() name.
  * @deprecated Use stedc_buffer_size().
- * @ingroup api_tridiag
+ * @ingroup api_tridiag_lowlevel
  */
 template <typename... Args>
     requires requires(Queue& probe_ctx, Args&&... probe_args) {
@@ -2185,7 +2227,7 @@ inline auto stedc_workspace_size(Queue& ctx, Args&&... args) {
 /**
  * @brief Queue-deducing form of the old ritz_values_workspace() name.
  * @deprecated Use ritz_values_buffer_size().
- * @ingroup api_eigen
+ * @ingroup api_eigen_lowlevel
  */
 template <typename... Args>
     requires requires(Queue& probe_ctx, Args&&... probe_args) {

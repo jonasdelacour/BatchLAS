@@ -329,6 +329,7 @@ inline constexpr void symm(const Group& group,
 /// @param row_extent rows of `C`
 /// @param col_extent columns of `C`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -341,6 +342,7 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param row_extent rows of `C`
 /// @param col_extent columns of `C`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,

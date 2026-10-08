@@ -51,7 +51,7 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 /// Called by the public potrf() before the selection key is built.
 /// @throws batchlas::invalid_argument on negative extents, a non-square A or an
 ///         invalid @p uplo.
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
@@ -84,7 +84,7 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A     batch of n x n matrices to be factorized
 /// @param uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf()
-/// @ingroup api_factorizations
+/// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,

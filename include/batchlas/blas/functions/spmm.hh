@@ -100,7 +100,7 @@ BATCHLAS_API Event spmm(Queue& ctx,
 /// @param transB  the spmm call's `transB`
 /// @return required workspace size in bytes (may be 0)
 /// @throws batchlas::dispatch::NoRouteError under the same conditions as spmm
-/// @ingroup api_sparse
+/// @ingroup api_sparse_lowlevel
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
                                      const MatrixView<T, MFormat>& A,

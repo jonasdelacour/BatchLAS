@@ -109,7 +109,7 @@ inline Event syev(Queue& ctx,
  *
  * Makes the same kernel choice as the call, so the size is for the tier that will
  * run. `info` does not affect it.
- * @ingroup api_eigen
+ * @ingroup api_eigen_lowlevel
  */
 template <Backend B, typename T>
 BATCHLAS_API size_t syev_buffer_size(Queue& ctx,

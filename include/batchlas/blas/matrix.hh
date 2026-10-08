@@ -2173,7 +2173,7 @@ namespace batchlas {
     }
 
     /// @brief Shape (rows, cols) of op(@p mat) for @p trans: swapped unless NoTrans.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans) {
         return (trans == Transpose::NoTrans)
@@ -2182,7 +2182,7 @@ namespace batchlas {
     }
 
     /// @brief Shape of op(@p mat) for item @p batch_index, using that item's active extents.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans, int batch_index) {
         const int rows = mat.rows(batch_index);
@@ -2193,14 +2193,14 @@ namespace batchlas {
     }
 
     /// @brief Prints with MatrixView::stream_formatted_to() defaults.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T, MatrixFormat MType>
     std::ostream& operator<<(std::ostream& os, const MatrixView<T, MType>& view) {
         return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
     }
 
     /// @brief Prints the matrix's view.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T, MatrixFormat MType>
     std::ostream& operator<<(std::ostream& os, const Matrix<T, MType>& matrix) {
         os << matrix.view(); // Leverages MatrixView's operator<<
@@ -2208,14 +2208,14 @@ namespace batchlas {
     }
 
     /// @brief Prints with VectorView::stream_formatted_to() defaults.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T>
     std::ostream& operator<<(std::ostream& os, const VectorView<T>& view) {
         return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
     }
 
     /// @brief Prints the vector's view.
-    /// @ingroup api_matrix
+    /// @ingroup api_matrix_lowlevel
     template <typename T>
     std::ostream& operator<<(std::ostream& os, const Vector<T>& vec) {
         os << VectorView(vec); // Leverages VectorView's operator<<

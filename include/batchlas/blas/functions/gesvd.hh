@@ -175,7 +175,7 @@ inline Event gesvd(Queue& ctx,
  *
  * Canonicalises `jobu`/`jobvh` and makes the same kernel choice as the call does, so
  * the size is for the kernel that will run. `info` does not affect it.
- * @ingroup api_svd
+ * @ingroup api_svd_lowlevel
  */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
@@ -186,7 +186,7 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       SvdVectors jobu,
                                       SvdVectors jobvh);
 
-/** @brief Workspace, in bytes, for the Hermitian gesvd(). @ingroup api_svd */
+/** @brief Workspace, in bytes, for the Hermitian gesvd(). @ingroup api_svd_lowlevel */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,

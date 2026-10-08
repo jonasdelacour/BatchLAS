@@ -474,6 +474,7 @@ inline constexpr void gemm(const Group& group,
 /// @param aligned_a        the caller guarantees `A` meets the aligned NN kernel's 4-element alignment
 /// @param aligned_b        the same for `B`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Transpose TransAV = Transpose::NoTrans, Transpose TransBV = Transpose::NoTrans>
 inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -493,6 +494,7 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param aligned_a the caller guarantees `A` meets the aligned kernel's 4-element alignment
 /// @param aligned_b the same for `B`
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T,
           DeviceBlasPolicy Policy,
           Transpose TransAV = Transpose::NoTrans,

@@ -13,11 +13,17 @@ points are in @ref md_docs_2cpp-api.
 @defgroup api_core Queues, devices and events
 @brief batchlas::Queue, batchlas::Device, batchlas::Event and SYCL interop.
 
+String conversions and other helpers: @ref api_core_lowlevel.
+
 @defgroup api_matrix Matrices, views and vectors
 @brief Column-major batched containers and the non-owning views every entry point takes.
 
+String conversions and other helpers: @ref api_matrix_lowlevel.
+
 @defgroup api_enums Enumerations and scalar concepts
 @brief Transpose, Uplo, Side, Diag, Backend and the scalar concepts that constrain every template.
+
+String conversions and other helpers: @ref api_enums_lowlevel.
 
 @defgroup api_options Option structs
 @brief Designated-initialiser option structs accepted by the entry points.
@@ -28,26 +34,42 @@ points are in @ref md_docs_2cpp-api.
 @defgroup api_blas3 BLAS level 3
 @brief Batched matrix-matrix operations: gemm, trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k.
 
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_blas3_lowlevel.
+
 @defgroup api_factorizations Factorizations and linear solvers
 @brief Cholesky and LU factorizations, their solves and inverses.
+
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_factorizations_lowlevel.
 
 @defgroup api_qr QR and orthogonal transforms
 @brief Householder QR, forming and applying Q, and batched orthogonalisation.
 
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_qr_lowlevel.
+
 @defgroup api_eigen Symmetric and Hermitian eigensolvers
 @brief syev and its tiers, selected-range syevx, and the iterative eigensolvers.
+
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_eigen_lowlevel.
 
 @defgroup api_tridiag Tridiagonal and band reduction
 @brief Reduction to tridiagonal form and the tridiagonal eigensolvers (steqr, stedc, stebz, stein).
 
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_tridiag_lowlevel.
+
 @defgroup api_svd Singular value decomposition
 @brief gesvd and the bidiagonal pipeline stages.
+
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_svd_lowlevel.
 
 @defgroup api_sparse Sparse (CSR) operations
 @brief Sparse-dense products, ILU(k) and CSR test-matrix generators.
 
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_sparse_lowlevel.
+
 @defgroup api_extra Norms, condition numbers and utilities
 @brief Matrix norms, condition estimates, inversion and scaling helpers.
+
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_extra_lowlevel.
 
 @defgroup api_linalg Convenience layer (batchlas::linalg)
 @brief Value-returning, NumPy-like wrappers over the entry points.
@@ -69,8 +91,12 @@ Which kernel runs for a shape is decided by flat kernel selection (developer doc
 @defgroup api_config Configuration, environment and tuning
 @brief Runtime settings captured from the environment and the tuning constants.
 
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_config_lowlevel.
+
 @defgroup api_device_blas Device-side group BLAS
 @brief In-kernel work-group and sub-group BLAS templates (`#include <batchlas/blas/device.hh>`, needs `-fsycl`).
+
+Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_device_blas_lowlevel.
 
 @defgroup api_internal_helpers Kernel helpers (installed, not API)
 @brief Headers installed because public headers include them. Not a stable interface.
@@ -195,4 +221,82 @@ Each `src/ops/<op>/choice.hh` adds itself to this group. Which families rank fir
 and where each table came from (measured, converted or transcribed), is on the generated
 @ref selection_tables page, and the measurements behind each op's families are on its
 `docs/perf/` evidence page.
+*/
+
+/**
+@defgroup api_core_lowlevel Queues, devices and events: helpers
+@ingroup api_core
+@brief String conversions and device predicates.
+*/
+
+/**
+@defgroup api_matrix_lowlevel Matrices, views and vectors: helpers
+@ingroup api_matrix
+@brief Free functions over matrices, views and vectors.
+*/
+
+/**
+@defgroup api_enums_lowlevel Enumerations: helpers
+@ingroup api_enums
+@brief String conversions and shape helpers for the enumerations.
+*/
+
+/**
+@defgroup api_blas3_lowlevel BLAS level 3: lower-level API
+@ingroup api_blas3
+@brief Argument validation and workspace queries behind the level-3 entry points.
+*/
+
+/**
+@defgroup api_factorizations_lowlevel Factorizations: lower-level API
+@ingroup api_factorizations
+@brief Workspace queries and argument validation behind potrf, getrf, getrs, getri, gesv and posv.
+*/
+
+/**
+@defgroup api_qr_lowlevel QR: lower-level API
+@ingroup api_qr
+@brief Workspace queries, argument validation and the CTA ormqr kernel behind the QR entry points.
+*/
+
+/**
+@defgroup api_eigen_lowlevel Eigensolvers: lower-level API
+@ingroup api_eigen
+@brief Algorithm-specific entry points (CTA, blocked, two-stage, Jacobi, direct, LOBPCG, filtered), algorithm and range selection, and workspace queries behind syev, syevx, lanczos and ritz_values.
+*/
+
+/**
+@defgroup api_tridiag_lowlevel Tridiagonal and band reduction: lower-level API
+@ingroup api_tridiag
+@brief Kernel-level reductions and solvers (CTA, single-step band reduction, latrd panel, Francis sweep) and workspace queries.
+*/
+
+/**
+@defgroup api_svd_lowlevel SVD: lower-level API
+@ingroup api_svd
+@brief The stages and algorithm-specific entry points behind gesvd (gebrd, bdsqr, bdsdc, ormbr, blocked, CTA and Jacobi SVD) and their workspace queries.
+*/
+
+/**
+@defgroup api_sparse_lowlevel Sparse: lower-level API
+@ingroup api_sparse
+@brief ILU(k) level scheduling, test-matrix generation and workspace queries.
+*/
+
+/**
+@defgroup api_extra_lowlevel Utilities: lower-level API
+@ingroup api_extra
+@brief Workspace queries and the explicit-inverse helper.
+*/
+
+/**
+@defgroup api_config_lowlevel Configuration: lower-level API
+@ingroup api_config
+@brief Per-size tuning lookups, environment parsers and internal hooks behind settings() and configure().
+*/
+
+/**
+@defgroup api_device_blas_lowlevel Device-side group BLAS: lower-level API
+@ingroup api_device_blas
+@brief Launch-description and operand builders, and workspace sizes.
 */

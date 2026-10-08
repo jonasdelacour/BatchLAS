@@ -285,6 +285,7 @@ inline constexpr void symv(const Group& group,
 /// @param launch description of the launch the call runs in
 /// @param extent order of the matrix
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
@@ -295,6 +296,7 @@ inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param launch description of the launch the call runs in
 /// @param extent order of the matrix
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
@@ -354,6 +356,7 @@ inline constexpr void hemv(const Group& group,
 /// @param launch description of the launch the call runs in
 /// @param extent order of the matrix
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {
@@ -364,6 +367,7 @@ inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo&
 /// @param launch description of the launch the call runs in
 /// @param extent order of the matrix
 /// @return element count, or 0 when no staged path applies
+/// @ingroup api_device_blas_lowlevel
 template <typename T, DeviceBlasPolicy Policy, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t hemv_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent) {

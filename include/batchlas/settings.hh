@@ -530,11 +530,11 @@ BATCHLAS_API void reload_settings();
 
 /// @brief Latch recording that a Queue exists, which closes configure(). Called only by Queue's
 /// constructors.
-/// @ingroup api_config
+/// @ingroup api_config_lowlevel
 BATCHLAS_API void note_queue_constructed() noexcept;
 
 /// @brief True once note_queue_constructed() has been called.
-/// @ingroup api_config
+/// @ingroup api_config_lowlevel
 BATCHLAS_API bool queue_constructed() noexcept;
 
 }  // namespace detail
