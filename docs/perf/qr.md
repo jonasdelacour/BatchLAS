@@ -34,7 +34,7 @@ Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n
 - Vendor-free, the second entry runs. For `geqrf` that is `tiny` in the float and cfloat gaps, `cta` for square double n <= 48 and cdouble n <= 255, `blocked` for square double 49..75, and `cta` then `blocked` elsewhere ([the native tiny tie-break](#the-native-tiny-tie-break)).
 - Pins `BATCHLAS_{GEQRF,ORGQR,ORMQR}_ROUTE` take `auto`, `native`, `vendor` or a family spelling; a family `can_run` refuses throws `invalid_argument` (R6). `geqrf_cta_dispatch`, `geqrf_blocked_dispatch` and `orgqr_blocked_dispatch` bypass selection.
 
-> **Note:** The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans span the whole n = 4..512 grid. A vendor-present build realises only the in-window part. Full grid: [`small-n-baseline.md`](small-n-baseline.md#geqrf).
+> **Note:** The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans span the whole n = 4..512 grid. A vendor-present build realises only the in-window part. Full grid: [small-n-baseline.md](small-n-baseline.md#geqrf).
 
 **Correctness terms.**
 
@@ -236,7 +236,7 @@ Git tag `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-inde
 
 ### What 96x96 resolves to, per type
 
-96 is a probe shape in `GeqrfCandidates.AutoReadsTheTranscribedTable` (`tests/geqrf_candidates_tests.cc:609`). Per type, native over vendor ([`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf), n = 96, batch 8192): float row `tiny, cta, blocked, vendor` runs `cta`, **2.69x** (last float order ranked `cta` first); cfloat same row runs `blocked`, **2.28x** (CTA measured; the cfloat area is 5,888 elems and 9,216 does not fit; P7 measured blocked ahead, 0.924); double row `blocked, tiny, cta, vendor` runs `blocked`, **1.16x** (1.70x with the register leaf, [what the shipped route does now](#what-the-shipped-route-does-now)); cdouble row `vendor, cta, tiny, blocked` runs `vendor`, 0.49x (floor n >= 256; ranking it native would ship a loss). The tier half of the answer is the row order and the tile fit, read from the device; nothing is hardcoded to this box.
+96 is a probe shape in `GeqrfCandidates.AutoReadsTheTranscribedTable` (`tests/geqrf_candidates_tests.cc:609`). Per type, native over vendor ([small-n-baseline.md#geqrf](small-n-baseline.md#geqrf), n = 96, batch 8192): float row `tiny, cta, blocked, vendor` runs `cta`, **2.69x** (last float order ranked `cta` first); cfloat same row runs `blocked`, **2.28x** (CTA measured; the cfloat area is 5,888 elems and 9,216 does not fit; P7 measured blocked ahead, 0.924); double row `blocked, tiny, cta, vendor` runs `blocked`, **1.16x** (1.70x with the register leaf, [what the shipped route does now](#what-the-shipped-route-does-now)); cdouble row `vendor, cta, tiny, blocked` runs `vendor`, 0.49x (floor n >= 256; ranking it native would ship a loss). The tier half of the answer is the row order and the tile fit, read from the device; nothing is hardcoded to this box.
 
 ### How the window is guarded
 
@@ -244,7 +244,7 @@ Git tag `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-inde
 
 ## The shipped `orgqr` ceiling
 
-`tuned/orgqr.*.txt` ranks `blocked` first only up to m = 512, every type, both devices (`m=512` rows `blocked, vendor`; `m=513` rows `vendor, blocked`), transcribing `rows <= 512 && cols <= 512` (`cols` is implied by `n <= m`). Grid: [`small-n-baseline.md`](small-n-baseline.md#orgqr); bracketing losses: [`orgqr` grid](#orgqr-grid). Every ratio is "beats the per-item loop", not "beats cuSOLVER".
+`tuned/orgqr.*.txt` ranks `blocked` first only up to m = 512, every type, both devices (`m=512` rows `blocked, vendor`; `m=513` rows `vendor, blocked`), transcribing `rows <= 512 && cols <= 512` (`cols` is implied by `n <= m`). Grid: [small-n-baseline.md](small-n-baseline.md#orgqr); bracketing losses: [orgqr grid](#orgqr-grid). Every ratio is "beats the per-item loop", not "beats cuSOLVER".
 
 The window has no floor: the margin is smallest at the largest order. Native over vendor at n = 512 / 256 / 64 / n <= 16: float 3.64 / 5.30 / 27.10 / >= 181; cfloat 2.54 / 4.04 / 15.09 / >= 172; double 4.61 / 8.46 / 27.09 / **>= 97.72**; cdouble 2.77 / 4.75 / 11.31 / >= 42. That is 66 square cells, orders 4..512, zero losses, minimum 2.54. The double floor is from `benchmarks/results/factor_baseline_orgqr_double.csv` (`double 16x16 b32768`: vendor 1642.61 ms, native 16.8097 ms); the predicate comment's `>= 98` overreaches by 0.28.
 
@@ -256,7 +256,7 @@ The device reading behind [CTA capacity](#cta-capacity); a test that gives `geqr
 
 ## The `geqrf` order floor and the tall-panel clause
 
-The `geqrf` rows carry two windows, cut from the route-era `preferred()`: `cols() >= floor_n || (rows() >= 128 && cols() >= 32 && rows() >= tall_aspect * cols())`, transcribed as `n >= 32 && aspect >= tall_aspect`. [QR: route arms](#qr-route-arms) lists the first-ranked family per type; the per-cell grid is in [`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf).
+The `geqrf` rows carry two windows, cut from the route-era `preferred()`: `cols() >= floor_n || (rows() >= 128 && cols() >= 32 && rows() >= tall_aspect * cols())`, transcribed as `n >= 32 && aspect >= tall_aspect`. [QR: route arms](#qr-route-arms) lists the first-ranked family per type; the per-cell grid is in [small-n-baseline.md#geqrf](small-n-baseline.md#geqrf).
 
 ### Why the floors sit where they do
 
@@ -334,7 +334,7 @@ Gain 1.2-5.0x (ms before to after, batch 16384 unless noted): float 8x8 b32768 0
 
 ## The tiny tier (WP6 / P1): square n <= 32 in registers
 
-`src/extensions/geqrf_tiny.cc`, the `tiny` family (first in `geqrf`'s list, `src/ops/geqrf/choice.hh:15`). One matrix per `SubGroupPartition<N>`, N in {8, 16, 32}; lane `r` owns row `r` in a compile-time `D rA[N]`. Each work-group has two sub-groups (`kTinyWgSize` = 64 work-items), carrying `64 / N` matrices. Auto runs the tier where a row ranks it first ([the tiny `geqrf` window](#the-tiny-geqrf-window)); vendor-free it takes the gaps. `BATCHLAS_GEQRF_ROUTE=tiny` pins it for any square shape `can_run` admits.
+`src/extensions/geqrf_tiny.cc`, the `tiny` family (first in `geqrf`'s list, `src/ops/geqrf/choice.hh:15`). One matrix per `SubGroupPartition<N>`, N in {8, 16, 32}; lane `r` owns row `r` in a compile-time `D rA[N]`. Each work-group has two sub-groups (`kTinyWgSize` = 64 work-items), carrying `64 / N` matrices. Auto runs the tier where a row ranks it first ([the tiny geqrf window](#the-tiny-geqrf-window)); vendor-free it takes the gaps. `BATCHLAS_GEQRF_ROUTE=tiny` pins it for any square shape `can_run` admits.
 
 It replaces CTA's per-reflector, per-trailing-column butterfly (496 dependent shuffle chains per matrix at n = 32): one reduction per column, Householder scalars replicated to every lane by an order-symmetric butterfly, the trailing update an elementwise product into one local tile. The matrix stays in registers from load to store.
 

@@ -21,7 +21,7 @@
 /// parses `--samples`, `--seed`, `--log10-cond`, `--csv`, `--benchmark_filter`,
 /// `--backend`, `--type` and positional argument lists. Installed because it is
 /// under include/batchlas; not a stable interface.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 // Helpers to generate unique variable names in macros.
 #define MINI_ACC_CONCAT_INNER(x, y) x##y
@@ -42,7 +42,7 @@ constexpr const char* kColorHeader = "\033[1;36m";
 constexpr const char* kColorName = "\033[1m";
 
 /// @brief Run-wide settings parsed from the command line.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 struct Config {
     size_t samples = 1024;
     unsigned int seed = 1234u;
@@ -141,7 +141,7 @@ inline std::vector<double> dedup_nearly_equal(const std::vector<double>& input,
 }
 
 /// @brief Per-case context handed to a benchmark: its arguments, the run settings, and the sample sink.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 class State {
 public:
     State(std::vector<double> args,
@@ -202,7 +202,7 @@ private:
 using BenchFunc = std::function<void(State&)>;
 
 /// @brief A registered case: name, function, and its argument lists (Args, ArgRange, ArgsProduct).
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 struct Benchmark {
     std::string name;
     BenchFunc func;
@@ -721,7 +721,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
 
 /// @brief Parses the command line and runs every registered case that matches; the body of MINI_ACC_MAIN().
 /// @return 0, including after `--help`
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 inline int MiniAccMain(int argc, char** argv) {
     const CliOptions opts = ParseCommandLine(argc, argv);
     // The one place that decides what --help means for the PROCESS.

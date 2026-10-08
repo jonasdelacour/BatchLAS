@@ -6,7 +6,7 @@
 ///
 /// Does not include `<batchlas/blas/device.hh>` (in-kernel group BLAS) or
 /// `<sycl/sycl.hpp>`; include those yourself where needed.
-/// @ingroup api
+/// @ingroup api_reference
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

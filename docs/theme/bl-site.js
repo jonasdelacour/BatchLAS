@@ -51,7 +51,7 @@
     var roots = window.BL_NAV;
     var section = roots.filter(containsHere)[0] || null;
     if (!section && /^(class|struct|union|namespace|concept|group__|.*_8h)/.test(here)) {
-      section = roots.filter(function (r) { return r.u === "group__api.html"; })[0] || null;
+      section = roots.filter(function (r) { return r.u === "group__api__reference.html"; })[0] || null;
     }
     var home = !section || section.u === "index.html";
     buildTabs(roots, section);
@@ -348,7 +348,24 @@
       }).catch(function () { /* offline: keep the version only */ });
   }
 
+  /* Doxygen puts the breadcrumb inside the sticky bar; it belongs above the page title. */
+  function moveBreadcrumb() {
+    var np = document.getElementById("nav-path"), hd = document.querySelector("div.header");
+    if (!np || !hd) return;
+    var crumbs = el("nav", "bl-crumbs");
+    crumbs.setAttribute("aria-label", "Breadcrumb");
+    np.querySelectorAll("li.navelem a").forEach(function (a, i) {
+      if (i) crumbs.appendChild(el("span", "bl-crumb-sep", "\u203a"));
+      var c = el("a", null, a.textContent);
+      c.href = a.getAttribute("href");
+      crumbs.appendChild(c);
+    });
+    np.parentNode.removeChild(np);
+    if (crumbs.childNodes.length) hd.insertBefore(crumbs, hd.firstChild);
+  }
+
   function init() {
+    moveBreadcrumb();
     buildNav();
     buildToc();
     buildSearch();

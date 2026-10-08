@@ -21,7 +21,7 @@
 // Annotate any further enum that becomes a template argument.
 // evidence: docs/design/symbol-visibility.md#symbol-visibility-enums-used-as-template-arguments
 namespace batchlas {
-    /// @addtogroup enums
+    /// @addtogroup api_enums
     /// @{
 
     /// @brief Real type underlying a scalar: `T` itself for a real `T`, `R` for `std::complex<R>`.

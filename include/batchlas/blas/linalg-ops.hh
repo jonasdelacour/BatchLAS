@@ -21,10 +21,10 @@
 
 /// @file
 /// @brief The batchlas::linalg convenience layer: elementwise operations and value-returning wrappers.
-/// @ingroup linalg
+/// @ingroup api_linalg
 
 /**
- * @addtogroup linalg
+ * @addtogroup api_linalg
  * @details
  * Free functions only, no operator overloads. Membership rule: value-returning,
  * backend from the Queue, workspace from the Queue's arena => `linalg::`;
@@ -41,7 +41,7 @@
 
 namespace batchlas::linalg {
 
-/// @addtogroup linalg
+/// @addtogroup api_linalg
 /// @{
 
 // ---- elementwise -----------------------------------------------------------
@@ -175,7 +175,7 @@ inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Den
 }
 }  // namespace detail
 
-/// @addtogroup linalg
+/// @addtogroup api_linalg
 /// @{
 
 /// @brief Returns a new matrix \f$A + B\f$ (elementwise).

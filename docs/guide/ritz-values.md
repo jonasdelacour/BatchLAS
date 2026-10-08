@@ -1,7 +1,8 @@
 # Ritz values (Rayleigh quotients) {#guide_ritz_values}
 
-> **Status:** current · signatures verified against `include/batchlas/blas/extensions.hh:1621-1672`
-> and `src/extensions/ritz_values.cc` on 2026-09-30.
+> **Status:** current · signatures verified against
+> `include/batchlas/blas/extensions.hh` (lines 1621-1672) and `src/extensions/ritz_values.cc`
+> on 2026-09-30.
 
 `ritz_values` returns the Rayleigh quotient of every trial-vector column, for dense or CSR
 operators and batched inputs.
@@ -96,9 +97,9 @@ arguments (`BATCHLAS_ACCEPT_OWNING`). `ritz_values_workspace` is a deprecated al
 | `A` | \f$n \times n\f$ per batch item, `Dense` or `CSR`; must be square |
 | `V` | dense \f$n \times k\f$ per batch item, same batch count as `A`; columns are the trial vectors |
 | `ritz_vals` | real `VectorView`, size \f$\ge k\f$, same batch count; entry \f$j\f$ of item \f$b\f$ is `ritz_vals(j, b)` |
-| `workspace` | at least `ritz_values_buffer_size(...)` bytes: \f$A V\f$ (\f$n k \cdot \text{batch}\f$ scalars), a batch pointer array, and `spmm`'s workspace for CSR |
+| `%workspace` | at least `ritz_values_buffer_size(...)` bytes: \f$A V\f$ (\f$n k \cdot \text{batch}\f$ scalars), a batch pointer array, and the `spmm` workspace for CSR |
 
-Shape mismatches are `assert`s, so a release build does not diagnose them.
+Shape mismatches fail an `assert`, so a release build does not diagnose them.
 
 ## Supported configurations
 

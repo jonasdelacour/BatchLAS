@@ -36,7 +36,7 @@ namespace batchlas {
     class BATCHLAS_API VectorView;
 
     /// @brief Backend-library descriptor for a matrix (cuSPARSE / rocSPARSE handles); defined in src/.
-    /// @ingroup internal_helpers
+    /// @ingroup api_internal_helpers
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class BackendMatrixHandle;
 
@@ -46,7 +46,7 @@ namespace batchlas {
     /// `int` means: `Matrix(rows, cols, batch)` versus `Matrix(rows, cols, nnz)`.
     /// @invariant `operator int` is deleted so the tag cannot decay back into that ambiguity.
     /// @see @ref matrix-model-strong-types-for-positional-integers
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct NonZeros {
         int value;  ///< The wrapped value.
         explicit constexpr NonZeros(int v) : value(v) {}  ///< Wraps @p v.
@@ -61,7 +61,7 @@ namespace batchlas {
     /// reads the wrong addresses silently. The tags make the order a compile error.
     /// @invariant `operator int` is deleted: without it the tag decays back into the ambiguity.
     /// @see @ref matrix-model-strong-types-for-positional-integers
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct Inc {
         int value;  ///< The wrapped value.
         explicit constexpr Inc(int v = 1) : value(v) {}  ///< Wraps @p v.
@@ -71,7 +71,7 @@ namespace batchlas {
 
     /// @brief Element distance between consecutive batch items, as a distinct type (0 = packed).
     /// @see Inc
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct Stride {
         int value;  ///< The wrapped value.
         explicit constexpr Stride(int v = 0) : value(v) {}  ///< Wraps @p v.
@@ -81,7 +81,7 @@ namespace batchlas {
 
     /// @brief Leading dimension (column pitch), as a distinct type (0 = packed).
     /// @see Inc
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct Ld {
         int value;  ///< The wrapped value.
         explicit constexpr Ld(int v = 0) : value(v) {}  ///< Wraps @p v.
@@ -91,7 +91,7 @@ namespace batchlas {
 
     /// @brief Number of batch items, as a distinct type.
     /// @see Inc
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct BatchSize {
         int value;  ///< The wrapped value.
         explicit constexpr BatchSize(int v = 1) : value(v) {}  ///< Wraps @p v.
@@ -100,7 +100,7 @@ namespace batchlas {
     static_assert(std::is_trivially_copyable_v<BatchSize>, "BatchSize must stay trivially copyable");
 
     /// @brief Marker for "to the end" in a Slice: `Slice(k, SliceEnd{})` selects [k, dim).
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct SliceEnd {};
 
     /// @brief A half-open index range [start, end) along one dimension.
@@ -108,7 +108,7 @@ namespace batchlas {
     /// A default Slice selects the whole dimension; `Slice(k)` selects [k, dim).
     /// A negative `start` or `end` counts from the end of the dimension (`-1` is
     /// the last index). Slicing is dense-only and never copies.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     struct Slice { //Default Slice selects entire matrix
         int64_t start = std::numeric_limits<int64_t>::min();  ///< First index; negative counts from the end. The default (min) with a default end means the whole dimension.
         int64_t end = std::numeric_limits<int64_t>::max();    ///< One past the last index; negative counts from the end; max means the end of the dimension.
@@ -132,7 +132,7 @@ namespace batchlas {
     /// @tparam T      scalar type
     /// @tparam MType  MatrixFormat::Dense or MatrixFormat::CSR
     /// @see @ref matrix-model-kernelmatrixview-the-device-side-view
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T, MatrixFormat MType>
     struct KernelMatrixView {
         T*   data_ = nullptr;        ///< Values of batch item 0.
@@ -464,7 +464,7 @@ namespace batchlas {
     /// @tparam T      scalar type (`float`, `double`, `std::complex<float>`, `std::complex<double>`)
     /// @tparam MType  MatrixFormat::Dense (default) or MatrixFormat::CSR
     /// @see @ref design_matrix_model, and the user guide's data-layout section in @ref md_docs_2cpp-api
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     // BATCHLAS_API sits on the class template, not on the explicit instantiations: only it
     // reaches the member-template instantiations, and g++ rejects it on an instantiation.
     // evidence: docs/design/symbol-visibility.md#symbol-visibility-the-export-attribute-on-the-matrix-class-template
@@ -1004,7 +1004,7 @@ namespace batchlas {
     /// @tparam T      scalar type
     /// @tparam MType  MatrixFormat::Dense (default) or MatrixFormat::CSR
     /// @see @ref design_matrix_model
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T, MatrixFormat MType>
     class BATCHLAS_API MatrixView {
     public:
@@ -1693,17 +1693,17 @@ namespace batchlas {
     };
 
     /// @brief Creates the backend descriptor for a matrix (src/backends/matrix_handle_impl.cc).
-    /// @ingroup internal_helpers
+    /// @ingroup api_internal_helpers
     template <typename T, MatrixFormat MType>
     std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix);
 
     /// @brief Creates the backend descriptor for a view (src/backends/matrix_handle_impl.cc).
-    /// @ingroup internal_helpers
+    /// @ingroup api_internal_helpers
     template <typename T, MatrixFormat MType>
     std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view);
 
     /// @brief Backend-library descriptor for a vector; defined in src/.
-    /// @ingroup internal_helpers
+    /// @ingroup api_internal_helpers
     template <typename T = float>
     class BackendVectorHandle; // Forward declaration with default parameter
 
@@ -1716,7 +1716,7 @@ namespace batchlas {
     ///       positional constructor takes (data, size, batch_size, inc, stride); the tag types
     ///       and the deleted bare-int overloads keep the two from being transliterated.
     /// @see @ref matrix-model-vectors-inc-and-stride
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T>
     struct Vector {
         using value_type = T;               ///< Element type.
@@ -1877,7 +1877,7 @@ namespace batchlas {
     ///       the opposite order to Vector's (size, batch_size, Stride, Inc). Prefer the
     ///       tagged overloads in new code.
     /// @see @ref matrix-model-vectors-inc-and-stride
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T>
     class BATCHLAS_API VectorView {
     public:
@@ -2173,7 +2173,7 @@ namespace batchlas {
     }
 
     /// @brief Shape (rows, cols) of op(@p mat) for @p trans: swapped unless NoTrans.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans) {
         return (trans == Transpose::NoTrans)
@@ -2182,7 +2182,7 @@ namespace batchlas {
     }
 
     /// @brief Shape of op(@p mat) for item @p batch_index, using that item's active extents.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     std::pair<int, int> get_effective_dims(const MatrixView<T, MType>& mat, Transpose trans, int batch_index) {
         const int rows = mat.rows(batch_index);
@@ -2193,14 +2193,14 @@ namespace batchlas {
     }
 
     /// @brief Prints with MatrixView::stream_formatted_to() defaults.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T, MatrixFormat MType>
     std::ostream& operator<<(std::ostream& os, const MatrixView<T, MType>& view) {
         return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
     }
 
     /// @brief Prints the matrix's view.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T, MatrixFormat MType>
     std::ostream& operator<<(std::ostream& os, const Matrix<T, MType>& matrix) {
         os << matrix.view(); // Leverages MatrixView's operator<<
@@ -2208,14 +2208,14 @@ namespace batchlas {
     }
 
     /// @brief Prints with VectorView::stream_formatted_to() defaults.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T>
     std::ostream& operator<<(std::ostream& os, const VectorView<T>& view) {
         return view.stream_formatted_to(os); // Uses default arguments from stream_formatted_to
     }
 
     /// @brief Prints the vector's view.
-    /// @ingroup matrix
+    /// @ingroup api_matrix
     template <typename T>
     std::ostream& operator<<(std::ostream& os, const Vector<T>& vec) {
         os << VectorView(vec); // Leverages VectorView's operator<<
@@ -2228,13 +2228,13 @@ namespace batchlas {
     /// @param mat_view  matrices to scale, within rows() x cols() (ld and stride honoured)
     /// @return event of the kernel
     /// @throws batchlas::unsupported for CSR
-    /// @ingroup extra
+    /// @ingroup api_extra
     template <typename T, MatrixFormat MType>
     BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
 
     /// @brief In-place x := alpha * x on every entry of every item.
     /// @return event of the kernel
-    /// @ingroup extra
+    /// @ingroup api_extra
     template <typename T>
     BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
 

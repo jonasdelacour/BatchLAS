@@ -5,7 +5,7 @@
 Matrices are column-major and batched, every call enqueues work and returns immediately, and the
 backend, the workspace and the device all come from the `Queue`. This page teaches that model and
 the traps around it. Signatures, option fields and per-op detail are in the generated API reference
-(groups in @ref api); environment variables are in @ref design_environment, exceptions in
+(groups in @ref api_reference); environment variables are in @ref design_environment, exceptions in
 @ref design_error_model, spelling rules in @ref design_api_conventions.
 
 ## The short version
@@ -160,7 +160,7 @@ when there is none and `batchlas::invalid_argument` for any other string.
 Every entry point is batched and applies the same operation to every item; **all matrix arguments
 of one call must have the same batch size**. `α` and `β` are the `alpha` and `beta` option fields,
 and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraints are in the API groups:
-@ref blas2, @ref blas3, @ref factorizations, @ref qr, @ref eigen, @ref svd, @ref sparse.
+@ref api_blas2, @ref api_blas3, @ref api_factorizations, @ref api_qr, @ref api_eigen, @ref api_svd, @ref api_sparse.
 
 | call | computes | written |
 | --- | --- | --- |
@@ -260,7 +260,7 @@ syev(ctx, A.view(), W, {.jobz = JobType::NoEigenVectors});
 getrs(ctx, LU.view(), X.view(), pivots, {.trans = Transpose::Trans});
 ```
 
-The structs are in `batchlas/blas/options.hh` (group @ref options): `GemmOptions<T>`,
+The structs are in `batchlas/blas/options.hh` (group @ref api_options): `GemmOptions<T>`,
 `GemvOptions<T>`, `SymmOptions<T>`, `HemmOptions<T>`, `SyrkOptions<T>`, `HerkOptions<T>`,
 `Syr2kOptions<T>`, `Her2kOptions<T>`, `TrmmOptions<T>`, `TrsmOptions<T>`, `PotrfOptions`,
 `GetrsOptions`, `SyevOptions`. The BLAS ones are templated on `T`; the three LAPACK ones are not.
@@ -436,7 +436,7 @@ auto Z = Matrix<float>::Zeros(n, n, batch);
 Other factories: `RandomTriangular`, `Ones`, `Diagonal`, `Triangular`, `TriDiagToeplitz`. To fill a
 matrix you own, the `fill_*` family on `MatrixView` writes in place and returns an `Event`
 (`fill`, `fill_zeros`, `fill_ones`, `fill_identity`, `fill_diagonal`, `fill_random`, ...; group
-@ref matrix). Pass your own queue: a default-constructed `Queue` builds a fresh one on
+@ref api_matrix). Pass your own queue: a default-constructed `Queue` builds a fresh one on
 `Device::default_device()`, which targets the wrong device on a multi-GPU box.
 
 > **Warning:** The `seed` of `Random`, `RandomTriangular`, `fill_random` and `fill_triangular_random`
@@ -511,7 +511,7 @@ that item's row range. Three accessors exist on `Matrix`, `MatrixView` and `Kern
   have completed; use the `KernelMatrixView` overload inside a kernel over device memory).
 - **`nnz_capacity()`**: the slots allocated per item.
 
-The from-data constructors are in @ref matrix and @ref design_matrix_model.
+The from-data constructors are in @ref api_matrix and @ref design_matrix_model.
 
 ## What gets thrown {#what-gets-thrown}
 
@@ -537,7 +537,7 @@ try {
 | --- | --- | --- | --- |
 | `invalid_argument` | `std::invalid_argument` | The call violates the contract: mismatched shapes or batch sizes, short span, null or non-USM pointer, bad `ld`. | No. |
 | `out_of_range` | `std::out_of_range` | Index outside its container (`V.at(i, j, b)`). | No. |
-| `error` | `std::runtime_error` | Base of the five below. | n/a |
+| `error` | `std::runtime_error` | Base of the six below. | n/a |
 | `unsupported` | `error` | No kernel or backend in this build on this device serves the request. | Not as asked; try another route pin, backend, type or shape. |
 | `device_error` | `error` | The device or vendor runtime failed (cuBLAS/cuSOLVER status, launch failure, null allocation, no device of that type). | Sometimes. |
 | `workspace_error` | `error` | Scratch too small, or the arena ran out. | Yes: re-query `*_buffer_size()` or halve the batch. |
@@ -857,7 +857,7 @@ from that context.
 
 ## The `linalg` convenience layer
 
-`batchlas::linalg` (`batchlas/blas/linalg-ops.hh`, group @ref linalg) offers value-returning and
+`batchlas::linalg` (`batchlas/blas/linalg-ops.hh`, group @ref api_linalg) offers value-returning and
 elementwise free functions; there are no operator overloads. Each takes its backend from the queue
 and workspace from the arena.
 

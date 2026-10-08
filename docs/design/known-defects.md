@@ -4,7 +4,7 @@
 
 Each entry is a defect located to a line and left in the tree. Entries give the symptom, the
 cause with its location, any workaround, and the status. Performance debt is listed per op under
-[`../perf/`](../perf/README.md), not here.
+[../perf/](../perf/README.md), not here.
 
 Entries keep their numbers so that other pages can cite them (for example, "known-defects #13").
 Entries 1, 3, 11, 12 and 14 are cited from code and carry a `Defect N:` heading. Entries 7 to 9 are
@@ -21,8 +21,8 @@ closed and kept only for numbering.
 | 5 | `src/backends/netlib_lapack.cc:484,496,513,525` | open, NaN from unwritten workspace |
 | 6 | `src/backends/netlib_lapack.cc:1250` | open, wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh` (deleted) | closed: not a defect |
-| 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed in the phase 5 rip |
-| 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed in the phase 5 rip |
+| 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
+| 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | open, worked around in `geqrf_blocked` |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
@@ -106,7 +106,7 @@ closed and kept only for numbering.
 - **Fix needs:** substitute `T(0)` for the `alpha` term, as the native bodies do, and add an
   `alpha == 0` case to `tests/trsm_tests.cc` with `B` poisoned by `NaN`. A merely wrong `B` cannot
   reveal the bug. The same defect in `spmm` (`netlib_lapack.cc:228,252`) is fixed; see
-  [`../perf/spmm.md`](../perf/spmm.md).
+  [../perf/spmm.md](../perf/spmm.md).
 - **Status:** open.
 
 ## 6. netlib `getri` ignores the leading dimension
@@ -116,7 +116,7 @@ closed and kept only for numbering.
 - **Cause:** `src/backends/netlib_lapack.cc:1250` copies `n * n` contiguous elements and reads
   neither `ld`.
 - **Fix needs:** the per-column `std::copy_n` already used at `:841`.
-- **Status:** open. Recorded in [`../perf/lu.md`](../perf/lu.md).
+- **Status:** open. Recorded in [../perf/lu.md](../perf/lu.md).
 
 ## 7. CLOSED: `trsm`'s heterogeneous-batch rejection can fire
 
@@ -124,14 +124,14 @@ The field is written: `trsm_op_shape` sets `s.heterogeneous_batch` from both `A`
 gate is therefore reachable. The old `trsm_route.hh` is deleted; the term now sits in the native
 families' `can_run` (`src/ops/trsm/trsm.cc`).
 
-The gate is still not armed. Its test is `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute`
+The gate is armed. Its test is `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute`
 (`tests/trsm_candidates_tests.cc`), which asserts that every native pin refuses a heterogeneous `A`
 or `B`. Dropping the term turns that test red for all four CUDA dtypes. The vendor arm still lacks
 the term (defect 12).
 
 ## 8, 9. CLOSED: forced-route defects in the level-3 dispatchers
 
-Both were removed with the phase 5 rip. `BATCHLAS_SYRK_ROUTE=native` and
+Both were removed with the old level-3 dispatchers. `BATCHLAS_SYRK_ROUTE=native` and
 `BATCHLAS_SYR2K_ROUTE=native` now run the tile kernel, which writes only the named triangle
 (`SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched`). The old `DiagFullGemm` route
 wrote both triangles and was reachable only through those pins.
@@ -247,7 +247,7 @@ triangle gets a wrong answer today.
 - **Cause:** `ormqr_blocked`'s sub-kernels put the batch on grid dimension 2. The driver does not
   check the limit, and `can_run` does not model it. Auto therefore does not fall to the vendor.
   Other ops that put the batch on dimension 2 may share the limit; see
-  [`flat-kernel-selection.md`](flat-kernel-selection.md) §11.
+  [flat-kernel-selection.md](flat-kernel-selection.md) §11.
 - **Fix needs:** fold the batch into dimension 0, or loop over batch chunks. As a stopgap, add a
   `batch <= 65535` term to the driver and `can_run`.
 - **Status:** open.
@@ -362,7 +362,7 @@ refuted.
 
 ## Retracted claim
 
-[`../perf/lu.md`](../perf/lu.md) reported a vendor gate defect: `getrs` sits in a `BATCHLAS_HAS_CUBLAS`
+[../perf/lu.md](../perf/lu.md) reported a vendor gate defect: `getrs` sits in a `BATCHLAS_HAS_CUBLAS`
 TU but calls cuSOLVER. Re-checked, the claim does not hold. `getrs_vendor` calls only
 `cublas?getrsBatched` (`src/backends/cublas.cc:1491`), and the gate matches the definition. The
 stated mismatch did not reproduce.

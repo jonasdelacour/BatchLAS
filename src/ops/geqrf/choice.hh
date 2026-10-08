@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief geqrf: tiny, cta, blocked, vendor. evidence: docs/perf/qr.md @ingroup selection_ops
+/// @brief geqrf: tiny, cta, blocked, vendor. evidence: docs/perf/qr.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

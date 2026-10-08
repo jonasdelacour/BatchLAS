@@ -25,7 +25,7 @@ namespace batchlas {
 
     #ifndef SYEVSTRUCTS
     #define SYEVSTRUCTS
-    /// @addtogroup eigen
+    /// @addtogroup api_eigen
     /// @{
 
     /**
@@ -126,7 +126,7 @@ namespace batchlas {
     /// @}
     #endif
 
-    /// @addtogroup qr
+    /// @addtogroup api_qr
     /// @{
 
     /**
@@ -199,7 +199,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup eigen
+    /// @addtogroup api_eigen
     /// @{
 
     /**
@@ -671,7 +671,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup tridiag
+    /// @addtogroup api_tridiag
     /// @{
 
     /**
@@ -823,7 +823,7 @@ namespace batchlas {
                              SteinParams<T> params = SteinParams<T>());
 
     /**
-     * @brief Sentinel meaning "every batch item has all `k` eigenvalues valid".
+     * @brief Sentinel meaning: every batch item has all `k` eigenvalues valid.
      *
      * @trap Spell this rather than a bare `{}` at `counts`: `{}` in a position two
      *       overloads both accept has silently selected the wrong one in this codebase before.
@@ -838,7 +838,7 @@ namespace batchlas {
      * workspace, and are neither iterated on nor joined to a cluster. Columns
      * `[counts[b], k)` of `Z` are written as EXACTLY ZERO, not left untouched, so callers
      * may back-transform a uniform `k` columns. `counts` is read on the device, so it may
-     * be the `m` span `stebz` just wrote; empty (or `stein_all_counts`) means "all `k`",
+     * be the `m` span `stebz` just wrote; empty (or `stein_all_counts`) means all `k` are valid,
      * and it is clamped to `[0, k]`. Other parameters as for the `counts`-less form.
      *
      * @throws batchlas::invalid_argument additionally if a non-empty `counts` is shorter
@@ -984,14 +984,14 @@ namespace batchlas {
 
     /**
      * @brief QR (GEQRF) or QL (GEQLF) reflector layout. Not referenced by any entry point.
-     * @ingroup qr
+     * @ingroup api_qr
      */
     enum class OrmqCtaFactorization {
         QR,
         QL,
     };
 
-    /// @addtogroup tridiag
+    /// @addtogroup api_tridiag
     /// @{
 
     /**
@@ -1272,7 +1272,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup eigen
+    /// @addtogroup api_eigen
     /// @{
 
     /**
@@ -1431,7 +1431,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup svd
+    /// @addtogroup api_svd
     /// @{
 
     /**
@@ -1815,7 +1815,7 @@ namespace batchlas {
      *
      * Overwrites `c_in` with `op(Q) * C` (`Side::Left`) or `C * op(Q)` (`Side::Right`),
      * using the first `k` reflectors.
-     * @ingroup qr
+     * @ingroup api_qr
      */
     template <Backend B, typename T>
     BATCHLAS_API Event ormqx_cta(Queue& ctx,
@@ -1829,7 +1829,7 @@ namespace batchlas {
                                 const Span<std::byte>& ws,
                                 size_t cta_wg_size_multiplier = 1);
 
-    /// @addtogroup tridiag
+    /// @addtogroup api_tridiag
     /// @{
 
     /** @brief Secular-equation root finder used by stedc()'s merge step. */
@@ -1918,7 +1918,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup eigen
+    /// @addtogroup api_eigen
     /// @{
 
     /**
@@ -2018,7 +2018,7 @@ namespace batchlas {
 
     /// @}
 
-    /// @addtogroup extra
+    /// @addtogroup api_extra
     /// @{
 
     /**
@@ -2171,7 +2171,7 @@ BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_buffer_size)
 /**
  * @brief Queue-deducing form of the old stedc_workspace_size() name.
  * @deprecated Use stedc_buffer_size().
- * @ingroup tridiag
+ * @ingroup api_tridiag
  */
 template <typename... Args>
     requires requires(Queue& probe_ctx, Args&&... probe_args) {
@@ -2185,7 +2185,7 @@ inline auto stedc_workspace_size(Queue& ctx, Args&&... args) {
 /**
  * @brief Queue-deducing form of the old ritz_values_workspace() name.
  * @deprecated Use ritz_values_buffer_size().
- * @ingroup eigen
+ * @ingroup api_eigen
  */
 template <typename... Args>
     requires requires(Queue& probe_ctx, Args&&... probe_args) {
@@ -2206,7 +2206,7 @@ BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)
 // blas/functions.hh (which ends by including options.hh) BEFORE this header, so `ortho` is
 // not yet declared when options.hh is parsed, and none of its helpers are reachable here.
 
-/// @addtogroup qr
+/// @addtogroup api_qr
 /// @{
 
 /** @brief Options for the option-struct ortho(); fields as the positional arguments. */
@@ -2310,7 +2310,7 @@ namespace detail {
 enum class OrthoEmptyBracesAreAmbiguous {};
 }  // namespace detail
 
-/// @addtogroup qr
+/// @addtogroup api_qr
 /// @{
 
 template <Backend B, typename T>

@@ -11,7 +11,7 @@
 /// @warning Do not change a `BATCHLAS_TUNE_*` variable between a `*_buffer_size()` query and its
 ///          call: the accessors feed both, and the workspace would be sized for another width.
 /// @see @ref perf_tuning
-/// @ingroup config
+/// @ingroup api_config
 // GENERATED constants (evaluation/tuning/generate_tuning_header.py); regenerate, do not hand-edit.
 // The accessors, this include and these doc comments are mirrored in the generator's template:
 // change both or a retune reverts it. evidence: docs/perf/tuning.md#tuning-regenerating-the-header
@@ -31,7 +31,7 @@ namespace detail {
 /// yield `fallback`, the compiled constant.
 /// @param captured the captured `BATCHLAS_TUNE_*` value from settings()
 /// @param fallback the compiled constant for this n
-/// @ingroup config
+/// @ingroup api_config
 // strtol stays HERE, not in settings.cc: env_int_or reads "16x" as 16, exactly what a retune
 // harness types. evidence: docs/perf/tuning.md#tuning-runtime-overrides-of-the-constants
 inline int32_t tuning_env_override(const EnvValue& captured, int32_t fallback) {
@@ -135,7 +135,7 @@ inline constexpr int32_t STEDC_WG_MULTIPLIER_XLARGE = 8;
 // Compile-time tables (constexpr): the bucket constant for n, no override.
 
 /// @brief Compiled `ORMQR_BLOCK_SIZE_*` bucket for n (no override).
-/// @ingroup config
+/// @ingroup api_config
 inline constexpr int32_t ormqr_block_size_default_for_n(int32_t n) {
     if (n <= 64) return ORMQR_BLOCK_SIZE_TINY;
     if (n <= 128) return ORMQR_BLOCK_SIZE_SMALL;
@@ -228,14 +228,14 @@ inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
 // through settings() first and falls back to the table above.
 
 /// @brief ormqr WY block width for order n; override `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t ormqr_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.ormqr_block_size,  // BATCHLAS_TUNE_ORMQR_BLOCK_SIZE
                                        ormqr_block_size_default_for_n(n));
 }
 
 /// @brief gebrd panel width for order n; override `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t gebrd_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.gebrd_block_size,  // BATCHLAS_TUNE_GEBRD_BLOCK_SIZE
                                        gebrd_block_size_default_for_n(n));
@@ -245,7 +245,7 @@ inline int32_t gebrd_block_size_for_n(int32_t n) {
 /// override `BATCHLAS_TUNE_SB2ST_BACK_TILE`.
 /// @note 0 is reachable only from the compiled constant: the override forces a geometry, never
 ///       auto. The same holds for sb2st_back_subs_for_n() and sy2sb_ormqr_nb_for_n().
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t sb2st_back_tile_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sb2st_back_tile,  // BATCHLAS_TUNE_SB2ST_BACK_TILE
                                        sb2st_back_tile_default_for_n(n));
@@ -253,7 +253,7 @@ inline int32_t sb2st_back_tile_for_n(int32_t n) {
 
 /// @brief sb2st wave back-transform sub-group count for order n, or 0 for the heuristic;
 /// override `BATCHLAS_TUNE_SB2ST_BACK_SUBS`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t sb2st_back_subs_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sb2st_back_subs,  // BATCHLAS_TUNE_SB2ST_BACK_SUBS
                                        sb2st_back_subs_default_for_n(n));
@@ -261,14 +261,14 @@ inline int32_t sb2st_back_subs_for_n(int32_t n) {
 
 /// @brief sy2sb back-transform WY width for order n, or 0 for the shape gate; override
 /// `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sy2sb_ormqr_nb,  // BATCHLAS_TUNE_SY2SB_ORMQR_NB
                                        sy2sb_ormqr_nb_default_for_n(n));
 }
 
 /// @brief sytrd panel width for order n; override `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t sytrd_block_size_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.sytrd_block_size,  // BATCHLAS_TUNE_SYTRD_BLOCK_SIZE
                                        sytrd_block_size_default_for_n(n));
@@ -276,19 +276,19 @@ inline int32_t sytrd_block_size_for_n(int32_t n) {
 
 /// @brief latrd lower-panel work-group size hint for order n, 0 for none; override
 /// `BATCHLAS_TUNE_LATRD_WG_HINT`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.latrd_wg_hint,  // BATCHLAS_TUNE_LATRD_WG_HINT
                                        latrd_lower_panel_wg_hint_default_for_n(n));
 }
 
 /// @brief latrd_lower_panel_wg_hint_for_n() at n = 256, for the legacy path.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t latrd_lower_panel_wg_hint() { return latrd_lower_panel_wg_hint_for_n(256); }
 
 /// @brief Whether sytrd fuses the panel update at order n. No `BATCHLAS_TUNE_*` override; see
 /// SelectionSettings::sytrd_fuse_panel_update.
-/// @ingroup config
+/// @ingroup api_config
 inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
     if (n <= 64) return SYTRD_FUSE_PANEL_UPDATE_TINY != 0;
     if (n <= 128) return SYTRD_FUSE_PANEL_UPDATE_SMALL != 0;
@@ -299,7 +299,7 @@ inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
 
 /// @brief stedc leaf size for order n; override `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`.
 /// @note 32 is the CTA invariant (sub-group width), not a tuning result.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t stedc_recursion_threshold_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_recursion_threshold,  // BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD
                                        stedc_recursion_threshold_default_for_n(n));
@@ -307,7 +307,7 @@ inline int32_t stedc_recursion_threshold_for_n(int32_t n) {
 
 /// @brief stedc merge variant for order n, as a StedcMergeVariant value (1 Fused, 2 FusedCta);
 /// override `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`.
-/// @ingroup config
+/// @ingroup api_config
 // Callers cast to StedcMergeVariant unchecked; 0 (Auto) would re-enter tuning resolution, so it
 // must stay unreachable (it is: non-positive overrides fall back).
 inline int32_t stedc_merge_variant_for_n(int32_t n) {
@@ -317,7 +317,7 @@ inline int32_t stedc_merge_variant_for_n(int32_t n) {
 
 /// @brief stedc secular-solve threads per root for order n; override
 /// `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t stedc_threads_per_root_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_threads_per_root,  // BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT
                                        stedc_threads_per_root_default_for_n(n));
@@ -325,7 +325,7 @@ inline int32_t stedc_threads_per_root_for_n(int32_t n) {
 
 /// @brief stedc merge work-group multiplier for order n; override
 /// `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`.
-/// @ingroup config
+/// @ingroup api_config
 inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
     return detail::tuning_env_override(settings().geometry.tune.stedc_wg_multiplier,  // BATCHLAS_TUNE_STEDC_WG_MULTIPLIER
                                        stedc_wg_multiplier_default_for_n(n));

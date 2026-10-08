@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief What this build links and what a run reached, as CSV in BATCHLAS_COVERAGE_OUT.pid; the
-/// columns are a contract with scripts/, tools/tune and benchviz. @ingroup selection
+/// columns are a contract with scripts/, tools/tune and benchviz. @ingroup api_selection
 // evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
 
 #include <batchlas/export.hh>
@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <string>
 
-namespace batchlas::coverage {  /** @addtogroup selection */ /** @{ */
+namespace batchlas::coverage {  /** @addtogroup api_selection */ /** @{ */
 
 struct Shape {  // the row key: different triangles or operands are different rows
     Op op = Op::COUNT;

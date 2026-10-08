@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief geqrf's can_run, a header so host tests can pass a synthetic select::Device. No real test
-/// device lacks a GPU, sub-group 32 or one CTA element of SLM. @ingroup selection_ops
+/// device lacks a GPU, sub-group 32 or one CTA element of SLM. @ingroup api_selection_ops
 
 #include <batchlas/blas/matrix.hh>
 

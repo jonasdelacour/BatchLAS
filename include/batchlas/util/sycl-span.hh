@@ -12,12 +12,12 @@
 namespace batchlas {
 
 /// @brief True for `std::array<T, N>`, false otherwise.
-/// @ingroup matrix
+/// @ingroup api_matrix
 template <typename T>
 struct is_std_array : std::false_type {};
 
 /// @brief Specialisation for `std::array<T, N>`.
-/// @ingroup matrix
+/// @ingroup api_matrix
 template <typename T, std::size_t N>
 struct is_std_array<std::array<T, N>> : std::true_type {};
 
@@ -31,7 +31,7 @@ struct is_std_array<std::array<T, N>> : std::true_type {};
 ///
 /// Element access asserts the bounds in a debug build only.
 /// @tparam T  element type
-/// @ingroup matrix
+/// @ingroup api_matrix
 // The out-of-line members (USM advice calls, operator==) are explicitly instantiated in
 // src/util/sycl-util-impl.cc, so Span crosses the shared-library boundary like Matrix.
 template <typename T>

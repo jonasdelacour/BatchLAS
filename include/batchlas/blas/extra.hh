@@ -8,12 +8,12 @@
 
 /// @file
 /// @brief Matrix norms, condition numbers, conditioned test-matrix generators and transpose.
-/// @ingroup extra
+/// @ingroup api_extra
 
 namespace batchlas
 {
 
-    /// @addtogroup extra
+    /// @addtogroup api_extra
     /// @{
 
     /// @brief Per-item matrix norm, written into a caller-owned span.

@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched Hermitian positive-definite solve (posv) by Cholesky.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 
 // No vendor arm and no `potrs` op: the composed arm is potrf then two routed
 // trsm calls, and the documented contract below is exactly that composition.
@@ -42,7 +42,7 @@ using posv_buffer_size = size_t(Queue&,
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()`, equal batch
 /// sizes and a valid @p uplo.
 /// @throws batchlas::invalid_argument if any check fails
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Stricter than potrf's validator on purpose: with no vendor arm, a
 // non-conforming pair would otherwise surface as a misleading "no route" error.
 template <typename T>
@@ -99,7 +99,7 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 ///                    item's X is meaningless). Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the call
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event posv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -112,7 +112,7 @@ BATCHLAS_API Event posv(Queue& ctx,
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the operands
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -120,7 +120,7 @@ BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
                                      Uplo uplo);
 
 /// @brief posv() without per-item status (`info` not requested).
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend Back, typename T>
 inline Event posv(Queue& ctx,

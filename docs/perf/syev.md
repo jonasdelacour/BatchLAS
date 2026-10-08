@@ -287,7 +287,7 @@ lower absolute time, not the best block size per case.
 *Superseded by the 2026-08-07 retune.* First measurement of `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE` and
 `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE` through `syev`: blocked provider, float, knee batch capped at 512 by the
 [workspace limit](#syev-workspace-footprint-limits-usable-batch). ORMQR 16 was optimal at n = 32..128 (n = 128:
-7.446 µs against 8.142 at 32 and 22.805 at 128); at n = 256 and 512 ORMQR 32 won by only 1.016× and 1.059×
+7.446 µs against 8.142 with ORMQR 32 and 22.805 with ORMQR 128); at n = 256 and 512 ORMQR 32 won by only 1.016× and 1.059×
 (neutral). SYTRD matched the committed 8/8/16/24 at n = 64/128/256/512 (n = 512: 24 gives 339.9, 8 gives 380.8).
 Double agreed at n ≤ 128 and preferred SYTRD 16 at n = 512 (1.05×–1.07×, neutral). ORMQR = 128 cost 2.1× at n = 64
 and 3.1× at n = 128. Gap: n = 256 missing in both modes and precisions (`syev_blocked` exceeded the 3 GB
@@ -458,7 +458,7 @@ Measured 2026-08-05. PR 55 (`0bb92fb`, the STEDC level-driver rework) cost `syev
 unchanged vendor column reproduced the grid, so the deltas are code). Float, eigenvectors, baseline / after PR 55 /
 fixed, µs per matrix: n = 64 1.64 / 2.25 / 1.70; n = 320 74.53 / 242.43 (**3.25×**) / 70.96; n = 640 727.48 / 1095.9
 (**1.51×**) / 714.99; n = 1024 2441.93 / 2559.1 / 2394.7. Fixed is within 0.96×–1.05× of baseline at all eight
-sizes.
+measured sizes (the four not quoted: n = 128 1.01×, 256 1.03×, 512 1.02×, 768 1.02×).
 
 **Defect A: the merge variant was flipped the wrong way.** `3072ea6` moved `STEDC_MERGE_VARIANT_*` from FusedCta (2)
 to Fused (1), claiming FusedCta was numerically wrong and 2–12% slower; neither reproduced. With variant 2 all 16
@@ -485,7 +485,8 @@ in the host-only `StedcLevelPlan.*` tests, since a bad leaf still gives correct 
 
 **Open defect, measured 2026-08-03.** `syev_cta`, n = 32, eigenvectors, peak device memory by batch: 512 445 MiB;
 1024 2237 MiB (0.320 µs/matrix); 4096 7505 MiB (0.192); 16384 **24083 MiB** (whole card; 0.592, regresses). That is
-about 1.8 MB of workspace per 32×32 matrix (roughly 450× the 4 KB of data), linear in batch above 512.
+about 1.5–2.2 MiB of workspace per 32×32 matrix at batch 1024–16384 (1.8 MiB at 4096; roughly 380–560× the
+4 KB of data), growing about linearly with batch above 512.
 Eigenvalues-only is unaffected (about 343 MiB at batch 16384). `syev_blocked` has the same problem: eigenvalues-only
 at batch 16384 (n = 32), 15258 (64), 3814 (128) and 953 (256) each exceeded 3 GB (predates WP1, not re-measured).
 Usable batch is capped near 4096 for n = 32 with vectors on a 24 GB card, below saturation; it caused a real OOM on a

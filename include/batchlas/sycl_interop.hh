@@ -13,7 +13,7 @@
 /// USM pointers from `sycl::malloc_device`, `sycl::malloc_host`, `cudaMalloc` or
 /// `cudaMallocManaged` wrap zero-copy in a Span or MatrixView, provided they are reachable from
 /// the Queue's context. Everything here is single-threaded in the same sense as Queue.
-/// @ingroup core
+/// @ingroup api_core
 // Kept out of the umbrella for compile time. evidence: docs/design/build-performance.md#build-performance-the-umbrella-header-excludes-device-code
 #include <batchlas/export.hh>
 #include <sycl/sycl.hpp>
@@ -31,7 +31,7 @@ namespace batchlas {
 /// @param ctx the Queue; must not be moved-from
 /// @return the underlying queue. Do not destroy it, hold it past `ctx`'s lifetime, or submit to
 ///         it from another thread.
-/// @ingroup core
+/// @ingroup api_core
 BATCHLAS_API sycl::queue& sycl_queue(const Queue& ctx);
 
 /// @brief The `sycl::event` underlying a BatchLAS Event.
@@ -41,7 +41,7 @@ BATCHLAS_API sycl::queue& sycl_queue(const Queue& ctx);
 /// @param event the BatchLAS event
 /// @return the underlying event, or a default-constructed (already complete) `sycl::event` when
 ///         `event` is default-constructed or moved-from
-/// @ingroup core
+/// @ingroup api_core
 BATCHLAS_API sycl::event sycl_event(const Event& event);
 
 /// @brief Wrap a foreign `sycl::event` as a BatchLAS Event, so BatchLAS work can be ordered after
@@ -58,7 +58,7 @@ BATCHLAS_API sycl::event sycl_event(const Event& event);
 /// @param event the foreign event
 /// @return an Event that Queue::enqueue() accepts
 /// @pre Both queues live in the same SYCL context.
-/// @ingroup core
+/// @ingroup api_core
 BATCHLAS_API Event event_from_sycl(sycl::event event);
 
 }  // namespace batchlas

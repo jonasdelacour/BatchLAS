@@ -341,7 +341,7 @@ inline constexpr void dispatch_trmm(const Exec& exec,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Triangular matrix-matrix product \f$ C := \alpha\,\mathrm{op}(A)\,B + \beta\,C \f$ (Left) or \f$ C := \alpha\,B\,\mathrm{op}(A) + \beta\,C \f$ (Right).

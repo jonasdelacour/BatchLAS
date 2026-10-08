@@ -462,7 +462,7 @@ inline constexpr void dispatch_rankk(const Exec& exec,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Symmetric rank-k update \f$ C := \alpha\,A\,A^{T} + \beta\,C \f$ (NoTrans) or \f$ C := \alpha\,A^{T} A + \beta\,C \f$, on the `UploV` triangle of `C` only.

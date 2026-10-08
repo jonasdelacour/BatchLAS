@@ -210,7 +210,7 @@ statistic that shows whether a clause has a loss anywhere inside it (`nrhs = 1`)
 
 **Mechanism.** The fused kernel gives one work-group to a matrix whose solve is a few dozen flops,
 so the work-group is the cost; `cublas?getrsBatched` has no such floor. Full write-up:
-[`getrs` order floor evidence](lu.md#getrs-order-floor-evidence) in `docs/perf/lu.md`.
+[getrs order floor evidence](lu.md#getrs-order-floor-evidence) in `docs/perf/lu.md`.
 
 ## Saturation
 

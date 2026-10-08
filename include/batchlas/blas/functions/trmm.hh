@@ -77,7 +77,7 @@ using trmm_vendor = Event(Queue&,
 ///         batch <= 65535 and a shape the `triangular` tiles or the `expand`
 ///         scratch admit (@ref md_docs_2perf_2level3).
 /// @see trsm, TrmmOptions, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, typename T>
 BATCHLAS_API Event trmm(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -100,7 +100,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of trmm (cuBLAS, rocBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::trmm calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trmm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,

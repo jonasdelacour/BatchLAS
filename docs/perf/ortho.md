@@ -41,7 +41,7 @@ Invariants that the code keeps next to the call:
   `ShiftChol3`'s shift kernel reads only the diagonal.
 - `svqb_alg` keeps its GEMM. It scales the whole `k x k` matrix before `syev`, so a one-triangle `C`
   would multiply uninitialised workspace.
-- The gate is "`syrk` reaches the Gram tile kernel on this route" (`select::level3_tile_route_available`,
+- The gate is that `syrk` reaches the Gram tile kernel on this route (`select::level3_tile_route_available`,
   `src/select/vendor.hh`), not "this is NVIDIA".
 - `BATCHLAS_ORTHO_GRAM=gemm` pins GEMM, so the substitution can be measured from one binary.
 

@@ -68,9 +68,9 @@ grid (`choice.hh:37-39`) straddles every edge: `out` 255/256, `red` 63/64 and 35
 
 | rows | ranking |
 |---|---|
-| 48, `complex<double>` only (`trans=T`, `red` 64–352, `out` ≥ 256, `batch` ≥ 320) | `cta \| vendor \| direct` |
-| every other `trans=T` row | `vendor \| cta \| direct` |
-| every `trans=N` row | `vendor \| direct` (`cta` cannot run NoTrans) |
+| 48, `complex<double>` only (`trans=T`, `red` 64–352, `out` ≥ 256, `batch` ≥ 320) | `cta`, then `vendor`, then `direct` |
+| every other `trans=T` row | `vendor`, then `cta`, then `direct` |
+| every `trans=N` row | `vendor`, then `direct` (`cta` cannot run NoTrans) |
 
 With the vendor present, `cta` ranks first only for `complex<double>`, `transA != NoTrans`,
 `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320`. `direct` never ranks first while the vendor
@@ -216,7 +216,7 @@ not a timing. The last blockers, `cdouble out=64 red=64 batch=512` (0.450 / 0.47
 | `n*batch >= 131072` | cuBLAS at the roof (924.7 GB/s) at `m=128, n=512, batch=256`; 0.97 / 0.97 | Refuted twice |
 | `A >= 256 MB` in place of a batch term | 0.9628 at 256 MB. The dip switches on at 537 MB for one shape and 134 MB for another | Refuted by a cell |
 | `64 <= m <= 320 && A >= 512 MB` | Worst cell 1.01×; never clears the ≥ 1.15× bar | Fails the gate |
-| WP7 clause search (`clause_search.py`) | No batch term; the two passing clauses captured at most 22 of 68 wins | Superseded |
+| Clause search (`clause_search.py`) | No batch term; the two passing clauses captured at most 22 of 68 wins | Superseded |
 | `red_len >= 48` | 88 cells, geomean 2.135, min 1.1605, zero losses; the vendor is still on the slope at red 48 | Declined |
 | `out_len >= 768 && batch >= 128` | ~18 cells at 2.26×–2.91×, no measured loss | Not shipped ([open debts](#gemv-open-debts)) |
 

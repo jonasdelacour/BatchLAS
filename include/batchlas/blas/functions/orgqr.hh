@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched formation of Q from geqrf reflectors (orgqr/ungqr) and its workspace query.
-/// @ingroup qr
+/// @ingroup api_qr
 
 #include <batchlas/export.hh>
 #include <stdexcept>
@@ -48,7 +48,7 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 /// served by the vendor kernel, the only one whose `can_run` admits it
 /// (src/ops/orgqr/orgqr.cc). The length of `tau` is checked by the option overloads.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup qr
+/// @ingroup api_qr
 // Deliberately no n <= m check: rejecting such a view is a user-visible behaviour change.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
@@ -83,7 +83,7 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @throws batchlas::NoRouteError if no native kernel can run the shape (the
 ///         blocked kernel needs a GPU queue, a homogeneous batch and n <= m)
 ///         and the vendor library was not built in
-/// @ingroup qr
+/// @ingroup api_qr
 template <Backend B, typename T>
 BATCHLAS_API Event orgqr(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -91,7 +91,7 @@ BATCHLAS_API Event orgqr(Queue& ctx,
                          Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that orgqr() needs for this shape on this queue.
-/// @ingroup qr
+/// @ingroup api_qr
 template <Backend B, typename T>
 BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -103,7 +103,7 @@ BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
 namespace batchlas::backend {
 
 /// @brief Vendor arm of orgqr(); called by the public orgqr(), not by users.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 // Declaration only: the public orgqr lives in src/ops/orgqr/orgqr.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
@@ -114,7 +114,7 @@ BATCHLAS_API Event orgqr_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of orgqr().
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t orgqr_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,

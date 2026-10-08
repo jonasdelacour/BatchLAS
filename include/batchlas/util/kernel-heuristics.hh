@@ -9,11 +9,11 @@
 
 /// @file
 /// @brief Launch-size heuristics used by the library's own kernels. Installed, not API.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 namespace batchlas {
 
-/// @addtogroup internal_helpers
+/// @addtogroup api_internal_helpers
 /// @{
 
 /**

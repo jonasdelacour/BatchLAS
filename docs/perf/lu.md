@@ -170,7 +170,7 @@ Clauses A and B, the rows that rank fused `cta` first, from `experiments/wp6_per
 | B: float, `nrhs = 3..4` | 36 | **1.611** | 1.133 | **0** |
 | both | **322** | **2.177** | **1.116** | **0** |
 
-On WP6's saturating grid, nrhs=1 moves from 0.256x (0 of 28 wins) to 2.117x (28 of 28). Full batch ladders at n = 32 to 2048 show zero of 322 laddered cells below 1.0 (lowest rung 1.116x), but this grid has no rung below n = 32; see [the order floor](#getrs-order-floor-evidence).
+On the saturating grid, nrhs=1 moves from 0.256x (0 of 28 wins) to 2.117x (28 of 28). Full batch ladders at n = 32 to 2048 show zero of 322 laddered cells below 1.0 (lowest rung 1.116x), but this grid has no rung below n = 32; see [the order floor](#getrs-order-floor-evidence).
 
 **Why clause B is float-only.** Mid-ladder dips refute the wider candidates: double n=128 at 0.940x (batch 2048); cdouble n=32 at 0.577x. Rejected: float `nrhs <= 8` (3 losses, worst 0.686x), `nrhs <= 4` every type (20 losses, worst 0.577x), the whole capability (55 losses, worst 0.294x). The thinnest margin is cdouble n=32 nrhs=2 at 1.116 (batch 16384); it flattens rather than falls.
 

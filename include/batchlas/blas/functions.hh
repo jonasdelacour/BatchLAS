@@ -9,7 +9,7 @@
 
 /// @file
 /// @brief All positional dense entry points (`blas/functions/*.hh`) plus their option-struct spellings.
-/// @ingroup api
+/// @ingroup api_reference
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/gemv.hh>

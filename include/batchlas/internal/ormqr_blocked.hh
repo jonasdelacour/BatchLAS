@@ -5,7 +5,7 @@
 ///
 /// Installed only because `batchlas/blas/functions/ormqr.hh` includes it; not a
 /// stable interface.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 
 #include <batchlas/export.hh>
 #include <batchlas/blas/enums.hh>
@@ -27,7 +27,7 @@ namespace batchlas {
 /// @throws batchlas::invalid_argument on mismatched batch or order, a short @p tau,
 ///         or an out-of-order @p ctx
 /// @throws batchlas::unsupported for `Transpose::Trans` with complex T (use `ConjTrans`)
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
@@ -39,7 +39,7 @@ BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
 
 /// @brief Workspace, in bytes, that ormqr_blocked() needs for this @p block_size.
-/// @ingroup internal_helpers
+/// @ingroup api_internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
                                               const MatrixView<T, MatrixFormat::Dense>& a,

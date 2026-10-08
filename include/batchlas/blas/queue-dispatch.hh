@@ -13,12 +13,12 @@
 
 /// @file
 /// @brief Backend deduction from the Queue, owning-argument acceptance and the USM pointer check.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 
 namespace batchlas {
 
 /**
- * @addtogroup dispatch
+ * @addtogroup api_dispatch
  * @details
  * <b>Every entry point has two spellings.</b> `f<Backend::CUDA>(ctx, ...)` fixes the
  * backend at compile time; `f(ctx, ...)` takes it from `ctx.backend()` through

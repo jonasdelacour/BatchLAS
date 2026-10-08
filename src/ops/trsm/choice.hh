@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief trsm: cta, sg_left, blocked, vendor. evidence: docs/perf/trsm.md @ingroup selection_ops
+/// @brief trsm: cta, sg_left, blocked, vendor. evidence: docs/perf/trsm.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

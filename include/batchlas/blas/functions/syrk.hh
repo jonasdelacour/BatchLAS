@@ -69,7 +69,7 @@ using syrk_vendor = Event(Queue&,
 ///         batch <= 65535, and either `T` is `float` (the `triangular` tiles) or the
 ///         `gram` tile admits the shape (@ref md_docs_2perf_2level3).
 /// @see herk, syr2k, SyrkOptions, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, RealScalar T>
 BATCHLAS_API Event syrk(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -90,7 +90,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of syrk (cuBLAS, rocBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::syrk calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, RealScalar T>
 BATCHLAS_API Event syrk_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,

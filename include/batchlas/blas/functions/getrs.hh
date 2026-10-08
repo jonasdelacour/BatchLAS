@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched solve with LU factors from getrf (getrs) and its workspace query.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 
 #include <batchlas/export.hh>
 #include <stdexcept>
@@ -55,7 +55,7 @@ using getrs_vendor_buffer_size = size_t(Queue&,
 /// overloads; on this path a non-conforming pair fails every native can_run and
 /// goes to the vendor.
 /// @throws batchlas::invalid_argument on negative extents
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Runs before selection in src/ops/getrs/getrs.cc reads A.rows()/B.cols().
 // Deliberately minimal; rejecting more would change a working call into an error.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
@@ -96,7 +96,7 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @throws batchlas::NoRouteError if no native kernel can run the shape and the
 ///         vendor library was not built in
 /// @see GetrsOptions
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -106,7 +106,7 @@ BATCHLAS_API Event getrs(Queue& ctx,
                         Span<std::byte> work_space);
 
 /// @brief Workspace, in bytes, that getrs() needs for these operands on this queue.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -120,7 +120,7 @@ namespace batchlas::backend {
 
 /// @brief Vendor arm of getrs(); called by getrs() when it selects the `vendor`
 ///        kernel family, not by users.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 // DECLARATION ONLY: the public getrs is defined in src/ops/getrs/getrs.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend Back, typename T>
@@ -133,7 +133,7 @@ BATCHLAS_API Event getrs_vendor(Queue& ctx,
 
 
 /// @brief Workspace query of the vendor arm of getrs().
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T,MatrixFormat::Dense>& A,

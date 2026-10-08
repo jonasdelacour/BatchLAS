@@ -3,7 +3,7 @@
 /// @file
 /// @brief Flat kernel selection: one choose() per op over measured per-device tables.
 /// Spec: docs/design/flat-kernel-selection.md §4-§5. Everything here is generic over a choice
-/// std::variant whose alternatives are family structs (§4.2). @ingroup selection
+/// std::variant whose alternatives are family structs (§4.2). @ingroup api_selection
 // State that a test and the library must share (pins, table cache, trace depth) lives in select.cc
 // behind BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
@@ -34,7 +34,7 @@
 #include <vector>
 
 namespace batchlas::select {
-/// @addtogroup selection
+/// @addtogroup api_selection
 /// @{
 
 // ---- device facts (§5.1) ---------------------------------------------------------------

@@ -103,7 +103,7 @@ using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFor
  *         fall back to the tuned choice with a warning)
  * @see @ref selection_tables, @ref perf_gesvd, @ref design_gesvd,
  *      @ref md_docs_2cpp-api (convergence status)
- * @ingroup svd
+ * @ingroup api_svd
  */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd(Queue& ctx,
@@ -124,7 +124,7 @@ BATCHLAS_API Event gesvd(Queue& ctx,
  * family has no triangle argument and reads all of `A`, so keep both triangles valid
  * wherever that family can be chosen, e.g. `Upper` with n > 32.
  * @pre `A` is square
- * @ingroup svd
+ * @ingroup api_svd
  */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd(Queue& ctx,
@@ -142,7 +142,7 @@ BATCHLAS_API Event gesvd(Queue& ctx,
 // is a function TYPE and cannot carry a default. Arity plus the Uplo/Span type at
 // parameter 8 keeps all four overloads unambiguous.
 // evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
-/** @brief gesvd() without the convergence status (`info` empty). @ingroup svd */
+/** @brief gesvd() without the convergence status (`info` empty). @ingroup api_svd */
 template <Backend B, typename T>
 inline Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -155,7 +155,7 @@ inline Event gesvd(Queue& ctx,
     return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace, Span<int32_t>{});
 }
 
-/** @brief Hermitian gesvd() without the convergence status (`info` empty). @ingroup svd */
+/** @brief Hermitian gesvd() without the convergence status (`info` empty). @ingroup api_svd */
 template <Backend B, typename T>
 inline Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -175,7 +175,7 @@ inline Event gesvd(Queue& ctx,
  *
  * Canonicalises `jobu`/`jobvh` and makes the same kernel choice as the call does, so
  * the size is for the kernel that will run. `info` does not affect it.
- * @ingroup svd
+ * @ingroup api_svd
  */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
@@ -186,7 +186,7 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       SvdVectors jobu,
                                       SvdVectors jobvh);
 
-/** @brief Workspace, in bytes, for the Hermitian gesvd(). @ingroup svd */
+/** @brief Workspace, in bytes, for the Hermitian gesvd(). @ingroup api_svd */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -213,7 +213,7 @@ namespace batchlas::backend {
  *         or `Thin` vectors (`gesvdjBatched` has no `econ` flag); on ROCm always
  * @throws batchlas::convergence_error on NETLIB for a non-converged item when
  *         `info_out` is empty
- * @ingroup dispatch
+ * @ingroup api_dispatch
  */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd_vendor(Queue& ctx,
@@ -226,7 +226,7 @@ BATCHLAS_API Event gesvd_vendor(Queue& ctx,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out = Span<int32_t>());
 
-/** @brief Workspace, in bytes, for backend::gesvd_vendor(). @ingroup dispatch */
+/** @brief Workspace, in bytes, for backend::gesvd_vendor(). @ingroup api_dispatch */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,

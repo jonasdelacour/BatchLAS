@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief posv: tiny, cta, blocked.
-/// `evidence: docs/perf/potrf.md#posv-selection-since-flat-kernel-selection-phase-3` @ingroup selection_ops
+/// `evidence: docs/perf/potrf.md#posv-selection-since-flat-kernel-selection-phase-3` @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

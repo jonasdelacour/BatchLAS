@@ -94,7 +94,7 @@ Not enforced, deliberately:
 
 - **Extremal with a contradicting `order`.** `SortOrder` has no "unset" value, so an explicit `Ascending` looks like the
   default. Python sends every field on every call, so rejecting this would break `bl.syevx(a, k)`.
-- **Capacity above \f$n\f$.** Clamped, not rejected.
+- **Capacity above the matrix size.** Clamped, not rejected.
 
 An out-of-range or inverted Index block resolves to the empty block (`il = 0`, `iu = -1`, `max_count = 0`), so
 \f$iu - il + 1 = \mathrm{max\_count}\f$ holds for every resolved range.

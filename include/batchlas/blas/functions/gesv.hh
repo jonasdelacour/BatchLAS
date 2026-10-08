@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief Batched general linear solve (gesv) by LU with partial pivoting.
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 
 // No vendor ships a batched gesv, so there is no gesv_vendor; the fallback is the
 // routed composition getrf; getrs, and the documented contract is exactly that.
@@ -41,7 +41,7 @@ using gesv_buffer_size = size_t(Queue&,
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()` and equal
 /// batch sizes.
 /// @throws batchlas::invalid_argument if any check fails
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Stricter than getrs_validate_params on purpose: getrs routes a non-conforming
 // pair to the vendor, but gesv has none, so it would report the wrong cause.
 template <typename T>
@@ -96,7 +96,7 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
 /// @throws batchlas::workspace_error if the composed getrf + getrs route is
 ///         chosen and @p work_space is shorter than its getrf leg needs
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event gesv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -109,14 +109,14 @@ BATCHLAS_API Event gesv(Queue& ctx,
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the operands
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API size_t gesv_buffer_size(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                      const MatrixView<T, MatrixFormat::Dense>& B);
 
 /// @brief gesv() without per-item status (`info` not requested).
-/// @ingroup factorizations
+/// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
 template <Backend Back, typename T>
 inline Event gesv(Queue& ctx,

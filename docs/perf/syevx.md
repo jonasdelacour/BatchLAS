@@ -34,8 +34,8 @@ The dense `Auto` rule, from `syevx_select_algorithm` (`src/extensions/syevx.cc:2
 ## syevx: the Direct baseline was never cuSOLVER
 
 Before commit `fc4fa7a9`, `syev`'s `Auto` order put the in-house blocked solver ahead of the vendor, so
-every dense `Direct` solve ran it. `syev_prefer_vendor` (`include/batchlas/blas/functions/syev.hh:181`)
-now sends `syev` to the vendor on CUDA. Over `n = 64..1024`, `batch = 1..512`, the vendor won 24 of 25
+every dense `Direct` solve ran it. The fix, `syev_prefer_vendor` (`syev.hh:181` when written; no longer in `include/` or `src/`, routing is
+now flat selection, see [syev](syev.md)), sent `syev` to the vendor on CUDA. Over `n = 64..1024`, `batch = 1..512`, the vendor won 24 of 25
 shapes (1.27x to 15.4x). Blocked leads by up to 1.37x on `320 <= n <= 640` with `batch >= 128`; that
 carve-out is kept as measured, since the boundary is not monotone in `n`.
 
@@ -72,7 +72,7 @@ algorithm` with algorithm 1..4 = Direct, DirectSubset, Filtered, LOBPCG. The Dir
 columns remain valid:
 
 - DirectSubset was 3x to 5x slower than Direct in eigenvalues-only mode at every shape. Its best
-  eigenvector result was 1.46x (`n = 1024`, batch 64), or 2.40x against the corrected baseline.
+  eigenvector result was 1.46x (`n = 1024`, batch 64), or, against the corrected baseline, 2.40x at batch 256 (1.00 at batch 64, see the table above).
 - Filtered's dense niche is narrow (`n >= 1024`, `k/n` about 1 %, small batch, margin under 2x). It has
   a convergence failure mode, so it stays opt-in.
 - LOBPCG on dense input was 10x to 100x behind Direct.
@@ -352,10 +352,11 @@ The projected problem is a batched `3k x 3k` dense eigensolve per iteration. `sy
 `n <= 32` to CTA, so it never reached the vendor. At `n = 30`, batch 8, float, eigenvectors: CTA 229.6 µs per call
 against cuSOLVER's 103.7 µs (2.21x), and nsys attributes 29.4 % of LOBPCG GPU time to it.
 
-`syev_prefer_vendor_over_cta` (`include/batchlas/blas/functions/syev.hh`) would send eigenvector-mode CUDA solves
-with `n > BATCHLAS_SYEV_CTA_MAX_N` to the vendor. It ships **off** (default 32, `syev_cta_max_n_default_for<T>()`):
-it measured 1.10x to 1.15x through LOBPCG at batch 8 but flips a marginal case in
-`ILUKTests.SyevxInstrumentationAndPreconditioner`. The owner decision is on the [syev page](syev.md#syev-the-lobpcg-projected-solve-knob).
+The retired (2026-10-05) `syev_prefer_vendor_over_cta` knob (`BATCHLAS_SYEV_CTA_MAX_N`, default 32 via
+`syev_cta_max_n_default_for<T>()`; none of these exist in `include/` or `src/` now) would have sent eigenvector-mode
+CUDA solves with `n` above the threshold to the vendor. It shipped **off**: it measured 1.10x to 1.15x through LOBPCG
+at batch 8 but flipped a marginal case in `ILUKTests.SyevxInstrumentationAndPreconditioner`. The open owner decision
+is on the [syev page](syev.md#syev-the-lobpcg-projected-solve-knob).
 `BATCHLAS_SYEVX_PROJECTED_VENDOR` forces the vendor for the projected solve; it changes workspace size, so it must
 not change between a buffer-size query and the call.
 

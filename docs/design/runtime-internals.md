@@ -141,7 +141,7 @@ first view.
 
 `WorkspaceArena` (`src/queue.hh`) is the scratch memory behind `Queue::workspace()` and
 `WorkspaceLease`. Caller rules are in `<batchlas/util/workspace.hh>`. The lease design (nesting,
-reassignment, out-of-order queues, sizing) is @ref design_workspace.
+reassignment, out-of-order queues, sizing) is in @ref design_workspace "the workspace design page".
 
 - **Append-only blocks.** Blocks are never moved, because a live lease keeps its pointer. A borrow
   that does not fit in the current block opens a new one. Released bytes are rewound, not freed, so

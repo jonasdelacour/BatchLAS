@@ -4,7 +4,7 @@
 
 The shared dispatch rules for every op, and the level-3 four (`symm`, `syrk`, `syr2k`, `trmm`): vendor availability,
 candidate families, `can_run` terms, pin spellings, what the tuned tables rank, and the measurements behind the
-table edges. How ops choose in general: @ref design_flat_selection and @ref selection. Per-op ranking:
+table edges. How ops choose in general: @ref design_flat_selection and @ref api_selection. Per-op ranking:
 @ref selection_tables.
 
 ## The vendor-availability gate
@@ -228,7 +228,7 @@ above, with different constants.
 | predicate | shipped condition | evidence | bracketing non-winner |
 |---|---|---|---|
 | `herk_gemm_preferred` (`src/backends/cublas.cc`) | `batch >= 4 && n <= 768` | complex64, n 32..1024 x batch 1..256: 1.6x–72x for batch >= 4 at n <= 512 | a wash at n = 640..768; **0.82x–0.93x from n = 896 up**; batch <= 2 a wash or loss at every n |
-| `her2k_gemm_preferred` (`src/expansion_budget.hh`) | `batch >= 2 \|\| n >= 128` | 1.4x–128x everywhere else | batch 1 at n <= 64: **0.74x at n = 32, 0.89x at n = 64** |
+| `her2k_gemm_preferred` (`src/expansion_budget.hh`) | `batch >= 2` or `n >= 128` | 1.4x–128x everywhere else | batch 1 at n <= 64: **0.74x at n = 32, 0.89x at n = 64** |
 
 herk's rule is a conjunction with a large-n ceiling, because its GEMM computes both triangles and keeps one. The
 her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` before their window

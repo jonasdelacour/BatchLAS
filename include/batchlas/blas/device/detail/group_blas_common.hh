@@ -17,7 +17,7 @@
 
 namespace batchlas::device {
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief Which implementation family a device BLAS call may use.

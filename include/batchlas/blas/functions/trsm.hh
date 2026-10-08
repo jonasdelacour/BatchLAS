@@ -47,7 +47,7 @@ using trsm_vendor = Event(Queue&,
 /// @param transA  NoTrans, Trans or ConjTrans
 /// @param diag    Diag::NonUnit or Diag::Unit
 /// @throws batchlas::invalid_argument naming the first violated requirement
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <typename T>
 inline void trsm_validate_params(
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -145,7 +145,7 @@ inline void trsm_validate_params(
 /// @note On `Backend::NETLIB`, `alpha == 0` still reads `B`, so a NaN in `B`
 ///       survives (known defect 5, @ref md_docs_2design_2known-defects).
 /// @see trmm, TrsmOptions, @ref perf_trsm, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -160,7 +160,7 @@ BATCHLAS_API Event trsm(Queue& ctx,
 // evidence: docs/cpp-api.md#trsm-alpha-moved-next-to-the-matrices
 /// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
 /// after `B`.
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Back, typename T>
 Event trsm(Queue&,
            const MatrixView<T, MatrixFormat::Dense>&,
@@ -168,7 +168,7 @@ Event trsm(Queue&,
            Side, Uplo, Transpose, Diag, T) = delete;
 
 /// @brief Deleted: the old argument order with `alpha` last, owning-Matrix spelling.
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Back, typename T>
 Event trsm(Queue&,
            const Matrix<T, MatrixFormat::Dense>&,
@@ -188,7 +188,7 @@ namespace batchlas::backend {
 /// Not an entry point: batchlas::trsm calls it after validation, when kernel
 /// selection picks the Vendor family. Same semantics as batchlas::trsm, but
 /// `alpha` is the last argument.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,
                                const MatrixView<T,MatrixFormat::Dense>& A,

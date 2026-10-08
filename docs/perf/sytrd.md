@@ -41,7 +41,7 @@ n = 128 loses (0.71–0.77); n = 384 is neutral (0.95).
 batch, at least 1.41× at batch ≤ 8. The crossover is a barrier-latency property of the device;
 re-measure on new hardware before changing it. The gate also holds in eigenvector mode
 ([syev: latrd grid gate confirmed in eigenvector mode](syev.md#syev-latrd-grid-gate-confirmed-in-eigenvector-mode)).
-The win shrinks with batch (n = 768: 1.38× at batch 1, 1.09× at batch 64).
+The win shrinks with batch (eigenvector mode, n = 768: 1.38× at batch 1, 1.09× at batch 64; the table above is eigenvalues only and has no batch-64 cell at n = 768).
 
 ## sytrd: the latrd grid kernel and its co-residency cap
 
@@ -86,7 +86,7 @@ unaffected (float and double at n = 512, batch 1024: 50.86 and 50.87 µs per mat
 Converting the other complex multiplies in the kernel made it slower, because the expanded form costs
 registers and occupancy: symv only 108.4 µs per matrix against 125.8 with every site converted
 (n = 512, batch 1024). General rule:
-[agent guide, GPU kernel facts](../developer/agent-guide.md#dev_agent_guide).
+[agent guide, GPU kernel facts](../developer/agent-guide.md#11-gpu-kernel-design-facts-sm_89-mostly-general).
 
 ## sytrd: rejected latrd symv loop shapes
 

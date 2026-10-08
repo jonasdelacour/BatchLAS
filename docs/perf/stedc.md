@@ -18,8 +18,9 @@ latency-bound, not compute- or bandwidth-bound.
 
 ## stedc: partition-parallel rescale and normalize
 
-Status: **done**. End-to-end gain on the CTA path is 4-9%, depending on n (about 5.5% at matched
-settings, see [stedc: end-to-end merge speedup](#stedc-end-to-end-merge-speedup)).
+Status: **done**. End-to-end gain on the CTA path is 4-9% on its own (the loops alone), depending on n (about
+5.5% at matched settings); with the multiplier change they enabled it is 15-20%, see
+[stedc: end-to-end merge speedup](#stedc-end-to-end-merge-speedup).
 
 `maybe_rescale_vectors` and `normalize_vectors` (`src/extensions/stedc_merge_cta.cc`) looped over
 `eid = 0 .. dd-1` with a whole-work-group reduction and a barrier per index. Both loops are

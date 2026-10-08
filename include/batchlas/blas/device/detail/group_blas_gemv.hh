@@ -189,7 +189,7 @@ inline void dispatch_gemv(const Group& group,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief General matrix-vector product \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$.

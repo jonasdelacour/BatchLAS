@@ -72,7 +72,7 @@ using syr2k_vendor = Event(Queue&,
 ///         with homogeneous operands and batch <= 65535 (the `triangular` tiles;
 ///         @ref md_docs_2perf_2level3).
 /// @see her2k, syrk, Syr2kOptions, @ref md_docs_2cpp-api
-/// @ingroup blas3
+/// @ingroup api_blas3
 template <Backend Ba, RealScalar T>
 BATCHLAS_API Event syr2k(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -94,7 +94,7 @@ namespace batchlas::backend {
 /// @brief Vendor-library implementation of syr2k (cuBLAS, rocBLAS, host BLAS).
 ///
 /// Not an entry point: batchlas::syr2k calls it. Same arguments and semantics.
-/// @ingroup dispatch
+/// @ingroup api_dispatch
 template <Backend Back, RealScalar T>
 BATCHLAS_API Event syr2k_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,

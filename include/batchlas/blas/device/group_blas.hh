@@ -2,7 +2,7 @@
 
 /// @file
 /// @brief All device group BLAS operations; include `<batchlas/blas/device.hh>` instead.
-/// @ingroup device_blas
+/// @ingroup api_device_blas
 
 #include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/device/detail/group_blas_subgroup_common.hh>

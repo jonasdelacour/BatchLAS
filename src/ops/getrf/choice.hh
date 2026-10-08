@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief getrf: tiny, cta, blocked, vendor. evidence: docs/perf/lu.md @ingroup selection_ops
+/// @brief getrf: tiny, cta, blocked, vendor. evidence: docs/perf/lu.md @ingroup api_selection_ops
 
 #include "../../select/select.hh"
 

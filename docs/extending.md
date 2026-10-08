@@ -4,7 +4,7 @@
 > [vendor-independence page](design/vendor-independence.md#adding-an-op-in-the-route-era).
 
 How to add a public entry point or a new op: where the declaration and definition go, how the op
-joins flat kernel selection (@ref design_flat_selection, code: @ref selection), and the overload
+joins flat kernel selection (@ref design_flat_selection, code: @ref api_selection), and the overload
 traps to avoid. Calling conventions are in [cpp-api.md](cpp-api.md).
 
 An entry point takes its backend as an explicit template parameter:
@@ -64,17 +64,17 @@ Every step is required; each has a check that fails if skipped.
    - `can_run(choice, device, ...)` is correctness only (rule R3): false exactly when the driver
      would throw or answer wrongly, each clause being the driver's own argument check; the vendor
      family's is `d.has_vendor`. Never put a speed threshold here.
-   - `launch(...)` is one `std::visit(select::overloaded{...})`, one arm per family; the vendor arm is
-     `if constexpr (select::has_library<B>(spec.vendor)) return backend::<op>_vendor<B, T>(...);
-     else select::no_vendor<B, T>(spec);`.
-   - `workspace(...)` is the same visit returning exactly the chosen family's bytes. It must be pure
+   - `launch(...)` is one `std::visit(select::overloaded{...})`, one arm per family. The vendor arm
+     calls `backend::<op>_vendor<B, T>(...)` when `select::has_library<B>(spec.vendor)` holds, and
+     `select::no_vendor<B, T>(spec)` otherwise.
+   - `%workspace(...)` is the same visit returning exactly the chosen family's bytes. It must be pure
      (no launch, no read of operand data); a nested op adds its children's public `*_buffer_size`.
    - The public `<op>` calls `<op>_validate_params`, then
      `select::run<B, T>(spec, q, key, candidates, can_run, shape, {}, launch)`. `<op>_buffer_size`
      calls the same validator, then `select::pick<B, T>` with the same key and `can_run`, then
      `workspace` (rule R5: sizing and running make the same choice). Validate only what no family
      could serve ([positional validators](design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve)).
-3. **Tables, `tuned/<op>.<dtype>.<device>.txt`**: one per dtype on every device the tree ships
+3. **Tables, `tuned/<op>.<dtype>.<%device>.txt`**: one per dtype on every device the tree ships
    tables for. `tuned_tables_tests` holds that inventory, parses every table, checks spellings
    against `candidates<T>()` and header keys against `key_names` (register the op in its
    `candidates(op, dtype)` map). Produce tables with the tuner, or `scripts/sweep_to_table.py`
@@ -91,7 +91,7 @@ Every step is required; each has a check that fails if skipped.
    that straddle its `can_run` limits both ways, checks `can_run` against what the driver accepts,
    runs each candidate with a workspace of exactly `<op>_buffer_size` bytes in a poisoned arena, and
    asserts a bad pin throws. docs/developer/agent-guide.md §8 applies in full.
-7. **Docs**: `@ingroup selection_ops` on the `choice.hh` declarations; measurements go on
+7. **Docs**: `@ingroup %api_selection_ops` on the `choice.hh` declarations; measurements go on
    `docs/perf/<op>.md` (add the op to `PERF_PAGE` in `docs/tools/gen_db_pages.py` if the page is
    named differently). @ref selection_tables picks the op up from `choice.hh` and the tables.
 8. **Verify the choice, not the timing**: `BATCHLAS_SELECT_TRACE=1` prints each decision and its

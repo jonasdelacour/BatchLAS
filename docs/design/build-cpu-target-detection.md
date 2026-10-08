@@ -1,6 +1,6 @@
 # CPU target detection {#design_cpu_target_detection}
 
-> **Status:** current · line numbers checked 2026-09-30.
+> **Status:** current · line numbers checked 2026-10-08.
 
 Configure decides whether CPU device code is compiled (`BATCHLAS_HAS_CPU_TARGET`) and drops what
 depends on it. Logic: `cmake/BatchLASDetectSYCL.cmake`. Options: `cmake/BatchLASOptions.cmake`.
@@ -11,17 +11,17 @@ to compile or finds no kernel at run time.
 
 ## Two stages
 
-**Stage 1: `detect_sycl_cpu_target()`** (`cmake/BatchLASDetectSYCL.cmake:495`) may append a CPU target
+**Stage 1: `detect_sycl_cpu_target()`** (`cmake/BatchLASDetectSYCL.cmake:477`) may append a CPU target
 to `BATCHLAS_SYCL_TARGETS`:
 
 | `BATCHLAS_CPU_TARGET` | Effect |
 | --- | --- |
 | `none` | No CPU target; `OFF`. |
 | `native_cpu` or `spir64_x86_64` | Appended; `ON`. |
-| `auto` (default, `cmake/BatchLASOptions.cmake:152`) | `sycl-ls` lists `[opencl:cpu]` or `[host:cpu]`: append `spir64_x86_64`. Lists `[native_cpu:cpu]`: append `native_cpu`. Otherwise, or if `sycl-ls` is missing or fails: `OFF`. |
+| `auto` (default, `cmake/BatchLASOptions.cmake:117`) | `sycl-ls` lists `[opencl:cpu]` or `[host:cpu]`: append `spir64_x86_64`. Lists `[native_cpu:cpu]`: append `native_cpu`. Otherwise, or if `sycl-ls` is missing or fails: `OFF`. |
 | Anything else | Configure `WARNING`, then treated as `auto`. |
 
-**Stage 2: the final gate** (`cmake/BatchLASDetectSYCL.cmake:655-678`) runs after
+**Stage 2: the final gate** (`cmake/BatchLASDetectSYCL.cmake:637-660`) runs after
 `-- Using SYCL targets: ...` is printed. It decides from the compile flags, not from device detection.
 
 1. An explicit `native_cpu` or `spir64_x86_64` forces `ON`.
@@ -31,7 +31,7 @@ to `BATCHLAS_SYCL_TARGETS`:
    -- CPU device detected by sycl-ls, but no CPU target in fsycl-targets
    -- CPU kernels will not be compiled - disabling CPU-dependent tests/benchmarks
    ```
-3. `BATCHLAS_ENABLE_CPU_TESTS=OFF` (`cmake/BatchLASOptions.cmake:104`, default `ON`) forces `OFF`.
+3. `BATCHLAS_ENABLE_CPU_TESTS=OFF` (`cmake/BatchLASOptions.cmake:72`, default `ON`) forces `OFF`.
 
 The result is exported as `BATCHLAS_HAS_CPU_TARGET` (`cmake/backend_config.h.in`, `#cmakedefine01`) and
 to Python as `compiled_features()["has_cpu_target"]`.
@@ -39,7 +39,7 @@ to Python as `compiled_features()["has_cpu_target"]`.
 ## What `BATCHLAS_HAS_CPU_TARGET=OFF` turns off
 
 - `minibench_cli_tests` is not built. It is the only member of `CPU_SYCL_DEPENDENT_TESTS`
-  (`tests/CMakeLists.txt:115-125`).
+  (`tests/CMakeLists.txt:135-137`).
 - Every NETLIB instantiation of every typed suite is compiled out. `backend_types`,
   `backend_types_filtered` and `backend_types_complex` (`tests/test_utils.hh`) add the NETLIB block only
   when `BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET`. Any NETLIB configuration still reached is

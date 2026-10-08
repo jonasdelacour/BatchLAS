@@ -7,7 +7,7 @@
 /// @file
 /// @brief WorkspaceLease: a scoped borrow of scratch memory from a Queue's workspace arena.
 /// @see @ref design_workspace
-/// @ingroup workspace
+/// @ingroup api_workspace
 
 // No util/sycl-span.hh (include cycle through sycl-device-queue.hh): Span and Queue are forward
 // declared, and these MUST stay inside namespace batchlas or they declare different types.
@@ -40,7 +40,7 @@ struct Queue;
 ///          upward. Call `ws.release()` first.
 /// @note Tied to one Queue and not thread-safe, like Queue itself.
 /// @see @ref design_workspace
-/// @ingroup workspace
+/// @ingroup api_workspace
 // Class-level BATCHLAS_API, not per member: it must cover the PRIVATE release_(), which the inline
 // move-assignment calls. evidence: docs/design/symbol-visibility.md#symbol-visibility-workspacelease-is-exported-at-class-level
 class BATCHLAS_API WorkspaceLease {

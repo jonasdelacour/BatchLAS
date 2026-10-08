@@ -339,7 +339,7 @@ vendor returning a status code instead of throwing is not covered by the skip. `
 2. **The design prediction of parity in the LOBPCG regime was refuted.** The gather is 1.3-4x faster there. The
    margin comes from cuSPARSE paying the `op(B)` wall and re-partitioning the CSR every call, not from beating the
    wall. Neither arm exceeds 0.52 of the roof.
-3. **The lanczos ratios shrink 4x at true saturation** (0.032 at batch 1024, 0.131 at batch 4096).
+3. **The lanczos win shrinks about 4x at true saturation.** The ratio rises from 0.032 at batch 1024 to 0.131 at batch 4096.
 4. **An rel_sd-only filter manufactured a passing clause** by deleting the reproducible non-winner (1.934 / 1.872,
    pass-2 rel_sd 0.033).
 5. **`complex<double>` transposed at 16 nnz/row loses at `nrhs = 1`** for m >= 2048.
@@ -371,7 +371,7 @@ vendor returning a status code instead of throwing is not covered by the skip. `
 * **Coverage cannot distinguish scale from scatter**, and rows are keyed on a power-of-two `shape_class`,
   first-writer-wins. A CSR and a Dense `spmm` at the same extents would share a row. This is unobservable today. Do
   not add a format bit: it invalidates every stored `.routes` baseline.
-* **One GPU only.** There is no second GPU generation, no AMD device, and no CPU-queue timing, so "no `is_gpu` gate"
+* **One GPU only.** There is no second GPU generation, no AMD device, and no CPU-queue timing, so having no `is_gpu` gate
   is a correctness decision, not a measured claim about `native_cpu`. The two 4090s share a NUMA node and one UVM
   driver. A sweep on the other card has inflated a cell 5.5x at a stable rel_sd. Verify both devices on re-runs.
 
@@ -391,8 +391,8 @@ Raw data is at the git tag `perf-evidence/vendor-independence`: `git show perf-e
 | small-batch corner, batch 1-128 | `experiments/sparse_spmm/sb1/`, `sb2/`, `run_smallbatch.sh`, `smallbatch.txt`, `sb_report.py` |
 | warm-up ramp, route-pin probes | `experiments/sparse_spmm/probe/warmup_probe.sh`, `probe/order_probe.sh` |
 | route census (65 decisions) | `experiments/sparse_spmm/route_census.py`, `scripts/route_diff.sh` captures |
-| campaign summary and vendor-defect list | `VENDOR_INDEPENDENCE_PLAN.md`, "WP8" sections |
-| coverage-instrument limits | `VENDOR_FREE_BASELINE.md` |
+| campaign summary and vendor-defect list | `VENDOR_INDEPENDENCE_PLAN.md`, "WP8" sections (root file, only at tag `perf-evidence/vendor-independence`) |
+| coverage-instrument limits | `VENDOR_FREE_BASELINE.md` (root file, only at tag `perf-evidence/vendor-independence`) |
 
 Reproduction (device 1 exclusive; `run_all.sh` takes about 21 min per pass, `run_smallbatch.sh` about 25 min):
 

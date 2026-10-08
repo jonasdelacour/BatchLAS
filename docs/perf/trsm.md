@@ -1,6 +1,6 @@
 # TRSM {#perf_trsm}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · WP3 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-05 (sm_120)
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · step-9 to step-16 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-05 (sm_120)
 
 Native batched `trsm` on the GPU: the `cta` (V1), `blocked` (V2) and `sg_left` kernels, the routing
 tables that choose among them, and the measurements behind those tables. The page gives the
@@ -94,8 +94,8 @@ On sm_120 it also skips a rung that leaves over half its lanes without an rhs co
 ([ladder cap](blackwell.md#trsm-v1-ladder-cap)).
 
 The work-group size cannot exceed 256. The worst instantiation, `complex<double>` at N=32, uses 226
-registers: `226*256 = 57,856` of 65,536 per block. The enforced check is the tighter per-sub-partition
-bound, `resident::sm89_fits` (2 x 32 x 232 = 14,848 of 16,384;
+registers: `226*256 = 57,856` of 65,536 per block, the whole-block count. The enforced check is the
+per-sub-partition bound `ceil(warps/4)*32*regs <= 16384`, `resident::sm89_fits` (2 x 32 x 232 = 14,848 of 16,384;
 [the LU page](lu.md#the-register-cap-that-binds-is-per-sub-partition)). It is a `static_assert` at
 `trsm_native.cc:94`.
 
@@ -103,7 +103,9 @@ Diagonal-block inversion is rejected at every tier; see [Negative results](#trsm
 
 ### The register gate and the CTA capacity {#the-register-gate-and-the-cta-capacity}
 
-The gate is: stack frame == 0, 0 spill bytes, and `registers * WG <= 65536`. Measure it with
+The gate is: stack frame == 0, 0 spill bytes, and `registers * WG <= 65536` as a first screen (the table below). The binding rule is the per-sub-partition
+bound `ceil(warps/4)*32*regs <= 16384`, which is the same at WG = 256 but not in general
+([agent guide, GPU kernel design facts](../developer/agent-guide.md#11-gpu-kernel-design-facts-sm_89-mostly-general)). Measure it with
 `scripts/register_probe.sh`, which replays the shared library's `link.txt`. A per-TU
 `-Xcuda-ptxas -v` log is not a valid measurement. Device code is compiled at the shared-library device
 link, so such a log reports "argument unused" and no spill whatever the kernel does.
@@ -207,7 +209,8 @@ Min-max ratio over all saturated cells at each order:
 | float | Right | 1.62-4.59 | 2.21-3.61 | **0.97**-1.58 | 1.02-1.63 |
 | float | Left | 1.61-3.58 | **0.70**-0.87 | 0.71-0.79 | **0.57**-0.63 |
 
-Saturated wins: double 32/32 (1.39-9.62x), complex<double> 30/30 (1.20-4.66x), complex<float> 30/30
+Saturated subsets as ranked in the notes (narrower than the min-max table above, which spans all
+saturated cells): double 32/32 wins (1.39-9.62x), complex<double> 30/30 (1.20-4.66x), complex<float> 30/30
 (1.01-21.91x), float/Right 18/18 (1.54-4.59x). Float/Left wins 6 of 16. The double path wins 1.39-6.37x
 at the same float/Left shapes, because cuBLAS's double triangular path is weak enough that the
 over-fetch never decides the race. That is why the decision is per type, and why the tables are per

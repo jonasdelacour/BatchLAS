@@ -419,7 +419,7 @@ inline constexpr void dispatch_gemm(const Exec& exec,
 
 } // namespace detail
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief General matrix-matrix product \f$ C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B) + \beta\,C \f$.

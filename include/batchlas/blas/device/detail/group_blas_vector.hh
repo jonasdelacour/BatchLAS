@@ -21,7 +21,7 @@ inline constexpr void hadamard(const Group& group,
 
 } // namespace detail::generic
 
-/// @addtogroup device
+/// @addtogroup api_device_blas
 /// @{
 
 /// @brief \f$ y := x \f$, cooperatively across `group`.

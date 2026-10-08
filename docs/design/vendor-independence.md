@@ -5,9 +5,9 @@
 BatchLAS configures, builds, loads and runs with no vendor math library. This page describes the
 mechanisms that keep that property: the two axes that decide vendor use, the per-library gate, the
 contracts every public entry point keeps, the coverage instrument and the verification scripts. It
-has no performance numbers. Measured windows and per-op debts are in [`docs/perf/`](../perf/README.md),
-starting at [`docs/perf/dispatch.md`](../perf/dispatch.md). Current vendor-free status is in
-[`vendor-free-status.md`](vendor-free-status.md).
+has no performance numbers. Measured windows and per-op debts are in [docs/perf/](../perf/README.md),
+starting at [docs/perf/dispatch.md](../perf/dispatch.md). Current vendor-free status is in
+[vendor-free-status.md](vendor-free-status.md).
 
 A vendor-free CUDA build is the ordinary build with one library axis off:
 `cmake -B build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON` yields
@@ -36,7 +36,7 @@ family variant. The vendor library is the family `vendor`.
 * **Nothing runnable** is reported by `select::pick` as `NoRouteError`.
 * **Ops without `choice.hh`** select by hand: `hemm`, `herk` and `her2k` (entry points in
   `src/ops/level3/level3.cc`; the expand-or-vendor choice is in `src/backends/cublas.cc`, see
-  [`docs/perf/level3.md`](../perf/level3.md)). `BATCHLAS_EXPAND_ROUTE=expand|loop` pins that decision. @ref selection_tables lists the ops that select from
+  [docs/perf/level3.md](../perf/level3.md)). `BATCHLAS_EXPAND_ROUTE=expand|loop` pins that decision. @ref selection_tables lists the ops that select from
   tables.
 
 The MathDx device libraries (cuBLASDx, cuSolverDx) counted as vendor, because their source is NVIDIA's
@@ -231,7 +231,7 @@ carried its own weak copy of the resolver produced a valid header and zero `reac
 `route_diff.sh` is the only tool that sees a vendor-to-vendor change. The kernel trace cannot, and timing
 cannot, because an unsaturated ratio measures overhead and a perf gate cannot flag a wrong choice.
 
-Adding an op is described in [Adding entry points](../extending.md) and the @ref selection group. The
+Adding an op is described in [Adding entry points](../extending.md) and the @ref api_selection group. The
 vendor-specific part is one `OpSpec::vendor` value and the `if constexpr` arm above.
 
 ## What is still open, architecturally
@@ -247,9 +247,9 @@ Per-op performance debts are on the `docs/perf/` pages. These belong to the vend
    build switch `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the enforcement today.
 4. `factorization_vendor_available` covers six ops over two NVIDIA libraries. A per-op split would move every call site.
 5. Ops without `choice.hh` still select by hand and keep their windows in code. See
-   [`docs/perf/dispatch.md`](../perf/dispatch.md) and @ref selection_tables.
+   [docs/perf/dispatch.md](../perf/dispatch.md) and @ref selection_tables.
 6. The vendor-free suite is not green, and no selection mechanism can make it so. The gap is missing
-   kernels, not routing. The failing set is tracked in [`vendor-free-status.md`](vendor-free-status.md).
+   kernels, not routing. The failing set is tracked in [vendor-free-status.md](vendor-free-status.md).
 
 ## History: the RouteTable layer
 
@@ -305,8 +305,8 @@ Until flat selection the public definitions were in `src/dispatch/entry_points/`
 
 A native driver has no `Backend` parameter, so it cannot name `gemm<B, T>`. The op file passes the public
 `gemm`, `trsm` or `ormqr` in as a lambda. Calling `sycl_gemm::gemm_custom` directly bypassed gemm's
-selection and pinned the native GEMM on shapes it loses; see [`docs/perf/trsm.md`](../perf/trsm.md) and
-[`docs/perf/gemm.md`](../perf/gemm.md).
+selection and pinned the native GEMM on shapes it loses; see [docs/perf/trsm.md](../perf/trsm.md) and
+[docs/perf/gemm.md](../perf/gemm.md).
 
 `scripts/facade_symbol_check.sh` verifies the move by symbol. A forwarder left behind still compiles and links.
 
@@ -314,9 +314,9 @@ selection and pinned the native GEMM on shapes it loses; see [`docs/perf/trsm.md
 
 Historical recipe, for reading old commits. The current recipe is [Adding entry points](../extending.md).
 
-**See also:** @ref design_flat_selection, @ref selection and @ref selection_tables. Per-op windows and
-rejected designs are in [`docs/perf/`](../perf/README.md), for example [`dispatch`](../perf/dispatch.md),
-[`gemm`](../perf/gemm.md), [`level3`](../perf/level3.md), [`trsm`](../perf/trsm.md),
-[`potrf`](../perf/potrf.md), [`qr`](../perf/qr.md), [`lu`](../perf/lu.md), [`gemv`](../perf/gemv.md) and
-[`spmm`](../perf/spmm.md). Superseded root design documents are at the git tag
+**See also:** @ref design_flat_selection, @ref api_selection and @ref selection_tables. Per-op windows and
+rejected designs are in [docs/perf/](../perf/README.md), for example [dispatch](../perf/dispatch.md),
+[gemm](../perf/gemm.md), [level3](../perf/level3.md), [trsm](../perf/trsm.md),
+[potrf](../perf/potrf.md), [qr](../perf/qr.md), [lu](../perf/lu.md), [gemv](../perf/gemv.md) and
+[spmm](../perf/spmm.md). Superseded root design documents are at the git tag
 `perf-evidence/vendor-independence`, readable with `git show <tag>:<path>`.

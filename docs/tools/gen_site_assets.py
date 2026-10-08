@@ -29,7 +29,7 @@ VERSIONED = ("batchlas.css", "bl-site.js", "bl-nav.js")
 RENAMES = {"README": "Overview and install"}
 # Tab labels for the top-level sections (the page titles are too long for a tab row).
 TAB_LABELS = {
-    "index.html": "Home", "guide_index.html": "User guide", "group__api.html": "API reference",
+    "index.html": "Home", "guide_index.html": "User guide", "group__api__reference.html": "API reference",
     "architecture_index.html": "Architecture", "algorithms_index.html": "Algorithms",
     "perf_evidence.html": "Performance", "results_index.html": "Results", "developer_index.html": "Developer",
 }
@@ -88,16 +88,25 @@ def build_tree(xml_dir, refid, child_tag, seen):
     return node
 
 
+def include_dir(xml_dir):
+    """The include/ directory page: the public headers, not Doxygen's list of every input dir."""
+    for refid, kind, name in compounds(xml_dir):
+        path = name.rstrip("/")
+        if kind == "dir" and (path == "include" or path.endswith("/include")):
+            return html_name(refid)
+    return "files.html"
+
+
 def build_nav(xml_dir):
     seen = set()
     root = build_tree(xml_dir, "indexpage", "innerpage", seen)
     nav = [{"t": "Home", "u": "index.html"}] + root.get("c", [])
-    api = build_tree(xml_dir, "group__api", "innergroup", set())
+    api = build_tree(xml_dir, "group__api__reference", "innergroup", set())
     if api:
         api["t"] = "API reference"
         api.setdefault("c", []).extend([
             {"t": "All classes", "u": "annotated.html"},
-            {"t": "All files", "u": "files.html"},
+            {"t": "Public headers", "u": include_dir(xml_dir)},
         ])
         nav.insert(2, api)
     for node in nav:
@@ -218,6 +227,37 @@ def version_assets(html_dir):
     return tags
 
 
+HREF_ANCHOR = re.compile(r'href="([A-Za-z0-9_.~%-]+\.html)?#([^"]+)"')
+ANCHOR_ID = re.compile(r'\s(?:id|name)="([^"]+)"')
+
+
+def drop_dangling_anchors(html_dir):
+    """Point links at a missing #anchor to the page itself.
+
+    Doxygen links friend declarations and some index entries to member anchors it never writes
+    (HIDE_FRIEND_COMPOUNDS); a link to the right page beats one that lands nowhere."""
+    docs = {}
+    for name in os.listdir(html_dir):
+        if name.endswith(".html"):
+            with open(os.path.join(html_dir, name), encoding="utf-8", errors="replace") as fh:
+                docs[name] = fh.read()
+    ids = {name: set(ANCHOR_ID.findall(doc)) for name, doc in docs.items()}
+    fixed = 0
+    for name, doc in docs.items():
+        def repl(m):
+            nonlocal fixed
+            target, anchor = m.group(1) or name, m.group(2)
+            if target in ids and anchor not in ids[target]:
+                fixed += 1
+                return 'href="%s"' % (m.group(1) or "#")
+            return m.group(0)
+        new = HREF_ANCHOR.sub(repl, doc)
+        if new != doc:
+            with open(os.path.join(html_dir, name), "w", encoding="utf-8") as fh:
+                fh.write(new)
+    return fixed
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--site", required=True, help="Doxygen output dir holding html/ and xml/")
@@ -234,10 +274,11 @@ def main():
     write_js(nav_js, "BL_NAV", nav)
     with open(nav_js, "a", encoding="utf-8") as fh:
         fh.write('window.BL_SEARCH_V="%s";\n' % search_v)
+    dangling = drop_dangling_anchors(html_dir)
     tags = version_assets(html_dir)
     size = os.path.getsize(os.path.join(html_dir, "bl-search.js"))
-    print("gen_site_assets: %d nav roots, %d search sections (%.1f MB), versioned %s"
-          % (len(nav), len(search), size / 1e6, ", ".join(sorted(tags))))
+    print("gen_site_assets: %d nav roots, %d search sections (%.1f MB), %d dangling anchors dropped, versioned %s"
+          % (len(nav), len(search), size / 1e6, dangling, ", ".join(sorted(tags))))
     return 0
 
 
