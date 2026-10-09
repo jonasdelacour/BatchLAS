@@ -252,7 +252,7 @@ each of potrf float (n=128, then n=110), potrf double (n=96, then n=78), posv fl
 n=110, nrhs=1) and trsm float (Left, NoTrans, order=q=128, then 104), all at batch 512, a worker
 raced the larger cell, then the smaller one at or just below the 48 KB hole, and a fresh child
 raced the smaller one. Every candidate's feasibility agreed. This is expected: potrf pads requests
-out of the hole and its kernels carry no static shared (docs/perf/potrf.md#potrf-the-48-kb-launch-hole).
+out of the hole and its kernels carry no static shared ([potrf: the 48 KB launch hole](../perf/potrf.md#potrf-the-48-kb-launch-hole)).
 The test stays as the guard; the mismatch path itself is tested with injected verdicts in
 `tune_tests`.
 
@@ -922,6 +922,58 @@ but not past `--cap-gib`. A key whose fields do not match the op's, or an op and
 does not tune, stops the run. The newer record wins in `best_records` (same tier, later date or
 run id), so the tables pick up the re-measure with no other change. Host tests: `TuneRemeasure.*`
 (a deliberate break of the planner or of the round-0 append turns them red).
+
+## Engine: the sm_120 deep run
+
+> **Status:** measured 2026-10-08/09 on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120,
+> CUDA 13.2, DPC++ `/opt/dpcpp-cuda`), GPUs 0-3, on a box shared with another user. The tables
+> it produced ship as `tuned/*.sm_120.txt`; the ledger is `benchmarks/results/tuning/ledger/`.
+
+**What ran.** `batchlas_tune all --tier deep --dtype float,double,cfloat,cdouble --devices 0,1,2,3`
+covered all 19 ops and every dtype each op instantiates: 70 (op, dtype) jobs, matrix dimensions up
+to 2048. It ran from 2026-10-08 06:23 to 2026-10-09 04:54 CEST, with four starts. The first
+ran 11.5 h and wrote 56,144 cells, until a geqrf cell with an 8192-wide matrix timed out its
+worker. The second died after 3 minutes and 345 cells when `nvidia-smi` failed during a GPU reset.
+The third ran 4.2 h (32,912 cells) and the fourth 4.9 h (35,323 cells), when the maintainer
+stopped it. That is about 20.6 h of measuring and 124,724 cell records. On 2026-10-09 two
+follow-up runs went into the same ledger. One re-measured 250 cells that the other user's jobs
+had damaged ("Engine: re-measuring named cells"): 2.5 min on 4 GPUs. The other re-ran gemv in
+full (8,515 cells in 33.5 min on 4 GPUs; float, double and cfloat hit the 2.0x refinement cap), because the defect-13 fix below edited `src/ops/gemv/gemv.cc`
+and so staled every gemv record. The final ledger holds 133,489 records over 118,854
+distinct cells.
+
+**Refinement coverage.** Every job's starting lattice is complete. Refinement is not: geqrf,
+ormqr, getri, posv, gesv, orgqr, syev, gesvd and complex getrs got little of it before the stop
+(a resumed run wanted 4,072 more refinement cells for the 15 ops of the re-measure run alone), so
+their crossovers sit on lattice spacing.
+
+**Interference.** Cells where every candidate stalled (about 2.3 ms or 7-11 ms, more than twice
+both log-neighbours, which agree on the winner) were screened over each table's first log key: 83
+strict outliers (over 2x both neighbours) and 252 soft ones (over 2x their log-interpolated
+time). The 250 non-gemv soft cells were re-measured at deep; afterwards the screen found 16 strict and 154 soft outliers, 153 of them among the cells just re-measured.
+The cells left reproduce, so they are real behaviour. Most are the gesvd `jacobi` cliff
+at m = 33, where the sub-group solver stops fitting, and spmm and syrk cells within a few
+microseconds of their neighbours.
+
+**What the run found, and what was fixed.** Each fix has its own section or defect entry:
+
+- *Dominance carry-forward* fired thousands of times and hid vendor/native crossovers. It was
+  removed ("Engine: dominance carry-forward removed").
+- *Unbounded matrix dimensions:* a geqrf vendor cell took many minutes. Fixed by the dimension
+  cap ("Engine: matrix-dimension cap").
+- *Idle tails:* GPUs waited at every (op, dtype) round boundary. Fixed by the pipelined queues
+  ("Engine: pipelined cell queues across op and dtype jobs").
+- *A transient `nvidia-smi` failure* killed the second start. The guard now retries
+  ("Engine: guard retries a failed nvidia-smi query").
+- *Repeat crashers:* the complex<double> cuBLAS gemv segfaults on every shape. The tuner now drops
+  such an arm ("Engine: repeat crashers are dropped"), and the library refuses it in `can_run`
+  (known defects, defect 13).
+- *LOBPCG:* with the new syev tables, LOBPCG's smallest-end solve returned 0. The cause was null P
+  columns, not the vendor (known defects, the LOBPCG entry). The projected solves also need more
+  accuracy than the speed tables can see, so they are now pinned to the CTA solver at n <= 32
+  ([LOBPCG: the accuracy pin on the projected syev](../perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev)).
+- *Single-`ld` verification* could not catch a candidate that derives `ld` from `n`. Fixed by
+  "Engine: the ld audit".
 
 ## Tiered tuning: open risks
 
