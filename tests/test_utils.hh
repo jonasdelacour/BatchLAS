@@ -3,6 +3,7 @@
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <type_traits>
 #include <cstdlib>
@@ -210,6 +211,22 @@ inline void assert_near(const T& a, const T& b, typename batchlas::base_type<T>:
     }
 }
 
+// batchlas::verify::pass (recorded) with value, bound, kind and n in the failure message.
+template <typename T>
+::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value) {
+    if (batchlas::verify::pass<T>(kind, n, value)) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
+                                         << batchlas::verify::bound<T>(kind, n) << " (n=" << n << ")";
+}
+
+template <typename T>
+::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value, batchlas::verify::Slack slack) {
+    if (batchlas::verify::pass<T>(kind, n, value, slack)) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
+                                         << batchlas::verify::bound<T>(kind, n, slack) << " (n=" << n << ", slack " << slack.factor
+                                         << " (" << slack.reason << "))";
+}
+
 // Unified base test fixture for all BatchLAS tests
 template <typename Config>
 class BatchLASTest : public ::testing::Test {
@@ -266,3 +283,7 @@ protected:
 };
 
 } // namespace test_utils
+
+// EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
+#define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))
+#define EXPECT_VERIFY_SLACK(T, kind, n, value, ...) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value), __VA_ARGS__))

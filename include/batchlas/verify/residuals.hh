@@ -159,15 +159,34 @@ template <class T> Dense<promoted_t<T>> csr_dense(const MatrixView<T, MatrixForm
     return out;
 }
 
-// ||A0 X V - B0 V||_F / (||A0||_F ||X V||_F). V is the identity while rows*cols*ncols of A0 X is at
-// most full_limit, else 8 seeded dense probe columns: O(n^2) host work at n = 4096, and a dense probe
-// still sees any wrong entry of X.
-template <class VA, class VX, class VB>
-double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const int> items, double full_limit) {
-    using T = value_of_t<VA>;
+// Q = H_0 ... H_{k-1} (reflector i below f's diagonal, implicit unit, H_i = I - tau_i v_i v_i^H)
+// applied to x in place.
+template <class T, class E, class D>
+void apply_q(const Item<T>& f, const VecItem<E>& t, int k, std::vector<D>& x) {
+    const int m = f.rows;
+    for (int i = k - 1; i >= 0; --i) {
+        D s = x[static_cast<std::size_t>(i)];
+        for (int r = i + 1; r < m; ++r) s += conj(get(f, r, i)) * x[static_cast<std::size_t>(r)];
+        s *= up(t[i]);
+        x[static_cast<std::size_t>(i)] -= s;
+        for (int r = i + 1; r < m; ++r) x[static_cast<std::size_t>(r)] -= s * get(f, r, i);
+    }
+}
+
+template <class T> promoted_t<T> op_shaped(const Item<T>& m, Shape s, Transpose t, int i, int j) {
+    if (t == Transpose::NoTrans) return shaped(m, s, i, j);
+    const auto x = shaped(m, s, j, i);
+    return t == Transpose::ConjTrans ? conj(x) : x;
+}
+
+// ||op(A) X V - B0 V||_F / (||op(A)||_F ||X V||_F); op_of(b) returns item b's op(A)(r, l) (m x k).
+// V is the identity while m*k*ncols is at most full_limit, else 8 seeded dense probe columns: O(n^2)
+// host work at n = 4096, and a dense probe still sees any wrong entry of X.
+template <class T, class OpOf, class VX, class VB>
+double solve_core(OpOf op_of, int m, int k, int batch, const VX& X, const VB& B0, std::span<const int> items, double full_limit) {
     using D = promoted_t<T>;
     const bool identity = B0.rows() == 0;
-    const int m = A0.rows(), k = A0.cols(), nc = X.cols();
+    const int nc = X.cols();
     if (X.rows() != k || (!identity && (B0.rows() != m || B0.cols() != nc))) bad("solve_residual", "dimension mismatch");
     const bool full = double(m) * double(k) * double(nc) <= full_limit;
     const int nv = full ? nc : 8;
@@ -177,14 +196,14 @@ double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const i
     auto vat = [&](int c, int j) { return full ? D(c == j ? 1 : 0) : V[static_cast<std::size_t>(j) * static_cast<std::size_t>(nc) + static_cast<std::size_t>(c)]; };
     std::vector<D> xv(static_cast<std::size_t>(k)), bv(static_cast<std::size_t>(m));
     double worst = 0;
-    for (int b : pick(items, A0.batch_size())) {
-        const auto a = item_of(A0, b);
+    for (int b : pick(items, batch)) {
+        const auto a = op_of(b);
         const auto x = item_of(X, b);
-        Item<T> rhs{};
+        Item<value_of_t<VB>> rhs{};
         if (!identity) rhs = item_of(B0, b);
         double na = 0, nx = 0, num = 0;
         for (int c = 0; c < k; ++c)
-            for (int r = 0; r < m; ++r) na += abs(get(a, r, c)) * abs(get(a, r, c));
+            for (int r = 0; r < m; ++r) na += abs(a(r, c)) * abs(a(r, c));
         for (int j = 0; j < nv; ++j) {
             std::fill(xv.begin(), xv.end(), D(0));
             std::fill(bv.begin(), bv.end(), D(0));
@@ -197,7 +216,7 @@ double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const i
             for (int r = 0; r < k; ++r) nx += abs(xv[static_cast<std::size_t>(r)]) * abs(xv[static_cast<std::size_t>(r)]);
             for (int r = 0; r < m; ++r) {
                 D acc = D(0);
-                for (int l = 0; l < k; ++l) acc += get(a, r, l) * xv[static_cast<std::size_t>(l)];
+                for (int l = 0; l < k; ++l) acc += a(r, l) * xv[static_cast<std::size_t>(l)];
                 const double d = abs(acc - bv[static_cast<std::size_t>(r)]);
                 num += d * d;
             }
@@ -205,6 +224,24 @@ double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const i
         worst = nanmax(worst, quot(std::sqrt(num), std::sqrt(na) * std::sqrt(nx)));
     }
     return worst;
+}
+
+template <class VA, class VX, class VB>
+double solve_residual(const VA& A0, Shape sa, Transpose ta, const VX& X, const VB& B0, std::span<const int> items, double full_limit) {
+    using T = value_of_t<VA>;
+    if (sa != Shape::general && sa != Shape::lower && sa != Shape::upper && A0.rows() != A0.cols())
+        bad("solve_residual", "unit, Hermitian and symmetric shapes need a square operand");
+    const bool nt = ta == Transpose::NoTrans;
+    const auto op_of = [&](int b) {
+        const auto a = item_of(A0, b);
+        return [a, sa, ta](int r, int l) { return op_shaped(a, sa, ta, r, l); };
+    };
+    return solve_core<T>(op_of, nt ? A0.rows() : A0.cols(), nt ? A0.cols() : A0.rows(), A0.batch_size(), X, B0, items, full_limit);
+}
+
+template <class VA, class VX, class VB>
+double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const int> items, double full_limit) {
+    return solve_residual(A0, Shape::general, Transpose::NoTrans, X, B0, items, full_limit);
 }
 
 }  // namespace detail
@@ -291,13 +328,7 @@ double qr_residual(const VA& A0, const VF& F, const VectorView<T>& tau, std::spa
         double num = 0, den = 0;
         for (int j = 0; j < n; ++j) {
             for (int r = 0; r < m; ++r) x[static_cast<std::size_t>(r)] = r <= j && r < k ? detail::get(f, r, j) : D(0);
-            for (int i = k - 1; i >= 0; --i) {
-                D s = x[static_cast<std::size_t>(i)];
-                for (int r = i + 1; r < m; ++r) s += conj(detail::get(f, r, i)) * x[static_cast<std::size_t>(r)];
-                s *= up(t[i]);
-                x[static_cast<std::size_t>(i)] -= s;
-                for (int r = i + 1; r < m; ++r) x[static_cast<std::size_t>(r)] -= s * detail::get(f, r, i);
-            }
+            detail::apply_q(f, t, k, x);
             for (int r = 0; r < m; ++r) {
                 const D z = detail::get(a, r, j);
                 num += abs(x[static_cast<std::size_t>(r)] - z) * abs(x[static_cast<std::size_t>(r)] - z);
@@ -309,11 +340,98 @@ double qr_residual(const VA& A0, const VF& F, const VectorView<T>& tau, std::spa
     return worst;
 }
 
+/// The first @p cols columns of Q = H_0 … H_{k−1} of item @p item (k = min(m, n) reflectors of the
+/// m x n @p F in geqrf storage, as qr_residual): m x cols, column-major, ld = m. F's diagonal and
+/// upper triangle are not read.
+template <class VF, class T>
+std::vector<promoted_t<T>> form_q(const VF& F, const VectorView<T>& tau, int item, int cols) {
+    using D = promoted_t<T>;
+    const int m = F.rows(), k = std::min(m, F.cols());
+    if (cols < 0 || cols > m) detail::bad("form_q", "cols must lie in [0, rows]");
+    if (tau.size() < k) detail::bad("form_q", "fewer than min(m, n) tau entries per item");
+    const auto f = detail::item_of(F, item);
+    const auto t = detail::vec_of(tau, item);
+    std::vector<D> Q(static_cast<std::size_t>(m) * static_cast<std::size_t>(cols)), x(static_cast<std::size_t>(m));
+    for (int j = 0; j < cols; ++j) {
+        std::fill(x.begin(), x.end(), D(0));
+        x[static_cast<std::size_t>(j)] = D(1);
+        detail::apply_q(f, t, k, x);
+        std::copy(x.begin(), x.end(), Q.begin() + static_cast<std::ptrdiff_t>(j) * m);
+    }
+    return Q;
+}
+
+/// ‖A0 − Q·triu(R)‖_F / ‖A0‖_F with an explicit m x k @p Q; R's first k rows are read on and above
+/// the diagonal only, so a geqrf factor (m x n) and a compact k x n R are both accepted.
+template <class VA, class VQ, class VR>
+double qr_reconstruction(const VA& A0, const VQ& Q, const VR& R, std::span<const int> items = {}) {
+    using D = promoted_t<detail::value_of_t<VA>>;
+    const int m = A0.rows(), n = A0.cols(), k = Q.cols();
+    if (Q.rows() != m || R.cols() != n || R.rows() < k) detail::bad("qr_reconstruction", "need A0 m x n, Q m x k, R at least k x n");
+    double worst = 0;
+    for (int b : detail::pick(items, A0.batch_size())) {
+        const auto a = detail::item_of(A0, b);
+        const auto q = detail::item_of(Q, b);
+        const auto r = detail::item_of(R, b);
+        double num = 0, den = 0;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i) {
+                D acc = D(0);
+                for (int l = 0; l <= std::min(j, k - 1); ++l) acc += detail::get(q, i, l) * detail::get(r, l, j);
+                const D z = detail::get(a, i, j);
+                num += abs(acc - z) * abs(acc - z);
+                den += abs(z) * abs(z);
+            }
+        worst = nanmax(worst, detail::quot(std::sqrt(num), std::sqrt(den)));
+    }
+    return worst;
+}
+
 /// ‖A0X − B0‖_F / (‖A0‖_F‖X‖_F); an empty B0 (rows() == 0) is the identity (getri). Above 2^28
 /// multiply-adds of A0·X per item, 8 seeded probe columns of X stand in for all of them.
 template <class VA, class VX, class VB>
 double solve_residual(const VA& A0, const VX& X, const VB& B0, std::span<const int> items = {}) {
     return detail::solve_residual(A0, X, B0, items, double(1 << 28));
+}
+
+/// ‖op(A0)X − B0‖_F / (‖A0‖_F‖X‖_F) with A0 read through @p sa (as gemm_backward_error) and @p ta.
+template <class VA, class VX, class VB>
+double solve_residual(const VA& A0, Shape sa, Transpose ta, const VX& X, const VB& B0, std::span<const int> items = {}) {
+    return detail::solve_residual(A0, sa, ta, X, B0, items, double(1 << 28));
+}
+
+/// solve_residual for X computed from getrf factors: A = P·L·U is formed on the host per checked
+/// item from @p F (unit L, U) and the packed 1-based @p piv, then ‖op(A)X − B0‖_F / (‖A‖_F‖X‖_F). An
+/// empty B0 is the identity (getri from factors); an out-of-range pivot makes that item NaN.
+template <class VF, class VX, class VB>
+double lu_solve_residual(const VF& F, const VectorView<std::int32_t>& piv, Transpose trans, const VX& X, const VB& B0,
+                         std::span<const int> items = {}) {
+    using T = detail::value_of_t<VF>;
+    using D = promoted_t<T>;
+    const int n = F.rows();
+    if (F.cols() != n) detail::bad("lu_solve_residual", "square factors only");
+    if (piv.size() < n) detail::bad("lu_solve_residual", "fewer than n pivots per item");
+    const auto op_of = [&](int b) {
+        const auto f = detail::item_of(F, b);
+        const auto p = detail::vec_of(piv, b);
+        detail::Dense<D> M(n, n);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                for (int l = 0; l <= std::min(i, j); ++l) M(i, j) += (l == i ? D(1) : detail::get(f, i, l)) * detail::get(f, l, j);
+        for (int k = n - 1; k >= 0; --k) {
+            const int ip = p[k] - 1;
+            if (ip < 0 || ip >= n) {
+                std::fill(M.a.begin(), M.a.end(), D(detail::kNaN));
+                break;
+            }
+            for (int c = 0; c < n; ++c) std::swap(M(k, c), M(ip, c));
+        }
+        return [M = std::move(M), trans](int r, int l) {
+            if (trans == Transpose::NoTrans) return M(r, l);
+            return trans == Transpose::ConjTrans ? conj(M(l, r)) : M(l, r);
+        };
+    };
+    return detail::solve_core<T>(op_of, n, n, F.batch_size(), X, B0, items, double(1 << 28));
 }
 
 /// Componentwise max |C − (α op(A) op(B) + βC0)| / (|α||op(A)||op(B)| + |β||C0|) over the elements
@@ -419,6 +537,75 @@ double spmm_backward_error(const MatrixView<T, MatrixFormat::CSR>& A, Transpose 
             opA, opB, [&](int i, int j) { return detail::get(c0, i, j); }, [&](int i, int j) { return detail::get(c, i, j); },
             c.rows, c.cols, Shape::general, alpha, beta);
         worst = nanmax(worst, bad_index ? detail::kNaN : e);
+    }
+    return worst;
+}
+
+/// Componentwise backward error of the rank-2k update over the @p uplo triangle of C:
+/// her2k (@p hermitian) C = α op(A)op(B)ᴴ + conj(α) op(B)op(A)ᴴ + βC0, with β real and C0's diagonal
+/// read as real; syr2k C = α op(A)op(B)ᵀ + α op(B)op(A)ᵀ + βC0. The denominator is
+/// |α||op(A)||op(B)|ᵀ + |α||op(B)||op(A)|ᵀ + |β||C0|. For complex data her2k takes NoTrans or
+/// ConjTrans and syr2k NoTrans or Trans (std::invalid_argument otherwise).
+template <class VA, class VB, class VC0, class VC>
+double rank2k_backward_error(const VA& A, const VB& B, Transpose trans, const VC0& C0, const VC& C, Uplo uplo,
+                             promoted_t<detail::value_of_t<VC>> alpha, promoted_t<detail::value_of_t<VC>> beta, bool hermitian,
+                             std::span<const int> items = {}) {
+    using T = detail::value_of_t<VC>;
+    using D = promoted_t<T>;
+    if constexpr (is_complex<T>::value) {
+        if (hermitian && trans == Transpose::Trans) detail::bad("rank2k_backward_error", "her2k takes NoTrans or ConjTrans");
+        if (!hermitian && trans == Transpose::ConjTrans) detail::bad("rank2k_backward_error", "syr2k takes NoTrans or Trans");
+        if (hermitian && std::imag(beta) != 0.0) detail::bad("rank2k_backward_error", "her2k takes a real beta");
+    }
+    const D alpha2 = hermitian ? conj(alpha) : alpha;
+    const auto back = [&](const D& x) { return hermitian ? conj(x) : x; };
+    double worst = 0;
+    for (int b : detail::pick(items, C.batch_size())) {
+        const auto opA = detail::apply_op(detail::shaped_dense(detail::item_of(A, b), Shape::general), trans);
+        const auto opB = detail::apply_op(detail::shaped_dense(detail::item_of(B, b), Shape::general), trans);
+        const auto c = detail::item_of(C, b);
+        if (c.rows != c.cols || opA.rows != c.rows || opB.rows != c.rows || opA.cols != opB.cols) detail::bad("rank2k_backward_error", "dimension mismatch");
+        const int n = c.rows, k = opA.cols;
+        // One product [op(A) op(B)] · [α back(op(B)); α2 back(op(A))] has exactly the rank-2k denominator.
+        detail::Dense<D> P(n, 2 * k), Q(2 * k, n);
+        for (int l = 0; l < k; ++l)
+            for (int i = 0; i < n; ++i) {
+                P(i, l) = opA(i, l);
+                P(i, k + l) = opB(i, l);
+                Q(l, i) = alpha * back(opB(i, l));
+                Q(k + l, i) = alpha2 * back(opA(i, l));
+            }
+        detail::Item<detail::value_of_t<VC0>> c0{};
+        if (beta != D(0)) {
+            c0 = detail::item_of(C0, b);
+            if (c0.rows != n || c0.cols != n) detail::bad("rank2k_backward_error", "C0 and C differ in shape");
+        }
+        const auto c0_at = [&](int i, int j) {
+            const D z = detail::get(c0, i, j);
+            return hermitian && i == j ? D(std::real(z)) : z;
+        };
+        worst = nanmax(worst, detail::componentwise(P, Q, c0_at, [&](int i, int j) { return detail::get(c, i, j); }, n, n,
+                                                    uplo == Uplo::Lower ? Shape::lower : Shape::upper, D(1), beta));
+    }
+    return worst;
+}
+
+/// max cabs1(L(i,k)·U(k,k)) / cabs1(U(k,k)) over a getrf factor (min(m, n) columns; a zero U(k,k)
+/// skips its column). Partial pivoting on cabs1 keeps it at most 1 up to rounding
+/// (pivot_ratio_bound); a modulus pivot rule or a wrong argmax does not. Residuals cannot see this:
+/// any valid pivot order passes them.
+template <class VF>
+double pivot_ratio(const VF& F, std::span<const int> items = {}) {
+    const int m = F.rows(), k = std::min(m, F.cols());
+    double worst = 0;
+    for (int b : detail::pick(items, F.batch_size())) {
+        const auto f = detail::item_of(F, b);
+        for (int j = 0; j < k; ++j) {
+            const auto ukk = detail::get(f, j, j);
+            const double den = cabs1(ukk);
+            if (den == 0.0) continue;
+            for (int i = j + 1; i < m; ++i) worst = nanmax(worst, cabs1(detail::get(f, i, j) * ukk) / den);
+        }
     }
     return worst;
 }

@@ -4,10 +4,15 @@
 #include <batchlas/verify/items.hh>
 #include <batchlas/verify/norms.hh>
 #include <batchlas/verify/reference.hh>
+#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
+
+#include "test_utils.hh"
 
 #include <cmath>
 #include <cstdio>
@@ -105,7 +110,9 @@ TEST(Norms, KernelViewAccepted) {
 TEST(Tolerance, BoundAndPass) {
     using batchlas::verify::bound;
     using batchlas::verify::pass;
-    EXPECT_EQ(bound<float>(Check::blas, 8), 4.0 * 8.0 * std::ldexp(1.0, -24));
+    EXPECT_EQ(bound<float>(Check::blas, 8), 4.0 * 10.0 * std::ldexp(1.0, -24));
+    EXPECT_EQ(bound<double>(Check::blas, 1), 4.0 * 3.0 * std::ldexp(1.0, -53));
+    EXPECT_EQ(bound<double>(Check::blas, 0), 4.0 * 2.0 * std::ldexp(1.0, -53));
     EXPECT_EQ(bound<double>(Check::eigen_residual, 3), 32.0 * 3.0 * std::ldexp(1.0, -53));
     EXPECT_EQ(bound<double>(Check::solve, 0), bound<double>(Check::solve, 1));
     EXPECT_FALSE(pass<double>(Check::solve, 10, kNaN));
@@ -128,15 +135,151 @@ TEST(Tolerance, RecordsWhenAsked) {
     std::istringstream fields(line);
     std::string kind, dtype;
     int n = 0;
-    double value = 0, bnd = 0;
-    ASSERT_TRUE(bool(fields >> kind >> dtype >> n >> value >> bnd));
+    double value = 0, bnd = 0, factor = 0;
+    std::string reason;
+    ASSERT_TRUE(bool(fields >> kind >> dtype >> n >> value >> bnd >> factor >> reason));
     EXPECT_EQ(kind, "orthogonality");
     EXPECT_EQ(dtype, "cfloat");
     EXPECT_EQ(n, 7);
     EXPECT_EQ(value, 1e-6);
     EXPECT_EQ(bnd, batchlas::verify::bound<std::complex<float>>(Check::orthogonality, 7));
+    EXPECT_EQ(factor, 1.0);
+    EXPECT_EQ(reason, "-");
     EXPECT_FALSE(std::getline(in, line));
     std::remove(path.c_str());
+}
+
+TEST(Tolerance, SlackScalesTheBoundEitherWay) {
+    using batchlas::verify::bound;
+    using batchlas::verify::Slack;
+    const double b = bound<float>(Check::factorization, 12);
+    EXPECT_EQ(bound<float>(Check::factorization, 12, Slack{4.0, "x"}), 4.0 * b);
+    EXPECT_EQ(bound<float>(Check::factorization, 12, Slack{0.25, "x"}), 0.25 * b);
+    EXPECT_TRUE(batchlas::verify::pass<float>(Check::factorization, 12, 3.0 * b, Slack{4.0, "x"}));
+    EXPECT_FALSE(batchlas::verify::pass<float>(Check::factorization, 12, 3.0 * b));
+    EXPECT_FALSE(batchlas::verify::pass<float>(Check::factorization, 12, 0.5 * b, Slack{0.25, "x"}));
+    EXPECT_FALSE(batchlas::verify::pass<float>(Check::factorization, 12, kNaN, Slack{4.0, "x"}));
+}
+
+TEST(Tolerance, SlackNeedsAReasonAndAPositiveFactor) {
+    using batchlas::verify::Slack;
+    EXPECT_THROW(batchlas::verify::bound<double>(Check::solve, 3, Slack{2.0, ""}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::bound<double>(Check::solve, 3, Slack{2.0, nullptr}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::bound<double>(Check::solve, 3, Slack{0.0, "r"}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::bound<double>(Check::solve, 3, Slack{-1.0, "r"}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::bound<double>(Check::solve, 3, Slack{kNaN, "r"}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::pass<double>(Check::solve, 3, 0.0, Slack{2.0, ""}), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::within<double>(Check::solve, 3, 0.0, Slack{0.0, "r"}), std::invalid_argument);
+}
+
+TEST(Tolerance, WithinIsPassWithoutRecording) {
+    using batchlas::verify::Slack;
+    using batchlas::verify::within;
+    const std::string path = ::testing::TempDir() + "verify_within.txt";
+    std::remove(path.c_str());
+    ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
+    const double b = batchlas::verify::bound<double>(Check::blas, 5);
+    EXPECT_TRUE(within<double>(Check::blas, 5, b));
+    EXPECT_FALSE(within<double>(Check::blas, 5, std::nextafter(b, 1.0)));
+    EXPECT_FALSE(within<double>(Check::blas, 5, kNaN));
+    EXPECT_TRUE(within<double>(Check::blas, 5, 1.5 * b, Slack{2.0, "r"}));
+    EXPECT_FALSE(within<double>(Check::blas, 5, 1.5 * b, Slack{0.5, "r"}));
+    unsetenv("BATCHLAS_VERIFY_RECORD");
+    std::ifstream in(path);
+    EXPECT_FALSE(in.good() && in.peek() != std::ifstream::traits_type::eof());
+    std::remove(path.c_str());
+}
+
+TEST(Tolerance, RecordsSlackFactorReasonAndRawValue) {
+    const std::string path = ::testing::TempDir() + "verify_record_slack.txt";
+    std::remove(path.c_str());
+    ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
+    (void)batchlas::verify::pass<double>(Check::eigen_residual, 9, 3e-12, batchlas::verify::Slack{8.0, "graded spectrum, see docs"});
+    unsetenv("BATCHLAS_VERIFY_RECORD");
+    std::ifstream in(path);
+    std::string line;
+    ASSERT_TRUE(std::getline(in, line));
+    std::istringstream fields(line);
+    std::string kind, dtype, reason, extra;
+    int n = 0;
+    double value = 0, bnd = 0, factor = 0;
+    ASSERT_TRUE(bool(fields >> kind >> dtype >> n >> value >> bnd >> factor >> reason));
+    EXPECT_FALSE(bool(fields >> extra));
+    EXPECT_EQ(kind, "eigen_residual");
+    EXPECT_EQ(dtype, "double");
+    EXPECT_EQ(value, 3e-12);
+    EXPECT_EQ(bnd, batchlas::verify::bound<double>(Check::eigen_residual, 9));
+    EXPECT_EQ(factor, 8.0);
+    EXPECT_EQ(reason, "graded_spectrum,_see_docs");
+    std::remove(path.c_str());
+}
+
+TEST(Tolerance, PivotRatioBound) {
+    EXPECT_EQ(batchlas::verify::pivot_ratio_bound<float>(), 1.0 + 64.0 * std::ldexp(1.0, -24));
+    EXPECT_EQ(batchlas::verify::pivot_ratio_bound<std::complex<double>>(), 1.0 + 64.0 * std::ldexp(1.0, -53));
+}
+
+TEST(ExpectVerify, PassesWithinTheBound) {
+    const double b = batchlas::verify::bound<float>(Check::solve, 4);
+    EXPECT_VERIFY(float, Check::solve, 4, b);
+    EXPECT_VERIFY_SLACK(float, Check::solve, 4, 2.0 * b, batchlas::verify::Slack{2.0, "r"});
+}
+
+TEST(ExpectVerify, FailureNamesValueBoundKindAndN) {
+    // Through a variable: the failure also prints the expression, which must not supply the kind's name.
+    const Check k = Check::orthogonality;
+    EXPECT_NONFATAL_FAILURE(EXPECT_VERIFY(double, k, 11, 0.5), "value 0.5 exceeds bound");
+    EXPECT_NONFATAL_FAILURE(EXPECT_VERIFY(double, k, 11, 0.5), "orthogonality");
+    EXPECT_NONFATAL_FAILURE(EXPECT_VERIFY(double, k, 11, 0.5), "n=11");
+    EXPECT_NONFATAL_FAILURE(EXPECT_VERIFY(std::complex<float>, Check::solve, 3, kNaN), "value nan");
+    EXPECT_NONFATAL_FAILURE(EXPECT_VERIFY_SLACK(float, Check::blas, 2, 1.0, batchlas::verify::Slack{3.0, "wide k"}),
+                            "slack 3 (wide k)");
+}
+
+TEST(Scalar, Cabs1AndFinite) {
+    using batchlas::verify::cabs1;
+    using batchlas::verify::finite;
+    EXPECT_EQ(cabs1(-2.5f), 2.5);
+    EXPECT_EQ(cabs1(-2.5), 2.5);
+    EXPECT_EQ(cabs1(std::complex<float>(3.0f, -4.0f)), 7.0);
+    EXPECT_EQ(cabs1(std::complex<double>(-0.5, 0.25)), 0.75);
+    const double inf = std::numeric_limits<double>::infinity();
+    EXPECT_TRUE(finite(1.0f));
+    EXPECT_FALSE(finite(float(kNaN)));
+    EXPECT_FALSE(finite(-inf));
+    EXPECT_TRUE(finite(std::complex<double>(1.0, -2.0)));
+    EXPECT_FALSE(finite(std::complex<double>(1.0, kNaN)));
+    EXPECT_FALSE(finite(std::complex<float>(float(inf), 0.0f)));
+    EXPECT_TRUE(std::isnan(cabs1(std::complex<float>(0.0f, float(kNaN)))));
+}
+
+TEST(View, LayoutAndDefaultStride) {
+    std::vector<double> buf(40, 1e30);
+    const auto v = batchlas::verify::view(buf.data(), 3, 2, 5, 0, 2);
+    EXPECT_EQ(v.rows(), 3);
+    EXPECT_EQ(v.cols(), 2);
+    EXPECT_EQ(v.ld(), 5);
+    EXPECT_EQ(v.stride(), 10);
+    EXPECT_EQ(v.batch_size(), 2);
+    const auto w = batchlas::verify::view(buf.data(), 3, 2, 5, 17, 2);
+    EXPECT_EQ(w.stride(), 17);
+    EXPECT_EQ(batchlas::verify::view(buf.data(), 4, 4, 4).batch_size(), 1);
+    EXPECT_THROW(batchlas::verify::view(buf.data(), 6, 2, 5), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, -1), std::invalid_argument);
+    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, 0, 0), std::invalid_argument);
+}
+
+TEST(View, ConstOverloadFeedsTheChecks) {
+    constexpr int ld = 4, stride = 11, batch = 3;
+    std::vector<std::complex<float>> buf(stride * batch, {1e30f, -1e30f});
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < 2; ++j)
+            for (int i = 0; i < 3; ++i) buf[b * stride + j * ld + i] = {float(b + 1), float(i - j)};
+    const std::complex<float>* cbuf = buf.data();
+    const auto v = batchlas::verify::view(cbuf, 3, 2, ld, stride, batch);
+    // Item 2: six real parts 3, imaginary parts (0, 1, 2) and (-1, 0, 1).
+    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(v, 2), std::sqrt(54.0 + 7.0));
+    EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(v, 2), std::abs(std::complex<double>(3.0, 2.0)));
 }
 
 // ----------------------------------------------------------------------------------- Inputs
@@ -512,6 +655,81 @@ TEST(Reference, GetrfPivotsUseCabs1ForComplex) {
     std::vector<std::int32_t> ipiv;
     ASSERT_TRUE(batchlas::verify::getrf_pivots(2, 2, a, ipiv));
     EXPECT_EQ(ipiv[0], 2);
+    std::vector<cfloat> f = {{4, 0}, {2.7f, 2.7f}, {1, 0}, {1, 0}};
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(2, 2, f, ipiv));
+    EXPECT_EQ(ipiv[0], 2);
+}
+
+namespace {
+template <class T> void getrf_pivots_of_permutation() {
+    const int p[4] = {2, 0, 3, 1};
+    std::vector<T> a(16, T(0));
+    for (int j = 0; j < 4; ++j) a[j * 4 + p[j]] = batchlas::verify::make<T>(1.0, -1.0);
+    std::vector<std::int32_t> ipiv;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(4, 4, a, ipiv));
+    const std::vector<std::int32_t> want{3, 3, 4, 4};
+    EXPECT_EQ(ipiv, want);
+    EXPECT_EQ(a[0], batchlas::verify::make<T>(1.0, -1.0));
+}
+}  // namespace
+
+TEST(Reference, GetrfPivotsInWorkingPrecision) {
+    static_assert(std::is_same_v<decltype(batchlas::verify::copy_item_native(
+                                     std::declval<const MatrixView<float, MatrixFormat::Dense>&>(), 0)),
+                                 std::vector<float>>);
+    getrf_pivots_of_permutation<float>();
+    getrf_pivots_of_permutation<double>();
+    getrf_pivots_of_permutation<cfloat>();
+    getrf_pivots_of_permutation<cdouble>();
+}
+
+// Found by search: the second pivot is a rounding tie that sgetrf breaks to row 2 and dgetrf (on the
+// same, exactly promoted, data) to row 3. Pivots from a promoted copy would read {2, 3, 3}.
+TEST(Reference, GetrfPivotsOfFloatDataAreSgetrfs) {
+    const float col[9] = {0.0f, -1.0f, 0x1.555556p-1f, -1.0f, -4.5f, 2.0f, -1.0f, -0.25f, 2.5f};
+    const std::vector<std::int32_t> single{2, 2, 3}, promoted{2, 3, 3};
+    std::vector<std::int32_t> ipiv;
+    std::vector<float> f(col, col + 9);
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 3, f, ipiv));
+    EXPECT_EQ(ipiv, single);
+    std::vector<cfloat> c(col, col + 9);
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 3, c, ipiv));
+    EXPECT_EQ(ipiv, single);
+    std::vector<double> d(col, col + 9);
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 3, d, ipiv));
+    EXPECT_EQ(ipiv, promoted);
+}
+
+TEST(Reference, GeqrfTauKnownReflector) {
+    // [3; 4]: beta = -5, tau = (beta - 3) / beta = 1.6, v = 4 / (3 - beta) = 0.5.
+    std::vector<double> a = {3.0, 4.0}, tau;
+    ASSERT_TRUE(batchlas::verify::geqrf_tau(2, 1, a, tau));
+    ASSERT_EQ(tau.size(), 1u);
+    EXPECT_NEAR(a[0], -5.0, 1e-15);
+    EXPECT_NEAR(a[1], 0.5, 1e-15);
+    EXPECT_NEAR(tau[0], 1.6, 1e-15);
+    // [3i; 4]: beta = -5, tau = (1, 0.6), v = 4 / (3i + 5) = (20 - 12i) / 34.
+    std::vector<cdouble> z = {{0.0, 3.0}, {4.0, 0.0}}, zt;
+    ASSERT_TRUE(batchlas::verify::geqrf_tau(2, 1, z, zt));
+    EXPECT_NEAR(std::abs(z[0] - cdouble(-5.0, 0.0)), 0.0, 1e-15);
+    EXPECT_NEAR(std::abs(z[1] - cdouble(20.0 / 34.0, -12.0 / 34.0)), 0.0, 1e-15);
+    EXPECT_NEAR(std::abs(zt[0] - cdouble(1.0, 0.6)), 0.0, 1e-15);
+}
+
+TEST(Reference, GeqrfTauFeedsQrResidual) {
+    for (const auto& [m, n] : {std::pair{7, 5}, std::pair{4, 6}}) {
+        std::vector<cdouble> a0(static_cast<std::size_t>(m) * n);
+        batchlas::verify::Rng rng(5);
+        for (auto& x : a0) x = cdouble(rng.next(), rng.next());
+        auto a = a0;
+        std::vector<cdouble> tau;
+        ASSERT_TRUE(batchlas::verify::geqrf_tau(m, n, a, tau));
+        ASSERT_EQ(tau.size(), std::size_t(std::min(m, n)));
+        const auto A0 = batchlas::verify::view(static_cast<const cdouble*>(a0.data()), m, n, m);
+        const auto F = batchlas::verify::view(static_cast<const cdouble*>(a.data()), m, n, m);
+        const batchlas::VectorView<cdouble> t(tau.data(), std::min(m, n), 1);
+        EXPECT_LT(batchlas::verify::qr_residual(A0, F, t), 1e-14);
+    }
 }
 
 TEST(Reference, SterfOfKnownTridiagonal) {
@@ -533,6 +751,10 @@ TEST(Reference, WithoutLapackeReturnsFalse) {
     EXPECT_FALSE(batchlas::verify::singular_values(2, 2, a, w));
     EXPECT_FALSE(batchlas::verify::getrf_pivots(2, 2, a, ipiv));
     EXPECT_FALSE(batchlas::verify::tridiagonal_eigenvalues(d, e));
+    std::vector<float> f(4, 1.0f);
+    EXPECT_FALSE(batchlas::verify::getrf_pivots(2, 2, f, ipiv));
+    std::vector<double> tau;
+    EXPECT_FALSE(batchlas::verify::geqrf_tau(2, 2, a, tau));
 }
 
 #endif
