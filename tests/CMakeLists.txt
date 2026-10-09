@@ -314,7 +314,7 @@ function(batchlas_add_test_target test_name)
     # factor tau is uniquely determined, and armed breaks (store 2v with tau/4; flip
     # LAPACK's beta sign) each turned the RESIDUAL red as well as tau. What LAPACKE adds
     # is an INDEPENDENT ORACLE: every other numerical check in the file measures the
-    # kernel against host_form_Q in that same file, so a convention error shared by the
+    # kernel against batchlas::verify::form_q, so a convention error shared by the
     # kernel and that oracle passes all of them. evidence: docs/perf/qr.md, "Breaks (h)
     # and (i) correct the rationale D9 was written from". Where no host backend is present
     # BATCHLAS_VERIFY_HAVE_LAPACKE is 0 and the test compiles and skips.

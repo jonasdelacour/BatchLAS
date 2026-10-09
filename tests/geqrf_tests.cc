@@ -111,8 +111,9 @@ double residual_tol(int m, int k) {
                     small_order_tol_floor<T>());
 }
 
-// The pre-migration bounds, as factors on the kind's 16 m eps. The Frobenius norm of Q^H Q - I is
-// sqrt(k) times the normalised value the old tolerance judged; the orthogonality factor is clamped at 1.
+// The pre-migration bounds, as factors on the kind's c m eps (factorization c = 16, orthogonality
+// c = 32). The Frobenius norm of Q^H Q - I is sqrt(k) times the normalised value the old tolerance
+// judged; the orthogonality factor is clamped at 1.
 template <typename T>
 verify::Slack residual_slack(int m, int k) {
     return {std::max(double(m + k), 16.0) / (16.0 * std::max(m, 1)),
@@ -122,7 +123,7 @@ verify::Slack residual_slack(int m, int k) {
 
 template <typename T>
 verify::Slack orth_slack(int m, int k) {
-    return {std::min(1.0, std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (16.0 * std::max(m, 1))),
+    return {std::min(1.0, std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (32.0 * std::max(m, 1))),
             "kept from this file's 0.5 (m+k) eps / sqrt(k) orthonormality tolerance, clamped at the library bound"};
 }
 

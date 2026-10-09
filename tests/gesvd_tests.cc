@@ -255,13 +255,14 @@ inline Real gesvd_recon_tol() {
 }
 
 // The cta provider always takes the normal-equations bidiagonal path, which squares the condition
-// number. Measured c needed for orthogonality: ~52 float, ~113 double (vs 16). Pass it to the
-// orthogonality checks of results produced by a "cta" pin on a real-typed input (the Hermitian
-// complex cta case measures c ~ 2.8 and needs none).
+// number. Measured c needed for orthogonality: ~52 float, ~113 double. The factors keep the bounds
+// accepted on 2026-10-09 (64 n eps float, 128 n eps double), tighter than orthogonality_rotations'
+// c = 256. Pass it to the orthogonality checks of results produced by a "cta" pin on a real-typed
+// input (the Hermitian complex cta case measures c ~ 2.8 and needs none).
 template <typename Real>
 inline batchlas::verify::Slack gesvd_cta_slack() {
-    return {std::is_same_v<Real, float> ? 4.0 : 8.0,
-            "gesvd cta provider always takes the normal-equations bidiagonal path, which squares the condition number (gesvd_bidiag_is_normal_equations comment)"};
+    return {std::is_same_v<Real, float> ? 0.25 : 0.5,
+            "gesvd cta provider always takes the normal-equations bidiagonal path (squares the condition number); measured c 52 float / 113 double, accepted bounds 64 / 128 n eps"};
 }
 
 template <typename Scalar, Backend B>
@@ -376,12 +377,12 @@ void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M,
     using Real = typename base_type<Scalar>::type;
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err,
-                            (batchlas::verify::Slack{200.0, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: old float constants 2e-1 vs 1e-3 (comment at gesvd_bidiag_is_normal_equations)"}));
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err,
+                            (batchlas::verify::Slack{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured c 7.18 (2.05e-5 at n=48); accepted bound 128 n eps (0.5x of c=256)"}));
     } else if (slack.factor != 1.0) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err, slack);
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err, slack);
     } else {
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err);
     }
 }
 

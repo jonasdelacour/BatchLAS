@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Eigenpair checks shared by the syev tests: orthonormal V and ||AV - V diag(w)|| through
-// batchlas::verify, judged at its orthogonality and eigen_residual bounds.
+// batchlas::verify, judged at its orthogonality_rotations and eigen_residual bounds.
 #pragma once
 
 #include "test_utils.hh"
@@ -27,7 +27,7 @@ void expect_eigenpairs(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat
     const batchlas::VectorView<Real> w(W, n, V.batch_size());
     const double ortho = batchlas::verify::orthogonality(V, items);
     const double resid = batchlas::verify::eigen_residual(A0, V, w, items);
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, ortho);
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, ortho);
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::eigen_residual, n, resid);
 }
 

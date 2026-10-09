@@ -109,7 +109,7 @@ inline verify::Slack recon_slack(int m, int n) {
     return {double(m + n) / (16.0 * m), "kept from this file's 0.5 (m+n) eps tolerance"};
 }
 inline verify::Slack orth_slack(int m, int n) {
-    return {std::min(1.0, double(m + n) * std::sqrt(double(n)) / (16.0 * m)),
+    return {std::min(1.0, double(m + n) * std::sqrt(double(n)) / (32.0 * m)),
             "kept from this file's 0.5 (m+n) eps / sqrt(n) orthonormality tolerance, clamped at the library bound"};
 }
 

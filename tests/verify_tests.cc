@@ -109,9 +109,11 @@ TEST(Norms, KernelViewAccepted) {
 TEST(Tolerance, BoundAndPass) {
     using batchlas::verify::bound;
     using batchlas::verify::pass;
-    EXPECT_EQ(bound<float>(Check::blas, 8), 4.0 * 10.0 * std::ldexp(1.0, -24));
-    EXPECT_EQ(bound<double>(Check::blas, 1), 4.0 * 3.0 * std::ldexp(1.0, -53));
-    EXPECT_EQ(bound<double>(Check::blas, 0), 4.0 * 2.0 * std::ldexp(1.0, -53));
+    EXPECT_EQ(bound<float>(Check::blas, 8), 8.0 * 10.0 * std::ldexp(1.0, -24));
+    EXPECT_EQ(bound<double>(Check::blas, 1), 8.0 * 3.0 * std::ldexp(1.0, -53));
+    EXPECT_EQ(bound<double>(Check::blas, 0), 8.0 * 2.0 * std::ldexp(1.0, -53));
+    EXPECT_EQ(bound<float>(Check::orthogonality, 5), 32.0 * 5.0 * std::ldexp(1.0, -24));
+    EXPECT_EQ(bound<float>(Check::orthogonality_rotations, 5), 256.0 * 5.0 * std::ldexp(1.0, -24));
     EXPECT_EQ(bound<double>(Check::eigen_residual, 3), 32.0 * 3.0 * std::ldexp(1.0, -53));
     EXPECT_EQ(bound<double>(Check::solve, 0), bound<double>(Check::solve, 1));
     EXPECT_FALSE(pass<double>(Check::solve, 10, kNaN));
@@ -174,7 +176,7 @@ TEST(Tolerance, SlackNeedsAReasonAndAPositiveFactor) {
 TEST(Tolerance, WithinIsPassWithoutRecording) {
     using batchlas::verify::Slack;
     using batchlas::verify::within;
-    const std::string path = ::testing::TempDir() + "verify_within.txt";
+    const std::string path = ::testing::TempDir() + "within_never_records.txt";
     std::remove(path.c_str());
     ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
     const double b = batchlas::verify::bound<double>(Check::blas, 5);

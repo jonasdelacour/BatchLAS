@@ -180,12 +180,12 @@ protected:
             if (orth_slack > 0.0) {
                 const batchlas::verify::Slack slack{
                     orth_slack,
-                    "graded kappa~1e6 D&C, n=64: the repair's Gram-Schmidt accumulates error. Measured max ||.||_F / bound = 77.9 (4.75e-3) float, 4.47 (5.08e-13) double; factor = next power of two"};
-                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, n, uorth, slack) << label << " U n=" << n << " b=" << b;
-                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, n, vorth, slack) << label << " V n=" << n << " b=" << b;
+                    "graded kappa~1e6 D&C, n=64: the repair's Gram-Schmidt accumulates error. Measured 4.75e-3 float (c 1246), 5.08e-13 double (c 71.5); accepted bounds 2048 n eps float, 128 n eps double (8x / 0.5x of c=256)"};
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth, slack) << label << " U n=" << n << " b=" << b;
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth, slack) << label << " V n=" << n << " b=" << b;
             } else {
-                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, uorth) << label << " U n=" << n << " b=" << b;
-                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, vorth) << label << " V n=" << n << " b=" << b;
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth) << label << " U n=" << n << " b=" << b;
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth) << label << " V n=" << n << " b=" << b;
             }
         }
     }
@@ -291,7 +291,7 @@ TYPED_TEST(BdsdcTest, GradedWithVectorsHighCondition) {
     // n=64, float), comfortably inside every tolerance the suite applies.
     // Callers who need better than this above n=32 want the one-sided Jacobi
     // route, which never forms the bidiagonal at all.
-    const double kGradedOrthTol = std::is_same_v<typename TestFixture::Scalar, float> ? 128.0 : 8.0;
+    const double kGradedOrthTol = std::is_same_v<typename TestFixture::Scalar, float> ? 8.0 : 0.5;
     this->check(64, 2, 303u, /*vectors=*/true, /*dscale=*/0.803, kGradedOrthTol);
 }
 

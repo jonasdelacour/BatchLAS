@@ -183,7 +183,7 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
         const double resid = verify::eigen_residual(A0, V, w, items);
         const double ortho = verify::orthogonality(V, items);
         ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::eigen_residual, n, resid)) << what;
-        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality, n, ortho)) << what;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality_rotations, n, ortho)) << what;
     }
     for (int it = 0; it < s.batch; ++it)
         for (std::size_t e = std::size_t(it) * p.stride; e < std::size_t(it + 1) * p.stride && e < p.mem.size(); ++e) {

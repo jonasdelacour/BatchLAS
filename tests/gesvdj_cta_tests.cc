@@ -181,7 +181,7 @@ protected:
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
 
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, m, col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
             << "U orthogonality m=" << m << " n=" << n;
 
@@ -196,7 +196,7 @@ protected:
                 }
             }
         }
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
             << "V orthogonality m=" << m << " n=" << n;
     }
 
@@ -250,7 +250,7 @@ protected:
                   static_cast<double>(recon_tol()))
             << "thin reconstruction m=" << m << " n=" << n;
 
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, k, col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
             << "thin U orthogonality m=" << m << " n=" << n;
 
@@ -265,7 +265,7 @@ protected:
                 }
             }
         }
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, k, col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
             << "thin V orthogonality m=" << m << " n=" << n;
     }
 

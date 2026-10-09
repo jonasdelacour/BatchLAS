@@ -148,7 +148,7 @@ Apply<T> make_apply(const Spec& s) {
 
 // Q = H_0 ... H_{k-1} (m x m) of one item, formed by batchlas::verify from the stored reflectors and tau.
 template <typename T>
-std::vector<verify::promoted_t<T>> host_q(const Apply<T>& p, int it) {
+std::vector<verify::promoted_t<T>> reflector_q(const Apply<T>& p, int it) {
     const Spec& s = p.s;
     const auto F = verify::view(p.mem0.data() + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
     return verify::form_q(F, VectorView<T>(const_cast<T*>(p.tau.data()), s.k, s.batch, 1, s.k), it, s.m);
@@ -159,7 +159,7 @@ template <typename T>
 double apply_error(const Apply<T>& p, int it) {
     const Spec& s = p.s;
     using D = verify::promoted_t<T>;
-    auto Q = host_q(p, it);
+    auto Q = reflector_q(p, it);
     const auto Qv = verify::view(Q.data(), s.m, s.m, s.m);
     const auto C0 = verify::view(p.mem0.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
     const auto C = verify::view(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
