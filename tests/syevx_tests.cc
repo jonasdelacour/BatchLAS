@@ -18,6 +18,10 @@
 #include <algorithm>
 #include <type_traits>
 #include "../src/ops/syev/vendor.hh"
+#include "../src/select/select.hh"
+#include <map>
+#include <set>
+#include <sstream>
 
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -1281,6 +1285,94 @@ INSTANTIATE_TEST_SUITE_P(Pinned, SyevxProjectedSyevRouteTest,
                          [](const ::testing::TestParamInfo<const char*>& info) {
                              return std::string(info.param);
                          });
+
+// The accuracy pin, under a syev table that ranks the vendor first everywhere. neig 4 (block 6):
+// StAS (n 18) and XtAX (n 6) run cta_fused through the pin; ortho's own n = 6 Gram solves are not
+// LOBPCG's projected solves and stay on the table. neig 12 (block 15): StAS is n = 45 > 32 and
+// takes the table. An explicit BATCHLAS_SYEV_ROUTE wins everywhere.
+// evidence: docs/perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev
+namespace {
+// n -> "<choice>" or "<choice> pinned" -> count, over the top-level "syev float" trace lines.
+std::map<int, std::map<std::string, int>> SyevTraceCounts(const std::string& err) {
+    std::map<int, std::map<std::string, int>> out;
+    std::istringstream in(err);
+    for (std::string line; std::getline(in, line);) {
+        if (line.rfind("syev float ", 0) != 0) continue;
+        const auto n_at = line.find(" n="), arrow = line.find(" -> ");
+        if (n_at == std::string::npos || arrow == std::string::npos) continue;
+        const std::string tail = line.substr(arrow + 4);
+        const bool pinned = line.find("[pinned]") != std::string::npos;
+        ++out[std::stoi(line.substr(n_at + 3))][tail.substr(0, tail.find(' ')) + (pinned ? " pinned" : "")];
+    }
+    return out;
+}
+}  // namespace
+
+TEST(SyevxProjectedSyevPin, CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFirst) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "native syev families are GPU-only";
+#if BATCHLAS_HAS_CUDA_BACKEND
+    constexpr Backend kGpu = Backend::CUDA;
+#elif BATCHLAS_HAS_ROCM_BACKEND
+    constexpr Backend kGpu = Backend::ROCM;
+#else
+    constexpr Backend kGpu = Backend::AUTO;
+#endif
+    constexpr int n = 120, batch = 2;
+    const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
+    const ScopedEnvVar extra("BATCHLAS_SYEVX_EXTRA_DIRECTIONS", nullptr);
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    const std::string dev = select::describe(ctx->device(), kGpu, false).key;
+    std::vector<std::pair<std::string, std::string>> files;
+    for (const auto& t : select::embedded_tables())
+        if (t.name.rfind("syev.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
+    files.emplace_back("syev.float." + dev + ".txt",
+                       "# op=syev dtype=float device=" + dev + " kernels=unknown\n"
+                       "# keys: jobz:exact n:log:3 batch:log\n"
+                       "jobz=V n=16 batch=2 | vendor 1 | blocked 2\n");
+    struct Restore {
+        ~Restore() { select::testing::use_embedded_tables(); }
+    } restore;
+    select::testing::set_builtin_tables(std::move(files));
+    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    ctx->wait();
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+
+    auto traced = [&](const char* route, int neig) {
+        const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", route);
+        const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+        Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+        ::testing::internal::CaptureStderr();
+        const auto run = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                                        SyevxPreconditioner::Jacobi, &V);
+        const std::string err = ::testing::internal::GetCapturedStderr();
+        CheckAgainstReference(run.W, W_ref, n, batch, neig, false, 1e-3f);
+        return std::pair{SyevTraceCounts(err), err};
+    };
+    const std::string table_pick = select::device_of<kGpu>(*ctx, select::Lib::solver).has_vendor ? "vendor" : "blocked";
+
+    const auto [small, err] = traced(nullptr, 4);
+    ASSERT_TRUE(small.count(18)) << err;
+    EXPECT_EQ(small.at(18).size(), 1u) << err;
+    EXPECT_GE(small.at(18).count("cta_fused pinned") ? small.at(18).at("cta_fused pinned") : 0, 2) << err;
+    ASSERT_TRUE(small.count(6)) << err;
+    EXPECT_EQ(small.at(6).count("cta_fused pinned"), 1u) << "XtAX\n" << err;
+    for (const auto& [m, counts] : small)
+        for (const auto& [what, c] : counts)
+            EXPECT_TRUE(what == "cta_fused pinned" || what == table_pick) << "n " << m << ": " << what << "\n" << err;
+
+    const auto [large, err_large] = traced(nullptr, 12);
+    ASSERT_TRUE(large.count(45)) << err_large;
+    EXPECT_EQ(large.at(45).size(), 1u) << err_large;
+    EXPECT_TRUE(large.at(45).count(table_pick)) << "n 45 is above the pin\n" << err_large;
+
+    const auto [by_env, err_env] = traced("blocked", 4);
+    ASSERT_TRUE(by_env.count(18)) << err_env;
+    for (const auto& [m, counts] : by_env)
+        EXPECT_EQ(counts.size(), 1u) << "n " << m << ": the explicit route lost\n" << err_env;
+    for (const auto& [m, counts] : by_env)
+        EXPECT_TRUE(counts.count("blocked pinned")) << "n " << m << "\n" << err_env;
+}
 
 // The whole point of the unshifted preconditioner: on a strongly graded (nearly
 // diagonal) matrix diag(A)^{-1} is close to A^{-1}, and the iteration count must

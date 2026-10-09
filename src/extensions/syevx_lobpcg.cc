@@ -19,6 +19,9 @@
 #include "../sort.hh"
 #include <batchlas/settings.hh>
 #include "../ops/syev/vendor.hh"
+#include "../ops/syev/choice.hh"
+#include <optional>
+#include <string>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -158,6 +161,30 @@ inline constexpr R jacobi_singular_tolerance() {
 template <typename R>
 inline constexpr R jacobi_definiteness_floor() {
     return R(1e-6);
+}
+
+// The projected solves (XtAX, StAS) run on the CTA solver whenever it can take the shape: the
+// speed tables cannot see that LOBPCG stagnates on a less accurate Ritz solve (cuSOLVER float
+// is ~7x further off at n = 16). An explicit pin (env or an outer ScopedPin) still wins. Cta has
+// CtaFused's can_run, so it is never the fallback; above n = 32 the table decides.
+// evidence: docs/perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev
+using ProjectedSyevPin = std::optional<batchlas::select::ScopedPin<batchlas::ops::syev::SyevChoice>>;
+template <batchlas::Backend B, typename T>
+ProjectedSyevPin projected_syev_pin(const batchlas::Queue& ctx,
+                                    const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& M) {
+    std::string source;
+    if (B == batchlas::Backend::NETLIB || batchlas::select::detail::pin_text("syev", &source)) return std::nullopt;
+    if (!batchlas::blas::dispatch::detail::syev_supports_cta<T>(ctx, M)) return std::nullopt;
+    return ProjectedSyevPin(std::in_place, "syev", batchlas::ops::syev::CtaFused{});
+}
+
+// Sized under the same pin as the call, so the buffer and the run branch identically.
+template <batchlas::Backend B, typename T>
+size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& M,
+                                  batchlas::Span<typename batchlas::base_type<T>::type> w, batchlas::JobType jobz,
+                                  batchlas::Uplo uplo) {
+    const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, M);
+    return batchlas::syev_buffer_size<B>(ctx, M, w, jobz, uplo);
 }
 
 } // namespace
@@ -353,9 +380,9 @@ inline constexpr R jacobi_definiteness_floor() {
         // more than either the block_vectors or the 3*block_vectors one. Size all three.
         auto StAS_restart = MatrixView(StAS_base, block_vectors * 2, block_vectors * 2,
                                        StAS_base.ld(), StAS_base.stride());
-        const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
-        const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
-        const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_xtax = projected_syev_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas_restart = projected_syev_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
         size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
             const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
@@ -524,6 +551,7 @@ inline constexpr R jacobi_definiteness_floor() {
         if (prefer_vendor_projected_syev) {
             (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
+            const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, XtAX);
             (void)syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
         trace_wait("syevx: syev XtAX done");
@@ -1082,6 +1110,7 @@ inline constexpr R jacobi_definiteness_floor() {
             if (prefer_vendor_projected_syev) {
                 (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
+                const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, StAS);
                 (void)syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
             trace_wait("syevx: syev StAS done");
@@ -1269,9 +1298,9 @@ inline constexpr R jacobi_definiteness_floor() {
                 auto StAS_restart_dummy = projected_dummy(block_vectors * 2);
                 auto StAS_base_dummy = projected_dummy(block_vectors * 3);
 
-                const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_xtax = projected_syev_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas_restart = projected_syev_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
                 // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
