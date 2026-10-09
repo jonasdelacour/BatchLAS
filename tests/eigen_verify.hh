@@ -3,6 +3,8 @@
 // batchlas::verify, judged at its orthogonality and eigen_residual bounds.
 #pragma once
 
+#include "test_utils.hh"
+
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/residuals.hh>
@@ -25,11 +27,8 @@ void expect_eigenpairs(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat
     const batchlas::VectorView<Real> w(W, n, V.batch_size());
     const double ortho = batchlas::verify::orthogonality(V, items);
     const double resid = batchlas::verify::eigen_residual(A0, V, w, items);
-    EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, n, ortho))
-        << "||V^H V - I||_F = " << ortho << " > " << batchlas::verify::bound<Scalar>(batchlas::verify::Check::orthogonality, n);
-    EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::eigen_residual, n, resid))
-        << "||AV - V diag(w)||_F / ||A||_F = " << resid << " > "
-        << batchlas::verify::bound<Scalar>(batchlas::verify::Check::eigen_residual, n);
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, ortho);
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::eigen_residual, n, resid);
 }
 
 template <typename Scalar>

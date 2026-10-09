@@ -89,7 +89,6 @@ protected:
 
     static double sv_tol()   { return std::is_same_v<Scalar, float> ? 2e-4 : 1e-11; }
     static double vec_tol()  { return std::is_same_v<Scalar, float> ? 1e-3 : 1e-9;  }
-    static double orth_tol() { return std::is_same_v<Scalar, float> ? 1e-3 : 1e-9;  }
 
     // Core driver: run bdsdc on the given (d,e) and check singular values,
     // reconstruction of B, and orthogonality of both vector sets.
@@ -176,13 +175,18 @@ protected:
 
             // Orthogonality of U's columns and Vh's rows (the columns of Vh^T).
             const std::array<int, 1> item{b};
-            const double slack = orth_override > 0.0 ? orth_override / orth_tol() : 1.0;
             const double uorth = batchlas::verify::orthogonality(U.view(), item);
             const double vorth = batchlas::verify::orthogonality(Vt.view(), item);
-            EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, n, uorth / slack))
-                << label << " U orthogonality " << uorth << " n=" << n << " b=" << b;
-            EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, n, vorth / slack))
-                << label << " V orthogonality " << vorth << " n=" << n << " b=" << b;
+            if (orth_override > 0.0) {
+                const batchlas::verify::Slack slack{
+                    orth_override / batchlas::verify::bound<Scalar>(batchlas::verify::Check::orthogonality, n),
+                    "graded kappa~1e6 D&C: the repair's Gram-Schmidt accumulates error; measured 4.8e-3 float after the repair-threshold fix (see GradedWithVectorsHighCondition)"};
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, n, uorth, slack) << label << " U n=" << n << " b=" << b;
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, n, vorth, slack) << label << " V n=" << n << " b=" << b;
+            } else {
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, uorth) << label << " U n=" << n << " b=" << b;
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, vorth) << label << " V n=" << n << " b=" << b;
+            }
         }
     }
 

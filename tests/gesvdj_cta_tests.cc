@@ -181,9 +181,8 @@ protected:
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
 
-        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, m,
-                                                   col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld()))))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, m, col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld())))
             << "U orthogonality m=" << m << " n=" << n;
 
         // Vh's ROWS are the right singular vectors, so check Vh^H's columns by
@@ -197,8 +196,7 @@ protected:
                 }
             }
         }
-        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, n,
-                                                   col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n)))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, n, col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
             << "V orthogonality m=" << m << " n=" << n;
     }
 
@@ -252,9 +250,8 @@ protected:
                   static_cast<double>(recon_tol()))
             << "thin reconstruction m=" << m << " n=" << n;
 
-        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, k,
-                                                   col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld()))))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, k, col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld())))
             << "thin U orthogonality m=" << m << " n=" << n;
 
         // Vh is k x n; its k ROWS must be orthonormal, so build Vh^H (n x k)
@@ -268,8 +265,7 @@ protected:
                 }
             }
         }
-        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, k,
-                                                   col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n)))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, k, col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
             << "thin V orthogonality m=" << m << " n=" << n;
     }
 

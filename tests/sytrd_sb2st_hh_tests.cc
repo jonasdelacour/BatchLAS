@@ -30,6 +30,8 @@
 #include "../src/extensions/sytrd_sb2st_hh.hh"
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+
 using namespace batchlas;
 
 namespace {
@@ -202,17 +204,8 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                 scale = std::max(std::sqrt(scale), Real(1));
 
                 // Q must be orthogonal.
-                Real orth = Real(0);
-                for (int i = 0; i < n; ++i)
-                    for (int j = 0; j < n; ++j) {
-                        T acc = T(0);
-                        for (int l = 0; l < n; ++l)
-                            acc += conj_if(Q[static_cast<size_t>(l) * n + i]) *
-                                   Q[static_cast<size_t>(l) * n + j];
-                        if (i == j) acc -= T(1);
-                        orth += abs_of(acc) * abs_of(acc);
-                    }
-                EXPECT_LT(std::sqrt(orth), tol) << "n=" << n << " kd=" << kd << " b=" << b;
+                const double orth = batchlas::verify::orthogonality(batchlas::verify::view(Q.data(), n, n, n));
+                EXPECT_LT(orth, tol) << "n=" << n << " kd=" << kd << " b=" << b;
 
                 // Q^H A Q must be tridiagonal, with diag == d and |subdiag| == e.
                 Real offtri = Real(0);

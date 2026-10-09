@@ -168,8 +168,7 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
     for (int it : items)
         for (double l : p.lambda[it]) scale = verify::nanmax(scale, std::fabs(l));
     const double werr = verify::values_error(w, p.lambda, scale, items);
-    ASSERT_TRUE(verify::pass<T>(verify::Check::values, n, werr))
-        << what << " eigenvalue error " << werr << " > " << verify::bound<T>(verify::Check::values, n);
+    ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::values, n, werr)) << what;
     if (s.jobz == JobType::EigenVectors) {
         // eigen_residual mirrors the lower triangle: rebuild it from whichever triangle A stored.
         std::vector<T> lower(std::size_t(n) * n * (items.back() + 1), T(0));
@@ -183,10 +182,8 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
         const MVof<T> V(const_cast<T*>(p.mem.data()), n, n, p.ld, p.stride, s.batch);
         const double resid = verify::eigen_residual(A0, V, w, items);
         const double ortho = verify::orthogonality(V, items);
-        ASSERT_TRUE(verify::pass<T>(verify::Check::eigen_residual, n, resid))
-            << what << " residual " << resid << " > " << verify::bound<T>(verify::Check::eigen_residual, n);
-        ASSERT_TRUE(verify::pass<T>(verify::Check::orthogonality, n, ortho))
-            << what << " orthonormality " << ortho << " > " << verify::bound<T>(verify::Check::orthogonality, n);
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::eigen_residual, n, resid)) << what;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality, n, ortho)) << what;
     }
     for (int it = 0; it < s.batch; ++it)
         for (std::size_t e = std::size_t(it) * p.stride; e < std::size_t(it + 1) * p.stride && e < p.mem.size(); ++e) {

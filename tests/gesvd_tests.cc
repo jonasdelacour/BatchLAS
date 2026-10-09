@@ -254,6 +254,13 @@ inline Real gesvd_recon_tol() {
     }
 }
 
+// The provider pin of the last run_gesvd_with_provider call (nullptr: Auto). The orthogonality
+// checks read it to know whether the factors came from the normal-equations CTA provider.
+inline const char*& gesvd_last_provider() {
+    static thread_local const char* provider = nullptr;
+    return provider;
+}
+
 template <typename Scalar, Backend B>
 std::string run_gesvd_with_provider(Queue& ctx,
                                     Matrix<Scalar, MatrixFormat::Dense>& A,
@@ -264,6 +271,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                     SvdVectors jobvh,
                                     const char* provider,
                                     std::optional<Uplo> hermitian_uplo = std::nullopt) {
+    gesvd_last_provider() = provider;
     // A pin is a ScopedPin: a refused one throws (R6) and lands in the returned message.
     std::optional<select::ScopedPin<ops::gesvd::GesvdChoice>> pin;
     if (provider != nullptr) {
@@ -314,13 +322,6 @@ std::string run_gesvd_with_provider(Queue& ctx,
     return {};
 }
 
-// The relaxed bound of the retained normal-equations bidiagonal path (BATCHLAS_GESVD_BIDIAG=normal),
-// as the ratio of its old float constants to the default path's.
-template <typename Real>
-inline double gesvd_normal_equations_slack(double float_ratio) {
-    return std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations() ? float_ratio : 1.0;
-}
-
 template <typename Scalar>
 void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
                                           const UnifiedVector<typename base_type<Scalar>::type>& s) {
@@ -340,9 +341,12 @@ void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Den
     }
     const VectorView<Real> w(const_cast<Real*>(s.data()), k, batch);
     const double err = batchlas::verify::values_error(w, ref, sigma_max);
-    EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::values, k, err / gesvd_normal_equations_slack<Real>(25.0)))
-        << "max |sigma - sigma_ref| / sigma_max = " << err << " > "
-        << batchlas::verify::bound<Scalar>(batchlas::verify::Check::values, k);
+    if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::values, k, err,
+                            (batchlas::verify::Slack{25.0, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: old float constants 5e-2 vs 2e-3 (comment at gesvd_bidiag_is_normal_equations)"}));
+    } else {
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
+    }
 #else
     static_cast<void>(A_ref);
     static_cast<void>(s);
@@ -368,10 +372,18 @@ template <typename Scalar>
 void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M) {
     using Real = typename base_type<Scalar>::type;
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
-    EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, M.cols(),
-                                               err / gesvd_normal_equations_slack<Real>(200.0)))
-        << "||M^H M - I||_F = " << err << " > "
-        << batchlas::verify::bound<Scalar>(batchlas::verify::Check::orthogonality, M.cols());
+    const char* provider = gesvd_last_provider();
+    if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err,
+                            (batchlas::verify::Slack{200.0, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: old float constants 2e-1 vs 1e-3 (comment at gesvd_bidiag_is_normal_equations)"}));
+    } else if (provider != nullptr && std::string(provider) == "cta") {
+        // Measured c needed: ~52 float, ~113 double (vs 16).
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err,
+                            (batchlas::verify::Slack{std::is_same_v<Real, float> ? 4.0 : 8.0,
+                                                     "gesvd cta provider always takes the normal-equations bidiagonal path, which squares the condition number (gesvd_bidiag_is_normal_equations comment)"}));
+    } else {
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err);
+    }
 }
 
 // Rows are orthonormal when the columns of M^H are.
