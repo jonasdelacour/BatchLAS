@@ -3,6 +3,7 @@
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <type_traits>

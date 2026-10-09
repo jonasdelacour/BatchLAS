@@ -7,7 +7,6 @@
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
-#include <batchlas/util/sycl-device-queue.hh>
 
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
@@ -700,6 +699,58 @@ TEST(Reference, GetrfPivotsOfFloatDataAreSgetrfs) {
     EXPECT_EQ(ipiv, promoted);
 }
 
+TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
+    const float col[9] = {0.0f, -1.0f, 0x1.555556p-1f, -1.0f, -4.5f, 2.0f, -1.0f, -0.25f, 2.5f};
+    constexpr int ld = 5, stride = 17;
+    std::vector<float> buf(2 * stride, 1e30f);
+    std::vector<cfloat> cbuf(2 * stride, {1e30f, -1e30f});
+    for (int j = 0; j < 3; ++j)
+        for (int i = 0; i < 3; ++i) {
+            buf[stride + j * ld + i] = col[j * 3 + i];
+            cbuf[stride + j * ld + i] = col[j * 3 + i];
+        }
+    const std::vector<std::int32_t> single{2, 2, 3};
+    std::vector<std::int32_t> ipiv;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(batchlas::verify::view(buf.data(), 3, 3, ld, stride, 2), 1, ipiv));
+    EXPECT_EQ(ipiv, single);
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(batchlas::verify::view(cbuf.data(), 3, 3, ld, stride, 2), 1, ipiv));
+    EXPECT_EQ(ipiv, single);
+}
+
+namespace {
+// LAPACK's own factor and pivots of A0 must reproduce A0 through lu_solve_residual (X = I, B0 = A0):
+// pins the library's interchange order to LAPACK's rather than to a test's own loop.
+template <class T> void lu_convention_matches_lapack() {
+    constexpr int n = 8, ld = 11;
+    std::vector<T> a0(ld * n, sentinel<T>()), eye(ld * n, sentinel<T>());
+    batchlas::verify::Rng rng(17);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const double re = rng.next(), im = rng.next();
+            a0[j * ld + i] = batchlas::verify::make<T>(re, im);
+            eye[j * ld + i] = T(i == j ? 1 : 0);
+        }
+    const auto A0 = batchlas::verify::view(static_cast<const T*>(a0.data()), n, n, ld);
+    auto f = batchlas::verify::copy_item_native(A0, 0);
+    std::vector<std::int32_t> ipiv;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(n, n, f, ipiv));
+    int swaps = 0;
+    for (int k = 0; k < n; ++k) swaps += ipiv[k] != k + 1;
+    ASSERT_GE(swaps, 2) << "no interchanges to pin";
+    const batchlas::VectorView<std::int32_t> p(ipiv.data(), n, 1);
+    const double r = batchlas::verify::lu_solve_residual(batchlas::verify::view(static_cast<const T*>(f.data()), n, n, n), p,
+                                                         batchlas::Transpose::NoTrans, batchlas::verify::view(eye.data(), n, n, ld), A0);
+    EXPECT_TRUE(batchlas::verify::within<T>(Check::solve, n, r)) << "residual " << r;
+}
+}  // namespace
+
+TEST(Reference, LuSolvePivotOrderIsLapacks) {
+    lu_convention_matches_lapack<float>();
+    lu_convention_matches_lapack<double>();
+    lu_convention_matches_lapack<cfloat>();
+    lu_convention_matches_lapack<cdouble>();
+}
+
 TEST(Reference, GeqrfTauKnownReflector) {
     // [3; 4]: beta = -5, tau = (beta - 3) / beta = 1.6, v = 4 / (3 - beta) = 0.5.
     std::vector<double> a = {3.0, 4.0}, tau;
@@ -753,6 +804,7 @@ TEST(Reference, WithoutLapackeReturnsFalse) {
     EXPECT_FALSE(batchlas::verify::tridiagonal_eigenvalues(d, e));
     std::vector<float> f(4, 1.0f);
     EXPECT_FALSE(batchlas::verify::getrf_pivots(2, 2, f, ipiv));
+    EXPECT_FALSE(batchlas::verify::getrf_pivots(batchlas::verify::view(f.data(), 2, 2, 2), 0, ipiv));
     std::vector<double> tau;
     EXPECT_FALSE(batchlas::verify::geqrf_tau(2, 2, a, tau));
 }

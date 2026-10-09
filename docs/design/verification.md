@@ -81,7 +81,8 @@ through the tables or routes under test (agent guide §8 rule 7).
 The initial c values are calibrated by the implementation: each kind is set to the smallest
 power of two at least 4× the largest residual observed over the migrated tests' passing cases
 (all dtypes, the ladder of sizes they use), and the calibration table is recorded on this page.
-A kind whose calibrated c differs from the table above by more than 4× is reported, not silently
+Only rows recorded with factor 1 enter a kind's maximum; slacked rows (factor ≠ 1, below) are
+listed separately, so a slacked site cannot inflate its kind's c. A kind whose calibrated c differs from the table above by more than 4× is reported, not silently
 adopted.
 
 The `blas` growth is k + 2, not k: the α and β scalings and the complex multiply add roundings
@@ -93,13 +94,16 @@ above or below 1 (a site may also tighten); it must be finite and positive, and 
 mandatory (`std::invalid_argument` otherwise). With `BATCHLAS_VERIFY_RECORD=<path>` every `pass`
 appends `kind dtype n value bound factor reason`: `value` is the raw value (never divided by the
 factor), `bound` the kind's unslacked bound, `factor` 1 and `reason` `-` for the plain overloads,
-and whitespace in a reason is written as `_`. The calibration lists every factor above 1 for a
-user decision. `within<T>` makes the same comparison without recording, for predicates evaluated
+and whitespace in a reason is written as `_`. The calibration excludes every row with factor ≠ 1
+from its kind's maximum and lists it separately (site reason, factor, raw `value / (f(n)·eps)`);
+every factor above 1 goes to the user for a decision. `within<T>` makes the same comparison without recording, for predicates evaluated
 on results that are expected to be wrong.
 
 **Pivot ratio.** `pivot_ratio` is not a `c · f(n) · eps` quantity: cabs1 partial pivoting keeps it
-at most 1 exactly, so `pivot_ratio_bound<T>() = 1 + 64 eps(T)` (32 machine epsilons of slack for
-the rounding of `L(i,k)·U(k,k)` in T).
+at most 1 in exact arithmetic, so `pivot_ratio_bound<T>() = 1 + 64 eps(T)` (32 machine epsilons).
+The slack covers the factor's own rounding: `L(i,k) = A′(i,k) / U(k,k)` is computed in T (LAPACK
+and most kernels form the reciprocal of the pivot, then scale), so `L(i,k)·U(k,k)` recovers
+`A′(i,k)` only to a few ulps of T. The product itself is formed in double and adds nothing.
 
 ## Rollout
 

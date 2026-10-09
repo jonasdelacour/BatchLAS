@@ -75,9 +75,14 @@ template <class D> bool singular_values(int m, int n, std::vector<D>& a, std::ve
 // LAPACK's |re|+|im|, or breaks ties the other way, passes every residual. This is the check that does not.
 /// 1-based pivots of the m x n @p a (column-major, ld = m; overwritten by its LU factor): min(m, n)
 /// of them, from ?getrf in E's own precision (float, double, complex<float>, complex<double>).
+/// @pre @p a holds the data in its native precision: copy_item_native, never copy_item, which
+/// promotes float data and sends it to dgetrf. The view overload below does this for you.
 // Never promote float data to dgetrf: this box's host dgetrf is wrong from n = 10, sgetrf is not.
 // evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
 template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vector<std::int32_t>& ipiv) {
+    static_assert(std::is_same_v<E, float> || std::is_same_v<E, double> || std::is_same_v<E, std::complex<float>> ||
+                      std::is_same_v<E, std::complex<double>>,
+                  "getrf_pivots: float, double, complex<float> or complex<double> only");
     ipiv.assign(static_cast<std::size_t>(std::min(m, n)), 0);
     if (ipiv.empty()) return true;
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
@@ -101,9 +106,17 @@ template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vecto
 #endif
 }
 
+/// getrf_pivots of item @p item of a dense view, copied in the view's own precision.
+template <class View> bool getrf_pivots(const View& A, int item, std::vector<std::int32_t>& ipiv) {
+    auto a = copy_item_native(A, item);
+    return getrf_pivots(A.rows(), A.cols(), a, ipiv);
+}
+
 /// LAPACK geqrf of the m x n @p a (column-major, ld = m; overwritten by R and the reflectors) and its
 /// min(m, n) @p tau.
 template <class D> bool geqrf_tau(int m, int n, std::vector<D>& a, std::vector<D>& tau) {
+    static_assert(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>,
+                  "geqrf_tau: double or complex<double> only");
     tau.assign(static_cast<std::size_t>(std::min(m, n)), D(0));
     if (tau.empty()) return true;
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
