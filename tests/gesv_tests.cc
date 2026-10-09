@@ -14,7 +14,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "lu_verify.hh"
+
+#include <batchlas/verify/residuals.hh>
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/getrf_native.hh"
@@ -34,11 +35,6 @@ namespace {
 
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
-
-inline bool hfinite(double x) { return std::isfinite(x); }
-inline bool hfinite(std::complex<double> x) {
-    return std::isfinite(x.real()) && std::isfinite(x.imag());
-}
 
 using verify::Check;
 using verify::make;
@@ -133,9 +129,9 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
 template <typename T>
 double solve_residual(const Sys<T>& p, int item) {
     const int items[] = {item};
-    return verify::solve_residual(lu_verify::view_over<T>(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
-                                  lu_verify::view_over<T>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                                  lu_verify::view_over<T>(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return verify::solve_residual(verify::view(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
+                                  verify::view(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                  verify::view(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // Every element of the working buffer that no correct kernel may touch: the ld pad
@@ -213,8 +209,12 @@ TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
             this->run_tiny(p);
             for (int item : {0, p.batch - 1}) {
                 EXPECT_EQ(p.info[item], 0) << "n=" << n << " nrhs=" << nrhs;
+                bool moved = n == 1;
+                for (int k = 0; k < n; ++k)
+                    moved |= reinterpret_cast<const int*>(p.piv.data())[size_t(item) * n + k] != k + 1;
+                EXPECT_TRUE(moved) << "n=" << n << ": identity interchanges, so a dropped row swap would go unseen";
                 const double r = solve_residual(p, item);
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, r))
+                EXPECT_VERIFY(T, Check::solve, n, r)
                     << "n=" << n << " nrhs=" << nrhs << " item=" << item;
             }
         }
@@ -271,7 +271,7 @@ TYPED_TEST(GesvTest, TinyInfoReportsExactSingularityAndLeavesXFinite) {
                 << "n=" << n << ": the zero column is " << (n / 2) << ", 1-based " << (n / 2 + 1);
         }
         for (size_t i = 0; i < p.b.size(); ++i) {
-            ASSERT_TRUE(hfinite(up(p.b[i]))) << "X is not finite at element " << i;
+            ASSERT_TRUE(verify::finite(up(p.b[i]))) << "X is not finite at element " << i;
         }
     }
 }
@@ -315,7 +315,7 @@ TYPED_TEST(GesvTest, TinyPackedLaunchCoversEveryBatchItem) {
             for (int bi = 0; bi < batch; ++bi) {
                 ASSERT_EQ(p.info[bi], 0)
                     << "item " << bi << " of " << batch << " was not written (n=" << n << ")";
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual(p, bi)))
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, bi))
                     << "item " << bi << " of " << batch;
             }
         }
@@ -380,8 +380,8 @@ TYPED_TEST(GesvTest, PublicGesvSolvesAndMatchesTheTinyTier) {
 
         for (int item : {0, p.batch - 1}) {
             EXPECT_EQ(p.info[item], 0);
-            EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual(p, item))) << "public, n=" << n;
-            EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual(q, item))) << "tiny, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, item)) << "public, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(q, item)) << "tiny, n=" << n;
         }
         // The pivot lists must agree exactly: both arms run the same getrf recurrence.
         for (size_t i = 0; i < p.piv.size(); ++i) ASSERT_EQ(p.piv[i], q.piv[i]) << i;

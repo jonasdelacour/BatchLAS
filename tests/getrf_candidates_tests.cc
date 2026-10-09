@@ -15,7 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "lu_verify.hh"
+
+#include <batchlas/verify/residuals.hh>
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/ops/getrf/choice.hh"
@@ -83,11 +84,8 @@ Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
     p.piv = UnifiedVector<int64_t>(std::max<std::size_t>(std::size_t(n) * batch, 1), int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(std::max(batch, 1)), int32_t(-12345));
     for (int b = 0; b < batch; ++b) {
-        std::uint64_t s = (seed + 977u * std::uint64_t(period > 0 ? b % period : b)) * 6364136223846793005ULL + 1;
-        auto next = [&] {
-            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-            return double(std::int32_t(std::uint32_t(s >> 32))) / 2147483648.0;
-        };
+        verify::Rng rng(seed + 977u * std::uint64_t(period > 0 ? b % period : b));
+        auto next = [&] { return rng.next(); };
         for (int j = 0; j < n; ++j)
             for (int r = 0; r < n; ++r) {
                 const double re = next(), im = next();
@@ -103,7 +101,8 @@ Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
 template <typename T>
 double residual(const Lu<T>& p, int b) {
     const std::size_t off = std::size_t(b) * p.stride;
-    return lu_verify::factor_residual<T>(p.a0.data() + off, p.buf.data() + off, p.ip(b), p.n, p.n, p.ld);
+    return verify::getrf_residual(verify::view(p.a0.data() + off, p.n, p.n, p.ld), verify::view(p.buf.data() + off, p.n, p.n, p.ld),
+                                  VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.ip(b))), p.n, 1));
 }
 
 // info, pivots and the residual of the first and last item, and the padding bit for bit.
@@ -114,7 +113,7 @@ void expect_factored(const Lu<T>& p, const std::string& what, bool info_passed =
         for (int k = 0; k < p.n; ++k)
             ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.n) << what << " item " << b << " pivot " << k << " = " << p.ip(b)[k];
         const double r = residual(p, b);
-        EXPECT_TRUE(lu_verify::within<T>(verify::Check::factorization, p.n, r)) << what << " item " << b << " residual " << r;
+        EXPECT_VERIFY(T, verify::Check::factorization, p.n, r) << what << " item " << b << " residual " << r;
     }
     for (std::size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stride), i = r % p.ld, j = r / p.ld;

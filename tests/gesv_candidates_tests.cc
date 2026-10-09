@@ -15,7 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "lu_verify.hh"
+
+#include <batchlas/verify/residuals.hh>
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
@@ -112,9 +113,9 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
 template <typename T>
 double residual(const Sys<T>& p, int it) {
     const int items[] = {it};
-    return verify::solve_residual(lu_verify::view_over<T>(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
-                                  lu_verify::view_over<T>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                                  lu_verify::view_over<T>(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return verify::solve_residual(verify::view(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
+                                  verify::view(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                  verify::view(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
@@ -130,7 +131,7 @@ void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std:
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
     for (int it : {0, p.batch - 1}) {
         const double r = residual(p, it);
-        EXPECT_TRUE(lu_verify::within<T>(verify::Check::solve, p.n, r)) << what << " item " << it << " residual " << r;
+        EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " item " << it << " residual " << r;
         bool moved = false;
         for (int i = 0; i < p.n; ++i) {
             const int32_t pv = piv32(p, it, i);
@@ -811,7 +812,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         });
         EXPECT_EQ(got, "blocked");
         for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "item " << it;
-        for (int it : {0, p.batch - 1}) EXPECT_TRUE(lu_verify::within<T>(verify::Check::solve, p.n, residual(p, it))) << "item " << it;
+        for (int it : {0, p.batch - 1}) EXPECT_VERIFY(T, verify::Check::solve, p.n, residual(p, it)) << "item " << it;
 #endif
     }
 }

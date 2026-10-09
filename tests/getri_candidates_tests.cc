@@ -17,7 +17,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "lu_verify.hh"
+
+#include <batchlas/verify/residuals.hh>
 
 #include "../src/ops/getri/choice.hh"
 #include "../src/extensions/getri_native.hh"
@@ -90,7 +91,7 @@ struct Inv {
     std::size_t coff = 0;
     UnifiedVector<T> mem;
     std::vector<T> mem0;                   // after getrf, before getri
-    std::vector<verify::promoted_t<T>> a0;  // the matrix getrf factored, column-major per item
+    std::vector<T> a0;  // the matrix getrf factored, column-major per item
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
     UnifiedVector<T*> aptr, cptr;
@@ -115,7 +116,7 @@ void fill_a(Inv<T>& p) {
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    p.a0.assign(std::size_t(reps) * s.n * s.n, verify::promoted_t<T>(0));
+    p.a0.assign(std::size_t(reps) * s.n * s.n, T{});
     for (int it = 0; it < reps; ++it) {
         std::vector<int> perm(s.n);
         for (int i = 0; i < s.n; ++i) perm[i] = i;
@@ -124,7 +125,7 @@ void fill_a(Inv<T>& p) {
             for (int i = 0; i < s.n; ++i) {
                 const T v = i == j ? verify::make<T>(R(s.n) + R(1.5), R(0.25)) : verify::make<T>(u(gen), u(gen));
                 p.mem[p.ai(it, perm[i], j)] = v;
-                p.a0[std::size_t(it) * s.n * s.n + std::size_t(j) * s.n + perm[i]] = up(v);
+                p.a0[std::size_t(it) * s.n * s.n + std::size_t(j) * s.n + perm[i]] = v;
             }
     }
     for (int it = reps; it < s.batch; ++it)
@@ -137,10 +138,9 @@ template <typename T>
 double residual(const Inv<T>& p, int it) {
     const int n = p.s.n;
     const int rep = p.s.period > 0 ? it % std::min(p.s.period, p.s.batch) : it;
-    using D = verify::promoted_t<T>;
-    return verify::solve_residual(lu_verify::view_over<D>(p.a0.data() + std::size_t(rep) * n * n, n, n, n),
-                                  lu_verify::view_over<T>(p.mem.data() + p.ci(it, 0, 0), n, n, p.ldc),
-                                  MatrixView<D, MatrixFormat::Dense>());
+    return verify::solve_residual(verify::view(p.a0.data() + std::size_t(rep) * n * n, n, n, n),
+                                  verify::view(p.mem.data() + p.ci(it, 0, 0), n, n, p.ldc),
+                                  verify::view(static_cast<const T*>(nullptr), 0, 0, 1));
 }
 
 std::string label(const Spec& s) { return "n=" + std::to_string(s.n) + " batch=" + std::to_string(s.batch); }
@@ -312,7 +312,7 @@ protected:
         }
         for (int it : items) {
             const double r = residual(p, it);
-            ASSERT_TRUE(lu_verify::within<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
+            ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
         }
         for (int it = 0; it < s.batch; ++it) ASSERT_EQ(p.info[it], 0) << what << " info of item " << it;
         std::vector<char> inc(p.mem.size(), 0);

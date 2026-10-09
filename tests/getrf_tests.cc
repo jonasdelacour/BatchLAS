@@ -21,7 +21,8 @@
 #include <batchlas/settings.hh>
 
 #include "test_utils.hh"
-#include "lu_verify.hh"
+
+#include <batchlas/verify/residuals.hh>
 
 // The ONLY oracle in this file that is not BatchLAS code. Both getrf tiers share
 // getrf_cta_device.hh's lu_cabs1, so a defect in the pivot METRIC itself moves the
@@ -55,11 +56,6 @@ namespace {
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-// cabs1 = |Re| + |Im|: the metric ?GETRF's I?AMAX pivots on, not the modulus.
-inline double hcabs1(double x) { return std::fabs(x); }
-inline double hcabs1(std::complex<double> x) { return std::fabs(x.real()) + std::fabs(x.imag()); }
-inline bool hfinite(double x) { return std::isfinite(x); }
-inline bool hfinite(std::complex<double> x) { return std::isfinite(x.real()) && std::isfinite(x.imag()); }
 
 // Scale by a real factor without naming .real()/.imag() on a type without them.
 template <class T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
@@ -72,10 +68,33 @@ using verify::make;
 using verify::nanmax;
 using verify::up;
 using verify::Rng;
-using lu_verify::factor_residual;
-using lu_verify::inverse_residual;
-using lu_verify::machine_eps;
-using lu_verify::solve_residual;
+
+// The fixtures hold raw pointers at padded ld and odd strides; these hand one item to the library.
+template <class T>
+VectorView<int32_t> pivots_of(const int* ipiv, int count) {
+    return VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(ipiv)), count, 1);
+}
+template <class T>
+double factor_residual(const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
+    return verify::getrf_residual(verify::view(A0, m, n, ld), verify::view(F, m, n, ld),
+                                  pivots_of<T>(ipiv, std::min(m, n)));
+}
+template <class T>
+double solve_residual(const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
+    return verify::solve_residual(verify::view(A0, n, n, lda), verify::Shape::general, op,
+                                  verify::view(X, n, nrhs, ldb), verify::view(B0, n, nrhs, ldb));
+}
+template <class T>
+double inverse_residual(const T* A0, const T* C, int n, int lda, int ldc) {
+    return verify::solve_residual(verify::view(A0, n, n, lda), verify::view(C, n, n, ldc),
+                                  verify::view(static_cast<const T*>(nullptr), 0, 0, 1));
+}
+template <class T>
+double lu_solve_residual(const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf, int ldb,
+                         Transpose op) {
+    return verify::lu_solve_residual(verify::view(F, n, n, ldf), pivots_of<T>(ipiv, n), op,
+                                     verify::view(X, n, nrhs, ldb), verify::view(B0, n, nrhs, ldb));
+}
 
 bool verbose() {
     static const bool v = (std::getenv("BATCHLAS_TEST_VERBOSE") != nullptr);
@@ -235,24 +254,6 @@ const int* piv_item(const Lu<T>& p, int b) {
     return reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * p.n;
 }
 
-// ORACLE 3: the partial-pivoting property, in the metric the library pivots on.
-// "max |L(i,j)| <= 1" is WRONG for complex (cabs1(z) <= sqrt(2)|z|); the exact
-// statement is cabs1(L(i,k) U(k,k)) <= cabs1(U(k,k)), which a kernel pivoting on
-// the modulus violates. Returns the worst ratio; 1 is the bound.
-template <typename T>
-double worst_pivot_ratio(const T* F, int m, int n, int ld) {
-    const int k = std::min(m, n);
-    double worst = 0.0;
-    for (int j = 0; j < k; ++j) {
-        const auto ukk = up(F[size_t(j) * ld + j]);
-        const double den = hcabs1(ukk);
-        if (den == 0.0) continue;                 // a singular column says nothing here
-        for (int i = j + 1; i < m; ++i)
-            worst = nanmax(worst, hcabs1(up(F[size_t(j) * ld + i]) * ukk) / den);
-    }
-    return worst;
-}
-
 // The fixture.
 template <typename Config>
 class LuTest : public test_utils::BatchLASTest<Config> {
@@ -387,19 +388,19 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
 
         for (int j = 0; j < p.n; ++j)
             for (int i = 0; i < p.n; ++i)
-                ASSERT_TRUE(hfinite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
                     << what << ": F(" << i << "," << j << ") is not finite at b=" << b;
 
         const double res = factor_residual<T>(A0, F, ip, p.n, p.n, p.ld);
         if (verbose())
             std::printf("[verbose] %-34s n=%4d b=%d  ||PA-LU||=%.4e  tol=%.4e\n",
                         what, p.n, b, res, verify::bound<T>(Check::factorization, p.n));
-        EXPECT_TRUE(lu_verify::within<T>(Check::factorization, p.n, res))
+        EXPECT_VERIFY(T, Check::factorization, p.n, res)
             << what << ": ||PA - LU||_F / ||A||_F too large at b=" << b << " (n=" << p.n << ")";
 
         if (check_L) {
-            const double ratio = worst_pivot_ratio<T>(F, p.n, p.n, p.ld);
-            EXPECT_LE(ratio, 1.0 + 32.0 * machine_eps<T>())
+            const double ratio = verify::pivot_ratio(verify::view(F, p.n, p.n, p.ld));
+            EXPECT_LE(ratio, verify::pivot_ratio_bound<T>())
                 << what << ": cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached " << ratio
                 << " > 1 at b=" << b
                 << " -- a row with a LARGER cabs1 than the chosen pivot was left below it, so "
@@ -530,84 +531,6 @@ Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
-}
-
-// THE O(n^2) GETRS RESIDUAL, straight from the contract:
-//
-//   NoTrans   b = F^{-1}( L ( U x ) )      F^{-1} = the list walked BACKWARDS
-//   Trans/CT  b = op(U) ( op(L) ( F x ) )  F      = the list walked FORWARDS
-//
-// It never forms A, so it cannot see a flip of the CONVENTION itself.
-template <typename T>
-double fused_factor_residual(const T* F, const int* ipiv, const T* X, const T* B0,
-                             int n, int nrhs, int ldf, int ldb, Transpose op) {
-    using D = verify::promoted_t<T>;
-    const bool tr   = (op != Transpose::NoTrans);
-    const bool conj = (op == Transpose::ConjTrans);
-
-    double nu = 0.0, nx = 0.0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i <= j; ++i) {
-            const double u = verify::abs(up(F[size_t(j) * ldf + i]));
-            nu += u * u;
-        }
-    for (int j = 0; j < nrhs; ++j)
-        for (int i = 0; i < n; ++i) {
-            const double x = verify::abs(up(X[size_t(j) * ldb + i]));
-            nx += x * x;
-        }
-
-    auto El = [&](int i, int j) { return up(F[size_t(j) * ldf + i]); };
-
-    double num = 0.0;
-    std::vector<D> v(n), w(n);
-    for (int c = 0; c < nrhs; ++c) {
-        for (int i = 0; i < n; ++i) v[i] = up(X[size_t(c) * ldb + i]);
-
-        if (!tr) {
-            for (int i = 0; i < n; ++i) {                    // w = U v
-                D acc = D(0);
-                for (int t = i; t < n; ++t) acc += El(i, t) * v[t];
-                w[i] = acc;
-            }
-            for (int i = n - 1; i >= 0; --i) {               // v = L w, UNIT lower
-                D acc = w[i];
-                for (int t = 0; t < i; ++t) acc += El(i, t) * w[t];
-                v[i] = acc;
-            }
-            for (int k = n - 1; k >= 0; --k) {               // F^{-1}, BACKWARDS
-                const int q = ipiv[k] - 1;
-                if (q != k) std::swap(v[k], v[q]);
-            }
-        } else {
-            for (int k = 0; k < n; ++k) {                    // F, FORWARDS
-                const int q = ipiv[k] - 1;
-                if (q != k) std::swap(v[k], v[q]);
-            }
-            for (int i = 0; i < n; ++i) {                    // w = op(L) v, UNIT upper
-                D acc = v[i];
-                for (int t = i + 1; t < n; ++t) {
-                    const D l = El(t, i);
-                    acc += (conj ? verify::conj(l) : l) * v[t];
-                }
-                w[i] = acc;
-            }
-            for (int i = n - 1; i >= 0; --i) {               // v = op(U) w, LOWER
-                D acc = D(0);
-                for (int t = 0; t <= i; ++t) {
-                    const D u = El(t, i);
-                    acc += (conj ? verify::conj(u) : u) * w[t];
-                }
-                v[i] = acc;
-            }
-        }
-        for (int i = 0; i < n; ++i) {
-            const D d = v[i] - up(B0[size_t(c) * ldb + i]);
-            num += verify::abs(d) * verify::abs(d);
-        }
-    }
-    const double sc = std::sqrt(nu) * std::sqrt(nx);
-    return (sc > 0.0) ? std::sqrt(num) / sc : std::sqrt(num);
 }
 
 // The RHS pad and the inter-item gap must come back BIT-IDENTICAL: the fused
@@ -762,7 +685,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
             const double res = factor_residual<T>(a0.data() + size_t(b) * stride,
                                                  buf.data() + size_t(b) * stride,
                                                  piv.data() + size_t(b) * k, m, n, ld);
-            EXPECT_TRUE(lu_verify::within<T>(Check::factorization, std::max(m, n), res))
+            EXPECT_VERIFY(T, Check::factorization, std::max(m, n), res)
                 << "the " << r.bytes << " B panel launched but factorised incorrectly at b=" << b;
         }
     }
@@ -857,13 +780,13 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
                 << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
             this->ctx->wait();
 
-            const double res = fused_factor_residual<T>(
+            const double res = lu_solve_residual<T>(
                 p.buf.data(), reinterpret_cast<const int*>(p.piv.data()),
                 rhs.buf.data(), rhs.b0.data(), n, nrhs, p.ld, rhs.ld, op);
             if (verbose())
                 std::printf("[verbose] fused hole rung %6zu B n=%4d op=%d  res=%.4e tol=%.4e\n",
                             want, n, int(op), res, verify::bound<T>(Check::solve, n));
-            EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+            EXPECT_VERIFY(T, Check::solve, n, res)
                 << "rung " << want << " B (n=" << n << ", transA=" << int(op)
                 << ") launched but did not solve";
             check_rhs_pad_intact(rhs, "fused/hole");
@@ -1134,11 +1057,11 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
             const int* ip = piv.data() + size_t(b) * k;
             for (int s = 0; s < k; ++s)
                 ASSERT_TRUE(ip[s] >= s + 1 && ip[s] <= m) << "ipiv[" << s << "] = " << ip[s];
-            EXPECT_TRUE(lu_verify::within<T>(Check::factorization, m, factor_residual<T>(a0.data() + size_t(b) * stride,
-                                        buf.data() + size_t(b) * stride, ip, m, n, ld)))
+            EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(a0.data() + size_t(b) * stride,
+                                        buf.data() + size_t(b) * stride, ip, m, n, ld))
                 << (resident ? "resident" : "global") << " leaf, b=" << b;
-            EXPECT_LE(worst_pivot_ratio<T>(buf.data() + size_t(b) * stride, m, n, ld),
-                      1.0 + 32.0 * machine_eps<T>())
+            EXPECT_LE(verify::pivot_ratio(verify::view(buf.data() + size_t(b) * stride, m, n, ld)),
+                      verify::pivot_ratio_bound<T>())
                 << (resident ? "resident" : "global") << " leaf, b=" << b;
         }
         if (this->HasFailure()) return;
@@ -1272,14 +1195,12 @@ TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
                         << what << " m=" << m << " ncols=" << ncols << " b=" << b
                         << ": ipiv[" << s << "] = " << ip[size_t(s)]
                         << " is outside [s+1, m] -- not a 1-based interchange list";
-                EXPECT_TRUE(lu_verify::within<T>(
-                    Check::factorization, std::max(m, ncols),
+                EXPECT_VERIFY(T, Check::factorization, std::max(m, ncols),
                     factor_residual<T>(p.src_of(b), reg_fac.data() + size_t(b) * p.stride,
-                                       ip.data(), m, ncols, p.ld)))
+                                       ip.data(), m, ncols, p.ld))
                     << "register leaf m=" << m << " ncols=" << ncols << " b=" << b;
-                EXPECT_LE(worst_pivot_ratio<T>(reg_fac.data() + size_t(b) * p.stride,
-                                               m, ncols, p.ld),
-                          1.0 + 32.0 * machine_eps<T>())
+                EXPECT_LE(verify::pivot_ratio(verify::view(reg_fac.data() + size_t(b) * p.stride, m, ncols, p.ld)),
+                          verify::pivot_ratio_bound<T>())
                     << "register leaf m=" << m << " ncols=" << ncols << " b=" << b
                     << ": a row with a LARGER cabs1 than the chosen pivot was left below it";
             }
@@ -1338,8 +1259,7 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
             << " (got " << ip[col] << "). The winner is " << (row / 32)
             << " sub-groups down the work-group, so a butterfly-only argmax cannot find it";
         const auto lp = panel_local_piv(ip, ncols, p.piv_base);
-        EXPECT_TRUE(lu_verify::within<T>(
-            Check::factorization, m, factor_residual<T>(p.src_of(b), p.fac_of(b), lp.data(), m, ncols, p.ld)))
+        EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(p.src_of(b), p.fac_of(b), lp.data(), m, ncols, p.ld))
             << "b=" << b;
     }
 }
@@ -1415,7 +1335,7 @@ TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
         const T* F = p.fac_of(b);
         for (int j = 0; j < ncols; ++j)
             for (int i = 0; i < m; ++i)
-                ASSERT_TRUE(hfinite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
                     << "b=" << b << " left F(" << i << "," << j << ") non-finite; a failed "
                        "item must stay finite, as LAPACK's and cuBLAS's do";
     }
@@ -1548,7 +1468,7 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
         }
         // RELATIVE, and generous: the two kernels run the same operations in the same
         // order, so the only legitimate difference is a contracted multiply-subtract.
-        EXPECT_LE(worst, 1000.0 * double(n) * machine_eps<T>() * std::max(scale, 1.0))
+        EXPECT_LE(worst, 1000.0 * double(n) * (2.0 * verify::eps<T>()) * std::max(scale, 1.0))
             << "n=" << n << ": the two leaves' factors differ by " << worst
             << " at the worst element (scale " << scale
             << ") -- far past a contraction difference";
@@ -1612,14 +1532,13 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                ASSERT_TRUE(hfinite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
                     << "item " << b << " left F(" << i << "," << j << ") non-finite; a failed "
                        "item must stay finite, as LAPACK's and cuBLAS's do";
         // A failure in one item must not corrupt the others.
         if (b != bad) {
             const int* ip = piv_item(p, b);
-            EXPECT_TRUE(lu_verify::within<T>(
-                Check::factorization, n, factor_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld)))
+            EXPECT_VERIFY(T, Check::factorization, n, factor_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld))
                 << "healthy item " << b;
         }
     }
@@ -1787,7 +1706,7 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
 
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
-        const double diag = hcabs1(up(F[size_t(c) * p.ld + c]));
+        const double diag = verify::cabs1(up(F[size_t(c) * p.ld + c]));
         // ANTI-VACUITY: the pivot really is tiny, or this is just "info == 0".
         ASSERT_GT(diag, 0.0) << "U(c,c) is exactly zero, so this is the SINGULAR case";
         ASSERT_LT(diag, 1e-20) << "U(c,c) = " << diag << " is not nearly singular at all";
@@ -1832,7 +1751,7 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
         // ANTI-VACUITY: the two functionals must genuinely disagree on this data.
         const auto z0 = up(p.a0[0]);
         const auto z1 = up(p.a0[1]);
-        ASSERT_LT(hcabs1(z0), hcabs1(z1)) << "cabs1 does not prefer row 1 on this matrix";
+        ASSERT_LT(verify::cabs1(z0), verify::cabs1(z1)) << "cabs1 does not prefer row 1 on this matrix";
         ASSERT_GT(verify::abs(z0), verify::abs(z1))     << "the modulus does not prefer row 0 on this matrix";
 
         for (int tier = 0; tier < 2; ++tier) {
@@ -1897,7 +1816,7 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
                 if (verbose())
                     std::printf("[verbose] getrs op=%d nrhs=%d b=%d  res=%.4e tol=%.4e\n",
                                 int(op), nrhs, b, res, verify::bound<T>(Check::solve, n));
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+                EXPECT_VERIFY(T, Check::solve, n, res)
                     << "getrs transA=" << int(op) << " nrhs=" << nrhs << " b=" << b;
             }
             solutions.emplace_back(rhs.buf.begin(), rhs.buf.end());
@@ -1978,7 +1897,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                             rhs.buf.data() + size_t(b) * rhs.stride,
                             rhs.b0.data() + size_t(b) * rhs.stride,
                             n, nrhs, p.ld, rhs.ld, op);
-                        EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+                        EXPECT_VERIFY(T, Check::solve, n, res)
                             << "getrs spelling=" << spelling << " transA=" << int(op)
                             << " n=" << n << " nrhs=" << nrhs << " b=" << b;
                     }
@@ -2129,7 +2048,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
         if (verbose())
             std::printf("[verbose] getri b=%d  ||AC-I||/(||A|| ||C||)=%.4e tol=%.4e\n",
                         b, res, verify::bound<T>(Check::solve, n));
-        EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res)) << "||A C - I||_F / (||A||_F ||C||_F) at b=" << b;
+        EXPECT_VERIFY(T, Check::solve, n, res) << "||A C - I||_F / (||A||_F ||C||_F) at b=" << b;
     }
 
     for (size_t i = 0; i < factored.size(); ++i)
@@ -2176,10 +2095,10 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
                                                          p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
-                                            n, nrhs, p.ld, rhs.ld, Transpose::NoTrans)))
+                                            n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
                     << "the VENDOR getrs could not consume the NATIVE getrf's factor, b=" << b;
         }
         {   // vendor getri on the native factor
@@ -2194,8 +2113,8 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) {
                 EXPECT_EQ(ci[b], 0);
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
-                                              c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld)))
+                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                              c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld))
                     << "the VENDOR getri could not consume the NATIVE getrf's factor, b=" << b;
             }
         }
@@ -2236,10 +2155,10 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
                 this->getrs_seam()));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
-                                            n, nrhs, p.ld, rhs.ld, Transpose::NoTrans)))
+                                            n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
                     << "the NATIVE getrs could not consume the VENDOR getrf's factor, b=" << b;
         }
         {   // native getri on the vendor factor
@@ -2255,8 +2174,8 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) {
                 EXPECT_EQ(ci[b], 0);
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
-                                              c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld)))
+                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                              c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld))
                     << "the NATIVE getri could not consume the VENDOR getrf's factor, b=" << b;
             }
         }
@@ -2585,7 +2504,7 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
                 if (verbose())
                     std::printf("[verbose] fused getrs op=%d nrhs=%d b=%d  res=%.4e tol=%.4e\n",
                                 int(op), nrhs, b, res, verify::bound<T>(Check::solve, n));
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+                EXPECT_VERIFY(T, Check::solve, n, res)
                     << "fused getrs transA=" << int(op) << " nrhs=" << nrhs << " b=" << b;
             }
             check_rhs_pad_intact(rhs, "fused/window");
@@ -2648,7 +2567,7 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
                                                          rhs.buf.data() + size_t(b) * rhs.stride,
                                                          rhs.b0.data() + size_t(b) * rhs.stride,
                                                          n, nrhs, p.ld, rhs.ld, op);
-                    EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+                    EXPECT_VERIFY(T, Check::solve, n, res)
                         << "fused getrs n=" << n << " nrhs=" << nrhs << " transA=" << int(op)
                         << " b=" << b;
                 }
@@ -2714,10 +2633,10 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
             ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
-                                            n, nrhs, p.ld, rhs.ld, op)))
+                                            n, nrhs, p.ld, rhs.ld, op))
                     << "one width past the fused tier the facade returned a wrong answer, "
                        "transA=" << int(op) << " b=" << b;
         }
@@ -2778,10 +2697,10 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
-                                            n, nrhs, p.ld, rhs.ld, op)))
+                                            n, nrhs, p.ld, rhs.ld, op))
                     << "the FUSED getrs could not consume the " << who << " factor, transA="
                     << int(op) << " b=" << b;
             check_rhs_pad_intact(rhs, who);
@@ -2830,10 +2749,10 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
                                                      p.piv.to_span(), ws.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
-            EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                         rhs.buf.data() + size_t(b) * rhs.stride,
                                         rhs.b0.data() + size_t(b) * rhs.stride,
-                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans)))
+                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
                 << "the VENDOR getrs could not consume the factor the fused tier just read";
     }
 }
@@ -2871,16 +2790,16 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                 for (int b = 0; b < batch; ++b) {
                     for (int c = 0; c < nrhs; ++c)
                         for (int i = 0; i < n; ++i)
-                            ASSERT_TRUE(hfinite(up(
+                            ASSERT_TRUE(verify::finite(up(
                                 rhs.buf[size_t(b) * rhs.stride + size_t(c) * rhs.ld + i])))
                                 << "a NEARLY singular factor produced a non-finite answer at kz="
                                 << kz << " transA=" << int(op) << " b=" << b;
-                    const double res = fused_factor_residual<T>(
+                    const double res = lu_solve_residual<T>(
                         p.buf.data() + size_t(b) * p.stride,
                         reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * n,
                         rhs.buf.data() + size_t(b) * rhs.stride,
                         rhs.b0.data() + size_t(b) * rhs.stride, n, nrhs, p.ld, rhs.ld, op);
-                    EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, res))
+                    EXPECT_VERIFY(T, Check::solve, n, res)
                         << "a NEARLY singular factor was not solved to a backward-error bound "
                            "at kz=" << kz << " transA=" << int(op) << " b=" << b
                         << " -- an epsilon floor or a skipped division would look like this";
@@ -2909,7 +2828,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                     bool nonfinite = false;
                     for (int c = 0; c < nrhs && !nonfinite; ++c)
                         for (int i = 0; i < n && !nonfinite; ++i)
-                            if (!hfinite(up(rhs.buf[size_t(b) * rhs.stride +
+                            if (!verify::finite(up(rhs.buf[size_t(b) * rhs.stride +
                                                     size_t(c) * rhs.ld + i])))
                                 nonfinite = true;
                     EXPECT_TRUE(nonfinite)
@@ -3051,10 +2970,10 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
                                      exact.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
-            EXPECT_TRUE(lu_verify::within<T>(Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                         rhs.buf.data() + size_t(b) * rhs.stride,
                                         rhs.b0.data() + size_t(b) * rhs.stride,
-                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans)));
+                                        n, nrhs, p.ld, rhs.ld, Transpose::NoTrans));
     }
 }
 
@@ -3177,7 +3096,7 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
         double best = -1.0, second = -1.0;
         int win = k;
         for (int i = k; i < n; ++i) {
-            const double m = hcabs1(A[size_t(k) * size_t(n) + size_t(i)]);
+            const double m = verify::cabs1(A[size_t(k) * size_t(n) + size_t(i)]);
             // STRICTLY greater, so an exact tie keeps the LOWEST row -- I?AMAX's order
             // and the tier's. A `>=` here would silently make the oracle disagree with
             // LAPACK on exactly the case TinyBreaksAnExactCabs1Tie guards.
@@ -3191,7 +3110,7 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
                 std::swap(A[size_t(c) * size_t(n) + size_t(k)],
                           A[size_t(c) * size_t(n) + size_t(win)]);
         const P p = A[size_t(k) * size_t(n) + size_t(k)];
-        if (hcabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
+        if (verify::cabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
         for (int i = k + 1; i < n; ++i) A[size_t(k) * size_t(n) + size_t(i)] /= p;
         for (int c = k + 1; c < n; ++c) {
             const P u = A[size_t(c) * size_t(n) + size_t(k)];
@@ -3300,10 +3219,10 @@ TYPED_TEST(LuTest, TinyPaddingIsInertAgainstTheCtaRoute) {
                     // Relative to the element itself, floored at 1 so an entry that
                     // underflows towards zero does not demand exact agreement.
                     const double scale = std::max(1.0, verify::abs(bv));
-                    const double tol = kTinyVsCtaUlpsPerStep * double(n) * machine_eps<T>() * scale;
+                    const double tol = kTinyVsCtaUlpsPerStep * double(n) * (2.0 * verify::eps<T>()) * scale;
                     ASSERT_LE(d, tol)
                         << "n=" << n << " item " << it << " element (" << i << "," << j
-                        << "): tiny and cta differ by " << d << " (" << d / (machine_eps<T>() * scale)
+                        << "): tiny and cta differ by " << d << " (" << d / ((2.0 * verify::eps<T>()) * scale)
                         << " ulp of " << verify::abs(bv) << "), tolerance " << tol;
                 }
         }
@@ -3368,7 +3287,7 @@ TYPED_TEST(LuTest, TinyPlantedZeroColumnGivesGlobalOneBasedInfo) {
                         << ip[c] << " is outside [c+1, n] -- a padded row won the argmax";
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i)
-                        ASSERT_TRUE(hfinite(up(p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i])))
+                        ASSERT_TRUE(verify::finite(up(p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i])))
                             << "n=" << n << " k=" << k << " b=" << b << ": F(" << i << "," << j
                             << ") is not finite -- the elimination did not continue finitely";
             }
@@ -3495,14 +3414,14 @@ TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
         // cabs1, must be strictly the column maximum, and must be different values.
         for (int b = 0; b < batch; ++b) {
             const T* A0 = p.a0.data() + size_t(b) * p.stride;
-            const double c0 = hcabs1(up(A0[0]));
-            const double c2 = hcabs1(up(A0[2]));
+            const double c0 = verify::cabs1(up(A0[0]));
+            const double c2 = verify::cabs1(up(A0[2]));
             ASSERT_EQ(c0, c2) << "the fixture no longer carries an exact cabs1 tie";
             ASSERT_GT(verify::abs(up(A0[0]) - up(A0[2])), 0.0)
                 << "the tied entries are equal, so no tie-break can be observed";
             for (int i = 0; i < n; ++i)
                 if (i != 0 && i != 2)
-                    ASSERT_LT(hcabs1(up(A0[i])), c0)
+                    ASSERT_LT(verify::cabs1(up(A0[i])), c0)
                         << "row " << i << " outranks the tie, so column 0 is not decided by it";
         }
         this->run_tiny(p);
