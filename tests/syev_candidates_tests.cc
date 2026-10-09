@@ -16,6 +16,9 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
+
 #include "../src/ops/syev/choice.hh"
 
 #include <algorithm>
@@ -146,14 +149,10 @@ Eig<T> make_eig(const Spec& s) {
     return p;
 }
 
-template <typename T>
-double tol(int n) {
-    return 200.0 * std::max(n, 4) * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-// Eigenvalues against the construction (relative to max |lambda| = 100), eigenvector residual
-// and orthonormality from the original A, nothing written outside A's n x n footprint (LAPACK
-// lets jobz = N destroy A), and a repeating batch bit-identical to its representatives.
+// Eigenvalues against the construction (relative to max |lambda|), eigenvector residual and
+// orthonormality from the original A (all three through batchlas::verify), nothing written outside
+// A's n x n footprint (LAPACK lets jobz = N destroy A), and a repeating batch bit-identical to
+// its representatives.
 template <typename T>
 void expect_solved(const Eig<T>& p, const std::string& what) {
     const Spec& s = p.s;
@@ -162,34 +161,29 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
     std::vector<int> items;
     for (int it = 0; it < std::min(reps, 4); ++it) items.push_back(it);
     if (reps > 4) items.push_back(reps - 1);
-    const double t = tol<T>(n);
-    for (int it : items) {
-        const auto& lam = p.lambda[it];
-        for (int i = 0; i < n; ++i)
-            ASSERT_NEAR(double(p.w[std::size_t(it) * n + i]), lam[i], t * 100.0)
-                << what << " item " << it << " eigenvalue " << i;
-        if (s.jobz != JobType::EigenVectors) continue;
-        auto a0 = [&](int i, int j) {
-            const bool st = p.stored(i, j);
-            const cd v = up(p.mem0[st ? p.at(it, i, j) : p.at(it, j, i)]);
-            return st ? v : std::conj(v);
-        };
-        double worst_r = 0, worst_o = 0;
-        for (int k = 0; k < n; ++k) {
-            const double lk = double(p.w[std::size_t(it) * n + k]);
-            for (int i = 0; i < n; ++i) {
-                cd r = -lk * up(p.mem[p.at(it, i, k)]);
-                for (int j = 0; j < n; ++j) r += a0(i, j) * up(p.mem[p.at(it, j, k)]);
-                worst_r = std::max(worst_r, std::abs(r) / 100.0);
-            }
-            for (int l = 0; l < n; ++l) {
-                cd d = 0;
-                for (int i = 0; i < n; ++i) d += std::conj(up(p.mem[p.at(it, i, k)])) * up(p.mem[p.at(it, i, l)]);
-                worst_o = std::max(worst_o, std::abs(d - (k == l ? 1.0 : 0.0)));
-            }
-        }
-        ASSERT_LE(worst_r, t) << what << " item " << it << " residual";
-        ASSERT_LE(worst_o, t) << what << " item " << it << " orthonormality";
+
+    using R = RealOf<T>;
+    const VectorView<R> w(const_cast<R*>(p.w.data()), n, s.batch);
+    double scale = 0;
+    for (int it : items)
+        for (double l : p.lambda[it]) scale = verify::nanmax(scale, std::fabs(l));
+    const double werr = verify::values_error(w, p.lambda, scale, items);
+    ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::values, n, werr)) << what;
+    if (s.jobz == JobType::EigenVectors) {
+        // eigen_residual mirrors the lower triangle: rebuild it from whichever triangle A stored.
+        std::vector<T> lower(std::size_t(n) * n * (items.back() + 1), T(0));
+        for (int it : items)
+            for (int j = 0; j < n; ++j)
+                for (int i = j; i < n; ++i) {
+                    const T v = p.mem0[p.stored(i, j) ? p.at(it, i, j) : p.at(it, j, i)];
+                    lower[std::size_t(it) * n * n + std::size_t(j) * n + i] = p.stored(i, j) ? v : from<T>(std::conj(up(v)));
+                }
+        const MVof<T> A0(lower.data(), n, n, n, n * n, items.back() + 1);
+        const MVof<T> V(const_cast<T*>(p.mem.data()), n, n, p.ld, p.stride, s.batch);
+        const double resid = verify::eigen_residual(A0, V, w, items);
+        const double ortho = verify::orthogonality(V, items);
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::eigen_residual, n, resid)) << what;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality, n, ortho)) << what;
     }
     for (int it = 0; it < s.batch; ++it)
         for (std::size_t e = std::size_t(it) * p.stride; e < std::size_t(it + 1) * p.stride && e < p.mem.size(); ++e) {

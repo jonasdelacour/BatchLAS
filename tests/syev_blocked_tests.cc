@@ -10,6 +10,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -30,18 +31,6 @@ Real tol_eig_for() {
 	return Real(5e-10);
 }
 
-template <typename Real>
-Real tol_ortho_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(5e-3f);
-	return Real(5e-10);
-}
-
-template <typename Real>
-Real tol_resid_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(2e-2f);
-	return Real(5e-9);
-}
-
 template <typename Scalar, Backend B>
 typename base_type<Scalar>::type blocked_cuda_tolerance_floor_eig() {
 	using Real = typename base_type<Scalar>::type;
@@ -49,100 +38,6 @@ typename base_type<Scalar>::type blocked_cuda_tolerance_floor_eig() {
 		return Real(1e-8);
 	}
 	return Real(0);
-}
-
-template <typename Scalar, Backend B>
-typename base_type<Scalar>::type blocked_cuda_tolerance_floor_ortho() {
-	using Real = typename base_type<Scalar>::type;
-	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
-		return Real(3e-8);
-	}
-	return Real(0);
-}
-
-template <typename Scalar, Backend B>
-typename base_type<Scalar>::type blocked_cuda_tolerance_floor_resid() {
-	using Real = typename base_type<Scalar>::type;
-	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
-		return Real(1e-7);
-	}
-	return Real(0);
-}
-
-template <typename Scalar>
-using RealOf = typename base_type<Scalar>::type;
-
-template <typename Scalar>
-inline constexpr bool is_complex_scalar_v =
-    std::is_same_v<std::remove_cv_t<std::remove_reference_t<Scalar>>, std::complex<RealOf<Scalar>>>;
-
-template <typename Scalar>
-static RealOf<Scalar> abs_val(const Scalar& x) {
-	using Real = RealOf<Scalar>;
-	return static_cast<Real>(std::abs(x));
-}
-
-template <typename Scalar>
-static Scalar conj_val(const Scalar& x) {
-	if constexpr (is_complex_scalar_v<Scalar>) {
-		return std::conj(x);
-	} else {
-		return x;
-	}
-}
-
-template <typename Scalar>
-static void check_orthonormal_columns(const MatrixView<Scalar, MatrixFormat::Dense>& V,
-										  const UnifiedVector<RealOf<Scalar>>& W,
-										  RealOf<Scalar> tol) {
-	using Real = RealOf<Scalar>;
-	const int n = V.rows();
-
-	// Check V^H V ~= I
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			Scalar dot = Scalar(0);
-			for (int k = 0; k < n; ++k) {
-				dot += conj_val(V(k, i)) * V(k, j);
-			}
-			const Scalar expected = (i == j) ? Scalar(1) : Scalar(0);
-			EXPECT_LE(abs_val(dot - expected), tol) << "(i,j)= (" << i << "," << j << ")";
-		}
-	}
-
-	(void)W;
-}
-
-template <typename Scalar>
-static void check_eigen_residual(const MatrixView<Scalar, MatrixFormat::Dense>& A0,
-									const MatrixView<Scalar, MatrixFormat::Dense>& V,
-									const UnifiedVector<RealOf<Scalar>>& W,
-									RealOf<Scalar> tol) {
-	using Real = RealOf<Scalar>;
-	const int n = A0.rows();
-
-	// For each eigenpair: ||A*v - w*v|| / ||A||
-	Real normA = Real(0);
-	for (int c = 0; c < n; ++c) {
-		for (int r = 0; r < n; ++r) {
-			normA = std::max(normA, abs_val(A0(r, c)));
-		}
-	}
-	if (normA == Real(0)) normA = Real(1);
-
-	for (int j = 0; j < n; ++j) {
-		const Real w = W[j];
-		Real max_res = Real(0);
-		for (int i = 0; i < n; ++i) {
-			Scalar avi = Scalar(0);
-			for (int k = 0; k < n; ++k) {
-				avi += A0(i, k) * V(k, j);
-			}
-			const Scalar r = avi - Scalar(w) * V(i, j);
-			max_res = std::max(max_res, abs_val(r));
-		}
-		EXPECT_LE(max_res / normA, tol) << "eigenvector col=" << j;
-	}
 }
 
 template <typename T, Backend B>
@@ -288,8 +183,7 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 		EXPECT_NEAR(W_blk[i], W_ref[i], tol_w);
 	}
 
-	check_orthonormal_columns(A_blk.view(), W_blk, std::max(tol_ortho_for<Real>(), blocked_cuda_tolerance_floor_ortho<Scalar, B>()));
-	check_eigen_residual(A0.view(), A_blk.view(), W_blk, std::max(tol_resid_for<Real>(), blocked_cuda_tolerance_floor_resid<Scalar, B>()));
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_blk.view(), W_blk, n);
 }
 
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
@@ -362,10 +256,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 		EXPECT_TRUE(std::isfinite(W_two_stage[i])) << "non-finite eigenvalue at i=" << i;
 	}
 
-	const Real ortho_tol = std::max(tol_ortho_for<Real>(), Real(1e-7));
-	const Real resid_tol = std::max(tol_resid_for<Real>(), Real(1e-7));
-	check_orthonormal_columns(A_two_stage.view(), W_two_stage, ortho_tol);
-	check_eigen_residual(A0.view(), A_two_stage.view(), W_two_stage, resid_tol);
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_two_stage.view(), W_two_stage, n);
 }
 // n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
 // sytrd_block_size_default<T> now returns a different panel width for complex
@@ -418,13 +309,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 		}
 	}
 
-	const Real ortho_tol = std::max(tol_ortho_for<Real>(),
-									blocked_cuda_tolerance_floor_ortho<Scalar, TestFixture::BackendType>());
-	const Real resid_tol = std::max(tol_resid_for<Real>(),
-									blocked_cuda_tolerance_floor_resid<Scalar, TestFixture::BackendType>());
-
-	check_orthonormal_columns(A.view(), W, ortho_tol);
-	check_eigen_residual(A0.view(), A.view(), W, resid_tol);
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
 }
 
 // The n <= 32 range, where Auto picks among the three CTA kernels rather than a
@@ -466,12 +351,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 				<< "eigenvalues not ascending, n=" << n << " i=" << i;
 		}
 
-		const Real ortho_tol = std::max(tol_ortho_for<Real>(),
-										blocked_cuda_tolerance_floor_ortho<Scalar, TestFixture::BackendType>());
-		const Real resid_tol = std::max(tol_resid_for<Real>(),
-										blocked_cuda_tolerance_floor_resid<Scalar, TestFixture::BackendType>());
-		check_orthonormal_columns(A.view(), W, ortho_tol);
-		check_eigen_residual(A0.view(), A.view(), W, resid_tol);
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
 	}
 }
 #endif

@@ -9,6 +9,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <algorithm>
 #include <array>
@@ -25,87 +26,6 @@ using namespace batchlas;
 namespace {
 template <typename Scalar>
 using RealOf = typename base_type<Scalar>::type;
-
-template <typename Scalar>
-static RealOf<Scalar> abs_val(const Scalar& x) {
-	using Real = RealOf<Scalar>;
-	return static_cast<Real>(std::abs(x));
-}
-
-template <typename Scalar>
-static RealOf<Scalar> norm2_val(const Scalar& x) {
-	using Real = RealOf<Scalar>;
-	if constexpr (std::is_same_v<Scalar, Real>) {
-		return x * x;
-	} else {
-		return static_cast<Real>(std::norm(x));
-	}
-}
-
-template <typename Scalar>
-static Scalar conj_val(const Scalar& x) {
-	if constexpr (std::is_same_v<Scalar, RealOf<Scalar>>) {
-		return x;
-	} else {
-		return std::conj(x);
-	}
-}
-
-template <typename Scalar>
-static void check_orthonormal_columns(const MatrixView<Scalar, MatrixFormat::Dense>& V,
-									  const UnifiedVector<RealOf<Scalar>>& W /*unused*/, // keep signature uniform
-									  RealOf<Scalar> tol) {
-	static_cast<void>(W);
-	using Real = RealOf<Scalar>;
-	const int n = V.rows();
-	Real max_err = Real(0);
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			Scalar dot = Scalar(0);
-			for (int r = 0; r < n; ++r) {
-				dot += conj_val(V(r, i, 0)) * V(r, j, 0);
-			}
-			const Real target = (i == j) ? Real(1) : Real(0);
-			max_err = std::max(max_err, abs_val(dot - Scalar(target)));
-		}
-	}
-	EXPECT_LE(max_err, tol) << "max |V^H V - I| = " << max_err;
-}
-
-template <typename Scalar>
-static void check_eigen_residual(const MatrixView<Scalar, MatrixFormat::Dense>& A0,
-								 const MatrixView<Scalar, MatrixFormat::Dense>& V,
-								 const UnifiedVector<RealOf<Scalar>>& W,
-								 RealOf<Scalar> tol) {
-	using Real = RealOf<Scalar>;
-	const int n = A0.rows();
-
-	Real a_norm2 = Real(0);
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			a_norm2 += norm2_val(A0(i, j, 0));
-		}
-	}
-	const Real a_norm = std::sqrt(a_norm2);
-
-	Real r_norm2 = Real(0);
-	for (int j = 0; j < n; ++j) {
-		const Real wj = W[static_cast<std::size_t>(j)];
-		for (int i = 0; i < n; ++i) {
-			Scalar sum = Scalar(0);
-			for (int k = 0; k < n; ++k) {
-				sum += A0(i, k, 0) * V(k, j, 0);
-			}
-			sum -= Scalar(wj) * V(i, j, 0);
-			r_norm2 += norm2_val(sum);
-		}
-	}
-
-	const Real r_norm = std::sqrt(r_norm2);
-	const Real denom = (a_norm > Real(0)) ? (a_norm * Real(n)) : Real(1);
-	const Real rel = r_norm / denom;
-	EXPECT_LE(rel, tol) << "relative residual ||AV - VΛ||/(||A||*n) = " << rel;
-}
 
 template <typename Scalar>
 static Matrix<Scalar, MatrixFormat::Dense> make_near_degenerate_hermitian(int n, int batch, unsigned seed, RealOf<Scalar> eps) {
@@ -141,7 +61,8 @@ static Matrix<Scalar, MatrixFormat::Dense> make_near_degenerate_hermitian(int n,
 				} else {
 					const Scalar v = Scalar(eps) * z;
 					A(i, j, b) = v;
-					A(j, i, b) = conj_val(v);
+					if constexpr (std::is_same_v<Scalar, Real>) A(j, i, b) = v;
+					else A(j, i, b) = std::conj(v);
 				}
 			}
 		}
@@ -287,8 +208,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 		(void)tol_w;
 #endif
 
-		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
-		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -336,8 +256,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 		(void)tol_w;
 #endif
 
-		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
-		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -393,8 +312,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 		(void)tol_w;
 #endif
 
-		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
-		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>());
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -462,8 +380,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 		(void)tol_w;
 #endif
 
-		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
-		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
 	if (dbg) std::cerr << "[cta-test] CTA done" << std::endl;
 }
@@ -491,8 +408,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_N32_Stre
 		auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::EigenVectors, p));
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
-		check_orthonormal_columns(A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
-		check_eigen_residual(A0.view(), A_cta.view(), W_cta, test_utils::tolerance<Scalar>() * Real(10));
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 

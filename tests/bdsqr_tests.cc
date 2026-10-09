@@ -19,6 +19,10 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/reference.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -49,48 +53,18 @@ struct bdsqr_types {
 
 using BdsqrTestTypes = typename bdsqr_types<BdsqrConfig>::type;
 
-// Singular values of an upper bidiagonal matrix, computed on the host in double
-// by one-sided Jacobi on the dense form. Slow but independent and reliable.
+// Singular values of an upper bidiagonal matrix: LAPACKE in double on the dense form (NaN when
+// the reference is unavailable, so a check against it fails).
 std::vector<double> reference_singular_values(const std::vector<double>& d,
                                               const std::vector<double>& e,
                                               int n) {
     std::vector<double> A(static_cast<size_t>(n) * n, 0.0);
     for (int i = 0; i < n; ++i) {
-        A[static_cast<size_t>(i) * n + i] = d[static_cast<size_t>(i)];       // (i,i)
-        if (i + 1 < n) A[static_cast<size_t>(i + 1) * n + i] = e[static_cast<size_t>(i)];  // (i,i+1)
+        A[static_cast<size_t>(i) * n + i] = d[static_cast<size_t>(i)];
+        if (i + 1 < n) A[static_cast<size_t>(i + 1) * n + i] = e[static_cast<size_t>(i)];
     }
-    for (int sweep = 0; sweep < 60; ++sweep) {
-        double off = 0.0;
-        for (int p = 0; p < n; ++p) {
-            for (int q = p + 1; q < n; ++q) {
-                double app = 0, aqq = 0, apq = 0;
-                for (int i = 0; i < n; ++i) {
-                    const double x = A[static_cast<size_t>(p) * n + i];
-                    const double y = A[static_cast<size_t>(q) * n + i];
-                    app += x * x; aqq += y * y; apq += x * y;
-                }
-                if (std::abs(apq) <= 1e-300) continue;
-                off = std::max(off, std::abs(apq) / std::sqrt(app * aqq));
-                const double tau = (aqq - app) / (2.0 * apq);
-                const double t = (tau >= 0 ? 1.0 : -1.0) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
-                const double c = 1.0 / std::sqrt(1.0 + t * t), s = t * c;
-                for (int i = 0; i < n; ++i) {
-                    const double x = A[static_cast<size_t>(p) * n + i];
-                    const double y = A[static_cast<size_t>(q) * n + i];
-                    A[static_cast<size_t>(p) * n + i] = c * x - s * y;
-                    A[static_cast<size_t>(q) * n + i] = s * x + c * y;
-                }
-            }
-        }
-        if (off < 1e-15) break;
-    }
-    std::vector<double> s(static_cast<size_t>(n));
-    for (int j = 0; j < n; ++j) {
-        double acc = 0.0;
-        for (int i = 0; i < n; ++i) acc += A[static_cast<size_t>(j) * n + i] * A[static_cast<size_t>(j) * n + i];
-        s[static_cast<size_t>(j)] = std::sqrt(acc);
-    }
-    std::sort(s.begin(), s.end(), std::greater<double>());
+    std::vector<double> s;
+    if (!batchlas::verify::singular_values(n, n, A, s)) s.assign(static_cast<size_t>(n), std::nan(""));
     return s;
 }
 
