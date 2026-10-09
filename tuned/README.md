@@ -85,11 +85,13 @@ Caveats:
 
 ## How they are produced
 
-The `potrf.*` tables and the sm_120 `posv.*` tables are seed tables, converted from the forced-route
-sweeps in `benchmarks/results/routing/` (provenance in the README there):
+Every sm_120 table is written from its tuning ledger (`source=ledger:`); the old forced-route
+sweeps for sm_120 potrf and posv are still validated but no longer write a table. The sm_89
+`potrf.*` tables are converted from `benchmarks/results/routing/` (provenance in the README there):
 
-    python3 scripts/sweep_to_table.py --date 2026-10-04   # rewrite tuned/potrf.*.txt, posv.*.sm_120.txt
-    python3 scripts/sweep_to_table.py --check             # verify tuned/ matches the sweeps (§10.2)
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger   # rewrite every sm_120 table
+    python3 scripts/sweep_to_table.py --date 2026-10-04   # rewrite tuned/potrf.*.sm_89.txt
+    python3 scripts/sweep_to_table.py --check             # verify tuned/ matches ledgers, sweeps and CSVs (§10.2)
 
 Do not edit them by hand: `--check` fails on any difference from the sweeps (the header date
 included, hence `--date`). The posv sweep was resumed after guard refusals, and its resume re-ran

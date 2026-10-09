@@ -227,7 +227,8 @@ POTRF = OpSpec(
     candidate_order=["tiny", "cta", "lpanel:panel=8", "lpanel:panel=16", "blocked", "vendor"],
     sources=[
         Source("sm_120", ["sm120_potrf_sweep.jsonl", "sm120_potrf_sweep_edges.jsonl"],
-               "a1063892", "converted, passes 1+2"),
+               "a1063892", "converted, passes 1+2",
+               adopted=False),  # superseded by the deep ledger (tuned/README.md): validated, never written
         Source("sm_89", ["sm89_potrf_archive.jsonl"], "unknown",
                "converted, kernel_current rows only; repeated medians averaged", current_only=True),
     ],
@@ -257,7 +258,7 @@ POSV = OpSpec(
     # (cell, arm, pass) can appear twice: the later row wins (routing/README.md).
     sources=[Source("sm_120", ["sm120_posv_sweep.jsonl"], "886537e8",
                     "converted, passes 1+2, resumed rows replace earlier duplicates",
-                    dedupe_latest=True)],
+                    dedupe_latest=True, adopted=False)],  # superseded by the deep ledger, as potrf sm_120
     route_field="reached",
     keep_not_ok=relsd_only,
 )
