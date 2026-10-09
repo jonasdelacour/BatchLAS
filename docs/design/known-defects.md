@@ -28,7 +28,7 @@ verified one. Neither is "in the tree today" in the sense the paragraph above me
 id with an `autotoc_md` prefix, so its GitHub slug is not a live anchor on the site and
 `check_doc_anchors.py` rejects an `evidence:` pointer to it. An entry that code cites therefore
 starts with distinctive text instead (`## Defect 11: ...`, `## Known defects: ...`). Entries 1, 3,
-11, 12 and 14 are cited and carry the `Defect N:` form (renamed 2026-10-06, every pointer updated
+11, 12, 13 and 14 are cited and carry the `Defect N:` form (13 since 2026-10-09; the rest renamed 2026-10-06, every pointer updated
 in the same change); the other entries keep their numbered headings until something needs to cite
 them. Line citations below were refreshed on 2026-10-06 where the code
 still exists; citations into deleted files are marked as such.
@@ -52,7 +52,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and `trsm` accept a heterogeneous batch and run at the full storage order (symm, syrk, syr2k, trmm: fixed, their vendor refuses one) | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
-| 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt; cuSPARSE spmm | complex<double> gemm/gemv with a unit dimension segfault inside cuBLASLt on one box, root cause unknown; two cuSPARSE spmm shapes misbehave | gemm worked around; gemv crashes `ortho_tests`; spmm refused in `can_run` |
+| 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt; cuSPARSE spmm | complex<double> gemm with a unit dimension, and complex<double> gemv at any shape, segfault inside cuBLASLt on one box, root cause unknown; two cuSPARSE spmm shapes misbehave | gemm worked around; gemv vendor refused for complex<double> on CUDA; spmm refused in `can_run` |
 | 14 | `gesvd_cta` (Upper), `gesvd_blocked` (Lower, n <= 32), `syev_cta` (Upper), `syev_blocked` (Lower, n <= 32), `syev_two_stage` (Lower) | the Hermitian drivers read the triangle the caller did not name | **wrong answer under Auto** for gesvd Hermitian Upper n <= 32 and syev cfloat n 9..32, cdouble n <= 32 with Upper |
 | 15 | cuSOLVER `gesvdjBatched` | values-only, non-square input faults with `CUDA_ERROR_ILLEGAL_ADDRESS` | pinned vendor only; Auto never sends the shape there |
 | 16 | `ormqr_blocked`'s sub-kernels | batch > 65535 exceeds the grid's dimension-2 limit and throws | throws under Auto at batch > 65535 |
@@ -547,7 +547,7 @@ Auto throws `runtime_error` (`NoRouteError` vendor-free) on every backend:
 `SymmCandidates.HeterogeneousBatchHasNoRoute` also keeps the A-only wrong answer of the direct
 expansion as the reason `expand` carries the term.
 
-## 13. complex<double> cuBLAS calls with a unit dimension segfault inside cuBLASLt
+## Defect 13: complex<double> cuBLAS calls segfault inside cuBLASLt
 
 Seen on threadripper02 (RTX PRO 6000 Blackwell, cuBLAS 13.4.1 from HPC SDK 26.5, 2026-10-04). Every
 complex<double> `cublasGemmEx` / `cublasGemmStridedBatchedEx` with m or n == 1, and
@@ -564,7 +564,19 @@ into it nor the cuBLASLt log (algo 13, workspace 0 in both) separated the two. R
 - **gemm worked around (P3.3):** `gemm_vendor_impl` (`src/backends/cublas.cc`) calls the typed
   `cublasZgemmStridedBatched` for complex<double> when m or n is 1. Guard:
   `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. getrf_tests passes with it.
-- **gemv open:** `ortho_tests` still crashes in `gemv_vendor` for complex<double>, as on the parent.
+- **gemv refused (2026-10-09):** the crash is not limited to the strided-batched call. Under a
+  pinned vendor every non-trivial `GemvMatrixViewTest/7.*` and `GemvCoverageTest/7.*` case exits
+  139, batch 1 included; gdb puts the fault at `cublasZgemv_v2 -> cublasLtZZZMatmul`. The deep
+  sm_120 tuning ledger (`benchmarks/results/tuning/ledger/gemv.cdouble.sm_120`) agrees: the vendor
+  arm crashed in all 1458 batch > 1 cells and 191 of 196 batch-1 cells; only trans=N red=32768
+  out >= 64 batch 1 survived, and those five rows ranked vendor first, so nearest-row lookup sent
+  batch 2-4 and other shapes into the crash. With no characterisable safe window, gemv's
+  `can_run(Vendor)` (`src/ops/gemv/gemv.cc`) refuses complex<double> on the CUDA backend
+  outright: a strict pin throws `std::invalid_argument`, the `vendor` class word falls back to
+  Auto, and Auto runs `direct`/`cta`. Guard: `GemvVendorRefusalTest/7.ComplexDoubleVendorIsRefusedOnCuda`
+  (segfaults with the term removed). `gemv_tests` and `ortho_tests` now pass under the old tables
+  too. The term is CUDA-wide, not keyed on this cuBLAS version; on a box where cuBLAS Zgemv works
+  it costs the vendor's speed, not correctness.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 
@@ -623,6 +635,37 @@ Measured on threadripper02 (cuSPARSE from HPC SDK 26.5 / CUDA 13.2) by calling
 * **R3 waiver:** cuSPARSE silently mis-handles operands off their natural alignment. Alignment is a
   property of the pointers, not of the selection key, and modelling it would move routing, so
   `can_run` does not carry it; `spmm_tests` skips misaligned cases unless pinned native.
+
+## LOBPCG picked a spurious zero Ritz value from a null P column
+
+**Fixed 2026-10-09; kept here because the symptom pointed at the wrong component.** With the deep
+sm_120 tables, `syevx_tests` `FindLargestAndSmallest/SyevxJacobiTest.*/Smallest` returned 0 for
+eigenvalues 1-3. The tables route LOBPCG's projected solves (float, jobz=V, n = 12 and 18,
+batch 2) to the cuSOLVER `vendor` family, and pinning `vendor` under the old tables failed the
+same way, so the vendor wrapper was the suspect, specifically its handling of the 12x12 corner
+of an 18x18 slab (ld 18 > n).
+
+That hypothesis is refuted. `SyevTest/*.VendorRouteHonoursLdSubViewsAndBatchStride`
+(`tests/syev_tests.cc`) runs the pinned vendor on packed, ld > n, sub-view, padded-stride and
+batch-1 layouts, all four dtypes, against a closed-form graded spectrum with poisoned padding,
+and passes on the unchanged wrapper. Dumping the vendor's inputs and outputs inside LOBPCG showed
+the eigenpairs it returned were correct. What it returned, though, were Ritz vectors whose P and R
+coefficients were **exactly zero** for two converged columns. LOBPCG builds the next P from those
+coefficients (`C_p`, `src/extensions/syevx_lobpcg.cc`), so two P columns were null, the next
+\f$S^T A S\f$ had zero rows and columns at 6 and 7, and the projected problem gained an
+eigenvalue 0. Taking the smallest end selects it whenever 0 lies below the wanted Ritz values (here
+-0.337, -0.041, **0**, 0.74), which gives a zero column in X. The largest end never reaches it. The
+native `jacobi` family hits it too: `Pinned/SyevxProjectedSyevRouteTest.SmallestDenseMatchesReferenceSyev/jacobi`
+fails on the unfixed tree, as does `/vendor`, while `cta`, `cta_fused` and `blocked` leave
+round-off in those coefficients and pass.
+
+LOBPCG already planted a sentinel \f$\lVert S^T A S\rVert_F + 1\f$ on the diagonal for residual
+columns that soft locking had zeroed. It did not do that for a null P column. It also could not
+do it on a restart, where R sits in the P slot but the sentinel index assumed offset
+`2 * block_vectors`. The deflation kernel now finds null directions from \f$S\f$ itself: every
+column at or after `block_vectors` with \f$\lVert s_c\rVert^2 \le (n\,\varepsilon)^2\f$ gets the
+sentinel, whatever made it null. Guards: the five `Pinned/SyevxProjectedSyevRouteTest.*` cases, which
+pin each family so the result no longer depends on the table.
 
 ## Known defects: the CTA SYTRD Lower path
 

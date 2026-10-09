@@ -1250,6 +1250,38 @@ INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest, SyevxJacobiTest, ::testing::Val
                              return info.param ? "Largest" : "Smallest";
                          });
 
+// The same smallest-end solve with the projected syev pinned per family, so the result does
+// not hang on which family a tuned table ranks first. cuSOLVER returns Ritz vectors whose P/R
+// coefficients are exactly zero once a column has converged; the P column built from them was
+// null, StAS gained a spurious eigenvalue 0 and the smallest-end selection took it.
+// evidence: docs/design/known-defects.md#lobpcg-picked-a-spurious-zero-ritz-value-from-a-null-p-column
+class SyevxProjectedSyevRouteTest : public ::testing::TestWithParam<const char*> {};
+
+TEST_P(SyevxProjectedSyevRouteTest, SmallestDenseMatchesReferenceSyev) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 120, batch = 2, neig = 4;
+    if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "native syev families are GPU-only";
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    ctx->wait();
+    Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
+    JacobiRunResult run;
+    {
+        const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", GetParam());
+        run = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
+                                             SyevxPreconditioner::Jacobi, &V);
+    }
+    const auto W_ref = ReferenceSpectrum(*ctx, A, n, batch);
+    CheckAgainstReference(run.W, W_ref, n, batch, neig, false, 1e-3f);
+    CheckResiduals(A, V, run.W, n, batch, neig, 5e-3f);
+}
+
+INSTANTIATE_TEST_SUITE_P(Pinned, SyevxProjectedSyevRouteTest,
+                         ::testing::Values("vendor", "cta_fused", "cta", "jacobi", "blocked"),
+                         [](const ::testing::TestParamInfo<const char*>& info) {
+                             return std::string(info.param);
+                         });
+
 // The whole point of the unshifted preconditioner: on a strongly graded (nearly
 // diagonal) matrix diag(A)^{-1} is close to A^{-1}, and the iteration count must
 // drop substantially. Measured 70 -> 11 at n=512, k=2 (see DISABLED_IterationSweep);
@@ -3478,10 +3510,15 @@ TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
     }
     EXPECT_GT(converged, 0) << "no item converged on diag(n..1) with a well-separated spectrum "
                                "and 300 iterations; info cannot be reporting 1 unconditionally";
+    // info == 0 promises ||r|| / (||Ax|| + |lambda| ||x||) <= tol, i.e. |theta - lambda| up to
+    // ~2 tol |lambda| (1.28e-3 at lambda = 64) when the Ritz value is biased by a float basis
+    // that is not exactly orthonormal; 1e-3 sat inside that band and flipped with the syev
+    // route (64.001007 under jacobi + vendor). A memset still misses by ~64.
+    const float claimed_tol = 1.5f * 2.0f * params.relative_tolerance;
     for (int b = 0; b < batch; ++b) {
         if (info[b] != 0) continue;
         for (int i = 0; i < neigs; ++i) {
-            EXPECT_NEAR(W[b * neigs + i], float(n - i), 1e-3f)
+            EXPECT_NEAR(W[b * neigs + i], float(n - i), claimed_tol * float(n - i))
                 << "batch " << b << " claimed convergence (info == 0) but eigenvalue " << i
                 << " is wrong -- a span memset to zero would look exactly like this";
         }
