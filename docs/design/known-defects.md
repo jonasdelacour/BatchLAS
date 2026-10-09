@@ -603,7 +603,7 @@ which the driver could run by mirroring, until this is fixed.
 **What fixing it needs.** Mirror (or read only) the named triangle in each driver, then delete the
 skip list and enable the gesvd test.
 
-## 15. cuSOLVER `gesvdjBatched` faults on values-only non-square input
+## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
 `BATCHLAS_GESVD_ROUTE=vendor`, float 8x4, jobs N/N, batch 3: `CUDA_ERROR_ILLEGAL_ADDRESS`.
 Reproduced on the pre-phase-5 router (`424a45bc`) too. Auto never sends such a shape to the vendor
@@ -611,7 +611,7 @@ Reproduced on the pre-phase-5 router (`424a45bc`) too. Auto never sends such a s
 `supports()` was; cuSOLVER's other refusals (`max(m, n) > 32`, non-packed batches, thin factors)
 arrive as launch-time throws. The gesvd candidate tests' vendor envelope excludes the shape.
 
-## 16. `ormqr` blocked throws at batch > 65535
+## Defect 16: `ormqr` blocked throws at batch > 65535
 
 `ormqr` float L T m=2 k=1 q=1 batch=65536 under Auto (`blocked`): "Number of work-groups exceed limit
 for dimension 2". The same on `424a45bc`. `ormqr_blocked`'s sub-kernels put the batch on grid
@@ -622,7 +622,7 @@ ceiling ([`flat-kernel-selection.md`](flat-kernel-selection.md) §11; gemm's `ca
 **What fixing it needs.** Fold the batch into dimension 0 (or loop over batch chunks) in the
 sub-kernels, or, as a stopgap, a `batch <= 65535` term in the driver and `can_run`.
 
-## 17. cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
+## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 
 Measured on threadripper02 (cuSPARSE from HPC SDK 26.5 / CUDA 13.2) by calling
 `backend::spmm_vendor` directly, so it is vendor behaviour:

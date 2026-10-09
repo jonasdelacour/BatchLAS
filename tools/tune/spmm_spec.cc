@@ -96,7 +96,7 @@ struct SpmmProblem {
         q.wait();
     }
     // A `vendor` pin that can_run refuses (spmm.cc's CUDA vendor terms) is refused by the tuner's
-    // strict pin. evidence: docs/design/known-defects.md#17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
+    // strict pin. evidence: docs/design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
     std::size_t workspace() {
         return spmm_buffer_size<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
     }

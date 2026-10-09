@@ -109,7 +109,7 @@ struct GesvdProblem {
     // above 32, Thin) although can_run admits it: that is a refused pin here, not a crashed arm.
     // Values-only non-square input faults the device instead (CUDA_ERROR_ILLEGAL_ADDRESS, a worker
     // restart per cell), so that pin is refused up front. Auto never sends the shape there.
-    // evidence: docs/design/known-defects.md#15-cusolver-gesvdjbatched-faults-on-values-only-non-square-input
+    // evidence: docs/design/known-defects.md#defect-15-cusolver-gesvdjbatched-faults-on-values-only-non-square-input
     std::size_t workspace() {
         std::string src;
         if (job == SvdVectors::None && m != n && select::detail::pin_text("gesvd", &src) == std::optional<std::string>("vendor"))
