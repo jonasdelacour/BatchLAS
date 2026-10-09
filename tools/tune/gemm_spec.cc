@@ -2,10 +2,10 @@
 // [-1, 1) (complex parts both), alpha with an imaginary part and beta = 1, so the epilogue reads C
 // (docs/developer/agent-guide.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
 // max(1, --ld-pad) (an odd ld fails every aligned leg, as the parent-ld panel updates do);
-// layout=packed cells are contiguous with the allocator's aligned bases. Verification is the
-// componentwise error |C - Cref| / (|alpha| |op(A)| |op(B)| + |beta| |C0|) against a double /
-// complex<double> host reference on items 0 and batch-1, over every row of up to 64 sampled
-// columns (always the first and last), so a lost tile edge or an ignored transpose is caught.
+// layout=packed cells are contiguous with the allocator's aligned bases. Verification is
+// batchlas::verify::gemm_backward_error (docs/design/verification.md) on the default items, over
+// every row of up to 64 sampled columns (always the first and last), so a lost tile edge or an
+// ignored transpose is caught.
 //
 // The grid is demand-driven, not a lattice (plan §3): squares for every form and both layouts,
 // panels and skinny shapes for the issued forms. `--grid name=v1:v2` FILTERS that grid.
@@ -14,10 +14,13 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/items.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/scalar.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/gemm/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -44,7 +47,6 @@ Transpose trans_of(const std::string& w, bool complex) {
 template <class T>
 struct GemmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Transpose ta, tb;
     int m, n, k, batch;
@@ -60,14 +62,18 @@ struct GemmProblem {
           br(tb_ == Transpose::NoTrans ? k_ : n_), bc(tb_ == Transpose::NoTrans ? n_ : k_),
           lda(ar + pad), ldb(br + pad), ldc(m_ + pad),
           sa(std::size_t(lda) * std::size_t(ac)), sb(std::size_t(ldb) * std::size_t(bc)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(mk<T>(1.25, -0.5)), beta(mk<T>(1.0, 0.0)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(batchlas::verify::make<T>(1.25, -0.5)),
+          beta(batchlas::verify::make<T>(1.0, 0.0)),
           A(sa * std::size_t(batch_)), B(sb * std::size_t(batch_)), C0(sc * std::size_t(batch_)),
           C(sc * std::size_t(batch_)), Av(A.data(), ar, ac, lda, int(sa), batch_),
           Bv(B.data(), br, bc, ldb, int(sb), batch_), C0v(C0.data(), m_, n_, ldc, int(sc), batch_),
           Cv(C.data(), m_, n_, ldc, int(sc), batch_) {
-        Rng rg(777);
+        batchlas::verify::Rng rg(777);
         for (auto* v : {&A, &B, &C0})
-            for (std::size_t i = 0; i < v->size(); ++i) (*v)[i] = mk<T>(rg.next(), rg.next());
+            for (std::size_t i = 0; i < v->size(); ++i) {
+                const double re = rg.next();
+                (*v)[i] = batchlas::verify::make<T>(re, rg.next());
+            }
     }
     void reset() {  // beta = 1 accumulates into C
         (void)MV::copy(q, Cv, C0v);
@@ -84,34 +90,36 @@ struct GemmProblem {
         (void)gemm<kBackend, T>(q, Av, Bv, Cv, alpha, beta, ta, tb);
         q.wait();
     }
-    D op(const UnifiedVector<T>& M, std::size_t o, int ld, Transpose t, int r, int c) const {
-        const int sr = t == Transpose::NoTrans ? r : c, scol = t == Transpose::NoTrans ? c : r;
-        const D v = up(M[o + std::size_t(scol) * std::size_t(ld) + std::size_t(sr)]);
-        return t == Transpose::ConjTrans ? cj(v) : v;
-    }
+    // The sampled columns of op(B), C0 and C are gathered into packed host copies, so A is read
+    // once per item. op(B)'s column j is B's row j when B is transposed: gather rows then.
     std::pair<double, int> verify() {
+        using V = MatrixView<T, MatrixFormat::Dense>;
+        using batchlas::verify::Shape;
         std::vector<int> cols;
         for (int i = 0; i < std::min(n, kMaxCheckedCols); ++i)
             cols.push_back(n <= kMaxCheckedCols ? i : int(std::int64_t(i) * (n - 1) / (kMaxCheckedCols - 1)));
+        const int nc = int(cols.size());
+        const bool bt = tb != Transpose::NoTrans;
+        std::vector<T> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
         double worst = 0;
-        const double aal = ab(up(alpha)), abe = ab(up(beta));
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;
-            for (int j : cols)
-                for (int i = 0; i < m; ++i) {
-                    D acc = D(0);
-                    double mag = 0;
-                    for (int p = 0; p < k; ++p) {
-                        const D t = op(A, oa, lda, ta, i, p) * op(B, ob, ldb, tb, p, j);
-                        acc += t;
-                        mag += ab(t);
-                    }
-                    const std::size_t at = oc + std::size_t(j) * std::size_t(ldc) + std::size_t(i);
-                    const D c0 = up(C0[at]);
-                    const D want = up(alpha) * acc + up(beta) * c0;
-                    const double num = ab(up(C[at]) - want), den = aal * mag + abe * ab(c0);
-                    worst = nanmax(worst, den > 0 ? num / den : num);
+        for (int b : batchlas::verify::default_items(batch)) {
+            const std::size_t ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;
+            for (int i = 0; i < nc; ++i) {
+                const std::size_t j = std::size_t(cols[std::size_t(i)]), ii = std::size_t(i);
+                for (std::size_t p = 0; p < std::size_t(k); ++p)
+                    bs[bt ? p * std::size_t(nc) + ii : ii * std::size_t(k) + p] =
+                        bt ? B[ob + p * std::size_t(ldb) + j] : B[ob + j * std::size_t(ldb) + p];
+                for (std::size_t r = 0; r < std::size_t(m); ++r) {
+                    c0s[ii * std::size_t(m) + r] = C0[oc + j * std::size_t(ldc) + r];
+                    cs[ii * std::size_t(m) + r] = C[oc + j * std::size_t(ldc) + r];
                 }
+            }
+            worst = batchlas::verify::nanmax(
+                worst, batchlas::verify::gemm_backward_error(
+                           V(A.data() + std::size_t(b) * sa, ar, ac, lda), Shape::general, ta,
+                           bt ? V(bs.data(), nc, k, nc) : V(bs.data(), k, nc, k), Shape::general, tb,
+                           V(c0s.data(), m, nc, m), V(cs.data(), m, nc, m), Shape::general,
+                           batchlas::verify::up(alpha), batchlas::verify::up(beta)));
         }
         return {worst, 0};
     }
@@ -244,8 +252,9 @@ public:
             GemmProblem<T> p(*q, trans_of(get("ta", "N"), kComplex), trans_of(get("tb", "N"), kComplex),
                              int(key_int(req.key, "m")), int(key_int(req.key, "n")), int(key_int(req.key, "k")),
                              int(key_int(req.key, "batch")), packed ? 0 : std::max(1, req.ld_pad));
-            if (req.mode == "race") return run_race<G::GemmChoice>("gemm", p, req, Tol<T>::v);
-            return run_arms<G::GemmChoice>("gemm", p, req, Tol<T>::v);
+            const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::blas, p.k);
+            if (req.mode == "race") return run_race<G::GemmChoice>("gemm", p, req, tol);
+            return run_arms<G::GemmChoice>("gemm", p, req, tol);
         });
     }
 };
