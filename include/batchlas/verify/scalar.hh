@@ -29,6 +29,20 @@ inline double abs(std::complex<double> x) { return std::abs(x); }
 inline double conj(double x) { return x; }
 inline std::complex<double> conj(std::complex<double> x) { return std::conj(x); }
 
+/// |re| + |im| (LAPACK's cabs1, the partial-pivoting metric); |x| for a real x.
+template <class T> double cabs1(T x) {
+    const auto z = up(x);
+    if constexpr (is_complex<T>::value) return std::fabs(z.real()) + std::fabs(z.imag());
+    else return std::fabs(z);
+}
+
+/// True when every component of @p x is finite.
+template <class T> bool finite(T x) {
+    const auto z = up(x);
+    if constexpr (is_complex<T>::value) return std::isfinite(z.real()) && std::isfinite(z.imag());
+    else return std::isfinite(z);
+}
+
 template <class T> T make(double re, double im) {
     if constexpr (is_complex<T>::value) return T(real_t<T>(re), real_t<T>(im));
     else { (void)im; return T(re); }

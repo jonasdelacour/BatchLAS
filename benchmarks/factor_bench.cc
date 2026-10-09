@@ -1,15 +1,9 @@
 // P0 of docs/design/small-n-factorization-plan.md: the in-tree, correct,
 // saturation-aware A/B harness for the batched factorizations
 // (potrf / getrf / getrs / geqrf / orgqr / gesv / posv) at n = 4..512.
-//
-// It exists because there was no potrf, getrf or getrs harness in benchmarks/
-// at all: every Cholesky and LU number in docs/perf came from standalone
-// programs under experiments/ that now live only at the tag
-// perf-evidence/vendor-independence. This file ports the proven pieces of three
-// of them -- wp4_potrf/phase2_ab/realpotrf.cpp, wp6_lu/bench/lubench6.cpp and
-// wp5_qr/bench/qrbench.cpp -- into the tree, so P1..P7 are gated on a harness
-// that is reviewed and versioned rather than on a scratch file.
-//
+// It ports the proven pieces of wp4_potrf/phase2_ab/realpotrf.cpp, wp6_lu/bench/lubench6.cpp and
+// wp5_qr/bench/qrbench.cpp (tag perf-evidence/vendor-independence) into the tree. Inputs, residuals
+// and bounds come from batchlas::verify (docs/design/verification.md).
 // ONE CELL PER PROCESS. The binary takes exactly one (op, type, shape, batch)
 // and never loops over shapes internally. That is not a style choice: the SLM
 // carve-out attribute is sticky per CUfunction, so an earlier, larger launch in
@@ -53,7 +47,10 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
-#include <lapacke.h>
+#include <batchlas/verify/inputs.hh>
+#include <batchlas/verify/reference.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
 #include <cctype>
@@ -79,58 +76,6 @@ static constexpr Backend BE = Backend::CUDA;
 static constexpr Backend BE = Backend::ROCM;
 #endif
 
-// ------------------------------------------------------------- promotion
-template <class T> struct Prom { using type = double; };
-template <class R> struct Prom<std::complex<R>> { using type = std::complex<double>; };
-
-static inline double ab(double x) { return std::fabs(x); }
-static inline double ab(std::complex<double> x) { return std::abs(x); }
-static inline double cj(double x) { return x; }
-static inline std::complex<double> cj(std::complex<double> x) { return std::conj(x); }
-static inline double up(float x) { return double(x); }
-static inline double up(double x) { return x; }
-static inline std::complex<double> up(std::complex<float> x) { return {double(x.real()), double(x.imag())}; }
-static inline std::complex<double> up(std::complex<double> x) { return x; }
-
-// NAN-PROPAGATING max. std::max(a, b) returns `a` when the comparison against a
-// NaN `b` is false, so a poisoned probe reads as a perfect one -- the exact
-// defect (WP5 break K5) that once printed 4.788e-07 over garbage. Every
-// worst-case accumulation below goes through this, never through std::max.
-static inline double nanmax(double a, double b) {
-    if (std::isnan(a) || std::isnan(b)) return std::numeric_limits<double>::quiet_NaN();
-    return a > b ? a : b;
-}
-
-template <class T> static inline T mk(double re, double im);
-template <> inline float mk<float>(double re, double) { return float(re); }
-template <> inline double mk<double>(double re, double) { return re; }
-template <> inline std::complex<float> mk<std::complex<float>>(double re, double im) { return {float(re), float(im)}; }
-template <> inline std::complex<double> mk<std::complex<double>>(double re, double im) { return {re, im}; }
-
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
-    // uniform in [-1, 1)
-    double next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return double(int32_t(uint32_t(s >> 32))) / 2147483648.0;
-    }
-    double uni01() { const double u = next() * 0.5 + 0.5; return u <= 0.0 ? 1e-12 : u; }
-    double gauss() { return std::sqrt(-2.0 * std::log(uni01())) * std::cos(6.283185307179586 * uni01()); }
-};
-
-// THE RESIDUAL BOUND, and it exists because its ABSENCE was measured: an earlier
-// LU harness computed every residual correctly and then gated only on
-// isfinite(), so a driver that dropped a row interchange drove the residual from
-// 1.5e-07 to 1.2e-01 and the row still printed "ok". Every number below carries
-// a bound. The inputs are conditioned O(1) by construction, so a few hundred eps
-// is generous rather than tuned.
-template <typename T> struct Tol;
-template <> struct Tol<float>                { static constexpr double v = 1e-4; };
-template <> struct Tol<std::complex<float>>  { static constexpr double v = 1e-4; };
-template <> struct Tol<double>               { static constexpr double v = 1e-11; };
-template <> struct Tol<std::complex<double>> { static constexpr double v = 1e-11; };
-
 static double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
 static int ld_pad()    { const char* e = std::getenv("LD_PAD"); return e ? std::atoi(e) : 0; }
 
@@ -147,26 +92,6 @@ static Stat stat_of(std::vector<double> v) {
     sd = std::sqrt(sd / double(v.size()));
     s.relsd = s.mean > 0 ? sd / s.mean : 0.0;
     return s;
-}
-
-// ------------------------------------------------------------- host LAPACK
-// The independent factorisation getrf's PIVOT SEQUENCE is compared against.
-// A residual bound is satisfied by ANY valid pivot choice, so a kernel that
-// pivots on |z| instead of LAPACK's cabs1, or breaks ties the other way, passes
-// every residual test in existence. This is the check that does not.
-static int host_getrf(int m, int n, float* a, int lda, int* ip) {
-    return LAPACKE_sgetrf(LAPACK_COL_MAJOR, m, n, a, lda, ip);
-}
-static int host_getrf(int m, int n, double* a, int lda, int* ip) {
-    return LAPACKE_dgetrf(LAPACK_COL_MAJOR, m, n, a, lda, ip);
-}
-static int host_getrf(int m, int n, std::complex<float>* a, int lda, int* ip) {
-    return LAPACKE_cgetrf(LAPACK_COL_MAJOR, m, n,
-                          reinterpret_cast<lapack_complex_float*>(a), lda, ip);
-}
-static int host_getrf(int m, int n, std::complex<double>* a, int lda, int* ip) {
-    return LAPACKE_zgetrf(LAPACK_COL_MAJOR, m, n,
-                          reinterpret_cast<lapack_complex_double*>(a), lda, ip);
 }
 
 // ------------------------------------------------------------- route pins
@@ -242,226 +167,31 @@ static bool pin_parsed_now(OpKind k) {
     return false;
 }
 
-// ------------------------------------------------------------- inputs
-// potrf: diagonally dominant SPD, condition number close to 1, EXACTLY as the
-// archived realpotrf.cpp built it -- so any nonzero info is the implementation
-// and not the input.
-template <typename T>
-static void fill_spd(UnifiedVector<T>& A0, int n, int ld, size_t stride, int batch) {
-    for (int b = 0; b < batch; ++b)
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < n; ++r) {
-                const double v = (r == c) ? double(n) + 1.0 : 0.5 / (1.0 + std::abs(r - c));
-                A0[size_t(b) * stride + size_t(c) * size_t(ld) + size_t(r)] = mk<T>(v, 0.0);
-            }
-}
-
-// getrf/getrs: diagonally dominant, THEN ROW-PERMUTED per item. The permutation
-// is a recorded break rather than a precaution: on the dominant matrix alone
-// partial pivoting picks the diagonal at every step, ipiv is the identity, and
-// both a broken pivot search and a dropped row interchange left the residual
-// BIT-IDENTICAL. `nontrivial_pivots` below is the anti-vacuity check on the
-// configuration -- necessary, and not sufficient.
-template <typename T>
-static void fill_lu(UnifiedVector<T>& A0, int n, int ld, size_t stride, int batch, uint64_t seed) {
-    Rng rg(seed);
-    const size_t nn = size_t(n);
-    std::vector<T> col(nn);
-    std::vector<int> perm(nn);
-    for (int b = 0; b < batch; ++b) {
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < n; ++r)
-                A0[size_t(b) * stride + size_t(c) * size_t(ld) + size_t(r)] = mk<T>(rg.next(), rg.next());
-        for (int i = 0; i < n; ++i) {
-            const size_t d = size_t(b) * stride + size_t(i) * size_t(ld) + size_t(i);
-            A0[d] = A0[d] + mk<T>(double(n), 0.0);
-        }
-        for (int i = 0; i < n; ++i) perm[size_t(i)] = i;
-        for (int i = n - 1; i > 0; --i) {
-            const int j = int((rg.next() * 0.5 + 0.5) * double(i + 1)) % (i + 1);
-            std::swap(perm[size_t(i)], perm[size_t(j)]);
-        }
-        for (int c = 0; c < n; ++c) {
-            for (int i = 0; i < n; ++i)
-                col[size_t(i)] = A0[size_t(b) * stride + size_t(c) * size_t(ld) + size_t(perm[size_t(i)])];
-            for (int i = 0; i < n; ++i)
-                A0[size_t(b) * stride + size_t(c) * size_t(ld) + size_t(i)] = col[size_t(i)];
-        }
-    }
-}
-
-// geqrf/orgqr: random Gaussian, fixed seed.
-template <typename T>
-static void fill_gauss(UnifiedVector<T>& A0, int m, int n, int ld, size_t stride, int batch, uint64_t seed) {
-    Rng rg(seed);
-    for (int b = 0; b < batch; ++b)
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < m; ++r)
-                A0[size_t(b) * stride + size_t(c) * size_t(ld) + size_t(r)] = mk<T>(rg.gauss(), rg.gauss());
-}
-
-// ------------------------------------------------------------- host probes
-// All of them: Frobenius norms, double promotion, items 0 AND batch-1.
-
-// || A0 - L L^H ||_F / || A0 ||_F over the FACTORED (lower) triangle.
-template <typename T>
-static double potrf_residual(const UnifiedVector<T>& F, const UnifiedVector<T>& A0,
-                             int n, int ld, size_t stride, int batch, bool upper) {
-    using D = typename Prom<T>::type;
-    double worst = 0;
-    for (int b : {0, batch - 1}) {
-        const size_t o = size_t(b) * stride;
-        double num = 0, den = 0;
-        // Lower walks the lower triangle and forms L L^H; Upper walks the upper one and forms
-        // U^H U, where U(k, i) lives at F[i*ld + k]. Reusing the Lower sweep for an Upper
-        // factor reads the untouched triangle and scores a correct answer as garbage.
-        for (int j = 0; j < n; ++j)
-            for (int i = (upper ? 0 : j); upper ? (i <= j) : (i < n); ++i) {
-                D acc = D(0);
-                if (upper) {
-                    for (int k = 0; k <= i; ++k)
-                        acc += cj(up(F[o + size_t(i) * size_t(ld) + size_t(k)])) *
-                               up(F[o + size_t(j) * size_t(ld) + size_t(k)]);
-                } else {
-                    for (int k = 0; k <= j; ++k)
-                        acc += up(F[o + size_t(k) * size_t(ld) + size_t(i)]) *
-                               cj(up(F[o + size_t(k) * size_t(ld) + size_t(j)]));
-                }
-                const D a = up(A0[o + size_t(j) * size_t(ld) + size_t(i)]);
-                const double d = ab(acc - a), r = ab(a);
-                num += d * d;
-                den += r * r;
-            }
-        if (std::isnan(num) || std::isnan(den)) return std::numeric_limits<double>::quiet_NaN();
-        worst = nanmax(worst, den > 0 ? std::sqrt(num) / std::sqrt(den) : std::sqrt(num));
-    }
-    return worst;
-}
-
-// || P A0 - L U ||_F / || A0 ||_F, P rebuilt from the DEVICE pivots.
-template <typename T>
-static double getrf_residual(const UnifiedVector<T>& F, const UnifiedVector<T>& A0,
-                             const int* piv, int pstride, int n, int ld, size_t stride, int batch) {
-    using D = typename Prom<T>::type;
-    double worst = 0;
-    const size_t npa = size_t(n) * size_t(n);
-    std::vector<D> PA(npa);
-    for (int b : {0, batch - 1}) {
-        const size_t o = size_t(b) * stride;
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < n; ++r)
-                PA[size_t(c) * size_t(n) + size_t(r)] = up(A0[o + size_t(c) * size_t(ld) + size_t(r)]);
-        const int* pv = piv + size_t(b) * size_t(pstride);
-        for (int k = 0; k < n; ++k) {
-            const int ip = pv[k] - 1;                       // LAPACK 1-based
-            if (ip < 0 || ip >= n) return std::numeric_limits<double>::quiet_NaN();
-            if (ip != k)
-                for (int c = 0; c < n; ++c)
-                    std::swap(PA[size_t(c) * size_t(n) + size_t(k)],
-                              PA[size_t(c) * size_t(n) + size_t(ip)]);
-        }
-        double num = 0, den = 0;
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                D acc = D(0);
-                const int kmax = std::min(i, j);
-                for (int k = 0; k <= kmax; ++k) {
-                    const D l = (k == i) ? D(1) : up(F[o + size_t(k) * size_t(ld) + size_t(i)]);
-                    acc += l * up(F[o + size_t(j) * size_t(ld) + size_t(k)]);
-                }
-                const D a = PA[size_t(j) * size_t(n) + size_t(i)];
-                const double d = ab(acc - a), r = ab(a);
-                num += d * d;
-                den += r * r;
-            }
-        if (std::isnan(num) || std::isnan(den)) return std::numeric_limits<double>::quiet_NaN();
-        worst = nanmax(worst, den > 0 ? std::sqrt(num) / std::sqrt(den) : std::sqrt(num));
-    }
-    return worst;
-}
-
-static int nontrivial_pivots(const int* piv, int n) {
-    int c = 0;
-    for (int k = 0; k < n; ++k) if (piv[k] != k + 1) ++c;
-    return c;
-}
-
-// || A0 X - B0 ||_F / (|| A0 ||_F || X ||_F)
-template <typename T>
-static double getrs_residual(const UnifiedVector<T>& X, const UnifiedVector<T>& B0,
-                             const UnifiedVector<T>& A0, int n, int nrhs, int lda, size_t sa,
-                             int ldb, size_t sb, int batch) {
-    using D = typename Prom<T>::type;
-    double worst = 0;
-    for (int b : {0, batch - 1}) {
-        const size_t oa = size_t(b) * sa, ob = size_t(b) * sb;
-        double na = 0, nx = 0, num = 0;
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < n; ++r) {
-                const double v = ab(up(A0[oa + size_t(c) * size_t(lda) + size_t(r)]));
-                na += v * v;
-            }
-        for (int c = 0; c < nrhs; ++c)
-            for (int r = 0; r < n; ++r) {
-                const double v = ab(up(X[ob + size_t(c) * size_t(ldb) + size_t(r)]));
-                nx += v * v;
-            }
-        for (int c = 0; c < nrhs; ++c)
-            for (int r = 0; r < n; ++r) {
-                D acc = D(0);
-                for (int k = 0; k < n; ++k)
-                    acc += up(A0[oa + size_t(k) * size_t(lda) + size_t(r)]) *
-                           up(X[ob + size_t(c) * size_t(ldb) + size_t(k)]);
-                const double d = ab(acc - up(B0[ob + size_t(c) * size_t(ldb) + size_t(r)]));
-                num += d * d;
-            }
-        if (std::isnan(num) || std::isnan(na) || std::isnan(nx))
-            return std::numeric_limits<double>::quiet_NaN();
-        const double den = std::sqrt(na) * std::sqrt(nx);
-        worst = nanmax(worst, den > 0 ? std::sqrt(num) / den : std::sqrt(num));
-    }
-    return worst;
-}
-
-// The explicit Q (m x k) for one item, from the packed reflectors:
-// Q = H_0 H_1 ... H_{k-1} applied to the first k columns of I_m.
+// The explicit Q (m x k) of item b from the packed reflectors, Q = H_0 ... H_{k-1} applied to the
+// first k columns of I_m. batchlas::verify has no equivalent (qr_residual applies the reflectors
+// in place), and orthogonality() needs Q itself.
 template <typename T>
 static void form_Q(const UnifiedVector<T>& F, const UnifiedVector<T>& tau,
                    int b, int m, int k, int ld, size_t stride, size_t taustride,
-                   std::vector<typename Prom<T>::type>& Q) {
-    using D = typename Prom<T>::type;
+                   std::vector<verify::promoted_t<T>>& Q) {
+    using D = verify::promoted_t<T>;
     const size_t o = size_t(b) * stride;
     Q.assign(size_t(m) * size_t(k), D(0));
     for (int j = 0; j < k; ++j) Q[size_t(j) * size_t(m) + size_t(j)] = D(1);
     for (int step = 0; step < k; ++step) {
         const int i = k - 1 - step;
-        const D t = up(tau[taustride * size_t(b) + size_t(i)]);
+        const D t = verify::up(tau[taustride * size_t(b) + size_t(i)]);
         for (int c = 0; c < k; ++c) {
             D s = Q[size_t(c) * size_t(m) + size_t(i)];      // v(i) == 1 implicitly
             for (int r = i + 1; r < m; ++r)
-                s += cj(up(F[o + size_t(i) * size_t(ld) + size_t(r)])) *
+                s += verify::conj(verify::up(F[o + size_t(i) * size_t(ld) + size_t(r)])) *
                      Q[size_t(c) * size_t(m) + size_t(r)];
             Q[size_t(c) * size_t(m) + size_t(i)] -= t * s;
             for (int r = i + 1; r < m; ++r)
                 Q[size_t(c) * size_t(m) + size_t(r)] -=
-                    t * up(F[o + size_t(i) * size_t(ld) + size_t(r)]) * s;
+                    t * verify::up(F[o + size_t(i) * size_t(ld) + size_t(r)]) * s;
         }
     }
-}
-
-// || Q^H Q - I ||_F over the k columns of an explicit column-major Q.
-template <class D>
-static double ortho_norm(const D* Q, int m, int k, int lq) {
-    double num = 0;
-    for (int a = 0; a < k; ++a)
-        for (int c = 0; c < k; ++c) {
-            D acc = D(0);
-            for (int r = 0; r < m; ++r)
-                acc += cj(Q[size_t(a) * size_t(lq) + size_t(r)]) * Q[size_t(c) * size_t(lq) + size_t(r)];
-            const double d = ab(acc - D(a == c ? 1 : 0));
-            num += d * d;
-        }
-    return std::sqrt(num);
 }
 
 // ------------------------------------------------------------- one arm
@@ -562,9 +292,9 @@ static void refuse(Arm& a, const std::invalid_argument& e) {
     flag(a, why.c_str());
 }
 
-static void gate(Arm& a, double tol, int reps) {
+static void gate(Arm& a, bool residual_within_bound, int reps) {
     if (!std::isfinite(a.residual)) flag(a, "residual_nonfinite");
-    else if (a.residual > tol) flag(a, "residual");
+    else if (!residual_within_bound) flag(a, "residual");
     if (!std::isfinite(a.extra)) flag(a, "extra_nonfinite");
     if (a.info_nonzero != 0) flag(a, "info");
     if (reps > 1 && a.st.relsd > 0.10) flag(a, "relsd");
@@ -648,21 +378,17 @@ static int run(const Cfg& c) {
     if (has_rhs) {
         B0v = MV(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data());
         Xv  = MV(X.data(),  n, nrhs, ldb, int(sb), batch, pX.data());
-        Rng rg(777);
-        for (int b = 0; b < batch; ++b)
-            for (int cc = 0; cc < nrhs; ++cc)
-                for (int r = 0; r < n; ++r)
-                    B0[size_t(b) * sb + size_t(cc) * size_t(ldb) + size_t(r)] = mk<T>(rg.next(), rg.next());
+        verify::fill_random(B0v, 777);
     }
 
     switch (c.op) {
         case OpKind::potrf:
-        case OpKind::posv: fill_spd<T>(A0, n, lda, sa, batch); break;
+        case OpKind::posv: verify::fill_spd(A0v); break;
         case OpKind::getrf:
         case OpKind::gesv:
-        case OpKind::getrs: fill_lu<T>(A0, n, lda, sa, batch, 12345); break;
+        case OpKind::getrs: verify::fill_lu(A0v, 12345); break;
         case OpKind::geqrf:
-        case OpKind::orgqr: fill_gauss<T>(A0, m, n, lda, sa, batch, 12345); break;
+        case OpKind::orgqr: verify::fill_gauss(A0v, 12345); break;
     }
 
     auto reset_A = [&] { (void)MV::copy(*q, Av, A0v); q->wait(); };
@@ -835,90 +561,72 @@ static int run(const Cfg& c) {
             reset();
             if (!run_arm(a)) continue;
         }
+        // Items 0 AND batch-1: item 0 alone is blind to a wrong batch stride.
+        const std::vector<int> items{0, batch - 1};
+        using Check = verify::Check;
+        bool within = false;
         switch (c.op) {
             case OpKind::potrf:
-                a.residual = potrf_residual<T>(A, A0, n, lda, sa, batch, c.upper);
+                a.residual = verify::potrf_residual(A0v, Av, up_of(c), items);
+                within = verify::pass<T>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
-                a.residual = getrf_residual<T>(A, A0, pivi, pstride, n, lda, sa, batch);
-                // The DISCRIMINATING oracle: the pivot sequence, elementwise,
-                // against an independent host xGETRF on the same input.
+                // Packed 1-based int32 pivots, n per item, in the first half of the int64 span.
+                VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), n, batch, 1, pstride);
+                a.residual = verify::getrf_residual(A0v, Av, pivv, items);
+                within = verify::pass<T>(Check::factorization, n, a.residual);
+                // The DISCRIMINATING oracle: the pivot sequence, elementwise, against an
+                // independent host xGETRF on the same input.
                 int mism = 0;
-                const size_t nn = size_t(n);
-                std::vector<T> h(nn * nn);
-                std::vector<int> hp(nn);
-                for (int b : {0, batch - 1}) {
-                    for (int cc = 0; cc < n; ++cc)
-                        std::memcpy(h.data() + size_t(cc) * size_t(n),
-                                    A0.data() + size_t(b) * sa + size_t(cc) * size_t(lda),
-                                    size_t(n) * sizeof(T));
-                    host_getrf(n, n, h.data(), n, hp.data());
+                std::vector<int32_t> hp;
+                for (int b : items) {
+                    auto h = verify::copy_item(A0v, b);
+                    if (!verify::getrf_pivots(n, n, h, hp)) { flag(a, "pivot_oracle_unavailable"); break; }
                     for (int k = 0; k < n; ++k)
                         if (hp[size_t(k)] != pivi[size_t(b) * size_t(pstride) + size_t(k)]) ++mism;
                 }
                 a.extra = double(mism);
                 if (mism != 0) flag(a, "pivot_mismatch");
-                if (nontrivial_pivots(pivi, n) == 0) flag(a, "vacuous_pivots");
+                int nontrivial = 0;
+                for (int k = 0; k < n; ++k) nontrivial += (pivi[k] != k + 1);
+                if (nontrivial == 0) flag(a, "vacuous_pivots");
                 break;
             }
             case OpKind::gesv:
             case OpKind::posv:
             case OpKind::getrs:
-                a.residual = getrs_residual<T>(X, B0, A0, n, nrhs, lda, sa, ldb, sb, batch);
+                a.residual = verify::solve_residual(A0v, Xv, B0v, items);
+                within = verify::pass<T>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
-                using D = typename Prom<T>::type;
+                using D = verify::promoted_t<T>;
+                using QV = MatrixView<D, MatrixFormat::Dense>;
+                VectorView<T> tauv(tau.data(), kmin, batch, 1, kmin);
+                a.residual = verify::qr_residual(A0v, Av, tauv, items);
                 std::vector<D> Q;
-                double worst = 0, orth = 0;
-                for (int b : {0, batch - 1}) {
+                double orth = 0;
+                for (int b : items) {
                     form_Q<T>(A, tau, b, m, kmin, lda, sa, size_t(kmin), Q);
-                    orth = nanmax(orth, ortho_norm<D>(Q.data(), m, kmin, m));
-                    const size_t o = size_t(b) * sa;
-                    double num = 0, den = 0;
-                    for (int j = 0; j < n; ++j)
-                        for (int r = 0; r < m; ++r) {
-                            D acc = D(0);
-                            const int kk = std::min(kmin, j + 1);
-                            for (int k = 0; k < kk; ++k)
-                                acc += Q[size_t(k) * size_t(m) + size_t(r)] *
-                                       up(A[o + size_t(j) * size_t(lda) + size_t(k)]);
-                            const D a0 = up(A0[o + size_t(j) * size_t(lda) + size_t(r)]);
-                            const double d = ab(acc - a0), rr = ab(a0);
-                            num += d * d;
-                            den += rr * rr;
-                        }
-                    if (std::isnan(num) || std::isnan(den)) {
-                        worst = std::numeric_limits<double>::quiet_NaN();
-                        break;
-                    }
-                    worst = nanmax(worst, den > 0 ? std::sqrt(num) / std::sqrt(den) : std::sqrt(num));
+                    D* qp = Q.data();
+                    QV Qv(Q.data(), m, kmin, m, m * kmin, 1, &qp);
+                    orth = verify::nanmax(orth, verify::orthogonality(Qv));
                 }
-                a.residual = worst;
                 a.extra = orth;
-                if (!(orth <= Tol<T>::v)) flag(a, "orthogonality");
+                within = verify::pass<T>(Check::factorization, n, a.residual);
+                if (!verify::pass<T>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
                 break;
             }
             case OpKind::orgqr: {
-                using D = typename Prom<T>::type;
-                double orth = 0;
-                const size_t qsz = size_t(m) * size_t(n);
-                std::vector<D> Q(qsz);
-                for (int b : {0, batch - 1}) {
-                    const size_t o = size_t(b) * sa;
-                    for (int cc = 0; cc < n; ++cc)
-                        for (int r = 0; r < m; ++r)
-                            Q[size_t(cc) * size_t(m) + size_t(r)] =
-                                up(A[o + size_t(cc) * size_t(lda) + size_t(r)]);
-                    orth = nanmax(orth, ortho_norm<D>(Q.data(), m, n, m));
-                }
-                a.residual = orth;   // orgqr has no factorisation residual of its own
-                a.extra = orth;
+                // orgqr has no factorisation residual of its own.
+                a.residual = verify::orthogonality(Av, items);
+                a.extra = a.residual;
+                within = verify::pass<T>(Check::orthogonality, m, a.residual);
                 break;
             }
         }
         if (c.op == OpKind::potrf || c.op == OpKind::getrf)
             for (int b = 0; b < batch; ++b) if (info[b] != 0) ++a.info_nonzero;
-        gate(a, Tol<T>::v, c.reps);
+        gate(a, within, c.reps);
     }
 
     std::FILE* csv = nullptr;
