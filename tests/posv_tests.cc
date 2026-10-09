@@ -14,6 +14,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/potrf_native.hh"
@@ -55,48 +57,10 @@ bool potrf_native_runs(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Up
     return false;
 }
 
-inline double up(float x) { return double(x); }
-inline double up(double x) { return x; }
-inline std::complex<double> up(std::complex<float> x) { return {double(x.real()), double(x.imag())}; }
-inline std::complex<double> up(std::complex<double> x) { return x; }
-
-inline double hconj(double x) { return x; }
-inline std::complex<double> hconj(std::complex<double> x) { return std::conj(x); }
-inline double habs(double x) { return std::fabs(x); }
-inline double habs(std::complex<double> x) { return std::abs(x); }
 inline bool hfinite(double x) { return std::isfinite(x); }
 inline bool hfinite(std::complex<double> x) {
     return std::isfinite(x.real()) && std::isfinite(x.imag());
 }
-
-template <class T> inline T mk(double re, double im);
-template <> inline float mk<float>(double re, double) { return float(re); }
-template <> inline double mk<double>(double re, double) { return re; }
-template <> inline std::complex<float> mk<std::complex<float>>(double re, double im) {
-    return {float(re), float(im)};
-}
-template <> inline std::complex<double> mk<std::complex<double>>(double re, double im) {
-    return {re, im};
-}
-
-template <typename T>
-constexpr double eps_of() {
-    if constexpr (std::is_same_v<RealOf<T>, float>) return 1.1920929e-7;
-    else return 2.220446049250313e-16;
-}
-
-// Cholesky is backward stable and the matrices below are diagonally dominant with
-// cond(A) = O(1), so the bound scales with n * eps.
-template <typename T> double solve_tol(int n) { return 400.0 * double(n) * eps_of<T>(); }
-
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
-    double next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return double(int32_t(uint32_t(s >> 32))) / 2147483648.0;
-    }
-};
 
 template <typename T, Backend B>
 struct PosvConfig {
@@ -126,14 +90,14 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
     p.lda = n + 5;  p.stra = p.lda * n + 11;
     p.ldb = n + 5;  p.strb = p.ldb * nrhs + 11;
 
-    const T poison = mk<T>(-9.75e3, 4.5e3);
+    const T poison = verify::make<T>(-9.75e3, 4.5e3);
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
     p.bptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(-12345));
 
-    Rng rg(seed);
+    verify::Rng rg(seed);
     for (int bi = 0; bi < batch; ++bi) {
         // Build the full Hermitian matrix first, then copy only the owned triangle
         // in: the two triangles must be exact conjugates or the "Upper == Lower"
@@ -165,11 +129,11 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
                 const bool owned = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                 if (!owned) continue;
                 const auto v = full[size_t(j) * n + i];
-                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = mk<T>(v.real(), v.imag());
+                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = verify::make<T>(v.real(), v.imag());
             }
         for (int k = 0; k < nrhs; ++k)
             for (int i = 0; i < n; ++i)
-                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = mk<T>(rg.next(), rg.next());
+                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = verify::make<T>(rg.next(), rg.next());
     }
     p.a0.assign(p.a.begin(), p.a.end());
     p.b0.assign(p.b.begin(), p.b.end());
@@ -194,38 +158,12 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
                                               p.bptr.data());
 }
 
-// ||A x - b|| / (||A|| ||x||), with A reconstructed HERMITIAN from the owned triangle
-// of the pristine input.
 template <typename T>
 double solve_residual(const Sys<T>& p, int item, Uplo uplo) {
-    using D = std::complex<double>;
-    const T* A0 = p.a0.data() + size_t(item) * p.stra;
-    const T* B0 = p.b0.data() + size_t(item) * p.strb;
-    const T* X = p.b.data() + size_t(item) * p.strb;
-
-    auto at = [&](int i, int j) -> D {
-        const bool owned = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
-        if (owned) return up(A0[size_t(j) * p.lda + i]);
-        return hconj(up(A0[size_t(i) * p.lda + j]));
-    };
-
-    double num = 0.0, an = 0.0, xn = 0.0;
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) { const double m = habs(at(i, j)); an += m * m; }
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const double m = habs(up(X[size_t(k) * p.ldb + i])); xn += m * m;
-        }
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            D acc = up(B0[size_t(k) * p.ldb + i]);
-            acc = D(-acc.real(), -acc.imag());
-            for (int t = 0; t < p.n; ++t) acc += at(i, t) * up(X[size_t(k) * p.ldb + t]);
-            num += habs(acc) * habs(acc);
-        }
-    an = std::sqrt(an); xn = std::sqrt(xn);
-    if (an == 0.0 || xn == 0.0) return std::sqrt(num);
-    return std::sqrt(num) / (an * xn);
+    return verify::solve_residual(verify::view(p.a0.data() + size_t(item) * p.stra, p.n, p.n, p.lda),
+                                  uplo == Uplo::Lower ? verify::Shape::hermitian_lower : verify::Shape::hermitian_upper,
+                                  Transpose::NoTrans, verify::view(p.b.data() + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
+                                  verify::view(p.b0.data() + size_t(item) * p.strb, p.n, p.nrhs, p.ldb));
 }
 
 // Everything the kernel may not write: the ld pad, the stride pad, AND the triangle
@@ -301,7 +239,7 @@ TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
                 this->run_tiny(p, uplo);
                 for (int item : {0, p.batch - 1}) {
                     EXPECT_EQ(p.info[item], 0) << "n=" << n << " nrhs=" << nrhs;
-                    EXPECT_LT(solve_residual(p, item, uplo), solve_tol<T>(n))
+                    EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                         << "n=" << n << " nrhs=" << nrhs << " item=" << item
                         << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
                 }
@@ -363,7 +301,7 @@ TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
             for (int bi = 0; bi < p.batch; ++bi)
                 EXPECT_EQ(p.info[bi], n / 2 + 1) << "n=" << n << " zero_minor=" << zero_minor;
             for (size_t i = 0; i < p.b.size(); ++i)
-                ASSERT_TRUE(hfinite(up(p.b[i])))
+                ASSERT_TRUE(hfinite(verify::up(p.b[i])))
                     << "X is not finite at " << i << " (n=" << n
                     << " zero_minor=" << zero_minor << ")";
         }
@@ -403,7 +341,7 @@ TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
             for (int bi = 0; bi < batch; ++bi) {
                 ASSERT_EQ(p.info[bi], 0)
                     << "item " << bi << " of " << batch << " was not written";
-                EXPECT_LT(solve_residual(p, bi, Uplo::Lower), solve_tol<T>(n))
+                EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, bi, Uplo::Lower))
                     << "item " << bi << " of " << batch;
             }
         }
@@ -445,7 +383,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
 
                 for (int item : {0, p.batch / 2, p.batch - 1}) {
                     EXPECT_EQ(p.info[item], 0) << "n=" << n;
-                    EXPECT_LT(solve_residual(p, item, uplo), solve_tol<T>(n))
+                    EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                         << "n=" << n << " nrhs=" << nrhs << " item=" << item
                         << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
                 }
@@ -484,7 +422,7 @@ TYPED_TEST(PosvTest, PublicPosvSolvesOnBothTriangles) {
 
             for (int item : {0, p.batch - 1}) {
                 EXPECT_EQ(p.info[item], 0) << "n=" << n;
-                EXPECT_LT(solve_residual(p, item, uplo), solve_tol<T>(n))
+                EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                     << "n=" << n << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
             }
         }
@@ -517,5 +455,5 @@ TYPED_TEST(PosvTest, LinalgSolveSpdLeavesItsInputsAlone) {
                     X.view().data_ptr()[size_t(bi) * X.view().stride() +
                                         size_t(k) * X.view().ld() + i];
     for (int item : {0, p.batch - 1})
-        EXPECT_LT(solve_residual(p, item, Uplo::Lower), solve_tol<T>(n));
+        EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, Uplo::Lower));
 }

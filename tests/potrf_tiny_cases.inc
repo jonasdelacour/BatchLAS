@@ -1,6 +1,6 @@
 // The TINY tier: one matrix per sub-group partition, held in registers. Included by
 // potrf_tests.cc inside its anonymous namespace, so make_spd, make_planted_ldl,
-// multiply_back_residual and residual_tol are in scope.
+// potrf_error and kLeafSlack are in scope.
 //
 // Every case here but the facade one drives sycl_potrf::potrf_tiny_dispatch DIRECTLY.
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
@@ -21,6 +21,11 @@ struct TinyProb {
         return buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
     }
 };
+
+template <typename T>
+double potrf_error(const std::vector<T>& A, const TinyProb<T>& p, int b, Uplo uplo) {
+    return potrf_error<T>(A, p.buf.data() + static_cast<size_t>(b) * p.stride, p.ld, p.n, uplo);
+}
 
 // `seed_shift` scales item b's matrix so a cross-matrix write changes a value rather
 // than reproducing the neighbour's.
@@ -97,17 +102,6 @@ protected:
         return std::vector<int32_t>(info.begin(), info.end());
     }
 
-    // L for item b: for Upper the stored object is U with A = U^H U, so L = U^H.
-    std::vector<T> extract_L(const TinyProb<T>& p, int b, Uplo uplo) {
-        std::vector<T> L(static_cast<size_t>(p.n) * p.n, T{});
-        for (int i = 0; i < p.n; ++i) {
-            for (int j = 0; j <= i; ++j) {
-                L[i + static_cast<size_t>(j) * p.n] =
-                    (uplo == Uplo::Lower) ? p.at(i, j, b) : host_conj(p.at(j, i, b));
-            }
-        }
-        return L;
-    }
 };
 
 TYPED_TEST_SUITE(PotrfTinyTest, PotrfTestTypes);
@@ -133,15 +127,13 @@ TYPED_TEST(PotrfTinyTest, TinyResidualBothTriangles) {
                 for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
                     auto p = make_tiny_prob<T>(n, batch, ld, stride, uplo,
                                                1000u + 7u * static_cast<unsigned>(n),
-                                               make_scalar<T>(R(-11), R(5)));
+                                               verify::make<T>(R(-11), R(5)));
                     const auto info = this->run_tiny(p.view(), uplo);
                     for (int b = 0; b < batch; ++b) {
                         ASSERT_EQ(info[b], 0)
                             << "n=" << n << " b=" << b << " ld=" << ld
                             << " uplo=" << static_cast<int>(uplo);
-                        const auto L = this->extract_L(p, b, uplo);
-                        EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)),
-                                  residual_tol<T>(n))
+                        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, potrf_error<T>(p.ref[b], p, b, uplo), kLeafSlack)
                             << "n=" << n << " b=" << b << " ld=" << ld
                             << " uplo=" << static_cast<int>(uplo);
                     }
@@ -168,9 +160,9 @@ TYPED_TEST(PotrfTinyTest, TinyAgreesWithCtaWithinOnePanel) {
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
             const int batch = 5;
             auto tiny = make_tiny_prob<T>(n, batch, n, n * n, uplo, 5150u,
-                                          make_scalar<T>(R(0), R(0)));
+                                          verify::make<T>(R(0), R(0)));
             auto cta = make_tiny_prob<T>(n, batch, n, n * n, uplo, 5150u,
-                                         make_scalar<T>(R(0), R(0)));
+                                         verify::make<T>(R(0), R(0)));
 
             const auto info_t = this->run_tiny(tiny.view(), uplo);
 
@@ -227,9 +219,9 @@ TYPED_TEST(PotrfTinyTest, TinyPaddingIsInert) {
                 const int ld = n + 5;
                 const int stride = ld * n + 13;
                 auto clean = make_tiny_prob<T>(n, batch, ld, stride, uplo, 31337u,
-                                               make_scalar<T>(R(0), R(0)));
+                                               verify::make<T>(R(0), R(0)));
                 auto poisoned = make_tiny_prob<T>(n, batch, ld, stride, uplo, 31337u,
-                                                  make_scalar<T>(nan, nan));
+                                                  verify::make<T>(nan, nan));
 
                 const auto info_c = this->run_tiny(clean.view(), uplo);
                 const auto info_p = this->run_tiny(poisoned.view(), uplo);
@@ -268,7 +260,7 @@ TYPED_TEST(PotrfTinyTest, TinyOtherTriangleIsNeitherReadNorWritten) {
         if (n > cap) continue;
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
             const int batch = 6;
-            const T sentinel = make_scalar<T>(R(-3.5), R(11.25));
+            const T sentinel = verify::make<T>(R(-3.5), R(11.25));
             auto p = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, uplo, 55u,
                                        sentinel);
             const auto info = this->run_tiny(p.view(), uplo);
@@ -287,7 +279,7 @@ TYPED_TEST(PotrfTinyTest, TinyOtherTriangleIsNeitherReadNorWritten) {
 
             const R nan = std::numeric_limits<R>::quiet_NaN();
             auto q = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, uplo, 55u,
-                                       make_scalar<T>(nan, nan));
+                                       verify::make<T>(nan, nan));
             const auto info2 = this->run_tiny(q.view(), uplo);
             for (int b = 0; b < batch; ++b) {
                 ASSERT_EQ(info2[b], 0);
@@ -329,7 +321,7 @@ TYPED_TEST(PotrfTinyTest, TinyPackedBatchMatchesSolo) {
         const int ld = n + 5;
         const int stride = ld * n + 13;
         auto packed = make_tiny_prob<T>(n, batch, ld, stride, Uplo::Lower, 2000u,
-                                        make_scalar<T>(nan, nan));
+                                        verify::make<T>(nan, nan));
         const auto info_packed = this->run_tiny(packed.view(), Uplo::Lower);
 
         for (int b = 0; b < batch; ++b) {
@@ -340,7 +332,7 @@ TYPED_TEST(PotrfTinyTest, TinyPackedBatchMatchesSolo) {
             TinyProb<T> solo;
             solo.n = n; solo.batch = 1; solo.ld = ld; solo.stride = stride;
             solo.buf = UnifiedVector<T>(static_cast<size_t>(stride),
-                                        make_scalar<T>(nan, nan));
+                                        verify::make<T>(nan, nan));
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
                     solo.buf[i + static_cast<size_t>(j) * ld] =
@@ -378,7 +370,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
         for (int c : {0, 1, 5, 8, 9, 15, n - 1}) {
             if (c < 0 || c >= n) continue;
             auto p = make_tiny_prob<T>(n, 1, n + 5, (n + 5) * n + 13, uplo, 1u,
-                                       make_scalar<T>(R(0), R(0)));
+                                       verify::make<T>(R(0), R(0)));
             const auto ref = make_planted_ldl<T>(n, {c}, 4242u + static_cast<unsigned>(c));
             if (c >= 1) {
                 ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
@@ -405,7 +397,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
         const int c2 = c + 5;
         if (c2 >= n) continue;
         auto p = make_tiny_prob<T>(n, 1, n, n * n, Uplo::Lower, 2u,
-                                   make_scalar<T>(R(0), R(0)));
+                                   verify::make<T>(R(0), R(0)));
         const auto ref = make_planted_ldl<T>(n, {c, c2}, 777u + static_cast<unsigned>(c));
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
@@ -423,7 +415,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
         const std::vector<int> bad_items = {0, 5, batch - 1};
         const std::vector<int> bad_cols = {0, 6, n - 1};
         auto p = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower, 300u,
-                                   make_scalar<T>(R(0), R(0)));
+                                   verify::make<T>(R(0), R(0)));
         for (size_t k = 0; k < bad_items.size(); ++k) {
             const int b = bad_items[k];
             p.ref[b] = make_planted_ldl<T>(n, {bad_cols[k]},
@@ -451,8 +443,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
         for (int b = 0; b < batch; ++b) {
             if (std::find(bad_items.begin(), bad_items.end(), b) != bad_items.end()) continue;
             ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-            const auto L = this->extract_L(p, b, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)), residual_tol<T>(n))
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(p.ref[b], p, b, Uplo::Lower)), kLeafSlack)
                 << "healthy item " << b << " next to a failed one";
         }
     }
@@ -468,7 +459,7 @@ TYPED_TEST(PotrfTinyTest, TinyEmptyInfoSpanStillFactorises) {
     const int n = std::min(29, this->cap());
     const int batch = 2 * this->per_wg(n) + 1;
     auto p = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower, 606u,
-                               make_scalar<T>(R(0), R(0)));
+                               verify::make<T>(R(0), R(0)));
 
     EXPECT_GT(sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, p.view()), 0u)
         << "an empty info span draws batch int32s of scratch from the workspace, so it "
@@ -476,8 +467,7 @@ TYPED_TEST(PotrfTinyTest, TinyEmptyInfoSpanStillFactorises) {
 
     this->run_tiny(p.view(), Uplo::Lower, /*pass_info_span=*/false);
     for (int b = 0; b < batch; ++b) {
-        const auto L = this->extract_L(p, b, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)), residual_tol<T>(n)) << "b=" << b;
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(p.ref[b], p, b, Uplo::Lower)), kLeafSlack) << "b=" << b;
     }
 }
 
@@ -539,9 +529,9 @@ TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
     const select::ScopedPin<ops::potrf::PotrfChoice> route_pin("potrf", ops::potrf::Tiny{});
 
     auto through = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower,
-                                     8080u, make_scalar<T>(R(0), R(0)));
+                                     8080u, verify::make<T>(R(0), R(0)));
     auto direct = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower,
-                                    8080u, make_scalar<T>(R(0), R(0)));
+                                    8080u, verify::make<T>(R(0), R(0)));
 
     UnifiedVector<std::byte> ws(
         potrf_buffer_size<B, T>(*this->ctx, through.view(), Uplo::Lower));
