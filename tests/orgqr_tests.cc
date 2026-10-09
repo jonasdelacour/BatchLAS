@@ -106,10 +106,11 @@ double recon(const T* Q, const T* F, const T* A0, int m, int n, int ld) {
 }
 
 inline verify::Slack recon_slack(int m, int n) {
-    return {double(m + n) / (16.0 * m), "Householder QR backward error is (m+n) eps; a Q of another item or a dropped reflector misses by O(1)"};
+    return {double(m + n) / (16.0 * m), "kept from this file's 0.5 (m+n) eps tolerance"};
 }
 inline verify::Slack orth_slack(int m, int n) {
-    return {double(m + n) * std::sqrt(double(n)) / (16.0 * m), "orgqr's Q is unitary to (m+n) eps/sqrt(n); a lost reflector misses by O(1)"};
+    return {std::min(1.0, double(m + n) * std::sqrt(double(n)) / (16.0 * m)),
+            "kept from this file's 0.5 (m+n) eps / sqrt(n) orthonormality tolerance, clamped at the library bound"};
 }
 
 }  // namespace orgqr_wp5

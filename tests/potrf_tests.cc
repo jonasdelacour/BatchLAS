@@ -173,7 +173,7 @@ double potrf_error(const std::vector<T>& A, const Matrix<T, MatrixFormat::Dense>
 }
 
 // The CTA leaf's pre-migration bound 4 n eps = 8 n u, a factor 1/2 on the kind's 16 n u.
-inline const verify::Slack kLeafSlack{0.5, "the CTA leaf is a stale-pivot or dropped-update defect away from O(1); one reduction-order bit is 2 n u"};
+inline const verify::Slack kLeafSlack{0.5, "kept from this file's leaf tolerance 4 n eps (docs/perf/potrf.md#potrf-correctness-findings)"};
 
 template <typename T, Backend B>
 struct PotrfConfig {

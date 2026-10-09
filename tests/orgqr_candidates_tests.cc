@@ -111,17 +111,14 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     return p;
 }
 
-// ||Q^H Q - I||_F and the componentwise |Q R - A0| / (|Q||R|) for one item (R = triu(F)).
+// ||Q^H Q - I||_F and ||A0 - Q triu(F)||_F / ||A0||_F for one item.
 template <typename T>
 std::pair<double, double> q_errors(const Prob<T>& p, int it) {
-    using D = verify::promoted_t<T>;
     const int item[] = {it};
-    const MVof<T> Q(const_cast<T*>(p.mem.data()), p.m, p.n, p.ld, p.stride, p.batch);
-    const MVof<T> R(const_cast<T*>(p.f.data()), p.n, p.n, p.ld, p.stride, p.batch);
-    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.m, p.n, p.ld, p.stride, p.batch);
-    return {verify::orthogonality(Q, item),
-            verify::gemm_backward_error(Q, verify::Shape::general, Transpose::NoTrans, R, verify::Shape::upper, Transpose::NoTrans, A0, A0,
-                                        verify::Shape::general, D(1), D(0), item)};
+    const auto Q = verify::view(p.mem.data(), p.m, p.n, p.ld, p.stride, p.batch);
+    const auto F = verify::view(p.f.data(), p.m, p.n, p.ld, p.stride, p.batch);
+    const auto A0 = verify::view(p.a0.data(), p.m, p.n, p.ld, p.stride, p.batch);
+    return {verify::orthogonality(Q, item), verify::qr_reconstruction(A0, Q, F, item)};
 }
 
 // Q's checked items, every element outside A's footprint and all of tau bit for bit, and for a

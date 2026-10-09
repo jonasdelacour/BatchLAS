@@ -113,8 +113,8 @@ double qr_residual(const Qr<T>& p, int it) {
 // The pre-migration bound max(m+n, 16) eps as a factor on the kind's 16 m eps.
 verify::Slack tol(int m, int n) {
     return {std::max(double(m + n), 16.0) / (16.0 * std::max(m, 1)),
-            "Householder QR backward error is (m+n) eps with a 16 eps floor at tiny orders; a dropped or misordered "
-            "reflector misses by O(1)"};
+            "kept from this file's 0.5 (m+n) eps tolerance with its 8 eps tiny-order floor "
+            "(docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new)"};
 }
 
 // The checked items' residuals (all of a small batch, the representatives of a repeating one),

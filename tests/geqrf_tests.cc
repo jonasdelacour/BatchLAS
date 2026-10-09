@@ -111,25 +111,19 @@ double residual_tol(int m, int k) {
                     small_order_tol_floor<T>());
 }
 
-template <typename T>
-double orth_tol(int m, int k) {
-    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
-                    small_order_tol_floor<T>());
-}
-
 // The pre-migration bounds, as factors on the kind's 16 m eps. The Frobenius norm of Q^H Q - I is
-// sqrt(k) times the normalised value the old tolerance judged.
+// sqrt(k) times the normalised value the old tolerance judged; the orthogonality factor is clamped at 1.
 template <typename T>
 verify::Slack residual_slack(int m, int k) {
     return {std::max(double(m + k), 16.0) / (16.0 * std::max(m, 1)),
-            "Householder QR backward error is (m+k) eps with a 16 eps floor at tiny orders; a dropped, misordered or "
-            "mis-scaled reflector misses by O(1)"};
+            "kept from this file's 0.5 (m+k) eps tolerance with its 16 eps tiny-order floor "
+            "(docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new)"};
 }
 
 template <typename T>
 verify::Slack orth_slack(int m, int k) {
-    return {std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (16.0 * std::max(m, 1)),
-            "reflectors are unitary to (m+k) eps/sqrt(k) per column; a wrong tau (non-unitary H) misses by O(1)"};
+    return {std::min(1.0, std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (16.0 * std::max(m, 1))),
+            "kept from this file's 0.5 (m+k) eps / sqrt(k) orthonormality tolerance, clamped at the library bound"};
 }
 
 inline bool verbose() { return std::getenv("GEQRF_TESTS_VERBOSE") != nullptr; }
