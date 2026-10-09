@@ -305,8 +305,8 @@ function(batchlas_add_test_target test_name)
     # find_dependency(CUDAToolkit) onto every installed consumer.
     #
     # batchlas::verify (header-only) brings LAPACKE and BATCHLAS_VERIFY_HAVE_LAPACKE=0|1 to every test.
-    # gesvd_tests and sytrd_sb2st_tests call LAPACKE_* directly; geqrf_tests and getrf_tests use it as
-    # an independent oracle (rationale below).
+    # No test calls LAPACKE_* directly: references go through batchlas::verify (reference.hh), and
+    # geqrf_tests and getrf_tests use it as an independent oracle (rationale below).
     target_link_libraries(${test_name} PRIVATE batchlas::verify)
     # geqrf_tests compares tau ELEMENTWISE against LAPACKE. NOT because the residual and
     # orthogonality probes are blind to tau -- that was the original rationale and it is

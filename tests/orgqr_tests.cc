@@ -45,7 +45,7 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
-    EXPECT_VERIFY(T, verify::Check::orthogonality, n, verify::orthogonality(A.view()));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), verify::orthogonality(A.view()));
 }
 
 TYPED_TEST(OrgqrTest, BatchedMatrices) {
@@ -65,7 +65,7 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     const auto all = verify::all_items(batch);
-    EXPECT_VERIFY(T, verify::Check::orthogonality, n, verify::orthogonality(A.view(), all));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), verify::orthogonality(A.view(), all));
 }
 
 

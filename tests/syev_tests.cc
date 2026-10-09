@@ -23,6 +23,7 @@ struct SyevConfig {
 };
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
 template <typename Config>
@@ -127,6 +128,27 @@ Real mixed_convergence_eigenvalue(int b, int i, int n) {
     return Real(1) - Real(std::cos(M_PI * double(i + 1) / double(n + 1)));
 }
 
+// The items whose info is 0 against the closed-form spectrum, each relative to its own ||A||_2,
+// at Check::values; the worst item is judged.
+template <typename T>
+void expect_converged_items_exact(const UnifiedVector<typename base_type<T>::type>& W, const UnifiedVector<int32_t>& info, int n, int batch) {
+    using Real = typename base_type<T>::type;
+    const VectorView<Real> w(const_cast<Real*>(W.data()), n, batch);
+    std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
+    double worst = 0;
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        double scale = 0;
+        for (int i = 0; i < n; ++i) {
+            ref[static_cast<size_t>(b)].push_back(double(mixed_convergence_eigenvalue<Real>(b, i, n)));
+            scale = verify::nanmax(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
+        }
+        const int item[] = {b};
+        worst = verify::nanmax(worst, verify::values_error(w, ref, scale, item));
+    }
+    EXPECT_VERIFY(T, verify::Check::values, n, worst);
+}
+
 }  // namespace
 
 TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
@@ -160,15 +182,7 @@ TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
                                  "spectrum is available in closed form";
     }
 
-    const double tol = std::is_same_v<Real, float> ? 1e-3 : 1e-8;
-    for (int b = 0; b < batch; ++b) {
-        if (info[b] != 0) continue;
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(static_cast<double>(W[static_cast<size_t>(b) * n + i]),
-                        static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
-                << "batch " << b << " eigenvalue " << i;
-        }
-    }
+    expect_converged_items_exact<T>(W, info, n, batch);
 }
 
 // An EMPTY span is "not requested": it must change neither the answer nor the
@@ -259,15 +273,7 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
 
         // The half that stops a report-failure-everywhere implementation from
         // passing: an item syev_cta says converged must still be correct.
-        const double tol = std::is_same_v<Real, float> ? 1e-3 : 1e-8;
-        for (int b = 0; b < batch; ++b) {
-            if (info[b] != 0) continue;
-            for (int i = 0; i < n; ++i) {
-                EXPECT_NEAR(static_cast<double>(W[static_cast<size_t>(b) * n + i]),
-                            static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
-                    << "item " << b << " reported info == 0 but eigenvalue " << i << " is wrong";
-            }
-        }
+        expect_converged_items_exact<T>(W, info, n, batch);
     }
 }
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND

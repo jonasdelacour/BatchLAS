@@ -9,6 +9,7 @@
 #include <string>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 #include "../src/select/vendor.hh"
 
 using namespace batchlas;
@@ -28,6 +29,19 @@ protected:
 };
 
 TYPED_TEST_SUITE(TrmmTest, TrmmTestTypes);
+
+// Componentwise error of C = op(A) B (Left) or B op(A) (Right), A read as its triangle; k = A's order.
+template <typename T>
+double trmm_error(const Matrix<T>& A, const Matrix<T>& B, const Matrix<T>& C, Side side, Uplo uplo, Transpose trans, Diag diag) {
+    using verify::Shape;
+    const bool unit = diag == Diag::Unit;
+    const Shape tri = uplo == Uplo::Lower ? (unit ? Shape::unit_lower : Shape::lower) : (unit ? Shape::unit_upper : Shape::upper);
+    if (side == Side::Left)
+        return verify::gemm_backward_error(A.view(), tri, trans, B.view(), Shape::general, Transpose::NoTrans, C.view(), C.view(),
+                                           Shape::general, verify::promoted_t<T>(1), verify::promoted_t<T>(0));
+    return verify::gemm_backward_error(B.view(), Shape::general, Transpose::NoTrans, A.view(), tri, trans, C.view(), C.view(),
+                                       Shape::general, verify::promoted_t<T>(1), verify::promoted_t<T>(0));
+}
 
 TYPED_TEST(TrmmTest, AllCombinations) {
     using T = typename TestFixture::ScalarType;
@@ -56,33 +70,11 @@ TYPED_TEST(TrmmTest, AllCombinations) {
                              C.view(),
                              {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
 
-                    // subtract the full matrix product from C to obtain the residual
-                    if (side == Side::Right) {
-                        gemm(*(this->ctx),
-                                 B.view(),
-                                 A.view(),
-                                 C.view(),
-                                 {.beta = T(-1.0), .transB = trans}).wait();
-                    } else {
-                        gemm(*(this->ctx),
-                                 A.view(),
-                                 B.view(),
-                                 C.view(),
-                                 {.beta = T(-1.0), .transA = trans}).wait();
-                    }
-
-                    // the residual should be close to zero for a correct implementation
-                    auto   diffNorm = norm(*(this->ctx), C.view());
-                    using real_t   = typename base_type<T>::type;
-                    real_t tol     = test_utils::tolerance<T>() * real_t(n);
-                    for (auto norm : diffNorm) {
-                        // check if the norm is within the tolerance
-                        EXPECT_LE(norm, tol)
+                    EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(A, B, C, side, uplo, trans, diag))
                         << "Failed combination: trans=" << static_cast<int>(trans)
                         << ", side=" << static_cast<int>(side)
                         << ", uplo=" << static_cast<int>(uplo)
                         << ", diag=" << static_cast<int>(diag);
-                    }
                 }
             }
         }
@@ -114,15 +106,9 @@ TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
 // TRMM must not reference the opposite triangle of A, nor its diagonal when
 // Diag::Unit is requested.
 //
-// Every other test in this file builds A with RandomTriangular -- already
-// materialised with zeros in the unreferenced half and ones on a unit
-// diagonal -- and then validates against a full gemm on that same A. That
-// comparison cannot distinguish a real trmm from a plain gemm, so it passes
-// for an implementation that ignores uplo and diag entirely.
-//
-// This test poisons the storage TRMM is forbidden to read. The reference is a
-// gemm against the clean A, so a correct trmm is unaffected while an
-// implementation that reads the poisoned entries is not.
+// AllCombinations builds A with RandomTriangular (zeros in the unreferenced half, ones on a unit
+// diagonal), so it cannot tell a real trmm from a plain gemm. This test poisons the storage TRMM
+// may not read; the host reference reads only the referenced triangle, so a read of the poison fails.
 //
 // A ragged dimension and a non-square B are in the shapes because the CUDA
 // backend materialises the triangle into packed scratch with a leading
@@ -173,25 +159,13 @@ TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
                                  {.side = side, .uplo = uplo, .trans = trans, .diag = diag})
                                 .wait();
 
-                            // Subtract the product against the clean A; the residual must vanish.
-                            if (side == Side::Left) {
-                                gemm(*(this->ctx), A_clean.view(), B.view(), C.view(),
-                                     {.beta = T(-1.0), .transA = trans}).wait();
-                            } else {
-                                gemm(*(this->ctx), B.view(), A_clean.view(), C.view(),
-                                     {.beta = T(-1.0), .transB = trans}).wait();
-                            }
-
-                            const real_t tol = test_utils::tolerance<T>() * real_t(k);
-                            for (auto residual : norm(*(this->ctx), C.view())) {
-                                EXPECT_LE(residual, tol)
-                                    << "trmm read storage it must not touch: " << route << " route, "
-                                    << shape.rows << "x" << shape.cols << " batch " << shape.batch
-                                    << " side=" << (side == Side::Left ? "Left" : "Right")
-                                    << " uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                    << " trans=" << static_cast<int>(trans)
-                                    << " diag=" << (diag == Diag::Unit ? "Unit" : "NonUnit");
-                            }
+                            EXPECT_VERIFY(T, verify::Check::blas, k, trmm_error(A_poisoned, B, C, side, uplo, trans, diag))
+                                << "trmm read storage it must not touch: " << route << " route, "
+                                << shape.rows << "x" << shape.cols << " batch " << shape.batch
+                                << " side=" << (side == Side::Left ? "Left" : "Right")
+                                << " uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
+                                << " trans=" << static_cast<int>(trans)
+                                << " diag=" << (diag == Diag::Unit ? "Unit" : "NonUnit");
                         }
                     }
                 }

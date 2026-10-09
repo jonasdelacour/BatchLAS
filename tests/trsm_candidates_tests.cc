@@ -54,11 +54,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -109,7 +104,7 @@ struct Solve {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 // Strictly diagonally dominant owned triangle, every entry with a nonzero imaginary part; a
@@ -125,13 +120,13 @@ void fill(Solve<T>& p) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 if (i == j)
-                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? mk<T>(R(300), R(-200))
-                                                                 : mk<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? batchlas::verify::make<T>(R(300), R(-200))
+                                                                 : batchlas::verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
                 else if (p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
+                    p.mem[p.ai(it, i, j)] = batchlas::verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < p.b.cols; ++j)
-            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = batchlas::verify::make<T>(u(gen), u(gen));
     }
     for (int it = reps; it < s.batch; ++it) {
         const int r = it % reps;
@@ -146,7 +141,7 @@ void fill(Solve<T>& p) {
 
 template <typename T>
 T alpha_of() {
-    return mk<T>(RealOf<T>(1.5), RealOf<T>(-0.5));
+    return batchlas::verify::make<T>(RealOf<T>(1.5), RealOf<T>(-0.5));
 }
 
 template <typename T>
@@ -659,8 +654,8 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = batchlas::verify::make<T>(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
+    Bm.fill(batchlas::verify::make<T>(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());

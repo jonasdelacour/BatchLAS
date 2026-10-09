@@ -23,14 +23,9 @@
 #include "test_utils.hh"
 
 #include <batchlas/verify/residuals.hh>
-
-// The ONLY oracle in this file that is not BatchLAS code. Both getrf tiers share
-// getrf_cta_device.hh's lu_cabs1, so a defect in the pivot METRIC itself moves the
-// tiny tier and the CTA tier together and the tiny-vs-cta comparisons stay green.
-// TinyPivotsMatchLapackeOnUnstructuredData is what can see that.
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-#include <lapacke.h>
-#endif
+// The only non-BatchLAS oracle here (verify::getrf_pivots): both tiers share lu_cabs1, so only
+// TinyPivotsMatchLapackeOnUnstructuredData sees a defect in the pivot METRIC itself.
+#include <batchlas/verify/reference.hh>
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/extensions/getrs_native.hh"
@@ -3055,24 +3050,6 @@ Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
     return p;
 }
 
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-// Column-major, lda = n, 1-based ipiv -- the same contract the device span carries.
-template <typename T>
-lapack_int lapacke_getrf_any(int n, T* a, lapack_int* ipiv) {
-    if constexpr (std::is_same_v<T, float>) {
-        return LAPACKE_sgetrf(LAPACK_COL_MAJOR, n, n, a, n, ipiv);
-    } else if constexpr (std::is_same_v<T, double>) {
-        return LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, n, a, n, ipiv);
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-        return LAPACKE_cgetrf(LAPACK_COL_MAJOR, n, n,
-                              reinterpret_cast<lapack_complex_float*>(a), n, ipiv);
-    } else {
-        static_assert(std::is_same_v<T, std::complex<double>>);
-        return LAPACKE_zgetrf(LAPACK_COL_MAJOR, n, n,
-                              reinterpret_cast<lapack_complex_double*>(a), n, ipiv);
-    }
-}
-#endif
 
 // LAPACK's ?GETF2 on the host in promoted arithmetic, recording at each step the
 // MARGIN by which the winner beat the runner-up: margin[k] = cabs1(runner-up) /
@@ -3126,9 +3103,8 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
 // oracle for a given cell -- see the note in TinyPivotsMatchLapackeOnUnstructuredData.
 template <typename T>
 double host_factor_residual(int n, const std::vector<T>& a0, const std::vector<T>& f,
-                            const lapack_int* ip) {
-    static_assert(sizeof(lapack_int) == sizeof(int), "lapack_int must be the 32-bit interchange type");
-    return factor_residual<T>(a0.data(), f.data(), reinterpret_cast<const int*>(ip), n, n, n);
+                            const std::int32_t* ip) {
+    return factor_residual<T>(a0.data(), f.data(), ip, n, n, n);
 }
 
 }  // namespace
@@ -3548,7 +3524,7 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
     const double kLapackeTrustTol = 1e-3;
 
     std::vector<T> h, f;
-    std::vector<lapack_int> hp;
+    std::vector<std::int32_t> hp;
     std::vector<int> ref;
     std::vector<double> margin;
     int asserted_nondiagonal = 0, lapacke_cells = 0, lapacke_dropped = 0;
@@ -3567,10 +3543,8 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
             host_getf2_with_margins<T>(n, h, ref, margin);
 
             f = h;
-            hp.assign(size_t(n), 0);
-            const lapack_int rc = lapacke_getrf_any<T>(n, f.data(), hp.data());
-            ASSERT_EQ(rc, 0) << "n=" << n << " b=" << b
-                             << ": the host reference itself reported info = " << rc;
+            ASSERT_TRUE(verify::getrf_pivots(n, n, f, hp)) << "n=" << n << " b=" << b
+                                                           << ": the host reference itself failed";
             const double lres = host_factor_residual<T>(n, h, f, hp.data());
             const bool trust = std::isfinite(lres) && lres <= kLapackeTrustTol;
             ++lapacke_cells;

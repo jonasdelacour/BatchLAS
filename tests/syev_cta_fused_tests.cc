@@ -133,7 +133,7 @@ TYPED_TEST(SyevCtaFusedTest, EigenvectorsAllSizesBothTrianglesResidualAndOrtho) 
 	}
 }
 
-// Eigenvalues must match the CPU reference.
+// Eigenvalues must match LAPACKE.
 TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
@@ -144,39 +144,15 @@ TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 
 	auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
 	auto A_fused = A0;
-	auto A_ref = A0;
 
 	auto W_fused = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
-
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
-			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev(*this->ctx,
-                        A_ref.view(),
-                        W_ref.to_span(),
-                        {.jobz = JobType::NoEigenVectors},
-                        ws_ref.to_span())
-			.wait();
-	}
-#endif
 
 	syev_cta_fused<B, Scalar>(*this->ctx, A_fused.view(), W_fused.to_span(), JobType::NoEigenVectors,
 							  Uplo::Lower)
 		.wait();
 
-	const Real tol = test_utils::tolerance<Scalar>();
-#if BATCHLAS_HAS_HOST_BACKEND
-	for (int b = 0; b < batch; ++b) {
-		for (int i = 0; i < n; ++i) {
-			const std::size_t idx = static_cast<std::size_t>(b) * n + i;
-			ASSERT_NEAR(W_fused[idx], W_ref[idx], tol) << "eigenvalue mismatch i=" << i << " batch=" << b;
-		}
-	}
-#else
-	(void)tol;
-#endif
+	// Every item against LAPACKE in double (not a BatchLAS syev on this queue).
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_fused, n, false, verify::all_items(batch));
 
 	// jobz == NoEigenVectors must leave A alone (unlike syev_cta, which leaves
 	// the reduction's reflectors behind).
@@ -221,14 +197,7 @@ TYPED_TEST(SyevCtaFusedTest, AgreesWithPartitionedSyevCta) {
 								  Uplo::Lower)
 			.wait();
 
-		const Real tol = test_utils::tolerance<Scalar>() * Real(5);
-		for (int b = 0; b < batch; ++b) {
-			for (int i = 0; i < n; ++i) {
-				const std::size_t idx = static_cast<std::size_t>(b) * n + i;
-				ASSERT_NEAR(W_fused[idx], W_pipe[idx], tol)
-					<< "eigenvalue mismatch n=" << n << " i=" << i << " batch=" << b;
-			}
-		}
+		test_utils::expect_eigenvalues_agree<Scalar>(W_fused, W_pipe, n, batch);
 	}
 }
 

@@ -63,11 +63,6 @@ constexpr Transpose kN = Transpose::NoTrans, kT = Transpose::Trans, kC = Transpo
 const Transpose kForms[] = {kN, kT, kC};
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -235,15 +230,15 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
 void init(Problem<T>& p, std::size_t total) {
     using R = RealOf<T>;
     const Spec& s = p.s;
-    p.alpha = mk<T>(R(1.25), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : mk<T>(R(-0.75), R(0.25));
+    p.alpha = batchlas::verify::make<T>(R(1.25), R(-0.5));
+    p.beta = s.beta_zero ? T(0) : batchlas::verify::make<T>(R(-0.75), R(0.25));
     p.mem = UnifiedVector<T>(total, poison<T>());
     p.pa = UnifiedVector<T*>(s.batch, nullptr);
     p.pb = UnifiedVector<T*>(s.batch, nullptr);
@@ -259,7 +254,7 @@ void init(Problem<T>& p, std::size_t total) {
                 for (int i = 0; i < g.rows; ++i) {
                     T& v = p.mem[Problem<T>::at(g, it, i, j)];
                     if (it != r) v = p.mem[Problem<T>::at(g, r, i, j)];
-                    else v = is_c && s.nan_c ? mk<T>(nan, nan) : mk<T>(u(gen), u(gen));
+                    else v = is_c && s.nan_c ? batchlas::verify::make<T>(nan, nan) : batchlas::verify::make<T>(u(gen), u(gen));
                 }
         };
         put(p.a, false);

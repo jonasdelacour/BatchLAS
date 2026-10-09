@@ -90,13 +90,6 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    // Guards the values-only result against LAPACKE at n=8, absolute. Was
-    // 5e-2, which at sigma_max ~ 3 is a 1.6% relative check; tightening the
-    // three constants above without this one would just leave the loosest
-    // guard here.
-    static constexpr Real tol() {
-        return std::is_same_v<Real, float> ? Real(2e-3f) : Real(1e-10);
-    }
 };
 
 template <typename Config>
@@ -105,10 +98,6 @@ protected:
     using Scalar = typename Config::ScalarType;
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
-
-    static constexpr Real tol() {
-        return std::is_same_v<Real, float> ? Real(5e-3f) : Real(1e-10);
-    }
 };
 
 // Complex GENERAL input, as distinct from the Hermitian-complex fixture above.
@@ -156,7 +145,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-#if !BATCHLAS_HAS_HOST_BACKEND
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
     GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
 #else
     const int n = 8;
@@ -195,56 +184,18 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
 
 namespace {
 
-// The float constants used to be 5e-2 / 2e-1 / 3e-1. Those predate any path
-// accurate enough to justify tightening them, and they had stopped guarding
-// anything: 3e-1 permits a 30% relative reconstruction error against a measured
-// ~1.3e-6 on these shapes.
-//
-// Chosen with margin over BOTH error sources, not only ours. The reference is
-// LAPACKE_sgesvd in the SAME precision, whose own error is about
-// eps_f32 * sigma_max ~= 1.1e-6 absolute at n=64; the test matrices are
-// Random(-1,1), so sigma_max ~= 2*sqrt(n)/sqrt(3) ~= 9.2 there, and the
-// singular-value check is ABSOLUTE.
-//
-// These were fitted by measurement across every provider and all three
-// BATCHLAS_GESVD_BIDIAG settings, which is the sweep that matters: a value
-// tuned only against the bdsdc default will fail the =normal path, whose
-// relative error reaches 4e-1 at kappa=1e4.
-// BATCHLAS_GESVD_BIDIAG=normal selects the OLD normal-equations bidiagonal
-// path, which is retained purely so the three solvers can be A/B'd. It forms
-// the tridiagonal of B^T B, so it squares the condition number and reaches ~4e-1
-// relative error at kappa=1e4 -- it cannot meet the tolerances the default path
-// meets, and it is not supposed to.
-//
-// So the tolerances are solver-aware rather than pinned to the worst path. The
-// alternative was to keep 3e-1 forever, which is what made these guards
-// vacuous in the first place; the alternative after that was to let the =normal
-// A/B arm fail, which would quietly train people to ignore a red suite.
+// BATCHLAS_GESVD_BIDIAG=normal selects the old normal-equations bidiagonal path, kept only so the
+// three solvers can be A/B'd: it squares the condition number (~4e-1 relative error at kappa = 1e4),
+// so the checks below that it reaches carry their own bound or slack.
 inline bool gesvd_bidiag_is_normal_equations() {
     const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
     return v != nullptr && std::string(v) == "normal";
 }
 
-// The float constants used to be 5e-2 / 2e-1 / 3e-1. Those predate any path
-// accurate enough to justify tightening them, and they had stopped guarding
-// anything: 3e-1 permits a 30% relative reconstruction error against a measured
-// ~1.3e-6 on these shapes.
-//
-// Chosen with margin over BOTH error sources, not only ours. The reference is
-// LAPACKE_sgesvd in the SAME precision, whose own error is about
-// eps_f32 * sigma_max ~= 1.1e-6 absolute at n=64; the test matrices are
-// Random(-1,1), so sigma_max ~= 2*sqrt(n)/sqrt(3) ~= 9.2 there, and the
-// singular-value check is ABSOLUTE. Verified against every provider and all
-// three BATCHLAS_GESVD_BIDIAG settings.
-template <typename Real>
-inline Real gesvd_sv_tol() {
-    if constexpr (std::is_same_v<Real, float>) {
-        return gesvd_bidiag_is_normal_equations() ? Real(5e-2f) : Real(2e-3f);
-    } else {
-        return Real(1e-10);
-    }
-}
-
+// The reconstruction ||A - U S V^H||_F / ||A||_F has no library kind (verification.md, "Kept outside
+// the library"), so it keeps this file's measured per-type bound. The float constant used to be 3e-1,
+// which permitted a 30% error against a measured ~1.3e-6; BATCHLAS_GESVD_BIDIAG=normal squares the
+// condition number and keeps the old bound.
 template <typename Real>
 inline Real gesvd_recon_tol() {
     if constexpr (std::is_same_v<Real, float>) {
@@ -328,7 +279,7 @@ std::string run_gesvd_with_provider(Queue& ctx,
 template <typename Scalar>
 void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
                                           const UnifiedVector<typename base_type<Scalar>::type>& s) {
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
     using Real = typename base_type<Scalar>::type;
     const int k = std::min(A_ref.rows(), A_ref.cols());
     const int batch = A_ref.batch_size();
@@ -351,33 +302,53 @@ void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Den
 #endif
 }
 
+// s (k values per item, packed) against ref[item] over @p items at Check::values, relative to the
+// largest reference value; no items, nothing to check.
+template <typename Real>
+void expect_singular_values_near(const UnifiedVector<Real>& s, const std::vector<std::vector<double>>& ref, int k, int batch,
+                                 const std::vector<int>& items) {
+    if (items.empty()) return;
+    double scale = 0.0;
+    for (int b : items)
+        for (double r : ref[static_cast<size_t>(b)]) scale = batchlas::verify::nanmax(scale, std::fabs(r));
+    const VectorView<Real> w(const_cast<Real*>(s.data()), k, batch);
+    EXPECT_VERIFY(Real, batchlas::verify::Check::values, k, batchlas::verify::values_error(w, ref, scale, items));
+}
+
+// s against another run's values (thin vs full, blocked vs unblocked) at Check::values, every item.
+template <typename Real>
+void expect_singular_values_agree(const UnifiedVector<Real>& s, const UnifiedVector<Real>& s_ref, int k, int batch) {
+    std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
+    for (int b = 0; b < batch; ++b)
+        ref[static_cast<size_t>(b)].assign(s_ref.begin() + static_cast<std::ptrdiff_t>(b) * k, s_ref.begin() + static_cast<std::ptrdiff_t>(b + 1) * k);
+    expect_singular_values_near(s, ref, k, batch, batchlas::verify::all_items(batch));
+}
+
 template <typename Real>
 void expect_sorted_singular_values(const UnifiedVector<Real>& s,
                                    int n,
                                    int batch,
                                    const std::vector<Real>& expected_desc) {
     ASSERT_EQ(static_cast<int>(expected_desc.size()), n);
-    for (int b = 0; b < batch; ++b) {
-        SCOPED_TRACE("batch=" + std::to_string(b));
-        const Real* sb = s.data() + static_cast<size_t>(b) * static_cast<size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(sb[i], expected_desc[static_cast<size_t>(i)], gesvd_sv_tol<Real>());
-        }
-    }
+    const std::vector<std::vector<double>> ref(static_cast<size_t>(batch), std::vector<double>(expected_desc.begin(), expected_desc.end()));
+    expect_singular_values_near(s, ref, n, batch, batchlas::verify::all_items(batch));
 }
 
+// Orthogonality n is the length of the vectors checked: M.rows() here, and M.cols() for
+// expect_orthonormal_rows (the rows of M^H).
 template <typename Scalar>
 void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M,
                                 batchlas::verify::Slack slack = {1.0, "-"}) {
     using Real = typename base_type<Scalar>::type;
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err,
-                            (batchlas::verify::Slack{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag n=48, c 7.18 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"}));
+        const batchlas::verify::Slack normal{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag 128 x 48 (n = 128 rows), c 2.69 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"};
+        // A tighter slack the caller passed wins, with its own reason.
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err, slack.factor < normal.factor ? slack : normal);
     } else if (slack.factor != 1.0) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err, slack);
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err, slack);
     } else {
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err);
     }
 }
 
@@ -448,7 +419,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-#if !BATCHLAS_HAS_HOST_BACKEND
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
     GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
 #else
     const int n = 12;
@@ -1164,14 +1135,8 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
         *this->ctx, A_thin, s_thin, U_thin, Vh_thin, SvdVectors::Thin, SvdVectors::Thin, nullptr);
     ASSERT_TRUE(err_thin.empty()) << err_thin;
 
-    const Real sv_tol = gesvd_sv_tol<Real>();
+    expect_singular_values_agree(s_thin, s_full, k, batch);
     for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < k; ++i) {
-            EXPECT_NEAR(static_cast<double>(s_thin[static_cast<size_t>(b) * k + i]),
-                        static_cast<double>(s_full[static_cast<size_t>(b) * k + i]),
-                        static_cast<double>(sv_tol))
-                << "sigma mismatch b=" << b << " i=" << i;
-        }
         auto Uf = U_full.view().batch_item(b);
         auto Ut = U_thin.view().batch_item(b);
         for (int c = 0; c < k; ++c) {
@@ -1345,15 +1310,7 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
             ASSERT_TRUE(err.empty()) << "unblocked gebrd: " << err;
         }
 
-        const Real sv_tol = gesvd_sv_tol<Real>();
-        for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < k; ++i) {
-                const size_t idx = static_cast<size_t>(b) * k + i;
-                EXPECT_NEAR(static_cast<double>(s_blk[idx]), static_cast<double>(s_unb[idx]),
-                            static_cast<double>(sv_tol))
-                    << "sigma b=" << b << " i=" << i;
-            }
-        }
+        expect_singular_values_agree(s_blk, s_unb, k, batch);
         expect_orthonormal_columns(U_blk);
         expect_reconstruction(A_ref, s_blk, U_blk, Vh_blk);
     }
@@ -1538,14 +1495,14 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
                                   "the span, so a zero here would have proved nothing";
         EXPECT_EQ(info[b], 0) << "item " << b << " reported non-convergence on a diagonal matrix";
     }
+    std::vector<std::vector<double>> exact(static_cast<size_t>(batch));
+    std::vector<int> converged;
     for (int b = 0; b < batch; ++b) {
         if (info[b] != 0) continue;
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(static_cast<double>(s[static_cast<size_t>(b) * n + i]), double(n - i),
-                        static_cast<double>(TestFixture::tol()) * n)
-                << "batch " << b << " singular value " << i;
-        }
+        converged.push_back(b);
+        for (int i = 0; i < n; ++i) exact[static_cast<size_t>(b)].push_back(double(n - i));
     }
+    expect_singular_values_near(s, exact, n, batch, converged);
 }
 
 // An empty span is "not requested": neither the workspace query nor the answer
@@ -1653,16 +1610,15 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
             << "a two-sweep budget on dense 32x32 items reported universal convergence; "
                "either the status is not written, or it is written unconditionally zero";
 
+        // An item reporting info == 0 must match the full-budget run.
+        std::vector<std::vector<double>> full_run(static_cast<size_t>(batch));
+        std::vector<int> converged;
         for (int b = 0; b < batch; ++b) {
             if (info[b] != 0) continue;
-            for (int i = 0; i < n; ++i) {
-                const size_t idx = static_cast<size_t>(b) * n + i;
-                EXPECT_NEAR(static_cast<double>(s[idx]), static_cast<double>(s_ref[idx]),
-                            static_cast<double>(TestFixture::tol()) * n)
-                    << "item " << b << " reported info == 0 but singular value " << i
-                    << " differs from the full-budget run";
-            }
+            converged.push_back(b);
+            full_run[static_cast<size_t>(b)].assign(s_ref.begin() + static_cast<std::ptrdiff_t>(b) * n, s_ref.begin() + static_cast<std::ptrdiff_t>(b + 1) * n);
         }
+        expect_singular_values_near(s, full_run, n, batch, converged);
     }
 }
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND

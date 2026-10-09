@@ -171,24 +171,6 @@ static void make_graded_spd(int n, int grade, unsigned seed,
 	}
 }
 
-// Tolerance for comparing against an independent eigensolver.
-//
-// Both solvers carry a backward error of order eps*||A||, so the *absolute*
-// agreement between them scales with the spectral radius; a fixed absolute
-// tolerance silently becomes a relative tolerance of eps only when ||A|| ~ 1.
-// The scaling below is what makes the comparison size-independent.
-// (Agreement at the eps*||A|| level is verified directly, against a double
-// reference, in RandomSymmetricMatchesDoubleReference.)
-template <typename Scalar>
-static RealOf<Scalar> eig_compare_tol(const UnifiedVector<RealOf<Scalar>>& w_ref, int n, int batch) {
-	using Real = RealOf<Scalar>;
-	Real lambda_max = Real(1);
-	for (int i = 0; i < n * batch; ++i) {
-		lambda_max = std::max(lambda_max, std::abs(w_ref[static_cast<std::size_t>(i)]));
-	}
-	return test_utils::tolerance<Scalar>() * lambda_max;
-}
-
 // Random symmetric matrix with dyadic entries, so it is represented exactly in
 // both float and double and the two precisions see identical input.
 static void make_dyadic_symmetric(int n, unsigned seed,
@@ -255,35 +237,13 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 		Matrix<Scalar, MatrixFormat::Dense> A0 =
 			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
 		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
-		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-#if BATCHLAS_HAS_HOST_BACKEND
-		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
-				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo));
-			syev(*this->ctx,
-                         A_ref.view(),
-                         W_ref.to_span(),
-                         {.jobz = JobType::NoEigenVectors, .uplo = uplo},
-                         ws_ref.to_span()).wait();
-		}
-#endif
 
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
-#if BATCHLAS_HAS_HOST_BACKEND
-		const Real tol = eig_compare_tol<Scalar>(W_ref, n, batch);
-		for (int b = 0; b < batch; ++b) {
-			for (int i = 0; i < n; ++i) {
-				const std::size_t idx = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-									  + static_cast<std::size_t>(i);
-				ASSERT_NEAR(W_jac[idx], W_ref[idx], tol) << "eigenvalue mismatch i=" << i << " batch=" << b;
-			}
-		}
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
 	}
 }
 
@@ -327,35 +287,13 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 			Matrix<Scalar, MatrixFormat::Dense> A0 =
 				Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
 			Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
-			Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 			auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-			auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-#if BATCHLAS_HAS_HOST_BACKEND
-			{
-				auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
-					*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, uplo));
-				syev(*this->ctx,
-                          A_ref.view(),
-                          W_ref.to_span(),
-                          {.jobz = JobType::NoEigenVectors, .uplo = uplo},
-                          ws_ref.to_span()).wait();
-			}
-#endif
 
 			syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
-#if BATCHLAS_HAS_HOST_BACKEND
-			const Real tol_w = eig_compare_tol<Scalar>(W_ref, n, batch);
-			for (int b = 0; b < batch; ++b) {
-				for (int i = 0; i < n; ++i) {
-					const std::size_t idx = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-										  + static_cast<std::size_t>(i);
-					ASSERT_NEAR(W_jac[idx], W_ref[idx], tol_w) << "eigenvalue mismatch i=" << i << " batch=" << b;
-				}
-			}
-#endif
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
 
 			for (int b = 0; b < batch; ++b) {
 				test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, b);
@@ -379,35 +317,13 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
 		Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(
 			n, n, /*hermitian=*/true, batch, /*seed=*/static_cast<unsigned>(1000 + n));
 		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
-		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-#if BATCHLAS_HAS_HOST_BACKEND
-		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
-				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-			syev(*this->ctx,
-                         A_ref.view(),
-                         W_ref.to_span(),
-                         {.jobz = JobType::NoEigenVectors},
-                         ws_ref.to_span()).wait();
-		}
-#endif
 
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-#if BATCHLAS_HAS_HOST_BACKEND
-		const Real tol_w = eig_compare_tol<Scalar>(W_ref, n, batch);
-		for (int b = 0; b < batch; ++b) {
-			for (int i = 0; i < n; ++i) {
-				const std::size_t idx = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-									  + static_cast<std::size_t>(i);
-				ASSERT_NEAR(W_jac[idx], W_ref[idx], tol_w) << "eigenvalue mismatch i=" << i << " batch=" << b;
-			}
-		}
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
 
 		for (int b = 0; b < batch; ++b) {
 			test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, b);
@@ -438,15 +354,8 @@ TYPED_TEST(SyevJacobiCtaTest, DescendingSortOrder) {
 	syev_jacobi_cta<B, Scalar>(*this->ctx, A_desc.view(), W_desc.to_span(), JobType::EigenVectors, Uplo::Lower,
 							   Span<std::byte>(), p_desc).wait();
 
+	test_utils::expect_eigenvalues_agree<Scalar>(W_desc, W_asc, n, batch, /*reversed=*/true);
 	for (int b = 0; b < batch; ++b) {
-		for (int i = 0; i < n; ++i) {
-			const std::size_t ia = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-								 + static_cast<std::size_t>(i);
-			const std::size_t id = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-								 + static_cast<std::size_t>(n - 1 - i);
-			ASSERT_NEAR(W_asc[ia], W_desc[id], test_utils::tolerance<Scalar>())
-				<< "descending order does not mirror ascending at i=" << i;
-		}
 		for (int i = 1; i < n; ++i) {
 			const std::size_t prev = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
 								   + static_cast<std::size_t>(i - 1);
@@ -500,8 +409,8 @@ TYPED_TEST(SyevJacobiCtaTest, RepeatedRunsDoNotHang) {
 
 // Verifies that the float kernel agrees with an exact-input double reference to
 // within a small multiple of eps*||A||, i.e. that it is backward stable at the
-// level theory predicts. This is what licenses the ||A||-scaled tolerance used
-// when cross-checking against LAPACK above: the discrepancy there is ordinary
+// level theory predicts. This is what licenses the ||A||-scaled values check used
+// when cross-checking against LAPACKE above: the discrepancy there is ordinary
 // float rounding shared by any backward-stable solver, not a deficiency of this
 // kernel.
 TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {

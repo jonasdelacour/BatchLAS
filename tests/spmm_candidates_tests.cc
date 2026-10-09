@@ -56,16 +56,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -110,7 +100,7 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -118,8 +108,8 @@ Problem<T> make(const Spec& s) {
     using R = RealOf<T>;
     Problem<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.25), R(-0.5));
-    p.beta = mk<T>(R(-0.75), R(0.25));
+    p.alpha = batchlas::verify::make<T>(R(1.25), R(-0.5));
+    p.beta = batchlas::verify::make<T>(R(-0.75), R(0.25));
     const bool an = s.ta == Transpose::NoTrans, bn = s.tb == Transpose::NoTrans;
     p.out_rows = an ? s.m : s.k;
     p.red_rows = an ? s.k : s.m;
@@ -153,14 +143,14 @@ Problem<T> make(const Spec& s) {
     p.ci.resize(p.val.size());
     p.ro.resize(std::size_t(p.ostride) * std::max(1, s.batch));
     std::vector<T> vals_rep(std::size_t(p.vstride) * reps);
-    for (auto& v : vals_rep) v = mk<T>(u(gen), u(gen));
+    for (auto& v : vals_rep) v = batchlas::verify::make<T>(u(gen), u(gen));
     for (int b = 0; b < s.batch; ++b) {
         const int r = b % reps;
         const int nnz = int(cols[r].size());
         for (int i = 0; i < p.ostride; ++i) p.ro[std::size_t(b) * p.ostride + i] = i <= s.m ? rows[r][i] : p.cap;
         for (int q = 0; q < p.vstride; ++q) {
             const std::size_t at = std::size_t(b) * p.vstride + q;
-            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : mk<T>(R(1e6), R(-1e6));
+            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : batchlas::verify::make<T>(R(1e6), R(-1e6));
             p.ci[at] = q < nnz ? cols[r][q] : 0;
         }
     }
@@ -170,8 +160,8 @@ Problem<T> make(const Spec& s) {
     for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<T>();
     std::vector<T> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
         crep(std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs) * reps);
-    for (auto& v : brep) v = mk<T>(u(gen), u(gen));
-    for (auto& v : crep) v = mk<T>(u(gen), u(gen));
+    for (auto& v : brep) v = batchlas::verify::make<T>(u(gen), u(gen));
+    for (auto& v : crep) v = batchlas::verify::make<T>(u(gen), u(gen));
     for (int b = 0; b < s.batch; ++b) {
         const std::size_t r = std::size_t(b % reps);
         for (int j = 0; j < p.b_cols; ++j)

@@ -59,11 +59,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -110,7 +105,7 @@ struct Prob {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -118,7 +113,7 @@ Prob<T> make_prob(const Spec& s) {
     using R = RealOf<T>;
     Prob<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.5), R(-0.5));
+    p.alpha = batchlas::verify::make<T>(R(1.5), R(-0.5));
     const int br = s.side == Side::Left ? s.n : s.q, bc = s.side == Side::Left ? s.q : s.n;
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
@@ -132,9 +127,9 @@ Prob<T> make_prob(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
                 if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+                    p.mem[p.ai(it, i, j)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
@@ -238,8 +233,8 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     using R = RealOf<T>;
     const int n = 16, q = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
-    A.fill(mk<T>(R(0.5), R(0)));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+    A.fill(batchlas::verify::make<T>(R(0.5), R(0)));
+    Bm.fill(batchlas::verify::make<T>(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());

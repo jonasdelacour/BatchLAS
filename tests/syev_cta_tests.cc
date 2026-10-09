@@ -127,22 +127,10 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
 	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
-
-	// Reference (CPU LAPACKE)
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev(*this->ctx,
-                        A_ref.view(),
-                        W_ref.to_span(),
-                        {.jobz = JobType::NoEigenVectors},
-                        ws_ref.to_span()).wait();
-	}
-#endif
+	// Every item against LAPACKE in double (not a BatchLAS syev on this queue).
+	const auto all = verify::all_items(batch);
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -152,18 +140,7 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::NoEigenVectors, p));
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
-		const Real tol = test_utils::tolerance<Scalar>();
-#if BATCHLAS_HAS_HOST_BACKEND
-		for (int j = 0; j < batch; ++j) {
-			for (int i = 0; i < n; ++i) {
-				ASSERT_NEAR(W_cta[static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * static_cast<std::size_t>(n)],
-						W_ref[static_cast<std::size_t>(i) + static_cast<std::size_t>(j) * static_cast<std::size_t>(n)],
-						tol) << "eigenvalue mismatch i=" << i << " batch=" << j;
-			}
-		}
-#else
-		(void)tol;
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n, false, all);
 	}
 }
 
@@ -177,19 +154,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 
 	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
 	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
-
-	// Reference eigenvalues (CPU LAPACKE). We compute eigenvectors too just to ensure it runs,
-	// but we validate the CTA eigenvectors via residual + orthogonality.
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
-	}
-#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -199,14 +165,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 		auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::EigenVectors, p));
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
-		const Real tol_w = test_utils::tolerance<Scalar>();
-#if BATCHLAS_HAS_HOST_BACKEND
-		for (int i = 0; i < n; ++i) {
-			ASSERT_NEAR(W_cta[static_cast<std::size_t>(i)], W_ref[static_cast<std::size_t>(i)], tol_w) << "eigenvalue mismatch i=" << i;
-		}
-#else
-		(void)tol_w;
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n);
 
 		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
@@ -222,22 +181,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 
 	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/789);
 	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
-
-	// Reference (CPU LAPACKE)
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Upper));
-		syev(*this->ctx,
-                        A_ref.view(),
-                        W_ref.to_span(),
-                        {.uplo = Uplo::Upper},
-                        ws_ref.to_span()).wait();
-	}
-#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -247,14 +192,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 		auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::EigenVectors, p));
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Upper, ws_cta.to_span(), p).wait();
 
-		const Real tol_w = test_utils::tolerance<Scalar>();
-#if BATCHLAS_HAS_HOST_BACKEND
-		for (int i = 0; i < n; ++i) {
-			ASSERT_NEAR(W_cta[static_cast<std::size_t>(i)], W_ref[static_cast<std::size_t>(i)], tol_w) << "eigenvalue mismatch i=" << i;
-		}
-#else
-		(void)tol_w;
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n);
 
 		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
@@ -269,18 +207,8 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 	const int batch = 1;
 	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242);
 	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
-
-	// Reference (CPU LAPACKE)
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
-	}
-#endif
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -291,26 +219,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
-		std::vector<Real> w_cta_sorted(static_cast<std::size_t>(n));
-		for (int i = 0; i < n; ++i) {
-			w_cta_sorted[static_cast<std::size_t>(i)] = W_cta[static_cast<std::size_t>(i)];
-		}
-		std::sort(w_cta_sorted.begin(), w_cta_sorted.end());
-
-		const Real tol_w = test_utils::tolerance<Scalar>() * Real(5);
-#if BATCHLAS_HAS_HOST_BACKEND
-		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
-		for (int i = 0; i < n; ++i) {
-			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
-		}
-		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
-		for (int i = 0; i < n; ++i) {
-			ASSERT_NEAR(w_cta_sorted[static_cast<std::size_t>(i)], w_ref_sorted[static_cast<std::size_t>(i)], tol_w)
-				<< "eigenvalue mismatch (sorted) i=" << i;
-		}
-#else
-		(void)tol_w;
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n, /*sorted_copy=*/true);
 
 		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}
@@ -332,20 +241,10 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 	if (dbg) std::cerr << "[cta-test] building near-degenerate A" << std::endl;
 	Matrix<Scalar, MatrixFormat::Dense> A0 = make_near_degenerate_hermitian<Scalar>(n, batch, /*seed=*/1337, Real(1e-3));
 	Matrix<Scalar, MatrixFormat::Dense> A_cta = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 	if (dbg) std::cerr << "[cta-test] A built" << std::endl;
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-	if (dbg) std::cerr << "[cta-test] running NETLIB reference" << std::endl;
-#if BATCHLAS_HAS_HOST_BACKEND
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::EigenVectors, Uplo::Lower));
-		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
-	}
-#endif
-	if (dbg) std::cerr << "[cta-test] NETLIB done" << std::endl;
 
 	if (dbg) std::cerr << "[cta-test] running CTA" << std::endl;
 	for (auto scheme : kCtaUpdateSchemes) {
@@ -359,26 +258,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
-		std::vector<Real> w_cta_sorted(static_cast<std::size_t>(n));
-		for (int i = 0; i < n; ++i) {
-			w_cta_sorted[static_cast<std::size_t>(i)] = W_cta[static_cast<std::size_t>(i)];
-		}
-		std::sort(w_cta_sorted.begin(), w_cta_sorted.end());
-
-		const Real tol_w = test_utils::tolerance<Scalar>() * Real(5);
-#if BATCHLAS_HAS_HOST_BACKEND
-		std::vector<Real> w_ref_sorted(static_cast<std::size_t>(n));
-		for (int i = 0; i < n; ++i) {
-			w_ref_sorted[static_cast<std::size_t>(i)] = W_ref[static_cast<std::size_t>(i)];
-		}
-		std::sort(w_ref_sorted.begin(), w_ref_sorted.end());
-		for (int i = 0; i < n; ++i) {
-			ASSERT_NEAR(w_cta_sorted[static_cast<std::size_t>(i)], w_ref_sorted[static_cast<std::size_t>(i)], tol_w)
-				<< "eigenvalue mismatch (sorted) i=" << i;
-		}
-#else
-		(void)tol_w;
-#endif
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n, /*sorted_copy=*/true);
 
 		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
 	}

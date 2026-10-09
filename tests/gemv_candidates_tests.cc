@@ -57,11 +57,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -99,7 +94,7 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -107,8 +102,8 @@ Problem<T> make_problem(const Spec& s) {
     using R = RealOf<T>;
     Problem<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.5), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : mk<T>(R(-0.75), R(0.25));
+    p.alpha = batchlas::verify::make<T>(R(1.5), R(-0.5));
+    p.beta = s.beta_zero ? T(0) : batchlas::verify::make<T>(R(-0.75), R(0.25));
     p.lda = s.m + 3;
     p.sa = p.lda * std::max(s.n, 1) + 5;
     p.sx = p.incx * std::max(s.red(), 1) + 7;
@@ -123,12 +118,12 @@ Problem<T> make_problem(const Spec& s) {
         const int r = it % reps;
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.xi(r, i)];
+                p.mem[p.ai(it, i, j)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.xi(r, i)];
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.yi(r, i)];
+                p.mem[p.yi(it, i)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.yi(r, i)];
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;

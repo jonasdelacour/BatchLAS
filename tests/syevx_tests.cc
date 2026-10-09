@@ -11,6 +11,7 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/settings.hh>
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 #include <tuple>
 #include <cstdlib>
 #include <string>
@@ -539,33 +540,12 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
 
     if (!want_vectors) return;
 
-    // Residual against the ORIGINAL A: this is what proves the back-transform.
-    for (int b = 0; b < batch; ++b) {
-        for (int j = 0; j < neig; ++j) {
-            const float lambda = W[b * neig + j];
-            float res2 = 0.0f, vnorm2 = 0.0f;
-            for (int r = 0; r < n; ++r) {
-                float av = 0.0f;
-                for (int c = 0; c < n; ++c) av += A.view()(r, c, b) * V.view()(c, j, b);
-                const float d = av - lambda * V.view()(r, j, b);
-                res2 += d * d;
-                vnorm2 += V.view()(r, j, b) * V.view()(r, j, b);
-            }
-            EXPECT_NEAR(std::sqrt(vnorm2), 1.0f, 1e-3f)
-                << "eigenvector not normalized, batch " << b << " column " << j;
-            EXPECT_LE(std::sqrt(res2) / std::max(std::abs(lambda), 1e-5f), 2e-3f)
-                << "residual too large, batch " << b << " column " << j;
-        }
-        // Orthonormality of the returned block.
-        for (int i = 0; i < neig; ++i) {
-            for (int j = i + 1; j < neig; ++j) {
-                float dot = 0.0f;
-                for (int r = 0; r < n; ++r) dot += V.view()(r, i, b) * V.view()(r, j, b);
-                EXPECT_LE(std::abs(dot), 1e-3f)
-                    << "columns " << i << "," << j << " not orthogonal in batch " << b;
-            }
-        }
-    }
+    // Residual against the ORIGINAL A: this is what proves the back-transform. V is n x neig, so the
+    // orthogonality n is its row count (verification.md).
+    const auto items = verify::all_items(batch);
+    const VectorView<float> w(W, neig, batch);
+    EXPECT_VERIFY(float, verify::Check::eigen_residual, n, verify::eigen_residual(A.view(), V.view(), w, items));
+    EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, n, verify::orthogonality(V.view(), items));
 }
 
 TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {

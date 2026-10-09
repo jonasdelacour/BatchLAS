@@ -143,7 +143,7 @@ struct SytrdSb2stConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 // Ascending eigenvalues of the tridiagonal (d, e), overwriting d; e is not modified. Computed in
 // double by the library's LAPACKE reference.
 template <typename Real>
@@ -247,7 +247,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
 
     // SB2ST outputs tridiagonal (d,e). Use host LAPACK STERF to compute its eigenvalues.
     // Note: STERF overwrites (d,e), so copy into scratch buffers.
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
     UnifiedVector<Real> d_tri(static_cast<size_t>(n));
     UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
@@ -350,7 +350,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     sytrd_band_reduction(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, ws2.to_span(), params).wait();
 
     // Compute eigenvalues of returned tridiagonal (d,e) via host LAPACK STERF.
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
     UnifiedVector<Real> d_tri(static_cast<size_t>(n));
     UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
@@ -437,7 +437,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
             UnifiedVector<Real> d_tri(static_cast<size_t>(n));
             UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
 
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
             for (int b = 0; b < batch; ++b) {
                 for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
                 for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);

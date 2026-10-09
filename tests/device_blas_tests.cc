@@ -235,24 +235,6 @@ double maxabs(const V& m) {
     return batchlas::verify::max_abs(m, 0);
 }
 
-// max over C of |alpha| (|op(A)||op(B)|)_ij + |beta||C0_ij|: the largest denominator of the componentwise error.
-template <class VA, class VB, class VC0, class D>
-double max_denominator(const VA& A, batchlas::verify::Shape sa, Transpose ta, const VB& B, batchlas::verify::Shape sb, Transpose tb,
-                       const VC0& C0, D alpha, D beta) {
-    namespace vd = batchlas::verify::detail;
-    const auto opA = vd::apply_op(vd::shaped_dense(vd::item_of(A, 0), sa), ta);
-    const auto opB = vd::apply_op(vd::shaped_dense(vd::item_of(B, 0), sb), tb);
-    const auto c0 = vd::item_of(C0, 0);
-    double worst = 0;
-    for (int j = 0; j < opB.cols; ++j)
-        for (int i = 0; i < opA.rows; ++i) {
-            double acc = 0;
-            for (int l = 0; l < opA.cols; ++l) acc += std::abs(opA(i, l)) * std::abs(opB(l, j));
-            worst = std::max(worst, std::abs(alpha) * acc + std::abs(beta) * std::abs(vd::get(c0, i, j)));
-        }
-    return worst;
-}
-
 // Everything below judges C (rows x cols) against C0 (the snapshot) with the given product error.
 template <typename T>
 void expect_c_close(double err, int k, double old_tol, double scale, const char* what) {
@@ -267,7 +249,7 @@ void expect_gemm_close(const DenseView<T>& a, Transpose ta, const DenseView<T>& 
     const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
     const int k = ta == Transpose::NoTrans ? a.cols() : a.rows();
     const double err = gemm_backward_error(a, Shape::general, ta, b, Shape::general, tb, c_before, c, Shape::general, up(alpha), up(beta));
-    expect_c_close<T>(err, k, old_tol, max_denominator(a, Shape::general, ta, b, Shape::general, tb, c_before, up(alpha), up(beta)), "gemm");
+    expect_c_close<T>(err, k, old_tol, batchlas::verify::gemm_max_denominator(a, Shape::general, ta, b, Shape::general, tb, c_before, up(alpha), up(beta)), "gemm");
 }
 
 template <typename T>
@@ -280,8 +262,8 @@ void expect_symm_close(const DenseView<T>& a, Side side, Uplo uplo, const DenseV
         ? gemm_backward_error(a, sym, Transpose::NoTrans, b, Shape::general, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta))
         : gemm_backward_error(b, Shape::general, Transpose::NoTrans, a, sym, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta));
     const double den = side == Side::Left
-        ? max_denominator(a, sym, Transpose::NoTrans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
-        : max_denominator(b, Shape::general, Transpose::NoTrans, a, sym, Transpose::NoTrans, c_before, up(alpha), up(beta));
+        ? batchlas::verify::gemm_max_denominator(a, sym, Transpose::NoTrans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
+        : batchlas::verify::gemm_max_denominator(b, Shape::general, Transpose::NoTrans, a, sym, Transpose::NoTrans, c_before, up(alpha), up(beta));
     expect_c_close<T>(err, a.rows(), old_tol, den, "symm");
 }
 
@@ -296,8 +278,8 @@ void expect_trmm_close(const DenseView<T>& a, Side side, Uplo uplo, Transpose tr
         ? gemm_backward_error(a, tri, trans, b, Shape::general, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta))
         : gemm_backward_error(b, Shape::general, Transpose::NoTrans, a, tri, trans, c_before, c, Shape::general, up(alpha), up(beta));
     const double den = side == Side::Left
-        ? max_denominator(a, tri, trans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
-        : max_denominator(b, Shape::general, Transpose::NoTrans, a, tri, trans, c_before, up(alpha), up(beta));
+        ? batchlas::verify::gemm_max_denominator(a, tri, trans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
+        : batchlas::verify::gemm_max_denominator(b, Shape::general, Transpose::NoTrans, a, tri, trans, c_before, up(alpha), up(beta));
     expect_c_close<T>(err, a.rows(), old_tol, den, "trmm");
 }
 
@@ -319,7 +301,7 @@ void expect_syrk_close(const DenseView<T>& a, Uplo uplo, Transpose trans, const 
     const int k = nt ? a.cols() : a.rows();
     const double err = gemm_backward_error(a, Shape::general, trans, a, Shape::general, nt ? Transpose::Trans : Transpose::NoTrans, c_before, c,
                                            uplo == Uplo::Lower ? Shape::lower : Shape::upper, up(alpha), up(beta));
-    expect_c_close<T>(err, k, old_tol, max_denominator(a, Shape::general, trans, a, Shape::general, nt ? Transpose::Trans : Transpose::NoTrans, c_before, up(alpha), up(beta)), "syrk");
+    expect_c_close<T>(err, k, old_tol, batchlas::verify::gemm_max_denominator(a, Shape::general, trans, a, Shape::general, nt ? Transpose::Trans : Transpose::NoTrans, c_before, up(alpha), up(beta)), "syrk");
     expect_triangle_untouched(uplo, c0, c);
 }
 

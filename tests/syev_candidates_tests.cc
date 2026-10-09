@@ -55,16 +55,6 @@ constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
 template <typename T>
-T from(cd v) {
-    if constexpr (kCx<T>) return T(RealOf<T>(v.real()), RealOf<T>(v.imag()));
-    else return T(v.real());
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -102,7 +92,7 @@ struct Eig {
 
 template <typename T>
 T poison() {
-    return from<T>(cd(-9.0e3, 7.0e3));
+    return batchlas::verify::make<T>(cd(-9.0e3, 7.0e3));
 }
 
 // Graded spectrum +-10^[-2, 2] and a dense complex Householder Q, built in double on the host.
@@ -136,7 +126,7 @@ Eig<T> make_eig(const Spec& s) {
                 cd a = 0;
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
-                p.mem[p.at(it, i, j)] = from<T>(a);
+                p.mem[p.at(it, i, j)] = batchlas::verify::make<T>(a);
             }
         std::sort(lam.begin(), lam.end());
         p.lambda.push_back(lam);
@@ -176,7 +166,7 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
             for (int j = 0; j < n; ++j)
                 for (int i = j; i < n; ++i) {
                     const T v = p.mem0[p.stored(i, j) ? p.at(it, i, j) : p.at(it, j, i)];
-                    lower[std::size_t(it) * n * n + std::size_t(j) * n + i] = p.stored(i, j) ? v : from<T>(std::conj(up(v)));
+                    lower[std::size_t(it) * n * n + std::size_t(j) * n + i] = p.stored(i, j) ? v : batchlas::verify::conj(v);
                 }
         const MVof<T> A0(lower.data(), n, n, n, n * n, items.back() + 1);
         const MVof<T> V(const_cast<T*>(p.mem.data()), n, n, p.ld, p.stride, s.batch);
