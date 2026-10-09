@@ -1,8 +1,9 @@
 // trsm for the tuner (flat-kernel-selection-phase3-plan.md §1.2, §3): a strongly diagonally
 // dominant triangular A (other triangle poisoned with a large finite value), random B, alpha with
-// an imaginary part, and the componentwise backward error of op(A) X = alpha B (Left) or X op(A) = alpha B (Right) on
-// items 0 and batch-1. trans=T times ConjTrans for a complex scalar (what the library's callers
-// issue; the key folds C into T). blocked's times include the public gemm it calls.
+// an imaginary part, and the componentwise backward error of op(A) X = alpha B (Left) or
+// X op(A) = alpha B (Right) through batchlas::verify (docs/design/verification.md). trans=T times
+// ConjTrans for a complex scalar (what the library's callers issue; the key folds C into T).
+// blocked's times include the public gemm it calls.
 //
 // uplo and diag are not table keys (plan §1.2). They are hidden grid axes fixed at L and N, so
 // the invariance A/B is a flag: `--grid uplo=L:U --grid diag=N:U --no-refine` with --raw only.
@@ -12,10 +13,13 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/inputs.hh>
+#include <batchlas/verify/items.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/trsm/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -33,7 +37,6 @@ constexpr int kMaxCheckedRhs = 32;  // host check cost is order^2 per rhs; sampl
 template <class T>
 struct TrsmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Side side;
     Uplo uplo;
@@ -50,28 +53,24 @@ struct TrsmProblem {
         : q(q_), side(s), uplo(u), trans(t), diag(d), order(order_), nrhs(q_rhs), batch(batch_),
           brows(s == Side::Left ? order_ : q_rhs), bcols(s == Side::Left ? q_rhs : order_), lda(order_ + ld_pad),
           ldb(brows + ld_pad), sa(std::size_t(lda) * std::size_t(order_)), sb(std::size_t(ldb) * std::size_t(bcols)),
-          alpha(mk<T>(1.5, -0.5)), A(sa * std::size_t(batch_)), B0(sb * std::size_t(batch_)), X(sb * std::size_t(batch_)),
-          pA(std::size_t(batch_)), pB0(std::size_t(batch_)), pX(std::size_t(batch_)),
+          alpha(batchlas::verify::make<T>(1.5, -0.5)), A(sa * std::size_t(batch_)), B0(sb * std::size_t(batch_)),
+          X(sb * std::size_t(batch_)), pA(std::size_t(batch_)), pB0(std::size_t(batch_)), pX(std::size_t(batch_)),
           Av(A.data(), order, order, lda, int(sa), batch, pA.data()),
           B0v(B0.data(), brows, bcols, ldb, int(sb), batch, pB0.data()),
           Xv(X.data(), brows, bcols, ldb, int(sb), batch, pX.data()) {
         // Off-diagonal row mass <= 0.56*(pi^2/6 - 1) ~ 0.36 against a diagonal of 1 or ~2.06: well
         // conditioned for NonUnit and Unit alike. The coupling must not shrink with order, or a
-        // lost trailing block (blocked's gemm) stays under Tol<float> from order 256 up.
+        // lost trailing block (blocked's gemm) stays under the float bound from order 256 up.
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < order; ++c)
                 for (int r = 0; r < order; ++r) {
                     const bool in_tri = uplo == Uplo::Lower ? r >= c : r <= c;
                     const double w = 0.5 / ((1.0 + std::abs(r - c)) * (1.0 + std::abs(r - c)));
                     A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] =
-                        r == c ? mk<T>(2.0, 0.5) : (in_tri ? mk<T>(w, 0.5 * w) : mk<T>(1e6, 0.0));
+                        r == c ? batchlas::verify::make<T>(2.0, 0.5)
+                        : batchlas::verify::make<T>(in_tri ? w : 1e6, in_tri ? 0.5 * w : 0.0);
                 }
-        Rng rg(4242);
-        for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < bcols; ++c)
-                for (int r = 0; r < brows; ++r)
-                    B0[std::size_t(b) * sb + std::size_t(c) * std::size_t(ldb) + std::size_t(r)] =
-                        mk<T>(rg.next(), rg.next());
+        batchlas::verify::fill_random(B0v, 4242);
     }
     void reset() {  // the solve overwrites B with X
         (void)MV::copy(q, Xv, B0v);
@@ -88,41 +87,49 @@ struct TrsmProblem {
         (void)trsm<kBackend, T>(q, Av, Xv, alpha, side, uplo, trans, diag);
         q.wait();
     }
-    D opA(std::size_t o, int r, int c) const {
-        const int sr = trans == Transpose::NoTrans ? r : c, sc = trans == Transpose::NoTrans ? c : r;
-        if (uplo == Uplo::Lower ? sr < sc : sr > sc) return D(0);
-        if (sr == sc && diag == Diag::Unit) return D(1);
-        const D v = up(A[o + std::size_t(sc) * std::size_t(lda) + std::size_t(sr)]);
-        return trans == Transpose::ConjTrans ? cj(v) : v;
-    }
     // Componentwise backward error, max over sampled rhs and rows i of
-    // |op(A) X - alpha B|_i / (|op(A)| |X| + |alpha| |B|)_i. A normwise residual averages a lost
-    // 32-wide trailing block over the whole matrix and passes Tol<float> from order ~1024 up
-    // (2e-4); componentwise it is ~0.3 against ~5e-8 for a correct float solve at every order.
+    // |op(A) X - alpha B|_i / (|op(A)| |X| + |alpha| |B|)_i: gemm_backward_error with C = 0, C0 = B0,
+    // beta = -alpha, over packed copies of the sampled rhs (Left: columns of X; Right: rows). A
+    // normwise residual averages a lost 32-wide trailing block over the whole matrix and passes a
+    // float bound from order ~1024 up (2e-4); componentwise it is ~0.3 against ~5e-8 for a correct
+    // float solve at every order.
     std::pair<double, int> verify() {
+        using V = MatrixView<T, MatrixFormat::Dense>;
+        using batchlas::verify::Shape;
+        const bool unit = diag == Diag::Unit, left = side == Side::Left;
+        const Shape shape = uplo == Uplo::Lower ? (unit ? Shape::unit_lower : Shape::lower)
+                                                : (unit ? Shape::unit_upper : Shape::upper);
         std::vector<int> rhs;
         for (int i = 0; i < std::min(nrhs, kMaxCheckedRhs); ++i)
             rhs.push_back(nrhs <= kMaxCheckedRhs ? i : int(std::int64_t(i) * (nrhs - 1) / (kMaxCheckedRhs - 1)));
+        const int nr = int(rhs.size());
+        const std::size_t len = std::size_t(order) * std::size_t(nr);
+        std::vector<T> xs(len), b0s(len), zero(len, T(0));
+        // Element (t, i) of rhs i in the packed copy: Left order x nr, Right nr x order.
+        auto at = [&](int t, int i) { return left ? std::size_t(i) * std::size_t(order) + std::size_t(t)
+                                                  : std::size_t(t) * std::size_t(nr) + std::size_t(i); };
+        const int ldp = left ? order : nr;
         double worst = 0;
-        const double aal = ab(up(alpha));
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, ob = std::size_t(b) * sb;
-            auto x = [&](int r, int c) { return up(X[ob + std::size_t(c) * std::size_t(ldb) + std::size_t(r)]); };
-            auto b0 = [&](int r, int c) { return up(B0[ob + std::size_t(c) * std::size_t(ldb) + std::size_t(r)]); };
-            for (int j : rhs)
-                for (int i = 0; i < order; ++i) {
-                    // Left: rhs j is column j of X; Right: rhs j is row j.
-                    const int xr = side == Side::Left ? i : j, xc = side == Side::Left ? j : i;
-                    D acc = D(0);
-                    double mag = 0;
-                    for (int k = 0; k < order; ++k) {
-                        const D t = side == Side::Left ? opA(oa, i, k) * x(k, j) : x(j, k) * opA(oa, k, i);
-                        acc += t;
-                        mag += ab(t);
-                    }
-                    const double num = ab(acc - up(alpha) * b0(xr, xc)), den = mag + aal * ab(b0(xr, xc));
-                    worst = nanmax(worst, den > 0 ? num / den : num);
+        for (int b : batchlas::verify::default_items(batch)) {
+            const std::size_t ob = std::size_t(b) * sb;
+            for (int i = 0; i < nr; ++i)
+                for (int t = 0; t < order; ++t) {
+                    const int r = left ? t : rhs[std::size_t(i)], c = left ? rhs[std::size_t(i)] : t;
+                    const std::size_t o = ob + std::size_t(c) * std::size_t(ldb) + std::size_t(r);
+                    xs[at(t, i)] = X[o];
+                    b0s[at(t, i)] = B0[o];
                 }
+            const V a(A.data() + std::size_t(b) * sa, order, order, lda);
+            const V x = left ? V(xs.data(), order, nr, ldp) : V(xs.data(), nr, order, ldp);
+            const V b0 = left ? V(b0s.data(), order, nr, ldp) : V(b0s.data(), nr, order, ldp);
+            const V z = left ? V(zero.data(), order, nr, ldp) : V(zero.data(), nr, order, ldp);
+            const auto one = batchlas::verify::up(T(1)), nal = -batchlas::verify::up(alpha);
+            const Transpose nt = Transpose::NoTrans;
+            const double e = left ? batchlas::verify::gemm_backward_error(a, shape, trans, x, Shape::general, nt, b0, z,
+                                                                          Shape::general, one, nal)
+                                  : batchlas::verify::gemm_backward_error(x, Shape::general, nt, a, shape, trans, b0, z,
+                                                                          Shape::general, one, nal);
+            worst = batchlas::verify::nanmax(worst, e);
         }
         return {worst, 0};
     }
@@ -184,8 +191,9 @@ public:
             const Diag diag = get("diag", "N") == "U" ? Diag::Unit : Diag::NonUnit;
             TrsmProblem<T> p(*q, side, uplo, trans, diag, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
-            return run_arms<S::TrsmChoice>("trsm", p, req, Tol<T>::v);
+            const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::solve, p.order);
+            if (req.mode == "race") return run_race<S::TrsmChoice>("trsm", p, req, tol);
+            return run_arms<S::TrsmChoice>("trsm", p, req, tol);
         });
     }
 };

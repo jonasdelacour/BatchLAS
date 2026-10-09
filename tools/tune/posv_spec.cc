@@ -1,15 +1,17 @@
 // posv for the tuner (flat-kernel-selection-phase3-plan.md §1.1): SPD A, random B, the
-// factor_bench solve residual on items 0 and batch-1. posv's cta and blocked times include the
-// public potrf and trsm the composition calls, each choosing for itself (plan §2 "Coupling").
+// batchlas::verify solve residual (docs/design/verification.md). posv's cta and blocked times
+// include the public potrf and trsm the composition calls, each choosing for itself (plan §2 "Coupling").
 
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/inputs.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/posv/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <string>
@@ -41,13 +43,8 @@ struct PosvProblem {
           pX(std::size_t(batch_)), A0v(A0.data(), n, n, lda, int(sa), batch, pA0.data()),
           Av(A.data(), n, n, lda, int(sa), batch, pA.data()), B0v(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data()),
           Xv(X.data(), n, nrhs, ldb, int(sb), batch, pX.data()), info(std::size_t(batch_), 0) {
-        fill_spd<T>(A0.data(), n, lda, sa, batch);
-        Rng rg(777);
-        for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < nrhs; ++c)
-                for (int r = 0; r < n; ++r)
-                    B0[std::size_t(b) * sb + std::size_t(c) * std::size_t(ldb) + std::size_t(r)] =
-                        mk<T>(rg.next(), rg.next());
+        batchlas::verify::fill_spd(A0v);
+        batchlas::verify::fill_random(B0v, 777);
     }
     std::size_t workspace() { return posv_buffer_size<kBackend, T>(q, Av, Xv, uplo); }
     void reset() {  // the solve overwrites A with the factor and B with X
@@ -65,7 +62,7 @@ struct PosvProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        return {solve_residual<T>(X.data(), B0.data(), A0.data(), n, nrhs, lda, sa, ldb, sb, batch), bad};
+        return {batchlas::verify::solve_residual(A0v, Xv, B0v), bad};
     }
 };
 
@@ -120,8 +117,9 @@ public:
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PosvProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                              int(key_int(req.key, "batch")), req.ld_pad, uplo);
-            if (req.mode == "race") return run_race<S::PosvChoice>("posv", p, req, Tol<T>::v);
-            return run_arms<S::PosvChoice>("posv", p, req, Tol<T>::v);
+            const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::solve, p.n);
+            if (req.mode == "race") return run_race<S::PosvChoice>("posv", p, req, tol);
+            return run_arms<S::PosvChoice>("posv", p, req, tol);
         });
     }
 };

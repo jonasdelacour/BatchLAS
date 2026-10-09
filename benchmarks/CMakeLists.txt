@@ -80,10 +80,8 @@ endfunction()
 function(batchlas_add_benchmark_target target_name)
     add_executable(${target_name} ${target_name}.cc)
     batchlas_configure_binary_target(${target_name})
-    # batchlas::verify brings LAPACKE (the accuracy benchmarks' references) and
-    # BATCHLAS_VERIFY_HAVE_LAPACKE to every benchmark. Deliberately every one rather than a name
-    # list: the reference helpers in miniacc_accuracy_common.hh are inline templates and land in
-    # whichever TU instantiates them, and a list goes stale on the next accuracy benchmark.
+    # batchlas::verify carries LAPACKE for the accuracy benchmarks' references (libbatchlas_backends
+    # links Netlib PRIVATE, so a direct caller must ask for it) and the include path.
     target_link_libraries(${target_name} PRIVATE batchlas::verify)
     batchlas_register_benchmark(${target_name})
 endfunction()
