@@ -194,6 +194,10 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
         for (ArmOutcome& a : arms) b.once(a);
         return arms;
     }
+    if (req.mode == "verify") {
+        for (ArmOutcome& a : arms) b.verify(a, tol);
+        return arms;
+    }
     std::vector<std::size_t> base(arms.size());
     for (std::size_t i = 0; i < base.size(); ++i) base[i] = req.reverse ? base.size() - 1 - i : i;
     b.warm(base, req.warm_s * double(b.live()));

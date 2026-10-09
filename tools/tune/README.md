@@ -187,6 +187,11 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   in the fresh run, is a mismatch: the ledger gets
   an `audit` record either way, and on a mismatch the run line is rewritten with
   `wm.<op>.<dtype>: fresh` and the rest of that op and dtype runs in fresh children.
+- **ld audit.** Each candidate's first verified cell per op and dtype is verified once more, in the
+  same worker or child, at `ld_pad + 3`; a failure makes the arm `bad` there (reason `ld audit: ...`),
+  prints `ld audit FAILED`, and the summary gives passed/skipped/failed per op and dtype. The audit
+  above ignores an ld-audit failure (its fresh child verifies at the natural ld).
+  Rationale: [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-ld-audit).
 - **Ledger.** One run file per (op, dtype) under `--ledger`, opened at the first record. Its `run`
   record always carries the op's full key spec and candidate list, whatever `--grid` narrowed.
 - **Estimate.** Per cell: 0.49 s child start-up (`--cell-overhead-s`) plus, per candidate,
@@ -203,6 +208,8 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
   `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
   `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`,
+  `{"ev":"ld_audit",<op, dtype, key fields>,"cand":c,"verdict":"fail","reason":r}`,
+  `{"ev":"ld_audit_summary","op":o,"dtype":d,"passed":p,"skipped":s,"failed":f,"failures":"..."}`,
   `{"ev":"schedule","switches":s,"restarts":r,"switch_restarts":k}`, `{"ev":"done"}`.
 
 ## Protocol (§6.3) and where it lives

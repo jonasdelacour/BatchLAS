@@ -139,6 +139,7 @@ struct Job {
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     bool audited = false;  // until set, the next eligible worker cell is audited whatever the hash says
+    LdAuditBook ld;        // under TieredRun::mu_
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
@@ -293,11 +294,21 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
 }
 
 // A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
-void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
+void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
+    // The cell already had its ld audit; an arm it failed is a verdict on ld, not on the worker.
+    CellJob job = job_in;
+    job.ld_audit.clear();
+    auto ld_failed = [&](const std::string& arm) {
+        return std::any_of(warm.arms.begin(), warm.arms.end(), [&](const ArmOutcome& x) {
+            return x.arm == arm && x.ld_audit == "fail";
+        });
+    };
+    job.arms.erase(std::remove_if(job.arms.begin(), job.arms.end(), ld_failed), job.arms.end());
     const ArmBatch f = m_->measure_fresh(job);
     std::vector<ArmOutcome> on_worker;
     for (const ArmOutcome& x : warm.arms)
-        if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end()) on_worker.push_back(x);
+        if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end() && !ld_failed(x.arm))
+            on_worker.push_back(x);
     const AuditResult a = audit_compare(on_worker, f.arms, j.cands);
     const std::string od = j.spec->op() + "." + j.dtype;
     bool flipped = false;
@@ -326,9 +337,23 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     {
         std::lock_guard<std::mutex> lock(mu_);
         job.arms = seed_order(j.mine, c.key, c.arms);
+        job.ld_audit = j.ld.want(c.arms);
         worker = m_->persistent() && !j.fresh;
     }
     ArmBatch b = worker ? m_->measure(job) : m_->measure_fresh(job);
+    std::vector<std::string> ld_failed;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        ld_failed = j.ld.note(c.key, b.arms);
+    }
+    for (const ArmOutcome& a : b.arms) {
+        if (std::find(ld_failed.begin(), ld_failed.end(), a.arm) == ld_failed.end()) continue;
+        std::printf("[gpu%d] %s %s %s ld audit FAILED: %s %s\n", gpu, op.c_str(), j.dtype.c_str(),
+                    key_text(c.key).c_str(), a.arm.c_str(), a.reason.c_str());
+        std::fflush(stdout);
+        emit(Json().str("ev", "ld_audit").str("op", op).str("dtype", j.dtype).key(c.key).str("cand", a.arm)
+                 .str("verdict", "fail").str("reason", a.reason));
+    }
     if (b.worker_restarts > 0)
         emit(Json().str("ev", "worker_restart").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
                  .integer("restarts", b.worker_restarts).boolean("fallback", b.fallback));
@@ -598,6 +623,14 @@ int TieredRun::go() {
         std::printf("== summary %s %s: measured %zu lattice + %zu refinement cells, per round %s; planned ~%.0f "
                     "refinement%s; wall %.1f s\n", j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], refined,
                     rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", j->wall);
+    }
+    for (auto& j : jobs_) {
+        std::printf("== summary %s %s ld audit (ld +%d): %zu passed, %zu skipped, %zu failed\n", j->spec->op().c_str(),
+                    j->dtype.c_str(), kLdAuditPad, j->ld.passed, j->ld.skipped, j->ld.failed.size());
+        for (const std::string& f : j->ld.failed) std::printf("   ld audit FAILED %s\n", f.c_str());
+        emit(Json().str("ev", "ld_audit_summary").str("op", j->spec->op()).str("dtype", j->dtype)
+                 .integer("passed", std::int64_t(j->ld.passed)).integer("skipped", std::int64_t(j->ld.skipped))
+                 .integer("failed", std::int64_t(j->ld.failed.size())).str("failures", join(j->ld.failed, "; ")));
     }
     std::printf("== summary workers: %zu (op, dtype) switches; %zu carve-out restarts by footprint order, %zu of "
                 "them at a switch\n", switches_, restarts_, switch_restarts_);

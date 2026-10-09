@@ -32,7 +32,8 @@ std::string request_line(const std::string& op, const CellRequest& r) {
         .str("mode", r.mode).integer("reps", r.reps).num("warm", r.warm_s).boolean("reverse", r.reverse)
         .integer("ld_pad", r.ld_pad).str("tier", r.tier).integer("min_reps", r.min_reps)
         .integer("max_reps", r.max_reps).num("confidence", r.confidence)
-        .boolean("alternate_reverse", r.alternate_reverse).str("seed_order", join(r.seed_order, ",")).line();
+        .boolean("alternate_reverse", r.alternate_reverse).str("seed_order", join(r.seed_order, ","))
+        .str("ld_audit", join(r.ld_audit, ",")).line();
 }
 
 std::optional<std::pair<std::string, CellRequest>> parse_request(const std::string& line, std::string* err) {
@@ -54,6 +55,7 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
         r.confidence = rec->number("confidence");
         r.alternate_reverse = rec->get("alternate_reverse") == "true";
         r.seed_order = split(rec->get("seed_order"), ',');
+        r.ld_audit = split(rec->get("ld_audit"), ',');
     } catch (const std::exception& e) {
         if (err) *err = e.what();
         return std::nullopt;
@@ -71,7 +73,7 @@ std::string outcome_text(const std::vector<ArmOutcome>& arms) {
     for (const ArmOutcome& o : arms) {
         out += Json().str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
                    .num("median_ms", median(o.ms)).num("residual", o.residual).integer("info_nonzero", o.info_nonzero)
-                   .integer("reps", static_cast<std::int64_t>(o.ms.size())).line();
+                   .integer("reps", static_cast<std::int64_t>(o.ms.size())).str("ld_audit", o.ld_audit).line();
         for (std::size_t r = 0; r < o.ms.size(); ++r)
             out += Json().str("kind", "rep").str("arm", o.arm).integer("rep", static_cast<std::int64_t>(r))
                        .integer("slot", r < o.slot.size() ? o.slot[r] : 0).num("ms", o.ms[r]).line();
@@ -99,6 +101,7 @@ std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs) {
             o.reason = r.get("reason");
             o.residual = r.number("residual");
             o.info_nonzero = static_cast<int>(std::atoll(r.get("info_nonzero", "0").c_str()));
+            o.ld_audit = r.get("ld_audit");
         }
     }
     return out;

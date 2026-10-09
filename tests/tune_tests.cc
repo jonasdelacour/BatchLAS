@@ -3378,3 +3378,195 @@ TEST(TuneTieredDriver, AMultiOpRunSkipsTheDtypesASpecRefusesWithOneNote) {
     o.ops = {"fakereal"};
     EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake"}, &m), std::invalid_argument) << "a single-op run still refuses";
 }
+
+// ---- the ld audit (spec.hh kLdAuditPad) ------------------------------------------------------
+
+namespace {
+
+// verify at a padded ld: "a" fails its residual, "b" passes, "c" is refused; race: everything ok but "d".
+class LdAuditSpec : public FakeSpec {
+public:
+    mutable std::vector<CellRequest> calls;
+    bool throw_on_verify = false;
+    std::string op() const override { return "ldauditop"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+        calls.push_back(req);
+        if (req.mode == "verify" && throw_on_verify) throw std::runtime_error("device lost");
+        std::vector<ArmOutcome> out;
+        for (const std::string& a : req.arms) {
+            ArmOutcome o = arm(a, "ok", {1.0});
+            if (req.mode == "verify" && req.ld_pad > 0 && a == "a") o.status = "bad", o.reason = "residual", o.residual = 0.5;
+            if (req.mode == "verify" && a == "c") o.status = "skipped", o.reason = "pin refused";
+            if (req.mode != "verify" && a == "d") o.status = "bad", o.reason = "residual";
+            out.push_back(o);
+        }
+        return out;
+    }
+};
+
+const ArmOutcome& outcome(const std::vector<ArmOutcome>& v, const std::string& a) {
+    return *std::find_if(v.begin(), v.end(), [&](const ArmOutcome& o) { return o.arm == a; });
+}
+
+}  // namespace
+
+TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
+    LdAuditSpec s;
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b", "c", "d", "e"};
+    r.mode = "race";
+    r.ld_pad = 1;
+    r.ld_audit = {"a", "b", "c", "d"};
+    const auto out = run_cell_audited(s, r);
+    ASSERT_EQ(s.calls.size(), 2u);
+    EXPECT_EQ(s.calls[1].mode, "verify");
+    EXPECT_EQ(s.calls[1].ld_pad, 1 + kLdAuditPad);
+    EXPECT_EQ(s.calls[1].arms, (std::vector<std::string>{"a", "b", "c"})) << "d failed at the natural ld; e was not asked";
+    EXPECT_EQ(outcome(out, "a").status, "bad");
+    EXPECT_EQ(outcome(out, "a").ld_audit, "fail");
+    EXPECT_EQ(outcome(out, "a").reason.rfind("ld audit", 0), 0u) << outcome(out, "a").reason;
+    EXPECT_DOUBLE_EQ(outcome(out, "a").residual, 0.5);
+    EXPECT_EQ(outcome(out, "a").ms, std::vector<double>{1.0}) << "the timing stays; the status makes it unrankable";
+    EXPECT_EQ(outcome(out, "b").status, "ok");
+    EXPECT_EQ(outcome(out, "b").ld_audit, "pass");
+    EXPECT_EQ(outcome(out, "c").status, "ok");
+    EXPECT_EQ(outcome(out, "c").ld_audit, "skipped");
+    EXPECT_EQ(outcome(out, "d").ld_audit, "");
+    EXPECT_EQ(outcome(out, "e").ld_audit, "");
+
+    s.calls.clear();
+    r.mode = "jit";
+    (void)run_cell_audited(s, r);
+    EXPECT_EQ(s.calls.size(), 1u) << "only a timed cell is audited";
+    s.calls.clear();
+    r.mode = "race";
+    r.ld_audit.clear();
+    (void)run_cell_audited(s, r);
+    EXPECT_EQ(s.calls.size(), 1u) << "nothing asked, nothing audited";
+
+    s.throw_on_verify = true;
+    r.ld_audit = {"b"};
+    const auto thrown = run_cell_audited(s, r);
+    EXPECT_EQ(outcome(thrown, "b").status, "bad");
+    EXPECT_EQ(outcome(thrown, "b").ld_audit, "fail");
+    EXPECT_NE(outcome(thrown, "b").reason.find("device lost"), std::string::npos);
+}
+
+TEST(TuneLdAudit, TheBookAuditsEachArmOnceAndKeepsUnverifiedArmsWanted) {
+    LdAuditBook book;
+    EXPECT_EQ(book.want({"a", "b", "c"}), (std::vector<std::string>{"a", "b", "c"}));
+    std::vector<ArmOutcome> cell{arm("a", "bad"), arm("b", "ok"), arm("c", "skipped")};
+    cell[0].ld_audit = "fail", cell[0].reason = "ld audit: residual";
+    cell[1].ld_audit = "pass";
+    EXPECT_EQ(book.note(nkey(4), cell), std::vector<std::string>{"a"});
+    EXPECT_EQ(book.want({"a", "b", "c"}), std::vector<std::string>{"c"}) << "c was never verified, so never audited";
+    EXPECT_EQ(book.passed, 1u);
+    ASSERT_EQ(book.failed.size(), 1u);
+    EXPECT_EQ(book.failed[0], "a @ n=4 batch=1024: ld audit: residual");
+    EXPECT_TRUE(book.note(nkey(8), cell).empty()) << "a second verdict for an audited arm is not counted";
+    EXPECT_EQ(book.passed, 1u);
+    std::vector<ArmOutcome> later{arm("c", "ok")};
+    later[0].ld_audit = "skipped";
+    (void)book.note(nkey(16), later);
+    EXPECT_EQ(book.skipped, 1u);
+    EXPECT_TRUE(book.want({"a", "b", "c"}).empty());
+}
+
+TEST(TuneLdAudit, RequestsAndOutcomesCarryTheAudit) {
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b"};
+    r.mode = "race";
+    r.warm_s = 0.1;
+    r.ld_audit = {"b", "a"};
+    const auto got = parse_request(request_line("fakeop", r));
+    ASSERT_TRUE(got);
+    EXPECT_EQ(got->second.ld_audit, r.ld_audit);
+    r.ld_audit.clear();
+    EXPECT_TRUE(parse_request(request_line("fakeop", r))->second.ld_audit.empty());
+
+    std::vector<ArmOutcome> arms{arm("a", "bad", {1.0}), arm("b", "ok", {2.0})};
+    arms[0].ld_audit = "fail";
+    arms[1].ld_audit = "pass";
+    std::vector<Record> recs;
+    std::istringstream text(outcome_text(arms));
+    for (std::string line; std::getline(text, line);) recs.push_back(*parse_record(line));
+    const auto back = outcomes_from_records(recs);
+    EXPECT_EQ(outcome(back, "a").ld_audit, "fail");
+    EXPECT_EQ(outcome(back, "b").ld_audit, "pass");
+}
+
+namespace {
+
+// Honours CellJob::ld_audit as a child would: "a" fails the audit, every other audited arm passes.
+class LdAuditMeasurer : public CellMeasurer {
+public:
+    std::vector<std::vector<std::string>> asked;
+    bool worker = false;  // persistent: the first worker cell gets the carve-out audit too
+    bool persistent() const override { return worker; }
+    ArmBatch measure(const CellJob& j) override {
+        asked.push_back(j.ld_audit);
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            ArmOutcome o = arm(a, "ok", {a == "a" ? 0.5 : 1.0});
+            if (std::find(j.ld_audit.begin(), j.ld_audit.end(), a) != j.ld_audit.end()) {
+                o.ld_audit = a == "a" ? "fail" : "pass";
+                if (a == "a") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
+            }
+            b.arms.push_back(o);
+        }
+        return b;
+    }
+};
+
+}  // namespace
+
+TEST(TuneLdAudit, TheTieredDriverAuditsEachCandidatesFirstCellAndReportsTheFailure) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    LdAuditMeasurer m;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ::close(fd);
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_FALSE(m.asked.empty());
+    EXPECT_EQ(sorted(m.asked[0]), (std::vector<std::string>{"a", "b"}));
+    for (std::size_t i = 1; i < m.asked.size(); ++i) EXPECT_TRUE(m.asked[i].empty()) << "cell " << i;
+    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    std::size_t bad = 0;
+    for (const CellRecord& c : l.cells)
+        for (const CandResult& r : c.cands)
+            if (r.status == "bad") {
+                ++bad;
+                EXPECT_EQ(r.cand, "a");
+                EXPECT_EQ(r.reason.rfind("ld audit", 0), 0u) << r.reason;
+                EXPECT_NE(c.ranked.front(), "a") << "a bad arm is never ranked";
+            }
+    EXPECT_EQ(bad, 1u) << "only the audited cell marks it";
+    EXPECT_NE(out.find("ld audit FAILED: a ld audit"), std::string::npos) << out;
+    EXPECT_NE(out.find("== summary fakeop float ld audit (ld +3): 1 passed, 0 skipped, 1 failed"), std::string::npos) << out;
+    const std::string ev = read_file(events);
+    EXPECT_NE(ev.find("\"ev\": \"ld_audit\""), std::string::npos) << ev;
+    EXPECT_NE(ev.find("\"ev\": \"ld_audit_summary\""), std::string::npos) << ev;
+}
+
+TEST(TuneLdAudit, AnLdAuditFailureIsNotACarveOutMismatch) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    LdAuditMeasurer m;
+    m.worker = true;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find(" audit: ok"), std::string::npos) << out;
+    EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos)
+        << "the fresh child re-verifies at the natural ld, where the arm passes: no worker defect\n" << out;
+}

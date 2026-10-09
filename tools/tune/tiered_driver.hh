@@ -43,6 +43,7 @@ struct CellJob {
     Tier tier = Tier::preview;
     TierParams p{};
     double footprint = 0;  // item_footprint: a worker restarts before a smaller one
+    std::vector<std::string> ld_audit;  // arms not yet ld-audited in this (op, dtype): CellRequest::ld_audit
 };
 
 // One outcome per requested arm; `error` names a child failure that hit every arm.

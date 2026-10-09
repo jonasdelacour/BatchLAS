@@ -220,13 +220,14 @@ int child_main(const std::vector<std::string>& a) {
         else if (a[i] == "--confidence") req.confidence = std::stod(val());
         else if (a[i] == "--alternate-reverse") req.alternate_reverse = true;
         else if (a[i] == "--seed-order") req.seed_order = split(val(), ',');
+        else if (a[i] == "--ld-audit") req.ld_audit = split(val(), ',');
         else if (a[i] == "--result") result = val();
         else die("--cell: unknown argument " + a[i]);
     }
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
     std::ofstream out(result);
-    out << outcome_text(spec->run_cell(req));
+    out << outcome_text(run_cell_audited(*spec, req));
     return out ? 0 : 1;
 }
 
@@ -270,7 +271,7 @@ int worker_main(const std::vector<std::string>& a) {
         if (!req) die("--worker: bad request (" + err + "): " + line);
         const OpSpec* spec = find_spec(req->first);
         if (!spec) die("--worker: unknown op " + req->first);
-        const std::string text = outcome_text(spec->run_cell(req->second)) + Json().str("kind", "done").line();
+        const std::string text = outcome_text(run_cell_audited(*spec, req->second)) + Json().str("kind", "done").line();
         for (std::size_t done = 0; done < text.size();) {
             const ssize_t n = ::write(out, text.data() + done, text.size() - done);
             if (n <= 0) return 1;
@@ -628,6 +629,7 @@ CellRequest Driver::race_request(const CellJob& j) const {
     r.confidence = j.p.confidence;
     r.alternate_reverse = j.p.alternate_reverse;
     r.seed_order = j.arms;
+    r.ld_audit = j.ld_audit;
     return r;
 }
 
@@ -636,6 +638,7 @@ std::vector<std::string> Driver::race_args(const CellJob& j) const {
                                std::to_string(j.p.max_reps), "--confidence", fmt(j.p.confidence, "%.17g"),
                                "--seed-order", join(j.arms, ",")};
     if (j.p.alternate_reverse) a.push_back("--alternate-reverse");
+    if (!j.ld_audit.empty()) a.insert(a.end(), {"--ld-audit", join(j.ld_audit, ",")});
     return a;
 }
 

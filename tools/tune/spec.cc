@@ -22,6 +22,53 @@ const OpSpec* find_spec(std::string_view op) {
 
 std::vector<const OpSpec*> all_specs() { return registry(); }
 
+std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out, const std::vector<std::string>& wanted) {
+    std::vector<std::string> arms;
+    for (const ArmOutcome& o : out)
+        if ((o.status == "ok" || o.status == "eliminated") &&
+            std::find(wanted.begin(), wanted.end(), o.arm) != wanted.end())
+            arms.push_back(o.arm);
+    return arms;
+}
+
+void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit) {
+    for (const ArmOutcome& a : audit)
+        for (ArmOutcome& o : out) {
+            if (o.arm != a.arm) continue;
+            if (a.status == "ok") {
+                o.ld_audit = "pass";
+            } else if (a.status == "skipped") {
+                o.ld_audit = "skipped";
+            } else {
+                o.ld_audit = "fail";
+                o.status = "bad";
+                o.reason = "ld audit: ld_pad +" + std::to_string(kLdAuditPad) + ": " + a.status +
+                           (a.reason.empty() ? "" : " " + a.reason);
+                o.residual = a.residual;
+            }
+        }
+}
+
+std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req) {
+    std::vector<ArmOutcome> out = spec.run_cell(req);
+    if (req.ld_audit.empty() || (req.mode != "race" && req.mode != "time")) return out;
+    CellRequest a = req;
+    a.mode = "verify";
+    a.ld_pad = req.ld_pad + kLdAuditPad;
+    a.arms = ld_audit_arms(out, req.ld_audit);
+    a.seed_order.clear();
+    a.ld_audit.clear();
+    if (a.arms.empty()) return out;
+    std::vector<ArmOutcome> got;
+    try {
+        got = spec.run_cell(a);
+    } catch (const std::exception& e) {
+        for (const std::string& arm : a.arms) got.push_back({arm, "error", e.what(), {}, {}, 0, 0, ""});
+    }
+    apply_ld_audit(out, got);
+    return out;
+}
+
 std::vector<std::int64_t> OpSpec::dims(const std::string& dtype, const CellKey& key) const {
     static_cast<void>(dtype);
     std::vector<std::int64_t> out;

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -86,6 +87,15 @@ struct AuditResult {
 };
 AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
                           const std::vector<std::string>& order, double tie = 0.03, double margin = 0.10);
+
+// One (op, dtype)'s ld audit (spec.hh kLdAuditPad). An arm the cell did not verify stays wanted.
+struct LdAuditBook {
+    std::set<std::string> done;  // arms with a verdict: pass, fail or skipped
+    std::size_t passed = 0, skipped = 0;
+    std::vector<std::string> failed;  // "<arm> @ <key>: <reason>"
+    std::vector<std::string> want(const std::vector<std::string>& arms) const;  // those with no verdict yet
+    std::vector<std::string> note(const CellKey& key, const std::vector<ArmOutcome>& out);  // returns this cell's fails
+};
 
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);

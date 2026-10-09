@@ -441,4 +441,22 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
     return r;
 }
 
+std::vector<std::string> LdAuditBook::want(const std::vector<std::string>& arms) const {
+    std::vector<std::string> out;
+    for (const std::string& a : arms)
+        if (!done.count(a)) out.push_back(a);
+    return out;
+}
+
+std::vector<std::string> LdAuditBook::note(const CellKey& key, const std::vector<ArmOutcome>& out) {
+    std::vector<std::string> fails;
+    for (const ArmOutcome& o : out) {
+        if (o.ld_audit.empty() || !done.insert(o.arm).second) continue;
+        if (o.ld_audit == "pass") ++passed;
+        else if (o.ld_audit == "skipped") ++skipped;
+        else fails.push_back(o.arm), failed.push_back(o.arm + " @ " + key_text(key) + ": " + o.reason);
+    }
+    return fails;
+}
+
 }  // namespace batchlas::tune

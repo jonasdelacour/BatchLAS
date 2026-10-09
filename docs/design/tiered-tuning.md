@@ -870,6 +870,43 @@ ledger, so an earlier op's unfinished rounds change nothing it measures. Host te
 (`TuneTieredPipeline.*`) check no wait behind a straggler, ascending footprints per GPU and round,
 planning only after the round's last record, and records identical to a one-GPU run.
 
+## Engine: the ld audit
+
+Added 2026-10-09. Every cell times and verifies at one leading dimension (`ld_pad`, normally 0), so a
+candidate that derives `ld` from `n` verifies, wins and ships. The deep sm_120 run was suspected of
+shipping exactly that for the syev `vendor` family. That suspicion turned out to be wrong
+(@ref md_docs_2design_2known-defects "known defects", the LOBPCG entry), but nothing in the tuner
+could have caught such a defect if it had been real.
+
+**The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified
+cell* (status `ok`, or `eliminated` after passing verification) for one extra verification at
+`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`). The check runs in the same worker or child,
+straight after the timed cell, as a `verify`-mode cell, which is a fresh problem built by the spec
+at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict. A candidate
+that the cell did not verify stays wanted for its next cell.
+
+**On a failure.** If the padded verification comes back `bad` or `error`, or throws, the arm is
+`bad` in that cell's record with the reason `ld audit: ld_pad +3: ...`, so it is never ranked
+there. The driver prints `ld audit FAILED`, emits an `ld_audit` progress event, and the run summary
+gives one line per (op, dtype) with passed, skipped and failed counts and lists the failures (event
+`ld_audit_summary`). A pin that refuses the padded shape counts as `skipped`. The carve-out audit
+(above) leaves out an arm that failed the ld audit, because its fresh child re-verifies at the
+natural `ld`, where the arm passes. Counting that as a worker mismatch would send the rest of the
+run to fresh children for nothing.
+
+**Limits.** The batch stride is padded only where a spec derives it from `ld` (most use
+`ld * cols`). gemm's `packed` layout ignores `ld_pad`. A spec that takes no `ld_pad` audits
+nothing. The audit is a once-per-candidate check, not a sweep: a defect that appears only at some
+shapes can still get through.
+
+**Evidence.** Host tests `TuneLdAudit.*` cover the child-side fold, the book, the request and
+outcome round trip, the driver's first-cell rule and reporting, and the carve-out interplay. A
+deliberate break of each part turns exactly its own test red. GPU check (threadripper02, GPU 2): with
+vendor syev's run calls passing `rows()` as `lda`, a preview `syev float jobz=V n=12:18
+batch=2:256` sweep reported `ld audit FAILED: vendor ... bad residual` on its first cell and
+`5 passed, 0 skipped, 1 failed`. With the break removed, the same sweep reported `6 passed, 0
+skipped, 0 failed`.
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps
