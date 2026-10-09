@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Host LAPACK references (docs/design/verification.md): eigenvalues, singular values and getrf pivots
 // from LAPACKE, never from a BatchLAS path under test. Without LAPACKE (no host backend) every
-// function returns false and the caller reports NaN, so a values-only check is `bad`, never passed.
+// function returns false, empty input included, and the caller reports NaN or skips: never a pass.
 #pragma once
 
 #include <batchlas/verify/norms.hh>
@@ -58,8 +58,8 @@ template <class D> bool eigenvalues(int n, std::vector<D>& a, std::vector<double
 /// Descending singular values of the m x n @p a (column-major, ld = m; destroyed).
 template <class D> bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
     s.assign(static_cast<std::size_t>(std::min(m, n)), 0.0);
-    if (s.empty()) return true;
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
+    if (s.empty()) return true;
     if constexpr (std::is_same_v<D, double>)
         return LAPACKE_dgesdd(LAPACK_COL_MAJOR, 'N', m, n, a.data(), m, s.data(), nullptr, 1, nullptr, 1) == 0;
     else
@@ -77,15 +77,15 @@ template <class D> bool singular_values(int m, int n, std::vector<D>& a, std::ve
 /// of them, from ?getrf in E's own precision (float, double, complex<float>, complex<double>).
 /// @pre @p a holds the data in its native precision: copy_item_native, never copy_item, which
 /// promotes float data and sends it to dgetrf. The view overload below does this for you.
-// Never promote float data to dgetrf: this box's host dgetrf is wrong from n = 10, sgetrf is not.
-// evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
+// Never promote float data to dgetrf: OpenBLAS 0.3.20's dgetrf on Cooperlake Xeons (its broken dgemm
+// kernel) is wrong from n = 10 while sgetrf is not. evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
 template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vector<std::int32_t>& ipiv) {
     static_assert(std::is_same_v<E, float> || std::is_same_v<E, double> || std::is_same_v<E, std::complex<float>> ||
                       std::is_same_v<E, std::complex<double>>,
                   "getrf_pivots: float, double, complex<float> or complex<double> only");
     ipiv.assign(static_cast<std::size_t>(std::min(m, n)), 0);
-    if (ipiv.empty()) return true;
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
+    if (ipiv.empty()) return true;
     std::vector<lapack_int> p(ipiv.size());
     lapack_int info;
     if constexpr (std::is_same_v<E, float>)
@@ -118,8 +118,8 @@ template <class D> bool geqrf_tau(int m, int n, std::vector<D>& a, std::vector<D
     static_assert(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>,
                   "geqrf_tau: double or complex<double> only");
     tau.assign(static_cast<std::size_t>(std::min(m, n)), D(0));
-    if (tau.empty()) return true;
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
+    if (tau.empty()) return true;
     if constexpr (std::is_same_v<D, double>)
         return LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, n, a.data(), m, tau.data()) == 0;
     else

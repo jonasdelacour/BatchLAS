@@ -62,6 +62,11 @@ TEST(Scalar, MakeAndPromote) {
     EXPECT_EQ(batchlas::verify::up(z), std::complex<double>(1.5, -2.0));
     EXPECT_EQ(batchlas::verify::abs(std::complex<double>(3.0, 4.0)), 5.0);
     EXPECT_EQ(batchlas::verify::conj(std::complex<double>(3.0, 4.0)), std::complex<double>(3.0, -4.0));
+    // conj and make keep the working type: a test builds T-valued data with them.
+    static_assert(std::is_same_v<decltype(batchlas::verify::conj(1.0f)), float>);
+    EXPECT_EQ(batchlas::verify::conj(std::complex<float>(3.0f, 4.0f)), std::complex<float>(3.0f, -4.0f));
+    EXPECT_EQ(batchlas::verify::make<std::complex<float>>(std::complex<double>(0.5, -0.25)), std::complex<float>(0.5f, -0.25f));
+    EXPECT_EQ(batchlas::verify::make<double>(std::complex<double>(0.5, -0.25)), 0.5);
 }
 
 TEST(Items, DefaultIncludesLastAndMiddle) {
@@ -809,6 +814,13 @@ TEST(Reference, WithoutLapackeReturnsFalse) {
     EXPECT_FALSE(batchlas::verify::getrf_pivots(batchlas::verify::view(f.data(), 2, 2, 2), 0, ipiv));
     std::vector<double> tau;
     EXPECT_FALSE(batchlas::verify::geqrf_tau(2, 2, a, tau));
+    // Empty input too: a reference that is not there never reads as a pass.
+    std::vector<double> none, none_e;
+    EXPECT_FALSE(batchlas::verify::eigenvalues(0, none, w));
+    EXPECT_FALSE(batchlas::verify::singular_values(0, 3, none, w));
+    EXPECT_FALSE(batchlas::verify::getrf_pivots(0, 0, none, ipiv));
+    EXPECT_FALSE(batchlas::verify::geqrf_tau(3, 0, none, tau));
+    EXPECT_FALSE(batchlas::verify::tridiagonal_eigenvalues(none, none_e));
 }
 
 #endif

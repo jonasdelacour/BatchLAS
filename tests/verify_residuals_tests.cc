@@ -752,6 +752,34 @@ TEST(GemmBackwardError, ZeroDenominatorUsesNumerator) {
                                                     Shape::general, 1.0, 1.0), 0.25);
 }
 
+// A = [1 -2; 3 4], B = [1 0; -1 2], C0 = [5 -6; 0 1], alpha 2, beta -1, in item 1 of a padded batch
+// (ld 3, stride 7) whose item 0 holds 1e6: |A||B| = [3 4; 7 8], so the denominators are [11 14; 14 17].
+TEST(GemmMaxDenominator, KnownValues) {
+    const auto fill = [](std::vector<double>& v, std::initializer_list<double> col_major) {
+        v.assign(14, 1e6);
+        int i = 0;
+        for (double x : col_major) v[7 + (i / 2) * 3 + i % 2] = x, ++i;
+    };
+    std::vector<double> a, b, c0;
+    fill(a, {1, 3, -2, 4});
+    fill(b, {1, -1, 0, 2});
+    fill(c0, {5, 0, -6, 1});
+    const auto A = batchlas::verify::view(a.data(), 2, 2, 3, 7, 2), B = batchlas::verify::view(b.data(), 2, 2, 3, 7, 2),
+               C0 = batchlas::verify::view(c0.data(), 2, 2, 3, 7, 2);
+    using batchlas::verify::gemm_max_denominator;
+    const auto g = Shape::general;
+    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 17.0);
+    // Unit lower triangle of A: [1 0; 3 1] gives [7 6; 8 5]; op(A) = A^T: [13 18; 12 17].
+    EXPECT_EQ(gemm_max_denominator(A, Shape::unit_lower, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 8.0);
+    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::Trans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 18.0);
+    // beta == 0 never reads C0 (NaN there is ignored); a NaN in A is the result.
+    c0[7 + 3 + 1] = std::nan("");
+    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, 0.0, 1), 16.0);
+    EXPECT_TRUE(std::isnan(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1)));
+    a[7] = std::nan("");
+    EXPECT_TRUE(std::isnan(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, 0.0, 1)));
+}
+
 TYPED_TEST(SpmmBackwardError, BadColumnIsNan) {
     SpmmCase<TypeParam> c;
     c.cols[static_cast<std::size_t>((kB - 1) * c.mstride)] = SpmmCase<TypeParam>::ak;

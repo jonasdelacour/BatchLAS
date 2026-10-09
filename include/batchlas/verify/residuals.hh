@@ -122,15 +122,30 @@ template <class D> Dense<D> apply_op(const Dense<D>& M, Transpose t) {
 // C0 is not read when beta == 0 (BLAS semantics: it may hold anything).
 template <class D, class C0At, class CAt>
 double componentwise(const Dense<D>& opA, const Dense<D>& opB, C0At c0, CAt c, int m, int n, Shape sc, D alpha, D beta) {
+    // op(A) transposed and both moduli formed once: the l loop then reads contiguous memory and
+    // takes no modulus (the same terms in the same order, so the same value).
+    const int kk = opA.cols;
+    std::vector<D> at(static_cast<std::size_t>(kk) * static_cast<std::size_t>(opA.rows));
+    std::vector<double> abs_at(at.size()), abs_b(opB.a.size());
+    for (int i = 0; i < opA.rows; ++i)
+        for (int l = 0; l < kk; ++l) {
+            at[static_cast<std::size_t>(i) * kk + l] = opA(i, l);
+            abs_at[static_cast<std::size_t>(i) * kk + l] = abs(opA(i, l));
+        }
+    for (std::size_t x = 0; x < opB.a.size(); ++x) abs_b[x] = abs(opB.a[x]);
     double worst = 0;
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i) {
             if ((lower_family(sc) && i < j) || (upper_family(sc) && i > j)) continue;
+            const D* a_row = at.data() + static_cast<std::size_t>(i) * kk;
+            const double* abs_a_row = abs_at.data() + static_cast<std::size_t>(i) * kk;
+            const D* b_col = opB.a.data() + static_cast<std::size_t>(j) * opB.rows;
+            const double* abs_b_col = abs_b.data() + static_cast<std::size_t>(j) * opB.rows;
             D acc = D(0);
             double mag = 0;
-            for (int l = 0; l < opA.cols; ++l) {
-                acc += opA(i, l) * opB(l, j);
-                mag += abs(opA(i, l)) * abs(opB(l, j));
+            for (int l = 0; l < kk; ++l) {
+                acc += a_row[l] * b_col[l];
+                mag += abs_a_row[l] * abs_b_col[l];
             }
             D want = alpha * acc;
             double den = abs(alpha) * mag;
@@ -455,6 +470,30 @@ double gemm_backward_error(const VA& A, Shape sa, Transpose ta, const VB& B, Sha
             opA, opB, [&](int i, int j) { return detail::get(c0, i, j); }, [&](int i, int j) { return detail::get(c, i, j); },
             c.rows, c.cols, sc, alpha, beta));
     }
+    return worst;
+}
+
+/// Largest denominator of gemm_backward_error over item @p item: max_ij |α|(|op(A)||op(B)|)_ij + |β||C0_ij|
+/// (C0 not read when β == 0). An absolute tolerance divided by it is a componentwise one.
+template <class VA, class VB, class VC0>
+double gemm_max_denominator(const VA& A, Shape sa, Transpose ta, const VB& B, Shape sb, Transpose tb, const VC0& C0,
+                            promoted_t<detail::value_of_t<VC0>> alpha, promoted_t<detail::value_of_t<VC0>> beta, int item = 0) {
+    using D = promoted_t<detail::value_of_t<VC0>>;
+    const auto opA = detail::apply_op(detail::shaped_dense(detail::item_of(A, item), sa), ta);
+    const auto opB = detail::apply_op(detail::shaped_dense(detail::item_of(B, item), sb), tb);
+    if (opA.cols != opB.rows) detail::bad("gemm_max_denominator", "dimension mismatch");
+    detail::Item<detail::value_of_t<VC0>> c0{};
+    if (beta != D(0)) {
+        c0 = detail::item_of(C0, item);
+        if (c0.rows != opA.rows || c0.cols != opB.cols) detail::bad("gemm_max_denominator", "C0 and op(A) op(B) differ in shape");
+    }
+    double worst = 0;
+    for (int j = 0; j < opB.cols; ++j)
+        for (int i = 0; i < opA.rows; ++i) {
+            double mag = 0;
+            for (int l = 0; l < opA.cols; ++l) mag += abs(opA(i, l)) * abs(opB(l, j));
+            worst = nanmax(worst, abs(alpha) * mag + (beta != D(0) ? abs(beta) * abs(detail::get(c0, i, j)) : 0.0));
+        }
     return worst;
 }
 

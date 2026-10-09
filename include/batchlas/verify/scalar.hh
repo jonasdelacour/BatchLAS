@@ -26,7 +26,9 @@ inline std::complex<double> up(std::complex<double> x) { return x; }
 
 inline double abs(double x) { return std::fabs(x); }
 inline double abs(std::complex<double> x) { return std::abs(x); }
+inline float conj(float x) { return x; }
 inline double conj(double x) { return x; }
+inline std::complex<float> conj(std::complex<float> x) { return std::conj(x); }
 inline std::complex<double> conj(std::complex<double> x) { return std::conj(x); }
 
 /// |re| + |im| (LAPACK's cabs1, the partial-pivoting metric); |x| for a real x.
@@ -48,6 +50,9 @@ template <class T> T make(double re, double im) {
     else { (void)im; return T(re); }
 }
 
+/// make<T>(z.real(), z.imag()): a promoted value rounded back to T (the imaginary part dropped for a real T).
+template <class T> T make(std::complex<double> z) { return make<T>(z.real(), z.imag()); }
+
 /// Unit roundoff of T's real type: 2^-24 for float, 2^-53 for double.
 template <class T> constexpr double eps() { return std::numeric_limits<real_t<T>>::epsilon() * 0.5; }
 
@@ -58,7 +63,8 @@ inline double nanmax(double a, double b) {
     return a > b ? a : b;
 }
 
-// Bit-identical to Rng in benchmarks/factor_bench.cc: seeded sequences must reproduce across harnesses.
+// factor_bench.cc's historical LCG (its constants and draws, unchanged): seeded sequences, and so
+// archived sweeps and ledger records, reproduce across harnesses.
 class Rng {
 public:
     explicit Rng(std::uint64_t seed) : s_(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
