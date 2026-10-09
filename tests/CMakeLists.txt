@@ -16,7 +16,7 @@ endif()
 
 # Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
 # any -j: syev_cta_tests has a concurrency wrong-answer flake (docs/developer/agent-guide.md section 8).
-set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
+set(BATCHLAS_HOST_ONLY_TESTS tune_tests verify_tests)
 set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
@@ -34,6 +34,7 @@ set(TEST_TARGETS
     select_tests
     tuned_tables_tests
     tune_tests
+    verify_tests
     tune_race_gpu_tests
     error_model_tests
     linalg_layer_tests
@@ -170,7 +171,7 @@ set(BATCHLAS_TEST_LABELS_util
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests
     settings_tests error_model_tests
-    linalg_layer_tests select_tests tuned_tables_tests tune_tests tune_race_gpu_tests)
+    linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
@@ -269,6 +270,9 @@ function(batchlas_add_test_target test_name)
             BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
             BATCHLAS_TUNE_CMAKE="${CMAKE_COMMAND}"
             BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
+    elseif(test_name STREQUAL "verify_tests")
+        # Host-only: header-only batchlas::verify; MatrixView's constructor lives in the library.
+        batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
     elseif(test_name STREQUAL "tune_race_gpu_tests")
         # The tuner's GPU side: the race and the worker against real kernels (potrf, posv, trsm specs).
         # The worker cases run batchlas_tune_impl, built with the benchmarks.

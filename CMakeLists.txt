@@ -14,6 +14,7 @@ include(cmake/BatchLASPackaging.cmake)
 include(cmake/BatchLASDocs.cmake)
 
 add_subdirectory(src)
+include(cmake/BatchLASVerify.cmake)
 
 if(BATCHLAS_BUILD_TESTS)
     enable_testing()
