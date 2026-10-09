@@ -254,11 +254,14 @@ inline Real gesvd_recon_tol() {
     }
 }
 
-// The provider pin of the last run_gesvd_with_provider call (nullptr: Auto). The orthogonality
-// checks read it to know whether the factors came from the normal-equations CTA provider.
-inline const char*& gesvd_last_provider() {
-    static thread_local const char* provider = nullptr;
-    return provider;
+// The cta provider always takes the normal-equations bidiagonal path, which squares the condition
+// number. Measured c needed for orthogonality: ~52 float, ~113 double (vs 16). Pass it to the
+// orthogonality checks of results produced by a "cta" pin on a real-typed input (the Hermitian
+// complex cta case measures c ~ 2.8 and needs none).
+template <typename Real>
+inline batchlas::verify::Slack gesvd_cta_slack() {
+    return {std::is_same_v<Real, float> ? 4.0 : 8.0,
+            "gesvd cta provider always takes the normal-equations bidiagonal path, which squares the condition number (gesvd_bidiag_is_normal_equations comment)"};
 }
 
 template <typename Scalar, Backend B>
@@ -271,7 +274,6 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                     SvdVectors jobvh,
                                     const char* provider,
                                     std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    gesvd_last_provider() = provider;
     // A pin is a ScopedPin: a refused one throws (R6) and lands in the returned message.
     std::optional<select::ScopedPin<ops::gesvd::GesvdChoice>> pin;
     if (provider != nullptr) {
@@ -369,18 +371,15 @@ void expect_sorted_singular_values(const UnifiedVector<Real>& s,
 }
 
 template <typename Scalar>
-void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M) {
+void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M,
+                                batchlas::verify::Slack slack = {1.0, "-"}) {
     using Real = typename base_type<Scalar>::type;
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
-    const char* provider = gesvd_last_provider();
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
         EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err,
                             (batchlas::verify::Slack{200.0, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: old float constants 2e-1 vs 1e-3 (comment at gesvd_bidiag_is_normal_equations)"}));
-    } else if (provider != nullptr && std::string(provider) == "cta") {
-        // Measured c needed: ~52 float, ~113 double (vs 16).
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err,
-                            (batchlas::verify::Slack{std::is_same_v<Real, float> ? 4.0 : 8.0,
-                                                     "gesvd cta provider always takes the normal-equations bidiagonal path, which squares the condition number (gesvd_bidiag_is_normal_equations comment)"}));
+    } else if (slack.factor != 1.0) {
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err, slack);
     } else {
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality, M.cols(), err);
     }
@@ -388,7 +387,8 @@ void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M) {
 
 // Rows are orthonormal when the columns of M^H are.
 template <typename Scalar>
-void expect_orthonormal_rows(const Matrix<Scalar, MatrixFormat::Dense>& M) {
+void expect_orthonormal_rows(const Matrix<Scalar, MatrixFormat::Dense>& M,
+                             batchlas::verify::Slack slack = {1.0, "-"}) {
     Matrix<Scalar, MatrixFormat::Dense> Mh(M.cols(), M.rows(), M.batch_size());
     for (int b = 0; b < M.batch_size(); ++b) {
         auto Mb = M.view().batch_item(b);
@@ -405,7 +405,7 @@ void expect_orthonormal_rows(const Matrix<Scalar, MatrixFormat::Dense>& M) {
             }
         }
     }
-    expect_orthonormal_columns(Mh);
+    expect_orthonormal_columns(Mh, slack);
 }
 
 template <typename Scalar>
@@ -684,10 +684,10 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
 
             expect_singular_values_match_lapacke(A_ref, s);
             if (job.jobu == SvdVectors::All) {
-                expect_orthonormal_columns(U);
+                expect_orthonormal_columns(U, gesvd_cta_slack<typename TestFixture::Real>());
             }
             if (job.jobvh == SvdVectors::All) {
-                expect_orthonormal_rows(Vh);
+                expect_orthonormal_rows(Vh, gesvd_cta_slack<typename TestFixture::Real>());
             }
             if (job.jobu == SvdVectors::All && job.jobvh == SvdVectors::All) {
                 expect_reconstruction(A_ref, s, U, Vh);
@@ -782,8 +782,8 @@ TYPED_TEST(GesvdTest, CtaProviderHandlesRepeatedAndTinySingularValues) {
         std::sort(expected.begin(), expected.end(), std::greater<Real>());
 
         expect_sorted_singular_values(s, n, batch, expected);
-        expect_orthonormal_columns(U);
-        expect_orthonormal_rows(Vh);
+        expect_orthonormal_columns(U, gesvd_cta_slack<typename TestFixture::Real>());
+        expect_orthonormal_rows(Vh, gesvd_cta_slack<typename TestFixture::Real>());
         expect_reconstruction(A_ref, s, U, Vh);
     }
 }
@@ -854,8 +854,8 @@ TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
         ASSERT_TRUE(err.empty()) << err;
 
         expect_singular_values_match_lapacke(A_ref, s);
-        expect_orthonormal_columns(U);
-        expect_orthonormal_rows(Vh);
+        expect_orthonormal_columns(U, gesvd_cta_slack<typename TestFixture::Real>());
+        expect_orthonormal_rows(Vh, gesvd_cta_slack<typename TestFixture::Real>());
         expect_reconstruction(A_ref, s, U, Vh);
     }
 }
