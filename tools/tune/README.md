@@ -202,10 +202,12 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   (at most the cap factor), else cap factor x 0.5. `--plan` prints both the lattice-only and the
   with-refinement estimate; the run ends with a summary line per op and dtype (cells per round,
   lattice and refinement counts, the planned refinement, wall time).
-- **Progress events** (`--progress-fd`): `{"ev":"plan","cells":N,"est_s":S,"refine_cells":R,"est_refine_s":E,"est_total_s":T}`
-  (`est_s` is the lattice only), `{"ev":"refine_cap","op":o,"dtype":d,"lattice":L,"refined":n,"cap":c,"dropped":k}`,
+- **Progress events** (`--progress-fd`; every event also carries `"t"`, Unix time in seconds): `{"ev":"plan","cells":N,"est_s":S,"refine_cells":R,"est_refine_s":E,"est_total_s":T}`
+  (`est_s` is the lattice only), before it one
+  `{"ev":"plan_job","op":o,"dtype":d,"device":v,"cells":N,"measure":M,"mix":"12 current, 300 measure","est_s":S,"refine_cells":R,"est_refine_s":E}`
+  per (op, dtype), `{"ev":"refine_cap","op":o,"dtype":d,"lattice":L,"refined":n,"cap":c,"dropped":k}`,
   `{"ev":"cell_start",<op, dtype, key fields>,"gpu":g}`,
-  `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t}`,
+  `{"ev":"cell_done",<op, dtype, key fields>,"ranked":"a|b","tier":t,"round":r}` (no `round` on a single-candidate cell),
   `{"ev":"eliminated",<op, dtype, key fields>,"cand":c,"round":r}`,
   `{"ev":"audit",<op, dtype, key fields>,"verdict":v,"fresh_ms":f,"warm_ms":w,"fresh":b}`,
   `{"ev":"worker_restart",<op, dtype, key fields>,"gpu":g,"restarts":n,"fallback":b}`,

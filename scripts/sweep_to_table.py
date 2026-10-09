@@ -125,6 +125,7 @@ import argparse
 import csv
 import datetime
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -897,9 +898,11 @@ def read_cell(rec):
     key = tuple(tuple(kv.split("=", 1)) for kv in rec["key"].split(","))
     names = [n for n in rec["cands"].split("|") if n]
     cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""),
-              "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}")}
+              "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}"), "lo": rec.get(f"lo{i}"),
+              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}")}
              for i, n in enumerate(names)]
     return {"run_id": rec["run_id"], "tier": rec["tier"], "key": key, "date": rec.get("date", ""),
+            "round": int(rec.get("round", 0)),
             "ranked": [r for r in rec.get("ranked", "").split("|") if r], "cands": cands}
 
 
@@ -1014,19 +1017,41 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
         if entries:
             cand_rows.append((key_tuple(spec, keyspec, key), c["tier"], entries))
     cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
-    def near(a, b, stride):
-        return all(a[i] == b[i] for i in exact_pos) and all(
-            abs(lattice_index(lattice[i], a[i]) - lattice_index(lattice[i], b[i])) < stride for i in log_pos)
+    pos = {}
+
+    def index_of(k):
+        if k not in pos:
+            pos[k] = tuple(lattice_index(lattice[i], k[i]) for i in log_pos)
+        return pos[k]
+
+    def bracketed_by(against, stride):
+        """near(a, b) = equal exact keys and index distance < stride on every log key. Two such keys
+        sit in the same or an adjacent floor(index / stride) bucket, so only those are compared."""
+        buckets = defaultdict(list)
+        for k in against:
+            p = index_of(k)
+            buckets[(tuple(k[i] for i in exact_pos), tuple(math.floor(x / stride) for x in p))].append(p)
+
+        def hit(key):
+            exact, p = tuple(key[i] for i in exact_pos), index_of(key)
+            home = [math.floor(x / stride) for x in p]
+            for off in itertools.product((-1, 0, 1), repeat=len(p)):
+                for q in buckets.get((exact, tuple(h + o for h, o in zip(home, off))), ()):
+                    if all(abs(a - b) < stride for a, b in zip(p, q)):
+                        return True
+            return False
+        return hit
 
     kept = {}
     for tier in LEDGER_TIERS:
         # Measured rows are bracketed by kept higher rows; a transcribed row by any measured row,
         # kept or dropped, since a dropped preview row still says the region was measured.
         against = [k for k, t, _ in cand_rows if t != "transcribed"] if tier == "transcribed" else list(kept)
+        near = bracketed_by(against, LEDGER_STRIDE[tier])
         for key, t, entries in cand_rows:
             if t != tier or key in kept:
                 continue
-            if not any(near(hk, key, LEDGER_STRIDE[tier]) for hk in against):
+            if not near(key):
                 kept[key] = (tier, entries)
     return kept
 

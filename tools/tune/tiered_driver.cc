@@ -186,10 +186,10 @@ private:
     std::vector<const Job*> gpu_job_;
     std::size_t restarts_ = 0, switch_restarts_ = 0, switches_ = 0;
 
-    void emit(const Json& j);
+    void emit(Json j);
     void build(const std::string& op, const std::string& dtype);
     std::vector<PlannedCell> plan(Job& j);
-    void print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells);
+    std::string print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells);
     double cap_factor() const { return o_.refine_cap_factor >= 0 ? o_.refine_cap_factor : params(o_.tier).refine_cap_factor; }
     std::pair<std::size_t, std::size_t> cap_base(const Job& j) const;
     void cap(Job& j, std::vector<PlannedCell>& plan);
@@ -204,9 +204,10 @@ private:
     void refine(Job& j);
 };
 
-void TieredRun::emit(const Json& j) {
+void TieredRun::emit(Json j) {
     if (o_.progress_fd < 0) return;
-    const std::string line = j.line();
+    const auto wall = std::chrono::system_clock::now().time_since_epoch();
+    const std::string line = j.num("t", std::chrono::duration<double>(wall).count()).line();
     std::lock_guard<std::mutex> lock(mu_);
     for (std::size_t done = 0; done < line.size();) {
         const ssize_t n = ::write(o_.progress_fd, line.data() + done, line.size() - done);
@@ -260,7 +261,7 @@ std::vector<PlannedCell> TieredRun::plan(Job& j) {
                       o_.max_dim, j.round == 0 ? &j.remeasure : nullptr);
 }
 
-void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
+std::string TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
     std::map<std::string, int> n;
     double est = 0;
     for (const PlannedCell& c : plan) {
@@ -271,7 +272,7 @@ void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, b
     for (const auto& [why, count] : n) mix += (mix.empty() ? "" : ", ") + std::to_string(count) + " " + why;
     std::printf("== plan %s %s %s tier=%s: %zu cells (%s); est %s\n", j.spec->op().c_str(), j.dtype.c_str(),
                 id_.device.c_str(), to_string(o_.tier).c_str(), plan.size(), mix.c_str(), hours(est).c_str());
-    if (!cells) return;
+    if (!cells) return mix;
     for (const PlannedCell& c : plan) {
         std::string line = "  " + key_text(c.key) + "  " + (c.reason.empty() ? std::string("measure") : c.reason);
         if (!c.arms.empty()) line += "  arms=" + join(c.arms, "|");
@@ -279,6 +280,7 @@ void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, b
         if (c.est_s > 0) line += "  est=" + fmt(c.est_s, "%.2fs");
         std::puts(line.c_str());
     }
+    return mix;
 }
 
 bool TieredRun::over_budget() const {
@@ -391,7 +393,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                     key_text(c.key).c_str(), round, b.error.c_str());
         std::fflush(stdout);
         emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key).str("ranked", "")
-                 .str("tier", to_string(c.tier)).str("error", b.error));
+                 .str("tier", to_string(c.tier)).integer("round", round).str("error", b.error));
         return;
     }
     if (c.round >= 0) round = c.round;  // a re-measured refinement midpoint stays a refinement record
@@ -413,7 +415,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                 summary.empty() ? "(nothing ranked)" : summary.c_str());
     std::fflush(stdout);
     emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key)
-             .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)));
+             .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)).integer("round", round));
     const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(c.tier).audit_fraction;
     bool pick = audit_pick(run_id_, c.key, fraction);
     if (worker && !b.fallback && b.error.empty()) {
@@ -595,11 +597,11 @@ int TieredRun::go() {
     std::size_t to_measure = 0;
     for (auto& j : jobs_) {
         j->plan = plan(*j);
-        print_plan(*j, j->plan, o_.plan);
-        double est_measure = 0;
+        const std::string mix = print_plan(*j, j->plan, o_.plan);
+        double est_measure = 0, est_job = 0;
         std::size_t n_measure = 0;
         for (const PlannedCell& c : j->plan) {
-            est += c.est_s;
+            est += c.est_s, est_job += c.est_s;
             to_measure += measurable(c) || c.reason == "skip:single";
             if (measurable(c)) est_measure += c.est_s, ++n_measure;
         }
@@ -614,6 +616,10 @@ int TieredRun::go() {
                     "(%zu stored, %zu refined stored, %zu to measure)\n", j->est_refine_cells, ratio,
                     history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(), cap_factor(), stored,
                     refined, n_measure);
+        emit(Json().str("ev", "plan_job").str("op", j->spec->op()).str("dtype", j->dtype).str("device", id_.device)
+                 .integer("cells", std::int64_t(j->plan.size())).integer("measure", std::int64_t(n_measure))
+                 .str("mix", mix).num("est_s", est_job).integer("refine_cells", std::llround(j->est_refine_cells))
+                 .num("est_refine_s", s));
     }
     std::printf("== plan total: %zu cells to measure or probe; est %s lattice only, %s with refinement (~%.0f refinement "
                 "cells; %.2f s per child)\n", to_measure, hours(est).c_str(), hours(est + est_refine).c_str(), refine_cells,
