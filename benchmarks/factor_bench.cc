@@ -167,33 +167,6 @@ static bool pin_parsed_now(OpKind k) {
     return false;
 }
 
-// The explicit Q (m x k) of item b from the packed reflectors, Q = H_0 ... H_{k-1} applied to the
-// first k columns of I_m. batchlas::verify has no equivalent (qr_residual applies the reflectors
-// in place), and orthogonality() needs Q itself.
-template <typename T>
-static void form_Q(const UnifiedVector<T>& F, const UnifiedVector<T>& tau,
-                   int b, int m, int k, int ld, size_t stride, size_t taustride,
-                   std::vector<verify::promoted_t<T>>& Q) {
-    using D = verify::promoted_t<T>;
-    const size_t o = size_t(b) * stride;
-    Q.assign(size_t(m) * size_t(k), D(0));
-    for (int j = 0; j < k; ++j) Q[size_t(j) * size_t(m) + size_t(j)] = D(1);
-    for (int step = 0; step < k; ++step) {
-        const int i = k - 1 - step;
-        const D t = verify::up(tau[taustride * size_t(b) + size_t(i)]);
-        for (int c = 0; c < k; ++c) {
-            D s = Q[size_t(c) * size_t(m) + size_t(i)];      // v(i) == 1 implicitly
-            for (int r = i + 1; r < m; ++r)
-                s += verify::conj(verify::up(F[o + size_t(i) * size_t(ld) + size_t(r)])) *
-                     Q[size_t(c) * size_t(m) + size_t(r)];
-            Q[size_t(c) * size_t(m) + size_t(i)] -= t * s;
-            for (int r = i + 1; r < m; ++r)
-                Q[size_t(c) * size_t(m) + size_t(r)] -=
-                    t * verify::up(F[o + size_t(i) * size_t(ld) + size_t(r)]) * s;
-        }
-    }
-}
-
 // ------------------------------------------------------------- one arm
 struct Arm {
     std::string name;      // "vendor" | "native" | "<pin>/leaf=<x>"
@@ -575,13 +548,12 @@ static int run(const Cfg& c) {
                 VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), n, batch, 1, pstride);
                 a.residual = verify::getrf_residual(A0v, Av, pivv, items);
                 within = verify::pass<T>(Check::factorization, n, a.residual);
-                // The DISCRIMINATING oracle: the pivot sequence, elementwise, against an
-                // independent host xGETRF on the same input.
+                // The discriminating oracle: pivots elementwise against host xGETRF.
                 int mism = 0;
                 std::vector<int32_t> hp;
                 for (int b : items) {
-                    auto h = verify::copy_item(A0v, b);
-                    if (!verify::getrf_pivots(n, n, h, hp)) { flag(a, "pivot_oracle_unavailable"); break; }
+                    if (!verify::getrf_pivots(A0v, b, hp)) { flag(a, "pivot_oracle_unavailable"); break; }
+                    // Agreement in the data's own precision rests on fill_lu's dominance margin (no near-ties).
                     for (int k = 0; k < n; ++k)
                         if (hp[size_t(k)] != pivi[size_t(b) * size_t(pstride) + size_t(k)]) ++mism;
                 }
@@ -603,10 +575,9 @@ static int run(const Cfg& c) {
                 using QV = MatrixView<D, MatrixFormat::Dense>;
                 VectorView<T> tauv(tau.data(), kmin, batch, 1, kmin);
                 a.residual = verify::qr_residual(A0v, Av, tauv, items);
-                std::vector<D> Q;
                 double orth = 0;
                 for (int b : items) {
-                    form_Q<T>(A, tau, b, m, kmin, lda, sa, size_t(kmin), Q);
+                    std::vector<D> Q = verify::form_q(Av, tauv, b, kmin);
                     D* qp = Q.data();
                     QV Qv(Q.data(), m, kmin, m, m * kmin, 1, &qp);
                     orth = verify::nanmax(orth, verify::orthogonality(Qv));
@@ -617,7 +588,6 @@ static int run(const Cfg& c) {
                 break;
             }
             case OpKind::orgqr: {
-                // orgqr has no factorisation residual of its own.
                 a.residual = verify::orthogonality(Av, items);
                 a.extra = a.residual;
                 within = verify::pass<T>(Check::orthogonality, m, a.residual);
