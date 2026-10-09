@@ -3,6 +3,8 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
 #include <array>
@@ -1160,47 +1162,39 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
 
 namespace {
 
-// Max-norm of a tridiagonal given as long-double d/e.
-double tridiag_norm(const std::vector<long double>& d, const std::vector<long double>& e) {
-    const int n = static_cast<int>(d.size());
-    double t = 0;
-    for (int i = 0; i < n; ++i) {
-        t = std::max(t, static_cast<double>(std::fabs(d[i]) + (i > 0 ? std::fabs(e[i - 1]) : 0.0L) +
-                                            (i < n - 1 ? std::fabs(e[i]) : 0.0L)));
-    }
-    return t;
-}
-
-// True when item b of a sorted steqr result is right: eigenvalues against the
-// long-double reference, the residual ||T z - lambda z|| and the orthogonality
-// of Z, each within 64*n*eps (times ||T|| where it has units). `why` receives
-// the three measured values for the failure message.
+// True when item b of a sorted steqr result is right, through batchlas::verify: eigenvalues
+// against the long-double reference (values, scaled by ||T||_inf), ||T Z - Z diag(w)||_F / ||T||_F
+// (eigen_residual) and ||Z^T Z - I||_F (orthogonality_rotations). `why` receives the three
+// measured values and their bounds for the failure message.
 template <typename Real>
 bool tridiag_item_ok(const std::vector<long double>& hd, const std::vector<long double>& he,
                      const std::vector<long double>& ref, Vector<Real>& evals, const Real* Z, int b,
                      std::string& why) {
+    using batchlas::verify::Check;
     const int n = static_cast<int>(hd.size());
-    const double tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
-    const double tnorm = tridiag_norm(hd, he);
-    double ev_err = 0, res = 0, orth = 0;
-    for (int j = 0; j < n; ++j) {
-        const double lam = evals(j, b);
-        ev_err = std::max(ev_err, std::fabs(lam - static_cast<double>(ref[j])));
-        for (int i = 0; i < n; ++i) {
-            double r = (static_cast<double>(hd[i]) - lam) * Z[i + j * n];
-            if (i > 0) r += static_cast<double>(he[i - 1]) * Z[i - 1 + j * n];
-            if (i < n - 1) r += static_cast<double>(he[i]) * Z[i + 1 + j * n];
-            res = std::max(res, std::fabs(r));
-        }
-        for (int k = 0; k <= j; ++k) {
-            double s = 0;
-            for (int i = 0; i < n; ++i) s += static_cast<double>(Z[i + j * n]) * Z[i + k * n];
-            orth = std::max(orth, std::fabs(s - (j == k ? 1.0 : 0.0)));
-        }
+    std::vector<double> T(static_cast<size_t>(n) * n, 0.0);
+    double tnorm = 0;
+    for (int i = 0; i < n; ++i) {
+        T[i + static_cast<size_t>(i) * n] = static_cast<double>(hd[i]);
+        if (i < n - 1) T[i + 1 + static_cast<size_t>(i) * n] = static_cast<double>(he[i]);
+        tnorm = std::max(tnorm, static_cast<double>(std::fabs(hd[i]) + (i > 0 ? std::fabs(he[i - 1]) : 0.0L) +
+                                                    (i < n - 1 ? std::fabs(he[i]) : 0.0L)));
     }
-    why = "eigenvalue error " + std::to_string(ev_err / tnorm) + ", residual " + std::to_string(res / tnorm) +
-          ", orthogonality " + std::to_string(orth) + " (tol " + std::to_string(tol) + ")";
-    return ev_err <= tol * tnorm && res <= tol * tnorm && orth <= tol;
+    const auto Zv = batchlas::verify::view(Z, n, n, n);
+    const VectorView<Real> w(&evals(0, b), n, 1, 1, n);
+    const std::vector<std::vector<double>> r{std::vector<double>(ref.begin(), ref.end())};
+    const double ev_err = batchlas::verify::values_error(w, r, tnorm);
+    const double res = batchlas::verify::eigen_residual(batchlas::verify::view(T.data(), n, n, n), Zv, w);
+    const double orth = batchlas::verify::orthogonality(Zv);
+    why = "eigenvalue error " + std::to_string(ev_err) + " (bound " +
+          std::to_string(batchlas::verify::bound<Real>(Check::values, n)) + "), residual " + std::to_string(res) +
+          " (bound " + std::to_string(batchlas::verify::bound<Real>(Check::eigen_residual, n)) + "), orthogonality " +
+          std::to_string(orth) + " (bound " + std::to_string(batchlas::verify::bound<Real>(Check::orthogonality_rotations, n)) +
+          ")";
+    const bool v_ok = batchlas::verify::pass<Real>(Check::values, n, ev_err);
+    const bool r_ok = batchlas::verify::pass<Real>(Check::eigen_residual, n, res);
+    const bool o_ok = batchlas::verify::pass<Real>(Check::orthogonality_rotations, n, orth);
+    return v_ok && r_ok && o_ok;
 }
 
 // steqr with eigenvectors, sorted ascending, on long-double input rounded to

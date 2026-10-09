@@ -3,6 +3,9 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/verify/norms.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -16,11 +19,25 @@ using namespace batchlas;
 namespace {
 
 template <typename Real>
-struct SteinTol {
-    // Residual ||T v - lambda v|| / ||T||, and orthogonality ||V^T V - I||.
-    static Real residual() { return std::is_same_v<Real, float> ? Real(2e-4) : Real(1e-10); }
-    static Real ortho() { return std::is_same_v<Real, float> ? Real(2e-4) : Real(1e-10); }
-};
+std::vector<Real> dense_tridiag(const std::vector<Real>& d, const std::vector<Real>& e, int n) {
+    std::vector<Real> t(static_cast<size_t>(n) * n, Real(0));
+    for (int i = 0; i < n; ++i) t[i + static_cast<size_t>(i) * n] = d[i];
+    for (int i = 0; i < n - 1; ++i) t[i + 1 + static_cast<size_t>(i) * n] = e[i];
+    return t;
+}
+
+// eigen_residual and (unless residual_only) orthogonality_rotations of item b's first kb columns.
+template <typename Real>
+void expect_stein_pairs(const std::vector<Real>& t, const MatrixView<Real, MatrixFormat::Dense>& Z,
+                        const Real* w, int n, int k, int b, int kb, bool residual_only = false) {
+    using batchlas::verify::Check;
+    const auto zb = batchlas::verify::view(Z.data_ptr() + static_cast<size_t>(b) * Z.stride(), n, kb, Z.ld());
+    const VectorView<Real> wb(const_cast<Real*>(w) + static_cast<size_t>(b) * k, kb, 1, 1, kb);
+    EXPECT_VERIFY(Real, Check::eigen_residual, n, batchlas::verify::eigen_residual(batchlas::verify::view(t.data(), n, n, n), zb, wb))
+        << "batch " << b << ", " << kb << " vectors";
+    if (!residual_only)
+        EXPECT_VERIFY(Real, Check::orthogonality_rotations, kb, batchlas::verify::orthogonality(zb)) << "batch " << b;
+}
 
 template <typename Real>
 class SteinTest : public ::testing::Test {
@@ -31,8 +48,7 @@ protected:
     // matter for SYEVX: small residual per pair, and orthonormal columns.
     void CheckTridiag(const std::vector<Real>& d_host,
                       const std::vector<Real>& e_host,
-                      int n, int batch, int il, int iu,
-                      Real residual_tol, Real ortho_tol) {
+                      int n, int batch, int il, int iu) {
         const int k = iu - il + 1;
 
         UnifiedVector<Real> d(n * batch), e(std::max(0, n - 1) * batch);
@@ -65,42 +81,8 @@ protected:
                                        k, Z.view(), sws, sp);
         ctx->wait();
 
-        // ||T||_inf for scaling the residual.
-        Real tnorm = 0;
-        for (int i = 0; i < n; ++i) {
-            const Real left = (i > 0) ? std::abs(e_host[i - 1]) : Real(0);
-            const Real right = (i < n - 1) ? std::abs(e_host[i]) : Real(0);
-            tnorm = std::max(tnorm, std::abs(d_host[i]) + left + right);
-        }
-
-        for (int b = 0; b < batch; ++b) {
-            for (int j = 0; j < k; ++j) {
-                const Real lambda = w[b * k + j];
-                Real res2 = 0;
-                for (int i = 0; i < n; ++i) {
-                    Real tv = d_host[i] * Z.view()(i, j, b);
-                    if (i > 0) tv += e_host[i - 1] * Z.view()(i - 1, j, b);
-                    if (i < n - 1) tv += e_host[i] * Z.view()(i + 1, j, b);
-                    const Real r = tv - lambda * Z.view()(i, j, b);
-                    res2 += r * r;
-                }
-                EXPECT_LE(std::sqrt(res2) / tnorm, residual_tol)
-                    << "residual too large, batch " << b << " vector " << j
-                    << " (lambda=" << lambda << ")";
-            }
-
-            // Orthonormality of the returned block.
-            for (int i = 0; i < k; ++i) {
-                for (int j = i; j < k; ++j) {
-                    Real dot = 0;
-                    for (int r = 0; r < n; ++r) dot += Z.view()(r, i, b) * Z.view()(r, j, b);
-                    const Real want = (i == j) ? Real(1) : Real(0);
-                    EXPECT_LE(std::abs(dot - want), ortho_tol)
-                        << "orthogonality failure, batch " << b
-                        << " columns (" << i << "," << j << "): dot=" << dot;
-                }
-            }
-        }
+        const auto t = dense_tridiag(d_host, e_host, n);
+        for (int b = 0; b < batch; ++b) expect_stein_pairs(t, Z.view(), w.data(), n, k, b, k);
     }
 
     std::shared_ptr<Queue> ctx;
@@ -119,8 +101,7 @@ TYPED_TEST(SteinTest, WellSeparatedSpectrum) {
     for (int i = 0; i < n; ++i) d[i] = Real(2);
     for (int i = 0; i < n - 1; ++i) e[i] = Real(-1);
 
-    this->CheckTridiag(d, e, n, /*batch=*/3, /*il=*/0, /*iu=*/7,
-                       SteinTol<Real>::residual(), SteinTol<Real>::ortho());
+    this->CheckTridiag(d, e, n, /*batch=*/3, /*il=*/0, /*iu=*/7);
 }
 
 // The other end of the spectrum, which exercises the descending-index path.
@@ -131,8 +112,7 @@ TYPED_TEST(SteinTest, TopOfSpectrum) {
     for (int i = 0; i < n; ++i) d[i] = Real(2);
     for (int i = 0; i < n - 1; ++i) e[i] = Real(-1);
 
-    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/n - 8, /*iu=*/n - 1,
-                       SteinTol<Real>::residual(), SteinTol<Real>::ortho());
+    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/n - 8, /*iu=*/n - 1);
 }
 
 // Clustered spectrum: the Wilkinson matrix W+_(2m+1) is the classic hard case for
@@ -150,8 +130,7 @@ TYPED_TEST(SteinTest, WilkinsonClusterStaysOrthogonal) {
     for (int i = 0; i < n - 1; ++i) e[i] = Real(1);
 
     // The top 6 eigenvalues contain three near-degenerate pairs.
-    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/n - 6, /*iu=*/n - 1,
-                       SteinTol<Real>::residual(), SteinTol<Real>::ortho());
+    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/n - 6, /*iu=*/n - 1);
 }
 
 // A graded matrix, where the entries vary over several orders of magnitude.
@@ -162,8 +141,7 @@ TYPED_TEST(SteinTest, GradedMatrix) {
     for (int i = 0; i < n; ++i) d[i] = static_cast<Real>(std::pow(1.2, i % 20));
     for (int i = 0; i < n - 1; ++i) e[i] = static_cast<Real>(0.5 * std::pow(1.1, i % 15));
 
-    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/10, /*iu=*/17,
-                       SteinTol<Real>::residual(), SteinTol<Real>::ortho());
+    this->CheckTridiag(d, e, n, /*batch=*/2, /*il=*/10, /*iu=*/17);
 }
 
 namespace {
@@ -181,7 +159,6 @@ struct CountsFixture {
     std::vector<Real> d, e;
     UnifiedVector<Real> d_dev, e_dev, w;
     UnifiedVector<int32_t> counts;
-    Real tnorm = 0;
 
     CountsFixture()
         : d(n, Real(2)), e(n - 1, Real(-1)),
@@ -189,11 +166,6 @@ struct CountsFixture {
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) d_dev[b * n + i] = d[i];
             for (int i = 0; i < n - 1; ++i) e_dev[b * (n - 1) + i] = e[i];
-        }
-        for (int i = 0; i < n; ++i) {
-            const Real left = (i > 0) ? std::abs(e[i - 1]) : Real(0);
-            const Real right = (i < n - 1) ? std::abs(e[i]) : Real(0);
-            tnorm = std::max(tnorm, std::abs(d[i]) + left + right);
         }
     }
 
@@ -212,19 +184,6 @@ struct CountsFixture {
             stebz_buffer_size<test_utils::gpu_backend, Real>(ctx, n, batch, bp));
         (void)stebz<test_utils::gpu_backend>(ctx, dv(), ev(), wv(), m.to_span(), bws, bp);
         ctx.wait();
-    }
-
-    Real residual(const MatrixView<Real, MatrixFormat::Dense>& Z,
-                  int b, int j, Real lambda) const {
-        Real res2 = 0;
-        for (int i = 0; i < n; ++i) {
-            Real tv = d[i] * Z(i, j, b);
-            if (i > 0) tv += e[i - 1] * Z(i - 1, j, b);
-            if (i < n - 1) tv += e[i] * Z(i + 1, j, b);
-            const Real r = tv - lambda * Z(i, j, b);
-            res2 += r * r;
-        }
-        return std::sqrt(res2) / tnorm;
     }
 };
 
@@ -284,29 +243,12 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
                                    Z.view(), sws, sp);
     this->ctx->wait();
 
-    const Real res_tol = SteinTol<Real>::residual();
-    const Real ortho_tol = SteinTol<Real>::ortho();
-
+    const auto t = dense_tridiag(f.d, f.e, n);
     for (int b = 0; b < CountsFixture<Real>::batch; ++b) {
         const int kb = f.counts[b];
 
         // (a) the declared prefix is a genuine orthonormal invariant-subspace basis.
-        for (int j = 0; j < kb; ++j) {
-            const Real lambda = f.w[b * k + j];
-            EXPECT_LE(f.residual(Z.view(), b, j, lambda), res_tol)
-                << "residual too large, batch " << b << " vector " << j
-                << " (lambda=" << lambda << ")";
-        }
-        for (int i = 0; i < kb; ++i) {
-            for (int j = i; j < kb; ++j) {
-                Real dot = 0;
-                for (int r = 0; r < n; ++r) dot += Z.view()(r, i, b) * Z.view()(r, j, b);
-                const Real want = (i == j) ? Real(1) : Real(0);
-                EXPECT_LE(std::abs(dot - want), ortho_tol)
-                    << "orthogonality failure, batch " << b
-                    << " columns (" << i << "," << j << "): dot=" << dot;
-            }
-        }
+        expect_stein_pairs(t, Z.view(), f.w.data(), n, k, b, kb);
 
         // (b) everything past the prefix is exactly zero -- not the sentinel, not
         // an inverse-iteration result on a garbage shift, and above all not NaN.
@@ -328,14 +270,8 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
 // counts-less overload bit for bit: same kernels, same inputs, same launch
 // geometry, and the deliberately fixed LCG seed makes inverse iteration
 // reproducible. A difference here is a bounding bug, not a rounding difference.
-//
-// Deliberately NOT asserted here: that `stein_all_counts` (an empty span) matches
-// the counts-less overload. It cannot fail -- the counts-less overload is DEFINED
-// as a forwarder that passes an empty span (stein.cc), so the two are literally
-// the same call, and comparing them would measure run-to-run determinism while
-// reading as though it validated a bound. The second half of this test is a case
-// where the counts genuinely bind differently, which is what makes the first half
-// worth stating.
+// Not compared: `stein_all_counts` against the counts-less overload, which forwards
+// exactly that empty span (stein.cc), so the comparison could not fail.
 TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
     using Real = TypeParam;
     CountsFixture<Real> f;
@@ -344,9 +280,6 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
     constexpr int batch = CountsFixture<Real>::batch;
     static_assert(batch >= 2, "the short-item half of this test needs a second item");
 
-    // The reason the empty-span comparison is not here, as an assertion rather
-    // than as a claim in a comment: `stein_all_counts` IS the empty span the
-    // counts-less overload forwards, so the two calls are indistinguishable.
     ASSERT_TRUE(stein_all_counts.empty());
 
     f.FillEigenvalues(*this->ctx);
@@ -427,7 +360,6 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
     f.FillEigenvalues(*this->ctx);
     f.counts[0] = k;
     f.counts[1] = 0;
-    // Item 1's whole w is now meaningless; make that explicit.
     for (int j = 0; j < k; ++j) f.w[1 * k + j] = Real(0);
 
     Matrix<Real, MatrixFormat::Dense> Z(n, k, CountsFixture<Real>::batch);
@@ -451,10 +383,7 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
         }
     }
     // Item 0 is unaffected by its neighbour's empty request.
-    for (int j = 0; j < k; ++j) {
-        EXPECT_LE(f.residual(Z.view(), 0, j, f.w[j]), SteinTol<Real>::residual())
-            << "batch 0 vector " << j << " damaged by batch 1's zero count";
-    }
+    expect_stein_pairs(dense_tridiag(f.d, f.e, n), Z.view(), f.w.data(), n, k, 0, k, /*residual_only=*/true);
 }
 
 int main(int argc, char** argv) {

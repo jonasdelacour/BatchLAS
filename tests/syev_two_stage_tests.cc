@@ -21,7 +21,11 @@
 #include <type_traits>
 #include <vector>
 
+#include "eigen_verify.hh"
 #include "test_utils.hh"
+
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -35,6 +39,17 @@ inline U conj_if(const U& x) {
     } else {
         return x;
     }
+}
+
+// ||A0 Z - Z diag(w)||_F / ||A0||_F for every item (Z overwrote A; A0 is the saved input).
+template <typename T>
+void expect_residual(const Matrix<T, MatrixFormat::Dense>& A0, const Matrix<T, MatrixFormat::Dense>& Z,
+                     UnifiedVector<typename base_type<T>::type>& w, int n, const char* what) {
+    using Real = typename base_type<T>::type;
+    const VectorView<Real> wv(w, n, Z.batch_size());
+    EXPECT_VERIFY(T, batchlas::verify::Check::eigen_residual, n,
+                  batchlas::verify::eigen_residual(A0.view(), Z.view(), wv, batchlas::verify::all_items(Z.batch_size())))
+        << what << " n=" << n;
 }
 
 template <typename T, Backend Back>
@@ -69,7 +84,6 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
 
     for (int n : {32, 64, 129}) {
         const int batch = 3;
@@ -78,11 +92,10 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
             Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/17);
 
         // Keep a host copy: syev_two_stage overwrites A with the eigenvectors.
-        std::vector<T> Aref(static_cast<size_t>(batch) * n * n);
+        Matrix<T, MatrixFormat::Dense> Aref(n, n, batch);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
+                for (int j = 0; j < n; ++j) Aref(i, j, b) = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
@@ -92,40 +105,8 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        for (int b = 0; b < batch; ++b) {
-            Real anorm = Real(0);
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j) {
-                    const Real m = std::abs(Aref[(static_cast<size_t>(b) * n + i) * n + j]);
-                    anorm += m * m;
-                }
-            anorm = std::max(std::sqrt(anorm), Real(1));
-
-            // ||A Z - Z diag(w)||_F / ||A||_F
-            Real resid = Real(0);
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < n; ++i) {
-                    T acc = T(0);
-                    for (int l = 0; l < n; ++l)
-                        acc += Aref[(static_cast<size_t>(b) * n + i) * n + l] * A0(l, j, b);
-                    const T diff = acc - A0(i, j, b) * T(w[static_cast<size_t>(b) * n + j]);
-                    resid += std::abs(diff) * std::abs(diff);
-                }
-            }
-            EXPECT_LT(std::sqrt(resid) / anorm, tol)
-                << "residual n=" << n << " b=" << b;
-
-            // ||Z^H Z - I||_F
-            Real orth = Real(0);
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j) {
-                    T acc = T(0);
-                    for (int l = 0; l < n; ++l) acc += conj_if(A0(l, i, b)) * A0(l, j, b);
-                    if (i == j) acc -= T(1);
-                    orth += std::abs(acc) * std::abs(acc);
-                }
-            EXPECT_LT(std::sqrt(orth), tol * Real(n)) << "orthogonality n=" << n << " b=" << b;
-        }
+        test_utils::expect_eigenpairs<T>(Aref.view(), A0.view(), w, n,
+                                         batchlas::verify::all_items(batch));
     }
 }
 
@@ -140,7 +121,6 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
 
     for (int n : {100, 130, 150, 200, 250}) {
         const int batch = 2;
@@ -148,11 +128,10 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
         Matrix<T, MatrixFormat::Dense> A0 =
             Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/29);
 
-        std::vector<T> Aref(static_cast<size_t>(batch) * n * n);
+        Matrix<T, MatrixFormat::Dense> Aref(n, n, batch);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
+                for (int j = 0; j < n; ++j) Aref(i, j, b) = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
@@ -162,28 +141,7 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        for (int b = 0; b < batch; ++b) {
-            Real anorm = Real(0);
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j) {
-                    const Real m = std::abs(Aref[(static_cast<size_t>(b) * n + i) * n + j]);
-                    anorm += m * m;
-                }
-            anorm = std::max(std::sqrt(anorm), Real(1));
-
-            Real resid = Real(0);
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < n; ++i) {
-                    T acc = T(0);
-                    for (int l = 0; l < n; ++l)
-                        acc += Aref[(static_cast<size_t>(b) * n + i) * n + l] * A0(l, j, b);
-                    const T diff = acc - A0(i, j, b) * T(w[static_cast<size_t>(b) * n + j]);
-                    resid += std::abs(diff) * std::abs(diff);
-                }
-            }
-            EXPECT_LT(std::sqrt(resid) / anorm, tol)
-                << "residual n=" << n << " b=" << b;
-        }
+        expect_residual(Aref, A0, w, n, "two-stage");
     }
 }
 
@@ -196,17 +154,15 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
 
     for (int n : {32, 64, 129}) {
         const int batch = 3;
         Matrix<T, MatrixFormat::Dense> A0 =
             Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/17);
-        std::vector<T> Aref(static_cast<size_t>(batch) * n * n);
+        Matrix<T, MatrixFormat::Dense> Aref(n, n, batch);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j)
-                    Aref[(static_cast<size_t>(b) * n + i) * n + j] = A0(i, j, b);
+                for (int j = 0; j < n; ++j) Aref(i, j, b) = A0(i, j, b);
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_blocked_buffer_size(
@@ -215,26 +171,7 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
                            Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        for (int b = 0; b < batch; ++b) {
-            Real anorm = Real(0);
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j < n; ++j) {
-                    const Real m = std::abs(Aref[(static_cast<size_t>(b) * n + i) * n + j]);
-                    anorm += m * m;
-                }
-            anorm = std::max(std::sqrt(anorm), Real(1));
-            Real resid = Real(0);
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) {
-                    T acc = T(0);
-                    for (int l = 0; l < n; ++l)
-                        acc += Aref[(static_cast<size_t>(b) * n + i) * n + l] * A0(l, j, b);
-                    const T diff = acc - A0(i, j, b) * T(w[static_cast<size_t>(b) * n + j]);
-                    resid += std::abs(diff) * std::abs(diff);
-                }
-            EXPECT_LT(std::sqrt(resid) / anorm, tol)
-                << "blocked residual n=" << n << " b=" << b;
-        }
+        expect_residual(Aref, A0, w, n, "blocked");
     }
 }
 

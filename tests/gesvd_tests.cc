@@ -344,12 +344,7 @@ void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Den
     }
     const VectorView<Real> w(const_cast<Real*>(s.data()), k, batch);
     const double err = batchlas::verify::values_error(w, ref, sigma_max);
-    if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::values, k, err,
-                            (batchlas::verify::Slack{25.0, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: old float constants 5e-2 vs 2e-3 (comment at gesvd_bidiag_is_normal_equations)"}));
-    } else {
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
-    }
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
 #else
     static_cast<void>(A_ref);
     static_cast<void>(s);
@@ -378,7 +373,7 @@ void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M,
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
         EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err,
-                            (batchlas::verify::Slack{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured c 7.18 (2.05e-5 at n=48); accepted bound 128 n eps (0.5x of c=256)"}));
+                            (batchlas::verify::Slack{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag n=48, c 7.18 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"}));
     } else if (slack.factor != 1.0) {
         EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err, slack);
     } else {
