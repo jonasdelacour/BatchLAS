@@ -76,6 +76,8 @@ void reset(Sys<T>& p) {
 
 // Strictly column-diagonally-dominant, so cond(A) is O(1) and the residual bound above
 // is the right one. The diagonal magnitude is 4n against off-diagonals bounded by 1.
+// Rows are shifted cyclically, so every column pivots off the diagonal: an identity
+// interchange list would hide a dropped or reversed row swap from every check here.
 template <typename T>
 Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
                    int ld_pad = 5, int stride_pad = 11, bool singular_col = false) {
@@ -103,7 +105,7 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
                 // finds a nonzero pivot for a merely small diagonal, so only a zero
                 // column makes U exactly singular at a predictable step.
                 if (singular_col && j == (n / 2)) v = T{};
-                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = v;
+                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + (i + 1) % n] = v;
             }
         }
         for (int k = 0; k < nrhs; ++k)
