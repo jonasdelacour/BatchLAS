@@ -161,8 +161,8 @@ Progress events (`--progress-fd`), one JSON object per line:
   timed. Then `--warm` seconds of warm-up per runnable candidate, `--reps` reps with the order rotated
   by rep index (inputs restored untimed before each call), and one verified run checked by
   `batchlas::verify` ([verification](../../docs/design/verification.md)) on items 0, batch/2 and
-  batch-1 against the cell's bound `c * n * eps` (potrf factorization and posv solve: n; trsm solve:
-  order; gemm blas: k). A failed verification is `bad`.
+  batch-1 against the cell's bound `c * f(n) * eps` (potrf factorization and posv solve: n; trsm and
+  gemm, componentwise under the blas kind: order + 2 and k + 2). A failed verification is `bad`.
 - **In the driver:** a JIT pass, pass 1 over the grid, then pass 2 with the candidate order reversed.
   A cell's time per candidate is the mean of its pass medians. If any candidate's pass medians differ
   by more than 10%, both passes run again once; that attempt replaces the first unless nothing in it
