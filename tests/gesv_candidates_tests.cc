@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "lu_verify.hh"
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
@@ -51,16 +52,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -87,7 +78,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     Sys<T> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = mk<T>(R(-999), R(777));
+    const T poison = verify::make<T>(R(-999), R(777));
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(batch, nullptr);
@@ -101,11 +92,11 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T v = (i == j) ? mk<T>(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
-                                         : mk<T>(d(gen), d(gen));
+                    const T v = (i == j) ? verify::make<T>(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
+                                         : verify::make<T>(d(gen), d(gen));
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
-            for (auto& v : b1) v = mk<T>(d(gen), d(gen));
+            for (auto& v : b1) v = verify::make<T>(d(gen), d(gen));
         }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) p.a[size_t(it) * p.stra + size_t(j) * p.lda + i] = a1[i + size_t(j) * n];
@@ -117,27 +108,13 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     return p;
 }
 
-// ||A X - B||_F / (||A||_F ||X||_F) in double, against the pristine A.
+// ||A X - B||_F / (||A||_F ||X||_F) against the pristine A, for one item.
 template <typename T>
 double residual(const Sys<T>& p, int it) {
-    double num = 0, an = 0, xn = 0;
-    const size_t ao = size_t(it) * p.stra, bo = size_t(it) * p.strb;
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) an += std::norm(up(p.a0[ao + size_t(j) * p.lda + i]));
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const size_t col = bo + size_t(k) * p.ldb;
-            xn += std::norm(up(p.b[col + i]));
-            std::complex<double> acc = -up(p.b0[col + i]);
-            for (int t = 0; t < p.n; ++t) acc += up(p.a0[ao + size_t(t) * p.lda + i]) * up(p.b[col + t]);
-            num += std::norm(acc);
-        }
-    return (an == 0 || xn == 0) ? std::sqrt(num) : std::sqrt(num / (an * xn));
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    const int items[] = {it};
+    return verify::solve_residual(lu_verify::view_over<T>(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
+                                  lu_verify::view_over<T>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                  lu_verify::view_over<T>(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
@@ -153,7 +130,7 @@ void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std:
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
     for (int it : {0, p.batch - 1}) {
         const double r = residual(p, it);
-        EXPECT_TRUE(std::isfinite(r) && r <= tol<T>(p.n)) << what << " item " << it << " residual " << r;
+        EXPECT_TRUE(lu_verify::within<T>(verify::Check::solve, p.n, r)) << what << " item " << it << " residual " << r;
         bool moved = false;
         for (int i = 0; i < p.n; ++i) {
             const int32_t pv = piv32(p, it, i);
@@ -456,8 +433,8 @@ TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 40 : -1), R(0.25));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = verify::make<T>(R(i == j ? 40 : -1), R(0.25));
+    Bm.fill(verify::make<T>(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -834,7 +811,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         });
         EXPECT_EQ(got, "blocked");
         for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "item " << it;
-        for (int it : {0, p.batch - 1}) EXPECT_LE(residual(p, it), tol<T>(p.n)) << "item " << it;
+        for (int it : {0, p.batch - 1}) EXPECT_TRUE(lu_verify::within<T>(verify::Check::solve, p.n, residual(p, it))) << "item " << it;
 #endif
     }
 }

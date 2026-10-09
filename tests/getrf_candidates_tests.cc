@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "lu_verify.hh"
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/ops/getrf/choice.hh"
@@ -53,16 +54,6 @@ template <typename T>
 constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
 
 template <typename T>
-T mk(double re, double im) {
-    if constexpr (kCx<T>) return T(RealOf<T>(re), RealOf<T>(im));
-    else return T(re);
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -87,7 +78,7 @@ template <typename T>
 Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
     Lu<T> p;
     p.n = n, p.batch = batch, p.ld = n + 3, p.stride = p.ld * std::max(n, 1) + 5;
-    p.buf = UnifiedVector<T>(std::size_t(p.stride) * std::max(batch, 1), mk<T>(-9.75e3, 4.5e3));
+    p.buf = UnifiedVector<T>(std::size_t(p.stride) * std::max(batch, 1), verify::make<T>(-9.75e3, 4.5e3));
     p.ptrs = UnifiedVector<T*>(std::size_t(std::max(batch, 1)), nullptr);
     p.piv = UnifiedVector<int64_t>(std::max<std::size_t>(std::size_t(n) * batch, 1), int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(std::max(batch, 1)), int32_t(-12345));
@@ -101,45 +92,18 @@ Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
             for (int r = 0; r < n; ++r) {
                 const double re = next(), im = next();
                 const double d = r == j ? 4.0 * n : 0.0;
-                p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] = mk<T>(re + d, im);
+                p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] = verify::make<T>(re + d, im);
             }
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
 }
 
-template <typename T>
-double eps() {
-    return double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
 // ||P A0 - L U||_F / ||A0||_F for one item, P rebuilt from the 1-based interchange list.
 template <typename T>
 double residual(const Lu<T>& p, int b) {
-    const int n = p.n;
-    std::vector<std::complex<double>> pa(std::size_t(n) * n), f(std::size_t(n) * n);
-    double norm = 0.0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            const std::size_t e = std::size_t(b) * p.stride + std::size_t(j) * p.ld + i;
-            pa[std::size_t(j) * n + i] = up(p.a0[e]);
-            f[std::size_t(j) * n + i] = up(p.buf[e]);
-            norm += std::norm(up(p.a0[e]));
-        }
-    for (int k = 0; k < n; ++k) {
-        const int r = p.ip(b)[k] - 1;
-        if (r < k || r >= n) return std::numeric_limits<double>::infinity();
-        for (int j = 0; j < n; ++j) std::swap(pa[std::size_t(j) * n + k], pa[std::size_t(j) * n + r]);
-    }
-    double err = 0.0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> acc = 0.0;
-            for (int k = 0; k <= std::min(i, j); ++k)
-                acc += (k == i ? 1.0 : f[std::size_t(k) * n + i]) * f[std::size_t(j) * n + k];
-            err += std::norm(pa[std::size_t(j) * n + i] - acc);
-        }
-    return std::sqrt(err / std::max(norm, 1e-300));
+    const std::size_t off = std::size_t(b) * p.stride;
+    return lu_verify::factor_residual<T>(p.a0.data() + off, p.buf.data() + off, p.ip(b), p.n, p.n, p.ld);
 }
 
 // info, pivots and the residual of the first and last item, and the padding bit for bit.
@@ -147,8 +111,10 @@ template <typename T>
 void expect_factored(const Lu<T>& p, const std::string& what, bool info_passed = true) {
     for (int b = 0; info_passed && b < p.batch; ++b) ASSERT_EQ(p.info[b], 0) << what << " item " << b;
     for (int b : {0, p.batch - 1}) {
+        for (int k = 0; k < p.n; ++k)
+            ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.n) << what << " item " << b << " pivot " << k << " = " << p.ip(b)[k];
         const double r = residual(p, b);
-        EXPECT_TRUE(std::isfinite(r) && r <= 200.0 * p.n * eps<T>()) << what << " item " << b << " residual " << r;
+        EXPECT_TRUE(lu_verify::within<T>(verify::Check::factorization, p.n, r)) << what << " item " << b << " residual " << r;
     }
     for (std::size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stride), i = r % p.ld, j = r / p.ld;
@@ -406,7 +372,7 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
             disagreements += pin != run;
         }
         // A non-square view: refused by the pin and by the driver alike.
-        UnifiedVector<T> w(std::size_t(24) * 32, mk<T>(1.0, 0.5));
+        UnifiedVector<T> w(std::size_t(24) * 32, verify::make<T>(1.0, 0.5));
         UnifiedVector<T*> wp(1, nullptr);
         const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
         EXPECT_FALSE(this->pin_accepted(c, W)) << select::to_string(c) << " non-square";
@@ -449,7 +415,7 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
 TYPED_TEST(GetrfCandidates, NonSquareIsTheVendorsOnly) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    UnifiedVector<T> w(std::size_t(24) * 32 * 2, mk<T>(1.0, 0.5));
+    UnifiedVector<T> w(std::size_t(24) * 32 * 2, verify::make<T>(1.0, 0.5));
     UnifiedVector<T*> wp(2, nullptr);
     const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 2, wp.data());
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);

@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "lu_verify.hh"
 
 #include "../src/extensions/getrs_native.hh"
 #include "../src/ops/getrs/choice.hh"
@@ -53,16 +54,8 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
+using verify::up;
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -104,7 +97,7 @@ struct Sys {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -133,11 +126,11 @@ Sys<T> make_sys(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
-                if (i == j) p.f(it, i, j) = mk<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else p.f(it, i, j) = mk<T>(sg * d(gen) / R(s.n), d(gen) / R(s.n));
+                if (i == j) p.f(it, i, j) = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                else p.f(it, i, j) = verify::make<T>(sg * d(gen) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
-            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = verify::make<T>(u(gen), u(gen));
     }
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -189,11 +182,6 @@ double residual(Sys<T>& p, int it) {
     return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
 }
 
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
 // Residuals of the checked items, everything outside B's footprint and A bit for bit, and for a
 // repeating batch every item bit-identical to its representative.
 template <typename T>
@@ -205,7 +193,7 @@ void expect_solved(Sys<T>& p, const std::string& what, const std::vector<T>* a0 
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
+        ASSERT_TRUE(lu_verify::within<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
     }
     for (std::size_t e = 0; e < p.b.size(); ++e) {
         const std::size_t off = e % std::size_t(p.sb), col = off / std::size_t(p.ldb), row = off % std::size_t(p.ldb);
