@@ -7,7 +7,7 @@
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <stdexcept>
-#include <oneapi/dpl/random>
+#include "../util/philox.hh"
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/extra.hh>
@@ -456,7 +456,8 @@ inline constexpr R jacobi_definiteness_floor() {
         }
 
         // Only the X block of S is filled: P and R are recomputed from the first
-        // Rayleigh-Ritz onwards. The linear index below reproduces fill_random's exactly
+        // Rayleigh-Ritz onwards. The linear index and the philox key (seed, 0, idx) below
+        // reproduce fill_random's exactly
         // -- fill_random ignores ld/stride and walks the buffer flat -- so the starting
         // block stays bit-for-bit reproducible.
         {
@@ -474,15 +475,7 @@ inline constexpr R jacobi_definiteness_floor() {
                         const int c = static_cast<int>(rem / nn);
                         const size_t idx = static_cast<size_t>(b) * (3 * kk * nn) +
                                            static_cast<size_t>(c) * nn + static_cast<size_t>(r);
-                        oneapi::dpl::uniform_real_distribution<float_type> dist(-1.0, 1.0);
-                        oneapi::dpl::minstd_rand engine(seed, idx);
-                        const auto r1 = dist(engine);
-                        if constexpr (is_std_complex_v<T>) {
-                            const auto r2 = dist(engine);
-                            Xk(r, c, b) = T(r1, r2);
-                        } else {
-                            Xk(r, c, b) = T(r1);
-                        }
+                        Xk(r, c, b) = philox::uniform_symmetric<T>(seed, 0, idx);
                     });
             });
         }

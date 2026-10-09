@@ -24,6 +24,7 @@ set(TEST_TARGETS
     sg_partition_tests
     util_span_tests
     util_vector_tests
+    philox_tests
     util_device_queue_tests
     device_blas_tests
     mempool_tests
@@ -166,7 +167,7 @@ endif()
 # grows past ~15 s, label it here rather than letting it bloat the default run.
 # ---------------------------------------------------------------------------
 set(BATCHLAS_TEST_LABELS_util
-    sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests
+    sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests philox_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests
     settings_tests error_model_tests

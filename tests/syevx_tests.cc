@@ -3456,7 +3456,7 @@ TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
 
     // WHY THIS DOES NOT ASSERT info == 0 FOR EVERY ITEM, even though all four
     // matrices are byte-identical: LOBPCG's starting block is random PER ITEM.
-    // syevx_lobpcg.cc:481-493 seeds oneapi::dpl::minstd_rand with the FLAT
+    // syevx_lobpcg.cc:466-479 keys its philox draw on the FLAT
     // buffer index, reproducing fill_random's walk, so item b starts from a
     // different subspace than item b-1. Convergence within a fixed iteration
     // budget is therefore a property of the item's draw, not only of the matrix;
