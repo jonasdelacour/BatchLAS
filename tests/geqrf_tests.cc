@@ -17,7 +17,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/settings.hh>
 
-#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 #include <lapacke.h>
 #endif
 
@@ -1770,7 +1770,7 @@ TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
 // file already guards (the real-beta choice), and mixing the two questions into one
 // assertion would make a failure ambiguous.
 // evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
-#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
     using T = typename TestFixture::T;
     if constexpr (!(std::is_same_v<T, float> || std::is_same_v<T, double>)) {
@@ -1828,7 +1828,7 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
         }
     }
 }
-#endif  // BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#endif  // BATCHLAS_VERIFY_HAVE_LAPACKE
 
 // T8. A SOURCE check, because neither property has observable behaviour on this device: a
 // work-group barrier in a partition kernel is a RACE that stays green, and a work-group

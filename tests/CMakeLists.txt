@@ -304,11 +304,10 @@ function(batchlas_add_test_target test_name)
     # src/CMakeLists.txt) because PUBLIC pushed absolute -dev paths and a
     # find_dependency(CUDAToolkit) onto every installed consumer.
     #
-    # LAPACKE: these two call LAPACKE_* directly for their reference results.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests|geqrf_tests|getrf_tests)$")
-        target_link_libraries(${test_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
-        target_include_directories(${test_name} SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
-    endif()
+    # batchlas::verify (header-only) brings LAPACKE and BATCHLAS_VERIFY_HAVE_LAPACKE=0|1 to every test.
+    # gesvd_tests and sytrd_sb2st_tests call LAPACKE_* directly; geqrf_tests and getrf_tests use it as
+    # an independent oracle (rationale below).
+    target_link_libraries(${test_name} PRIVATE batchlas::verify)
     # geqrf_tests compares tau ELEMENTWISE against LAPACKE. NOT because the residual and
     # orthogonality probes are blind to tau -- that was the original rationale and it is
     # measured FALSE: v(j) = 1 is implicit in LAPACK's storage, so for a given stored
@@ -317,20 +316,13 @@ function(batchlas_add_test_target test_name)
     # is an INDEPENDENT ORACLE: every other numerical check in the file measures the
     # kernel against host_form_Q in that same file, so a convention error shared by the
     # kernel and that oracle passes all of them. evidence: docs/perf/qr.md, "Breaks (h)
-    # and (i) correct the rationale D9 was written from". The define is separate from the
-    # link so the test compiles and skips, rather than failing to build, where no host
-    # backend is present.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "geqrf_tests")
-        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE=1)
-    endif()
+    # and (i) correct the rationale D9 was written from". Where no host backend is present
+    # BATCHLAS_VERIFY_HAVE_LAPACKE is 0 and the test compiles and skips.
     # getrf_tests compares the tiny tier's ipiv ELEMENTWISE against LAPACKE on
     # UNSTRUCTURED data. Every other pivot oracle in that file is BatchLAS code: the
     # combinatorial expect_piv, or the CTA tier -- which shares getrf_cta_device.hh's
     # lu_cabs1 with the tier under test, so a defect in the pivot METRIC moves both
     # and leaves the tiny-vs-cta comparisons green.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "getrf_tests")
-        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GETRF_TESTS_HAVE_LAPACKE=1)
-    endif()
     # util_device_queue_tests checks Device::cuda_compute_capability() against the
     # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
     if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart

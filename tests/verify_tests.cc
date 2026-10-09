@@ -3,14 +3,11 @@
 #include <batchlas/verify/inputs.hh>
 #include <batchlas/verify/items.hh>
 #include <batchlas/verify/norms.hh>
+#include <batchlas/verify/reference.hh>
 #include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <gtest/gtest.h>
-
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-#include <lapacke.h>
-#endif
 
 #include <cmath>
 #include <cstdio>
@@ -355,33 +352,26 @@ TEST(Inputs, GradedHermitianIsHermitianWithSpectrum) {
 }
 
 TEST(Inputs, GradedHermitianHasRequestedCondition) {
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
     const int n = 9, ld = 12, batch = 3;
     const long long stride = 130;
     const double c = 6.0;
-    {
-        std::vector<double> buf(stride * batch, sentinel<double>());
-        MatrixView<double, MatrixFormat::Dense> A(buf.data(), n, n, ld, stride, batch);
+    bool ran = false;
+    auto run = [&](auto tag) {
+        using T = decltype(tag);
+        std::vector<T> buf(stride * batch, sentinel<T>());
+        MatrixView<T, MatrixFormat::Dense> A(buf.data(), n, n, ld, stride, batch);
         batchlas::verify::fill_graded_hermitian(A, c, 99);
         for (int b = 0; b < batch; ++b) {
-            std::vector<double> w(n);
-            ASSERT_EQ(LAPACKE_dsyev(LAPACK_COL_MAJOR, 'N', 'L', n, buf.data() + b * stride, ld, w.data()), 0);
+            auto a = batchlas::verify::copy_item(A, b);
+            std::vector<double> w;
+            if (!batchlas::verify::eigenvalues(n, a, w)) return;
+            ran = true;
             EXPECT_NEAR(w[n - 1] / w[0] / std::pow(10.0, c), 1.0, 0.01);
         }
-    }
-    {
-        std::vector<cdouble> buf(stride * batch, sentinel<cdouble>());
-        MatrixView<cdouble, MatrixFormat::Dense> A(buf.data(), n, n, ld, stride, batch);
-        batchlas::verify::fill_graded_hermitian(A, c, 99);
-        for (int b = 0; b < batch; ++b) {
-            std::vector<double> w(n);
-            ASSERT_EQ(LAPACKE_zheev(LAPACK_COL_MAJOR, 'N', 'L', n, reinterpret_cast<lapack_complex_double*>(buf.data() + b * stride), ld, w.data()), 0);
-            EXPECT_NEAR(w[n - 1] / w[0] / std::pow(10.0, c), 1.0, 0.01);
-        }
-    }
-#else
-    GTEST_SKIP() << "built without LAPACKE: eigenvalue-ratio half skipped";
-#endif
+    };
+    run(double{});
+    run(cdouble{});
+    if (!ran) GTEST_SKIP() << "built without LAPACKE: eigenvalue-ratio half skipped";
 }
 
 namespace {
@@ -434,3 +424,115 @@ TEST(Inputs, ReflectorsHaveUnitTau) {
     batchlas::verify::fill_reflectors(A, t, 5);
     EXPECT_EQ(tau[3], 0.0);
 }
+
+// ---------------------------------------------------------------------------- reference.hh
+
+TEST(Reference, CopyItemIsPackedAndPromoted) {
+    constexpr int m = 3, n = 2, ld = 5, batch = 2;
+    constexpr long long stride = 17;
+    std::vector<float> buf(stride * batch, sentinel<float>());
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i) buf[b * stride + j * ld + i] = float(100 * b + 10 * j + i);
+    MatrixView<float, MatrixFormat::Dense> A(buf.data(), m, n, ld, stride, batch);
+    const auto d = batchlas::verify::copy_item(A, 1);
+    static_assert(std::is_same_v<decltype(d), const std::vector<double>>);
+    ASSERT_EQ(d.size(), std::size_t(m * n));
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < m; ++i) EXPECT_EQ(d[j * m + i], double(100 + 10 * j + i));
+}
+
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
+
+TEST(Reference, EigenvaluesOfDiagonal) {
+    // Unsorted diagonal: the result must be ascending, not the diagonal order.
+    std::vector<double> a(16, 0.0), w;
+    const double diag[4] = {3.0, -2.0, 7.0, 0.5};
+    for (int i = 0; i < 4; ++i) a[i * 4 + i] = diag[i];
+    ASSERT_TRUE(batchlas::verify::eigenvalues(4, a, w));
+    ASSERT_EQ(w.size(), 4u);
+    const double want[4] = {-2.0, 0.5, 3.0, 7.0};
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(w[i], want[i]);
+
+    // [[2, -i], [i, 2]] is Hermitian with eigenvalues 1 and 3; the real part alone has 2, 2.
+    std::vector<cdouble> h = {{2, 0}, {0, 1}, {0, -1}, {2, 0}};
+    std::vector<double> hv;
+    ASSERT_TRUE(batchlas::verify::eigenvalues(2, h, hv));
+    EXPECT_NEAR(hv[0], 1.0, 1e-14);
+    EXPECT_NEAR(hv[1], 3.0, 1e-14);
+}
+
+TEST(Reference, SingularValuesOfDiagonal) {
+    // Tall, with a negative entry: descending, and the sign is dropped.
+    std::vector<double> a(5 * 3, 0.0), s;
+    a[0 * 5 + 0] = 2.0;
+    a[1 * 5 + 1] = -5.0;
+    a[2 * 5 + 2] = 3.0;
+    ASSERT_TRUE(batchlas::verify::singular_values(5, 3, a, s));
+    ASSERT_EQ(s.size(), 3u);
+    EXPECT_NEAR(s[0], 5.0, 1e-14);
+    EXPECT_NEAR(s[1], 3.0, 1e-14);
+    EXPECT_NEAR(s[2], 2.0, 1e-14);
+
+    // Wide complex: a unit-modulus phase does not change the singular value.
+    std::vector<cdouble> z(2 * 4, 0.0);
+    z[0 * 2 + 0] = cdouble(0.0, 4.0);
+    z[1 * 2 + 1] = cdouble(3.0, 0.0);
+    std::vector<double> zs;
+    ASSERT_TRUE(batchlas::verify::singular_values(2, 4, z, zs));
+    ASSERT_EQ(zs.size(), 2u);
+    EXPECT_NEAR(zs[0], 4.0, 1e-14);
+    EXPECT_NEAR(zs[1], 3.0, 1e-14);
+}
+
+TEST(Reference, GetrfPivotsOfPermutation) {
+    // A(p[j], j) = 1: step by step the pivots are 3, 3, 4, 4 (1-based).
+    const int p[4] = {2, 0, 3, 1};
+    std::vector<double> a(16, 0.0);
+    for (int j = 0; j < 4; ++j) a[j * 4 + p[j]] = 1.0;
+    std::vector<std::int32_t> ipiv;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(4, 4, a, ipiv));
+    ASSERT_EQ(ipiv.size(), 4u);
+    const std::int32_t want[4] = {3, 3, 4, 4};
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(ipiv[i], want[i]);
+
+    // Rectangular m > n: min(m, n) pivots.
+    std::vector<double> t(3 * 2, 0.0);
+    t[0 * 3 + 2] = 1.0;
+    t[1 * 3 + 1] = 1.0;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 2, t, ipiv));
+    ASSERT_EQ(ipiv.size(), 2u);
+    EXPECT_EQ(ipiv[0], 3);
+    EXPECT_EQ(ipiv[1], 2);
+}
+
+TEST(Reference, GetrfPivotsUseCabs1ForComplex) {
+    // Column 0 = (4, 2.7+2.7i): |z| picks row 0 (4 > 3.82), LAPACK's |re|+|im| picks row 1 (5.4 > 4).
+    std::vector<cdouble> a = {{4, 0}, {2.7, 2.7}, {1, 0}, {1, 0}};
+    std::vector<std::int32_t> ipiv;
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(2, 2, a, ipiv));
+    EXPECT_EQ(ipiv[0], 2);
+}
+
+TEST(Reference, SterfOfKnownTridiagonal) {
+    // 2 on the diagonal, -1 off it: eigenvalues 2 - sqrt(2), 2, 2 + sqrt(2), ascending, in d.
+    std::vector<double> d = {2, 2, 2}, e = {-1, -1};
+    ASSERT_TRUE(batchlas::verify::tridiagonal_eigenvalues(d, e));
+    ASSERT_EQ(d.size(), 3u);
+    EXPECT_NEAR(d[0], 2.0 - std::sqrt(2.0), 1e-14);
+    EXPECT_NEAR(d[1], 2.0, 1e-14);
+    EXPECT_NEAR(d[2], 2.0 + std::sqrt(2.0), 1e-14);
+}
+
+#else
+
+TEST(Reference, WithoutLapackeReturnsFalse) {
+    std::vector<double> a(4, 1.0), w, d = {1, 2}, e = {0.5};
+    std::vector<std::int32_t> ipiv;
+    EXPECT_FALSE(batchlas::verify::eigenvalues(2, a, w));
+    EXPECT_FALSE(batchlas::verify::singular_values(2, 2, a, w));
+    EXPECT_FALSE(batchlas::verify::getrf_pivots(2, 2, a, ipiv));
+    EXPECT_FALSE(batchlas::verify::tridiagonal_eigenvalues(d, e));
+}
+
+#endif

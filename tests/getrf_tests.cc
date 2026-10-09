@@ -26,7 +26,7 @@
 // getrf_cta_device.hh's lu_cabs1, so a defect in the pivot METRIC itself moves the
 // tiny tier and the CTA tier together and the tiny-vs-cta comparisons stay green.
 // TinyPivotsMatchLapackeOnUnstructuredData is what can see that.
-#ifdef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 #include <lapacke.h>
 #endif
 
@@ -3286,7 +3286,7 @@ Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
     return p;
 }
 
-#ifdef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 // Column-major, lda = n, 1-based ipiv -- the same contract the device span carries.
 template <typename T>
 lapack_int lapacke_getrf_any(int n, T* a, lapack_int* ipiv) {
@@ -3791,7 +3791,7 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
 // evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
 //           docs/perf/lu.md#the-pivot-margin-gate-on-elementwise-comparisons
 TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
-#ifndef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
     GTEST_SKIP() << "no host LAPACKE reference in this build";
 #else
     using T = typename TestFixture::T;
