@@ -405,6 +405,7 @@ template <class T> struct GemmCase {
     GemmConfig g;
     int bound_n, hot_r, hot_c;
     Batched<T> A, B, C0, C;
+    std::vector<std::vector<T>> la, lb;  // logical op operands per item
     promoted_t<T> alpha = alpha_of<T>(), beta = beta_of<T>();
 
     // Default: syrk-like, C's strict upper triangle unchecked (sc = lower), op(A) = A^H.
@@ -419,6 +420,8 @@ template <class T> struct GemmCase {
         for (int b = 0; b < kB; ++b) {
             const auto a = logical<T>(g.sa, A.rows, A.cols, rng);
             const auto bb = logical<T>(g.sb, B.rows, B.cols, rng);
+            la.push_back(a);
+            lb.push_back(bb);
             for (int j = 0; j < A.cols; ++j)
                 for (int i = 0; i < A.rows; ++i) A.ex(b, i, j) = stored(g.sa, i, j) ? a[j * A.rows + i] : poison<T>();
             for (int j = 0; j < B.cols; ++j)
@@ -486,6 +489,7 @@ template <class T> struct TrsmCase {
     Diag diag;
     int na, xr, xc, bound_n, hot_r, hot_c;
     Batched<T> A, X, B0;
+    std::vector<std::vector<T>> la;
     promoted_t<T> alpha = alpha_of<T>();
 
     explicit TrsmCase(Side s = Side::Left, Uplo u = Uplo::Lower, Transpose t = Transpose::ConjTrans, Diag d = Diag::NonUnit)
@@ -498,6 +502,7 @@ template <class T> struct TrsmCase {
             auto a = logical<T>(sh, na, na, rng);
             if (d == Diag::NonUnit)
                 for (int i = 0; i < na; ++i) a[i * na + i] = make<T>(3.0, 1.0);
+            la.push_back(a);
             for (int j = 0; j < na; ++j)
                 for (int i = 0; i < na; ++i) A.ex(b, i, j) = stored(sh, i, j) ? a[j * na + i] : poison<T>();
             for (int j = 0; j < xc; ++j)
@@ -534,6 +539,7 @@ template <class T> struct SpmmCase {
     std::vector<T> vals;
     std::vector<int> offs, cols;
     Batched<T> B, C0, C;
+    std::vector<std::vector<T>> dense_items;
     promoted_t<T> alpha = alpha_of<T>(), beta = beta_of<T>();
 
     explicit SpmmCase(Transpose a = Transpose::NoTrans, Transpose tb_ = Transpose::ConjTrans)
@@ -559,6 +565,7 @@ template <class T> struct SpmmCase {
                     }
             }
             offs[b * ostride + am] = p;
+            dense_items.push_back(dense);
             for (int j = 0; j < B.cols; ++j)
                 for (int i = 0; i < B.rows; ++i) B.ex(b, i, j) = rand_int<T>(rng, 3.0);
             const std::vector<T> bq(B.exact[b]);
@@ -785,4 +792,189 @@ TEST(PivotsValid, RangeAndLayout) {
     p[2 * 11 + 2 * 3] = 3;
     VectorView<std::int32_t> natural(p.data(), 4, 3, 1, 11);  // inc 1 reads the zero padding
     EXPECT_FALSE(batchlas::verify::pivots_valid(natural, 5));
+}
+
+// ------------------------------------------------------------------ known values
+// One dyadic delta on one element of the last item, the expected value worked out by hand from the
+// fixture's own data: these pin each denominator (the exact cases score 0 whatever it is).
+
+namespace {
+
+template <class T> T delta() { return make<T>(0.5, -0.25); }
+template <class T> double nrm2(const T& x) { return std::norm(cdouble(up(x))); }
+template <class T> double mod(const T& x) { return std::abs(cdouble(up(x))); }
+
+template <class C> void expect_value(C& c, double expected) {
+    const double v = c.value();
+    EXPECT_NEAR(v, expected, 1e-12 * expected) << "value " << v << " expected " << expected;
+}
+
+template <class E> double frob2(Batched<E>& M, int b) {
+    double s = 0;
+    for (int j = 0; j < M.cols; ++j)
+        for (int i = 0; i < M.rows; ++i) s += nrm2(M.ex(b, i, j));
+    return s;
+}
+
+// Only (n-1, n-1) of L L^H (or U^H U) moves, by |l + d|^2 - |l|^2; the denominator is the norm of
+// A0's triangle.
+template <class T> void potrf_known(Uplo u) {
+    PotrfCase<T> c(u);
+    const int n = c.n, b = kB - 1;
+    const T d = delta<T>();
+    const cdouble l(up(c.F.ex(b, n - 1, n - 1)));
+    c.F.at(b, n - 1, n - 1) += d;
+    double den = 0;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            if (u == Uplo::Lower ? i >= j : i <= j) den += nrm2(c.A0.ex(b, i, j));
+    expect_value(c, std::abs(std::norm(l + cdouble(up(d))) - std::norm(l)) / std::sqrt(den));
+}
+
+template <class C> void trsm_known() {
+    using T = typename C::type;
+    C c;
+    const int b = kB - 1, i0 = c.xr - 1, j0 = c.xc - 1;
+    const T d = delta<T>();
+    const double x2 = nrm2(c.X.ex(b, i0, j0));
+    const double xp2 = nrm2(c.X.ex(b, i0, j0) + d);
+    c.X.at(b, i0, j0) += d;
+    // Left: op(A) X moves by d op(A)(:, i0) in column j0. Right: X op(A) moves by d op(A)(j0, :) in row i0.
+    double hit = 0;
+    for (int l = 0; l < c.na; ++l)
+        hit += std::norm(cdouble(c.side == Side::Left ? op_at(c.la[b], c.na, c.ta, l, i0) : op_at(c.la[b], c.na, c.ta, j0, l)));
+    double a2 = 0;
+    for (const T& x : c.la[b]) a2 += nrm2(x);
+    const double den = std::sqrt(a2) * std::sqrt(frob2(c.X, b) - x2 + xp2) + mod(c.alpha) * std::sqrt(frob2(c.B0, b));
+    expect_value(c, mod(d) * std::sqrt(hit) / den);
+}
+
+}  // namespace
+
+TYPED_TEST(PotrfResidual, KnownValue) { potrf_known<TypeParam>(Uplo::Lower); }
+TYPED_TEST(PotrfUpperResidual, KnownValue) { potrf_known<TypeParam>(Uplo::Upper); }
+
+// L(m-1, 0) += d moves row m-1 of L U by d U(0, :).
+TYPED_TEST(GetrfResidual, KnownValue) {
+    GetrfCase<TypeParam> c;
+    const int b = kB - 1;
+    const TypeParam d = delta<TypeParam>();
+    c.F.at(b, c.m - 1, 0) += d;
+    double u0 = 0;
+    for (int j = 0; j < c.n; ++j) u0 += nrm2(c.F.ex(b, 0, j));
+    expect_value(c, mod(d) * std::sqrt(u0) / std::sqrt(frob2(c.A0, b)));
+}
+
+// R(0, n-1) += d moves column n-1 of Q R by d Q e_0, a unit vector.
+TYPED_TEST(QrResidual, KnownValue) {
+    QrCase<TypeParam> c;
+    const int b = kB - 1;
+    const TypeParam d = delta<TypeParam>();
+    c.F.at(b, 0, c.n - 1) += d;
+    expect_value(c, mod(d) / std::sqrt(frob2(c.A0, b)));
+}
+
+// X(i0, j0) += d moves column j0 of A0 X by d A0(:, i0); the denominator is ||A0|| ||X + d||.
+TYPED_TEST(SolveResidual, KnownValue) {
+    SolveCase<TypeParam> c;
+    const int b = kB - 1, i0 = c.n - 1, j0 = c.nrhs - 1;
+    const TypeParam d = delta<TypeParam>();
+    const double x2 = nrm2(c.X.ex(b, i0, j0)), xp2 = nrm2(c.X.ex(b, i0, j0) + d);
+    c.X.at(b, i0, j0) += d;
+    double col = 0;
+    for (int r = 0; r < c.n; ++r) col += nrm2(c.A0.ex(b, r, i0));
+    expect_value(c, mod(d) * std::sqrt(col) / (std::sqrt(frob2(c.A0, b)) * std::sqrt(frob2(c.X, b) - x2 + xp2)));
+}
+
+// getri form: A0 is a phased permutation, so ||A0||_F^2 = n and every column of A0 has norm 1.
+TYPED_TEST(InverseSolveResidual, KnownValue) {
+    InverseCase<TypeParam> c;
+    const int b = kB - 1, n = c.n;
+    const TypeParam d = delta<TypeParam>();
+    const double x2 = nrm2(c.X.ex(b, n - 1, n - 1)), xp2 = nrm2(c.X.ex(b, n - 1, n - 1) + d);
+    c.X.at(b, n - 1, n - 1) += d;
+    expect_value(c, mod(d) / (std::sqrt(double(n)) * std::sqrt(double(n) - x2 + xp2)));
+}
+
+namespace {
+
+// Componentwise: only C(i0, j0) is off, by d, over |alpha| sum |opA||opB| + |beta||C0|.
+template <class T> void gemm_known(const GemmConfig& g) {
+    GemmCase<T> c(g);
+    const int b = kB - 1, i0 = g.m - 1, j0 = 0;
+    const T d = delta<T>();
+    c.C.at(b, i0, j0) += d;
+    double mag = 0;
+    for (int l = 0; l < g.k; ++l)
+        mag += std::abs(cdouble(op_at(c.la[b], c.A.rows, g.ta, i0, l))) * std::abs(cdouble(op_at(c.lb[b], c.B.rows, g.tb, l, j0)));
+    expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * mod(c.C0.ex(b, i0, j0))));
+}
+
+}  // namespace
+
+TYPED_TEST(GemmBackwardError, KnownValue) {
+    gemm_known<TypeParam>({Shape::general, Transpose::ConjTrans, Shape::general, Transpose::NoTrans, Shape::lower, 7, 7, 6});
+}
+TYPED_TEST(GemmBackwardError, HermitianKnownValue) {
+    gemm_known<TypeParam>({Shape::hermitian_lower, Transpose::NoTrans, Shape::unit_upper, Transpose::ConjTrans, Shape::general, 6, 6, 6});
+}
+
+TYPED_TEST(GemvBackwardError, KnownValue) {
+    GemvCase<TypeParam> c;
+    const int b = kB - 1, i0 = c.ac - 1;
+    const TypeParam d = delta<TypeParam>();
+    c.y.at(b, i0, 0) += d;
+    double mag = 0;
+    for (int l = 0; l < c.ar; ++l) mag += mod(c.A.ex(b, l, i0)) * mod(c.x.ex(b, l, 0));
+    expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * mod(c.y0.ex(b, i0, 0))));
+}
+
+TYPED_TEST(TrsmResidual, KnownValue) { trsm_known<TrsmCase<TypeParam>>(); }
+TYPED_TEST(TrsmRightResidual, KnownValue) { trsm_known<TrsmRightCase<TypeParam>>(); }
+
+TYPED_TEST(SpmmBackwardError, KnownValue) {
+    SpmmCase<TypeParam> c;
+    const int b = kB - 1, i0 = c.cm - 1, j0 = c.n - 1;
+    const TypeParam d = delta<TypeParam>();
+    c.C.at(b, i0, j0) += d;
+    double mag = 0;
+    for (int l = 0; l < c.ck; ++l)
+        mag += std::abs(cdouble(op_at(c.dense_items[b], c.am, c.ta, i0, l))) * std::abs(cdouble(op_at(c.B.exact[b], c.B.rows, c.tb, l, j0)));
+    expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * mod(c.C0.ex(b, i0, j0))));
+}
+
+// Column c += d e_r: (Q^H Q)(a, c) and (c, a) move by d conj(Q(r, a)) and its conjugate for a != c,
+// and (c, c) by 2 Re(conj(q) d) + |d|^2.
+TYPED_TEST(Orthogonality, KnownValue) {
+    OrthoCase<TypeParam> c;
+    const int b = kB - 1, r = c.m - 1, col = c.k - 1;
+    const TypeParam d = delta<TypeParam>();
+    const cdouble q(up(c.Q.ex(b, r, col))), dd(up(d));
+    double off = 0;
+    for (int a = 0; a < c.k; ++a)
+        if (a != col) off += nrm2(c.Q.ex(b, r, a));
+    const double diag = 2.0 * (std::conj(q) * dd).real() + std::norm(dd);
+    c.Q.at(b, r, col) += d;
+    expect_value(c, std::sqrt(2.0 * std::norm(dd) * off + diag * diag));
+}
+
+// V(i0, j0) += d moves column j0 of A V - V diag(w) by d (A(:, i0) - w_j0 e_i0); A is full Hermitian.
+TYPED_TEST(EigenResidual, KnownValue) {
+    EigenCase<TypeParam> c;
+    const int b = kB - 1, n = c.n, i0 = n - 1, j0 = 0;
+    const TypeParam d = delta<TypeParam>();
+    c.V.at(b, i0, j0) += d;
+    auto full = [&](int r, int s) { return r >= s ? cdouble(up(c.A.ex(b, r, s))) : std::conj(cdouble(up(c.A.ex(b, s, r)))); };
+    double hit = 0, a2 = 0;
+    for (int r = 0; r < n; ++r) {
+        hit += std::norm(full(r, i0) - (r == i0 ? double(c.w.ex(b, j0, 0)) : 0.0));
+        for (int s = 0; s < n; ++s) a2 += std::norm(full(r, s));
+    }
+    expect_value(c, mod(d) * std::sqrt(hit) / std::sqrt(a2));
+}
+
+TYPED_TEST(ValuesError, KnownValue) {
+    ValuesCase<TypeParam> c;
+    c.w.at(kB - 1, c.n - 1, 0) += real_t<TypeParam>(0.5);
+    EXPECT_DOUBLE_EQ(batchlas::verify::values_error(c.w.vview(), c.ref, 4.0), 0.125);
 }
