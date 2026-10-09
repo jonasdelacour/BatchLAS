@@ -3,6 +3,8 @@
 // bit-for-bit comparison with the direct driver, never assumed from the pin being accepted.
 // Ports the RouteSpmm.* cases of route_vocabulary_tests that still describe behaviour.
 #include <gtest/gtest.h>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/spmm.hh>
 #include "../src/select/coverage.hh"
@@ -183,47 +185,21 @@ Problem<T> make(const Spec& s) {
     return p;
 }
 
-// C = alpha op(A) op(B) + beta C from the definition, accumulated over the nonzeros so duplicate
-// columns sum; every in-range C element within a scale-relative bound, every other element of
-// the shared buffer bit for bit.
+// C = alpha op(A) op(B) + beta C judged componentwise by the library (duplicate columns sum, slots
+// above an item's nnz are unread), on every item; every other element of the shared buffer bit for bit.
 template <typename T>
 void expect_correct(const Problem<T>& p, const std::string& what) {
-    using R = RealOf<T>;
     const Spec& s = p.s;
-    const R eps = std::numeric_limits<R>::epsilon();
-    int bad = 0;
-    for (int b = 0; b < s.batch && bad < 5; ++b) {
-        const std::size_t n_out = std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs);
-        std::vector<T> acc(n_out, T(0));
-        std::vector<R> scale(n_out, R(0));
-        auto opb = [&](int j, int c) {
-            if (s.tb == Transpose::NoTrans) return p.mem0[p.bi(b, j, c)];
-            const T v = p.mem0[p.bi(b, c, j)];
-            return s.tb == Transpose::ConjTrans ? cj(v) : v;
-        };
-        for (int i = 0; i < s.m; ++i)
-            for (int q = p.ro[std::size_t(b) * p.ostride + i]; q < p.ro[std::size_t(b) * p.ostride + i + 1]; ++q) {
-                T a = p.val[std::size_t(b) * p.vstride + q];
-                const int j = p.ci[std::size_t(b) * p.vstride + q];
-                const bool an = s.ta == Transpose::NoTrans;
-                if (s.ta == Transpose::ConjTrans) a = cj(a);
-                const int orow = an ? i : j, rrow = an ? j : i;
-                for (int c = 0; c < s.nrhs; ++c) {
-                    acc[std::size_t(c) * p.out_rows + orow] += a * opb(rrow, c);
-                    scale[std::size_t(c) * p.out_rows + orow] += std::abs(a) * std::abs(opb(rrow, c));
-                }
-            }
-        for (int c = 0; c < s.nrhs; ++c)
-            for (int i = 0; i < p.out_rows; ++i) {
-                const std::size_t e = std::size_t(c) * p.out_rows + i;
-                const T c0 = p.mem0[p.cidx(b, i, c)];
-                const T want = p.alpha * acc[e] + p.beta * c0;
-                const R bound = R(64) * eps * (std::abs(p.alpha) * scale[e] + std::abs(p.beta) * std::abs(c0) + R(1));
-                const T got = p.mem[p.cidx(b, i, c)];
-                if (!(std::abs(got - want) <= bound) && bad++ < 5)
-                    ADD_FAILURE() << what << ": C(" << i << "," << c << ") item " << b << " = " << got << ", want "
-                                  << want;
-            }
+    {
+        using namespace batchlas::verify;
+        Problem<T>& q = const_cast<Problem<T>&>(p);
+        const Dense<T> B0(q.mem0.data() + p.boff, p.b_rows, p.b_cols, p.ldb, p.sb, s.batch);
+        const Dense<T> C0(q.mem0.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
+        const Dense<T> C1(q.mem.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
+        const std::vector<int> all = all_items(s.batch);
+        const double err = spmm_backward_error(q.A(), s.ta, B0, s.tb, C0, C1, up(p.alpha), up(p.beta), all);
+        if (!pass<T>(Check::blas, p.red_rows, err))
+            ADD_FAILURE() << what << ": backward error " << err << " exceeds " << bound<T>(Check::blas, p.red_rows);
     }
     std::vector<char> in_c(p.mem.size(), 0);
     for (int b = 0; b < s.batch; ++b)

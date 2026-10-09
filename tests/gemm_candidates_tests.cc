@@ -15,6 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
@@ -64,11 +66,6 @@ template <typename T>
 T mk(RealOf<T> r, RealOf<T> i) {
     if constexpr (kCx<T>) return T(r, i);
     else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
 }
 template <typename T>
 bool same_bits(T a, T b) {
@@ -310,45 +307,24 @@ Problem<T> make_panel(Spec s, int parent) {
     return p;
 }
 
-template <typename T>
-std::complex<double> op_at(const Problem<T>& p, const Region& g, Transpose t, int it, int i, int j) {
-    const std::complex<double> v = t == kN ? up(p.mem0[Problem<T>::at(g, it, i, j)]) : up(p.mem0[Problem<T>::at(g, it, j, i)]);
-    return t == kC ? std::conj(v) : v;
-}
-
-template <typename T>
-double eps() {
-    return double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-// Item `it` against a complex<double> reference, componentwise against the BLAS error bound
-// (k+2) eps (|alpha| |op(A)| |op(B)| + |beta| |C0|); a C read at beta = 0 is not in the reference.
+// Item `it` against the library's componentwise BLAS backward error (k eps units); the operands and
+// C0 are read from the pristine copy, so a kernel that wrote into A, B or C0 cannot hide it.
 template <typename T>
 ::testing::AssertionResult item_ok(const Problem<T>& p, int it) {
     const Spec& s = p.s;
-    const std::complex<double> al = up(p.alpha), be = up(p.beta);
-    const double tol = 4.0 * (s.k + 2) * eps<T>();
-    for (int j = 0; j < s.n; ++j)
-        for (int i = 0; i < s.m; ++i) {
-            std::complex<double> acc = 0.0;
-            double mag = 0;
-            for (int l = 0; l < s.k; ++l) {
-                const auto x = op_at(p, p.a, s.ta, it, i, l), y = op_at(p, p.b, s.tb, it, l, j);
-                acc += x * y;
-                mag += std::abs(x) * std::abs(y);
-            }
-            std::complex<double> ref = al * acc;
-            double bound = std::abs(al) * mag;
-            if (!s.beta_zero) {
-                const auto c0 = up(p.mem0[Problem<T>::at(p.c, it, i, j)]);
-                ref += be * c0;
-                bound += std::abs(be) * std::abs(c0);
-            }
-            const auto got = up(p.mem[Problem<T>::at(p.c, it, i, j)]);
-            if (!std::isfinite(got.real()) || !std::isfinite(got.imag()) || std::abs(got - ref) > tol * bound + 1e-30)
-                return ::testing::AssertionFailure() << "item " << it << " C(" << i << "," << j << ") = " << got
-                                                     << ", expected " << ref << " (bound " << tol * bound << ")";
-        }
+    auto view0 = [&](const Region& g) {
+        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+    };
+    auto view1 = [&](const Region& g) {
+        return batchlas::verify::view(p.mem.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+    };
+    const int one[] = {it};
+    const double err = batchlas::verify::gemm_backward_error(
+        view0(p.a), batchlas::verify::Shape::general, s.ta, view0(p.b), batchlas::verify::Shape::general, s.tb, view0(p.c),
+        view1(p.c), batchlas::verify::Shape::general, batchlas::verify::up(p.alpha), batchlas::verify::up(p.beta), one);
+    if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, err))
+        return ::testing::AssertionFailure() << "item " << it << ": componentwise backward error " << err << " exceeds "
+                                             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     return ::testing::AssertionSuccess();
 }
 

@@ -16,6 +16,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/gemv/choice.hh"
 #include "../src/sycl/gemv_native.hh"
@@ -58,11 +60,6 @@ template <typename T>
 T mk(RealOf<T> r, RealOf<T> i) {
     if constexpr (kCx<T>) return T(r, i);
     else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
 }
 template <typename T>
 bool same_bits(T a, T b) {
@@ -137,11 +134,6 @@ Problem<T> make_problem(const Spec& s) {
     return p;
 }
 
-template <typename T>
-double tol(int red) {
-    return 32.0 * std::max(red, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
 // y = alpha op(A) x + beta y against a double host reference on the checked items, every element
 // outside y's footprint bit for bit, and a repeating batch bit-identical to its representative.
 template <typename T>
@@ -151,31 +143,28 @@ void expect_gemv(const Problem<T>& p, const std::string& what) {
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    const std::complex<double> al = up(p.alpha), be = up(p.beta);
     // Reference-BLAS quick return: m == 0 or n == 0 leaves y untouched, even when out > 0.
     const bool quick = s.m == 0 || s.n == 0;
     for (int it : items)
         if (quick)
             for (int o = 0; o < s.out(); ++o)
                 ASSERT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem0[p.yi(it, o)])) << what << ": quick return wrote y";
-    for (int it : quick ? std::vector<int>{} : items)
-        for (int o = 0; o < s.out(); ++o) {
-            std::complex<double> acc = 0.0;
-            double mag = 0.0;
-            for (int r = 0; r < s.red(); ++r) {
-                std::complex<double> a = s.trans == Transpose::NoTrans ? up(p.mem0[p.ai(it, o, r)])
-                                                                       : up(p.mem0[p.ai(it, r, o)]);
-                if (s.trans == Transpose::ConjTrans) a = std::conj(a);
-                acc += a * up(p.mem0[p.xi(it, r)]);
-                mag += std::abs(a) * std::abs(up(p.mem0[p.xi(it, r)]));
-            }
-            const std::complex<double> y0 = s.beta_zero ? 0.0 : up(p.mem0[p.yi(it, o)]);
-            const std::complex<double> want = al * acc + be * y0;
-            const double err = std::abs(up(p.mem[p.yi(it, o)]) - want);
-            const double scale = std::abs(al) * mag + std::abs(be) * std::abs(y0) + 1e-300;
-            ASSERT_TRUE(std::isfinite(err) && err <= tol<T>(s.red()) * std::max(scale, 1.0))
-                << what << " item " << it << " y[" << o << "] err " << err << " scale " << scale;
+    if (!quick) {
+        // Operands and y0 from the pristine copy; y from the result buffer.
+        auto at0 = [&](std::size_t off) { return const_cast<T*>(p.mem0.data()) + off; };
+        const MVof<T> A0(at0(p.a_off), s.m, s.n, p.lda, p.sa, s.batch);
+        const VectorView<T> X0(at0(p.x_off), s.red(), s.batch, Inc{p.incx}, Stride{p.sx});
+        const VectorView<T> Y0(at0(p.y_off), s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
+        const VectorView<T> Y1(const_cast<T*>(p.mem.data()) + p.y_off, s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
+        for (int it : items) {
+            const int one[] = {it};
+            const double err = batchlas::verify::gemv_backward_error(A0, s.trans, X0, Y0, Y1, batchlas::verify::up(p.alpha),
+                                                                      batchlas::verify::up(p.beta), one);
+            ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.red(), err))
+                << what << " item " << it << " backward error " << err << " exceeds "
+                << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
         }
+    }
     std::vector<char> iny(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int o = 0; o < s.out(); ++o) iny[p.yi(it, o)] = 1;
