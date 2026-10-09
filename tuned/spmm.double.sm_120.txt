@@ -1,503 +1,716 @@
-# op=spmm dtype=double device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/spmm.sm_120.csv (the old router's preference order per grid cell, untimed)
+# op=spmm dtype=double device=sm_120 batchlas=209d9fb8 kernels=722b064a family_kernels=direct:8922cfaa,vendor:e5f40915 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/spmm.double.sm_120 tiers=deep:705,coarse:0,preview:0,custom:0,transcribed:8
 # keys: transA:exact transB:exact m:log nrhs:log batch:log
-transA=N transB=N m=1 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=N m=1 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=N m=1 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=N m=1 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=N m=1 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=N m=1 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=N m=1 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=N m=1 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=N m=1 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=N m=1 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=N m=1 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=N m=1 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=N m=1 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=N m=1 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=N m=1 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=N m=1 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=N m=1 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=N m=1 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=N m=1 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=N m=1 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=N m=1 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=N m=1 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=N m=1 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=N m=1 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=N m=1 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=N m=16 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=N m=16 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=N m=16 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=N m=16 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=N m=16 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=N m=16 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=N m=16 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=N m=16 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=N m=16 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=N m=16 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=N m=16 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=N m=16 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=N m=16 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=N m=16 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=N m=16 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=N m=16 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=N m=16 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=N m=16 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=N m=16 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=N m=16 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=N m=16 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=N m=16 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=N m=16 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=N m=16 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=N m=16 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=N m=256 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=N m=256 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=N m=256 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=N m=256 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=N m=256 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=N m=256 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=N m=256 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=N m=256 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=N m=256 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=N m=256 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=N m=256 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=N m=256 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=N m=256 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=N m=256 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=N m=256 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=N m=256 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=N m=256 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=N m=256 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=N m=256 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=N m=256 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=N m=256 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=N m=256 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=N m=256 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=N m=256 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=N m=256 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=N m=4096 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=N m=65536 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=T m=1 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=T m=1 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=T m=1 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=T m=1 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=T m=1 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=T m=1 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=T m=1 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=T m=1 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=T m=1 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=T m=1 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=T m=1 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=T m=1 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=T m=1 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=T m=1 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=T m=1 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=T m=1 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=T m=1 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=T m=1 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=T m=1 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=T m=1 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=T m=1 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=T m=1 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=T m=1 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=T m=1 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=T m=1 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=T m=16 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=T m=16 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=T m=16 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=T m=16 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=T m=16 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=T m=16 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=T m=16 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=T m=16 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=T m=16 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=T m=16 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=T m=16 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=T m=16 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=T m=16 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=T m=16 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=T m=16 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=T m=16 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=T m=16 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=T m=16 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=T m=16 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=T m=16 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=T m=16 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=T m=16 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=T m=16 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=T m=16 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=T m=16 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=T m=256 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=T m=256 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=T m=256 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=T m=256 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=T m=256 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=T m=256 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=T m=256 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=T m=256 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=T m=256 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=T m=256 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=T m=256 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=T m=256 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=T m=256 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=T m=256 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=T m=256 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=T m=256 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=T m=256 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=T m=256 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=T m=256 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=T m=256 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=T m=256 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=T m=256 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=T m=256 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=T m=256 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=T m=256 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=T m=4096 nrhs=64 batch=16384 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=1 batch=1 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=1 batch=8 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=1 batch=128 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=1 batch=1024 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=1 batch=16384 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=2 batch=1 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=2 batch=8 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=2 batch=128 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=2 batch=1024 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=2 batch=16384 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=4 batch=1 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=4 batch=8 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=4 batch=128 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=4 batch=1024 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=4 batch=16384 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=16 batch=1 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=16 batch=8 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=16 batch=128 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=16 batch=1024 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=16 batch=16384 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=64 batch=1 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=64 batch=8 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=64 batch=128 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=64 batch=1024 | direct - | vendor -
-transA=N transB=T m=65536 nrhs=64 batch=16384 | direct - | vendor -
-transA=T transB=N m=1 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=N m=1 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=N m=1 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=N m=1 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=N m=1 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=N m=1 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=N m=1 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=N m=1 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=N m=1 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=N m=1 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=N m=1 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=N m=1 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=N m=1 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=N m=1 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=N m=1 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=N m=1 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=N m=1 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=N m=1 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=N m=1 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=N m=1 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=N m=1 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=N m=1 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=N m=1 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=N m=1 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=N m=1 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=N m=16 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=N m=16 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=N m=16 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=N m=16 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=N m=16 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=N m=16 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=N m=16 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=N m=16 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=N m=16 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=N m=16 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=N m=16 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=N m=16 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=N m=16 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=N m=16 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=N m=16 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=N m=16 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=N m=16 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=N m=16 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=N m=16 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=N m=16 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=N m=16 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=N m=16 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=N m=16 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=N m=16 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=N m=16 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=N m=256 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=N m=256 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=N m=256 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=N m=256 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=N m=256 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=N m=256 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=N m=256 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=N m=256 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=N m=256 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=N m=256 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=N m=256 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=N m=256 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=N m=256 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=N m=256 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=N m=256 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=N m=256 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=N m=256 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=N m=256 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=N m=256 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=N m=256 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=N m=256 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=N m=256 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=N m=256 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=N m=256 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=N m=256 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=N m=4096 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=N m=65536 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=T m=1 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=T m=1 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=T m=1 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=T m=1 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=T m=1 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=T m=1 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=T m=1 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=T m=1 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=T m=1 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=T m=1 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=T m=1 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=T m=1 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=T m=1 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=T m=1 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=T m=1 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=T m=1 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=T m=1 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=T m=1 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=T m=1 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=T m=1 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=T m=1 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=T m=1 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=T m=1 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=T m=1 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=T m=1 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=T m=16 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=T m=16 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=T m=16 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=T m=16 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=T m=16 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=T m=16 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=T m=16 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=T m=16 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=T m=16 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=T m=16 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=T m=16 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=T m=16 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=T m=16 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=T m=16 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=T m=16 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=T m=16 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=T m=16 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=T m=16 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=T m=16 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=T m=16 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=T m=16 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=T m=16 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=T m=16 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=T m=16 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=T m=16 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=T m=256 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=T m=256 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=T m=256 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=T m=256 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=T m=256 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=T m=256 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=T m=256 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=T m=256 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=T m=256 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=T m=256 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=T m=256 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=T m=256 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=T m=256 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=T m=256 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=T m=256 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=T m=256 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=T m=256 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=T m=256 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=T m=256 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=T m=256 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=T m=256 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=T m=256 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=T m=256 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=T m=256 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=T m=256 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=T m=4096 nrhs=64 batch=16384 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=1 batch=1 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=1 batch=8 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=1 batch=128 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=1 batch=1024 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=1 batch=16384 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=2 batch=1 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=2 batch=8 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=2 batch=128 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=2 batch=1024 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=2 batch=16384 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=4 batch=1 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=4 batch=8 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=4 batch=128 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=4 batch=1024 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=4 batch=16384 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=16 batch=1 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=16 batch=8 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=16 batch=128 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=16 batch=1024 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=16 batch=16384 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=64 batch=1 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=64 batch=8 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=64 batch=128 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=64 batch=1024 | vendor - | direct -
-transA=T transB=T m=65536 nrhs=64 batch=16384 | vendor - | direct -
+transA=N transB=N m=1 nrhs=1 batch=1 | direct 0.009289 | vendor 0.02303 # deep
+transA=N transB=N m=1 nrhs=1 batch=8 | direct 0.009224 | vendor 0.01661 # deep
+transA=N transB=N m=1 nrhs=1 batch=128 | direct 0.008483 | vendor 0.01307 # deep
+transA=N transB=N m=1 nrhs=1 batch=1024 | direct 0.008348 | vendor 0.01641 # deep
+transA=N transB=N m=1 nrhs=1 batch=16384 | direct 0.01278 | vendor 0.1361 # deep
+transA=N transB=N m=1 nrhs=2 batch=1 | direct 0.009414 | vendor 0.01292 # deep
+transA=N transB=N m=1 nrhs=2 batch=8 | direct 0.009430 | vendor 0.02075 # deep
+transA=N transB=N m=1 nrhs=2 batch=128 | direct 0.01736 | vendor 0.03483 # deep
+transA=N transB=N m=1 nrhs=2 batch=1024 | direct 0.008433 | vendor 0.01985 # deep
+transA=N transB=N m=1 nrhs=2 batch=16384 | direct 0.01273 | vendor 1.039 # deep
+transA=N transB=N m=1 nrhs=4 batch=1 | direct 0.009825 | vendor 0.01515 # deep
+transA=N transB=N m=1 nrhs=4 batch=8 | direct 0.01026 | vendor 0.02877 # deep
+transA=N transB=N m=1 nrhs=4 batch=128 | direct 0.01214 | vendor 0.03707 # deep
+transA=N transB=N m=1 nrhs=4 batch=1024 | direct 0.008848 | vendor 0.02385 # deep
+transA=N transB=N m=1 nrhs=4 batch=16384 | direct 0.01222 | vendor 1.078 # deep
+transA=N transB=N m=1 nrhs=16 batch=1 | direct 0.01141 | vendor 0.02479 # deep
+transA=N transB=N m=1 nrhs=16 batch=8 | direct 0.01121 | vendor 0.03060 # deep
+transA=N transB=N m=1 nrhs=16 batch=128 | direct 0.01090 | vendor 0.04304 # deep
+transA=N transB=N m=1 nrhs=16 batch=1024 | direct 0.009439 | vendor 0.05258 # deep
+transA=N transB=N m=1 nrhs=16 batch=16384 | direct 0.01274 | vendor 1.287 # deep
+transA=N transB=N m=1 nrhs=64 batch=1 | direct 0.01146 | vendor 0.02822 # deep
+transA=N transB=N m=1 nrhs=64 batch=8 | direct 0.01076 | vendor 0.02903 # deep
+transA=N transB=N m=1 nrhs=64 batch=128 | direct 0.01119 | vendor 0.04622 # deep
+transA=N transB=N m=1 nrhs=64 batch=1024 | direct 0.009910 | vendor 0.1654 # deep
+transA=N transB=N m=1 nrhs=64 batch=16384 | direct 0.02270 | vendor 3.574 # deep
+transA=N transB=N m=16 nrhs=1 batch=1 | direct 0.01162 | vendor 0.02727 # deep
+transA=N transB=N m=16 nrhs=1 batch=8 | direct 0.01252 | vendor 0.02422 # deep
+transA=N transB=N m=16 nrhs=1 batch=128 | direct 0.01410 | vendor 0.02127 # deep
+transA=N transB=N m=16 nrhs=1 batch=1024 | direct 0.02022 | vendor 0.04499 # deep
+transA=N transB=N m=16 nrhs=1 batch=16384 | direct 0.02032 | vendor 5.965 # deep
+transA=N transB=N m=16 nrhs=2 batch=1 | direct 0.01255 | vendor 0.01930 # deep
+transA=N transB=N m=16 nrhs=2 batch=8 | direct 0.01251 | vendor 0.02878 # deep
+transA=N transB=N m=16 nrhs=2 batch=128 | direct 0.01498 | vendor 0.02260 # deep
+transA=N transB=N m=16 nrhs=2 batch=1024 | direct 0.01965 | vendor 0.04385 # deep
+transA=N transB=N m=16 nrhs=2 batch=16384 | direct 0.02271 | vendor 5.982 # deep
+transA=N transB=N m=16 nrhs=4 batch=1 | direct 0.02072 | vendor 0.02318 # deep
+transA=N transB=N m=16 nrhs=4 batch=8 | direct 0.01322 | vendor 0.01658 # deep
+transA=N transB=N m=16 nrhs=4 batch=128 | direct 0.01775 | vendor 0.02373 # deep
+transA=N transB=N m=16 nrhs=4 batch=1024 | direct 0.02315 | vendor 0.05094 # deep
+transA=N transB=N m=16 nrhs=4 batch=16384 | direct 0.03670 | vendor 5.915 # deep
+transA=N transB=N m=16 nrhs=16 batch=1 | direct 0.02026 | vendor 0.03796 # deep
+transA=N transB=N m=16 nrhs=16 batch=8 | direct 0.01722 | vendor 0.02444 # deep
+transA=N transB=N m=16 nrhs=16 batch=128 | direct 0.02336 | vendor 0.03153 # deep
+transA=N transB=N m=16 nrhs=16 batch=1024 | direct 0.03407 | vendor 0.08638 # deep
+transA=N transB=N m=16 nrhs=16 batch=16384 | direct 0.06488 | vendor 5.697 # deep
+transA=N transB=N m=16 nrhs=64 batch=1 | direct 0.02217 | vendor 0.03423 # deep
+transA=N transB=N m=16 nrhs=64 batch=8 | direct 0.02568 | vendor 0.03139 # deep
+transA=N transB=N m=16 nrhs=64 batch=128 | direct 0.03878 | vendor 0.06034 # deep
+transA=N transB=N m=16 nrhs=64 batch=1024 | direct 0.04486 | vendor 0.3511 # deep
+transA=N transB=N m=16 nrhs=64 batch=16384 | direct 0.3644 | vendor 8.288 # deep
+transA=N transB=N m=23 nrhs=64 batch=8 | direct 0.03006 | vendor 0.05607 # deep
+transA=N transB=N m=27 nrhs=64 batch=8 | direct 0.03046 | vendor 0.04042 # deep
+transA=N transB=N m=29 nrhs=64 batch=8 | direct 0.03122 | vendor 0.04456 # deep
+transA=N transB=N m=30 nrhs=64 batch=8 | direct 0.03202 | vendor 0.05289 # deep
+transA=N transB=N m=32 nrhs=64 batch=1 | direct 0.03079 | vendor 0.03899 # deep
+transA=N transB=N m=32 nrhs=64 batch=8 | vendor 0.03100 | direct 0.03450 # deep
+transA=N transB=N m=45 nrhs=64 batch=1 | direct 0.03168 | vendor 0.04760 # deep
+transA=N transB=N m=54 nrhs=64 batch=1 | direct 0.03017 | vendor 0.03196 # deep
+transA=N transB=N m=59 nrhs=64 batch=1 | direct 0.03207 | vendor 0.03246 # deep
+transA=N transB=N m=64 nrhs=64 batch=1 | vendor 0.02851 | direct 0.03037 # deep
+transA=N transB=N m=64 nrhs=64 batch=8 | vendor 0.03213 | direct 0.03770 # deep
+transA=N transB=N m=256 nrhs=1 batch=1 | direct 0.01097 | vendor 0.02618 # deep
+transA=N transB=N m=256 nrhs=1 batch=8 | direct 0.01385 | vendor 0.02111 # deep
+transA=N transB=N m=256 nrhs=1 batch=128 | direct 0.02416 | vendor 0.04536 # deep
+transA=N transB=N m=256 nrhs=1 batch=1024 | direct 0.02059 | vendor 4.934 # deep
+transA=N transB=N m=256 nrhs=1 batch=16384 | direct 0.3153 | vendor 61.65 # deep
+transA=N transB=N m=256 nrhs=2 batch=1 | direct 0.01096 | vendor 0.01712 # deep
+transA=N transB=N m=256 nrhs=2 batch=8 | direct 0.01485 | vendor 0.02194 # deep
+transA=N transB=N m=256 nrhs=2 batch=128 | direct 0.02415 | vendor 0.05891 # deep
+transA=N transB=N m=256 nrhs=2 batch=1024 | direct 0.02205 | vendor 4.678 # deep
+transA=N transB=N m=256 nrhs=2 batch=16384 | direct 0.3792 | vendor 67.73 # deep
+transA=N transB=N m=256 nrhs=4 batch=1 | direct 0.01593 | vendor 0.01875 # deep
+transA=N transB=N m=256 nrhs=4 batch=8 | direct 0.01849 | vendor 0.02264 # deep
+transA=N transB=N m=256 nrhs=4 batch=128 | direct 0.02984 | vendor 0.06205 # deep
+transA=N transB=N m=256 nrhs=4 batch=1024 | direct 0.03667 | vendor 4.258 # deep
+transA=N transB=N m=256 nrhs=4 batch=16384 | direct 0.5815 | vendor 64.25 # deep
+transA=N transB=N m=256 nrhs=16 batch=1 | direct 0.02376 | vendor 0.02698 # deep
+transA=N transB=N m=256 nrhs=16 batch=8 | direct 0.02831 | vendor 0.03129 # deep
+transA=N transB=N m=256 nrhs=16 batch=128 | direct 0.04756 | vendor 0.09252 # deep
+transA=N transB=N m=256 nrhs=16 batch=1024 | direct 0.07013 | vendor 4.643 # deep
+transA=N transB=N m=256 nrhs=16 batch=16384 | direct 1.669 | vendor 69.11 # deep
+transA=N transB=N m=256 nrhs=17 batch=8 | vendor 0.03097 | direct 0.03509 # deep
+transA=N transB=N m=256 nrhs=19 batch=8 | vendor 0.03250 | direct 0.03789 # deep
+transA=N transB=N m=256 nrhs=23 batch=8 | vendor 0.03342 | direct 0.03656 # deep
+transA=N transB=N m=256 nrhs=32 batch=1 | direct 0.02692 | vendor 0.02941 # deep
+transA=N transB=N m=256 nrhs=32 batch=8 | vendor 0.03555 | direct 0.04283 # deep
+transA=N transB=N m=256 nrhs=45 batch=1 | direct 0.02976 | vendor 0.03827 # deep
+transA=N transB=N m=256 nrhs=49 batch=1 | direct 0.03103 | vendor 0.03615 # deep
+transA=N transB=N m=256 nrhs=51 batch=1 | direct 0.03214 | vendor 0.03806 # deep
+transA=N transB=N m=256 nrhs=54 batch=1 | vendor 0.03046 | direct 0.03210 # deep
+transA=N transB=N m=256 nrhs=64 batch=1 | vendor 0.03220 | direct 0.03651 # deep
+transA=N transB=N m=256 nrhs=64 batch=8 | vendor 0.05821 | direct 0.07448 # deep
+transA=N transB=N m=256 nrhs=64 batch=128 | direct 0.2321 | vendor 0.4094 # deep
+transA=N transB=N m=256 nrhs=64 batch=1024 | direct 0.4398 | vendor 6.253 # deep
+transA=N transB=N m=1024 nrhs=64 batch=8 | vendor 0.1121 | direct 0.1343 # deep
+transA=N transB=N m=1117 nrhs=64 batch=8 | vendor 0.1108 | direct 0.1241 # deep
+transA=N transB=N m=1218 nrhs=64 batch=8 | direct 0.1092 | vendor 0.1219 # deep
+transA=N transB=N m=1448 nrhs=64 batch=8 | direct 0.1219 | vendor 0.1387 # deep
+transA=N transB=N m=2048 nrhs=64 batch=8 | direct 0.1437 | vendor 0.1439 # deep
+transA=N transB=N m=4096 nrhs=1 batch=1 | direct 0.01298 | vendor 0.02541 # deep
+transA=N transB=N m=4096 nrhs=1 batch=8 | direct 0.01883 | vendor 0.03087 # deep
+transA=N transB=N m=4096 nrhs=1 batch=128 | direct 0.08348 | vendor 0.9329 # deep
+transA=N transB=N m=4096 nrhs=1 batch=1024 | direct 0.4186 # deep
+transA=N transB=N m=4096 nrhs=2 batch=1 | direct 0.01325 | vendor 0.02065 # deep
+transA=N transB=N m=4096 nrhs=2 batch=8 | direct 0.01968 | vendor 0.05096 # deep
+transA=N transB=N m=4096 nrhs=2 batch=128 | direct 0.06159 # deep
+transA=N transB=N m=4096 nrhs=2 batch=1024 | direct 0.5842 # deep
+transA=N transB=N m=4096 nrhs=4 batch=1 | direct 0.01755 | vendor 0.02220 # deep
+transA=N transB=N m=4096 nrhs=4 batch=8 | direct 0.02417 | vendor 0.05117 # deep
+transA=N transB=N m=4096 nrhs=4 batch=128 | direct 0.09384 # deep
+transA=N transB=N m=4096 nrhs=4 batch=1024 | direct 0.8154 # deep
+transA=N transB=N m=4096 nrhs=16 batch=1 | direct 0.02837 | vendor 0.03044 # deep
+transA=N transB=N m=4096 nrhs=16 batch=8 | direct 0.04350 | vendor 0.08168 # deep
+transA=N transB=N m=4096 nrhs=16 batch=128 | direct 0.3519 # deep
+transA=N transB=N m=4096 nrhs=16 batch=1024 | direct 2.414 # deep
+transA=N transB=N m=4096 nrhs=64 batch=1 | vendor 0.05062 | direct 0.05669 # deep
+transA=N transB=N m=4096 nrhs=64 batch=8 | direct 0.1623 | vendor 0.2278 # deep
+transA=N transB=N m=4096 nrhs=64 batch=128 | direct 1.230 # deep
+transA=N transB=N m=4096 nrhs=64 batch=16384 | direct - | vendor - # transcribed
+transA=N transB=N m=65536 nrhs=1 batch=1 | direct 0.01356 | vendor 0.03092 # deep
+transA=N transB=N m=65536 nrhs=1 batch=8 | direct 0.06022 | vendor 0.08351 # deep
+transA=N transB=N m=65536 nrhs=1 batch=128 | direct 1.010 # deep
+transA=N transB=N m=65536 nrhs=2 batch=1 | direct 0.01865 | vendor 0.03820 # deep
+transA=N transB=N m=65536 nrhs=2 batch=8 | direct 0.09142 | vendor 0.1314 # deep
+transA=N transB=N m=65536 nrhs=2 batch=128 | direct 1.564 # deep
+transA=N transB=N m=65536 nrhs=4 batch=1 | direct 0.02869 | vendor 0.05064 # deep
+transA=N transB=N m=65536 nrhs=4 batch=8 | direct 0.1672 | vendor 0.2384 # deep
+transA=N transB=N m=65536 nrhs=4 batch=128 | direct 2.690 # deep
+transA=N transB=N m=65536 nrhs=16 batch=1 | direct 0.07884 | vendor 0.1331 # deep
+transA=N transB=N m=65536 nrhs=16 batch=8 | direct 0.6827 | vendor 1.077 # deep
+transA=N transB=N m=65536 nrhs=16 batch=128 | direct 9.563 # deep
+transA=N transB=N m=65536 nrhs=64 batch=1 | direct 0.3032 | vendor 0.4544 # deep
+transA=N transB=N m=65536 nrhs=64 batch=8 | direct 2.607 | vendor 5.497 # deep
+transA=N transB=N m=65536 nrhs=64 batch=16384 | direct - | vendor - # transcribed
+transA=N transB=T m=1 nrhs=1 batch=1 | direct 0.009584 | vendor 0.02501 # deep
+transA=N transB=T m=1 nrhs=1 batch=8 | direct 0.009614 | vendor 0.01720 # deep
+transA=N transB=T m=1 nrhs=1 batch=128 | direct 0.008838 | vendor 0.01343 # deep
+transA=N transB=T m=1 nrhs=1 batch=1024 | direct 0.008563 | vendor 0.01835 # deep
+transA=N transB=T m=1 nrhs=1 batch=16384 | direct 0.01176 | vendor 1.103 # deep
+transA=N transB=T m=1 nrhs=2 batch=1 | direct 0.009740 | vendor 0.01324 # deep
+transA=N transB=T m=1 nrhs=2 batch=8 | direct 0.009965 | vendor 0.02236 # deep
+transA=N transB=T m=1 nrhs=2 batch=128 | direct 0.01805 | vendor 0.03634 # deep
+transA=N transB=T m=1 nrhs=2 batch=1024 | direct 0.008583 | vendor 0.01951 # deep
+transA=N transB=T m=1 nrhs=2 batch=16384 | direct 0.01090 | vendor 0.9710 # deep
+transA=N transB=T m=1 nrhs=4 batch=1 | direct 0.01017 | vendor 0.01559 # deep
+transA=N transB=T m=1 nrhs=4 batch=8 | direct 0.01013 | vendor 0.03039 # deep
+transA=N transB=T m=1 nrhs=4 batch=128 | direct 0.01272 | vendor 0.03985 # deep
+transA=N transB=T m=1 nrhs=4 batch=1024 | direct 0.008072 | vendor 0.02298 # deep
+transA=N transB=T m=1 nrhs=4 batch=16384 | direct 0.01230 | vendor 1.100 # deep
+transA=N transB=T m=1 nrhs=16 batch=1 | direct 0.01194 | vendor 0.02479 # deep
+transA=N transB=T m=1 nrhs=16 batch=8 | direct 0.01165 | vendor 0.02867 # deep
+transA=N transB=T m=1 nrhs=16 batch=128 | direct 0.01139 | vendor 0.04164 # deep
+transA=N transB=T m=1 nrhs=16 batch=1024 | direct 0.009735 | vendor 0.05451 # deep
+transA=N transB=T m=1 nrhs=16 batch=16384 | direct 0.01320 | vendor 1.298 # deep
+transA=N transB=T m=1 nrhs=64 batch=1 | direct 0.01222 | vendor 0.02849 # deep
+transA=N transB=T m=1 nrhs=64 batch=8 | direct 0.01101 | vendor 0.02800 # deep
+transA=N transB=T m=1 nrhs=64 batch=128 | direct 0.01154 | vendor 0.05167 # deep
+transA=N transB=T m=1 nrhs=64 batch=1024 | direct 0.01020 | vendor 0.1665 # deep
+transA=N transB=T m=1 nrhs=64 batch=16384 | direct 0.02061 | vendor 3.726 # deep
+transA=N transB=T m=16 nrhs=1 batch=1 | direct 0.01231 | vendor 0.02835 # deep
+transA=N transB=T m=16 nrhs=1 batch=8 | direct 0.01256 | vendor 0.02447 # deep
+transA=N transB=T m=16 nrhs=1 batch=128 | direct 0.01402 | vendor 0.02314 # deep
+transA=N transB=T m=16 nrhs=1 batch=1024 | direct 0.02039 | vendor 0.04548 # deep
+transA=N transB=T m=16 nrhs=1 batch=16384 | direct 0.02028 | vendor 5.704 # deep
+transA=N transB=T m=16 nrhs=2 batch=1 | direct 0.01541 | vendor 0.01988 # deep
+transA=N transB=T m=16 nrhs=2 batch=8 | direct 0.01169 | vendor 0.02769 # deep
+transA=N transB=T m=16 nrhs=2 batch=128 | direct 0.01520 | vendor 0.02183 # deep
+transA=N transB=T m=16 nrhs=2 batch=1024 | direct 0.02093 | vendor 0.04846 # deep
+transA=N transB=T m=16 nrhs=2 batch=16384 | direct 0.02235 | vendor 5.174 # deep
+transA=N transB=T m=16 nrhs=4 batch=1 | direct 0.01915 | vendor 0.02231 # deep
+transA=N transB=T m=16 nrhs=4 batch=8 | direct 0.01330 | vendor 0.01682 # deep
+transA=N transB=T m=16 nrhs=4 batch=128 | direct 0.01686 | vendor 0.02313 # deep
+transA=N transB=T m=16 nrhs=4 batch=1024 | direct 0.02303 | vendor 0.05055 # deep
+transA=N transB=T m=16 nrhs=4 batch=16384 | direct 0.03642 | vendor 6.457 # deep
+transA=N transB=T m=16 nrhs=16 batch=1 | direct 0.02037 | vendor 0.04060 # deep
+transA=N transB=T m=16 nrhs=16 batch=8 | direct 0.01601 | vendor 0.02451 # deep
+transA=N transB=T m=16 nrhs=16 batch=128 | direct 0.02193 | vendor 0.03172 # deep
+transA=N transB=T m=16 nrhs=16 batch=1024 | direct 0.03242 | vendor 0.08335 # deep
+transA=N transB=T m=16 nrhs=16 batch=16384 | direct 0.06230 | vendor 6.154 # deep
+transA=N transB=T m=16 nrhs=64 batch=1 | direct 0.02161 | vendor 0.03503 # deep
+transA=N transB=T m=16 nrhs=64 batch=8 | direct 0.02509 | vendor 0.03286 # deep
+transA=N transB=T m=16 nrhs=64 batch=128 | direct 0.03937 | vendor 0.06163 # deep
+transA=N transB=T m=16 nrhs=64 batch=1024 | direct 0.04296 | vendor 0.3825 # deep
+transA=N transB=T m=16 nrhs=64 batch=16384 | direct 0.2994 | vendor 8.378 # deep
+transA=N transB=T m=64 nrhs=64 batch=8 | direct 0.03281 | vendor 0.03373 # deep
+transA=N transB=T m=70 nrhs=64 batch=8 | direct 0.04306 | vendor 0.04974 # deep
+transA=N transB=T m=76 nrhs=64 batch=8 | vendor 0.03885 | direct 0.04312 # deep
+transA=N transB=T m=91 nrhs=64 batch=8 | vendor 0.04227 | direct 0.04571 # deep
+transA=N transB=T m=128 nrhs=64 batch=8 | vendor 0.03842 | direct 0.04703 # deep
+transA=N transB=T m=256 nrhs=1 batch=1 | direct 0.01196 | vendor 0.02763 # deep
+transA=N transB=T m=256 nrhs=1 batch=8 | direct 0.01416 | vendor 0.02097 # deep
+transA=N transB=T m=256 nrhs=1 batch=128 | direct 0.02424 | vendor 0.04666 # deep
+transA=N transB=T m=256 nrhs=1 batch=1024 | direct 0.02116 | vendor 4.841 # deep
+transA=N transB=T m=256 nrhs=1 batch=16384 | direct 0.3137 | vendor 63.88 # deep
+transA=N transB=T m=256 nrhs=2 batch=1 | direct 0.01096 | vendor 0.01643 # deep
+transA=N transB=T m=256 nrhs=2 batch=8 | direct 0.01518 | vendor 0.02172 # deep
+transA=N transB=T m=256 nrhs=2 batch=128 | direct 0.02391 | vendor 0.05987 # deep
+transA=N transB=T m=256 nrhs=2 batch=1024 | direct 0.02258 | vendor 4.768 # deep
+transA=N transB=T m=256 nrhs=2 batch=16384 | direct 0.3736 | vendor 67.86 # deep
+transA=N transB=T m=256 nrhs=4 batch=1 | direct 0.01454 | vendor 0.01889 # deep
+transA=N transB=T m=256 nrhs=4 batch=8 | direct 0.01697 | vendor 0.02295 # deep
+transA=N transB=T m=256 nrhs=4 batch=128 | direct 0.02825 | vendor 0.06748 # deep
+transA=N transB=T m=256 nrhs=4 batch=1024 | direct 0.03732 | vendor 4.808 # deep
+transA=N transB=T m=256 nrhs=4 batch=16384 | direct 0.5542 | vendor 66.15 # deep
+transA=N transB=T m=256 nrhs=16 batch=1 | direct 0.01974 | vendor 0.02749 # deep
+transA=N transB=T m=256 nrhs=16 batch=8 | direct 0.02491 | vendor 0.03168 # deep
+transA=N transB=T m=256 nrhs=16 batch=128 | direct 0.04558 | vendor 0.09345 # deep
+transA=N transB=T m=256 nrhs=16 batch=1024 | direct 0.09550 | vendor 4.750 # deep
+transA=N transB=T m=256 nrhs=16 batch=16384 | direct 1.482 | vendor 69.12 # deep
+transA=N transB=T m=256 nrhs=17 batch=8 | vendor 0.03156 | direct 0.03715 # deep
+transA=N transB=T m=256 nrhs=19 batch=8 | vendor 0.03200 | direct 0.03785 # deep
+transA=N transB=T m=256 nrhs=23 batch=8 | vendor 0.03274 | direct 0.03486 # deep
+transA=N transB=T m=256 nrhs=32 batch=8 | vendor 0.03633 | direct 0.04154 # deep
+transA=N transB=T m=256 nrhs=64 batch=1 | direct 0.03120 | vendor 0.03306 # deep
+transA=N transB=T m=256 nrhs=64 batch=8 | vendor 0.05464 | direct 0.06410 # deep
+transA=N transB=T m=256 nrhs=64 batch=128 | direct 0.2353 | vendor 0.4429 # deep
+transA=N transB=T m=256 nrhs=64 batch=1024 | direct 0.4064 | vendor 6.250 # deep
+transA=N transB=T m=1024 nrhs=64 batch=8 | vendor 0.1149 | direct 0.1421 # deep
+transA=N transB=T m=2048 nrhs=64 batch=8 | vendor 0.1436 | direct 0.1490 # deep
+transA=N transB=T m=4096 nrhs=1 batch=1 | direct 0.01335 | vendor 0.02581 # deep
+transA=N transB=T m=4096 nrhs=1 batch=8 | direct 0.01936 | vendor 0.02991 # deep
+transA=N transB=T m=4096 nrhs=1 batch=128 | direct 0.08396 | vendor 0.9273 # deep
+transA=N transB=T m=4096 nrhs=1 batch=1024 | direct 0.4011 # deep
+transA=N transB=T m=4096 nrhs=2 batch=1 | direct 0.01317 | vendor 0.02137 # deep
+transA=N transB=T m=4096 nrhs=2 batch=8 | direct 0.02036 | vendor 0.05323 # deep
+transA=N transB=T m=4096 nrhs=2 batch=128 | direct 0.05304 # deep
+transA=N transB=T m=4096 nrhs=2 batch=1024 | direct 0.4937 # deep
+transA=N transB=T m=4096 nrhs=4 batch=1 | direct 0.01561 | vendor 0.02222 # deep
+transA=N transB=T m=4096 nrhs=4 batch=8 | direct 0.02275 | vendor 0.05526 # deep
+transA=N transB=T m=4096 nrhs=4 batch=128 | direct 0.07424 # deep
+transA=N transB=T m=4096 nrhs=4 batch=1024 | direct 0.5998 # deep
+transA=N transB=T m=4096 nrhs=16 batch=1 | direct 0.02452 | vendor 0.03100 # deep
+transA=N transB=T m=4096 nrhs=16 batch=8 | direct 0.03782 | vendor 0.08203 # deep
+transA=N transB=T m=4096 nrhs=16 batch=128 | direct 0.3414 # deep
+transA=N transB=T m=4096 nrhs=16 batch=1024 | direct 2.075 # deep
+transA=N transB=T m=4096 nrhs=64 batch=1 | direct 0.04675 | vendor 0.04797 # deep
+transA=N transB=T m=4096 nrhs=64 batch=8 | direct 0.1792 | vendor 0.2257 # deep
+transA=N transB=T m=4096 nrhs=64 batch=128 | direct 1.146 # deep
+transA=N transB=T m=4096 nrhs=64 batch=16384 | direct - | vendor - # transcribed
+transA=N transB=T m=65536 nrhs=1 batch=1 | direct 0.01450 | vendor 0.03309 # deep
+transA=N transB=T m=65536 nrhs=1 batch=8 | direct 0.06042 | vendor 0.08332 # deep
+transA=N transB=T m=65536 nrhs=1 batch=128 | direct 0.9796 # deep
+transA=N transB=T m=65536 nrhs=2 batch=1 | direct 0.01475 | vendor 0.03914 # deep
+transA=N transB=T m=65536 nrhs=2 batch=8 | direct 0.06502 | vendor 0.1320 # deep
+transA=N transB=T m=65536 nrhs=2 batch=128 | direct 1.088 # deep
+transA=N transB=T m=65536 nrhs=4 batch=1 | direct 0.01801 | vendor 0.05184 # deep
+transA=N transB=T m=65536 nrhs=4 batch=8 | direct 0.09848 | vendor 0.2271 # deep
+transA=N transB=T m=65536 nrhs=4 batch=128 | direct 1.700 # deep
+transA=N transB=T m=65536 nrhs=16 batch=1 | direct 0.04979 | vendor 0.1314 # deep
+transA=N transB=T m=65536 nrhs=16 batch=8 | direct 0.4648 | vendor 1.608 # deep
+transA=N transB=T m=65536 nrhs=16 batch=128 | direct 6.422 # deep
+transA=N transB=T m=65536 nrhs=64 batch=1 | direct 0.2092 | vendor 0.4318 # deep
+transA=N transB=T m=65536 nrhs=64 batch=8 | direct 1.732 | vendor 4.188 # deep
+transA=N transB=T m=65536 nrhs=64 batch=16384 | direct - | vendor - # transcribed
+transA=T transB=N m=1 nrhs=1 batch=1 | direct 0.01105 | vendor 0.01210 # deep
+transA=T transB=N m=1 nrhs=1 batch=8 | direct 0.01096 | vendor 0.01760 # deep
+transA=T transB=N m=1 nrhs=1 batch=128 | direct 0.009715 | vendor 0.01331 # deep
+transA=T transB=N m=1 nrhs=1 batch=1024 | direct 0.009484 | vendor 0.01599 # deep
+transA=T transB=N m=1 nrhs=1 batch=16384 | direct 0.01475 | vendor 1.022 # deep
+transA=T transB=N m=1 nrhs=2 batch=1 | direct 0.01138 | vendor 0.01304 # deep
+transA=T transB=N m=1 nrhs=2 batch=8 | direct 0.01211 | vendor 0.02166 # deep
+transA=T transB=N m=1 nrhs=2 batch=128 | direct 0.01916 | vendor 0.03920 # deep
+transA=T transB=N m=1 nrhs=2 batch=1024 | direct 0.009204 | vendor 0.01893 # deep
+transA=T transB=N m=1 nrhs=2 batch=16384 | direct 0.01417 | vendor 1.004 # deep
+transA=T transB=N m=1 nrhs=4 batch=1 | direct 0.01253 | vendor 0.01525 # deep
+transA=T transB=N m=1 nrhs=4 batch=8 | direct 0.01283 | vendor 0.02874 # deep
+transA=T transB=N m=1 nrhs=4 batch=128 | direct 0.01320 | vendor 0.04278 # deep
+transA=T transB=N m=1 nrhs=4 batch=1024 | direct 0.009584 | vendor 0.02384 # deep
+transA=T transB=N m=1 nrhs=4 batch=16384 | direct 0.01386 | vendor 0.9947 # deep
+transA=T transB=N m=1 nrhs=16 batch=1 | direct 0.01997 | vendor 0.02263 # deep
+transA=T transB=N m=1 nrhs=16 batch=8 | direct 0.02025 | vendor 0.03914 # deep
+transA=T transB=N m=1 nrhs=16 batch=128 | direct 0.01942 | vendor 0.04398 # deep
+transA=T transB=N m=1 nrhs=16 batch=1024 | direct 0.01105 | vendor 0.05358 # deep
+transA=T transB=N m=1 nrhs=16 batch=16384 | direct 0.01479 | vendor 1.358 # deep
+transA=T transB=N m=1 nrhs=23 batch=1 | direct 0.02457 | vendor 0.02501 # deep
+transA=T transB=N m=1 nrhs=25 batch=1 | direct 0.02715 | vendor 0.02736 # deep
+transA=T transB=N m=1 nrhs=27 batch=1 | vendor 0.02574 | direct 0.02657 # deep
+transA=T transB=N m=1 nrhs=32 batch=1 | vendor 0.02699 | direct 0.02847 # deep
+transA=T transB=N m=1 nrhs=32 batch=8 | direct 0.02837 | vendor 0.06401 # deep
+transA=T transB=N m=1 nrhs=45 batch=8 | direct 0.03309 | vendor 0.04909 # deep
+transA=T transB=N m=1 nrhs=54 batch=8 | direct 0.03834 | vendor 0.06817 # deep
+transA=T transB=N m=1 nrhs=59 batch=8 | direct 0.02758 | vendor 0.02686 # deep
+transA=T transB=N m=1 nrhs=64 batch=1 | vendor 0.02851 | direct 0.04581 # deep
+transA=T transB=N m=1 nrhs=64 batch=8 | vendor 0.03042 | direct 0.03168 # deep
+transA=T transB=N m=1 nrhs=64 batch=128 | direct 0.03285 | vendor 0.05069 # deep
+transA=T transB=N m=1 nrhs=64 batch=1024 | direct 0.01783 | vendor 0.1633 # deep
+transA=T transB=N m=1 nrhs=64 batch=16384 | direct 0.02332 | vendor 4.034 # deep
+transA=T transB=N m=2 nrhs=1 batch=1 | direct 0.01282 | vendor 0.01354 # deep
+transA=T transB=N m=2 nrhs=1 batch=8 | direct 0.01456 | vendor 0.02042 # deep
+transA=T transB=N m=2 nrhs=2 batch=1 | vendor 0.01437 | direct 0.01532 # deep
+transA=T transB=N m=2 nrhs=2 batch=8 | direct 0.01676 | vendor 0.02293 # deep
+transA=T transB=N m=2 nrhs=4 batch=1 | vendor 0.01634 | direct 0.01876 # deep
+transA=T transB=N m=2 nrhs=4 batch=8 | direct 0.02187 | vendor 0.02398 # deep
+transA=T transB=N m=2 nrhs=6 batch=8 | direct 0.02733 | vendor 0.02780 # deep
+transA=T transB=N m=2 nrhs=7 batch=8 | vendor 0.02813 | direct 0.02996 # deep
+transA=T transB=N m=2 nrhs=8 batch=8 | vendor 0.02808 | direct 0.02978 # deep
+transA=T transB=N m=2 nrhs=16 batch=1 | vendor 0.02483 | direct 0.04996 # deep
+transA=T transB=N m=2 nrhs=23 batch=1 | vendor 0.02235 | direct 0.05639 # deep
+transA=T transB=N m=2 nrhs=32 batch=8 | vendor 0.02815 | direct 0.05232 # deep
+transA=T transB=N m=3 nrhs=1 batch=1 | vendor 0.01422 | direct 0.01563 # deep
+transA=T transB=N m=3 nrhs=1 batch=8 | direct 0.01806 | vendor 0.02249 # deep
+transA=T transB=N m=3 nrhs=2 batch=8 | vendor 0.02246 | direct 0.02397 # deep
+transA=T transB=N m=3 nrhs=23 batch=1 | vendor 0.02297 | direct 0.1049 # deep
+transA=T transB=N m=4 nrhs=1 batch=1 | vendor 0.01506 | direct 0.02038 # deep
+transA=T transB=N m=4 nrhs=1 batch=8 | vendor 0.01849 | direct 0.02140 # deep
+transA=T transB=N m=4 nrhs=2 batch=1 | vendor 0.01435 | direct 0.02955 # deep
+transA=T transB=N m=4 nrhs=2 batch=8 | vendor 0.01948 | direct 0.03317 # deep
+transA=T transB=N m=4 nrhs=4 batch=1 | vendor 0.01713 | direct 0.04972 # deep
+transA=T transB=N m=4 nrhs=8 batch=8 | vendor 0.02881 | direct 0.1183 # deep
+transA=T transB=N m=4 nrhs=16 batch=1 | vendor 0.02763 | direct 0.1130 # deep
+transA=T transB=N m=4 nrhs=32 batch=8 | vendor 0.02789 | direct 0.1504 # deep
+transA=T transB=N m=6 nrhs=8 batch=8 | vendor 0.04648 | direct 0.4041 # deep
+transA=T transB=N m=7 nrhs=8 batch=8 | vendor 0.03357 | direct 0.3168 # deep
+transA=T transB=N m=8 nrhs=8 batch=8 | direct 0.01339 | vendor 0.01856 # deep
+transA=T transB=N m=8 nrhs=23 batch=1 | vendor 0.02089 | direct 0.2659 # deep
+transA=T transB=N m=16 nrhs=1 batch=1 | vendor 0.02063 | direct 0.05762 # deep
+transA=T transB=N m=16 nrhs=1 batch=8 | vendor 0.02127 | direct 0.08216 # deep
+transA=T transB=N m=16 nrhs=1 batch=128 | direct 0.01521 | vendor 0.02023 # deep
+transA=T transB=N m=16 nrhs=1 batch=1024 | direct 0.02033 | vendor 0.04695 # deep
+transA=T transB=N m=16 nrhs=1 batch=16384 | direct 0.02842 | vendor 5.658 # deep
+transA=T transB=N m=16 nrhs=2 batch=1 | vendor 0.01706 | direct 0.08554 # deep
+transA=T transB=N m=16 nrhs=2 batch=8 | vendor 0.02341 | direct 0.1761 # deep
+transA=T transB=N m=16 nrhs=2 batch=128 | direct 0.01580 | vendor 0.02137 # deep
+transA=T transB=N m=16 nrhs=2 batch=1024 | direct 0.02108 | vendor 0.05018 # deep
+transA=T transB=N m=16 nrhs=2 batch=16384 | direct 0.04059 | vendor 5.618 # deep
+transA=T transB=N m=16 nrhs=3 batch=8 | vendor 0.02691 | direct 0.1627 # deep
+transA=T transB=N m=16 nrhs=4 batch=1 | vendor 0.01753 | direct 0.09891 # deep
+transA=T transB=N m=16 nrhs=4 batch=8 | direct 0.01141 | vendor 0.01537 # deep
+transA=T transB=N m=16 nrhs=4 batch=128 | direct 0.01584 | vendor 0.02164 # deep
+transA=T transB=N m=16 nrhs=4 batch=1024 | direct 0.02170 | vendor 0.04751 # deep
+transA=T transB=N m=16 nrhs=4 batch=16384 | direct 0.07709 | vendor 5.659 # deep
+transA=T transB=N m=16 nrhs=16 batch=1 | vendor 0.02162 | direct 0.3167 # deep
+transA=T transB=N m=16 nrhs=16 batch=8 | direct 0.01719 | vendor 0.02059 # deep
+transA=T transB=N m=16 nrhs=16 batch=128 | direct 0.02098 | vendor 0.02683 # deep
+transA=T transB=N m=16 nrhs=16 batch=1024 | direct 0.03012 | vendor 0.07620 # deep
+transA=T transB=N m=16 nrhs=16 batch=16384 | direct 0.2287 | vendor 5.889 # deep
+transA=T transB=N m=16 nrhs=17 batch=8 | vendor 0.02747 | direct 0.3594 # deep
+transA=T transB=N m=16 nrhs=19 batch=8 | vendor 0.02319 | direct 0.1536 # deep
+transA=T transB=N m=16 nrhs=23 batch=8 | vendor 0.02475 | direct 0.1422 # deep
+transA=T transB=N m=16 nrhs=32 batch=1 | vendor 0.02285 | direct 0.1813 # deep
+transA=T transB=N m=16 nrhs=32 batch=8 | vendor 0.02280 | direct 0.02394 # deep
+transA=T transB=N m=16 nrhs=64 batch=1 | vendor 0.02397 | direct 0.2030 # deep
+transA=T transB=N m=16 nrhs=64 batch=8 | vendor 0.02845 | direct 0.03928 # deep
+transA=T transB=N m=16 nrhs=64 batch=128 | direct 0.04333 | vendor 0.05470 # deep
+transA=T transB=N m=16 nrhs=64 batch=1024 | direct 0.07166 | vendor 0.3168 # deep
+transA=T transB=N m=16 nrhs=64 batch=16384 | direct 1.381 | vendor 8.141 # deep
+transA=T transB=N m=23 nrhs=2 batch=8 | vendor 0.02678 | direct 0.08293 # deep
+transA=T transB=N m=25 nrhs=2 batch=8 | vendor 0.05875 | direct 0.1966 # deep
+transA=T transB=N m=27 nrhs=2 batch=8 | direct 0.01146 | vendor 0.01639 # deep
+transA=T transB=N m=32 nrhs=1 batch=8 | vendor 0.03574 | direct 0.1099 # deep
+transA=T transB=N m=32 nrhs=2 batch=8 | direct 0.01258 | vendor 0.01630 # deep
+transA=T transB=N m=32 nrhs=8 batch=8 | direct 0.01376 | vendor 0.01793 # deep
+transA=T transB=N m=32 nrhs=16 batch=1 | vendor 0.04131 | direct 0.1783 # deep
+transA=T transB=N m=32 nrhs=16 batch=8 | direct 0.01758 | vendor 0.02178 # deep
+transA=T transB=N m=32 nrhs=17 batch=8 | vendor 0.03146 | direct 0.1888 # deep
+transA=T transB=N m=32 nrhs=19 batch=8 | vendor 0.03555 | direct 0.1912 # deep
+transA=T transB=N m=32 nrhs=23 batch=8 | vendor 0.04028 | direct 0.2095 # deep
+transA=T transB=N m=32 nrhs=32 batch=8 | vendor 0.02382 | direct 0.02489 # deep
+transA=T transB=N m=45 nrhs=1 batch=8 | vendor 0.07566 | direct 0.1382 # deep
+transA=T transB=N m=45 nrhs=16 batch=1 | vendor 0.03696 | direct 0.06197 # deep
+transA=T transB=N m=45 nrhs=32 batch=8 | vendor 0.04240 | direct 0.06089 # deep
+transA=T transB=N m=54 nrhs=1 batch=8 | vendor 0.05057 | direct 0.07800 # deep
+transA=T transB=N m=54 nrhs=16 batch=1 | vendor 0.02969 | direct 0.04325 # deep
+transA=T transB=N m=54 nrhs=32 batch=8 | vendor 0.08888 | direct 0.1787 # deep
+transA=T transB=N m=59 nrhs=1 batch=8 | vendor 0.04417 | direct 0.07528 # deep
+transA=T transB=N m=59 nrhs=16 batch=1 | vendor 0.07040 | direct 0.1655 # deep
+transA=T transB=N m=59 nrhs=32 batch=8 | vendor 0.09370 | direct 0.1803 # deep
+transA=T transB=N m=64 nrhs=1 batch=1 | vendor 0.04030 | direct 0.04673 # deep
+transA=T transB=N m=64 nrhs=1 batch=8 | direct 0.01298 | vendor 0.01731 # deep
+transA=T transB=N m=64 nrhs=2 batch=1 | vendor 0.03753 | direct 0.07085 # deep
+transA=T transB=N m=64 nrhs=2 batch=8 | direct 0.01287 | vendor 0.01736 # deep
+transA=T transB=N m=64 nrhs=4 batch=1 | vendor 0.04607 | direct 0.1152 # deep
+transA=T transB=N m=64 nrhs=6 batch=1 | vendor 0.03777 | direct 0.06440 # deep
+transA=T transB=N m=64 nrhs=7 batch=1 | vendor 0.06633 | direct 0.1403 # deep
+transA=T transB=N m=64 nrhs=8 batch=1 | direct 0.01339 | vendor 0.01801 # deep
+transA=T transB=N m=64 nrhs=11 batch=8 | direct 0.01590 | vendor 0.02191 # deep
+transA=T transB=N m=64 nrhs=16 batch=1 | direct 0.01651 | vendor 0.02139 # deep
+transA=T transB=N m=64 nrhs=17 batch=1 | vendor 0.04135 | direct 0.09481 # deep
+transA=T transB=N m=64 nrhs=19 batch=1 | vendor 0.03090 | direct 0.04531 # deep
+transA=T transB=N m=64 nrhs=23 batch=1 | vendor 0.06680 | direct 0.1543 # deep
+transA=T transB=N m=64 nrhs=27 batch=8 | direct 0.02442 | vendor 0.02679 # deep
+transA=T transB=N m=64 nrhs=30 batch=8 | direct 0.02523 | vendor 0.02560 # deep
+transA=T transB=N m=64 nrhs=32 batch=1 | vendor 0.02243 | direct 0.02404 # deep
+transA=T transB=N m=64 nrhs=32 batch=8 | direct 0.02539 | vendor 0.02523 # deep
+transA=T transB=N m=64 nrhs=34 batch=8 | vendor 0.02577 | direct 0.02717 # deep
+transA=T transB=N m=64 nrhs=42 batch=8 | vendor 0.02748 | direct 0.03156 # deep
+transA=T transB=N m=64 nrhs=64 batch=8 | vendor 0.03028 | direct 0.04040 # deep
+transA=T transB=N m=68 nrhs=8 batch=1 | vendor 0.06015 | direct 0.1253 # deep
+transA=T transB=N m=72 nrhs=8 batch=1 | vendor 0.05925 | direct 0.1278 # deep
+transA=T transB=N m=81 nrhs=8 batch=1 | vendor 0.06207 | direct 0.1048 # deep
+transA=T transB=N m=91 nrhs=4 batch=1 | vendor 0.08600 | direct 0.1566 # deep
+transA=T transB=N m=103 nrhs=8 batch=1 | vendor 0.07378 | direct 0.1114 # deep
+transA=T transB=N m=108 nrhs=4 batch=1 | vendor 0.05765 | direct 0.07579 # deep
+transA=T transB=N m=118 nrhs=4 batch=1 | vendor 0.09535 | direct 0.1453 # deep
+transA=T transB=N m=128 nrhs=1 batch=1 | vendor 0.04976 | direct 0.05314 # deep
+transA=T transB=N m=128 nrhs=2 batch=1 | vendor 0.08022 | direct 0.08961 # deep
+transA=T transB=N m=128 nrhs=3 batch=1 | vendor 0.04940 | direct 0.05453 # deep
+transA=T transB=N m=128 nrhs=4 batch=1 | direct 0.01147 | vendor 0.01678 # deep
+transA=T transB=N m=128 nrhs=5 batch=1 | vendor 0.09491 | direct 0.1113 # deep
+transA=T transB=N m=128 nrhs=7 batch=1 | vendor 0.04539 | direct 0.05651 # deep
+transA=T transB=N m=128 nrhs=11 batch=1 | vendor 0.04720 | direct 0.05687 # deep
+transA=T transB=N m=128 nrhs=32 batch=1 | vendor 0.02343 | direct 0.02427 # deep
+transA=T transB=N m=128 nrhs=64 batch=8 | vendor 0.03554 | direct 0.04077 # deep
+transA=T transB=N m=137 nrhs=3 batch=1 | direct 0.1298 | vendor 0.1266 # deep
+transA=T transB=N m=146 nrhs=3 batch=1 | direct 0.01128 | vendor 0.01670 # deep
+transA=T transB=N m=146 nrhs=4 batch=1 | direct 0.02292 | vendor 0.03713 # deep
+transA=T transB=N m=152 nrhs=1 batch=1 | vendor 0.05896 | direct 0.06914 # deep
+transA=T transB=N m=152 nrhs=2 batch=1 | vendor 0.05307 | direct 0.05821 # deep
+transA=T transB=N m=152 nrhs=32 batch=1 | vendor 0.1404 | direct 0.1472 # deep
+transA=T transB=N m=152 nrhs=64 batch=8 | vendor 0.03752 | direct 0.04168 # deep
+transA=T transB=N m=156 nrhs=4 batch=1 | vendor 0.05121 | direct 0.06192 # deep
+transA=T transB=N m=166 nrhs=1 batch=1 | vendor 0.06956 | direct 0.07461 # deep
+transA=T transB=N m=166 nrhs=2 batch=1 | direct 0.1097 | vendor 0.1130 # deep
+transA=T transB=N m=166 nrhs=3 batch=1 | direct 0.1087 | vendor 0.1079 # deep
+transA=T transB=N m=166 nrhs=4 batch=1 | vendor 0.1034 | direct 0.1162 # deep
+transA=T transB=N m=166 nrhs=8 batch=1 | vendor 0.08502 | direct 0.09604 # deep
+transA=T transB=N m=166 nrhs=32 batch=1 | vendor 0.1152 | direct 0.1296 # deep
+transA=T transB=N m=166 nrhs=64 batch=8 | vendor 0.04023 | direct 0.04201 # deep
+transA=T transB=N m=175 nrhs=4 batch=1 | vendor 0.1284 | direct 0.1365 # deep
+transA=T transB=N m=181 nrhs=1 batch=1 | direct 0.01158 | vendor 0.02171 # deep
+transA=T transB=N m=181 nrhs=2 batch=1 | direct 0.03945 | vendor 0.04526 # deep
+transA=T transB=N m=181 nrhs=32 batch=1 | direct 0.02480 | vendor 0.02490 # deep
+transA=T transB=N m=181 nrhs=64 batch=8 | direct 0.04183 | vendor 0.04079 # deep
+transA=T transB=N m=185 nrhs=4 batch=1 | direct 0.09026 | vendor 0.09122 # deep
+transA=T transB=N m=206 nrhs=4 batch=1 | direct 0.03699 | vendor 0.04626 # deep
+transA=T transB=N m=256 nrhs=1 batch=1 | direct 0.07133 | vendor 0.07010 # deep
+transA=T transB=N m=256 nrhs=1 batch=8 | direct 0.01464 | vendor 0.02076 # deep
+transA=T transB=N m=256 nrhs=1 batch=128 | direct 0.02751 | vendor 0.04462 # deep
+transA=T transB=N m=256 nrhs=1 batch=1024 | direct 0.02620 | vendor 4.175 # deep
+transA=T transB=N m=256 nrhs=1 batch=16384 | direct 0.3696 | vendor 63.14 # deep
+transA=T transB=N m=256 nrhs=2 batch=1 | direct 0.01215 | vendor 0.01720 # deep
+transA=T transB=N m=256 nrhs=2 batch=8 | direct 0.01470 | vendor 0.02094 # deep
+transA=T transB=N m=256 nrhs=2 batch=128 | direct 0.02772 | vendor 0.06047 # deep
+transA=T transB=N m=256 nrhs=2 batch=1024 | direct 0.03838 | vendor 4.250 # deep
+transA=T transB=N m=256 nrhs=2 batch=16384 | direct 0.5925 | vendor 61.76 # deep
+transA=T transB=N m=256 nrhs=4 batch=1 | direct 0.01262 | vendor 0.01790 # deep
+transA=T transB=N m=256 nrhs=4 batch=8 | direct 0.01483 | vendor 0.02137 # deep
+transA=T transB=N m=256 nrhs=4 batch=128 | direct 0.02798 | vendor 0.06399 # deep
+transA=T transB=N m=256 nrhs=4 batch=1024 | direct 0.07081 | vendor 3.946 # deep
+transA=T transB=N m=256 nrhs=4 batch=16384 | direct 1.095 | vendor 66.20 # deep
+transA=T transB=N m=256 nrhs=16 batch=1 | direct 0.01794 | vendor 0.02401 # deep
+transA=T transB=N m=256 nrhs=16 batch=8 | direct 0.02132 | vendor 0.02772 # deep
+transA=T transB=N m=256 nrhs=16 batch=128 | direct 0.04344 | vendor 0.07375 # deep
+transA=T transB=N m=256 nrhs=16 batch=1024 | direct 0.2527 | vendor 4.357 # deep
+transA=T transB=N m=256 nrhs=16 batch=16384 | direct 4.141 | vendor 68.37 # deep
+transA=T transB=N m=256 nrhs=32 batch=1 | direct 0.02482 | vendor 0.02492 # deep
+transA=T transB=N m=256 nrhs=45 batch=1 | direct 0.08841 | vendor 0.1101 # deep
+transA=T transB=N m=256 nrhs=49 batch=1 | direct 0.08509 | vendor 0.1032 # deep
+transA=T transB=N m=256 nrhs=51 batch=1 | direct 0.08886 | vendor 0.1155 # deep
+transA=T transB=N m=256 nrhs=54 batch=1 | vendor 0.02809 | direct 0.03526 # deep
+transA=T transB=N m=256 nrhs=64 batch=1 | vendor 0.02814 | direct 0.03916 # deep
+transA=T transB=N m=256 nrhs=64 batch=8 | direct 0.04226 | vendor 0.04915 # deep
+transA=T transB=N m=256 nrhs=64 batch=128 | direct 0.1253 | vendor 0.3076 # deep
+transA=T transB=N m=256 nrhs=64 batch=1024 | direct 1.099 | vendor 5.713 # deep
+transA=T transB=N m=1024 nrhs=16 batch=1 | direct 0.01982 | vendor 0.02706 # deep
+transA=T transB=N m=2048 nrhs=16 batch=1 | direct 0.01947 | vendor 0.02676 # deep
+transA=T transB=N m=4096 nrhs=1 batch=1 | direct 0.01285 | vendor 0.02601 # deep
+transA=T transB=N m=4096 nrhs=1 batch=8 | direct 0.02014 | vendor 0.03090 # deep
+transA=T transB=N m=4096 nrhs=1 batch=128 | direct 0.06522 | vendor 0.9194 # deep
+transA=T transB=N m=4096 nrhs=1 batch=1024 | direct 0.5836 # deep
+transA=T transB=N m=4096 nrhs=2 batch=1 | direct 0.01334 | vendor 0.02042 # deep
+transA=T transB=N m=4096 nrhs=2 batch=8 | direct 0.02055 | vendor 0.04972 # deep
+transA=T transB=N m=4096 nrhs=2 batch=128 | direct 0.09522 # deep
+transA=T transB=N m=4096 nrhs=2 batch=1024 | direct 0.9062 # deep
+transA=T transB=N m=4096 nrhs=4 batch=1 | direct 0.01356 | vendor 0.02114 # deep
+transA=T transB=N m=4096 nrhs=4 batch=8 | direct 0.02184 | vendor 0.05191 # deep
+transA=T transB=N m=4096 nrhs=4 batch=128 | direct 0.1726 # deep
+transA=T transB=N m=4096 nrhs=4 batch=1024 | direct 1.719 # deep
+transA=T transB=N m=4096 nrhs=16 batch=1 | vendor 0.02730 # deep
+transA=T transB=N m=4096 nrhs=16 batch=8 | direct 0.04849 | vendor 0.06469 # deep
+transA=T transB=N m=4096 nrhs=16 batch=128 | direct 0.7418 # deep
+transA=T transB=N m=4096 nrhs=16 batch=1024 | direct 6.149 # deep
+transA=T transB=N m=4096 nrhs=64 batch=1 | vendor 0.04099 # deep
+transA=T transB=N m=4096 nrhs=64 batch=8 | direct 0.1621 | vendor 0.1841 # deep
+transA=T transB=N m=4096 nrhs=64 batch=128 | direct 3.211 # deep
+transA=T transB=N m=4096 nrhs=64 batch=16384 | vendor - | direct - # transcribed
+transA=T transB=N m=65536 nrhs=1 batch=1 | direct 0.01476 | vendor 0.02869 # deep
+transA=T transB=N m=65536 nrhs=1 batch=8 | direct 0.06256 | vendor 0.07519 # deep
+transA=T transB=N m=65536 nrhs=1 batch=128 | direct 1.128 # deep
+transA=T transB=N m=65536 nrhs=2 batch=1 | direct 0.01953 | vendor 0.04057 # deep
+transA=T transB=N m=65536 nrhs=2 batch=8 | direct 0.1034 | vendor 0.1140 # deep
+transA=T transB=N m=65536 nrhs=2 batch=128 | direct 2.080 # deep
+transA=T transB=N m=65536 nrhs=4 batch=1 | direct 0.02979 | vendor 0.04887 # deep
+transA=T transB=N m=65536 nrhs=4 batch=8 | direct 0.1873 | vendor 0.1929 # deep
+transA=T transB=N m=65536 nrhs=4 batch=128 | direct 3.893 # deep
+transA=T transB=N m=65536 nrhs=16 batch=1 | vendor 0.1079 # deep
+transA=T transB=N m=65536 nrhs=16 batch=8 | direct 0.8676 | vendor 1.458 # deep
+transA=T transB=N m=65536 nrhs=16 batch=128 | direct 14.63 # deep
+transA=T transB=N m=65536 nrhs=64 batch=1 | vendor 0.3738 # deep
+transA=T transB=N m=65536 nrhs=64 batch=8 | direct 4.123 | vendor 4.400 # deep
+transA=T transB=N m=65536 nrhs=64 batch=16384 | vendor - | direct - # transcribed
+transA=T transB=T m=1 nrhs=1 batch=1 | direct 0.01109 | vendor 0.01104 # deep
+transA=T transB=T m=1 nrhs=1 batch=8 | direct 0.01136 | vendor 0.01690 # deep
+transA=T transB=T m=1 nrhs=1 batch=128 | direct 0.009875 | vendor 0.01259 # deep
+transA=T transB=T m=1 nrhs=1 batch=1024 | direct 0.009479 | vendor 0.01578 # deep
+transA=T transB=T m=1 nrhs=1 batch=16384 | direct 0.01387 | vendor 1.009 # deep
+transA=T transB=T m=1 nrhs=2 batch=1 | direct 0.01169 | vendor 0.01354 # deep
+transA=T transB=T m=1 nrhs=2 batch=8 | direct 0.01204 | vendor 0.02142 # deep
+transA=T transB=T m=1 nrhs=2 batch=128 | direct 0.01953 | vendor 0.03921 # deep
+transA=T transB=T m=1 nrhs=2 batch=1024 | direct 0.009780 | vendor 0.01924 # deep
+transA=T transB=T m=1 nrhs=2 batch=16384 | direct 0.01301 | vendor 1.013 # deep
+transA=T transB=T m=1 nrhs=4 batch=1 | direct 0.01302 | vendor 0.01582 # deep
+transA=T transB=T m=1 nrhs=4 batch=8 | direct 0.01317 | vendor 0.02861 # deep
+transA=T transB=T m=1 nrhs=4 batch=128 | direct 0.01316 | vendor 0.04042 # deep
+transA=T transB=T m=1 nrhs=4 batch=1024 | direct 0.009420 | vendor 0.02341 # deep
+transA=T transB=T m=1 nrhs=4 batch=16384 | direct 0.01406 | vendor 0.9825 # deep
+transA=T transB=T m=1 nrhs=16 batch=1 | direct 0.02011 | vendor 0.02236 # deep
+transA=T transB=T m=1 nrhs=16 batch=8 | direct 0.02110 | vendor 0.04014 # deep
+transA=T transB=T m=1 nrhs=16 batch=128 | direct 0.02004 | vendor 0.04548 # deep
+transA=T transB=T m=1 nrhs=16 batch=1024 | direct 0.01143 | vendor 0.05390 # deep
+transA=T transB=T m=1 nrhs=16 batch=16384 | direct 0.01575 | vendor 1.269 # deep
+transA=T transB=T m=1 nrhs=23 batch=1 | direct 0.02516 | vendor 0.02566 # deep
+transA=T transB=T m=1 nrhs=27 batch=1 | direct 0.02831 | vendor 0.02825 # deep
+transA=T transB=T m=1 nrhs=29 batch=1 | vendor 0.02418 | direct 0.02681 # deep
+transA=T transB=T m=1 nrhs=32 batch=1 | vendor 0.02781 | direct 0.02999 # deep
+transA=T transB=T m=1 nrhs=32 batch=8 | direct 0.02676 | vendor 0.06330 # deep
+transA=T transB=T m=1 nrhs=45 batch=8 | direct 0.03237 | vendor 0.04745 # deep
+transA=T transB=T m=1 nrhs=54 batch=8 | direct 0.03737 | vendor 0.06798 # deep
+transA=T transB=T m=1 nrhs=59 batch=8 | vendor 0.02607 | direct 0.02691 # deep
+transA=T transB=T m=1 nrhs=64 batch=1 | vendor 0.02706 | direct 0.04778 # deep
+transA=T transB=T m=1 nrhs=64 batch=8 | vendor 0.02748 | direct 0.03017 # deep
+transA=T transB=T m=1 nrhs=64 batch=128 | direct 0.03018 | vendor 0.04708 # deep
+transA=T transB=T m=1 nrhs=64 batch=1024 | direct 0.01763 | vendor 0.1625 # deep
+transA=T transB=T m=1 nrhs=64 batch=16384 | direct 0.02367 | vendor 3.993 # deep
+transA=T transB=T m=2 nrhs=1 batch=1 | direct 0.01317 | vendor 0.01387 # deep
+transA=T transB=T m=2 nrhs=1 batch=8 | direct 0.01390 | vendor 0.01992 # deep
+transA=T transB=T m=2 nrhs=2 batch=1 | vendor 0.01453 | direct 0.01542 # deep
+transA=T transB=T m=2 nrhs=2 batch=8 | direct 0.01608 | vendor 0.02204 # deep
+transA=T transB=T m=2 nrhs=4 batch=1 | vendor 0.01707 | direct 0.01989 # deep
+transA=T transB=T m=2 nrhs=4 batch=8 | direct 0.02208 | vendor 0.02593 # deep
+transA=T transB=T m=2 nrhs=6 batch=8 | direct 0.02678 | vendor 0.02866 # deep
+transA=T transB=T m=2 nrhs=7 batch=8 | vendor 0.02966 | direct 0.03087 # deep
+transA=T transB=T m=2 nrhs=8 batch=8 | vendor 0.02980 | direct 0.03357 # deep
+transA=T transB=T m=2 nrhs=16 batch=1 | vendor 0.02859 | direct 0.04710 # deep
+transA=T transB=T m=2 nrhs=23 batch=1 | vendor 0.02326 | direct 0.06425 # deep
+transA=T transB=T m=2 nrhs=32 batch=8 | vendor 0.02733 | direct 0.05074 # deep
+transA=T transB=T m=3 nrhs=1 batch=1 | vendor 0.01418 | direct 0.01568 # deep
+transA=T transB=T m=3 nrhs=1 batch=8 | direct 0.01725 | vendor 0.02134 # deep
+transA=T transB=T m=3 nrhs=2 batch=8 | direct 0.02318 | vendor 0.02310 # deep
+transA=T transB=T m=3 nrhs=23 batch=1 | vendor 0.02374 | direct 0.1133 # deep
+transA=T transB=T m=4 nrhs=1 batch=1 | vendor 0.01541 | direct 0.01984 # deep
+transA=T transB=T m=4 nrhs=1 batch=8 | vendor 0.01868 | direct 0.02030 # deep
+transA=T transB=T m=4 nrhs=2 batch=1 | vendor 0.01501 | direct 0.02764 # deep
+transA=T transB=T m=4 nrhs=2 batch=8 | vendor 0.02102 | direct 0.03454 # deep
+transA=T transB=T m=4 nrhs=4 batch=1 | vendor 0.01743 | direct 0.04873 # deep
+transA=T transB=T m=4 nrhs=8 batch=8 | vendor 0.02937 | direct 0.1203 # deep
+transA=T transB=T m=4 nrhs=16 batch=1 | vendor 0.02912 | direct 0.1628 # deep
+transA=T transB=T m=4 nrhs=32 batch=8 | vendor 0.02737 | direct 0.1449 # deep
+transA=T transB=T m=6 nrhs=8 batch=8 | vendor 0.04721 | direct 0.4050 # deep
+transA=T transB=T m=7 nrhs=8 batch=8 | vendor 0.03339 | direct 0.3285 # deep
+transA=T transB=T m=8 nrhs=8 batch=8 | direct 0.01360 | vendor 0.01949 # deep
+transA=T transB=T m=8 nrhs=23 batch=1 | vendor 0.02205 | direct 0.2786 # deep
+transA=T transB=T m=16 nrhs=1 batch=1 | vendor 0.02091 | direct 0.05859 # deep
+transA=T transB=T m=16 nrhs=1 batch=8 | vendor 0.02135 | direct 0.08319 # deep
+transA=T transB=T m=16 nrhs=1 batch=128 | direct 0.01554 | vendor 0.02087 # deep
+transA=T transB=T m=16 nrhs=1 batch=1024 | direct 0.02042 | vendor 0.04625 # deep
+transA=T transB=T m=16 nrhs=1 batch=16384 | direct 0.02882 | vendor 5.670 # deep
+transA=T transB=T m=16 nrhs=2 batch=1 | vendor 0.01782 | direct 0.08890 # deep
+transA=T transB=T m=16 nrhs=2 batch=8 | vendor 0.02582 | direct 0.1793 # deep
+transA=T transB=T m=16 nrhs=2 batch=128 | direct 0.01608 | vendor 0.02187 # deep
+transA=T transB=T m=16 nrhs=2 batch=1024 | direct 0.02103 | vendor 0.04880 # deep
+transA=T transB=T m=16 nrhs=2 batch=16384 | direct 0.04312 | vendor 5.410 # deep
+transA=T transB=T m=16 nrhs=3 batch=8 | vendor 0.02164 | direct 0.1502 # deep
+transA=T transB=T m=16 nrhs=4 batch=1 | vendor 0.01790 | direct 0.08895 # deep
+transA=T transB=T m=16 nrhs=4 batch=8 | direct 0.01209 | vendor 0.01572 # deep
+transA=T transB=T m=16 nrhs=4 batch=128 | direct 0.01587 | vendor 0.02206 # deep
+transA=T transB=T m=16 nrhs=4 batch=1024 | direct 0.02108 | vendor 0.04938 # deep
+transA=T transB=T m=16 nrhs=4 batch=16384 | direct 0.07230 | vendor 5.797 # deep
+transA=T transB=T m=16 nrhs=16 batch=1 | vendor 0.02208 | direct 0.3159 # deep
+transA=T transB=T m=16 nrhs=16 batch=8 | direct 0.01770 | vendor 0.02090 # deep
+transA=T transB=T m=16 nrhs=16 batch=128 | direct 0.02165 | vendor 0.02747 # deep
+transA=T transB=T m=16 nrhs=16 batch=1024 | direct 0.02940 | vendor 0.07459 # deep
+transA=T transB=T m=16 nrhs=16 batch=16384 | direct 0.2641 | vendor 5.873 # deep
+transA=T transB=T m=16 nrhs=17 batch=8 | vendor 0.02707 | direct 0.3739 # deep
+transA=T transB=T m=16 nrhs=19 batch=8 | vendor 0.02355 | direct 0.1484 # deep
+transA=T transB=T m=16 nrhs=23 batch=8 | vendor 0.02628 | direct 0.1654 # deep
+transA=T transB=T m=16 nrhs=32 batch=1 | vendor 0.02344 | direct 0.1808 # deep
+transA=T transB=T m=16 nrhs=32 batch=8 | vendor 0.02345 | direct 0.02422 # deep
+transA=T transB=T m=16 nrhs=64 batch=1 | vendor 0.02452 | direct 0.1952 # deep
+transA=T transB=T m=16 nrhs=64 batch=8 | vendor 0.02725 | direct 0.03924 # deep
+transA=T transB=T m=16 nrhs=64 batch=128 | direct 0.04509 | vendor 0.05480 # deep
+transA=T transB=T m=16 nrhs=64 batch=1024 | direct 0.07686 | vendor 0.3125 # deep
+transA=T transB=T m=16 nrhs=64 batch=16384 | direct 1.518 | vendor 8.187 # deep
+transA=T transB=T m=23 nrhs=2 batch=8 | vendor 0.02813 | direct 0.08505 # deep
+transA=T transB=T m=25 nrhs=2 batch=8 | vendor 0.04785 | direct 0.1951 # deep
+transA=T transB=T m=27 nrhs=2 batch=8 | direct 0.01175 | vendor 0.01625 # deep
+transA=T transB=T m=32 nrhs=1 batch=8 | vendor 0.03705 | direct 0.1135 # deep
+transA=T transB=T m=32 nrhs=2 batch=8 | direct 0.01205 | vendor 0.01560 # deep
+transA=T transB=T m=32 nrhs=8 batch=8 | direct 0.01380 | vendor 0.01807 # deep
+transA=T transB=T m=32 nrhs=16 batch=1 | vendor 0.04244 | direct 0.1917 # deep
+transA=T transB=T m=32 nrhs=16 batch=8 | direct 0.01777 | vendor 0.02174 # deep
+transA=T transB=T m=32 nrhs=17 batch=8 | vendor 0.03264 | direct 0.2003 # deep
+transA=T transB=T m=32 nrhs=19 batch=8 | vendor 0.03559 | direct 0.1882 # deep
+transA=T transB=T m=32 nrhs=23 batch=8 | vendor 0.03565 | direct 0.1912 # deep
+transA=T transB=T m=32 nrhs=32 batch=8 | vendor 0.02396 | direct 0.02567 # deep
+transA=T transB=T m=45 nrhs=1 batch=8 | vendor 0.06959 | direct 0.1373 # deep
+transA=T transB=T m=45 nrhs=16 batch=1 | vendor 0.03556 | direct 0.06099 # deep
+transA=T transB=T m=45 nrhs=32 batch=8 | vendor 0.04241 | direct 0.06254 # deep
+transA=T transB=T m=54 nrhs=1 batch=8 | vendor 0.05640 | direct 0.08154 # deep
+transA=T transB=T m=54 nrhs=16 batch=1 | vendor 0.02952 | direct 0.04330 # deep
+transA=T transB=T m=54 nrhs=32 batch=8 | vendor 0.08722 | direct 0.1848 # deep
+transA=T transB=T m=59 nrhs=1 batch=8 | vendor 0.04444 | direct 0.07278 # deep
+transA=T transB=T m=59 nrhs=16 batch=1 | vendor 0.07034 | direct 0.1610 # deep
+transA=T transB=T m=59 nrhs=32 batch=8 | vendor 0.09112 | direct 0.1713 # deep
+transA=T transB=T m=64 nrhs=1 batch=8 | direct 0.01249 | vendor 0.01659 # deep
+transA=T transB=T m=64 nrhs=2 batch=1 | vendor 0.03840 | direct 0.06904 # deep
+transA=T transB=T m=64 nrhs=2 batch=8 | direct 0.01531 | vendor 0.01846 # deep
+transA=T transB=T m=64 nrhs=4 batch=1 | vendor 0.04715 | direct 0.1189 # deep
+transA=T transB=T m=64 nrhs=6 batch=1 | vendor 0.03662 | direct 0.06367 # deep
+transA=T transB=T m=64 nrhs=7 batch=1 | vendor 0.06747 | direct 0.1559 # deep
+transA=T transB=T m=64 nrhs=8 batch=1 | direct 0.01353 | vendor 0.01777 # deep
+transA=T transB=T m=64 nrhs=11 batch=8 | direct 0.01601 | vendor 0.02099 # deep
+transA=T transB=T m=64 nrhs=16 batch=1 | direct 0.01743 | vendor 0.02243 # deep
+transA=T transB=T m=64 nrhs=17 batch=1 | vendor 0.04081 | direct 0.09343 # deep
+transA=T transB=T m=64 nrhs=19 batch=1 | vendor 0.03046 | direct 0.04482 # deep
+transA=T transB=T m=64 nrhs=23 batch=1 | vendor 0.06845 | direct 0.1527 # deep
+transA=T transB=T m=64 nrhs=27 batch=8 | direct 0.02338 | vendor 0.02503 # deep
+transA=T transB=T m=64 nrhs=30 batch=8 | direct 0.02650 | vendor 0.02660 # deep
+transA=T transB=T m=64 nrhs=32 batch=1 | vendor 0.02219 | direct 0.02453 # deep
+transA=T transB=T m=64 nrhs=32 batch=8 | direct 0.02585 | vendor 0.02527 # deep
+transA=T transB=T m=64 nrhs=34 batch=8 | vendor 0.02593 | direct 0.02726 # deep
+transA=T transB=T m=64 nrhs=42 batch=8 | vendor 0.02686 | direct 0.03053 # deep
+transA=T transB=T m=64 nrhs=64 batch=8 | vendor 0.03036 | direct 0.04126 # deep
+transA=T transB=T m=91 nrhs=2 batch=1 | vendor 0.06293 | direct 0.09324 # deep
+transA=T transB=T m=91 nrhs=4 batch=1 | vendor 0.08510 | direct 0.1585 # deep
+transA=T transB=T m=108 nrhs=2 batch=1 | vendor 0.04024 | direct 0.05596 # deep
+transA=T transB=T m=108 nrhs=4 batch=1 | vendor 0.05549 | direct 0.08205 # deep
+transA=T transB=T m=118 nrhs=2 batch=1 | vendor 0.06167 | direct 0.08269 # deep
+transA=T transB=T m=118 nrhs=4 batch=1 | vendor 0.09657 | direct 0.1430 # deep
+transA=T transB=T m=128 nrhs=2 batch=1 | direct 0.08043 | vendor 0.07829 # deep
+transA=T transB=T m=128 nrhs=4 batch=1 | direct 0.01130 | vendor 0.01630 # deep
+transA=T transB=T m=128 nrhs=5 batch=1 | vendor 0.09590 | direct 0.1141 # deep
+transA=T transB=T m=128 nrhs=7 batch=1 | vendor 0.04983 | direct 0.05884 # deep
+transA=T transB=T m=128 nrhs=11 batch=1 | vendor 0.04826 | direct 0.05731 # deep
+transA=T transB=T m=128 nrhs=32 batch=1 | vendor 0.02362 | direct 0.02510 # deep
+transA=T transB=T m=128 nrhs=64 batch=8 | vendor 0.03404 | direct 0.04152 # deep
+transA=T transB=T m=181 nrhs=32 batch=1 | vendor 0.02368 | direct 0.02443 # deep
+transA=T transB=T m=181 nrhs=64 batch=8 | vendor 0.03985 | direct 0.04275 # deep
+transA=T transB=T m=197 nrhs=64 batch=8 | direct 0.04245 | vendor 0.04630 # deep
+transA=T transB=T m=215 nrhs=32 batch=1 | vendor 0.1359 | direct 0.1406 # deep
+transA=T transB=T m=215 nrhs=64 batch=8 | direct 0.04320 | vendor 0.04891 # deep
+transA=T transB=T m=235 nrhs=32 batch=1 | direct 0.02503 | vendor 0.02535 # deep
+transA=T transB=T m=256 nrhs=1 batch=1 | vendor 0.06753 | direct 0.07394 # deep
+transA=T transB=T m=256 nrhs=1 batch=8 | direct 0.01505 | vendor 0.02095 # deep
+transA=T transB=T m=256 nrhs=1 batch=128 | direct 0.02744 | vendor 0.04401 # deep
+transA=T transB=T m=256 nrhs=1 batch=1024 | direct 0.02611 | vendor 4.300 # deep
+transA=T transB=T m=256 nrhs=1 batch=16384 | direct 0.3745 | vendor 65.26 # deep
+transA=T transB=T m=256 nrhs=2 batch=1 | direct 0.01237 | vendor 0.01721 # deep
+transA=T transB=T m=256 nrhs=2 batch=8 | direct 0.01535 | vendor 0.02132 # deep
+transA=T transB=T m=256 nrhs=2 batch=128 | direct 0.02797 | vendor 0.06224 # deep
+transA=T transB=T m=256 nrhs=2 batch=1024 | direct 0.04168 | vendor 4.014 # deep
+transA=T transB=T m=256 nrhs=2 batch=16384 | direct 0.5930 | vendor 63.44 # deep
+transA=T transB=T m=256 nrhs=4 batch=1 | direct 0.01297 | vendor 0.01820 # deep
+transA=T transB=T m=256 nrhs=4 batch=8 | direct 0.01540 | vendor 0.02223 # deep
+transA=T transB=T m=256 nrhs=4 batch=128 | direct 0.02809 | vendor 0.06117 # deep
+transA=T transB=T m=256 nrhs=4 batch=1024 | direct 0.07119 | vendor 4.727 # deep
+transA=T transB=T m=256 nrhs=4 batch=16384 | direct 1.094 | vendor 64.37 # deep
+transA=T transB=T m=256 nrhs=16 batch=1 | direct 0.01779 | vendor 0.02348 # deep
+transA=T transB=T m=256 nrhs=16 batch=8 | direct 0.02149 | vendor 0.02817 # deep
+transA=T transB=T m=256 nrhs=16 batch=128 | direct 0.04328 | vendor 0.07226 # deep
+transA=T transB=T m=256 nrhs=16 batch=1024 | direct 0.2572 | vendor 4.814 # deep
+transA=T transB=T m=256 nrhs=16 batch=16384 | direct 4.347 | vendor 66.53 # deep
+transA=T transB=T m=256 nrhs=32 batch=1 | direct 0.02502 | vendor 0.02557 # deep
+transA=T transB=T m=256 nrhs=45 batch=1 | direct 0.08430 | vendor 0.1148 # deep
+transA=T transB=T m=256 nrhs=49 batch=1 | direct 0.08783 | vendor 0.09970 # deep
+transA=T transB=T m=256 nrhs=51 batch=1 | direct 0.08766 | vendor 0.1066 # deep
+transA=T transB=T m=256 nrhs=54 batch=1 | vendor 0.02785 | direct 0.03530 # deep
+transA=T transB=T m=256 nrhs=64 batch=1 | vendor 0.02818 | direct 0.04018 # deep
+transA=T transB=T m=256 nrhs=64 batch=8 | direct 0.04367 | vendor 0.05090 # deep
+transA=T transB=T m=256 nrhs=64 batch=128 | direct 0.1281 | vendor 0.3029 # deep
+transA=T transB=T m=256 nrhs=64 batch=1024 | direct 1.205 | vendor 5.077 # deep
+transA=T transB=T m=304 nrhs=1 batch=1 | vendor 0.09725 | direct 0.1037 # deep
+transA=T transB=T m=332 nrhs=1 batch=1 | direct 0.07516 | vendor 0.08435 # deep
+transA=T transB=T m=362 nrhs=1 batch=1 | direct 0.01275 | vendor 0.02331 # deep
+transA=T transB=T m=512 nrhs=1 batch=1 | direct 0.01291 | vendor 0.02303 # deep
+transA=T transB=T m=1024 nrhs=1 batch=1 | direct 0.01343 | vendor 0.02538 # deep
+transA=T transB=T m=1024 nrhs=16 batch=1 | direct 0.02073 | vendor 0.02791 # deep
+transA=T transB=T m=2048 nrhs=16 batch=1 | direct 0.01965 | vendor 0.02654 # deep
+transA=T transB=T m=4096 nrhs=1 batch=1 | direct 0.01399 | vendor 0.02647 # deep
+transA=T transB=T m=4096 nrhs=1 batch=8 | direct 0.01959 | vendor 0.02968 # deep
+transA=T transB=T m=4096 nrhs=1 batch=128 | direct 0.06617 | vendor 0.9483 # deep
+transA=T transB=T m=4096 nrhs=1 batch=1024 | direct 0.5795 # deep
+transA=T transB=T m=4096 nrhs=2 batch=1 | direct 0.01431 | vendor 0.02036 # deep
+transA=T transB=T m=4096 nrhs=2 batch=8 | direct 0.02064 | vendor 0.05250 # deep
+transA=T transB=T m=4096 nrhs=2 batch=128 | direct 0.09988 # deep
+transA=T transB=T m=4096 nrhs=2 batch=1024 | direct 0.9139 # deep
+transA=T transB=T m=4096 nrhs=4 batch=1 | direct 0.01470 | vendor 0.02186 # deep
+transA=T transB=T m=4096 nrhs=4 batch=8 | direct 0.02110 | vendor 0.05391 # deep
+transA=T transB=T m=4096 nrhs=4 batch=128 | direct 0.1703 # deep
+transA=T transB=T m=4096 nrhs=4 batch=1024 | direct 1.719 # deep
+transA=T transB=T m=4096 nrhs=16 batch=1 | vendor 0.02718 # deep
+transA=T transB=T m=4096 nrhs=16 batch=8 | direct 0.04891 | vendor 0.06512 # deep
+transA=T transB=T m=4096 nrhs=16 batch=128 | direct 0.7893 # deep
+transA=T transB=T m=4096 nrhs=16 batch=1024 | direct 6.332 # deep
+transA=T transB=T m=4096 nrhs=64 batch=1 | vendor 0.04143 # deep
+transA=T transB=T m=4096 nrhs=64 batch=8 | direct 0.1626 | vendor 0.1837 # deep
+transA=T transB=T m=4096 nrhs=64 batch=128 | direct 3.434 # deep
+transA=T transB=T m=4096 nrhs=64 batch=16384 | vendor - | direct - # transcribed
+transA=T transB=T m=65536 nrhs=1 batch=1 | direct 0.01490 | vendor 0.02907 # deep
+transA=T transB=T m=65536 nrhs=1 batch=8 | direct 0.06095 | vendor 0.07553 # deep
+transA=T transB=T m=65536 nrhs=1 batch=128 | direct 1.123 # deep
+transA=T transB=T m=65536 nrhs=2 batch=1 | direct 0.01957 | vendor 0.03961 # deep
+transA=T transB=T m=65536 nrhs=2 batch=8 | direct 0.1063 | vendor 0.1128 # deep
+transA=T transB=T m=65536 nrhs=2 batch=128 | direct 2.079 # deep
+transA=T transB=T m=65536 nrhs=4 batch=1 | direct 0.03004 | vendor 0.04910 # deep
+transA=T transB=T m=65536 nrhs=4 batch=8 | direct 0.1871 | vendor 0.1916 # deep
+transA=T transB=T m=65536 nrhs=4 batch=128 | direct 3.916 # deep
+transA=T transB=T m=65536 nrhs=16 batch=1 | vendor 0.1074 # deep
+transA=T transB=T m=65536 nrhs=16 batch=8 | direct 0.9190 | vendor 1.469 # deep
+transA=T transB=T m=65536 nrhs=16 batch=128 | direct 15.13 # deep
+transA=T transB=T m=65536 nrhs=64 batch=1 | vendor 0.3525 # deep
+transA=T transB=T m=65536 nrhs=64 batch=8 | direct 4.319 | vendor 4.350 # deep
+transA=T transB=T m=65536 nrhs=64 batch=16384 | vendor - | direct - # transcribed

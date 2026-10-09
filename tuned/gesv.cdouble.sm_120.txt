@@ -1,235 +1,212 @@
-# op=gesv dtype=cdouble device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/gesv.sm_120.csv (the old router's preference order per grid cell, untimed)
+# op=gesv dtype=cdouble device=sm_120 batchlas=a01c3c96 kernels=0326f361 family_kernels=tiny:f2fd992b,blocked:5954a1e2 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/gesv.cdouble.sm_120 tiers=deep:209,coarse:0,preview:0,custom:0,transcribed:0
 # keys: n:log:3 nrhs:log
-n=1 nrhs=1 | blocked -
-n=1 nrhs=2 | blocked -
-n=1 nrhs=4 | blocked -
-n=1 nrhs=5 | blocked -
-n=1 nrhs=8 | blocked -
-n=1 nrhs=16 | blocked -
-n=1 nrhs=64 | blocked -
-n=1 nrhs=256 | blocked -
-n=2 nrhs=1 | blocked -
-n=2 nrhs=2 | blocked -
-n=2 nrhs=4 | blocked -
-n=2 nrhs=5 | blocked -
-n=2 nrhs=8 | blocked -
-n=2 nrhs=16 | blocked -
-n=2 nrhs=64 | blocked -
-n=2 nrhs=256 | blocked -
-n=3 nrhs=1 | blocked -
-n=3 nrhs=2 | blocked -
-n=3 nrhs=4 | blocked -
-n=3 nrhs=5 | blocked -
-n=3 nrhs=8 | blocked -
-n=3 nrhs=16 | blocked -
-n=3 nrhs=64 | blocked -
-n=3 nrhs=256 | blocked -
-n=4 nrhs=1 | blocked -
-n=4 nrhs=2 | blocked -
-n=4 nrhs=4 | blocked -
-n=4 nrhs=5 | blocked -
-n=4 nrhs=8 | blocked -
-n=4 nrhs=16 | blocked -
-n=4 nrhs=64 | blocked -
-n=4 nrhs=256 | blocked -
-n=6 nrhs=1 | blocked -
-n=6 nrhs=2 | blocked -
-n=6 nrhs=4 | blocked -
-n=6 nrhs=5 | blocked -
-n=6 nrhs=8 | blocked -
-n=6 nrhs=16 | blocked -
-n=6 nrhs=64 | blocked -
-n=6 nrhs=256 | blocked -
-n=8 nrhs=1 | blocked -
-n=8 nrhs=2 | blocked -
-n=8 nrhs=4 | blocked -
-n=8 nrhs=5 | blocked -
-n=8 nrhs=8 | blocked -
-n=8 nrhs=16 | blocked -
-n=8 nrhs=64 | blocked -
-n=8 nrhs=256 | blocked -
-n=12 nrhs=1 | blocked -
-n=12 nrhs=2 | blocked -
-n=12 nrhs=4 | blocked -
-n=12 nrhs=5 | blocked -
-n=12 nrhs=8 | blocked -
-n=12 nrhs=16 | blocked -
-n=12 nrhs=64 | blocked -
-n=12 nrhs=256 | blocked -
-n=16 nrhs=1 | blocked -
-n=16 nrhs=2 | blocked -
-n=16 nrhs=4 | blocked -
-n=16 nrhs=5 | blocked -
-n=16 nrhs=8 | blocked -
-n=16 nrhs=16 | blocked -
-n=16 nrhs=64 | blocked -
-n=16 nrhs=256 | blocked -
-n=17 nrhs=1 | blocked -
-n=17 nrhs=2 | blocked -
-n=17 nrhs=4 | blocked -
-n=17 nrhs=5 | blocked -
-n=17 nrhs=8 | blocked -
-n=17 nrhs=16 | blocked -
-n=17 nrhs=64 | blocked -
-n=17 nrhs=256 | blocked -
-n=20 nrhs=1 | blocked -
-n=20 nrhs=2 | blocked -
-n=20 nrhs=4 | blocked -
-n=20 nrhs=5 | blocked -
-n=20 nrhs=8 | blocked -
-n=20 nrhs=16 | blocked -
-n=20 nrhs=64 | blocked -
-n=20 nrhs=256 | blocked -
-n=24 nrhs=1 | blocked -
-n=24 nrhs=2 | blocked -
-n=24 nrhs=4 | blocked -
-n=24 nrhs=5 | blocked -
-n=24 nrhs=8 | blocked -
-n=24 nrhs=16 | blocked -
-n=24 nrhs=64 | blocked -
-n=24 nrhs=256 | blocked -
-n=28 nrhs=1 | blocked -
-n=28 nrhs=2 | blocked -
-n=28 nrhs=4 | blocked -
-n=28 nrhs=5 | blocked -
-n=28 nrhs=8 | blocked -
-n=28 nrhs=16 | blocked -
-n=28 nrhs=64 | blocked -
-n=28 nrhs=256 | blocked -
-n=32 nrhs=1 | blocked -
-n=32 nrhs=2 | blocked -
-n=32 nrhs=4 | blocked -
-n=32 nrhs=5 | blocked -
-n=32 nrhs=8 | blocked -
-n=32 nrhs=16 | blocked -
-n=32 nrhs=64 | blocked -
-n=32 nrhs=256 | blocked -
-n=33 nrhs=1 | blocked -
-n=33 nrhs=2 | blocked -
-n=33 nrhs=4 | blocked -
-n=33 nrhs=5 | blocked -
-n=33 nrhs=8 | blocked -
-n=33 nrhs=16 | blocked -
-n=33 nrhs=64 | blocked -
-n=33 nrhs=256 | blocked -
-n=40 nrhs=1 | blocked -
-n=40 nrhs=2 | blocked -
-n=40 nrhs=4 | blocked -
-n=40 nrhs=5 | blocked -
-n=40 nrhs=8 | blocked -
-n=40 nrhs=16 | blocked -
-n=40 nrhs=64 | blocked -
-n=40 nrhs=256 | blocked -
-n=48 nrhs=1 | blocked -
-n=48 nrhs=2 | blocked -
-n=48 nrhs=4 | blocked -
-n=48 nrhs=5 | blocked -
-n=48 nrhs=8 | blocked -
-n=48 nrhs=16 | blocked -
-n=48 nrhs=64 | blocked -
-n=48 nrhs=256 | blocked -
-n=64 nrhs=1 | blocked -
-n=64 nrhs=2 | blocked -
-n=64 nrhs=4 | blocked -
-n=64 nrhs=5 | blocked -
-n=64 nrhs=8 | blocked -
-n=64 nrhs=16 | blocked -
-n=64 nrhs=64 | blocked -
-n=64 nrhs=256 | blocked -
-n=96 nrhs=1 | blocked -
-n=96 nrhs=2 | blocked -
-n=96 nrhs=4 | blocked -
-n=96 nrhs=5 | blocked -
-n=96 nrhs=8 | blocked -
-n=96 nrhs=16 | blocked -
-n=96 nrhs=64 | blocked -
-n=96 nrhs=256 | blocked -
-n=128 nrhs=1 | blocked -
-n=128 nrhs=2 | blocked -
-n=128 nrhs=4 | blocked -
-n=128 nrhs=5 | blocked -
-n=128 nrhs=8 | blocked -
-n=128 nrhs=16 | blocked -
-n=128 nrhs=64 | blocked -
-n=128 nrhs=256 | blocked -
-n=192 nrhs=1 | blocked -
-n=192 nrhs=2 | blocked -
-n=192 nrhs=4 | blocked -
-n=192 nrhs=5 | blocked -
-n=192 nrhs=8 | blocked -
-n=192 nrhs=16 | blocked -
-n=192 nrhs=64 | blocked -
-n=192 nrhs=256 | blocked -
-n=256 nrhs=1 | blocked -
-n=256 nrhs=2 | blocked -
-n=256 nrhs=4 | blocked -
-n=256 nrhs=5 | blocked -
-n=256 nrhs=8 | blocked -
-n=256 nrhs=16 | blocked -
-n=256 nrhs=64 | blocked -
-n=256 nrhs=256 | blocked -
-n=384 nrhs=1 | blocked -
-n=384 nrhs=2 | blocked -
-n=384 nrhs=4 | blocked -
-n=384 nrhs=5 | blocked -
-n=384 nrhs=8 | blocked -
-n=384 nrhs=16 | blocked -
-n=384 nrhs=64 | blocked -
-n=384 nrhs=256 | blocked -
-n=512 nrhs=1 | blocked -
-n=512 nrhs=2 | blocked -
-n=512 nrhs=4 | blocked -
-n=512 nrhs=5 | blocked -
-n=512 nrhs=8 | blocked -
-n=512 nrhs=16 | blocked -
-n=512 nrhs=64 | blocked -
-n=512 nrhs=256 | blocked -
-n=768 nrhs=1 | blocked -
-n=768 nrhs=2 | blocked -
-n=768 nrhs=4 | blocked -
-n=768 nrhs=5 | blocked -
-n=768 nrhs=8 | blocked -
-n=768 nrhs=16 | blocked -
-n=768 nrhs=64 | blocked -
-n=768 nrhs=256 | blocked -
-n=1024 nrhs=1 | blocked -
-n=1024 nrhs=2 | blocked -
-n=1024 nrhs=4 | blocked -
-n=1024 nrhs=5 | blocked -
-n=1024 nrhs=8 | blocked -
-n=1024 nrhs=16 | blocked -
-n=1024 nrhs=64 | blocked -
-n=1024 nrhs=256 | blocked -
-n=1536 nrhs=1 | blocked -
-n=1536 nrhs=2 | blocked -
-n=1536 nrhs=4 | blocked -
-n=1536 nrhs=5 | blocked -
-n=1536 nrhs=8 | blocked -
-n=1536 nrhs=16 | blocked -
-n=1536 nrhs=64 | blocked -
-n=1536 nrhs=256 | blocked -
-n=2048 nrhs=1 | blocked -
-n=2048 nrhs=2 | blocked -
-n=2048 nrhs=4 | blocked -
-n=2048 nrhs=5 | blocked -
-n=2048 nrhs=8 | blocked -
-n=2048 nrhs=16 | blocked -
-n=2048 nrhs=64 | blocked -
-n=2048 nrhs=256 | blocked -
-n=3072 nrhs=1 | blocked -
-n=3072 nrhs=2 | blocked -
-n=3072 nrhs=4 | blocked -
-n=3072 nrhs=5 | blocked -
-n=3072 nrhs=8 | blocked -
-n=3072 nrhs=16 | blocked -
-n=3072 nrhs=64 | blocked -
-n=3072 nrhs=256 | blocked -
-n=4096 nrhs=1 | blocked -
-n=4096 nrhs=2 | blocked -
-n=4096 nrhs=4 | blocked -
-n=4096 nrhs=5 | blocked -
-n=4096 nrhs=8 | blocked -
-n=4096 nrhs=16 | blocked -
-n=4096 nrhs=64 | blocked -
-n=4096 nrhs=256 | blocked -
+n=1 nrhs=1 | tiny 0.03220 | blocked 0.05734 # deep
+n=1 nrhs=2 | tiny 0.04028 | blocked 0.08245 # deep
+n=1 nrhs=4 | tiny 0.04111 | blocked 0.09022 # deep
+n=1 nrhs=5 | blocked 0.08926 # deep
+n=1 nrhs=8 | blocked 0.08866 # deep
+n=1 nrhs=16 | blocked 0.1474 # deep
+n=1 nrhs=64 | blocked 0.4918 # deep
+n=1 nrhs=256 | blocked 1.867 # deep
+n=2 nrhs=1 | tiny 0.05184 | blocked 0.07591 # deep
+n=2 nrhs=2 | tiny 0.05746 | blocked 0.1177 # deep
+n=2 nrhs=4 | tiny 0.06367 | blocked 0.1394 # deep
+n=2 nrhs=5 | blocked 0.1395 # deep
+n=2 nrhs=8 | blocked 0.1393 # deep
+n=2 nrhs=16 | blocked 0.2428 # deep
+n=2 nrhs=64 | blocked 0.8680 # deep
+n=2 nrhs=256 | blocked 3.410 # deep
+n=3 nrhs=1 | tiny 0.07353 | blocked 0.1021 # deep
+n=3 nrhs=2 | tiny 0.07385 | blocked 0.1631 # deep
+n=3 nrhs=4 | tiny 0.09147 | blocked 0.1902 # deep
+n=3 nrhs=5 | blocked 0.1916 # deep
+n=3 nrhs=8 | blocked 0.1941 # deep
+n=3 nrhs=16 | blocked 0.3495 # deep
+n=3 nrhs=64 | blocked 1.287 # deep
+n=3 nrhs=256 | blocked 5.178 # deep
+n=4 nrhs=1 | tiny 0.08768 | blocked 0.1257 # deep
+n=4 nrhs=2 | tiny 0.1001 | blocked 0.2112 # deep
+n=4 nrhs=4 | tiny 0.1249 | blocked 0.2492 # deep
+n=4 nrhs=5 | blocked 0.2461 # deep
+n=4 nrhs=8 | blocked 0.2543 # deep
+n=4 nrhs=16 | blocked 0.4559 # deep
+n=4 nrhs=64 | blocked 1.697 # deep
+n=4 nrhs=256 | blocked 6.973 # deep
+n=6 nrhs=1 | tiny 0.1363 | blocked 0.2139 # deep
+n=6 nrhs=2 | tiny 0.1530 | blocked 0.3325 # deep
+n=6 nrhs=4 | tiny 0.1921 | blocked 0.3898 # deep
+n=6 nrhs=5 | blocked 0.3864 # deep
+n=6 nrhs=8 | blocked 0.3888 # deep
+n=6 nrhs=16 | blocked 0.6988 # deep
+n=6 nrhs=64 | blocked 2.610 # deep
+n=6 nrhs=256 | blocked 10.86 # deep
+n=8 nrhs=1 | tiny 0.1874 | blocked 0.2840 # deep
+n=8 nrhs=2 | tiny 0.2135 | blocked 0.5007 # deep
+n=8 nrhs=4 | tiny 0.2634 | blocked 0.5054 # deep
+n=8 nrhs=5 | blocked 0.5099 # deep
+n=8 nrhs=8 | blocked 0.5122 # deep
+n=8 nrhs=16 | blocked 0.9179 # deep
+n=8 nrhs=64 | blocked 3.537 # deep
+n=8 nrhs=256 | blocked 14.34 # deep
+n=12 nrhs=1 | tiny 0.5581 | blocked 0.8009 # deep
+n=12 nrhs=2 | tiny 0.6370 | blocked 1.216 # deep
+n=12 nrhs=4 | tiny 0.7739 | blocked 1.227 # deep
+n=12 nrhs=5 | blocked 1.228 # deep
+n=12 nrhs=8 | blocked 1.237 # deep
+n=12 nrhs=16 | blocked 1.948 # deep
+n=12 nrhs=64 | blocked 7.478 # deep
+n=12 nrhs=256 | blocked 29.81 # deep
+n=16 nrhs=1 | tiny 0.8103 | blocked 1.659 # deep
+n=16 nrhs=2 | tiny 0.9123 | blocked 1.640 # deep
+n=16 nrhs=4 | tiny 1.119 | blocked 1.684 # deep
+n=16 nrhs=5 | blocked 1.674 # deep
+n=16 nrhs=8 | blocked 1.684 # deep
+n=16 nrhs=16 | blocked 2.624 # deep
+n=16 nrhs=64 | blocked 9.487 # deep
+n=16 nrhs=256 | blocked 37.05 # deep
+n=17 nrhs=1 | blocked 1.948 # deep
+n=17 nrhs=2 | blocked 1.954 # deep
+n=17 nrhs=4 | blocked 1.983 # deep
+n=17 nrhs=5 | blocked 1.991 # deep
+n=17 nrhs=8 | blocked 2.005 # deep
+n=17 nrhs=16 | blocked 3.199 # deep
+n=17 nrhs=64 | blocked 12.96 # deep
+n=17 nrhs=256 | blocked 50.83 # deep
+n=20 nrhs=1 | blocked 2.431 # deep
+n=20 nrhs=2 | blocked 2.407 # deep
+n=20 nrhs=4 | blocked 2.460 # deep
+n=20 nrhs=5 | blocked 2.480 # deep
+n=20 nrhs=8 | blocked 2.505 # deep
+n=20 nrhs=16 | blocked 3.810 # deep
+n=20 nrhs=64 | blocked 15.30 # deep
+n=20 nrhs=256 | blocked 59.67 # deep
+n=24 nrhs=1 | blocked 2.883 # deep
+n=24 nrhs=2 | blocked 2.912 # deep
+n=24 nrhs=4 | blocked 2.969 # deep
+n=24 nrhs=5 | blocked 2.965 # deep
+n=24 nrhs=8 | blocked 3.000 # deep
+n=24 nrhs=16 | blocked 4.745 # deep
+n=24 nrhs=64 | blocked 18.52 # deep
+n=24 nrhs=256 | blocked 71.92 # deep
+n=28 nrhs=1 | blocked 3.869 # deep
+n=28 nrhs=2 | blocked 3.849 # deep
+n=28 nrhs=4 | blocked 3.921 # deep
+n=28 nrhs=5 | blocked 3.944 # deep
+n=28 nrhs=8 | blocked 4.039 # deep
+n=28 nrhs=16 | blocked 6.303 # deep
+n=28 nrhs=64 | blocked 24.23 # deep
+n=28 nrhs=256 | blocked 92.81 # deep
+n=32 nrhs=1 | blocked 3.850 # deep
+n=32 nrhs=2 | blocked 4.704 # deep
+n=32 nrhs=4 | blocked 5.092 # deep
+n=32 nrhs=5 | blocked 5.040 # deep
+n=32 nrhs=8 | blocked 5.132 # deep
+n=32 nrhs=16 | blocked 7.497 # deep
+n=32 nrhs=64 | blocked 24.93 # deep
+n=33 nrhs=1 | blocked 7.043 # deep
+n=33 nrhs=2 | blocked 8.029 # deep
+n=33 nrhs=4 | blocked 8.553 # deep
+n=33 nrhs=5 | blocked 8.632 # deep
+n=33 nrhs=8 | blocked 8.673 # deep
+n=33 nrhs=16 | blocked 11.70 # deep
+n=33 nrhs=64 | blocked 34.12 # deep
+n=40 nrhs=1 | blocked 8.218 # deep
+n=40 nrhs=2 | blocked 9.389 # deep
+n=40 nrhs=4 | blocked 9.940 # deep
+n=40 nrhs=5 | blocked 9.932 # deep
+n=40 nrhs=8 | blocked 9.987 # deep
+n=40 nrhs=16 | blocked 13.66 # deep
+n=40 nrhs=64 | blocked 41.06 # deep
+n=48 nrhs=1 | blocked 9.892 # deep
+n=48 nrhs=2 | blocked 11.12 # deep
+n=48 nrhs=4 | blocked 12.22 # deep
+n=48 nrhs=5 | blocked 12.26 # deep
+n=48 nrhs=8 | blocked 12.41 # deep
+n=48 nrhs=16 | blocked 17.26 # deep
+n=48 nrhs=64 | blocked 53.27 # deep
+n=64 nrhs=1 | blocked 16.86 # deep
+n=64 nrhs=2 | blocked 18.84 # deep
+n=64 nrhs=4 | blocked 20.37 # deep
+n=64 nrhs=5 | blocked 20.42 # deep
+n=64 nrhs=8 | blocked 20.95 # deep
+n=64 nrhs=16 | blocked 28.40 # deep
+n=64 nrhs=64 | blocked 80.99 # deep
+n=96 nrhs=1 | blocked 10.46 # deep
+n=96 nrhs=2 | blocked 11.30 # deep
+n=96 nrhs=4 | blocked 13.45 # deep
+n=96 nrhs=5 | blocked 13.46 # deep
+n=96 nrhs=8 | blocked 13.49 # deep
+n=96 nrhs=16 | blocked 15.55 # deep
+n=96 nrhs=64 | blocked 35.82 # deep
+n=128 nrhs=1 | blocked 21.01 # deep
+n=128 nrhs=2 | blocked 22.09 # deep
+n=128 nrhs=4 | blocked 26.12 # deep
+n=128 nrhs=5 | blocked 26.14 # deep
+n=128 nrhs=8 | blocked 26.23 # deep
+n=128 nrhs=16 | blocked 29.13 # deep
+n=128 nrhs=64 | blocked 59.96 # deep
+n=192 nrhs=1 | blocked 17.63 # deep
+n=192 nrhs=2 | blocked 18.44 # deep
+n=192 nrhs=4 | blocked 20.83 # deep
+n=192 nrhs=5 | blocked 21.04 # deep
+n=192 nrhs=8 | blocked 21.04 # deep
+n=192 nrhs=16 | blocked 21.75 # deep
+n=192 nrhs=64 | blocked 36.11 # deep
+n=192 nrhs=256 | blocked 99.52 # deep
+n=256 nrhs=1 | blocked 39.15 # deep
+n=256 nrhs=2 | blocked 40.18 # deep
+n=256 nrhs=4 | blocked 45.04 # deep
+n=256 nrhs=5 | blocked 44.33 # deep
+n=256 nrhs=8 | blocked 44.73 # deep
+n=256 nrhs=16 | blocked 46.11 # deep
+n=256 nrhs=64 | blocked 69.19 # deep
+n=256 nrhs=256 | blocked 169.3 # deep
+n=384 nrhs=1 | blocked 42.33 # deep
+n=384 nrhs=2 | blocked 42.20 # deep
+n=384 nrhs=4 | blocked 46.78 # deep
+n=384 nrhs=5 | blocked 46.74 # deep
+n=384 nrhs=8 | blocked 46.65 # deep
+n=384 nrhs=16 | blocked 46.99 # deep
+n=384 nrhs=64 | blocked 59.97 # deep
+n=384 nrhs=256 | blocked 112.4 # deep
+n=512 nrhs=1 | blocked 96.01 # deep
+n=512 nrhs=2 | blocked 95.40 # deep
+n=512 nrhs=4 | blocked 103.5 # deep
+n=512 nrhs=5 | blocked 103.3 # deep
+n=512 nrhs=8 | blocked 103.5 # deep
+n=512 nrhs=16 | blocked 102.7 # deep
+n=512 nrhs=64 | blocked 124.8 # deep
+n=512 nrhs=256 | blocked 212.2 # deep
+n=768 nrhs=1 | blocked 184.0 # deep
+n=768 nrhs=2 | blocked 183.2 # deep
+n=768 nrhs=4 | blocked 190.8 # deep
+n=768 nrhs=5 | blocked 191.2 # deep
+n=768 nrhs=8 | blocked 191.2 # deep
+n=768 nrhs=16 | blocked 192.4 # deep
+n=768 nrhs=64 | blocked 204.2 # deep
+n=768 nrhs=256 | blocked 261.2 # deep
+n=1024 nrhs=1 | blocked 424.4 # deep
+n=1024 nrhs=2 | blocked 421.7 # deep
+n=1024 nrhs=4 | blocked 435.0 # deep
+n=1024 nrhs=5 | blocked 435.2 # deep
+n=1024 nrhs=8 | blocked 435.3 # deep
+n=1024 nrhs=16 | blocked 436.1 # deep
+n=1024 nrhs=64 | blocked 457.1 # deep
+n=1024 nrhs=256 | blocked 544.5 # deep
+n=1536 nrhs=1 | blocked 1381 # deep
+n=1536 nrhs=2 | blocked 1399 # deep
+n=1536 nrhs=4 | blocked 1401 # deep
+n=1536 nrhs=5 | blocked 1408 # deep
+n=1536 nrhs=8 | blocked 1408 # deep
+n=1536 nrhs=16 | blocked 1393 # deep
+n=1536 nrhs=64 | blocked 1405 # deep
+n=1536 nrhs=256 | blocked 1469 # deep
+n=2048 nrhs=1 | blocked 3235 # deep
+n=2048 nrhs=2 | blocked 3276 # deep
+n=2048 nrhs=4 | blocked 3280 # deep
+n=2048 nrhs=5 | blocked 3288 # deep
+n=2048 nrhs=8 | blocked 3288 # deep
+n=2048 nrhs=16 | blocked 3251 # deep
+n=2048 nrhs=64 | blocked 3301 # deep
+n=2048 nrhs=256 | blocked 3357 # deep

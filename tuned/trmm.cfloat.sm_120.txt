@@ -1,363 +1,577 @@
-# op=trmm dtype=cfloat device=sm_120 batchlas=ff340fc6 kernels=unknown date=2026-10-06 source=transcribed:ff340fc6
-# transcriber_csv=tuned/transcribed/trmm.csv (the old router's preference order per grid cell, untimed)
+# op=trmm dtype=cfloat device=sm_120 batchlas=209d9fb8 kernels=b29f30c5 family_kernels=triangular:60885e65,expand:32783b01,vendor:9e6f5b2c date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/trmm.cfloat.sm_120 tiers=deep:528,coarse:0,preview:0,custom:0,transcribed:46
 # keys: side:exact order:log:2 q:log batch:log
-side=L order=1 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=1 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=1 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=1 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=1 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=1 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=1 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=1 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=1 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=1 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=1 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=1 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=1 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=1 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=1 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=1 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=1 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=1 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=1 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=1 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=16 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=16 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=16 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=16 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=16 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=16 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=16 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=16 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=16 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=16 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=16 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=16 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=16 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=16 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=16 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=16 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=16 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=16 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=16 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=16 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=32 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=32 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=32 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=32 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=32 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=32 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=32 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=32 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=32 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=32 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=32 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=32 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=32 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=32 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=32 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=32 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=32 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=32 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=32 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=32 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=64 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=64 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=64 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=64 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=64 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=64 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=64 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=64 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=64 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=64 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=64 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=64 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=64 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=64 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=64 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=64 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=64 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=64 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=64 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=64 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=128 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=128 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=128 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=128 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=128 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=128 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=128 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=128 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=128 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=128 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=128 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=128 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=128 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=128 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=128 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=128 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=128 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=128 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=128 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=128 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=256 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=256 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=256 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=256 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=256 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=256 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=256 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=256 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=256 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=256 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=256 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=256 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=256 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=256 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=256 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=256 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=256 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=256 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=256 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=256 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=512 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=512 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=512 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=512 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=512 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=512 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=512 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=512 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=512 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=512 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=512 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=512 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=512 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=512 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=512 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=512 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=512 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=512 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=512 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=512 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=1024 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=1024 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=1024 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=1024 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=1024 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=1024 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=1024 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=1024 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=1024 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=1024 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=1024 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=1024 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=1024 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=1024 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=1024 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=1024 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=1024 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=1024 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=1024 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=1024 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=L order=2048 q=1 batch=1 | triangular - | expand - | vendor -
-side=L order=2048 q=1 batch=128 | triangular - | expand - | vendor -
-side=L order=2048 q=1 batch=1024 | triangular - | expand - | vendor -
-side=L order=2048 q=1 batch=32768 | triangular - | expand - | vendor -
-side=L order=2048 q=16 batch=1 | triangular - | expand - | vendor -
-side=L order=2048 q=16 batch=128 | triangular - | expand - | vendor -
-side=L order=2048 q=16 batch=1024 | triangular - | expand - | vendor -
-side=L order=2048 q=16 batch=32768 | triangular - | expand - | vendor -
-side=L order=2048 q=128 batch=1 | triangular - | expand - | vendor -
-side=L order=2048 q=128 batch=128 | triangular - | expand - | vendor -
-side=L order=2048 q=128 batch=1024 | triangular - | expand - | vendor -
-side=L order=2048 q=128 batch=32768 | triangular - | expand - | vendor -
-side=L order=2048 q=1024 batch=1 | triangular - | expand - | vendor -
-side=L order=2048 q=1024 batch=128 | triangular - | expand - | vendor -
-side=L order=2048 q=1024 batch=1024 | triangular - | expand - | vendor -
-side=L order=2048 q=1024 batch=32768 | triangular - | expand - | vendor -
-side=L order=2048 q=4096 batch=1 | triangular - | expand - | vendor -
-side=L order=2048 q=4096 batch=128 | triangular - | expand - | vendor -
-side=L order=2048 q=4096 batch=1024 | triangular - | expand - | vendor -
-side=L order=2048 q=4096 batch=32768 | triangular - | expand - | vendor -
-side=R order=1 q=1 batch=1 | expand - | vendor -
-side=R order=1 q=1 batch=128 | expand - | vendor -
-side=R order=1 q=1 batch=1024 | expand - | vendor -
-side=R order=1 q=1 batch=32768 | expand - | vendor -
-side=R order=1 q=16 batch=1 | expand - | vendor -
-side=R order=1 q=16 batch=128 | expand - | vendor -
-side=R order=1 q=16 batch=1024 | expand - | vendor -
-side=R order=1 q=16 batch=32768 | expand - | vendor -
-side=R order=1 q=128 batch=1 | expand - | vendor -
-side=R order=1 q=128 batch=128 | expand - | vendor -
-side=R order=1 q=128 batch=1024 | expand - | vendor -
-side=R order=1 q=128 batch=32768 | expand - | vendor -
-side=R order=1 q=1024 batch=1 | expand - | vendor -
-side=R order=1 q=1024 batch=128 | expand - | vendor -
-side=R order=1 q=1024 batch=1024 | expand - | vendor -
-side=R order=1 q=1024 batch=32768 | expand - | vendor -
-side=R order=1 q=4096 batch=1 | expand - | vendor -
-side=R order=1 q=4096 batch=128 | expand - | vendor -
-side=R order=1 q=4096 batch=1024 | expand - | vendor -
-side=R order=1 q=4096 batch=32768 | expand - | vendor -
-side=R order=16 q=1 batch=1 | expand - | vendor -
-side=R order=16 q=1 batch=128 | expand - | vendor -
-side=R order=16 q=1 batch=1024 | expand - | vendor -
-side=R order=16 q=1 batch=32768 | expand - | vendor -
-side=R order=16 q=16 batch=1 | expand - | vendor -
-side=R order=16 q=16 batch=128 | expand - | vendor -
-side=R order=16 q=16 batch=1024 | expand - | vendor -
-side=R order=16 q=16 batch=32768 | expand - | vendor -
-side=R order=16 q=128 batch=1 | expand - | vendor -
-side=R order=16 q=128 batch=128 | expand - | vendor -
-side=R order=16 q=128 batch=1024 | expand - | vendor -
-side=R order=16 q=128 batch=32768 | expand - | vendor -
-side=R order=16 q=1024 batch=1 | expand - | vendor -
-side=R order=16 q=1024 batch=128 | expand - | vendor -
-side=R order=16 q=1024 batch=1024 | expand - | vendor -
-side=R order=16 q=1024 batch=32768 | expand - | vendor -
-side=R order=16 q=4096 batch=1 | expand - | vendor -
-side=R order=16 q=4096 batch=128 | expand - | vendor -
-side=R order=16 q=4096 batch=1024 | expand - | vendor -
-side=R order=16 q=4096 batch=32768 | expand - | vendor -
-side=R order=32 q=1 batch=1 | expand - | vendor -
-side=R order=32 q=1 batch=128 | expand - | vendor -
-side=R order=32 q=1 batch=1024 | expand - | vendor -
-side=R order=32 q=1 batch=32768 | expand - | vendor -
-side=R order=32 q=16 batch=1 | expand - | vendor -
-side=R order=32 q=16 batch=128 | expand - | vendor -
-side=R order=32 q=16 batch=1024 | expand - | vendor -
-side=R order=32 q=16 batch=32768 | expand - | vendor -
-side=R order=32 q=128 batch=1 | expand - | vendor -
-side=R order=32 q=128 batch=128 | expand - | vendor -
-side=R order=32 q=128 batch=1024 | expand - | vendor -
-side=R order=32 q=128 batch=32768 | expand - | vendor -
-side=R order=32 q=1024 batch=1 | expand - | vendor -
-side=R order=32 q=1024 batch=128 | expand - | vendor -
-side=R order=32 q=1024 batch=1024 | expand - | vendor -
-side=R order=32 q=1024 batch=32768 | expand - | vendor -
-side=R order=32 q=4096 batch=1 | expand - | vendor -
-side=R order=32 q=4096 batch=128 | expand - | vendor -
-side=R order=32 q=4096 batch=1024 | expand - | vendor -
-side=R order=32 q=4096 batch=32768 | expand - | vendor -
-side=R order=64 q=1 batch=1 | expand - | vendor -
-side=R order=64 q=1 batch=128 | expand - | vendor -
-side=R order=64 q=1 batch=1024 | expand - | vendor -
-side=R order=64 q=1 batch=32768 | expand - | vendor -
-side=R order=64 q=16 batch=1 | expand - | vendor -
-side=R order=64 q=16 batch=128 | expand - | vendor -
-side=R order=64 q=16 batch=1024 | expand - | vendor -
-side=R order=64 q=16 batch=32768 | expand - | vendor -
-side=R order=64 q=128 batch=1 | expand - | vendor -
-side=R order=64 q=128 batch=128 | expand - | vendor -
-side=R order=64 q=128 batch=1024 | expand - | vendor -
-side=R order=64 q=128 batch=32768 | expand - | vendor -
-side=R order=64 q=1024 batch=1 | expand - | vendor -
-side=R order=64 q=1024 batch=128 | expand - | vendor -
-side=R order=64 q=1024 batch=1024 | expand - | vendor -
-side=R order=64 q=1024 batch=32768 | expand - | vendor -
-side=R order=64 q=4096 batch=1 | expand - | vendor -
-side=R order=64 q=4096 batch=128 | expand - | vendor -
-side=R order=64 q=4096 batch=1024 | expand - | vendor -
-side=R order=64 q=4096 batch=32768 | expand - | vendor -
-side=R order=128 q=1 batch=1 | expand - | vendor -
-side=R order=128 q=1 batch=128 | expand - | vendor -
-side=R order=128 q=1 batch=1024 | expand - | vendor -
-side=R order=128 q=1 batch=32768 | expand - | vendor -
-side=R order=128 q=16 batch=1 | expand - | vendor -
-side=R order=128 q=16 batch=128 | expand - | vendor -
-side=R order=128 q=16 batch=1024 | expand - | vendor -
-side=R order=128 q=16 batch=32768 | expand - | vendor -
-side=R order=128 q=128 batch=1 | expand - | vendor -
-side=R order=128 q=128 batch=128 | expand - | vendor -
-side=R order=128 q=128 batch=1024 | expand - | vendor -
-side=R order=128 q=128 batch=32768 | expand - | vendor -
-side=R order=128 q=1024 batch=1 | expand - | vendor -
-side=R order=128 q=1024 batch=128 | expand - | vendor -
-side=R order=128 q=1024 batch=1024 | expand - | vendor -
-side=R order=128 q=1024 batch=32768 | expand - | vendor -
-side=R order=128 q=4096 batch=1 | expand - | vendor -
-side=R order=128 q=4096 batch=128 | expand - | vendor -
-side=R order=128 q=4096 batch=1024 | expand - | vendor -
-side=R order=128 q=4096 batch=32768 | expand - | vendor -
-side=R order=256 q=1 batch=1 | expand - | vendor -
-side=R order=256 q=1 batch=128 | expand - | vendor -
-side=R order=256 q=1 batch=1024 | expand - | vendor -
-side=R order=256 q=1 batch=32768 | expand - | vendor -
-side=R order=256 q=16 batch=1 | expand - | vendor -
-side=R order=256 q=16 batch=128 | expand - | vendor -
-side=R order=256 q=16 batch=1024 | expand - | vendor -
-side=R order=256 q=16 batch=32768 | expand - | vendor -
-side=R order=256 q=128 batch=1 | expand - | vendor -
-side=R order=256 q=128 batch=128 | expand - | vendor -
-side=R order=256 q=128 batch=1024 | expand - | vendor -
-side=R order=256 q=128 batch=32768 | expand - | vendor -
-side=R order=256 q=1024 batch=1 | expand - | vendor -
-side=R order=256 q=1024 batch=128 | expand - | vendor -
-side=R order=256 q=1024 batch=1024 | expand - | vendor -
-side=R order=256 q=1024 batch=32768 | expand - | vendor -
-side=R order=256 q=4096 batch=1 | expand - | vendor -
-side=R order=256 q=4096 batch=128 | expand - | vendor -
-side=R order=256 q=4096 batch=1024 | expand - | vendor -
-side=R order=256 q=4096 batch=32768 | expand - | vendor -
-side=R order=512 q=1 batch=1 | expand - | vendor -
-side=R order=512 q=1 batch=128 | expand - | vendor -
-side=R order=512 q=1 batch=1024 | expand - | vendor -
-side=R order=512 q=1 batch=32768 | expand - | vendor -
-side=R order=512 q=16 batch=1 | expand - | vendor -
-side=R order=512 q=16 batch=128 | expand - | vendor -
-side=R order=512 q=16 batch=1024 | expand - | vendor -
-side=R order=512 q=16 batch=32768 | expand - | vendor -
-side=R order=512 q=128 batch=1 | expand - | vendor -
-side=R order=512 q=128 batch=128 | expand - | vendor -
-side=R order=512 q=128 batch=1024 | expand - | vendor -
-side=R order=512 q=128 batch=32768 | expand - | vendor -
-side=R order=512 q=1024 batch=1 | expand - | vendor -
-side=R order=512 q=1024 batch=128 | expand - | vendor -
-side=R order=512 q=1024 batch=1024 | expand - | vendor -
-side=R order=512 q=1024 batch=32768 | expand - | vendor -
-side=R order=512 q=4096 batch=1 | expand - | vendor -
-side=R order=512 q=4096 batch=128 | expand - | vendor -
-side=R order=512 q=4096 batch=1024 | expand - | vendor -
-side=R order=512 q=4096 batch=32768 | expand - | vendor -
-side=R order=1024 q=1 batch=1 | expand - | vendor -
-side=R order=1024 q=1 batch=128 | expand - | vendor -
-side=R order=1024 q=1 batch=1024 | expand - | vendor -
-side=R order=1024 q=1 batch=32768 | expand - | vendor -
-side=R order=1024 q=16 batch=1 | expand - | vendor -
-side=R order=1024 q=16 batch=128 | expand - | vendor -
-side=R order=1024 q=16 batch=1024 | expand - | vendor -
-side=R order=1024 q=16 batch=32768 | expand - | vendor -
-side=R order=1024 q=128 batch=1 | expand - | vendor -
-side=R order=1024 q=128 batch=128 | expand - | vendor -
-side=R order=1024 q=128 batch=1024 | expand - | vendor -
-side=R order=1024 q=128 batch=32768 | expand - | vendor -
-side=R order=1024 q=1024 batch=1 | expand - | vendor -
-side=R order=1024 q=1024 batch=128 | expand - | vendor -
-side=R order=1024 q=1024 batch=1024 | expand - | vendor -
-side=R order=1024 q=1024 batch=32768 | expand - | vendor -
-side=R order=1024 q=4096 batch=1 | expand - | vendor -
-side=R order=1024 q=4096 batch=128 | expand - | vendor -
-side=R order=1024 q=4096 batch=1024 | expand - | vendor -
-side=R order=1024 q=4096 batch=32768 | expand - | vendor -
-side=R order=2048 q=1 batch=1 | expand - | vendor -
-side=R order=2048 q=1 batch=128 | expand - | vendor -
-side=R order=2048 q=1 batch=1024 | expand - | vendor -
-side=R order=2048 q=1 batch=32768 | expand - | vendor -
-side=R order=2048 q=16 batch=1 | expand - | vendor -
-side=R order=2048 q=16 batch=128 | expand - | vendor -
-side=R order=2048 q=16 batch=1024 | expand - | vendor -
-side=R order=2048 q=16 batch=32768 | expand - | vendor -
-side=R order=2048 q=128 batch=1 | expand - | vendor -
-side=R order=2048 q=128 batch=128 | expand - | vendor -
-side=R order=2048 q=128 batch=1024 | expand - | vendor -
-side=R order=2048 q=128 batch=32768 | expand - | vendor -
-side=R order=2048 q=1024 batch=1 | expand - | vendor -
-side=R order=2048 q=1024 batch=128 | expand - | vendor -
-side=R order=2048 q=1024 batch=1024 | expand - | vendor -
-side=R order=2048 q=1024 batch=32768 | expand - | vendor -
-side=R order=2048 q=4096 batch=1 | expand - | vendor -
-side=R order=2048 q=4096 batch=128 | expand - | vendor -
-side=R order=2048 q=4096 batch=1024 | expand - | vendor -
-side=R order=2048 q=4096 batch=32768 | expand - | vendor -
+side=L order=1 q=1 batch=1 | vendor 0.01052 | triangular 0.01192 | expand 0.01265 # deep
+side=L order=1 q=1 batch=128 | triangular 0.01247 | expand 0.01347 | vendor 0.4370 # deep
+side=L order=1 q=1 batch=1024 | expand 0.01612 | triangular 0.02295 | vendor 3.467 # deep
+side=L order=1 q=1 batch=32768 | expand 0.1039 | triangular 0.2562 | vendor 102.5 # deep
+side=L order=1 q=16 batch=1 | vendor 0.01038 | expand 0.01232 | triangular 0.01246 # deep
+side=L order=1 q=16 batch=128 | triangular 0.01263 | expand 0.01320 | vendor 0.4320 # deep
+side=L order=1 q=16 batch=1024 | expand 0.01463 | triangular 0.02429 | vendor 3.182 # deep
+side=L order=1 q=16 batch=32768 | expand 0.1015 | triangular 0.2801 | vendor 109.9 # deep
+side=L order=1 q=27 batch=128 | triangular 0.01300 | expand 0.01281 | vendor 0.4165 # deep
+side=L order=1 q=31 batch=128 | triangular 0.01330 | expand 0.01358 | vendor 0.4466 # deep
+side=L order=1 q=33 batch=128 | expand 0.01262 | triangular 0.01343 | vendor 0.4229 # deep
+side=L order=1 q=35 batch=128 | expand 0.01254 | triangular 0.01317 | vendor 0.4083 # deep
+side=L order=1 q=45 batch=128 | expand 0.01291 | triangular 0.01345 | vendor 0.4428 # deep
+side=L order=1 q=128 batch=1 | vendor 0.01088 | expand 0.01293 | triangular 0.01626 # deep
+side=L order=1 q=128 batch=128 | expand 0.01327 | triangular 0.01639 | vendor 0.3975 # deep
+side=L order=1 q=128 batch=1024 | expand 0.01705 | triangular 0.02949 | vendor 3.318 # deep
+side=L order=1 q=128 batch=32768 | expand 0.1578 | triangular 0.3938 | vendor 105.3 # deep
+side=L order=1 q=1024 batch=1 | vendor 0.01071 | expand 0.01223 | triangular 0.01607 # deep
+side=L order=1 q=1024 batch=128 | expand 0.01552 | triangular 0.02842 | vendor 0.4217 # deep
+side=L order=1 q=1024 batch=1024 | expand 0.03278 | triangular 0.1105 | vendor 3.287 # deep
+side=L order=1 q=1024 batch=32768 | expand 1.069 | triangular 3.413 | vendor 109.7 # deep
+side=L order=1 q=4096 batch=1 | vendor 0.01099 | expand 0.01309 | triangular 0.01645 # deep
+side=L order=1 q=4096 batch=128 | expand 0.02278 | triangular 0.06511 # deep
+side=L order=1 q=4096 batch=1024 | expand 0.08817 | triangular 0.4090 # deep
+side=L order=1 q=4096 batch=32768 | expand 4.052 | triangular 15.04 # deep
+side=L order=2 q=16 batch=32768 | triangular 0.3003 | expand 0.3485 | vendor 103.0 # deep
+side=L order=2 q=128 batch=32768 | triangular 0.5044 | expand 0.6573 | vendor 109.4 # deep
+side=L order=4 q=16 batch=32768 | triangular 0.3530 | expand 0.3581 | vendor 102.4 # deep
+side=L order=4 q=35 batch=128 | expand 0.01461 | triangular 0.01545 | vendor 0.4161 # deep
+side=L order=4 q=128 batch=32768 | triangular 0.6643 | expand 0.6983 | vendor 105.4 # deep
+side=L order=8 q=35 batch=128 | expand 0.01451 | triangular 0.01546 | vendor 0.4287 # deep
+side=L order=9 q=35 batch=128 | triangular 0.01531 | expand 0.01527 | vendor 0.4017 # deep
+side=L order=11 q=35 batch=128 | triangular 0.01544 | expand 0.01555 | vendor 0.4125 # deep
+side=L order=16 q=1 batch=1 | vendor 0.01037 | expand 0.01294 | triangular 0.01303 # deep
+side=L order=16 q=1 batch=128 | triangular 0.01337 | expand 0.01359 | vendor 0.4226 # deep
+side=L order=16 q=1 batch=1024 | expand 0.01587 | triangular 0.02524 | vendor 3.462 # deep
+side=L order=16 q=1 batch=32768 | expand 0.1096 | triangular 0.3308 | vendor 105.5 # deep
+side=L order=16 q=2 batch=32768 | triangular 0.3479 | expand 0.3857 | vendor 102.8 # deep
+side=L order=16 q=4 batch=32768 | triangular 0.3825 | expand 0.4747 | vendor 101.2 # deep
+side=L order=16 q=16 batch=1 | vendor 0.01044 | expand 0.01392 | triangular 0.01403 # deep
+side=L order=16 q=16 batch=128 | triangular 0.01447 | expand 0.01454 | vendor 0.3910 # deep
+side=L order=16 q=16 batch=1024 | expand 0.02584 | triangular 0.02908 | vendor 3.248 # deep
+side=L order=16 q=16 batch=32768 | triangular 0.4359 | expand 0.5087 | vendor 106.0 # deep
+side=L order=16 q=27 batch=128 | triangular 0.01519 | expand 0.01569 | vendor 0.4094 # deep
+side=L order=16 q=35 batch=128 | triangular 0.01535 | expand 0.01495 | vendor 0.3974 # deep
+side=L order=16 q=37 batch=128 | triangular 0.01566 | expand 0.01564 | vendor 0.4407 # deep
+side=L order=16 q=40 batch=128 | expand 0.01466 | triangular 0.01566 | vendor 0.4052 # deep
+side=L order=16 q=45 batch=128 | expand 0.01506 | triangular 0.01571 | vendor 0.4062 # deep
+side=L order=16 q=128 batch=1 | vendor 0.01079 | expand 0.01449 | triangular 0.01997 # deep
+side=L order=16 q=128 batch=128 | expand 0.01733 | triangular 0.02051 | vendor 0.3939 # deep
+side=L order=16 q=128 batch=1024 | expand 0.04246 | triangular 0.05253 | vendor 3.279 # deep
+side=L order=16 q=128 batch=32768 | triangular 1.049 | expand 1.152 | vendor 106.8 # deep
+side=L order=16 q=1024 batch=1 | vendor 0.01065 | expand 0.01479 | triangular 0.02023 # deep
+side=L order=16 q=1024 batch=128 | expand 0.04028 | triangular 0.05329 | vendor 0.4557 # deep
+side=L order=16 q=1024 batch=1024 | expand 0.2588 | triangular 0.2839 | vendor 3.455 # deep
+side=L order=16 q=1117 batch=1024 | expand 0.2939 | triangular 0.3098 | vendor 3.490 # deep
+side=L order=16 q=1218 batch=1024 | triangular 0.3293 | expand 0.3260 | vendor 3.480 # deep
+side=L order=16 q=1448 batch=1024 | triangular 0.3805 | expand 0.3792 | vendor 3.505 # deep
+side=L order=16 q=2048 batch=1024 | triangular 0.5438 | expand 0.5309 | vendor 3.538 # deep
+side=L order=16 q=4096 batch=1 | vendor 0.01058 | expand 0.01453 | triangular 0.02046 # deep
+side=L order=16 q=4096 batch=128 | expand 0.1497 | triangular 0.1809 # deep
+side=L order=16 q=4096 batch=1024 | triangular 1.203 | expand 1.231 # deep
+side=L order=17 q=1 batch=128 | expand 0.01390 | triangular 0.01721 | vendor 0.4332 # deep
+side=L order=17 q=16 batch=128 | expand 0.01652 | triangular 0.01841 | vendor 0.4253 # deep
+side=L order=17 q=16 batch=32768 | expand 0.5174 | triangular 0.9381 | vendor 114.0 # deep
+side=L order=17 q=128 batch=32768 | expand 1.579 | triangular 2.088 | vendor 118.0 # deep
+side=L order=19 q=1 batch=128 | expand 0.01448 | triangular 0.01923 | vendor 0.4246 # deep
+side=L order=19 q=16 batch=128 | expand 0.01643 | triangular 0.02017 | vendor 0.4175 # deep
+side=L order=19 q=16 batch=32768 | expand 0.5701 | triangular 1.045 | vendor 114.1 # deep
+side=L order=19 q=128 batch=32768 | expand 1.709 | triangular 2.573 | vendor 118.0 # deep
+side=L order=23 q=1 batch=128 | expand 0.01408 | triangular 0.01982 | vendor 0.4172 # deep
+side=L order=23 q=16 batch=128 | expand 0.01618 | triangular 0.02183 | vendor 0.4333 # deep
+side=L order=23 q=16 batch=32768 | expand 0.6936 | triangular 1.130 | vendor 114.1 # deep
+side=L order=23 q=128 batch=32768 | expand 1.878 | triangular 2.929 | vendor 117.5 # deep
+side=L order=32 q=1 batch=1 | vendor 0.01090 | expand 0.01269 | triangular 0.01673 # deep
+side=L order=32 q=1 batch=128 | expand 0.01276 | triangular 0.01934 | vendor 0.4176 # deep
+side=L order=32 q=1 batch=1024 | expand 0.01625 | triangular 0.04243 | vendor 3.390 # deep
+side=L order=32 q=1 batch=32768 | expand 0.4121 | triangular 0.8672 | vendor 113.2 # deep
+side=L order=32 q=16 batch=1 | vendor 0.01117 | expand 0.01482 | triangular 0.01825 # deep
+side=L order=32 q=16 batch=128 | expand 0.01546 | triangular 0.02113 | vendor 0.4311 # deep
+side=L order=32 q=16 batch=1024 | expand 0.02876 | triangular 0.04935 | vendor 3.434 # deep
+side=L order=32 q=16 batch=32768 | expand 0.7081 | triangular 1.116 | vendor 114.1 # deep
+side=L order=32 q=128 batch=1 | vendor 0.01180 | expand 0.01579 | triangular 0.02730 # deep
+side=L order=32 q=128 batch=128 | expand 0.02236 | triangular 0.03226 | vendor 0.4260 # deep
+side=L order=32 q=128 batch=1024 | expand 0.06788 | triangular 0.08798 | vendor 3.457 # deep
+side=L order=32 q=128 batch=32768 | expand 1.944 | triangular 2.538 | vendor 116.8 # deep
+side=L order=32 q=1024 batch=1 | vendor 0.01174 | expand 0.01533 | triangular 0.02804 # deep
+side=L order=32 q=1024 batch=128 | expand 0.06115 | triangular 0.08806 | vendor 0.4551 # deep
+side=L order=32 q=1024 batch=1024 | expand 0.4599 | triangular 0.6303 | vendor 3.886 # deep
+side=L order=32 q=4096 batch=1 | vendor 0.01217 | expand 0.01534 | triangular 0.02830 # deep
+side=L order=32 q=4096 batch=128 | expand 0.2586 | triangular 0.3897 # deep
+side=L order=32 q=4096 batch=1024 | expand 2.515 | triangular 2.875 # deep
+side=L order=64 q=1 batch=1 | vendor 0.01226 | expand 0.01269 | triangular 0.02491 # deep
+side=L order=64 q=1 batch=128 | expand 0.01443 | triangular 0.03347 | vendor 0.6634 # deep
+side=L order=64 q=1 batch=1024 | expand 0.02555 | triangular 0.1095 | vendor 5.245 # deep
+side=L order=64 q=1 batch=32768 | expand 1.787 | triangular 2.782 | vendor 185.7 # deep
+side=L order=64 q=16 batch=1 | vendor 0.01256 | expand 0.01532 | triangular 0.02729 # deep
+side=L order=64 q=16 batch=128 | expand 0.01866 | triangular 0.03599 | vendor 0.6617 # deep
+side=L order=64 q=16 batch=1024 | expand 0.04483 | triangular 0.1210 | vendor 5.288 # deep
+side=L order=64 q=16 batch=32768 | expand 2.660 | triangular 3.301 | vendor 186.0 # deep
+side=L order=64 q=128 batch=1 | vendor 0.01299 | expand 0.01575 | triangular 0.03665 # deep
+side=L order=64 q=128 batch=128 | expand 0.02796 | triangular 0.05358 | vendor 0.6823 # deep
+side=L order=64 q=128 batch=1024 | expand 0.1253 | triangular 0.2275 | vendor 5.953 # deep
+side=L order=64 q=1024 batch=1 | vendor 0.01338 | expand 0.01617 | triangular 0.03799 # deep
+side=L order=64 q=1024 batch=128 | expand 0.1096 | triangular 0.2235 | vendor 0.7675 # deep
+side=L order=64 q=1024 batch=1024 | expand 0.8989 | triangular 1.547 | vendor 6.159 # deep
+side=L order=64 q=4096 batch=1 | vendor 0.01570 | expand 0.02422 | triangular 0.04007 # deep
+side=L order=64 q=4096 batch=128 | expand 0.4957 | triangular 0.9211 # deep
+side=L order=64 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=76 q=1 batch=1 | vendor 0.01304 | expand 0.01354 | triangular 0.03976 # deep
+side=L order=83 q=1 batch=1 | expand 0.01340 | vendor 0.01384 | triangular 0.04465 # deep
+side=L order=91 q=1 batch=1 | expand 0.01245 | vendor 0.01281 | triangular 0.04474 # deep
+side=L order=128 q=1 batch=1 | expand 0.01312 | vendor 0.01523 | triangular 0.05975 # deep
+side=L order=128 q=1 batch=128 | expand 0.01725 | triangular 0.07975 | vendor 1.008 # deep
+side=L order=128 q=1 batch=1024 | expand 0.1655 | triangular 0.3386 | vendor 8.034 # deep
+side=L order=128 q=2 batch=1 | vendor 0.01501 | expand 0.01765 | triangular 0.05958 # deep
+side=L order=128 q=4 batch=1 | vendor 0.01497 | expand 0.01745 | triangular 0.06084 # deep
+side=L order=128 q=16 batch=1 | vendor 0.01492 | expand 0.01768 | triangular 0.06259 # deep
+side=L order=128 q=16 batch=128 | expand 0.02783 | triangular 0.08552 | vendor 1.014 # deep
+side=L order=128 q=16 batch=1024 | expand 0.2139 | triangular 0.3869 | vendor 8.426 # deep
+side=L order=128 q=128 batch=1 | vendor 0.01501 | expand 0.01821 | triangular 0.08139 # deep
+side=L order=128 q=128 batch=128 | expand 0.05969 | triangular 0.1162 | vendor 1.017 # deep
+side=L order=128 q=128 batch=1024 | expand 0.5129 | triangular 0.6165 | vendor 8.761 # deep
+side=L order=128 q=1024 batch=1 | vendor 0.01524 | expand 0.01856 | triangular 0.08292 # deep
+side=L order=128 q=1024 batch=128 | expand 0.3833 | triangular 0.5986 | vendor 1.135 # deep
+side=L order=128 q=1024 batch=1024 | expand 2.943 | triangular 4.405 | vendor 8.994 # deep
+side=L order=128 q=4096 batch=1 | vendor 0.02180 | expand 0.02662 | triangular 0.08379 # deep
+side=L order=128 q=4096 batch=128 | expand 2.176 | triangular 2.590 # deep
+side=L order=128 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=152 q=128 batch=1 | vendor 0.01676 | expand 0.01990 | triangular 0.1004 # deep
+side=L order=166 q=128 batch=1 | vendor 0.01668 | expand 0.01970 | triangular 0.1157 # deep
+side=L order=181 q=4 batch=1 | vendor 0.01787 | expand 0.01970 | triangular 0.08827 # deep
+side=L order=181 q=23 batch=1 | vendor 0.01721 | expand 0.01949 | triangular 0.09426 # deep
+side=L order=181 q=54 batch=1 | vendor 0.01786 | expand 0.02085 | triangular 0.1064 # deep
+side=L order=181 q=60 batch=1 | vendor 0.01780 | expand 0.02086 | triangular 0.1078 # deep
+side=L order=181 q=63 batch=1 | vendor 0.01733 | expand 0.01988 | triangular 0.1091 # deep
+side=L order=181 q=67 batch=1 | expand 0.01784 | vendor 0.01782 | triangular 0.1157 # deep
+side=L order=181 q=83 batch=1 | expand 0.01759 | vendor 0.01751 | triangular 0.1203 # deep
+side=L order=181 q=128 batch=1 | expand 0.01691 | vendor 0.01726 | triangular 0.1352 # deep
+side=L order=181 q=128 batch=1024 | expand 1.219 | triangular 1.372 | vendor 11.61 # deep
+side=L order=197 q=4 batch=1 | vendor 0.01860 | expand 0.01988 | triangular 0.09130 # deep
+side=L order=215 q=4 batch=1 | expand 0.01992 | vendor 0.01953 | triangular 0.09958 # deep
+side=L order=215 q=128 batch=1024 | expand 1.622 | triangular 2.003 | vendor 12.92 # deep
+side=L order=235 q=128 batch=1024 | expand 1.829 | triangular 2.122 | vendor 13.59 # deep
+side=L order=256 q=1 batch=1 | expand 0.01469 | vendor 0.02059 | triangular 0.1046 # deep
+side=L order=256 q=1 batch=128 | expand 0.04151 | triangular 0.2129 | vendor 1.730 # deep
+side=L order=256 q=1 batch=1024 | expand 0.8546 | triangular 1.055 | vendor 14.10 # deep
+side=L order=256 q=4 batch=1 | expand 0.02054 | vendor 0.01997 | triangular 0.1058 # deep
+side=L order=256 q=6 batch=1 | expand 0.02068 | vendor 0.02016 | triangular 0.1069 # deep
+side=L order=256 q=7 batch=1 | expand 0.02106 | vendor 0.02052 | triangular 0.1104 # deep
+side=L order=256 q=8 batch=1 | vendor 0.02035 | expand 0.02167 | triangular 0.1079 # deep
+side=L order=256 q=16 batch=1 | vendor 0.02058 | expand 0.02271 | triangular 0.1093 # deep
+side=L order=256 q=16 batch=128 | expand 0.08875 | triangular 0.2247 | vendor 1.701 # deep
+side=L order=256 q=16 batch=1024 | expand 0.9682 | triangular 1.175 | vendor 14.35 # deep
+side=L order=256 q=17 batch=1 | expand 0.01720 | vendor 0.02004 | triangular 0.1098 # deep
+side=L order=256 q=18 batch=1 | expand 0.01752 | vendor 0.02055 | triangular 0.1102 # deep
+side=L order=256 q=21 batch=1 | expand 0.01733 | vendor 0.02022 | triangular 0.1114 # deep
+side=L order=256 q=27 batch=1 | expand 0.01786 | vendor 0.02042 | triangular 0.1100 # deep
+side=L order=256 q=45 batch=1 | expand 0.01857 | vendor 0.02079 | triangular 0.1212 # deep
+side=L order=256 q=45 batch=1024 | expand 1.300 | triangular 1.381 | vendor 14.35 # deep
+side=L order=256 q=58 batch=1024 | expand 1.310 | triangular 1.422 | vendor 14.41 # deep
+side=L order=256 q=62 batch=1024 | expand 1.335 | triangular 1.449 | vendor 14.40 # deep
+side=L order=256 q=66 batch=1024 | triangular 1.523 | expand 1.790 | vendor 14.36 # deep
+side=L order=256 q=76 batch=1024 | triangular 1.518 | expand 1.783 | vendor 14.41 # deep
+side=L order=256 q=128 batch=1 | expand 0.01793 | vendor 0.02094 | triangular 0.1436 # deep
+side=L order=256 q=128 batch=128 | expand 0.2333 | triangular 0.3243 | vendor 1.757 # deep
+side=L order=256 q=128 batch=1024 | triangular 1.753 | expand 1.878 | vendor 14.44 # deep
+side=L order=256 q=215 batch=1 | expand 0.01891 | vendor 0.02015 | triangular 0.1426 # deep
+side=L order=256 q=230 batch=1 | expand 0.02097 | vendor 0.02058 | triangular 0.1462 # deep
+side=L order=256 q=245 batch=1 | vendor 0.02035 | expand 0.02107 | triangular 0.1451 # deep
+side=L order=256 q=279 batch=1 | vendor 0.02100 | expand 0.02226 | triangular 0.1467 # deep
+side=L order=256 q=362 batch=1 | vendor 0.01996 | expand 0.02178 | triangular 0.1438 # deep
+side=L order=256 q=1024 batch=1 | vendor 0.02181 | expand 0.03275 | triangular 0.1473 # deep
+side=L order=256 q=1024 batch=128 | expand 1.447 | triangular 1.933 | vendor 2.121 # deep
+side=L order=256 q=1024 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=256 q=4096 batch=1 | vendor 0.04757 | expand 0.05777 | triangular 0.1496 # deep
+side=L order=256 q=4096 batch=128 | expand 6.043 | triangular 7.593 # deep
+side=L order=256 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=279 q=245 batch=1 | expand 0.02265 | vendor 0.02218 | triangular 0.1913 # deep
+side=L order=304 q=245 batch=1 | expand 0.02187 | vendor 0.02264 | triangular 0.1702 # deep
+side=L order=362 q=1 batch=1024 | expand 1.820 | triangular 2.137 | vendor 19.12 # deep
+side=L order=362 q=16 batch=1 | vendor 0.02504 | expand 0.02611 | triangular 0.1543 # deep
+side=L order=362 q=16 batch=128 | expand 0.2357 | triangular 0.4066 | vendor 2.346 # deep
+side=L order=362 q=16 batch=1024 | expand 2.014 | triangular 2.369 | vendor 19.28 # deep
+side=L order=362 q=17 batch=1 | expand 0.01911 | vendor 0.02517 | triangular 0.1567 # deep
+side=L order=362 q=18 batch=1 | expand 0.01839 | vendor 0.02521 | triangular 0.1578 # deep
+side=L order=362 q=21 batch=1 | expand 0.01798 | vendor 0.02509 | triangular 0.1587 # deep
+side=L order=362 q=27 batch=1 | expand 0.01802 | vendor 0.02500 | triangular 0.1621 # deep
+side=L order=362 q=45 batch=1 | expand 0.01796 | vendor 0.02496 | triangular 0.1769 # deep
+side=L order=362 q=128 batch=1 | expand 0.02002 | vendor 0.02472 | triangular 0.2255 # deep
+side=L order=362 q=128 batch=128 | expand 0.5429 | triangular 0.6392 | vendor 2.428 # deep
+side=L order=362 q=215 batch=1 | expand 0.02241 | vendor 0.02471 | triangular 0.2275 # deep
+side=L order=362 q=245 batch=1 | expand 0.02341 | vendor 0.02475 | triangular 0.2264 # deep
+side=L order=362 q=261 batch=1 | vendor 0.02522 | expand 0.02765 | triangular 0.2310 # deep
+side=L order=362 q=279 batch=1 | vendor 0.02590 | expand 0.02811 | triangular 0.2345 # deep
+side=L order=362 q=362 batch=1 | vendor 0.02549 | expand 0.02991 | triangular 0.2347 # deep
+side=L order=362 q=1024 batch=1 | vendor 0.04142 | expand 0.04355 | triangular 0.2323 # deep
+side=L order=395 q=16 batch=1 | expand 0.01863 | vendor 0.02688 | triangular 0.1726 # deep
+side=L order=395 q=128 batch=1 | expand 0.02032 | vendor 0.02661 | triangular 0.2628 # deep
+side=L order=395 q=215 batch=1 | expand 0.02369 | vendor 0.02683 | triangular 0.2608 # deep
+side=L order=395 q=245 batch=1 | expand 0.02556 | vendor 0.02724 | triangular 0.2596 # deep
+side=L order=395 q=261 batch=1 | vendor 0.02710 | expand 0.02985 | triangular 0.2602 # deep
+side=L order=395 q=279 batch=1 | vendor 0.02749 | expand 0.03000 | triangular 0.2615 # deep
+side=L order=395 q=362 batch=1 | vendor 0.02766 | expand 0.03283 | triangular 0.2685 # deep
+side=L order=395 q=1024 batch=1 | vendor 0.04136 | expand 0.04637 | triangular 0.2705 # deep
+side=L order=431 q=1 batch=1024 | expand 2.713 | triangular 2.842 | vendor 21.96 # deep
+side=L order=431 q=16 batch=1 | expand 0.01942 | vendor 0.02821 | triangular 0.1926 # deep
+side=L order=431 q=16 batch=1024 | expand 2.986 | triangular 3.303 | vendor 21.95 # deep
+side=L order=431 q=128 batch=1 | expand 0.02255 | vendor 0.02794 | triangular 0.2925 # deep
+side=L order=431 q=128 batch=128 | expand 0.7616 | triangular 0.8982 | vendor 2.777 # deep
+side=L order=431 q=215 batch=1 | expand 0.02566 | vendor 0.02801 | triangular 0.2836 # deep
+side=L order=431 q=1024 batch=1 | expand 0.04766 | vendor 0.04857 | triangular 0.2941 # deep
+side=L order=470 q=1 batch=1024 | expand 3.116 | triangular 3.596 | vendor 24.01 # deep
+side=L order=470 q=16 batch=1024 | expand 3.474 | triangular 4.032 | vendor 24.26 # deep
+side=L order=470 q=128 batch=1 | expand 0.02545 | vendor 0.03061 | triangular 0.2924 # deep
+side=L order=470 q=128 batch=128 | expand 0.8423 | triangular 0.9763 | vendor 3.051 # deep
+side=L order=470 q=215 batch=1 | expand 0.03033 | vendor 0.03057 | triangular 0.2889 # deep
+side=L order=512 q=1 batch=1 | expand 0.01799 | vendor 0.02244 | triangular 0.1998 # deep
+side=L order=512 q=1 batch=128 | expand 0.3618 | triangular 0.5796 | vendor 2.352 # deep
+side=L order=512 q=1 batch=1024 | triangular 3.538 | expand 3.611 | vendor 18.87 # deep
+side=L order=512 q=16 batch=1 | expand 0.01775 | vendor 0.02220 | triangular 0.2076 # deep
+side=L order=512 q=16 batch=128 | expand 0.4632 | triangular 0.6404 | vendor 2.350 # deep
+side=L order=512 q=16 batch=1024 | triangular 3.913 | expand 3.953 | vendor 18.88 # deep
+side=L order=512 q=45 batch=1 | expand 0.02100 | vendor 0.02300 | triangular 0.2274 # deep
+side=L order=512 q=45 batch=128 | expand 0.6130 | triangular 0.6972 | vendor 2.366 # deep
+side=L order=512 q=58 batch=128 | expand 0.6166 | triangular 0.7223 | vendor 2.368 # deep
+side=L order=512 q=62 batch=128 | expand 0.6213 | triangular 0.7210 | vendor 2.367 # deep
+side=L order=512 q=66 batch=128 | triangular 0.7528 | expand 0.8589 | vendor 2.364 # deep
+side=L order=512 q=76 batch=1 | expand 0.02195 | vendor 0.02234 | triangular 0.2457 # deep
+side=L order=512 q=76 batch=128 | triangular 0.7668 | expand 0.8757 | vendor 2.352 # deep
+side=L order=512 q=87 batch=1 | expand 0.02199 | vendor 0.02222 | triangular 0.2457 # deep
+side=L order=512 q=93 batch=1 | expand 0.02183 | vendor 0.02221 | triangular 0.2480 # deep
+side=L order=512 q=99 batch=1 | vendor 0.02297 | expand 0.02695 | triangular 0.2594 # deep
+side=L order=512 q=128 batch=1 | vendor 0.02223 | expand 0.02513 | triangular 0.2686 # deep
+side=L order=512 q=128 batch=128 | triangular 0.8960 | expand 0.9008 | vendor 2.367 # deep
+side=L order=512 q=128 batch=1024 | triangular 5.749 | expand 7.371 | vendor 18.89 # deep
+side=L order=512 q=215 batch=1 | vendor 0.02381 | expand 0.03230 | triangular 0.2668 # deep
+side=L order=512 q=362 batch=1 | vendor 0.03324 | expand 0.03887 | triangular 0.2703 # deep
+side=L order=512 q=362 batch=128 | triangular 2.399 | expand 2.390 | vendor 3.636 # deep
+side=L order=512 q=609 batch=1 | vendor 0.03471 | expand 0.04492 | triangular 0.2743 # deep
+side=L order=512 q=609 batch=128 | triangular 4.045 | expand 3.999 | vendor 4.272 # deep
+side=L order=512 q=650 batch=128 | vendor 4.277 | expand 4.464 | triangular 4.503 # deep
+side=L order=512 q=694 batch=1 | vendor 0.03486 | expand 0.04376 | triangular 0.2736 # deep
+side=L order=512 q=694 batch=128 | expand 4.437 | vendor 4.414 | triangular 4.654 # deep
+side=L order=512 q=740 batch=1 | expand 0.05147 | vendor 0.05322 | triangular 0.2727 # deep
+side=L order=512 q=790 batch=1 | expand 0.05469 | vendor 0.05363 | triangular 0.2724 # deep
+side=L order=512 q=790 batch=128 | expand 5.035 | triangular 5.221 | vendor 6.061 # deep
+side=L order=512 q=1024 batch=1 | expand 0.05834 | vendor 0.05705 | triangular 0.2770 # deep
+side=L order=512 q=1024 batch=128 | expand 6.080 | triangular 6.321 | vendor 7.176 # deep
+side=L order=512 q=1024 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=512 q=1117 batch=1 | vendor 0.04878 | expand 0.06436 | triangular 0.2762 # deep
+side=L order=512 q=1218 batch=1 | vendor 0.05780 | expand 0.06661 | triangular 0.2751 # deep
+side=L order=512 q=1448 batch=1 | vendor 0.06035 | expand 0.07050 | triangular 0.2750 # deep
+side=L order=512 q=2048 batch=1 | vendor 0.07638 | expand 0.1015 | triangular 0.2784 # deep
+side=L order=512 q=4096 batch=1 | vendor 0.1534 | expand 0.2012 # deep
+side=L order=512 q=4096 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=512 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=558 q=1024 batch=1 | vendor 0.06131 | expand 0.07209 | triangular 0.3487 # deep
+side=L order=609 q=790 batch=128 | expand 7.777 | vendor 8.518 | triangular 9.017 # deep
+side=L order=609 q=1024 batch=1 | vendor 0.06673 | expand 0.08100 | triangular 0.4017 # deep
+side=L order=609 q=1024 batch=128 | expand 8.842 | vendor 9.236 | triangular 10.83 # deep
+side=L order=636 q=6 batch=1 | expand 0.02114 | vendor 0.02533 | triangular 0.2561 # deep
+side=L order=664 q=790 batch=128 | vendor 8.971 | expand 9.362 | triangular 9.633 # deep
+side=L order=664 q=1024 batch=128 | vendor 10.52 | expand 11.03 | triangular 11.84 # deep
+side=L order=724 q=4 batch=1 | expand 0.01871 | vendor 0.02727 | triangular 0.2773 # deep
+side=L order=724 q=45 batch=1 | expand 0.02441 | vendor 0.02739 | triangular 0.3167 # deep
+side=L order=724 q=45 batch=128 | expand 1.385 | triangular 1.428 | vendor 2.894 # deep
+side=L order=724 q=54 batch=128 | expand 1.429 | triangular 1.480 | vendor 2.892 # deep
+side=L order=724 q=60 batch=128 | expand 1.471 | triangular 1.570 | vendor 2.898 # deep
+side=L order=724 q=63 batch=128 | expand 1.497 | triangular 1.588 | vendor 2.900 # deep
+side=L order=724 q=66 batch=1 | expand 0.02679 | vendor 0.02779 | triangular 0.3463 # deep
+side=L order=724 q=66 batch=128 | triangular 1.523 | expand 1.878 | vendor 2.900 # deep
+side=L order=724 q=80 batch=1 | expand 0.02673 | vendor 0.02767 | triangular 0.3576 # deep
+side=L order=724 q=89 batch=1 | expand 0.02821 | vendor 0.02838 | triangular 0.3647 # deep
+side=L order=724 q=93 batch=1 | expand 0.02712 | vendor 0.02772 | triangular 0.3638 # deep
+side=L order=724 q=98 batch=1 | vendor 0.02825 | expand 0.02975 | triangular 0.3783 # deep
+side=L order=724 q=98 batch=128 | triangular 1.815 | expand 2.184 | vendor 2.904 # deep
+side=L order=724 q=215 batch=1 | vendor 0.03016 | expand 0.04289 | triangular 0.4090 # deep
+side=L order=724 q=215 batch=128 | triangular 3.620 | vendor 3.537 | expand 3.712 # deep
+side=L order=724 q=318 batch=128 | triangular 5.173 | expand 5.165 | vendor 5.261 # deep
+side=L order=724 q=334 batch=128 | triangular 5.284 | expand 5.232 | vendor 5.511 # deep
+side=L order=724 q=350 batch=128 | expand 5.071 | triangular 5.300 | vendor 5.481 # deep
+side=L order=724 q=368 batch=128 | expand 5.196 | triangular 5.519 | vendor 5.520 # deep
+side=L order=724 q=386 batch=128 | vendor 5.698 | expand 6.446 | triangular 6.574 # deep
+side=L order=724 q=469 batch=128 | vendor 6.189 | expand 6.604 | triangular 7.099 # deep
+side=L order=724 q=790 batch=128 | vendor 10.20 | expand 10.71 | triangular 11.69 # deep
+side=L order=724 q=1024 batch=1 | vendor 0.08632 | expand 0.1209 | triangular 0.4213 # deep
+side=L order=724 q=1024 batch=128 | vendor 11.90 | expand 12.28 | triangular 14.12 # deep
+side=L order=790 q=45 batch=1 | expand 0.02581 | vendor 0.02506 | triangular 0.3604 # deep
+side=L order=790 q=45 batch=128 | expand 1.736 | triangular 1.876 | vendor 2.640 # deep
+side=L order=861 q=45 batch=1 | vendor 0.02494 | expand 0.02619 | triangular 0.4138 # deep
+side=L order=861 q=45 batch=128 | triangular 2.119 | expand 2.067 | vendor 2.637 # deep
+side=L order=861 q=92 batch=128 | triangular 2.669 | vendor 2.847 | expand 3.061 # deep
+side=L order=861 q=110 batch=128 | triangular 2.997 | expand 3.038 | vendor 3.134 # deep
+side=L order=861 q=120 batch=128 | triangular 2.998 | expand 3.061 | vendor 3.168 # deep
+side=L order=861 q=126 batch=128 | triangular 2.986 | expand 2.992 | vendor 3.064 # deep
+side=L order=861 q=132 batch=128 | vendor 3.668 | expand 4.258 | triangular 4.352 # deep
+side=L order=861 q=189 batch=128 | vendor 4.029 | triangular 4.900 | expand 4.939 # deep
+side=L order=861 q=790 batch=128 | vendor 13.31 | expand 14.81 | triangular 16.79 # deep
+side=L order=939 q=790 batch=128 | vendor 13.38 | expand 18.25 | triangular 19.31 # deep
+side=L order=1002 q=6 batch=1 | expand 0.02235 | vendor 0.02700 | triangular 0.3926 # deep
+side=L order=1024 q=1 batch=1 | expand 0.01950 | vendor 0.02488 | triangular 0.3932 # deep
+side=L order=1024 q=1 batch=128 | expand 1.747 | triangular 1.905 | vendor 2.628 # deep
+side=L order=1024 q=1 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=1024 q=16 batch=1 | expand 0.02430 | vendor 0.02526 | triangular 0.4069 # deep
+side=L order=1024 q=16 batch=128 | expand 1.930 | triangular 2.044 | vendor 2.630 # deep
+side=L order=1024 q=16 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=1024 q=18 batch=128 | expand 2.025 | triangular 2.224 | vendor 2.649 # deep
+side=L order=1024 q=19 batch=128 | expand 1.945 | triangular 2.088 | vendor 2.632 # deep
+side=L order=1024 q=20 batch=128 | expand 1.946 | triangular 2.080 | vendor 2.634 # deep
+side=L order=1024 q=21 batch=128 | triangular 2.114 | expand 2.123 | vendor 2.636 # deep
+side=L order=1024 q=27 batch=1 | expand 0.02369 | vendor 0.02513 | triangular 0.4167 # deep
+side=L order=1024 q=27 batch=128 | triangular 2.136 | expand 2.178 | vendor 2.631 # deep
+side=L order=1024 q=31 batch=1 | expand 0.02383 | vendor 0.02506 | triangular 0.4108 # deep
+side=L order=1024 q=33 batch=1 | vendor 0.02569 | expand 0.02728 | triangular 0.4225 # deep
+side=L order=1024 q=35 batch=1 | vendor 0.02606 | expand 0.02839 | triangular 0.4324 # deep
+side=L order=1024 q=45 batch=1 | vendor 0.02596 | expand 0.02846 | triangular 0.4367 # deep
+side=L order=1024 q=45 batch=128 | triangular 2.535 | vendor 2.664 | expand 2.803 # deep
+side=L order=1024 q=128 batch=1 | vendor 0.04072 | expand 0.04513 | triangular 0.5328 # deep
+side=L order=1024 q=128 batch=128 | triangular 3.190 | expand 4.084 | vendor 4.687 # deep
+side=L order=1024 q=128 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=1024 q=362 batch=128 | triangular 8.425 | expand 9.352 | vendor 11.77 # deep
+side=L order=1024 q=609 batch=128 | triangular 13.56 | vendor 14.06 | expand 14.34 # deep
+side=L order=1024 q=790 batch=128 | triangular 18.31 | vendor 18.25 | expand 19.20 # deep
+side=L order=1024 q=843 batch=128 | triangular 19.24 | vendor 19.26 | expand 19.92 # deep
+side=L order=1024 q=899 batch=128 | vendor 18.93 | triangular 21.43 | expand 22.32 # deep
+side=L order=1024 q=1024 batch=1 | vendor 0.1505 | expand 0.1780 | triangular 0.5470 # deep
+side=L order=1024 q=1024 batch=128 | vendor 20.77 | triangular 21.95 | expand 22.02 # deep
+side=L order=1024 q=1024 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=1024 q=4096 batch=1 | vendor 0.4836 | expand 0.6531 # deep
+side=L order=1024 q=4096 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=1024 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=1218 q=4 batch=1 | expand 0.02453 | vendor 0.02778 | triangular 0.4846 # deep
+side=L order=1258 q=6 batch=1 | expand 0.02484 | vendor 0.02823 | triangular 0.4963 # deep
+side=L order=1409 q=6 batch=1 | expand 0.02844 | vendor 0.02808 | triangular 0.5998 # deep
+side=L order=1448 q=16 batch=1 | expand 0.02930 | vendor 0.02942 | triangular 0.5714 # deep
+side=L order=1492 q=6 batch=1 | expand 0.02946 | vendor 0.02872 | triangular 0.5667 # deep
+side=L order=1579 q=4 batch=1 | expand 0.03029 | vendor 0.02970 | triangular 0.6411 # deep
+side=L order=1579 q=5 batch=1 | vendor 0.02884 | expand 0.03008 | triangular 0.6289 # deep
+side=L order=1579 q=6 batch=1 | vendor 0.02898 | expand 0.03029 | triangular 0.6385 # deep
+side=L order=1579 q=8 batch=1 | vendor 0.02898 | expand 0.03116 | triangular 0.6204 # deep
+side=L order=1579 q=16 batch=1 | vendor 0.02934 | expand 0.03164 | triangular 0.6578 # deep
+side=L order=1685 q=4 batch=1 | vendor 0.03162 | expand 0.03364 | triangular 0.6959 # deep
+side=L order=1722 q=16 batch=1 | vendor 0.03131 | expand 0.03512 | triangular 0.6871 # deep
+side=L order=1798 q=4 batch=1 | vendor 0.03120 | expand 0.04523 | triangular 0.7081 # deep
+side=L order=2048 q=1 batch=1 | expand 0.02534 | vendor 0.03379 | triangular 0.7527 # deep
+side=L order=2048 q=1 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=1 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=2 batch=1 | vendor 0.03402 | expand 0.04639 | triangular 0.7582 # deep
+side=L order=2048 q=4 batch=1 | vendor 0.03417 | expand 0.04617 | triangular 0.7621 # deep
+side=L order=2048 q=16 batch=1 | vendor 0.03490 | expand 0.04969 | triangular 0.7737 # deep
+side=L order=2048 q=16 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=16 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=128 batch=1 | vendor 0.09945 | expand 0.1084 | triangular 0.9929 # deep
+side=L order=2048 q=128 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=128 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=1024 batch=1 | vendor 0.4948 | expand 0.6092 | triangular 1.264 # deep
+side=L order=2048 q=1024 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=1024 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=4096 batch=1 | vendor 1.907 | expand 2.550 # deep
+side=L order=2048 q=4096 batch=1024 | triangular - | expand - | vendor - # transcribed
+side=L order=2048 q=4096 batch=32768 | triangular - | expand - | vendor - # transcribed
+side=R order=1 q=1 batch=1 | vendor 0.009815 | expand 0.01283 # deep
+side=R order=1 q=1 batch=128 | expand 0.01233 | vendor 0.4521 # deep
+side=R order=1 q=1 batch=1024 | expand 0.01549 | vendor 3.476 # deep
+side=R order=1 q=1 batch=32768 | expand 0.1007 | vendor 108.0 # deep
+side=R order=1 q=16 batch=1 | vendor 0.009625 | expand 0.01194 # deep
+side=R order=1 q=16 batch=128 | expand 0.01238 | vendor 0.4358 # deep
+side=R order=1 q=16 batch=1024 | expand 0.01678 | vendor 3.592 # deep
+side=R order=1 q=16 batch=32768 | expand 0.1012 | vendor 114.3 # deep
+side=R order=1 q=128 batch=1 | vendor 0.009519 | expand 0.01178 # deep
+side=R order=1 q=128 batch=128 | expand 0.01217 | vendor 0.4128 # deep
+side=R order=1 q=128 batch=1024 | expand 0.01666 | vendor 3.395 # deep
+side=R order=1 q=128 batch=32768 | expand 0.1555 | vendor 106.0 # deep
+side=R order=1 q=1024 batch=1 | vendor 0.009850 | expand 0.01287 # deep
+side=R order=1 q=1024 batch=128 | expand 0.01516 | vendor 0.4311 # deep
+side=R order=1 q=1024 batch=1024 | expand 0.03243 | vendor 3.342 # deep
+side=R order=1 q=1024 batch=32768 | expand 1.052 | vendor 106.6 # deep
+side=R order=1 q=4096 batch=1 | vendor 0.009870 | expand 0.01206 # deep
+side=R order=1 q=4096 batch=128 | expand 0.02182 # deep
+side=R order=1 q=4096 batch=1024 | expand 0.08678 # deep
+side=R order=1 q=4096 batch=32768 | expand 3.905 # deep
+side=R order=16 q=1 batch=1 | vendor 0.009625 | expand 0.01231 # deep
+side=R order=16 q=1 batch=128 | expand 0.01230 | vendor 0.4152 # deep
+side=R order=16 q=1 batch=1024 | expand 0.01473 | vendor 3.203 # deep
+side=R order=16 q=1 batch=32768 | expand 0.1251 | vendor 107.2 # deep
+side=R order=16 q=16 batch=1 | vendor 0.009850 | expand 0.01419 # deep
+side=R order=16 q=16 batch=128 | expand 0.01419 | vendor 0.4095 # deep
+side=R order=16 q=16 batch=1024 | expand 0.02561 | vendor 3.455 # deep
+side=R order=16 q=16 batch=32768 | expand 0.5152 | vendor 105.1 # deep
+side=R order=16 q=128 batch=1 | vendor 0.01026 | expand 0.01422 # deep
+side=R order=16 q=128 batch=128 | expand 0.01695 | vendor 0.4340 # deep
+side=R order=16 q=128 batch=1024 | expand 0.04137 | vendor 3.455 # deep
+side=R order=16 q=128 batch=32768 | expand 1.123 | vendor 112.4 # deep
+side=R order=16 q=1024 batch=1 | vendor 0.009845 | expand 0.01371 # deep
+side=R order=16 q=1024 batch=128 | expand 0.03890 | vendor 0.4143 # deep
+side=R order=16 q=1024 batch=1024 | expand 0.2551 | vendor 3.548 # deep
+side=R order=16 q=4096 batch=1 | vendor 0.01033 | expand 0.01399 # deep
+side=R order=16 q=4096 batch=128 | expand 0.1454 # deep
+side=R order=16 q=4096 batch=1024 | expand 1.111 # deep
+side=R order=32 q=1 batch=1 | vendor 0.01037 | expand 0.01235 # deep
+side=R order=32 q=1 batch=128 | expand 0.01341 | vendor 0.4534 # deep
+side=R order=32 q=1 batch=1024 | expand 0.01735 | vendor 3.556 # deep
+side=R order=32 q=1 batch=32768 | expand 0.4298 | vendor 122.9 # deep
+side=R order=32 q=16 batch=1 | vendor 0.01064 | expand 0.01428 # deep
+side=R order=32 q=16 batch=128 | expand 0.01594 | vendor 0.4576 # deep
+side=R order=32 q=16 batch=1024 | expand 0.02786 | vendor 3.571 # deep
+side=R order=32 q=16 batch=32768 | expand 0.7304 | vendor 124.3 # deep
+side=R order=32 q=128 batch=1 | vendor 0.01092 | expand 0.01447 # deep
+side=R order=32 q=128 batch=128 | expand 0.01864 | vendor 0.4602 # deep
+side=R order=32 q=128 batch=1024 | expand 0.06208 | vendor 3.647 # deep
+side=R order=32 q=128 batch=32768 | expand 1.938 | vendor 126.5 # deep
+side=R order=32 q=1024 batch=1 | vendor 0.01106 | expand 0.01460 # deep
+side=R order=32 q=1024 batch=128 | expand 0.05948 | vendor 0.4767 # deep
+side=R order=32 q=1024 batch=1024 | expand 0.3792 | vendor 4.169 # deep
+side=R order=32 q=4096 batch=1 | vendor 0.01118 | expand 0.01691 # deep
+side=R order=32 q=4096 batch=128 | expand 0.2023 # deep
+side=R order=32 q=4096 batch=1024 | expand 1.586 # deep
+side=R order=45 q=1 batch=1 | vendor 0.01183 | expand 0.01300 # deep
+side=R order=54 q=1 batch=1 | vendor 0.01272 | expand 0.01324 # deep
+side=R order=59 q=1 batch=1 | expand 0.01231 | vendor 0.01239 # deep
+side=R order=64 q=1 batch=1 | expand 0.01244 | vendor 0.01256 # deep
+side=R order=64 q=1 batch=128 | expand 0.01473 | vendor 0.6939 # deep
+side=R order=64 q=1 batch=1024 | expand 0.02743 | vendor 5.473 # deep
+side=R order=64 q=1 batch=32768 | expand 1.805 | vendor 190.5 # deep
+side=R order=64 q=2 batch=1 | vendor 0.01304 | expand 0.01549 # deep
+side=R order=64 q=4 batch=1 | vendor 0.01285 | expand 0.01578 # deep
+side=R order=64 q=16 batch=1 | vendor 0.01288 | expand 0.01546 # deep
+side=R order=64 q=16 batch=128 | expand 0.01900 | vendor 0.6990 # deep
+side=R order=64 q=16 batch=1024 | expand 0.04958 | vendor 5.523 # deep
+side=R order=64 q=16 batch=32768 | expand 2.317 | vendor 194.3 # deep
+side=R order=64 q=128 batch=1 | vendor 0.01296 | expand 0.01566 # deep
+side=R order=64 q=128 batch=128 | expand 0.02744 | vendor 0.7456 # deep
+side=R order=64 q=128 batch=1024 | expand 0.1227 | vendor 6.479 # deep
+side=R order=64 q=1024 batch=1 | vendor 0.01337 | expand 0.01568 # deep
+side=R order=64 q=1024 batch=128 | expand 0.1080 | vendor 0.8430 # deep
+side=R order=64 q=1024 batch=1024 | expand 0.9025 | vendor 6.813 # deep
+side=R order=64 q=4096 batch=1 | vendor 0.01357 | expand 0.01752 # deep
+side=R order=64 q=4096 batch=128 | expand 0.4584 # deep
+side=R order=64 q=4096 batch=32768 | expand - | vendor - # transcribed
+side=R order=128 q=1 batch=1 | expand 0.01376 | vendor 0.01546 # deep
+side=R order=128 q=1 batch=128 | expand 0.01793 | vendor 1.044 # deep
+side=R order=128 q=1 batch=1024 | expand 0.1735 | vendor 8.656 # deep
+side=R order=128 q=2 batch=1 | vendor 0.01555 | expand 0.01866 # deep
+side=R order=128 q=4 batch=1 | vendor 0.01529 | expand 0.01791 # deep
+side=R order=128 q=16 batch=1 | vendor 0.01521 | expand 0.01797 # deep
+side=R order=128 q=16 batch=128 | expand 0.03368 | vendor 1.046 # deep
+side=R order=128 q=16 batch=1024 | expand 0.2325 | vendor 8.878 # deep
+side=R order=128 q=128 batch=1 | vendor 0.01572 | expand 0.01894 # deep
+side=R order=128 q=128 batch=128 | expand 0.05748 | vendor 1.099 # deep
+side=R order=128 q=128 batch=1024 | expand 0.5195 | vendor 9.320 # deep
+side=R order=128 q=1024 batch=1 | vendor 0.01502 | expand 0.01764 # deep
+side=R order=128 q=1024 batch=128 | expand 0.3711 | vendor 1.249 # deep
+side=R order=128 q=1024 batch=1024 | expand 2.873 | vendor 9.824 # deep
+side=R order=128 q=4096 batch=1 | vendor 0.01859 | expand 0.02491 # deep
+side=R order=128 q=4096 batch=128 | expand 1.789 # deep
+side=R order=128 q=4096 batch=32768 | expand - | vendor - # transcribed
+side=R order=181 q=16 batch=1 | vendor 0.01756 | expand 0.01983 # deep
+side=R order=181 q=128 batch=1 | vendor 0.02021 | expand 0.02181 # deep
+side=R order=197 q=128 batch=1 | expand 0.01793 | vendor 0.01880 # deep
+side=R order=215 q=16 batch=1 | vendor 0.01949 | expand 0.02214 # deep
+side=R order=215 q=45 batch=1 | vendor 0.01950 | expand 0.02169 # deep
+side=R order=215 q=48 batch=1 | expand 0.01910 | vendor 0.02032 # deep
+side=R order=215 q=51 batch=1 | expand 0.01828 | vendor 0.02001 # deep
+side=R order=215 q=58 batch=1 | expand 0.01762 | vendor 0.01968 # deep
+side=R order=215 q=76 batch=1 | expand 0.01840 | vendor 0.01992 # deep
+side=R order=215 q=128 batch=1 | expand 0.01832 | vendor 0.01993 # deep
+side=R order=227 q=45 batch=1 | expand 0.01752 | vendor 0.02042 # deep
+side=R order=235 q=16 batch=1 | vendor 0.01990 | expand 0.02241 # deep
+side=R order=240 q=45 batch=1 | expand 0.01725 | vendor 0.02022 # deep
+side=R order=256 q=1 batch=1 | expand 0.01285 | vendor 0.02041 # deep
+side=R order=256 q=1 batch=128 | expand 0.04283 | vendor 1.743 # deep
+side=R order=256 q=1 batch=1024 | expand 0.8785 | vendor 14.44 # deep
+side=R order=256 q=16 batch=1 | expand 0.01705 | vendor 0.02057 # deep
+side=R order=256 q=16 batch=128 | expand 0.09401 | vendor 1.768 # deep
+side=R order=256 q=16 batch=1024 | expand 1.020 | vendor 14.53 # deep
+side=R order=256 q=128 batch=1 | expand 0.01795 | vendor 0.02144 # deep
+side=R order=256 q=128 batch=128 | expand 0.2314 | vendor 1.870 # deep
+side=R order=256 q=128 batch=1024 | expand 1.837 | vendor 14.92 # deep
+side=R order=256 q=215 batch=1 | expand 0.01962 | vendor 0.02134 # deep
+side=R order=256 q=245 batch=1 | expand 0.02131 | vendor 0.02119 # deep
+side=R order=256 q=261 batch=1 | vendor 0.02164 | expand 0.02609 # deep
+side=R order=256 q=279 batch=1 | vendor 0.02130 | expand 0.02477 # deep
+side=R order=256 q=362 batch=1 | vendor 0.02115 | expand 0.02386 # deep
+side=R order=256 q=1024 batch=1 | vendor 0.02142 | expand 0.02883 # deep
+side=R order=256 q=1024 batch=128 | expand 1.442 | vendor 2.217 # deep
+side=R order=256 q=1024 batch=32768 | expand - | vendor - # transcribed
+side=R order=256 q=4096 batch=1 | vendor 0.04172 | expand 0.05944 # deep
+side=R order=256 q=4096 batch=128 | expand 5.382 # deep
+side=R order=256 q=4096 batch=32768 | expand - | vendor - # transcribed
+side=R order=267 q=45 batch=1 | expand 0.01934 | vendor 0.02205 # deep
+side=R order=332 q=45 batch=1 | expand 0.01801 | vendor 0.02420 # deep
+side=R order=362 q=128 batch=1 | expand 0.01926 | vendor 0.02552 # deep
+side=R order=431 q=128 batch=1 | expand 0.02054 | vendor 0.02830 # deep
+side=R order=470 q=128 batch=1 | expand 0.02467 | vendor 0.03051 # deep
+side=R order=512 q=1 batch=1 | expand 0.01396 | vendor 0.02281 # deep
+side=R order=512 q=1 batch=128 | expand 0.4140 | vendor 2.365 # deep
+side=R order=512 q=1 batch=1024 | expand 3.615 | vendor 18.87 # deep
+side=R order=512 q=16 batch=1 | expand 0.01771 | vendor 0.02277 # deep
+side=R order=512 q=16 batch=128 | expand 0.4926 | vendor 2.366 # deep
+side=R order=512 q=16 batch=1024 | expand 4.243 | vendor 18.89 # deep
+side=R order=512 q=45 batch=1 | expand 0.01985 | vendor 0.02255 # deep
+side=R order=512 q=76 batch=1 | expand 0.02161 | vendor 0.02292 # deep
+side=R order=512 q=87 batch=1 | expand 0.02228 | vendor 0.02326 # deep
+side=R order=512 q=93 batch=1 | expand 0.02287 | vendor 0.02331 # deep
+side=R order=512 q=99 batch=1 | vendor 0.02285 | expand 0.02512 # deep
+side=R order=512 q=128 batch=1 | vendor 0.02302 | expand 0.02506 # deep
+side=R order=512 q=128 batch=128 | expand 0.8954 | vendor 2.381 # deep
+side=R order=512 q=128 batch=1024 | expand 7.274 | vendor 18.90 # deep
+side=R order=512 q=1024 batch=1 | vendor 0.04555 | expand 0.05779 # deep
+side=R order=512 q=1024 batch=128 | expand 5.607 | vendor 5.750 # deep
+side=R order=512 q=1024 batch=32768 | expand - | vendor - # transcribed
+side=R order=512 q=4096 batch=1 | vendor 0.1150 | expand 0.2020 # deep
+side=R order=512 q=4096 batch=1024 | expand - | vendor - # transcribed
+side=R order=512 q=4096 batch=32768 | expand - | vendor - # transcribed
+side=R order=558 q=1024 batch=128 | vendor 6.679 | expand 7.591 # deep
+side=R order=609 q=1024 batch=128 | vendor 7.939 | expand 8.548 # deep
+side=R order=724 q=45 batch=1 | expand 0.02214 | vendor 0.02748 # deep
+side=R order=724 q=128 batch=128 | expand 2.091 | vendor 3.142 # deep
+side=R order=724 q=362 batch=128 | expand 5.116 | vendor 5.474 # deep
+side=R order=724 q=386 batch=128 | vendor 5.596 | expand 6.310 # deep
+side=R order=724 q=412 batch=128 | vendor 5.498 | expand 6.224 # deep
+side=R order=724 q=470 batch=128 | vendor 5.845 | expand 6.290 # deep
+side=R order=724 q=609 batch=128 | vendor 7.538 | expand 7.853 # deep
+side=R order=724 q=1024 batch=128 | vendor 9.876 | expand 11.47 # deep
+side=R order=861 q=45 batch=1 | expand 0.02520 | vendor 0.02542 # deep
+side=R order=861 q=128 batch=128 | expand 3.014 | vendor 3.181 # deep
+side=R order=939 q=45 batch=1 | expand 0.02731 | vendor 0.02756 # deep
+side=R order=939 q=128 batch=128 | vendor 3.481 | expand 3.833 # deep
+side=R order=1024 q=1 batch=1 | expand 0.01496 | vendor 0.02548 # deep
+side=R order=1024 q=1 batch=128 | expand 1.783 | vendor 2.630 # deep
+side=R order=1024 q=1 batch=32768 | expand - | vendor - # transcribed
+side=R order=1024 q=16 batch=1 | expand 0.02494 | vendor 0.02521 # deep
+side=R order=1024 q=16 batch=128 | expand 2.101 | vendor 2.654 # deep
+side=R order=1024 q=16 batch=32768 | expand - | vendor - # transcribed
+side=R order=1024 q=27 batch=1 | expand 0.02484 | vendor 0.02500 # deep
+side=R order=1024 q=31 batch=1 | expand 0.02546 | vendor 0.02582 # deep
+side=R order=1024 q=33 batch=1 | vendor 0.02565 | expand 0.02700 # deep
+side=R order=1024 q=35 batch=1 | vendor 0.02571 | expand 0.02710 # deep
+side=R order=1024 q=45 batch=1 | vendor 0.02572 | expand 0.02791 # deep
+side=R order=1024 q=45 batch=128 | expand 2.873 | vendor 2.872 # deep
+side=R order=1024 q=51 batch=128 | expand 2.738 | vendor 2.860 # deep
+side=R order=1024 q=54 batch=128 | expand 2.935 | vendor 2.947 # deep
+side=R order=1024 q=58 batch=128 | vendor 2.912 | expand 3.064 # deep
+side=R order=1024 q=76 batch=128 | vendor 3.314 | expand 3.959 # deep
+side=R order=1024 q=128 batch=1 | vendor 0.03291 | expand 0.03828 # deep
+side=R order=1024 q=128 batch=128 | vendor 3.956 | expand 4.105 # deep
+side=R order=1024 q=128 batch=32768 | expand - | vendor - # transcribed
+side=R order=1024 q=1024 batch=1 | vendor 0.1271 | expand 0.1947 # deep
+side=R order=1024 q=1024 batch=128 | vendor 17.49 | expand 21.70 # deep
+side=R order=1024 q=1024 batch=32768 | expand - | vendor - # transcribed
+side=R order=1024 q=4096 batch=1 | vendor 0.4108 | expand 0.6797 # deep
+side=R order=1024 q=4096 batch=1024 | expand - | vendor - # transcribed
+side=R order=1024 q=4096 batch=32768 | expand - | vendor - # transcribed
+side=R order=1218 q=16 batch=1 | expand 0.02613 | vendor 0.02819 # deep
+side=R order=1328 q=16 batch=1 | vendor 0.02735 | expand 0.02952 # deep
+side=R order=1448 q=16 batch=1 | vendor 0.02973 | expand 0.03266 # deep
+side=R order=2048 q=1 batch=1 | expand 0.02603 | vendor 0.03347 # deep
+side=R order=2048 q=1 batch=1024 | expand - | vendor - # transcribed
+side=R order=2048 q=1 batch=32768 | expand - | vendor - # transcribed
+side=R order=2048 q=2 batch=1 | vendor 0.03370 | expand 0.05222 # deep
+side=R order=2048 q=4 batch=1 | vendor 0.03356 | expand 0.05149 # deep
+side=R order=2048 q=16 batch=1 | vendor 0.03460 | expand 0.05309 # deep
+side=R order=2048 q=16 batch=1024 | expand - | vendor - # transcribed
+side=R order=2048 q=16 batch=32768 | expand - | vendor - # transcribed
+side=R order=2048 q=128 batch=1 | vendor 0.09591 | expand 0.1150 # deep
+side=R order=2048 q=128 batch=1024 | expand - | vendor - # transcribed
+side=R order=2048 q=128 batch=32768 | expand - | vendor - # transcribed
+side=R order=2048 q=1024 batch=1 | vendor 0.4048 | expand 0.6857 # deep
+side=R order=2048 q=1024 batch=1024 | expand - | vendor - # transcribed
+side=R order=2048 q=1024 batch=32768 | expand - | vendor - # transcribed
+side=R order=2048 q=4096 batch=1 | vendor 1.647 | expand 2.529 # deep
+side=R order=2048 q=4096 batch=1024 | expand - | vendor - # transcribed
+side=R order=2048 q=4096 batch=32768 | expand - | vendor - # transcribed

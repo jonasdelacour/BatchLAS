@@ -1,639 +1,631 @@
-# op=geqrf dtype=cdouble device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/geqrf.csv (the old router's preference order per grid cell, untimed)
+# op=geqrf dtype=cdouble device=sm_120 batchlas=a01c3c96 kernels=2de2c975 family_kernels=tiny:f518f860,cta:14780c9f,blocked:83ec0765,vendor:3dd02abf date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/geqrf.cdouble.sm_120 tiers=deep:495,coarse:0,preview:0,custom:0,transcribed:133
 # keys: form:exact n:log:3 aspect:log
-form=sq n=1 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=2 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=3 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=4 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=5 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=6 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=8 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=9 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=10 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=11 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=12 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=14 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=16 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=17 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=20 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=21 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=22 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=23 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=24 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=28 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=31 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=32 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=33 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=40 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=47 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=48 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=49 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=56 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=63 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=64 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=75 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=76 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=80 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=96 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=97 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=112 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=128 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=160 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=192 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=224 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=255 aspect=1 | vendor - | cta - | tiny - | blocked -
-form=sq n=256 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=288 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=384 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=512 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=768 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=1024 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=1536 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=2048 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=3072 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=4096 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=sq n=8192 aspect=1 | cta - | tiny - | blocked - | vendor -
-form=tall n=1 aspect=1 | vendor - | cta - | blocked -
-form=tall n=1 aspect=2 | vendor - | cta - | blocked -
-form=tall n=1 aspect=3 | vendor - | cta - | blocked -
-form=tall n=1 aspect=4 | vendor - | cta - | blocked -
-form=tall n=1 aspect=5 | vendor - | cta - | blocked -
-form=tall n=1 aspect=7 | vendor - | cta - | blocked -
-form=tall n=1 aspect=8 | vendor - | cta - | blocked -
-form=tall n=1 aspect=12 | vendor - | cta - | blocked -
-form=tall n=1 aspect=16 | vendor - | cta - | blocked -
-form=tall n=1 aspect=64 | vendor - | cta - | blocked -
-form=tall n=1 aspect=256 | vendor - | cta - | blocked -
-form=tall n=2 aspect=1 | vendor - | cta - | blocked -
-form=tall n=2 aspect=2 | vendor - | cta - | blocked -
-form=tall n=2 aspect=3 | vendor - | cta - | blocked -
-form=tall n=2 aspect=4 | vendor - | cta - | blocked -
-form=tall n=2 aspect=5 | vendor - | cta - | blocked -
-form=tall n=2 aspect=7 | vendor - | cta - | blocked -
-form=tall n=2 aspect=8 | vendor - | cta - | blocked -
-form=tall n=2 aspect=12 | vendor - | cta - | blocked -
-form=tall n=2 aspect=16 | vendor - | cta - | blocked -
-form=tall n=2 aspect=64 | vendor - | cta - | blocked -
-form=tall n=2 aspect=256 | vendor - | cta - | blocked -
-form=tall n=3 aspect=1 | vendor - | cta - | blocked -
-form=tall n=3 aspect=2 | vendor - | cta - | blocked -
-form=tall n=3 aspect=3 | vendor - | cta - | blocked -
-form=tall n=3 aspect=4 | vendor - | cta - | blocked -
-form=tall n=3 aspect=5 | vendor - | cta - | blocked -
-form=tall n=3 aspect=7 | vendor - | cta - | blocked -
-form=tall n=3 aspect=8 | vendor - | cta - | blocked -
-form=tall n=3 aspect=12 | vendor - | cta - | blocked -
-form=tall n=3 aspect=16 | vendor - | cta - | blocked -
-form=tall n=3 aspect=64 | vendor - | cta - | blocked -
-form=tall n=3 aspect=256 | vendor - | cta - | blocked -
-form=tall n=4 aspect=1 | vendor - | cta - | blocked -
-form=tall n=4 aspect=2 | vendor - | cta - | blocked -
-form=tall n=4 aspect=3 | vendor - | cta - | blocked -
-form=tall n=4 aspect=4 | vendor - | cta - | blocked -
-form=tall n=4 aspect=5 | vendor - | cta - | blocked -
-form=tall n=4 aspect=7 | vendor - | cta - | blocked -
-form=tall n=4 aspect=8 | vendor - | cta - | blocked -
-form=tall n=4 aspect=12 | vendor - | cta - | blocked -
-form=tall n=4 aspect=16 | vendor - | cta - | blocked -
-form=tall n=4 aspect=64 | vendor - | cta - | blocked -
-form=tall n=4 aspect=256 | vendor - | cta - | blocked -
-form=tall n=5 aspect=1 | vendor - | cta - | blocked -
-form=tall n=5 aspect=2 | vendor - | cta - | blocked -
-form=tall n=5 aspect=3 | vendor - | cta - | blocked -
-form=tall n=5 aspect=4 | vendor - | cta - | blocked -
-form=tall n=5 aspect=5 | vendor - | cta - | blocked -
-form=tall n=5 aspect=7 | vendor - | cta - | blocked -
-form=tall n=5 aspect=8 | vendor - | cta - | blocked -
-form=tall n=5 aspect=12 | vendor - | cta - | blocked -
-form=tall n=5 aspect=16 | vendor - | cta - | blocked -
-form=tall n=5 aspect=64 | vendor - | cta - | blocked -
-form=tall n=5 aspect=256 | vendor - | cta - | blocked -
-form=tall n=6 aspect=1 | vendor - | cta - | blocked -
-form=tall n=6 aspect=2 | vendor - | cta - | blocked -
-form=tall n=6 aspect=3 | vendor - | cta - | blocked -
-form=tall n=6 aspect=4 | vendor - | cta - | blocked -
-form=tall n=6 aspect=5 | vendor - | cta - | blocked -
-form=tall n=6 aspect=7 | vendor - | cta - | blocked -
-form=tall n=6 aspect=8 | vendor - | cta - | blocked -
-form=tall n=6 aspect=12 | vendor - | cta - | blocked -
-form=tall n=6 aspect=16 | vendor - | cta - | blocked -
-form=tall n=6 aspect=64 | vendor - | cta - | blocked -
-form=tall n=6 aspect=256 | vendor - | cta - | blocked -
-form=tall n=8 aspect=1 | vendor - | cta - | blocked -
-form=tall n=8 aspect=2 | vendor - | cta - | blocked -
-form=tall n=8 aspect=3 | vendor - | cta - | blocked -
-form=tall n=8 aspect=4 | vendor - | cta - | blocked -
-form=tall n=8 aspect=5 | vendor - | cta - | blocked -
-form=tall n=8 aspect=7 | vendor - | cta - | blocked -
-form=tall n=8 aspect=8 | vendor - | cta - | blocked -
-form=tall n=8 aspect=12 | vendor - | cta - | blocked -
-form=tall n=8 aspect=16 | vendor - | cta - | blocked -
-form=tall n=8 aspect=64 | vendor - | cta - | blocked -
-form=tall n=8 aspect=256 | vendor - | cta - | blocked -
-form=tall n=9 aspect=1 | vendor - | cta - | blocked -
-form=tall n=9 aspect=2 | vendor - | cta - | blocked -
-form=tall n=9 aspect=3 | vendor - | cta - | blocked -
-form=tall n=9 aspect=4 | vendor - | cta - | blocked -
-form=tall n=9 aspect=5 | vendor - | cta - | blocked -
-form=tall n=9 aspect=7 | vendor - | cta - | blocked -
-form=tall n=9 aspect=8 | vendor - | cta - | blocked -
-form=tall n=9 aspect=12 | vendor - | cta - | blocked -
-form=tall n=9 aspect=16 | vendor - | cta - | blocked -
-form=tall n=9 aspect=64 | vendor - | cta - | blocked -
-form=tall n=9 aspect=256 | vendor - | cta - | blocked -
-form=tall n=10 aspect=1 | vendor - | cta - | blocked -
-form=tall n=10 aspect=2 | vendor - | cta - | blocked -
-form=tall n=10 aspect=3 | vendor - | cta - | blocked -
-form=tall n=10 aspect=4 | vendor - | cta - | blocked -
-form=tall n=10 aspect=5 | vendor - | cta - | blocked -
-form=tall n=10 aspect=7 | vendor - | cta - | blocked -
-form=tall n=10 aspect=8 | vendor - | cta - | blocked -
-form=tall n=10 aspect=12 | vendor - | cta - | blocked -
-form=tall n=10 aspect=16 | vendor - | cta - | blocked -
-form=tall n=10 aspect=64 | vendor - | cta - | blocked -
-form=tall n=10 aspect=256 | vendor - | cta - | blocked -
-form=tall n=11 aspect=1 | vendor - | cta - | blocked -
-form=tall n=11 aspect=2 | vendor - | cta - | blocked -
-form=tall n=11 aspect=3 | vendor - | cta - | blocked -
-form=tall n=11 aspect=4 | vendor - | cta - | blocked -
-form=tall n=11 aspect=5 | vendor - | cta - | blocked -
-form=tall n=11 aspect=7 | vendor - | cta - | blocked -
-form=tall n=11 aspect=8 | vendor - | cta - | blocked -
-form=tall n=11 aspect=12 | vendor - | cta - | blocked -
-form=tall n=11 aspect=16 | vendor - | cta - | blocked -
-form=tall n=11 aspect=64 | vendor - | cta - | blocked -
-form=tall n=11 aspect=256 | vendor - | cta - | blocked -
-form=tall n=12 aspect=1 | vendor - | cta - | blocked -
-form=tall n=12 aspect=2 | vendor - | cta - | blocked -
-form=tall n=12 aspect=3 | vendor - | cta - | blocked -
-form=tall n=12 aspect=4 | vendor - | cta - | blocked -
-form=tall n=12 aspect=5 | vendor - | cta - | blocked -
-form=tall n=12 aspect=7 | vendor - | cta - | blocked -
-form=tall n=12 aspect=8 | vendor - | cta - | blocked -
-form=tall n=12 aspect=12 | vendor - | cta - | blocked -
-form=tall n=12 aspect=16 | vendor - | cta - | blocked -
-form=tall n=12 aspect=64 | vendor - | cta - | blocked -
-form=tall n=12 aspect=256 | vendor - | cta - | blocked -
-form=tall n=14 aspect=1 | vendor - | cta - | blocked -
-form=tall n=14 aspect=2 | vendor - | cta - | blocked -
-form=tall n=14 aspect=3 | vendor - | cta - | blocked -
-form=tall n=14 aspect=4 | vendor - | cta - | blocked -
-form=tall n=14 aspect=5 | vendor - | cta - | blocked -
-form=tall n=14 aspect=7 | vendor - | cta - | blocked -
-form=tall n=14 aspect=8 | vendor - | cta - | blocked -
-form=tall n=14 aspect=12 | vendor - | cta - | blocked -
-form=tall n=14 aspect=16 | vendor - | cta - | blocked -
-form=tall n=14 aspect=64 | vendor - | cta - | blocked -
-form=tall n=14 aspect=256 | vendor - | cta - | blocked -
-form=tall n=16 aspect=1 | vendor - | cta - | blocked -
-form=tall n=16 aspect=2 | vendor - | cta - | blocked -
-form=tall n=16 aspect=3 | vendor - | cta - | blocked -
-form=tall n=16 aspect=4 | vendor - | cta - | blocked -
-form=tall n=16 aspect=5 | vendor - | cta - | blocked -
-form=tall n=16 aspect=7 | vendor - | cta - | blocked -
-form=tall n=16 aspect=8 | vendor - | cta - | blocked -
-form=tall n=16 aspect=12 | vendor - | cta - | blocked -
-form=tall n=16 aspect=16 | vendor - | cta - | blocked -
-form=tall n=16 aspect=64 | vendor - | cta - | blocked -
-form=tall n=16 aspect=256 | vendor - | cta - | blocked -
-form=tall n=17 aspect=1 | vendor - | cta - | blocked -
-form=tall n=17 aspect=2 | vendor - | cta - | blocked -
-form=tall n=17 aspect=3 | vendor - | cta - | blocked -
-form=tall n=17 aspect=4 | vendor - | cta - | blocked -
-form=tall n=17 aspect=5 | vendor - | cta - | blocked -
-form=tall n=17 aspect=7 | vendor - | cta - | blocked -
-form=tall n=17 aspect=8 | vendor - | cta - | blocked -
-form=tall n=17 aspect=12 | vendor - | cta - | blocked -
-form=tall n=17 aspect=16 | vendor - | cta - | blocked -
-form=tall n=17 aspect=64 | vendor - | cta - | blocked -
-form=tall n=17 aspect=256 | vendor - | cta - | blocked -
-form=tall n=20 aspect=1 | vendor - | cta - | blocked -
-form=tall n=20 aspect=2 | vendor - | cta - | blocked -
-form=tall n=20 aspect=3 | vendor - | cta - | blocked -
-form=tall n=20 aspect=4 | vendor - | cta - | blocked -
-form=tall n=20 aspect=5 | vendor - | cta - | blocked -
-form=tall n=20 aspect=7 | vendor - | cta - | blocked -
-form=tall n=20 aspect=8 | vendor - | cta - | blocked -
-form=tall n=20 aspect=12 | vendor - | cta - | blocked -
-form=tall n=20 aspect=16 | vendor - | cta - | blocked -
-form=tall n=20 aspect=64 | vendor - | cta - | blocked -
-form=tall n=20 aspect=256 | vendor - | cta - | blocked -
-form=tall n=21 aspect=1 | vendor - | cta - | blocked -
-form=tall n=21 aspect=2 | vendor - | cta - | blocked -
-form=tall n=21 aspect=3 | vendor - | cta - | blocked -
-form=tall n=21 aspect=4 | vendor - | cta - | blocked -
-form=tall n=21 aspect=5 | vendor - | cta - | blocked -
-form=tall n=21 aspect=7 | vendor - | cta - | blocked -
-form=tall n=21 aspect=8 | vendor - | cta - | blocked -
-form=tall n=21 aspect=12 | vendor - | cta - | blocked -
-form=tall n=21 aspect=16 | vendor - | cta - | blocked -
-form=tall n=21 aspect=64 | vendor - | cta - | blocked -
-form=tall n=21 aspect=256 | vendor - | cta - | blocked -
-form=tall n=22 aspect=1 | vendor - | cta - | blocked -
-form=tall n=22 aspect=2 | vendor - | cta - | blocked -
-form=tall n=22 aspect=3 | vendor - | cta - | blocked -
-form=tall n=22 aspect=4 | vendor - | cta - | blocked -
-form=tall n=22 aspect=5 | vendor - | cta - | blocked -
-form=tall n=22 aspect=7 | vendor - | cta - | blocked -
-form=tall n=22 aspect=8 | vendor - | cta - | blocked -
-form=tall n=22 aspect=12 | vendor - | cta - | blocked -
-form=tall n=22 aspect=16 | vendor - | cta - | blocked -
-form=tall n=22 aspect=64 | vendor - | cta - | blocked -
-form=tall n=22 aspect=256 | vendor - | cta - | blocked -
-form=tall n=23 aspect=1 | vendor - | cta - | blocked -
-form=tall n=23 aspect=2 | vendor - | cta - | blocked -
-form=tall n=23 aspect=3 | vendor - | cta - | blocked -
-form=tall n=23 aspect=4 | vendor - | cta - | blocked -
-form=tall n=23 aspect=5 | vendor - | cta - | blocked -
-form=tall n=23 aspect=7 | vendor - | cta - | blocked -
-form=tall n=23 aspect=8 | vendor - | cta - | blocked -
-form=tall n=23 aspect=12 | vendor - | cta - | blocked -
-form=tall n=23 aspect=16 | vendor - | cta - | blocked -
-form=tall n=23 aspect=64 | vendor - | cta - | blocked -
-form=tall n=23 aspect=256 | vendor - | cta - | blocked -
-form=tall n=24 aspect=1 | vendor - | cta - | blocked -
-form=tall n=24 aspect=2 | vendor - | cta - | blocked -
-form=tall n=24 aspect=3 | vendor - | cta - | blocked -
-form=tall n=24 aspect=4 | vendor - | cta - | blocked -
-form=tall n=24 aspect=5 | vendor - | cta - | blocked -
-form=tall n=24 aspect=7 | vendor - | cta - | blocked -
-form=tall n=24 aspect=8 | vendor - | cta - | blocked -
-form=tall n=24 aspect=12 | vendor - | cta - | blocked -
-form=tall n=24 aspect=16 | vendor - | cta - | blocked -
-form=tall n=24 aspect=64 | vendor - | cta - | blocked -
-form=tall n=24 aspect=256 | vendor - | cta - | blocked -
-form=tall n=28 aspect=1 | vendor - | cta - | blocked -
-form=tall n=28 aspect=2 | vendor - | cta - | blocked -
-form=tall n=28 aspect=3 | vendor - | cta - | blocked -
-form=tall n=28 aspect=4 | vendor - | cta - | blocked -
-form=tall n=28 aspect=5 | vendor - | cta - | blocked -
-form=tall n=28 aspect=7 | vendor - | cta - | blocked -
-form=tall n=28 aspect=8 | vendor - | cta - | blocked -
-form=tall n=28 aspect=12 | vendor - | cta - | blocked -
-form=tall n=28 aspect=16 | vendor - | cta - | blocked -
-form=tall n=28 aspect=64 | vendor - | cta - | blocked -
-form=tall n=28 aspect=256 | vendor - | cta - | blocked -
-form=tall n=31 aspect=1 | vendor - | cta - | blocked -
-form=tall n=31 aspect=2 | vendor - | cta - | blocked -
-form=tall n=31 aspect=3 | vendor - | cta - | blocked -
-form=tall n=31 aspect=4 | vendor - | cta - | blocked -
-form=tall n=31 aspect=5 | vendor - | cta - | blocked -
-form=tall n=31 aspect=7 | vendor - | cta - | blocked -
-form=tall n=31 aspect=8 | vendor - | cta - | blocked -
-form=tall n=31 aspect=12 | vendor - | cta - | blocked -
-form=tall n=31 aspect=16 | vendor - | cta - | blocked -
-form=tall n=31 aspect=64 | vendor - | cta - | blocked -
-form=tall n=31 aspect=256 | vendor - | cta - | blocked -
-form=tall n=32 aspect=1 | vendor - | cta - | blocked -
-form=tall n=32 aspect=2 | vendor - | cta - | blocked -
-form=tall n=32 aspect=3 | vendor - | cta - | blocked -
-form=tall n=32 aspect=4 | vendor - | cta - | blocked -
-form=tall n=32 aspect=5 | vendor - | cta - | blocked -
-form=tall n=32 aspect=7 | vendor - | cta - | blocked -
-form=tall n=32 aspect=8 | cta - | blocked - | vendor -
-form=tall n=32 aspect=12 | cta - | blocked - | vendor -
-form=tall n=32 aspect=16 | cta - | blocked - | vendor -
-form=tall n=32 aspect=64 | cta - | blocked - | vendor -
-form=tall n=32 aspect=256 | cta - | blocked - | vendor -
-form=tall n=33 aspect=1 | vendor - | cta - | blocked -
-form=tall n=33 aspect=2 | vendor - | cta - | blocked -
-form=tall n=33 aspect=3 | vendor - | cta - | blocked -
-form=tall n=33 aspect=4 | vendor - | cta - | blocked -
-form=tall n=33 aspect=5 | vendor - | cta - | blocked -
-form=tall n=33 aspect=7 | vendor - | cta - | blocked -
-form=tall n=33 aspect=8 | cta - | blocked - | vendor -
-form=tall n=33 aspect=12 | cta - | blocked - | vendor -
-form=tall n=33 aspect=16 | cta - | blocked - | vendor -
-form=tall n=33 aspect=64 | cta - | blocked - | vendor -
-form=tall n=33 aspect=256 | cta - | blocked - | vendor -
-form=tall n=40 aspect=1 | vendor - | cta - | blocked -
-form=tall n=40 aspect=2 | vendor - | cta - | blocked -
-form=tall n=40 aspect=3 | vendor - | cta - | blocked -
-form=tall n=40 aspect=4 | vendor - | cta - | blocked -
-form=tall n=40 aspect=5 | vendor - | cta - | blocked -
-form=tall n=40 aspect=7 | vendor - | cta - | blocked -
-form=tall n=40 aspect=8 | cta - | blocked - | vendor -
-form=tall n=40 aspect=12 | cta - | blocked - | vendor -
-form=tall n=40 aspect=16 | cta - | blocked - | vendor -
-form=tall n=40 aspect=64 | cta - | blocked - | vendor -
-form=tall n=40 aspect=256 | cta - | blocked - | vendor -
-form=tall n=47 aspect=1 | vendor - | cta - | blocked -
-form=tall n=47 aspect=2 | vendor - | cta - | blocked -
-form=tall n=47 aspect=3 | vendor - | cta - | blocked -
-form=tall n=47 aspect=4 | vendor - | cta - | blocked -
-form=tall n=47 aspect=5 | vendor - | cta - | blocked -
-form=tall n=47 aspect=7 | vendor - | cta - | blocked -
-form=tall n=47 aspect=8 | cta - | blocked - | vendor -
-form=tall n=47 aspect=12 | cta - | blocked - | vendor -
-form=tall n=47 aspect=16 | cta - | blocked - | vendor -
-form=tall n=47 aspect=64 | cta - | blocked - | vendor -
-form=tall n=47 aspect=256 | cta - | blocked - | vendor -
-form=tall n=48 aspect=1 | vendor - | cta - | blocked -
-form=tall n=48 aspect=2 | vendor - | cta - | blocked -
-form=tall n=48 aspect=3 | vendor - | cta - | blocked -
-form=tall n=48 aspect=4 | vendor - | cta - | blocked -
-form=tall n=48 aspect=5 | vendor - | cta - | blocked -
-form=tall n=48 aspect=7 | vendor - | cta - | blocked -
-form=tall n=48 aspect=8 | cta - | blocked - | vendor -
-form=tall n=48 aspect=12 | cta - | blocked - | vendor -
-form=tall n=48 aspect=16 | cta - | blocked - | vendor -
-form=tall n=48 aspect=64 | cta - | blocked - | vendor -
-form=tall n=48 aspect=256 | cta - | blocked - | vendor -
-form=tall n=49 aspect=1 | vendor - | cta - | blocked -
-form=tall n=49 aspect=2 | vendor - | cta - | blocked -
-form=tall n=49 aspect=3 | vendor - | cta - | blocked -
-form=tall n=49 aspect=4 | vendor - | cta - | blocked -
-form=tall n=49 aspect=5 | vendor - | cta - | blocked -
-form=tall n=49 aspect=7 | vendor - | cta - | blocked -
-form=tall n=49 aspect=8 | cta - | blocked - | vendor -
-form=tall n=49 aspect=12 | cta - | blocked - | vendor -
-form=tall n=49 aspect=16 | cta - | blocked - | vendor -
-form=tall n=49 aspect=64 | cta - | blocked - | vendor -
-form=tall n=49 aspect=256 | cta - | blocked - | vendor -
-form=tall n=56 aspect=1 | vendor - | cta - | blocked -
-form=tall n=56 aspect=2 | vendor - | cta - | blocked -
-form=tall n=56 aspect=3 | vendor - | cta - | blocked -
-form=tall n=56 aspect=4 | vendor - | cta - | blocked -
-form=tall n=56 aspect=5 | vendor - | cta - | blocked -
-form=tall n=56 aspect=7 | vendor - | cta - | blocked -
-form=tall n=56 aspect=8 | cta - | blocked - | vendor -
-form=tall n=56 aspect=12 | cta - | blocked - | vendor -
-form=tall n=56 aspect=16 | cta - | blocked - | vendor -
-form=tall n=56 aspect=64 | cta - | blocked - | vendor -
-form=tall n=56 aspect=256 | cta - | blocked - | vendor -
-form=tall n=63 aspect=1 | vendor - | cta - | blocked -
-form=tall n=63 aspect=2 | vendor - | cta - | blocked -
-form=tall n=63 aspect=3 | vendor - | cta - | blocked -
-form=tall n=63 aspect=4 | vendor - | cta - | blocked -
-form=tall n=63 aspect=5 | vendor - | cta - | blocked -
-form=tall n=63 aspect=7 | vendor - | cta - | blocked -
-form=tall n=63 aspect=8 | cta - | blocked - | vendor -
-form=tall n=63 aspect=12 | cta - | blocked - | vendor -
-form=tall n=63 aspect=16 | cta - | blocked - | vendor -
-form=tall n=63 aspect=64 | cta - | blocked - | vendor -
-form=tall n=63 aspect=256 | cta - | blocked - | vendor -
-form=tall n=64 aspect=1 | vendor - | cta - | blocked -
-form=tall n=64 aspect=2 | vendor - | cta - | blocked -
-form=tall n=64 aspect=3 | vendor - | cta - | blocked -
-form=tall n=64 aspect=4 | vendor - | cta - | blocked -
-form=tall n=64 aspect=5 | vendor - | cta - | blocked -
-form=tall n=64 aspect=7 | vendor - | cta - | blocked -
-form=tall n=64 aspect=8 | cta - | blocked - | vendor -
-form=tall n=64 aspect=12 | cta - | blocked - | vendor -
-form=tall n=64 aspect=16 | cta - | blocked - | vendor -
-form=tall n=64 aspect=64 | cta - | blocked - | vendor -
-form=tall n=64 aspect=256 | cta - | blocked - | vendor -
-form=tall n=75 aspect=1 | vendor - | cta - | blocked -
-form=tall n=75 aspect=2 | vendor - | cta - | blocked -
-form=tall n=75 aspect=3 | vendor - | cta - | blocked -
-form=tall n=75 aspect=4 | vendor - | cta - | blocked -
-form=tall n=75 aspect=5 | vendor - | cta - | blocked -
-form=tall n=75 aspect=7 | vendor - | cta - | blocked -
-form=tall n=75 aspect=8 | cta - | blocked - | vendor -
-form=tall n=75 aspect=12 | cta - | blocked - | vendor -
-form=tall n=75 aspect=16 | cta - | blocked - | vendor -
-form=tall n=75 aspect=64 | cta - | blocked - | vendor -
-form=tall n=75 aspect=256 | cta - | blocked - | vendor -
-form=tall n=76 aspect=1 | vendor - | cta - | blocked -
-form=tall n=76 aspect=2 | vendor - | cta - | blocked -
-form=tall n=76 aspect=3 | vendor - | cta - | blocked -
-form=tall n=76 aspect=4 | vendor - | cta - | blocked -
-form=tall n=76 aspect=5 | vendor - | cta - | blocked -
-form=tall n=76 aspect=7 | vendor - | cta - | blocked -
-form=tall n=76 aspect=8 | cta - | blocked - | vendor -
-form=tall n=76 aspect=12 | cta - | blocked - | vendor -
-form=tall n=76 aspect=16 | cta - | blocked - | vendor -
-form=tall n=76 aspect=64 | cta - | blocked - | vendor -
-form=tall n=76 aspect=256 | cta - | blocked - | vendor -
-form=tall n=80 aspect=1 | vendor - | cta - | blocked -
-form=tall n=80 aspect=2 | vendor - | cta - | blocked -
-form=tall n=80 aspect=3 | vendor - | cta - | blocked -
-form=tall n=80 aspect=4 | vendor - | cta - | blocked -
-form=tall n=80 aspect=5 | vendor - | cta - | blocked -
-form=tall n=80 aspect=7 | vendor - | cta - | blocked -
-form=tall n=80 aspect=8 | cta - | blocked - | vendor -
-form=tall n=80 aspect=12 | cta - | blocked - | vendor -
-form=tall n=80 aspect=16 | cta - | blocked - | vendor -
-form=tall n=80 aspect=64 | cta - | blocked - | vendor -
-form=tall n=80 aspect=256 | cta - | blocked - | vendor -
-form=tall n=96 aspect=1 | vendor - | cta - | blocked -
-form=tall n=96 aspect=2 | vendor - | cta - | blocked -
-form=tall n=96 aspect=3 | vendor - | cta - | blocked -
-form=tall n=96 aspect=4 | vendor - | cta - | blocked -
-form=tall n=96 aspect=5 | vendor - | cta - | blocked -
-form=tall n=96 aspect=7 | vendor - | cta - | blocked -
-form=tall n=96 aspect=8 | cta - | blocked - | vendor -
-form=tall n=96 aspect=12 | cta - | blocked - | vendor -
-form=tall n=96 aspect=16 | cta - | blocked - | vendor -
-form=tall n=96 aspect=64 | cta - | blocked - | vendor -
-form=tall n=96 aspect=256 | cta - | blocked - | vendor -
-form=tall n=97 aspect=1 | vendor - | cta - | blocked -
-form=tall n=97 aspect=2 | vendor - | cta - | blocked -
-form=tall n=97 aspect=3 | vendor - | cta - | blocked -
-form=tall n=97 aspect=4 | vendor - | cta - | blocked -
-form=tall n=97 aspect=5 | vendor - | cta - | blocked -
-form=tall n=97 aspect=7 | vendor - | cta - | blocked -
-form=tall n=97 aspect=8 | cta - | blocked - | vendor -
-form=tall n=97 aspect=12 | cta - | blocked - | vendor -
-form=tall n=97 aspect=16 | cta - | blocked - | vendor -
-form=tall n=97 aspect=64 | cta - | blocked - | vendor -
-form=tall n=97 aspect=256 | cta - | blocked - | vendor -
-form=tall n=112 aspect=1 | vendor - | cta - | blocked -
-form=tall n=112 aspect=2 | vendor - | cta - | blocked -
-form=tall n=112 aspect=3 | vendor - | cta - | blocked -
-form=tall n=112 aspect=4 | vendor - | cta - | blocked -
-form=tall n=112 aspect=5 | vendor - | cta - | blocked -
-form=tall n=112 aspect=7 | vendor - | cta - | blocked -
-form=tall n=112 aspect=8 | cta - | blocked - | vendor -
-form=tall n=112 aspect=12 | cta - | blocked - | vendor -
-form=tall n=112 aspect=16 | cta - | blocked - | vendor -
-form=tall n=112 aspect=64 | cta - | blocked - | vendor -
-form=tall n=112 aspect=256 | cta - | blocked - | vendor -
-form=tall n=128 aspect=1 | vendor - | cta - | blocked -
-form=tall n=128 aspect=2 | vendor - | cta - | blocked -
-form=tall n=128 aspect=3 | vendor - | cta - | blocked -
-form=tall n=128 aspect=4 | vendor - | cta - | blocked -
-form=tall n=128 aspect=5 | vendor - | cta - | blocked -
-form=tall n=128 aspect=7 | vendor - | cta - | blocked -
-form=tall n=128 aspect=8 | cta - | blocked - | vendor -
-form=tall n=128 aspect=12 | cta - | blocked - | vendor -
-form=tall n=128 aspect=16 | cta - | blocked - | vendor -
-form=tall n=128 aspect=64 | cta - | blocked - | vendor -
-form=tall n=128 aspect=256 | cta - | blocked - | vendor -
-form=tall n=160 aspect=1 | vendor - | cta - | blocked -
-form=tall n=160 aspect=2 | vendor - | cta - | blocked -
-form=tall n=160 aspect=3 | vendor - | cta - | blocked -
-form=tall n=160 aspect=4 | vendor - | cta - | blocked -
-form=tall n=160 aspect=5 | vendor - | cta - | blocked -
-form=tall n=160 aspect=7 | vendor - | cta - | blocked -
-form=tall n=160 aspect=8 | cta - | blocked - | vendor -
-form=tall n=160 aspect=12 | cta - | blocked - | vendor -
-form=tall n=160 aspect=16 | cta - | blocked - | vendor -
-form=tall n=160 aspect=64 | cta - | blocked - | vendor -
-form=tall n=160 aspect=256 | cta - | blocked - | vendor -
-form=tall n=192 aspect=1 | vendor - | cta - | blocked -
-form=tall n=192 aspect=2 | vendor - | cta - | blocked -
-form=tall n=192 aspect=3 | vendor - | cta - | blocked -
-form=tall n=192 aspect=4 | vendor - | cta - | blocked -
-form=tall n=192 aspect=5 | vendor - | cta - | blocked -
-form=tall n=192 aspect=7 | vendor - | cta - | blocked -
-form=tall n=192 aspect=8 | cta - | blocked - | vendor -
-form=tall n=192 aspect=12 | cta - | blocked - | vendor -
-form=tall n=192 aspect=16 | cta - | blocked - | vendor -
-form=tall n=192 aspect=64 | cta - | blocked - | vendor -
-form=tall n=192 aspect=256 | cta - | blocked - | vendor -
-form=tall n=224 aspect=1 | vendor - | cta - | blocked -
-form=tall n=224 aspect=2 | vendor - | cta - | blocked -
-form=tall n=224 aspect=3 | vendor - | cta - | blocked -
-form=tall n=224 aspect=4 | vendor - | cta - | blocked -
-form=tall n=224 aspect=5 | vendor - | cta - | blocked -
-form=tall n=224 aspect=7 | vendor - | cta - | blocked -
-form=tall n=224 aspect=8 | cta - | blocked - | vendor -
-form=tall n=224 aspect=12 | cta - | blocked - | vendor -
-form=tall n=224 aspect=16 | cta - | blocked - | vendor -
-form=tall n=224 aspect=64 | cta - | blocked - | vendor -
-form=tall n=224 aspect=256 | cta - | blocked - | vendor -
-form=tall n=255 aspect=1 | vendor - | cta - | blocked -
-form=tall n=255 aspect=2 | vendor - | cta - | blocked -
-form=tall n=255 aspect=3 | vendor - | cta - | blocked -
-form=tall n=255 aspect=4 | vendor - | cta - | blocked -
-form=tall n=255 aspect=5 | vendor - | cta - | blocked -
-form=tall n=255 aspect=7 | vendor - | cta - | blocked -
-form=tall n=255 aspect=8 | cta - | blocked - | vendor -
-form=tall n=255 aspect=12 | cta - | blocked - | vendor -
-form=tall n=255 aspect=16 | cta - | blocked - | vendor -
-form=tall n=255 aspect=64 | cta - | blocked - | vendor -
-form=tall n=255 aspect=256 | cta - | blocked - | vendor -
-form=tall n=256 aspect=1 | cta - | blocked - | vendor -
-form=tall n=256 aspect=2 | cta - | blocked - | vendor -
-form=tall n=256 aspect=3 | cta - | blocked - | vendor -
-form=tall n=256 aspect=4 | cta - | blocked - | vendor -
-form=tall n=256 aspect=5 | cta - | blocked - | vendor -
-form=tall n=256 aspect=7 | cta - | blocked - | vendor -
-form=tall n=256 aspect=8 | cta - | blocked - | vendor -
-form=tall n=256 aspect=12 | cta - | blocked - | vendor -
-form=tall n=256 aspect=16 | cta - | blocked - | vendor -
-form=tall n=256 aspect=64 | cta - | blocked - | vendor -
-form=tall n=256 aspect=256 | cta - | blocked - | vendor -
-form=tall n=288 aspect=1 | cta - | blocked - | vendor -
-form=tall n=288 aspect=2 | cta - | blocked - | vendor -
-form=tall n=288 aspect=3 | cta - | blocked - | vendor -
-form=tall n=288 aspect=4 | cta - | blocked - | vendor -
-form=tall n=288 aspect=5 | cta - | blocked - | vendor -
-form=tall n=288 aspect=7 | cta - | blocked - | vendor -
-form=tall n=288 aspect=8 | cta - | blocked - | vendor -
-form=tall n=288 aspect=12 | cta - | blocked - | vendor -
-form=tall n=288 aspect=16 | cta - | blocked - | vendor -
-form=tall n=288 aspect=64 | cta - | blocked - | vendor -
-form=tall n=288 aspect=256 | cta - | blocked - | vendor -
-form=tall n=384 aspect=1 | cta - | blocked - | vendor -
-form=tall n=384 aspect=2 | cta - | blocked - | vendor -
-form=tall n=384 aspect=3 | cta - | blocked - | vendor -
-form=tall n=384 aspect=4 | cta - | blocked - | vendor -
-form=tall n=384 aspect=5 | cta - | blocked - | vendor -
-form=tall n=384 aspect=7 | cta - | blocked - | vendor -
-form=tall n=384 aspect=8 | cta - | blocked - | vendor -
-form=tall n=384 aspect=12 | cta - | blocked - | vendor -
-form=tall n=384 aspect=16 | cta - | blocked - | vendor -
-form=tall n=384 aspect=64 | cta - | blocked - | vendor -
-form=tall n=384 aspect=256 | cta - | blocked - | vendor -
-form=tall n=512 aspect=1 | cta - | blocked - | vendor -
-form=tall n=512 aspect=2 | cta - | blocked - | vendor -
-form=tall n=512 aspect=3 | cta - | blocked - | vendor -
-form=tall n=512 aspect=4 | cta - | blocked - | vendor -
-form=tall n=512 aspect=5 | cta - | blocked - | vendor -
-form=tall n=512 aspect=7 | cta - | blocked - | vendor -
-form=tall n=512 aspect=8 | cta - | blocked - | vendor -
-form=tall n=512 aspect=12 | cta - | blocked - | vendor -
-form=tall n=512 aspect=16 | cta - | blocked - | vendor -
-form=tall n=512 aspect=64 | cta - | blocked - | vendor -
-form=tall n=512 aspect=256 | cta - | blocked - | vendor -
-form=tall n=768 aspect=1 | cta - | blocked - | vendor -
-form=tall n=768 aspect=2 | cta - | blocked - | vendor -
-form=tall n=768 aspect=3 | cta - | blocked - | vendor -
-form=tall n=768 aspect=4 | cta - | blocked - | vendor -
-form=tall n=768 aspect=5 | cta - | blocked - | vendor -
-form=tall n=768 aspect=7 | cta - | blocked - | vendor -
-form=tall n=768 aspect=8 | cta - | blocked - | vendor -
-form=tall n=768 aspect=12 | cta - | blocked - | vendor -
-form=tall n=768 aspect=16 | cta - | blocked - | vendor -
-form=tall n=768 aspect=64 | cta - | blocked - | vendor -
-form=tall n=768 aspect=256 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=1 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=2 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=3 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=4 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=5 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=7 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=8 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=12 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=16 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=64 | cta - | blocked - | vendor -
-form=tall n=1024 aspect=256 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=1 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=2 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=3 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=4 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=5 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=7 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=8 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=12 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=16 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=64 | cta - | blocked - | vendor -
-form=tall n=1536 aspect=256 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=1 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=2 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=3 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=4 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=5 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=7 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=8 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=12 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=16 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=64 | cta - | blocked - | vendor -
-form=tall n=2048 aspect=256 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=1 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=2 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=3 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=4 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=5 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=7 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=8 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=12 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=16 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=64 | cta - | blocked - | vendor -
-form=tall n=3072 aspect=256 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=1 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=2 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=3 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=4 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=5 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=7 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=8 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=12 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=16 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=64 | cta - | blocked - | vendor -
-form=tall n=4096 aspect=256 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=1 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=2 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=3 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=4 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=5 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=7 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=8 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=12 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=16 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=64 | cta - | blocked - | vendor -
-form=tall n=8192 aspect=256 | cta - | blocked - | vendor -
-form=wide n=2 aspect=1 | vendor -
-form=wide n=2 aspect=4 | vendor -
-form=wide n=2 aspect=64 | vendor -
-form=wide n=64 aspect=1 | vendor -
-form=wide n=64 aspect=4 | vendor -
-form=wide n=64 aspect=64 | vendor -
-form=wide n=1024 aspect=1 | vendor -
-form=wide n=1024 aspect=4 | vendor -
-form=wide n=1024 aspect=64 | vendor -
-form=wide n=8192 aspect=1 | vendor -
-form=wide n=8192 aspect=4 | vendor -
-form=wide n=8192 aspect=64 | vendor -
+form=sq n=1 aspect=1 | vendor 0.01970 | tiny 0.04064 | cta 0.06975 | blocked 0.07046 # deep
+form=sq n=2 aspect=1 | vendor 0.02628 | tiny 0.07407 | cta 0.1664 | blocked 0.1682 # deep
+form=sq n=3 aspect=1 | vendor 0.03528 | tiny 0.1076 | blocked 0.2860 | cta 0.2866 # deep
+form=sq n=4 aspect=1 | vendor 0.06904 | tiny 0.1414 | blocked 0.4240 | cta 0.4267 # deep
+form=sq n=5 aspect=1 | vendor 0.09345 | tiny 0.1757 | blocked 0.5821 | cta 0.5835 # deep
+form=sq n=6 aspect=1 | vendor 0.1204 | tiny 0.2091 | blocked 0.7569 | cta 0.7601 # deep
+form=sq n=7 aspect=1 | vendor 0.1521 | tiny 0.2434 | cta 0.9547 | blocked 0.9571 # deep
+form=sq n=8 aspect=1 | tiny 0.2304 | vendor 0.2647 | blocked 1.172 | cta 1.175 # deep
+form=sq n=9 aspect=1 | vendor 0.3211 | tiny 0.7831 | blocked 1.394 | cta 1.394 # deep
+form=sq n=10 aspect=1 | vendor 0.3901 | tiny 0.8722 | blocked 1.667 | cta 1.670 # deep
+form=sq n=11 aspect=1 | vendor 0.4564 | tiny 0.9383 | blocked 1.916 | cta 1.919 # deep
+form=sq n=12 aspect=1 | vendor 0.5301 | tiny 1.016 | cta 2.212 | blocked 2.212 # deep
+form=sq n=14 aspect=1 | vendor 0.7062 | tiny 1.188 | blocked 2.890 | cta 2.896 # deep
+form=sq n=15 aspect=1 | vendor 0.8059 | tiny 1.277 | blocked 3.245 | cta 3.247 # deep
+form=sq n=16 aspect=1 | tiny 1.200 | vendor 1.737 | cta 3.607 | blocked 3.608 # deep
+form=sq n=17 aspect=1 | vendor 1.932 | cta 3.965 | blocked 3.967 # deep
+form=sq n=20 aspect=1 | vendor 2.676 | cta 5.317 | blocked 5.321 # deep
+form=sq n=21 aspect=1 | vendor 2.917 | cta 6.257 | blocked 6.261 # deep
+form=sq n=22 aspect=1 | vendor 3.228 | blocked 6.877 | cta 6.882 # deep
+form=sq n=23 aspect=1 | vendor 3.480 | blocked 6.755 | cta 6.757 # deep
+form=sq n=24 aspect=1 | vendor 3.825 | blocked 7.372 | cta 7.374 # deep
+form=sq n=28 aspect=1 | vendor 5.111 | cta 23.80 | blocked 23.82 # deep
+form=sq n=31 aspect=1 | vendor 6.365 | blocked 27.54 | cta 27.55 # deep
+form=sq n=32 aspect=1 | vendor 11.95 | cta 28.71 | blocked 28.71 # deep
+form=sq n=33 aspect=1 | vendor 7.021 | cta 15.03 | blocked 50.30 # deep
+form=sq n=40 aspect=1 | vendor 10.39 | cta 20.71 | blocked 55.14 # deep
+form=sq n=47 aspect=1 | vendor 7.306 | cta 13.63 | blocked 28.89 # deep
+form=sq n=48 aspect=1 | vendor 7.601 | cta 14.09 | blocked 29.01 # deep
+form=sq n=49 aspect=1 | vendor 7.960 | cta 14.58 | blocked 31.21 # deep
+form=sq n=56 aspect=1 | vendor 10.45 | blocked 32.54 # deep
+form=sq n=63 aspect=1 | vendor 13.31 | blocked 38.08 # deep
+form=sq n=64 aspect=1 | vendor 13.71 | blocked 38.42 # deep
+form=sq n=75 aspect=1 | vendor 12.75 | blocked 33.53 # deep
+form=sq n=76 aspect=1 | vendor 13.27 | blocked 34.04 # deep
+form=sq n=80 aspect=1 | vendor 14.86 | blocked 34.42 # deep
+form=sq n=96 aspect=1 | vendor 14.10 | blocked 21.10 # deep
+form=sq n=97 aspect=1 | vendor 14.96 | blocked 28.64 # deep
+form=sq n=112 aspect=1 | vendor 22.67 | blocked 30.61 # deep
+form=sq n=128 aspect=1 | vendor 32.33 | blocked 35.44 # deep
+form=sq n=143 aspect=1 | blocked 25.51 | vendor 39.01 # deep
+form=sq n=160 aspect=1 | blocked 28.61 | vendor 51.81 # deep
+form=sq n=192 aspect=1 | blocked 27.91 | vendor 80.77 # deep
+form=sq n=224 aspect=1 | blocked 37.05 | vendor 121.3 # deep
+form=sq n=255 aspect=1 | blocked 47.60 | vendor 188.8 # deep
+form=sq n=256 aspect=1 | blocked 47.15 | vendor 186.7 # deep
+form=sq n=288 aspect=1 | blocked 39.56 | vendor 243.2 # deep
+form=sq n=384 aspect=1 | blocked 55.72 | vendor 526.4 # deep
+form=sq n=512 aspect=1 | blocked 94.97 | vendor 1179 # deep
+form=sq n=768 aspect=1 | blocked 135.5 | vendor 3431 # deep
+form=sq n=1024 aspect=1 | blocked 231.0 | vendor 8059 # deep
+form=sq n=1536 aspect=1 | blocked 344.6 | vendor 24080 # deep
+form=sq n=2048 aspect=1 | blocked 599.5 | vendor 57846 # deep
+form=sq n=8192 aspect=1 | cta - | tiny - | blocked - | vendor - # transcribed
+form=tall n=1 aspect=2 | vendor 0.02006 | cta 0.08626 | blocked 0.08886 # deep
+form=tall n=1 aspect=3 | vendor 0.01982 | cta 0.08698 | blocked 0.08855 # deep
+form=tall n=1 aspect=4 | vendor 0.02401 | cta 0.08626 | blocked 0.08661 # deep
+form=tall n=1 aspect=5 | vendor 0.02477 | cta 0.08680 | blocked 0.08716 # deep
+form=tall n=1 aspect=7 | vendor 0.02529 | cta 0.08561 | blocked 0.08598 # deep
+form=tall n=1 aspect=8 | vendor 0.02915 | cta 0.08697 | blocked 0.08724 # deep
+form=tall n=1 aspect=12 | vendor 0.03093 | cta 0.08564 | blocked 0.08622 # deep
+form=tall n=1 aspect=16 | vendor 0.04287 | blocked 0.08597 | cta 0.08633 # deep
+form=tall n=1 aspect=64 | vendor 0.07265 | cta 0.1034 | blocked 0.1036 # deep
+form=tall n=1 aspect=256 | vendor 0.1022 | cta 0.2129 | blocked 0.2133 # deep
+form=tall n=2 aspect=1 | vendor 0.02671 | blocked 0.1859 | cta 0.1866 # deep
+form=tall n=2 aspect=2 | vendor 0.03649 | blocked 0.1859 | cta 0.1871 # deep
+form=tall n=2 aspect=3 | vendor 0.03860 | blocked 0.1855 | cta 0.1879 # deep
+form=tall n=2 aspect=4 | vendor 0.04778 | cta 0.1846 | blocked 0.1858 # deep
+form=tall n=2 aspect=5 | vendor 0.05178 | blocked 0.1855 | cta 0.1856 # deep
+form=tall n=2 aspect=7 | vendor 0.05220 | cta 0.1846 | blocked 0.1854 # deep
+form=tall n=2 aspect=8 | vendor 0.08079 | cta 0.1824 | blocked 0.1831 # deep
+form=tall n=2 aspect=12 | vendor 0.08946 | cta 0.1860 | blocked 0.1864 # deep
+form=tall n=2 aspect=16 | vendor 0.1402 | cta 0.1860 | blocked 0.1861 # deep
+form=tall n=2 aspect=64 | vendor 0.1812 | cta 0.4451 | blocked 0.4457 # deep
+form=tall n=2 aspect=256 | vendor 0.4630 | blocked 0.9958 | cta 0.9976 # deep
+form=tall n=3 aspect=1 | vendor 0.05191 | blocked 0.3053 | cta 0.3063 # deep
+form=tall n=3 aspect=2 | vendor 0.05461 | blocked 0.3035 | cta 0.3058 # deep
+form=tall n=3 aspect=3 | vendor 0.07357 | blocked 0.3053 | cta 0.3061 # deep
+form=tall n=3 aspect=4 | vendor 0.07776 | cta 0.2996 | blocked 0.3014 # deep
+form=tall n=3 aspect=5 | vendor 0.08763 | cta 0.3071 | blocked 0.3073 # deep
+form=tall n=3 aspect=7 | vendor 0.1449 | cta 0.3047 | blocked 0.3052 # deep
+form=tall n=3 aspect=8 | vendor 0.1431 | cta 0.2998 | blocked 0.3013 # deep
+form=tall n=3 aspect=12 | vendor 0.2549 | blocked 0.9809 | cta 0.9816 # deep
+form=tall n=3 aspect=16 | vendor 0.2560 | cta 0.9916 | blocked 0.9919 # deep
+form=tall n=3 aspect=64 | vendor 0.3950 | cta 1.298 | blocked 1.298 # deep
+form=tall n=3 aspect=256 | vendor 0.3622 | cta 0.8704 | blocked 0.8722 # deep
+form=tall n=4 aspect=1 | vendor 0.07258 | blocked 0.4347 | cta 0.4385 # deep
+form=tall n=4 aspect=2 | vendor 0.1004 | cta 0.4415 | blocked 0.4416 # deep
+form=tall n=4 aspect=3 | vendor 0.1108 | blocked 0.4414 | cta 0.4424 # deep
+form=tall n=4 aspect=4 | vendor 0.1924 | cta 0.4425 | blocked 0.4428 # deep
+form=tall n=4 aspect=5 | vendor 0.2064 | cta 0.4413 | blocked 0.4420 # deep
+form=tall n=4 aspect=7 | vendor 0.2114 | blocked 0.4438 | cta 0.4438 # deep
+form=tall n=4 aspect=8 | vendor 0.3500 | blocked 0.4442 | cta 0.4445 # deep
+form=tall n=4 aspect=12 | vendor 0.3803 | cta 1.363 | blocked 1.368 # deep
+form=tall n=4 aspect=16 | vendor 0.3842 | blocked 1.366 | cta 1.369 # deep
+form=tall n=4 aspect=64 | vendor 0.8082 | cta 2.102 | blocked 2.102 # deep
+form=tall n=4 aspect=256 | vendor 1.199 | blocked 2.319 # deep
+form=tall n=5 aspect=1 | vendor 0.09914 | cta 0.6017 | blocked 0.6020 # deep
+form=tall n=5 aspect=2 | vendor 0.1395 | blocked 0.5919 | cta 0.5962 # deep
+form=tall n=5 aspect=3 | vendor 0.1502 | blocked 0.6005 | cta 0.6033 # deep
+form=tall n=5 aspect=4 | vendor 0.2824 | cta 0.5987 | blocked 0.6008 # deep
+form=tall n=5 aspect=5 | vendor 0.2879 | blocked 0.6000 | cta 0.6010 # deep
+form=tall n=5 aspect=7 | vendor 0.5142 | blocked 3.268 | cta 3.282 # deep
+form=tall n=5 aspect=8 | vendor 0.5323 | cta 3.351 | blocked 3.353 # deep
+form=tall n=5 aspect=12 | vendor 0.5346 | blocked 3.366 | cta 3.380 # deep
+form=tall n=5 aspect=16 | vendor 0.5751 | blocked 3.521 | cta 3.532 # deep
+form=tall n=5 aspect=64 | vendor 0.7854 | cta 2.368 | blocked 2.372 # deep
+form=tall n=5 aspect=256 | vendor 0.9253 | blocked 1.273 # deep
+form=tall n=6 aspect=1 | vendor 0.1764 | blocked 0.7764 | cta 0.7782 # deep
+form=tall n=6 aspect=2 | vendor 0.1868 | blocked 0.7748 | cta 0.7797 # deep
+form=tall n=6 aspect=3 | vendor 0.3556 | cta 0.7761 | blocked 0.7764 # deep
+form=tall n=6 aspect=4 | vendor 0.3783 | cta 0.7797 | blocked 0.7800 # deep
+form=tall n=6 aspect=5 | vendor 0.3798 | cta 0.7797 | blocked 0.7810 # deep
+form=tall n=6 aspect=7 | vendor 0.6978 | blocked 4.056 | cta 4.058 # deep
+form=tall n=6 aspect=8 | vendor 0.7039 | blocked 4.111 | cta 4.121 # deep
+form=tall n=6 aspect=12 | vendor 0.7630 | blocked 4.338 | cta 4.350 # deep
+form=tall n=6 aspect=16 | vendor 0.7769 | blocked 4.331 | cta 4.336 # deep
+form=tall n=6 aspect=64 | vendor 0.6200 | cta 1.709 | blocked 1.710 # deep
+form=tall n=6 aspect=256 | vendor 0.8115 | blocked 1.076 # deep
+form=tall n=8 aspect=1 | vendor 0.2843 | blocked 1.191 | cta 1.192 # deep
+form=tall n=8 aspect=2 | vendor 0.5374 | cta 1.188 | blocked 1.189 # deep
+form=tall n=8 aspect=3 | vendor 0.5904 | blocked 1.191 | cta 1.192 # deep
+form=tall n=8 aspect=4 | vendor 1.015 | blocked 1.194 | cta 1.195 # deep
+form=tall n=8 aspect=5 | vendor 1.098 | blocked 5.610 | cta 5.615 # deep
+form=tall n=8 aspect=7 | vendor 1.125 | blocked 5.703 | cta 5.704 # deep
+form=tall n=8 aspect=8 | vendor 1.128 | blocked 5.694 | cta 5.704 # deep
+form=tall n=8 aspect=12 | vendor 1.240 | blocked 6.053 | cta 6.069 # deep
+form=tall n=8 aspect=16 | vendor 1.619 | blocked 6.410 | cta 6.412 # deep
+form=tall n=8 aspect=64 | vendor 1.726 | blocked 3.333 # deep
+form=tall n=8 aspect=256 | vendor 2.006 | blocked 2.454 # deep
+form=tall n=9 aspect=1 | vendor 0.3429 | blocked 1.423 | cta 1.426 # deep
+form=tall n=9 aspect=2 | vendor 0.6624 | cta 1.411 | blocked 1.412 # deep
+form=tall n=9 aspect=3 | vendor 0.7213 | cta 1.433 | blocked 1.438 # deep
+form=tall n=9 aspect=4 | vendor 1.306 | cta 6.301 | blocked 6.308 # deep
+form=tall n=9 aspect=5 | vendor 1.345 | cta 6.460 | blocked 6.468 # deep
+form=tall n=9 aspect=7 | vendor 1.353 | blocked 6.453 | cta 6.466 # deep
+form=tall n=9 aspect=8 | vendor 1.470 | blocked 6.927 | cta 6.930 # deep
+form=tall n=9 aspect=12 | vendor 2.027 | cta 7.431 | blocked 7.432 # deep
+form=tall n=9 aspect=16 | vendor 1.230 | blocked 3.909 | cta 3.910 # deep
+form=tall n=9 aspect=64 | vendor 1.119 | blocked 2.168 # deep
+form=tall n=10 aspect=1 | vendor 0.4125 | blocked 1.678 | cta 1.681 # deep
+form=tall n=10 aspect=2 | vendor 0.8060 | blocked 1.666 | cta 1.666 # deep
+form=tall n=10 aspect=3 | vendor 0.8574 | cta 1.684 | blocked 1.687 # deep
+form=tall n=10 aspect=4 | vendor 1.594 | blocked 7.299 | cta 7.300 # deep
+form=tall n=10 aspect=5 | vendor 1.608 | blocked 7.307 | cta 7.315 # deep
+form=tall n=10 aspect=7 | vendor 1.736 | cta 7.756 | blocked 7.762 # deep
+form=tall n=10 aspect=8 | vendor 1.779 | cta 7.930 | blocked 7.938 # deep
+form=tall n=10 aspect=12 | vendor 1.348 | blocked 4.201 | cta 4.202 # deep
+form=tall n=10 aspect=16 | vendor 1.577 | blocked 4.479 | cta 4.480 # deep
+form=tall n=10 aspect=64 | vendor 1.672 | blocked 2.217 # deep
+form=tall n=11 aspect=1 | vendor 0.9106 | cta 1.963 | blocked 1.964 # deep
+form=tall n=11 aspect=2 | vendor 0.9777 | blocked 1.966 | cta 1.976 # deep
+form=tall n=11 aspect=3 | vendor 1.757 | cta 7.658 | blocked 7.672 # deep
+form=tall n=11 aspect=4 | vendor 1.902 | cta 8.274 | blocked 8.274 # deep
+form=tall n=11 aspect=5 | vendor 1.911 | blocked 8.276 | cta 8.284 # deep
+form=tall n=11 aspect=7 | vendor 2.099 | cta 8.926 | blocked 8.932 # deep
+form=tall n=11 aspect=8 | vendor 2.117 | blocked 8.926 | cta 8.942 # deep
+form=tall n=11 aspect=12 | vendor 1.690 | cta 4.874 | blocked 4.877 # deep
+form=tall n=11 aspect=16 | vendor 2.131 | blocked 5.426 | cta 5.436 # deep
+form=tall n=11 aspect=64 | vendor 2.235 | blocked 2.785 # deep
+form=tall n=12 aspect=1 | vendor 1.081 | cta 2.253 | blocked 2.257 # deep
+form=tall n=12 aspect=2 | vendor 1.138 | blocked 2.255 | cta 2.259 # deep
+form=tall n=12 aspect=3 | vendor 2.109 | cta 8.737 | blocked 8.743 # deep
+form=tall n=12 aspect=4 | vendor 2.212 | blocked 9.214 | cta 9.218 # deep
+form=tall n=12 aspect=5 | vendor 2.231 | cta 9.212 | blocked 9.224 # deep
+form=tall n=12 aspect=7 | vendor 2.472 | blocked 9.936 | cta 9.948 # deep
+form=tall n=12 aspect=8 | vendor 1.387 | blocked 4.991 | cta 4.999 # deep
+form=tall n=12 aspect=12 | vendor 2.135 | blocked 5.680 | cta 5.682 # deep
+form=tall n=12 aspect=16 | vendor 1.220 | blocked 3.090 | cta 3.091 # deep
+form=tall n=12 aspect=64 | vendor 1.652 | blocked 1.854 # deep
+form=tall n=14 aspect=1 | vendor 1.447 | blocked 2.900 | cta 2.901 # deep
+form=tall n=14 aspect=2 | vendor 1.501 | cta 2.883 | blocked 2.883 # deep
+form=tall n=14 aspect=3 | vendor 2.860 | cta 10.97 | blocked 10.97 # deep
+form=tall n=14 aspect=4 | vendor 2.879 | blocked 11.00 | cta 11.00 # deep
+form=tall n=14 aspect=5 | vendor 3.090 | cta 11.64 | blocked 11.64 # deep
+form=tall n=14 aspect=7 | vendor 2.016 | cta 6.118 | blocked 6.122 # deep
+form=tall n=14 aspect=8 | vendor 2.509 | cta 6.546 | blocked 6.548 # deep
+form=tall n=14 aspect=12 | vendor 1.538 | blocked 3.760 | cta 3.768 # deep
+form=tall n=14 aspect=16 | vendor 2.069 | blocked 4.650 # deep
+form=tall n=14 aspect=64 | vendor 2.627 | blocked 2.857 # deep
+form=tall n=15 aspect=64 | vendor 3.241 | blocked 3.410 # deep
+form=tall n=16 aspect=1 | vendor 1.868 | blocked 3.643 | cta 3.643 # deep
+form=tall n=16 aspect=2 | vendor 3.353 | cta 3.668 | blocked 3.669 # deep
+form=tall n=16 aspect=3 | vendor 3.636 | blocked 12.98 | cta 12.99 # deep
+form=tall n=16 aspect=4 | vendor 3.692 | blocked 13.17 | cta 13.18 # deep
+form=tall n=16 aspect=5 | vendor 2.278 | cta 7.208 | blocked 7.208 # deep
+form=tall n=16 aspect=7 | vendor 3.243 | blocked 7.824 | cta 7.827 # deep
+form=tall n=16 aspect=8 | vendor 3.310 | cta 7.836 | blocked 7.843 # deep
+form=tall n=16 aspect=12 | vendor 2.344 | blocked 4.619 # deep
+form=tall n=16 aspect=16 | vendor 3.318 | blocked 5.849 # deep
+form=tall n=16 aspect=32 | vendor 3.615 | blocked 4.004 # deep
+form=tall n=16 aspect=64 | blocked 4.196 | vendor 4.145 # deep
+form=tall n=17 aspect=1 | vendor 2.086 | cta 4.122 | blocked 4.123 # deep
+form=tall n=17 aspect=2 | vendor 3.802 | cta 12.94 | blocked 12.95 # deep
+form=tall n=17 aspect=3 | vendor 4.097 | blocked 14.19 | cta 14.19 # deep
+form=tall n=17 aspect=4 | vendor 2.365 | blocked 7.340 | cta 7.341 # deep
+form=tall n=17 aspect=5 | vendor 2.581 | blocked 7.813 | cta 7.819 # deep
+form=tall n=17 aspect=7 | vendor 3.756 | blocked 8.434 | cta 8.442 # deep
+form=tall n=17 aspect=8 | vendor 1.975 | blocked 4.530 | cta 4.531 # deep
+form=tall n=17 aspect=12 | vendor 2.902 | blocked 5.884 # deep
+form=tall n=17 aspect=16 | vendor 1.968 | blocked 3.491 # deep
+form=tall n=17 aspect=32 | vendor 2.255 | blocked 2.543 # deep
+form=tall n=17 aspect=64 | blocked 2.279 | vendor 3.625 # deep
+form=tall n=20 aspect=1 | vendor 2.850 | cta 5.350 | blocked 5.353 # deep
+form=tall n=20 aspect=2 | vendor 5.316 | cta 16.71 | blocked 16.71 # deep
+form=tall n=20 aspect=3 | vendor 3.037 | cta 8.807 | blocked 8.812 # deep
+form=tall n=20 aspect=4 | vendor 3.460 | blocked 9.652 | cta 9.660 # deep
+form=tall n=20 aspect=5 | vendor 4.085 | blocked 9.985 | cta 9.986 # deep
+form=tall n=20 aspect=7 | vendor 2.775 | blocked 5.719 | cta 5.721 # deep
+form=tall n=20 aspect=8 | vendor 3.115 | blocked 6.518 # deep
+form=tall n=20 aspect=12 | vendor 2.837 | blocked 4.061 # deep
+form=tall n=20 aspect=16 | vendor 3.281 | blocked 4.165 # deep
+form=tall n=20 aspect=32 | blocked 3.919 | vendor 3.957 # deep
+form=tall n=20 aspect=64 | blocked 3.471 | vendor 6.160 # deep
+form=tall n=21 aspect=1 | vendor 3.091 | blocked 5.891 | cta 5.904 # deep
+form=tall n=21 aspect=2 | vendor 5.778 | blocked 17.77 | cta 17.77 # deep
+form=tall n=21 aspect=3 | vendor 3.334 | blocked 9.396 | cta 9.403 # deep
+form=tall n=21 aspect=4 | vendor 3.847 | blocked 10.38 | cta 10.38 # deep
+form=tall n=21 aspect=5 | vendor 2.429 | blocked 5.582 | cta 5.586 # deep
+form=tall n=21 aspect=7 | vendor 3.224 | blocked 6.330 # deep
+form=tall n=21 aspect=8 | vendor 3.645 | blocked 7.346 # deep
+form=tall n=21 aspect=12 | vendor 3.207 | blocked 4.421 # deep
+form=tall n=21 aspect=16 | vendor 3.823 | blocked 4.751 # deep
+form=tall n=21 aspect=32 | blocked 4.666 | vendor 4.546 # deep
+form=tall n=21 aspect=64 | blocked 4.232 | vendor 6.737 # deep
+form=tall n=22 aspect=1 | vendor 6.010 | cta 17.62 | blocked 17.63 # deep
+form=tall n=22 aspect=2 | vendor 6.382 | cta 19.25 | blocked 19.25 # deep
+form=tall n=22 aspect=3 | vendor 3.690 | cta 10.09 | blocked 10.09 # deep
+form=tall n=22 aspect=4 | vendor 4.295 | cta 11.14 | blocked 11.14 # deep
+form=tall n=22 aspect=5 | vendor 2.861 | cta 6.011 | blocked 6.014 # deep
+form=tall n=22 aspect=7 | vendor 3.728 | blocked 7.510 # deep
+form=tall n=22 aspect=8 | vendor 4.191 | blocked 8.026 # deep
+form=tall n=22 aspect=12 | vendor 3.397 | blocked 4.938 # deep
+form=tall n=22 aspect=16 | vendor 4.321 | blocked 5.154 # deep
+form=tall n=22 aspect=32 | blocked 5.018 | vendor 5.098 # deep
+form=tall n=22 aspect=64 | blocked 5.124 | vendor 7.927 # deep
+form=tall n=23 aspect=1 | vendor 6.571 | blocked 18.85 | cta 18.85 # deep
+form=tall n=23 aspect=2 | vendor 3.838 | cta 10.31 | blocked 10.31 # deep
+form=tall n=23 aspect=3 | vendor 4.095 | blocked 10.84 | cta 10.85 # deep
+form=tall n=23 aspect=4 | vendor 2.287 | cta 5.988 | blocked 5.997 # deep
+form=tall n=23 aspect=5 | vendor 3.305 | blocked 6.535 | cta 6.537 # deep
+form=tall n=23 aspect=7 | vendor 4.230 | blocked 7.993 # deep
+form=tall n=23 aspect=8 | vendor 2.504 | blocked 4.348 # deep
+form=tall n=23 aspect=12 | vendor 3.904 | blocked 4.851 # deep
+form=tall n=23 aspect=16 | vendor 2.830 | blocked 3.131 # deep
+form=tall n=23 aspect=32 | blocked 2.640 | vendor 4.377 # deep
+form=tall n=23 aspect=64 | blocked 3.204 | vendor 8.979 # deep
+form=tall n=24 aspect=1 | vendor 7.183 | cta 20.29 | blocked 20.29 # deep
+form=tall n=24 aspect=2 | vendor 4.168 | cta 11.01 | blocked 11.01 # deep
+form=tall n=24 aspect=3 | vendor 4.540 | cta 11.87 | blocked 11.87 # deep
+form=tall n=24 aspect=4 | vendor 2.546 | cta 6.336 | blocked 6.336 # deep
+form=tall n=24 aspect=5 | vendor 3.666 | cta 6.997 | blocked 6.999 # deep
+form=tall n=24 aspect=7 | vendor 4.766 | blocked 8.725 # deep
+form=tall n=24 aspect=8 | vendor 2.751 | blocked 4.570 # deep
+form=tall n=24 aspect=12 | vendor 4.348 | blocked 5.224 # deep
+form=tall n=24 aspect=16 | vendor 3.320 | blocked 3.461 # deep
+form=tall n=24 aspect=32 | blocked 3.139 | vendor 5.474 # deep
+form=tall n=24 aspect=64 | blocked 3.544 | vendor 10.34 # deep
+form=tall n=26 aspect=16 | blocked 4.254 | vendor 4.173 # deep
+form=tall n=28 aspect=1 | vendor 5.344 | cta 12.84 | blocked 12.85 # deep
+form=tall n=28 aspect=2 | vendor 5.567 | cta 13.62 | blocked 13.62 # deep
+form=tall n=28 aspect=3 | vendor 3.289 | cta 7.783 | blocked 7.786 # deep
+form=tall n=28 aspect=4 | vendor 4.579 | blocked 9.440 # deep
+form=tall n=28 aspect=5 | vendor 5.430 | blocked 10.29 # deep
+form=tall n=28 aspect=7 | vendor 3.772 | blocked 5.955 # deep
+form=tall n=28 aspect=8 | vendor 4.149 | blocked 5.750 # deep
+form=tall n=28 aspect=12 | vendor 3.779 | blocked 4.105 # deep
+form=tall n=28 aspect=14 | blocked 4.743 | vendor 4.752 # deep
+form=tall n=28 aspect=16 | blocked 5.258 | vendor 5.367 # deep
+form=tall n=28 aspect=64 | blocked 5.541 | vendor 15.46 # deep
+form=tall n=29 aspect=12 | vendor 4.182 | blocked 4.446 # deep
+form=tall n=31 aspect=1 | vendor 6.602 | cta 15.18 | blocked 15.18 # deep
+form=tall n=31 aspect=2 | vendor 6.829 | cta 15.79 | blocked 15.79 # deep
+form=tall n=31 aspect=3 | vendor 4.222 | blocked 9.055 | cta 9.057 # deep
+form=tall n=31 aspect=4 | vendor 6.169 | blocked 11.17 # deep
+form=tall n=31 aspect=5 | vendor 4.086 | blocked 6.199 # deep
+form=tall n=31 aspect=7 | vendor 5.391 | blocked 6.752 # deep
+form=tall n=31 aspect=8 | vendor 6.788 | blocked 7.265 # deep
+form=tall n=31 aspect=10 | blocked 4.720 | vendor 4.627 # deep
+form=tall n=31 aspect=12 | blocked 5.497 | vendor 5.758 # deep
+form=tall n=31 aspect=16 | blocked 7.063 | vendor 7.871 # deep
+form=tall n=31 aspect=64 | blocked 7.429 | vendor 20.28 # deep
+form=tall n=32 aspect=1 | vendor 7.038 | cta 16.05 | blocked 16.05 # deep
+form=tall n=32 aspect=2 | vendor 7.280 | cta 16.75 | blocked 16.76 # deep
+form=tall n=32 aspect=3 | vendor 4.628 | blocked 9.596 # deep
+form=tall n=32 aspect=4 | vendor 6.447 | blocked 11.71 # deep
+form=tall n=32 aspect=5 | vendor 4.362 | blocked 6.512 # deep
+form=tall n=32 aspect=7 | vendor 5.543 | blocked 7.127 # deep
+form=tall n=32 aspect=8 | blocked 7.646 | vendor 7.824 # deep
+form=tall n=32 aspect=12 | blocked 5.750 | vendor 6.187 # deep
+form=tall n=32 aspect=16 | blocked 7.692 | vendor 8.787 # deep
+form=tall n=32 aspect=64 | blocked 8.045 | vendor 23.24 # deep
+form=tall n=33 aspect=1 | vendor 7.493 | cta 16.80 | blocked 52.70 # deep
+form=tall n=33 aspect=2 | vendor 3.994 | cta 8.925 | blocked 27.69 # deep
+form=tall n=33 aspect=3 | vendor 5.100 | blocked 30.67 # deep
+form=tall n=33 aspect=4 | vendor 4.265 | blocked 17.75 # deep
+form=tall n=33 aspect=5 | vendor 4.822 | blocked 18.91 # deep
+form=tall n=33 aspect=7 | vendor 6.439 | blocked 20.96 # deep
+form=tall n=33 aspect=8 | vendor 4.686 | blocked 15.34 # deep
+form=tall n=33 aspect=12 | vendor 6.430 | blocked 18.21 # deep
+form=tall n=33 aspect=16 | vendor 7.240 | blocked 10.45 # deep
+form=tall n=40 aspect=1 | vendor 5.526 | cta 11.35 | blocked 28.93 # deep
+form=tall n=40 aspect=2 | vendor 6.373 | blocked 32.32 # deep
+form=tall n=40 aspect=3 | vendor 5.879 | blocked 19.67 # deep
+form=tall n=40 aspect=4 | vendor 6.895 | blocked 21.43 # deep
+form=tall n=40 aspect=5 | vendor 7.867 | blocked 22.36 # deep
+form=tall n=40 aspect=7 | vendor 6.862 | blocked 18.10 # deep
+form=tall n=40 aspect=8 | vendor 7.688 | blocked 19.12 # deep
+form=tall n=40 aspect=12 | vendor 9.214 | blocked 11.93 # deep
+form=tall n=40 aspect=16 | vendor 12.88 | blocked 14.46 # deep
+form=tall n=40 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=40 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=43 aspect=12 | blocked 12.98 | vendor 12.71 # deep
+form=tall n=43 aspect=16 | blocked 15.29 | vendor 15.24 # deep
+form=tall n=47 aspect=1 | vendor 8.027 | blocked 33.20 # deep
+form=tall n=47 aspect=2 | vendor 5.656 | blocked 18.58 # deep
+form=tall n=47 aspect=3 | vendor 8.978 | blocked 21.89 # deep
+form=tall n=47 aspect=4 | vendor 6.551 | blocked 12.61 # deep
+form=tall n=47 aspect=5 | vendor 8.583 | blocked 13.68 # deep
+form=tall n=47 aspect=7 | vendor 11.07 | blocked 20.44 # deep
+form=tall n=47 aspect=8 | vendor 10.81 | blocked 11.19 # deep
+form=tall n=47 aspect=10 | blocked 12.47 | vendor 12.86 # deep
+form=tall n=47 aspect=12 | blocked 13.67 | vendor 15.32 # deep
+form=tall n=47 aspect=16 | blocked 10.92 | vendor 19.62 # deep
+form=tall n=47 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=47 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=48 aspect=1 | vendor 8.507 | blocked 33.18 # deep
+form=tall n=48 aspect=2 | vendor 5.959 | blocked 18.93 # deep
+form=tall n=48 aspect=3 | vendor 9.356 | blocked 22.11 # deep
+form=tall n=48 aspect=4 | vendor 6.620 | blocked 12.31 # deep
+form=tall n=48 aspect=5 | vendor 9.333 | blocked 13.81 # deep
+form=tall n=48 aspect=7 | vendor 11.55 | blocked 20.82 # deep
+form=tall n=48 aspect=8 | blocked 11.27 | vendor 11.63 # deep
+form=tall n=48 aspect=12 | blocked 14.04 | vendor 16.32 # deep
+form=tall n=48 aspect=16 | blocked 11.19 | vendor 21.55 # deep
+form=tall n=48 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=48 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=49 aspect=1 | vendor 8.930 | blocked 36.02 # deep
+form=tall n=49 aspect=2 | vendor 6.421 | blocked 21.46 # deep
+form=tall n=49 aspect=3 | vendor 9.752 | blocked 24.51 # deep
+form=tall n=49 aspect=4 | vendor 7.407 | blocked 14.18 # deep
+form=tall n=49 aspect=5 | vendor 10.26 | blocked 15.74 # deep
+form=tall n=49 aspect=7 | vendor 10.15 | blocked 11.58 # deep
+form=tall n=49 aspect=8 | blocked 12.41 | vendor 12.16 # deep
+form=tall n=49 aspect=12 | blocked 15.99 | vendor 17.30 # deep
+form=tall n=49 aspect=16 | blocked 12.86 | vendor 21.59 # deep
+form=tall n=49 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=49 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=52 aspect=7 | blocked 12.26 | vendor 12.42 # deep
+form=tall n=56 aspect=1 | vendor 7.717 | blocked 20.86 # deep
+form=tall n=56 aspect=2 | vendor 9.902 | blocked 23.23 # deep
+form=tall n=56 aspect=3 | vendor 8.029 | blocked 14.29 # deep
+form=tall n=56 aspect=4 | vendor 10.28 | blocked 16.04 # deep
+form=tall n=56 aspect=5 | vendor 14.06 | blocked 22.32 # deep
+form=tall n=56 aspect=6 | blocked 12.12 | vendor 13.42 # deep
+form=tall n=56 aspect=7 | blocked 13.24 | vendor 16.07 # deep
+form=tall n=56 aspect=8 | blocked 14.08 | vendor 17.56 # deep
+form=tall n=56 aspect=12 | blocked 12.28 | vendor 23.83 # deep
+form=tall n=56 aspect=16 | blocked 14.80 | vendor 32.03 # deep
+form=tall n=56 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=56 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=59 aspect=5 | blocked 11.60 | vendor 13.50 # deep
+form=tall n=63 aspect=1 | vendor 10.12 | blocked 22.50 # deep
+form=tall n=63 aspect=2 | vendor 14.04 | blocked 25.46 # deep
+form=tall n=63 aspect=3 | vendor 11.86 | blocked 16.19 # deep
+form=tall n=63 aspect=4 | vendor 17.39 | blocked 17.94 # deep
+form=tall n=63 aspect=5 | blocked 12.40 | vendor 16.46 # deep
+form=tall n=63 aspect=7 | blocked 15.02 | vendor 22.26 # deep
+form=tall n=63 aspect=8 | blocked 16.38 | vendor 26.60 # deep
+form=tall n=63 aspect=12 | blocked 14.39 | vendor 36.00 # deep
+form=tall n=63 aspect=16 | blocked 17.70 | vendor 46.25 # deep
+form=tall n=63 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=63 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=64 aspect=1 | vendor 10.49 | blocked 22.72 # deep
+form=tall n=64 aspect=2 | vendor 14.21 | blocked 25.71 # deep
+form=tall n=64 aspect=3 | vendor 12.13 | blocked 16.06 # deep
+form=tall n=64 aspect=4 | blocked 18.21 | vendor 17.87 # deep
+form=tall n=64 aspect=5 | blocked 12.54 | vendor 17.40 # deep
+form=tall n=64 aspect=7 | blocked 15.27 | vendor 23.05 # deep
+form=tall n=64 aspect=8 | blocked 16.79 | vendor 27.94 # deep
+form=tall n=64 aspect=12 | blocked 14.67 | vendor 38.27 # deep
+form=tall n=64 aspect=16 | blocked 18.10 | vendor 49.51 # deep
+form=tall n=64 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=64 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=69 aspect=3 | vendor 15.23 | blocked 26.01 # deep
+form=tall n=75 aspect=1 | vendor 10.73 | blocked 20.03 # deep
+form=tall n=75 aspect=2 | vendor 13.58 | blocked 22.95 # deep
+form=tall n=75 aspect=3 | blocked 15.33 | vendor 16.31 # deep
+form=tall n=75 aspect=4 | blocked 20.53 | vendor 22.77 # deep
+form=tall n=75 aspect=5 | blocked 22.96 | vendor 27.82 # deep
+form=tall n=75 aspect=7 | blocked 18.78 | vendor 36.63 # deep
+form=tall n=75 aspect=8 | blocked 20.39 | vendor 38.46 # deep
+form=tall n=75 aspect=12 | blocked 17.64 | vendor 54.78 # deep
+form=tall n=75 aspect=16 | blocked 21.04 | vendor 72.52 # deep
+form=tall n=75 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=75 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=76 aspect=1 | vendor 11.26 | blocked 20.67 # deep
+form=tall n=76 aspect=2 | vendor 13.72 | blocked 23.05 # deep
+form=tall n=76 aspect=3 | blocked 15.30 | vendor 17.10 # deep
+form=tall n=76 aspect=4 | blocked 20.38 | vendor 23.33 # deep
+form=tall n=76 aspect=5 | blocked 22.87 | vendor 28.69 # deep
+form=tall n=76 aspect=7 | blocked 19.05 | vendor 37.50 # deep
+form=tall n=76 aspect=8 | blocked 20.44 | vendor 40.41 # deep
+form=tall n=76 aspect=12 | blocked 17.60 | vendor 57.24 # deep
+form=tall n=76 aspect=16 | blocked 21.48 | vendor 75.18 # deep
+form=tall n=76 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=76 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=80 aspect=1 | vendor 12.96 | blocked 21.12 # deep
+form=tall n=80 aspect=2 | vendor 15.53 | blocked 23.70 # deep
+form=tall n=80 aspect=3 | blocked 15.61 | vendor 22.12 # deep
+form=tall n=80 aspect=4 | blocked 20.98 | vendor 26.60 # deep
+form=tall n=80 aspect=5 | blocked 24.23 | vendor 33.11 # deep
+form=tall n=80 aspect=7 | blocked 19.88 | vendor 42.09 # deep
+form=tall n=80 aspect=8 | blocked 21.25 | vendor 48.12 # deep
+form=tall n=80 aspect=12 | blocked 18.41 | vendor 65.91 # deep
+form=tall n=80 aspect=16 | blocked 22.53 | vendor 90.35 # deep
+form=tall n=80 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=80 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=88 aspect=2 | vendor 20.99 | blocked 28.00 # deep
+form=tall n=96 aspect=1 | vendor 21.04 | blocked 26.19 # deep
+form=tall n=96 aspect=2 | blocked 16.18 | vendor 24.15 # deep
+form=tall n=96 aspect=3 | blocked 21.20 | vendor 35.91 # deep
+form=tall n=96 aspect=4 | blocked 18.08 | vendor 41.79 # deep
+form=tall n=96 aspect=5 | blocked 20.53 | vendor 50.83 # deep
+form=tall n=96 aspect=7 | blocked 25.45 | vendor 71.81 # deep
+form=tall n=96 aspect=8 | blocked 17.52 | vendor 79.18 # deep
+form=tall n=96 aspect=12 | blocked 23.65 | vendor 114.0 # deep
+form=tall n=96 aspect=16 | blocked 25.78 | vendor 143.8 # deep
+form=tall n=96 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=96 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=97 aspect=1 | vendor 21.88 | blocked 33.79 # deep
+form=tall n=97 aspect=2 | blocked 21.22 | vendor 24.45 # deep
+form=tall n=97 aspect=3 | blocked 29.30 | vendor 38.30 # deep
+form=tall n=97 aspect=4 | blocked 24.56 | vendor 44.77 # deep
+form=tall n=97 aspect=5 | blocked 27.25 | vendor 53.67 # deep
+form=tall n=97 aspect=7 | blocked 21.80 | vendor 68.68 # deep
+form=tall n=97 aspect=8 | blocked 23.44 | vendor 81.59 # deep
+form=tall n=97 aspect=12 | blocked 30.92 | vendor 117.2 # deep
+form=tall n=97 aspect=16 | blocked 31.88 | vendor 149.9 # deep
+form=tall n=97 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=97 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=104 aspect=1 | vendor 25.46 | blocked 35.51 # deep
+form=tall n=112 aspect=1 | blocked 20.98 | vendor 28.15 # deep
+form=tall n=112 aspect=2 | blocked 23.51 | vendor 36.82 # deep
+form=tall n=112 aspect=3 | blocked 23.92 | vendor 50.28 # deep
+form=tall n=112 aspect=4 | blocked 27.45 | vendor 65.95 # deep
+form=tall n=112 aspect=5 | blocked 31.05 | vendor 83.12 # deep
+form=tall n=112 aspect=7 | blocked 24.72 | vendor 107.6 # deep
+form=tall n=112 aspect=8 | blocked 27.50 | vendor 121.5 # deep
+form=tall n=112 aspect=12 | blocked 31.09 | vendor 169.4 # deep
+form=tall n=112 aspect=16 | blocked 37.97 | vendor 230.4 # deep
+form=tall n=112 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=112 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=128 aspect=1 | blocked 23.95 | vendor 40.80 # deep
+form=tall n=128 aspect=2 | blocked 28.48 | vendor 58.49 # deep
+form=tall n=128 aspect=3 | blocked 27.83 | vendor 75.04 # deep
+form=tall n=128 aspect=4 | blocked 32.65 | vendor 100.8 # deep
+form=tall n=128 aspect=5 | blocked 24.25 | vendor 112.3 # deep
+form=tall n=128 aspect=7 | blocked 30.49 | vendor 156.8 # deep
+form=tall n=128 aspect=8 | blocked 33.61 | vendor 182.3 # deep
+form=tall n=128 aspect=12 | blocked 39.11 | vendor 268.0 # deep
+form=tall n=128 aspect=16 | blocked 48.94 | vendor 348.9 # deep
+form=tall n=128 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=128 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=160 aspect=1 | blocked 26.34 | vendor 75.31 # deep
+form=tall n=160 aspect=2 | blocked 32.54 | vendor 98.63 # deep
+form=tall n=160 aspect=3 | blocked 27.75 | vendor 134.0 # deep
+form=tall n=160 aspect=4 | blocked 33.03 | vendor 176.5 # deep
+form=tall n=160 aspect=5 | blocked 38.59 | vendor 222.5 # deep
+form=tall n=160 aspect=7 | blocked 42.03 | vendor 292.3 # deep
+form=tall n=160 aspect=8 | blocked 45.97 | vendor 339.5 # deep
+form=tall n=160 aspect=12 | blocked 54.96 | vendor 483.7 # deep
+form=tall n=160 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=160 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=160 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=192 aspect=1 | blocked 37.56 | vendor 127.0 # deep
+form=tall n=192 aspect=2 | blocked 30.74 | vendor 156.0 # deep
+form=tall n=192 aspect=3 | blocked 39.99 | vendor 228.7 # deep
+form=tall n=192 aspect=4 | blocked 39.83 | vendor 290.4 # deep
+form=tall n=192 aspect=5 | blocked 47.50 | vendor 356.0 # deep
+form=tall n=192 aspect=7 | blocked 60.50 | vendor 509.1 # deep
+form=tall n=192 aspect=8 | blocked 57.68 | vendor 553.3 # deep
+form=tall n=192 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=192 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=192 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=224 aspect=1 | blocked 33.93 | vendor 180.6 # deep
+form=tall n=224 aspect=2 | blocked 42.06 | vendor 240.4 # deep
+form=tall n=224 aspect=3 | blocked 45.60 | vendor 333.1 # deep
+form=tall n=224 aspect=4 | blocked 55.46 | vendor 461.3 # deep
+form=tall n=224 aspect=5 | blocked 65.07 | vendor 572.1 # deep
+form=tall n=224 aspect=7 | blocked 71.58 | vendor 766.8 # deep
+form=tall n=224 aspect=8 | blocked 79.38 | vendor 882.8 # deep
+form=tall n=224 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=224 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=224 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=224 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=255 aspect=1 | blocked 43.46 | vendor 262.0 # deep
+form=tall n=255 aspect=2 | blocked 54.54 | vendor 355.0 # deep
+form=tall n=255 aspect=3 | blocked 58.73 | vendor 511.5 # deep
+form=tall n=255 aspect=4 | blocked 72.41 | vendor 676.6 # deep
+form=tall n=255 aspect=5 | blocked 72.07 | vendor 803.7 # deep
+form=tall n=255 aspect=7 | blocked 94.10 | vendor 1133 # deep
+form=tall n=255 aspect=8 | blocked 103.4 | vendor 1284 # deep
+form=tall n=255 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=255 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=255 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=255 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=256 aspect=1 | blocked 43.49 | vendor 267.8 # deep
+form=tall n=256 aspect=2 | blocked 54.35 | vendor 359.8 # deep
+form=tall n=256 aspect=3 | blocked 57.94 | vendor 516.3 # deep
+form=tall n=256 aspect=4 | blocked 71.79 | vendor 683.1 # deep
+form=tall n=256 aspect=5 | blocked 72.81 | vendor 822.3 # deep
+form=tall n=256 aspect=7 | blocked 94.06 | vendor 1154 # deep
+form=tall n=256 aspect=8 | blocked 104.5 | vendor 1312 # deep
+form=tall n=256 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=256 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=256 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=256 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=288 aspect=1 | blocked 55.88 | vendor 369.3 # deep
+form=tall n=288 aspect=2 | blocked 56.06 | vendor 482.0 # deep
+form=tall n=288 aspect=3 | blocked 73.11 | vendor 718.4 # deep
+form=tall n=288 aspect=4 | blocked 77.92 | vendor 935.8 # deep
+form=tall n=288 aspect=5 | blocked 92.10 | vendor 1166 # deep
+form=tall n=288 aspect=7 | blocked 106.8 | vendor 1557 # deep
+form=tall n=288 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=288 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=288 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=288 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=384 aspect=1 | blocked 77.35 | vendor 812.4 # deep
+form=tall n=384 aspect=2 | blocked 80.41 | vendor 1068 # deep
+form=tall n=384 aspect=3 | blocked 108.5 | vendor 1607 # deep
+form=tall n=384 aspect=4 | blocked 117.6 | vendor 2079 # deep
+form=tall n=384 aspect=5 | blocked 140.2 | vendor 2662 # deep
+form=tall n=384 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=384 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=384 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=384 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=1 | blocked 110.5 | vendor 1768 # deep
+form=tall n=512 aspect=2 | blocked 139.7 | vendor 2472 # deep
+form=tall n=512 aspect=3 | blocked 165.1 | vendor 3711 # deep
+form=tall n=512 aspect=4 | blocked 208.4 | vendor 4972 # deep
+form=tall n=512 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=512 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=1 | blocked 198.2 | vendor 5645 # deep
+form=tall n=768 aspect=2 | blocked 218.3 | vendor 7446 # deep
+form=tall n=768 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=768 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=1 | blocked 294.2 | vendor 12745 # deep
+form=tall n=1024 aspect=2 | blocked 380.1 | vendor 18080 # deep
+form=tall n=1024 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=1024 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=1536 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=1 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=2 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=3 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=2048 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=1 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=2 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=3 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=3072 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=1 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=2 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=3 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=4096 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=1 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=2 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=3 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=4 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=5 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=7 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=8 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=12 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=16 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=64 | cta - | blocked - | vendor - # transcribed
+form=tall n=8192 aspect=256 | cta - | blocked - | vendor - # transcribed
+form=wide n=2 aspect=1 | vendor - # transcribed
+form=wide n=2 aspect=4 | vendor - # transcribed
+form=wide n=2 aspect=64 | vendor - # transcribed
+form=wide n=64 aspect=1 | vendor 12.03 # deep
+form=wide n=64 aspect=4 | vendor 9.848 # deep
+form=wide n=64 aspect=64 | vendor 0.1181 # deep
+form=wide n=1024 aspect=1 | vendor 5413 # deep
+form=wide n=1024 aspect=4 | vendor 1098 # deep
+form=wide n=1024 aspect=64 | vendor 35.07 # deep
+form=wide n=8192 aspect=1 | vendor - # transcribed
+form=wide n=8192 aspect=4 | vendor - # transcribed
+form=wide n=8192 aspect=64 | vendor - # transcribed

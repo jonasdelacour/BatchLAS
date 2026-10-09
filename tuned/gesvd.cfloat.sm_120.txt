@@ -1,2028 +1,1878 @@
-# op=gesvd dtype=cfloat device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/gesvd.csv (the old router's preference order per grid cell, untimed)
+# op=gesvd dtype=cfloat device=sm_120 batchlas=a01c3c96 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/gesvd.cfloat.sm_120 tiers=deep:349,coarse:0,preview:0,custom:0,transcribed:1526
 # keys: herm:exact vec:exact m:log:1.5 n:log:1.5
-herm=L vec=all m=1 n=1 | cta - | blocked - | vendor -
-herm=L vec=all m=1 n=2 | vendor -
-herm=L vec=all m=1 n=4 | vendor -
-herm=L vec=all m=1 n=8 | vendor -
-herm=L vec=all m=1 n=16 | vendor -
-herm=L vec=all m=1 n=24 | vendor -
-herm=L vec=all m=1 n=32 | vendor -
-herm=L vec=all m=1 n=33 | vendor -
-herm=L vec=all m=1 n=48 | vendor -
-herm=L vec=all m=1 n=64 | vendor -
-herm=L vec=all m=1 n=65 | vendor -
-herm=L vec=all m=1 n=128 | vendor -
-herm=L vec=all m=1 n=256 | vendor -
-herm=L vec=all m=1 n=512 | vendor -
-herm=L vec=all m=1 n=1024 | vendor -
-herm=L vec=all m=2 n=1 | vendor -
-herm=L vec=all m=2 n=2 | cta - | blocked - | vendor -
-herm=L vec=all m=2 n=4 | vendor -
-herm=L vec=all m=2 n=8 | vendor -
-herm=L vec=all m=2 n=16 | vendor -
-herm=L vec=all m=2 n=24 | vendor -
-herm=L vec=all m=2 n=32 | vendor -
-herm=L vec=all m=2 n=33 | vendor -
-herm=L vec=all m=2 n=48 | vendor -
-herm=L vec=all m=2 n=64 | vendor -
-herm=L vec=all m=2 n=65 | vendor -
-herm=L vec=all m=2 n=128 | vendor -
-herm=L vec=all m=2 n=256 | vendor -
-herm=L vec=all m=2 n=512 | vendor -
-herm=L vec=all m=2 n=1024 | vendor -
-herm=L vec=all m=4 n=1 | vendor -
-herm=L vec=all m=4 n=2 | vendor -
-herm=L vec=all m=4 n=4 | cta - | blocked - | vendor -
-herm=L vec=all m=4 n=8 | vendor -
-herm=L vec=all m=4 n=16 | vendor -
-herm=L vec=all m=4 n=24 | vendor -
-herm=L vec=all m=4 n=32 | vendor -
-herm=L vec=all m=4 n=33 | vendor -
-herm=L vec=all m=4 n=48 | vendor -
-herm=L vec=all m=4 n=64 | vendor -
-herm=L vec=all m=4 n=65 | vendor -
-herm=L vec=all m=4 n=128 | vendor -
-herm=L vec=all m=4 n=256 | vendor -
-herm=L vec=all m=4 n=512 | vendor -
-herm=L vec=all m=4 n=1024 | vendor -
-herm=L vec=all m=8 n=1 | vendor -
-herm=L vec=all m=8 n=2 | vendor -
-herm=L vec=all m=8 n=4 | vendor -
-herm=L vec=all m=8 n=8 | cta - | blocked - | vendor -
-herm=L vec=all m=8 n=16 | vendor -
-herm=L vec=all m=8 n=24 | vendor -
-herm=L vec=all m=8 n=32 | vendor -
-herm=L vec=all m=8 n=33 | vendor -
-herm=L vec=all m=8 n=48 | vendor -
-herm=L vec=all m=8 n=64 | vendor -
-herm=L vec=all m=8 n=65 | vendor -
-herm=L vec=all m=8 n=128 | vendor -
-herm=L vec=all m=8 n=256 | vendor -
-herm=L vec=all m=8 n=512 | vendor -
-herm=L vec=all m=8 n=1024 | vendor -
-herm=L vec=all m=16 n=1 | vendor -
-herm=L vec=all m=16 n=2 | vendor -
-herm=L vec=all m=16 n=4 | vendor -
-herm=L vec=all m=16 n=8 | vendor -
-herm=L vec=all m=16 n=16 | cta - | blocked - | vendor -
-herm=L vec=all m=16 n=24 | vendor -
-herm=L vec=all m=16 n=32 | vendor -
-herm=L vec=all m=16 n=33 | vendor -
-herm=L vec=all m=16 n=48 | vendor -
-herm=L vec=all m=16 n=64 | vendor -
-herm=L vec=all m=16 n=65 | vendor -
-herm=L vec=all m=16 n=128 | vendor -
-herm=L vec=all m=16 n=256 | vendor -
-herm=L vec=all m=16 n=512 | vendor -
-herm=L vec=all m=16 n=1024 | vendor -
-herm=L vec=all m=24 n=1 | vendor -
-herm=L vec=all m=24 n=2 | vendor -
-herm=L vec=all m=24 n=4 | vendor -
-herm=L vec=all m=24 n=8 | vendor -
-herm=L vec=all m=24 n=16 | vendor -
-herm=L vec=all m=24 n=24 | cta - | blocked - | vendor -
-herm=L vec=all m=24 n=32 | vendor -
-herm=L vec=all m=24 n=33 | vendor -
-herm=L vec=all m=24 n=48 | vendor -
-herm=L vec=all m=24 n=64 | vendor -
-herm=L vec=all m=24 n=65 | vendor -
-herm=L vec=all m=24 n=128 | vendor -
-herm=L vec=all m=24 n=256 | vendor -
-herm=L vec=all m=24 n=512 | vendor -
-herm=L vec=all m=24 n=1024 | vendor -
-herm=L vec=all m=32 n=1 | vendor -
-herm=L vec=all m=32 n=2 | vendor -
-herm=L vec=all m=32 n=4 | vendor -
-herm=L vec=all m=32 n=8 | vendor -
-herm=L vec=all m=32 n=16 | vendor -
-herm=L vec=all m=32 n=24 | vendor -
-herm=L vec=all m=32 n=32 | cta - | blocked - | vendor -
-herm=L vec=all m=32 n=33 | vendor -
-herm=L vec=all m=32 n=48 | vendor -
-herm=L vec=all m=32 n=64 | vendor -
-herm=L vec=all m=32 n=65 | vendor -
-herm=L vec=all m=32 n=128 | vendor -
-herm=L vec=all m=32 n=256 | vendor -
-herm=L vec=all m=32 n=512 | vendor -
-herm=L vec=all m=32 n=1024 | vendor -
-herm=L vec=all m=33 n=1 | vendor -
-herm=L vec=all m=33 n=2 | vendor -
-herm=L vec=all m=33 n=4 | vendor -
-herm=L vec=all m=33 n=8 | vendor -
-herm=L vec=all m=33 n=16 | vendor -
-herm=L vec=all m=33 n=24 | vendor -
-herm=L vec=all m=33 n=32 | vendor -
-herm=L vec=all m=33 n=33 | blocked - | vendor -
-herm=L vec=all m=33 n=48 | vendor -
-herm=L vec=all m=33 n=64 | vendor -
-herm=L vec=all m=33 n=65 | vendor -
-herm=L vec=all m=33 n=128 | vendor -
-herm=L vec=all m=33 n=256 | vendor -
-herm=L vec=all m=33 n=512 | vendor -
-herm=L vec=all m=33 n=1024 | vendor -
-herm=L vec=all m=48 n=1 | vendor -
-herm=L vec=all m=48 n=2 | vendor -
-herm=L vec=all m=48 n=4 | vendor -
-herm=L vec=all m=48 n=8 | vendor -
-herm=L vec=all m=48 n=16 | vendor -
-herm=L vec=all m=48 n=24 | vendor -
-herm=L vec=all m=48 n=32 | vendor -
-herm=L vec=all m=48 n=33 | vendor -
-herm=L vec=all m=48 n=48 | blocked - | vendor -
-herm=L vec=all m=48 n=64 | vendor -
-herm=L vec=all m=48 n=65 | vendor -
-herm=L vec=all m=48 n=128 | vendor -
-herm=L vec=all m=48 n=256 | vendor -
-herm=L vec=all m=48 n=512 | vendor -
-herm=L vec=all m=48 n=1024 | vendor -
-herm=L vec=all m=64 n=1 | vendor -
-herm=L vec=all m=64 n=2 | vendor -
-herm=L vec=all m=64 n=4 | vendor -
-herm=L vec=all m=64 n=8 | vendor -
-herm=L vec=all m=64 n=16 | vendor -
-herm=L vec=all m=64 n=24 | vendor -
-herm=L vec=all m=64 n=32 | vendor -
-herm=L vec=all m=64 n=33 | vendor -
-herm=L vec=all m=64 n=48 | vendor -
-herm=L vec=all m=64 n=64 | blocked - | vendor -
-herm=L vec=all m=64 n=65 | vendor -
-herm=L vec=all m=64 n=128 | vendor -
-herm=L vec=all m=64 n=256 | vendor -
-herm=L vec=all m=64 n=512 | vendor -
-herm=L vec=all m=64 n=1024 | vendor -
-herm=L vec=all m=65 n=1 | vendor -
-herm=L vec=all m=65 n=2 | vendor -
-herm=L vec=all m=65 n=4 | vendor -
-herm=L vec=all m=65 n=8 | vendor -
-herm=L vec=all m=65 n=16 | vendor -
-herm=L vec=all m=65 n=24 | vendor -
-herm=L vec=all m=65 n=32 | vendor -
-herm=L vec=all m=65 n=33 | vendor -
-herm=L vec=all m=65 n=48 | vendor -
-herm=L vec=all m=65 n=64 | vendor -
-herm=L vec=all m=65 n=65 | blocked - | vendor -
-herm=L vec=all m=65 n=128 | vendor -
-herm=L vec=all m=65 n=256 | vendor -
-herm=L vec=all m=65 n=512 | vendor -
-herm=L vec=all m=65 n=1024 | vendor -
-herm=L vec=all m=128 n=1 | vendor -
-herm=L vec=all m=128 n=2 | vendor -
-herm=L vec=all m=128 n=4 | vendor -
-herm=L vec=all m=128 n=8 | vendor -
-herm=L vec=all m=128 n=16 | vendor -
-herm=L vec=all m=128 n=24 | vendor -
-herm=L vec=all m=128 n=32 | vendor -
-herm=L vec=all m=128 n=33 | vendor -
-herm=L vec=all m=128 n=48 | vendor -
-herm=L vec=all m=128 n=64 | vendor -
-herm=L vec=all m=128 n=65 | vendor -
-herm=L vec=all m=128 n=128 | blocked - | vendor -
-herm=L vec=all m=128 n=256 | vendor -
-herm=L vec=all m=128 n=512 | vendor -
-herm=L vec=all m=128 n=1024 | vendor -
-herm=L vec=all m=256 n=1 | vendor -
-herm=L vec=all m=256 n=2 | vendor -
-herm=L vec=all m=256 n=4 | vendor -
-herm=L vec=all m=256 n=8 | vendor -
-herm=L vec=all m=256 n=16 | vendor -
-herm=L vec=all m=256 n=24 | vendor -
-herm=L vec=all m=256 n=32 | vendor -
-herm=L vec=all m=256 n=33 | vendor -
-herm=L vec=all m=256 n=48 | vendor -
-herm=L vec=all m=256 n=64 | vendor -
-herm=L vec=all m=256 n=65 | vendor -
-herm=L vec=all m=256 n=128 | vendor -
-herm=L vec=all m=256 n=256 | blocked - | vendor -
-herm=L vec=all m=256 n=512 | vendor -
-herm=L vec=all m=256 n=1024 | vendor -
-herm=L vec=all m=512 n=1 | vendor -
-herm=L vec=all m=512 n=2 | vendor -
-herm=L vec=all m=512 n=4 | vendor -
-herm=L vec=all m=512 n=8 | vendor -
-herm=L vec=all m=512 n=16 | vendor -
-herm=L vec=all m=512 n=24 | vendor -
-herm=L vec=all m=512 n=32 | vendor -
-herm=L vec=all m=512 n=33 | vendor -
-herm=L vec=all m=512 n=48 | vendor -
-herm=L vec=all m=512 n=64 | vendor -
-herm=L vec=all m=512 n=65 | vendor -
-herm=L vec=all m=512 n=128 | vendor -
-herm=L vec=all m=512 n=256 | vendor -
-herm=L vec=all m=512 n=512 | blocked - | vendor -
-herm=L vec=all m=512 n=1024 | vendor -
-herm=L vec=all m=1024 n=1 | vendor -
-herm=L vec=all m=1024 n=2 | vendor -
-herm=L vec=all m=1024 n=4 | vendor -
-herm=L vec=all m=1024 n=8 | vendor -
-herm=L vec=all m=1024 n=16 | vendor -
-herm=L vec=all m=1024 n=24 | vendor -
-herm=L vec=all m=1024 n=32 | vendor -
-herm=L vec=all m=1024 n=33 | vendor -
-herm=L vec=all m=1024 n=48 | vendor -
-herm=L vec=all m=1024 n=64 | vendor -
-herm=L vec=all m=1024 n=65 | vendor -
-herm=L vec=all m=1024 n=128 | vendor -
-herm=L vec=all m=1024 n=256 | vendor -
-herm=L vec=all m=1024 n=512 | vendor -
-herm=L vec=all m=1024 n=1024 | blocked - | vendor -
-herm=L vec=none m=1 n=1 | cta - | blocked - | vendor -
-herm=L vec=none m=1 n=2 | vendor -
-herm=L vec=none m=1 n=4 | vendor -
-herm=L vec=none m=1 n=8 | vendor -
-herm=L vec=none m=1 n=16 | vendor -
-herm=L vec=none m=1 n=24 | vendor -
-herm=L vec=none m=1 n=32 | vendor -
-herm=L vec=none m=1 n=33 | vendor -
-herm=L vec=none m=1 n=48 | vendor -
-herm=L vec=none m=1 n=64 | vendor -
-herm=L vec=none m=1 n=65 | vendor -
-herm=L vec=none m=1 n=128 | vendor -
-herm=L vec=none m=1 n=256 | vendor -
-herm=L vec=none m=1 n=512 | vendor -
-herm=L vec=none m=1 n=1024 | vendor -
-herm=L vec=none m=2 n=1 | vendor -
-herm=L vec=none m=2 n=2 | cta - | blocked - | vendor -
-herm=L vec=none m=2 n=4 | vendor -
-herm=L vec=none m=2 n=8 | vendor -
-herm=L vec=none m=2 n=16 | vendor -
-herm=L vec=none m=2 n=24 | vendor -
-herm=L vec=none m=2 n=32 | vendor -
-herm=L vec=none m=2 n=33 | vendor -
-herm=L vec=none m=2 n=48 | vendor -
-herm=L vec=none m=2 n=64 | vendor -
-herm=L vec=none m=2 n=65 | vendor -
-herm=L vec=none m=2 n=128 | vendor -
-herm=L vec=none m=2 n=256 | vendor -
-herm=L vec=none m=2 n=512 | vendor -
-herm=L vec=none m=2 n=1024 | vendor -
-herm=L vec=none m=4 n=1 | vendor -
-herm=L vec=none m=4 n=2 | vendor -
-herm=L vec=none m=4 n=4 | cta - | blocked - | vendor -
-herm=L vec=none m=4 n=8 | vendor -
-herm=L vec=none m=4 n=16 | vendor -
-herm=L vec=none m=4 n=24 | vendor -
-herm=L vec=none m=4 n=32 | vendor -
-herm=L vec=none m=4 n=33 | vendor -
-herm=L vec=none m=4 n=48 | vendor -
-herm=L vec=none m=4 n=64 | vendor -
-herm=L vec=none m=4 n=65 | vendor -
-herm=L vec=none m=4 n=128 | vendor -
-herm=L vec=none m=4 n=256 | vendor -
-herm=L vec=none m=4 n=512 | vendor -
-herm=L vec=none m=4 n=1024 | vendor -
-herm=L vec=none m=8 n=1 | vendor -
-herm=L vec=none m=8 n=2 | vendor -
-herm=L vec=none m=8 n=4 | vendor -
-herm=L vec=none m=8 n=8 | cta - | blocked - | vendor -
-herm=L vec=none m=8 n=16 | vendor -
-herm=L vec=none m=8 n=24 | vendor -
-herm=L vec=none m=8 n=32 | vendor -
-herm=L vec=none m=8 n=33 | vendor -
-herm=L vec=none m=8 n=48 | vendor -
-herm=L vec=none m=8 n=64 | vendor -
-herm=L vec=none m=8 n=65 | vendor -
-herm=L vec=none m=8 n=128 | vendor -
-herm=L vec=none m=8 n=256 | vendor -
-herm=L vec=none m=8 n=512 | vendor -
-herm=L vec=none m=8 n=1024 | vendor -
-herm=L vec=none m=16 n=1 | vendor -
-herm=L vec=none m=16 n=2 | vendor -
-herm=L vec=none m=16 n=4 | vendor -
-herm=L vec=none m=16 n=8 | vendor -
-herm=L vec=none m=16 n=16 | cta - | blocked - | vendor -
-herm=L vec=none m=16 n=24 | vendor -
-herm=L vec=none m=16 n=32 | vendor -
-herm=L vec=none m=16 n=33 | vendor -
-herm=L vec=none m=16 n=48 | vendor -
-herm=L vec=none m=16 n=64 | vendor -
-herm=L vec=none m=16 n=65 | vendor -
-herm=L vec=none m=16 n=128 | vendor -
-herm=L vec=none m=16 n=256 | vendor -
-herm=L vec=none m=16 n=512 | vendor -
-herm=L vec=none m=16 n=1024 | vendor -
-herm=L vec=none m=24 n=1 | vendor -
-herm=L vec=none m=24 n=2 | vendor -
-herm=L vec=none m=24 n=4 | vendor -
-herm=L vec=none m=24 n=8 | vendor -
-herm=L vec=none m=24 n=16 | vendor -
-herm=L vec=none m=24 n=24 | cta - | blocked - | vendor -
-herm=L vec=none m=24 n=32 | vendor -
-herm=L vec=none m=24 n=33 | vendor -
-herm=L vec=none m=24 n=48 | vendor -
-herm=L vec=none m=24 n=64 | vendor -
-herm=L vec=none m=24 n=65 | vendor -
-herm=L vec=none m=24 n=128 | vendor -
-herm=L vec=none m=24 n=256 | vendor -
-herm=L vec=none m=24 n=512 | vendor -
-herm=L vec=none m=24 n=1024 | vendor -
-herm=L vec=none m=32 n=1 | vendor -
-herm=L vec=none m=32 n=2 | vendor -
-herm=L vec=none m=32 n=4 | vendor -
-herm=L vec=none m=32 n=8 | vendor -
-herm=L vec=none m=32 n=16 | vendor -
-herm=L vec=none m=32 n=24 | vendor -
-herm=L vec=none m=32 n=32 | cta - | blocked - | vendor -
-herm=L vec=none m=32 n=33 | vendor -
-herm=L vec=none m=32 n=48 | vendor -
-herm=L vec=none m=32 n=64 | vendor -
-herm=L vec=none m=32 n=65 | vendor -
-herm=L vec=none m=32 n=128 | vendor -
-herm=L vec=none m=32 n=256 | vendor -
-herm=L vec=none m=32 n=512 | vendor -
-herm=L vec=none m=32 n=1024 | vendor -
-herm=L vec=none m=33 n=1 | vendor -
-herm=L vec=none m=33 n=2 | vendor -
-herm=L vec=none m=33 n=4 | vendor -
-herm=L vec=none m=33 n=8 | vendor -
-herm=L vec=none m=33 n=16 | vendor -
-herm=L vec=none m=33 n=24 | vendor -
-herm=L vec=none m=33 n=32 | vendor -
-herm=L vec=none m=33 n=33 | blocked - | vendor -
-herm=L vec=none m=33 n=48 | vendor -
-herm=L vec=none m=33 n=64 | vendor -
-herm=L vec=none m=33 n=65 | vendor -
-herm=L vec=none m=33 n=128 | vendor -
-herm=L vec=none m=33 n=256 | vendor -
-herm=L vec=none m=33 n=512 | vendor -
-herm=L vec=none m=33 n=1024 | vendor -
-herm=L vec=none m=48 n=1 | vendor -
-herm=L vec=none m=48 n=2 | vendor -
-herm=L vec=none m=48 n=4 | vendor -
-herm=L vec=none m=48 n=8 | vendor -
-herm=L vec=none m=48 n=16 | vendor -
-herm=L vec=none m=48 n=24 | vendor -
-herm=L vec=none m=48 n=32 | vendor -
-herm=L vec=none m=48 n=33 | vendor -
-herm=L vec=none m=48 n=48 | blocked - | vendor -
-herm=L vec=none m=48 n=64 | vendor -
-herm=L vec=none m=48 n=65 | vendor -
-herm=L vec=none m=48 n=128 | vendor -
-herm=L vec=none m=48 n=256 | vendor -
-herm=L vec=none m=48 n=512 | vendor -
-herm=L vec=none m=48 n=1024 | vendor -
-herm=L vec=none m=64 n=1 | vendor -
-herm=L vec=none m=64 n=2 | vendor -
-herm=L vec=none m=64 n=4 | vendor -
-herm=L vec=none m=64 n=8 | vendor -
-herm=L vec=none m=64 n=16 | vendor -
-herm=L vec=none m=64 n=24 | vendor -
-herm=L vec=none m=64 n=32 | vendor -
-herm=L vec=none m=64 n=33 | vendor -
-herm=L vec=none m=64 n=48 | vendor -
-herm=L vec=none m=64 n=64 | blocked - | vendor -
-herm=L vec=none m=64 n=65 | vendor -
-herm=L vec=none m=64 n=128 | vendor -
-herm=L vec=none m=64 n=256 | vendor -
-herm=L vec=none m=64 n=512 | vendor -
-herm=L vec=none m=64 n=1024 | vendor -
-herm=L vec=none m=65 n=1 | vendor -
-herm=L vec=none m=65 n=2 | vendor -
-herm=L vec=none m=65 n=4 | vendor -
-herm=L vec=none m=65 n=8 | vendor -
-herm=L vec=none m=65 n=16 | vendor -
-herm=L vec=none m=65 n=24 | vendor -
-herm=L vec=none m=65 n=32 | vendor -
-herm=L vec=none m=65 n=33 | vendor -
-herm=L vec=none m=65 n=48 | vendor -
-herm=L vec=none m=65 n=64 | vendor -
-herm=L vec=none m=65 n=65 | blocked - | vendor -
-herm=L vec=none m=65 n=128 | vendor -
-herm=L vec=none m=65 n=256 | vendor -
-herm=L vec=none m=65 n=512 | vendor -
-herm=L vec=none m=65 n=1024 | vendor -
-herm=L vec=none m=128 n=1 | vendor -
-herm=L vec=none m=128 n=2 | vendor -
-herm=L vec=none m=128 n=4 | vendor -
-herm=L vec=none m=128 n=8 | vendor -
-herm=L vec=none m=128 n=16 | vendor -
-herm=L vec=none m=128 n=24 | vendor -
-herm=L vec=none m=128 n=32 | vendor -
-herm=L vec=none m=128 n=33 | vendor -
-herm=L vec=none m=128 n=48 | vendor -
-herm=L vec=none m=128 n=64 | vendor -
-herm=L vec=none m=128 n=65 | vendor -
-herm=L vec=none m=128 n=128 | blocked - | vendor -
-herm=L vec=none m=128 n=256 | vendor -
-herm=L vec=none m=128 n=512 | vendor -
-herm=L vec=none m=128 n=1024 | vendor -
-herm=L vec=none m=256 n=1 | vendor -
-herm=L vec=none m=256 n=2 | vendor -
-herm=L vec=none m=256 n=4 | vendor -
-herm=L vec=none m=256 n=8 | vendor -
-herm=L vec=none m=256 n=16 | vendor -
-herm=L vec=none m=256 n=24 | vendor -
-herm=L vec=none m=256 n=32 | vendor -
-herm=L vec=none m=256 n=33 | vendor -
-herm=L vec=none m=256 n=48 | vendor -
-herm=L vec=none m=256 n=64 | vendor -
-herm=L vec=none m=256 n=65 | vendor -
-herm=L vec=none m=256 n=128 | vendor -
-herm=L vec=none m=256 n=256 | blocked - | vendor -
-herm=L vec=none m=256 n=512 | vendor -
-herm=L vec=none m=256 n=1024 | vendor -
-herm=L vec=none m=512 n=1 | vendor -
-herm=L vec=none m=512 n=2 | vendor -
-herm=L vec=none m=512 n=4 | vendor -
-herm=L vec=none m=512 n=8 | vendor -
-herm=L vec=none m=512 n=16 | vendor -
-herm=L vec=none m=512 n=24 | vendor -
-herm=L vec=none m=512 n=32 | vendor -
-herm=L vec=none m=512 n=33 | vendor -
-herm=L vec=none m=512 n=48 | vendor -
-herm=L vec=none m=512 n=64 | vendor -
-herm=L vec=none m=512 n=65 | vendor -
-herm=L vec=none m=512 n=128 | vendor -
-herm=L vec=none m=512 n=256 | vendor -
-herm=L vec=none m=512 n=512 | blocked - | vendor -
-herm=L vec=none m=512 n=1024 | vendor -
-herm=L vec=none m=1024 n=1 | vendor -
-herm=L vec=none m=1024 n=2 | vendor -
-herm=L vec=none m=1024 n=4 | vendor -
-herm=L vec=none m=1024 n=8 | vendor -
-herm=L vec=none m=1024 n=16 | vendor -
-herm=L vec=none m=1024 n=24 | vendor -
-herm=L vec=none m=1024 n=32 | vendor -
-herm=L vec=none m=1024 n=33 | vendor -
-herm=L vec=none m=1024 n=48 | vendor -
-herm=L vec=none m=1024 n=64 | vendor -
-herm=L vec=none m=1024 n=65 | vendor -
-herm=L vec=none m=1024 n=128 | vendor -
-herm=L vec=none m=1024 n=256 | vendor -
-herm=L vec=none m=1024 n=512 | vendor -
-herm=L vec=none m=1024 n=1024 | blocked - | vendor -
-herm=L vec=thin m=1 n=1 | blocked - | vendor -
-herm=L vec=thin m=1 n=2 | vendor -
-herm=L vec=thin m=1 n=4 | vendor -
-herm=L vec=thin m=1 n=8 | vendor -
-herm=L vec=thin m=1 n=16 | vendor -
-herm=L vec=thin m=1 n=24 | vendor -
-herm=L vec=thin m=1 n=32 | vendor -
-herm=L vec=thin m=1 n=33 | vendor -
-herm=L vec=thin m=1 n=48 | vendor -
-herm=L vec=thin m=1 n=64 | vendor -
-herm=L vec=thin m=1 n=65 | vendor -
-herm=L vec=thin m=1 n=128 | vendor -
-herm=L vec=thin m=1 n=256 | vendor -
-herm=L vec=thin m=1 n=512 | vendor -
-herm=L vec=thin m=1 n=1024 | vendor -
-herm=L vec=thin m=2 n=1 | vendor -
-herm=L vec=thin m=2 n=2 | blocked - | vendor -
-herm=L vec=thin m=2 n=4 | vendor -
-herm=L vec=thin m=2 n=8 | vendor -
-herm=L vec=thin m=2 n=16 | vendor -
-herm=L vec=thin m=2 n=24 | vendor -
-herm=L vec=thin m=2 n=32 | vendor -
-herm=L vec=thin m=2 n=33 | vendor -
-herm=L vec=thin m=2 n=48 | vendor -
-herm=L vec=thin m=2 n=64 | vendor -
-herm=L vec=thin m=2 n=65 | vendor -
-herm=L vec=thin m=2 n=128 | vendor -
-herm=L vec=thin m=2 n=256 | vendor -
-herm=L vec=thin m=2 n=512 | vendor -
-herm=L vec=thin m=2 n=1024 | vendor -
-herm=L vec=thin m=4 n=1 | vendor -
-herm=L vec=thin m=4 n=2 | vendor -
-herm=L vec=thin m=4 n=4 | blocked - | vendor -
-herm=L vec=thin m=4 n=8 | vendor -
-herm=L vec=thin m=4 n=16 | vendor -
-herm=L vec=thin m=4 n=24 | vendor -
-herm=L vec=thin m=4 n=32 | vendor -
-herm=L vec=thin m=4 n=33 | vendor -
-herm=L vec=thin m=4 n=48 | vendor -
-herm=L vec=thin m=4 n=64 | vendor -
-herm=L vec=thin m=4 n=65 | vendor -
-herm=L vec=thin m=4 n=128 | vendor -
-herm=L vec=thin m=4 n=256 | vendor -
-herm=L vec=thin m=4 n=512 | vendor -
-herm=L vec=thin m=4 n=1024 | vendor -
-herm=L vec=thin m=8 n=1 | vendor -
-herm=L vec=thin m=8 n=2 | vendor -
-herm=L vec=thin m=8 n=4 | vendor -
-herm=L vec=thin m=8 n=8 | blocked - | vendor -
-herm=L vec=thin m=8 n=16 | vendor -
-herm=L vec=thin m=8 n=24 | vendor -
-herm=L vec=thin m=8 n=32 | vendor -
-herm=L vec=thin m=8 n=33 | vendor -
-herm=L vec=thin m=8 n=48 | vendor -
-herm=L vec=thin m=8 n=64 | vendor -
-herm=L vec=thin m=8 n=65 | vendor -
-herm=L vec=thin m=8 n=128 | vendor -
-herm=L vec=thin m=8 n=256 | vendor -
-herm=L vec=thin m=8 n=512 | vendor -
-herm=L vec=thin m=8 n=1024 | vendor -
-herm=L vec=thin m=16 n=1 | vendor -
-herm=L vec=thin m=16 n=2 | vendor -
-herm=L vec=thin m=16 n=4 | vendor -
-herm=L vec=thin m=16 n=8 | vendor -
-herm=L vec=thin m=16 n=16 | blocked - | vendor -
-herm=L vec=thin m=16 n=24 | vendor -
-herm=L vec=thin m=16 n=32 | vendor -
-herm=L vec=thin m=16 n=33 | vendor -
-herm=L vec=thin m=16 n=48 | vendor -
-herm=L vec=thin m=16 n=64 | vendor -
-herm=L vec=thin m=16 n=65 | vendor -
-herm=L vec=thin m=16 n=128 | vendor -
-herm=L vec=thin m=16 n=256 | vendor -
-herm=L vec=thin m=16 n=512 | vendor -
-herm=L vec=thin m=16 n=1024 | vendor -
-herm=L vec=thin m=24 n=1 | vendor -
-herm=L vec=thin m=24 n=2 | vendor -
-herm=L vec=thin m=24 n=4 | vendor -
-herm=L vec=thin m=24 n=8 | vendor -
-herm=L vec=thin m=24 n=16 | vendor -
-herm=L vec=thin m=24 n=24 | blocked - | vendor -
-herm=L vec=thin m=24 n=32 | vendor -
-herm=L vec=thin m=24 n=33 | vendor -
-herm=L vec=thin m=24 n=48 | vendor -
-herm=L vec=thin m=24 n=64 | vendor -
-herm=L vec=thin m=24 n=65 | vendor -
-herm=L vec=thin m=24 n=128 | vendor -
-herm=L vec=thin m=24 n=256 | vendor -
-herm=L vec=thin m=24 n=512 | vendor -
-herm=L vec=thin m=24 n=1024 | vendor -
-herm=L vec=thin m=32 n=1 | vendor -
-herm=L vec=thin m=32 n=2 | vendor -
-herm=L vec=thin m=32 n=4 | vendor -
-herm=L vec=thin m=32 n=8 | vendor -
-herm=L vec=thin m=32 n=16 | vendor -
-herm=L vec=thin m=32 n=24 | vendor -
-herm=L vec=thin m=32 n=32 | blocked - | vendor -
-herm=L vec=thin m=32 n=33 | vendor -
-herm=L vec=thin m=32 n=48 | vendor -
-herm=L vec=thin m=32 n=64 | vendor -
-herm=L vec=thin m=32 n=65 | vendor -
-herm=L vec=thin m=32 n=128 | vendor -
-herm=L vec=thin m=32 n=256 | vendor -
-herm=L vec=thin m=32 n=512 | vendor -
-herm=L vec=thin m=32 n=1024 | vendor -
-herm=L vec=thin m=33 n=1 | vendor -
-herm=L vec=thin m=33 n=2 | vendor -
-herm=L vec=thin m=33 n=4 | vendor -
-herm=L vec=thin m=33 n=8 | vendor -
-herm=L vec=thin m=33 n=16 | vendor -
-herm=L vec=thin m=33 n=24 | vendor -
-herm=L vec=thin m=33 n=32 | vendor -
-herm=L vec=thin m=33 n=33 | blocked - | vendor -
-herm=L vec=thin m=33 n=48 | vendor -
-herm=L vec=thin m=33 n=64 | vendor -
-herm=L vec=thin m=33 n=65 | vendor -
-herm=L vec=thin m=33 n=128 | vendor -
-herm=L vec=thin m=33 n=256 | vendor -
-herm=L vec=thin m=33 n=512 | vendor -
-herm=L vec=thin m=33 n=1024 | vendor -
-herm=L vec=thin m=48 n=1 | vendor -
-herm=L vec=thin m=48 n=2 | vendor -
-herm=L vec=thin m=48 n=4 | vendor -
-herm=L vec=thin m=48 n=8 | vendor -
-herm=L vec=thin m=48 n=16 | vendor -
-herm=L vec=thin m=48 n=24 | vendor -
-herm=L vec=thin m=48 n=32 | vendor -
-herm=L vec=thin m=48 n=33 | vendor -
-herm=L vec=thin m=48 n=48 | blocked - | vendor -
-herm=L vec=thin m=48 n=64 | vendor -
-herm=L vec=thin m=48 n=65 | vendor -
-herm=L vec=thin m=48 n=128 | vendor -
-herm=L vec=thin m=48 n=256 | vendor -
-herm=L vec=thin m=48 n=512 | vendor -
-herm=L vec=thin m=48 n=1024 | vendor -
-herm=L vec=thin m=64 n=1 | vendor -
-herm=L vec=thin m=64 n=2 | vendor -
-herm=L vec=thin m=64 n=4 | vendor -
-herm=L vec=thin m=64 n=8 | vendor -
-herm=L vec=thin m=64 n=16 | vendor -
-herm=L vec=thin m=64 n=24 | vendor -
-herm=L vec=thin m=64 n=32 | vendor -
-herm=L vec=thin m=64 n=33 | vendor -
-herm=L vec=thin m=64 n=48 | vendor -
-herm=L vec=thin m=64 n=64 | blocked - | vendor -
-herm=L vec=thin m=64 n=65 | vendor -
-herm=L vec=thin m=64 n=128 | vendor -
-herm=L vec=thin m=64 n=256 | vendor -
-herm=L vec=thin m=64 n=512 | vendor -
-herm=L vec=thin m=64 n=1024 | vendor -
-herm=L vec=thin m=65 n=1 | vendor -
-herm=L vec=thin m=65 n=2 | vendor -
-herm=L vec=thin m=65 n=4 | vendor -
-herm=L vec=thin m=65 n=8 | vendor -
-herm=L vec=thin m=65 n=16 | vendor -
-herm=L vec=thin m=65 n=24 | vendor -
-herm=L vec=thin m=65 n=32 | vendor -
-herm=L vec=thin m=65 n=33 | vendor -
-herm=L vec=thin m=65 n=48 | vendor -
-herm=L vec=thin m=65 n=64 | vendor -
-herm=L vec=thin m=65 n=65 | blocked - | vendor -
-herm=L vec=thin m=65 n=128 | vendor -
-herm=L vec=thin m=65 n=256 | vendor -
-herm=L vec=thin m=65 n=512 | vendor -
-herm=L vec=thin m=65 n=1024 | vendor -
-herm=L vec=thin m=128 n=1 | vendor -
-herm=L vec=thin m=128 n=2 | vendor -
-herm=L vec=thin m=128 n=4 | vendor -
-herm=L vec=thin m=128 n=8 | vendor -
-herm=L vec=thin m=128 n=16 | vendor -
-herm=L vec=thin m=128 n=24 | vendor -
-herm=L vec=thin m=128 n=32 | vendor -
-herm=L vec=thin m=128 n=33 | vendor -
-herm=L vec=thin m=128 n=48 | vendor -
-herm=L vec=thin m=128 n=64 | vendor -
-herm=L vec=thin m=128 n=65 | vendor -
-herm=L vec=thin m=128 n=128 | blocked - | vendor -
-herm=L vec=thin m=128 n=256 | vendor -
-herm=L vec=thin m=128 n=512 | vendor -
-herm=L vec=thin m=128 n=1024 | vendor -
-herm=L vec=thin m=256 n=1 | vendor -
-herm=L vec=thin m=256 n=2 | vendor -
-herm=L vec=thin m=256 n=4 | vendor -
-herm=L vec=thin m=256 n=8 | vendor -
-herm=L vec=thin m=256 n=16 | vendor -
-herm=L vec=thin m=256 n=24 | vendor -
-herm=L vec=thin m=256 n=32 | vendor -
-herm=L vec=thin m=256 n=33 | vendor -
-herm=L vec=thin m=256 n=48 | vendor -
-herm=L vec=thin m=256 n=64 | vendor -
-herm=L vec=thin m=256 n=65 | vendor -
-herm=L vec=thin m=256 n=128 | vendor -
-herm=L vec=thin m=256 n=256 | blocked - | vendor -
-herm=L vec=thin m=256 n=512 | vendor -
-herm=L vec=thin m=256 n=1024 | vendor -
-herm=L vec=thin m=512 n=1 | vendor -
-herm=L vec=thin m=512 n=2 | vendor -
-herm=L vec=thin m=512 n=4 | vendor -
-herm=L vec=thin m=512 n=8 | vendor -
-herm=L vec=thin m=512 n=16 | vendor -
-herm=L vec=thin m=512 n=24 | vendor -
-herm=L vec=thin m=512 n=32 | vendor -
-herm=L vec=thin m=512 n=33 | vendor -
-herm=L vec=thin m=512 n=48 | vendor -
-herm=L vec=thin m=512 n=64 | vendor -
-herm=L vec=thin m=512 n=65 | vendor -
-herm=L vec=thin m=512 n=128 | vendor -
-herm=L vec=thin m=512 n=256 | vendor -
-herm=L vec=thin m=512 n=512 | blocked - | vendor -
-herm=L vec=thin m=512 n=1024 | vendor -
-herm=L vec=thin m=1024 n=1 | vendor -
-herm=L vec=thin m=1024 n=2 | vendor -
-herm=L vec=thin m=1024 n=4 | vendor -
-herm=L vec=thin m=1024 n=8 | vendor -
-herm=L vec=thin m=1024 n=16 | vendor -
-herm=L vec=thin m=1024 n=24 | vendor -
-herm=L vec=thin m=1024 n=32 | vendor -
-herm=L vec=thin m=1024 n=33 | vendor -
-herm=L vec=thin m=1024 n=48 | vendor -
-herm=L vec=thin m=1024 n=64 | vendor -
-herm=L vec=thin m=1024 n=65 | vendor -
-herm=L vec=thin m=1024 n=128 | vendor -
-herm=L vec=thin m=1024 n=256 | vendor -
-herm=L vec=thin m=1024 n=512 | vendor -
-herm=L vec=thin m=1024 n=1024 | blocked - | vendor -
-herm=N vec=all m=1 n=1 | jacobi - | vendor -
-herm=N vec=all m=1 n=2 | jacobi - | vendor -
-herm=N vec=all m=1 n=4 | jacobi - | vendor -
-herm=N vec=all m=1 n=8 | jacobi - | vendor -
-herm=N vec=all m=1 n=16 | jacobi - | vendor -
-herm=N vec=all m=1 n=24 | jacobi - | vendor -
-herm=N vec=all m=1 n=32 | jacobi - | vendor -
-herm=N vec=all m=1 n=33 | jacobi - | vendor -
-herm=N vec=all m=1 n=48 | jacobi - | vendor -
-herm=N vec=all m=1 n=64 | jacobi - | vendor -
-herm=N vec=all m=1 n=65 | vendor -
-herm=N vec=all m=1 n=128 | vendor -
-herm=N vec=all m=1 n=256 | vendor -
-herm=N vec=all m=1 n=512 | vendor -
-herm=N vec=all m=1 n=1024 | vendor -
-herm=N vec=all m=2 n=1 | jacobi - | vendor -
-herm=N vec=all m=2 n=2 | jacobi - | vendor -
-herm=N vec=all m=2 n=4 | jacobi - | vendor -
-herm=N vec=all m=2 n=8 | jacobi - | vendor -
-herm=N vec=all m=2 n=16 | jacobi - | vendor -
-herm=N vec=all m=2 n=24 | jacobi - | vendor -
-herm=N vec=all m=2 n=32 | jacobi - | vendor -
-herm=N vec=all m=2 n=33 | jacobi - | vendor -
-herm=N vec=all m=2 n=48 | jacobi - | vendor -
-herm=N vec=all m=2 n=64 | jacobi - | vendor -
-herm=N vec=all m=2 n=65 | vendor -
-herm=N vec=all m=2 n=128 | vendor -
-herm=N vec=all m=2 n=256 | vendor -
-herm=N vec=all m=2 n=512 | vendor -
-herm=N vec=all m=2 n=1024 | vendor -
-herm=N vec=all m=4 n=1 | jacobi - | vendor -
-herm=N vec=all m=4 n=2 | jacobi - | vendor -
-herm=N vec=all m=4 n=4 | jacobi - | vendor -
-herm=N vec=all m=4 n=8 | jacobi - | vendor -
-herm=N vec=all m=4 n=16 | jacobi - | vendor -
-herm=N vec=all m=4 n=24 | jacobi - | vendor -
-herm=N vec=all m=4 n=32 | jacobi - | vendor -
-herm=N vec=all m=4 n=33 | jacobi - | vendor -
-herm=N vec=all m=4 n=48 | jacobi - | vendor -
-herm=N vec=all m=4 n=64 | jacobi - | vendor -
-herm=N vec=all m=4 n=65 | vendor -
-herm=N vec=all m=4 n=128 | vendor -
-herm=N vec=all m=4 n=256 | vendor -
-herm=N vec=all m=4 n=512 | vendor -
-herm=N vec=all m=4 n=1024 | vendor -
-herm=N vec=all m=8 n=1 | jacobi - | vendor -
-herm=N vec=all m=8 n=2 | jacobi - | vendor -
-herm=N vec=all m=8 n=4 | jacobi - | vendor -
-herm=N vec=all m=8 n=8 | jacobi - | vendor -
-herm=N vec=all m=8 n=16 | jacobi - | vendor -
-herm=N vec=all m=8 n=24 | jacobi - | vendor -
-herm=N vec=all m=8 n=32 | jacobi - | vendor -
-herm=N vec=all m=8 n=33 | jacobi - | vendor -
-herm=N vec=all m=8 n=48 | jacobi - | vendor -
-herm=N vec=all m=8 n=64 | jacobi - | vendor -
-herm=N vec=all m=8 n=65 | vendor -
-herm=N vec=all m=8 n=128 | vendor -
-herm=N vec=all m=8 n=256 | vendor -
-herm=N vec=all m=8 n=512 | vendor -
-herm=N vec=all m=8 n=1024 | vendor -
-herm=N vec=all m=16 n=1 | jacobi - | vendor -
-herm=N vec=all m=16 n=2 | jacobi - | vendor -
-herm=N vec=all m=16 n=4 | jacobi - | vendor -
-herm=N vec=all m=16 n=8 | jacobi - | vendor -
-herm=N vec=all m=16 n=16 | jacobi - | vendor -
-herm=N vec=all m=16 n=24 | jacobi - | vendor -
-herm=N vec=all m=16 n=32 | jacobi - | vendor -
-herm=N vec=all m=16 n=33 | jacobi - | vendor -
-herm=N vec=all m=16 n=48 | jacobi - | vendor -
-herm=N vec=all m=16 n=64 | jacobi - | vendor -
-herm=N vec=all m=16 n=65 | vendor -
-herm=N vec=all m=16 n=128 | vendor -
-herm=N vec=all m=16 n=256 | vendor -
-herm=N vec=all m=16 n=512 | vendor -
-herm=N vec=all m=16 n=1024 | vendor -
-herm=N vec=all m=24 n=1 | jacobi - | vendor -
-herm=N vec=all m=24 n=2 | jacobi - | vendor -
-herm=N vec=all m=24 n=4 | jacobi - | vendor -
-herm=N vec=all m=24 n=8 | jacobi - | vendor -
-herm=N vec=all m=24 n=16 | jacobi - | vendor -
-herm=N vec=all m=24 n=24 | jacobi - | vendor -
-herm=N vec=all m=24 n=32 | jacobi - | vendor -
-herm=N vec=all m=24 n=33 | jacobi - | vendor -
-herm=N vec=all m=24 n=48 | jacobi - | vendor -
-herm=N vec=all m=24 n=64 | jacobi - | vendor -
-herm=N vec=all m=24 n=65 | vendor -
-herm=N vec=all m=24 n=128 | vendor -
-herm=N vec=all m=24 n=256 | vendor -
-herm=N vec=all m=24 n=512 | vendor -
-herm=N vec=all m=24 n=1024 | vendor -
-herm=N vec=all m=32 n=1 | jacobi - | vendor -
-herm=N vec=all m=32 n=2 | jacobi - | vendor -
-herm=N vec=all m=32 n=4 | jacobi - | vendor -
-herm=N vec=all m=32 n=8 | jacobi - | vendor -
-herm=N vec=all m=32 n=16 | jacobi - | vendor -
-herm=N vec=all m=32 n=24 | jacobi - | vendor -
-herm=N vec=all m=32 n=32 | jacobi - | vendor -
-herm=N vec=all m=32 n=33 | jacobi - | vendor -
-herm=N vec=all m=32 n=48 | jacobi - | vendor -
-herm=N vec=all m=32 n=64 | jacobi - | vendor -
-herm=N vec=all m=32 n=65 | vendor -
-herm=N vec=all m=32 n=128 | vendor -
-herm=N vec=all m=32 n=256 | vendor -
-herm=N vec=all m=32 n=512 | vendor -
-herm=N vec=all m=32 n=1024 | vendor -
-herm=N vec=all m=33 n=1 | jacobi - | vendor -
-herm=N vec=all m=33 n=2 | jacobi - | vendor -
-herm=N vec=all m=33 n=4 | jacobi - | vendor -
-herm=N vec=all m=33 n=8 | jacobi - | vendor -
-herm=N vec=all m=33 n=16 | jacobi - | vendor -
-herm=N vec=all m=33 n=24 | jacobi - | vendor -
-herm=N vec=all m=33 n=32 | jacobi - | vendor -
-herm=N vec=all m=33 n=33 | jacobi - | vendor -
-herm=N vec=all m=33 n=48 | jacobi - | vendor -
-herm=N vec=all m=33 n=64 | jacobi - | vendor -
-herm=N vec=all m=33 n=65 | vendor -
-herm=N vec=all m=33 n=128 | vendor -
-herm=N vec=all m=33 n=256 | vendor -
-herm=N vec=all m=33 n=512 | vendor -
-herm=N vec=all m=33 n=1024 | vendor -
-herm=N vec=all m=48 n=1 | jacobi - | vendor -
-herm=N vec=all m=48 n=2 | jacobi - | vendor -
-herm=N vec=all m=48 n=4 | jacobi - | vendor -
-herm=N vec=all m=48 n=8 | jacobi - | vendor -
-herm=N vec=all m=48 n=16 | jacobi - | vendor -
-herm=N vec=all m=48 n=24 | jacobi - | vendor -
-herm=N vec=all m=48 n=32 | jacobi - | vendor -
-herm=N vec=all m=48 n=33 | jacobi - | vendor -
-herm=N vec=all m=48 n=48 | jacobi - | vendor -
-herm=N vec=all m=48 n=64 | jacobi - | vendor -
-herm=N vec=all m=48 n=65 | vendor -
-herm=N vec=all m=48 n=128 | vendor -
-herm=N vec=all m=48 n=256 | vendor -
-herm=N vec=all m=48 n=512 | vendor -
-herm=N vec=all m=48 n=1024 | vendor -
-herm=N vec=all m=64 n=1 | jacobi - | vendor -
-herm=N vec=all m=64 n=2 | jacobi - | vendor -
-herm=N vec=all m=64 n=4 | jacobi - | vendor -
-herm=N vec=all m=64 n=8 | jacobi - | vendor -
-herm=N vec=all m=64 n=16 | jacobi - | vendor -
-herm=N vec=all m=64 n=24 | jacobi - | vendor -
-herm=N vec=all m=64 n=32 | jacobi - | vendor -
-herm=N vec=all m=64 n=33 | jacobi - | vendor -
-herm=N vec=all m=64 n=48 | jacobi - | vendor -
-herm=N vec=all m=64 n=64 | jacobi - | vendor -
-herm=N vec=all m=64 n=65 | vendor -
-herm=N vec=all m=64 n=128 | vendor -
-herm=N vec=all m=64 n=256 | vendor -
-herm=N vec=all m=64 n=512 | vendor -
-herm=N vec=all m=64 n=1024 | vendor -
-herm=N vec=all m=65 n=1 | vendor -
-herm=N vec=all m=65 n=2 | vendor -
-herm=N vec=all m=65 n=4 | vendor -
-herm=N vec=all m=65 n=8 | vendor -
-herm=N vec=all m=65 n=16 | vendor -
-herm=N vec=all m=65 n=24 | vendor -
-herm=N vec=all m=65 n=32 | vendor -
-herm=N vec=all m=65 n=33 | vendor -
-herm=N vec=all m=65 n=48 | vendor -
-herm=N vec=all m=65 n=64 | vendor -
-herm=N vec=all m=65 n=65 | vendor -
-herm=N vec=all m=65 n=128 | vendor -
-herm=N vec=all m=65 n=256 | vendor -
-herm=N vec=all m=65 n=512 | vendor -
-herm=N vec=all m=65 n=1024 | vendor -
-herm=N vec=all m=128 n=1 | vendor -
-herm=N vec=all m=128 n=2 | vendor -
-herm=N vec=all m=128 n=4 | vendor -
-herm=N vec=all m=128 n=8 | vendor -
-herm=N vec=all m=128 n=16 | vendor -
-herm=N vec=all m=128 n=24 | vendor -
-herm=N vec=all m=128 n=32 | vendor -
-herm=N vec=all m=128 n=33 | vendor -
-herm=N vec=all m=128 n=48 | vendor -
-herm=N vec=all m=128 n=64 | vendor -
-herm=N vec=all m=128 n=65 | vendor -
-herm=N vec=all m=128 n=128 | vendor -
-herm=N vec=all m=128 n=256 | vendor -
-herm=N vec=all m=128 n=512 | vendor -
-herm=N vec=all m=128 n=1024 | vendor -
-herm=N vec=all m=256 n=1 | vendor -
-herm=N vec=all m=256 n=2 | vendor -
-herm=N vec=all m=256 n=4 | vendor -
-herm=N vec=all m=256 n=8 | vendor -
-herm=N vec=all m=256 n=16 | vendor -
-herm=N vec=all m=256 n=24 | vendor -
-herm=N vec=all m=256 n=32 | vendor -
-herm=N vec=all m=256 n=33 | vendor -
-herm=N vec=all m=256 n=48 | vendor -
-herm=N vec=all m=256 n=64 | vendor -
-herm=N vec=all m=256 n=65 | vendor -
-herm=N vec=all m=256 n=128 | vendor -
-herm=N vec=all m=256 n=256 | vendor -
-herm=N vec=all m=256 n=512 | vendor -
-herm=N vec=all m=256 n=1024 | vendor -
-herm=N vec=all m=512 n=1 | vendor -
-herm=N vec=all m=512 n=2 | vendor -
-herm=N vec=all m=512 n=4 | vendor -
-herm=N vec=all m=512 n=8 | vendor -
-herm=N vec=all m=512 n=16 | vendor -
-herm=N vec=all m=512 n=24 | vendor -
-herm=N vec=all m=512 n=32 | vendor -
-herm=N vec=all m=512 n=33 | vendor -
-herm=N vec=all m=512 n=48 | vendor -
-herm=N vec=all m=512 n=64 | vendor -
-herm=N vec=all m=512 n=65 | vendor -
-herm=N vec=all m=512 n=128 | vendor -
-herm=N vec=all m=512 n=256 | vendor -
-herm=N vec=all m=512 n=512 | vendor -
-herm=N vec=all m=512 n=1024 | vendor -
-herm=N vec=all m=1024 n=1 | vendor -
-herm=N vec=all m=1024 n=2 | vendor -
-herm=N vec=all m=1024 n=4 | vendor -
-herm=N vec=all m=1024 n=8 | vendor -
-herm=N vec=all m=1024 n=16 | vendor -
-herm=N vec=all m=1024 n=24 | vendor -
-herm=N vec=all m=1024 n=32 | vendor -
-herm=N vec=all m=1024 n=33 | vendor -
-herm=N vec=all m=1024 n=48 | vendor -
-herm=N vec=all m=1024 n=64 | vendor -
-herm=N vec=all m=1024 n=65 | vendor -
-herm=N vec=all m=1024 n=128 | vendor -
-herm=N vec=all m=1024 n=256 | vendor -
-herm=N vec=all m=1024 n=512 | vendor -
-herm=N vec=all m=1024 n=1024 | vendor -
-herm=N vec=none m=1 n=1 | jacobi - | vendor -
-herm=N vec=none m=1 n=2 | jacobi - | vendor -
-herm=N vec=none m=1 n=4 | jacobi - | vendor -
-herm=N vec=none m=1 n=8 | jacobi - | vendor -
-herm=N vec=none m=1 n=16 | jacobi - | vendor -
-herm=N vec=none m=1 n=24 | jacobi - | vendor -
-herm=N vec=none m=1 n=32 | jacobi - | vendor -
-herm=N vec=none m=1 n=33 | jacobi - | vendor -
-herm=N vec=none m=1 n=48 | jacobi - | vendor -
-herm=N vec=none m=1 n=64 | jacobi - | vendor -
-herm=N vec=none m=1 n=65 | vendor -
-herm=N vec=none m=1 n=128 | vendor -
-herm=N vec=none m=1 n=256 | vendor -
-herm=N vec=none m=1 n=512 | vendor -
-herm=N vec=none m=1 n=1024 | vendor -
-herm=N vec=none m=2 n=1 | jacobi - | vendor -
-herm=N vec=none m=2 n=2 | jacobi - | vendor -
-herm=N vec=none m=2 n=4 | jacobi - | vendor -
-herm=N vec=none m=2 n=8 | jacobi - | vendor -
-herm=N vec=none m=2 n=16 | jacobi - | vendor -
-herm=N vec=none m=2 n=24 | jacobi - | vendor -
-herm=N vec=none m=2 n=32 | jacobi - | vendor -
-herm=N vec=none m=2 n=33 | jacobi - | vendor -
-herm=N vec=none m=2 n=48 | jacobi - | vendor -
-herm=N vec=none m=2 n=64 | jacobi - | vendor -
-herm=N vec=none m=2 n=65 | vendor -
-herm=N vec=none m=2 n=128 | vendor -
-herm=N vec=none m=2 n=256 | vendor -
-herm=N vec=none m=2 n=512 | vendor -
-herm=N vec=none m=2 n=1024 | vendor -
-herm=N vec=none m=4 n=1 | jacobi - | vendor -
-herm=N vec=none m=4 n=2 | jacobi - | vendor -
-herm=N vec=none m=4 n=4 | jacobi - | vendor -
-herm=N vec=none m=4 n=8 | jacobi - | vendor -
-herm=N vec=none m=4 n=16 | jacobi - | vendor -
-herm=N vec=none m=4 n=24 | jacobi - | vendor -
-herm=N vec=none m=4 n=32 | jacobi - | vendor -
-herm=N vec=none m=4 n=33 | jacobi - | vendor -
-herm=N vec=none m=4 n=48 | jacobi - | vendor -
-herm=N vec=none m=4 n=64 | jacobi - | vendor -
-herm=N vec=none m=4 n=65 | vendor -
-herm=N vec=none m=4 n=128 | vendor -
-herm=N vec=none m=4 n=256 | vendor -
-herm=N vec=none m=4 n=512 | vendor -
-herm=N vec=none m=4 n=1024 | vendor -
-herm=N vec=none m=8 n=1 | jacobi - | vendor -
-herm=N vec=none m=8 n=2 | jacobi - | vendor -
-herm=N vec=none m=8 n=4 | jacobi - | vendor -
-herm=N vec=none m=8 n=8 | jacobi - | vendor -
-herm=N vec=none m=8 n=16 | jacobi - | vendor -
-herm=N vec=none m=8 n=24 | jacobi - | vendor -
-herm=N vec=none m=8 n=32 | jacobi - | vendor -
-herm=N vec=none m=8 n=33 | jacobi - | vendor -
-herm=N vec=none m=8 n=48 | jacobi - | vendor -
-herm=N vec=none m=8 n=64 | jacobi - | vendor -
-herm=N vec=none m=8 n=65 | vendor -
-herm=N vec=none m=8 n=128 | vendor -
-herm=N vec=none m=8 n=256 | vendor -
-herm=N vec=none m=8 n=512 | vendor -
-herm=N vec=none m=8 n=1024 | vendor -
-herm=N vec=none m=16 n=1 | jacobi - | vendor -
-herm=N vec=none m=16 n=2 | jacobi - | vendor -
-herm=N vec=none m=16 n=4 | jacobi - | vendor -
-herm=N vec=none m=16 n=8 | jacobi - | vendor -
-herm=N vec=none m=16 n=16 | jacobi - | vendor -
-herm=N vec=none m=16 n=24 | jacobi - | vendor -
-herm=N vec=none m=16 n=32 | jacobi - | vendor -
-herm=N vec=none m=16 n=33 | jacobi - | vendor -
-herm=N vec=none m=16 n=48 | jacobi - | vendor -
-herm=N vec=none m=16 n=64 | jacobi - | vendor -
-herm=N vec=none m=16 n=65 | vendor -
-herm=N vec=none m=16 n=128 | vendor -
-herm=N vec=none m=16 n=256 | vendor -
-herm=N vec=none m=16 n=512 | vendor -
-herm=N vec=none m=16 n=1024 | vendor -
-herm=N vec=none m=24 n=1 | jacobi - | vendor -
-herm=N vec=none m=24 n=2 | jacobi - | vendor -
-herm=N vec=none m=24 n=4 | jacobi - | vendor -
-herm=N vec=none m=24 n=8 | jacobi - | vendor -
-herm=N vec=none m=24 n=16 | jacobi - | vendor -
-herm=N vec=none m=24 n=24 | jacobi - | vendor -
-herm=N vec=none m=24 n=32 | jacobi - | vendor -
-herm=N vec=none m=24 n=33 | jacobi - | vendor -
-herm=N vec=none m=24 n=48 | jacobi - | vendor -
-herm=N vec=none m=24 n=64 | jacobi - | vendor -
-herm=N vec=none m=24 n=65 | vendor -
-herm=N vec=none m=24 n=128 | vendor -
-herm=N vec=none m=24 n=256 | vendor -
-herm=N vec=none m=24 n=512 | vendor -
-herm=N vec=none m=24 n=1024 | vendor -
-herm=N vec=none m=32 n=1 | jacobi - | vendor -
-herm=N vec=none m=32 n=2 | jacobi - | vendor -
-herm=N vec=none m=32 n=4 | jacobi - | vendor -
-herm=N vec=none m=32 n=8 | jacobi - | vendor -
-herm=N vec=none m=32 n=16 | jacobi - | vendor -
-herm=N vec=none m=32 n=24 | jacobi - | vendor -
-herm=N vec=none m=32 n=32 | jacobi - | vendor -
-herm=N vec=none m=32 n=33 | jacobi - | vendor -
-herm=N vec=none m=32 n=48 | jacobi - | vendor -
-herm=N vec=none m=32 n=64 | jacobi - | vendor -
-herm=N vec=none m=32 n=65 | vendor -
-herm=N vec=none m=32 n=128 | vendor -
-herm=N vec=none m=32 n=256 | vendor -
-herm=N vec=none m=32 n=512 | vendor -
-herm=N vec=none m=32 n=1024 | vendor -
-herm=N vec=none m=33 n=1 | jacobi - | vendor -
-herm=N vec=none m=33 n=2 | jacobi - | vendor -
-herm=N vec=none m=33 n=4 | jacobi - | vendor -
-herm=N vec=none m=33 n=8 | jacobi - | vendor -
-herm=N vec=none m=33 n=16 | jacobi - | vendor -
-herm=N vec=none m=33 n=24 | jacobi - | vendor -
-herm=N vec=none m=33 n=32 | jacobi - | vendor -
-herm=N vec=none m=33 n=33 | jacobi - | vendor -
-herm=N vec=none m=33 n=48 | jacobi - | vendor -
-herm=N vec=none m=33 n=64 | jacobi - | vendor -
-herm=N vec=none m=33 n=65 | vendor -
-herm=N vec=none m=33 n=128 | vendor -
-herm=N vec=none m=33 n=256 | vendor -
-herm=N vec=none m=33 n=512 | vendor -
-herm=N vec=none m=33 n=1024 | vendor -
-herm=N vec=none m=48 n=1 | jacobi - | vendor -
-herm=N vec=none m=48 n=2 | jacobi - | vendor -
-herm=N vec=none m=48 n=4 | jacobi - | vendor -
-herm=N vec=none m=48 n=8 | jacobi - | vendor -
-herm=N vec=none m=48 n=16 | jacobi - | vendor -
-herm=N vec=none m=48 n=24 | jacobi - | vendor -
-herm=N vec=none m=48 n=32 | jacobi - | vendor -
-herm=N vec=none m=48 n=33 | jacobi - | vendor -
-herm=N vec=none m=48 n=48 | jacobi - | vendor -
-herm=N vec=none m=48 n=64 | jacobi - | vendor -
-herm=N vec=none m=48 n=65 | vendor -
-herm=N vec=none m=48 n=128 | vendor -
-herm=N vec=none m=48 n=256 | vendor -
-herm=N vec=none m=48 n=512 | vendor -
-herm=N vec=none m=48 n=1024 | vendor -
-herm=N vec=none m=64 n=1 | jacobi - | vendor -
-herm=N vec=none m=64 n=2 | jacobi - | vendor -
-herm=N vec=none m=64 n=4 | jacobi - | vendor -
-herm=N vec=none m=64 n=8 | jacobi - | vendor -
-herm=N vec=none m=64 n=16 | jacobi - | vendor -
-herm=N vec=none m=64 n=24 | jacobi - | vendor -
-herm=N vec=none m=64 n=32 | jacobi - | vendor -
-herm=N vec=none m=64 n=33 | jacobi - | vendor -
-herm=N vec=none m=64 n=48 | jacobi - | vendor -
-herm=N vec=none m=64 n=64 | jacobi - | vendor -
-herm=N vec=none m=64 n=65 | vendor -
-herm=N vec=none m=64 n=128 | vendor -
-herm=N vec=none m=64 n=256 | vendor -
-herm=N vec=none m=64 n=512 | vendor -
-herm=N vec=none m=64 n=1024 | vendor -
-herm=N vec=none m=65 n=1 | vendor -
-herm=N vec=none m=65 n=2 | vendor -
-herm=N vec=none m=65 n=4 | vendor -
-herm=N vec=none m=65 n=8 | vendor -
-herm=N vec=none m=65 n=16 | vendor -
-herm=N vec=none m=65 n=24 | vendor -
-herm=N vec=none m=65 n=32 | vendor -
-herm=N vec=none m=65 n=33 | vendor -
-herm=N vec=none m=65 n=48 | vendor -
-herm=N vec=none m=65 n=64 | vendor -
-herm=N vec=none m=65 n=65 | vendor -
-herm=N vec=none m=65 n=128 | vendor -
-herm=N vec=none m=65 n=256 | vendor -
-herm=N vec=none m=65 n=512 | vendor -
-herm=N vec=none m=65 n=1024 | vendor -
-herm=N vec=none m=128 n=1 | vendor -
-herm=N vec=none m=128 n=2 | vendor -
-herm=N vec=none m=128 n=4 | vendor -
-herm=N vec=none m=128 n=8 | vendor -
-herm=N vec=none m=128 n=16 | vendor -
-herm=N vec=none m=128 n=24 | vendor -
-herm=N vec=none m=128 n=32 | vendor -
-herm=N vec=none m=128 n=33 | vendor -
-herm=N vec=none m=128 n=48 | vendor -
-herm=N vec=none m=128 n=64 | vendor -
-herm=N vec=none m=128 n=65 | vendor -
-herm=N vec=none m=128 n=128 | vendor -
-herm=N vec=none m=128 n=256 | vendor -
-herm=N vec=none m=128 n=512 | vendor -
-herm=N vec=none m=128 n=1024 | vendor -
-herm=N vec=none m=256 n=1 | vendor -
-herm=N vec=none m=256 n=2 | vendor -
-herm=N vec=none m=256 n=4 | vendor -
-herm=N vec=none m=256 n=8 | vendor -
-herm=N vec=none m=256 n=16 | vendor -
-herm=N vec=none m=256 n=24 | vendor -
-herm=N vec=none m=256 n=32 | vendor -
-herm=N vec=none m=256 n=33 | vendor -
-herm=N vec=none m=256 n=48 | vendor -
-herm=N vec=none m=256 n=64 | vendor -
-herm=N vec=none m=256 n=65 | vendor -
-herm=N vec=none m=256 n=128 | vendor -
-herm=N vec=none m=256 n=256 | vendor -
-herm=N vec=none m=256 n=512 | vendor -
-herm=N vec=none m=256 n=1024 | vendor -
-herm=N vec=none m=512 n=1 | vendor -
-herm=N vec=none m=512 n=2 | vendor -
-herm=N vec=none m=512 n=4 | vendor -
-herm=N vec=none m=512 n=8 | vendor -
-herm=N vec=none m=512 n=16 | vendor -
-herm=N vec=none m=512 n=24 | vendor -
-herm=N vec=none m=512 n=32 | vendor -
-herm=N vec=none m=512 n=33 | vendor -
-herm=N vec=none m=512 n=48 | vendor -
-herm=N vec=none m=512 n=64 | vendor -
-herm=N vec=none m=512 n=65 | vendor -
-herm=N vec=none m=512 n=128 | vendor -
-herm=N vec=none m=512 n=256 | vendor -
-herm=N vec=none m=512 n=512 | vendor -
-herm=N vec=none m=512 n=1024 | vendor -
-herm=N vec=none m=1024 n=1 | vendor -
-herm=N vec=none m=1024 n=2 | vendor -
-herm=N vec=none m=1024 n=4 | vendor -
-herm=N vec=none m=1024 n=8 | vendor -
-herm=N vec=none m=1024 n=16 | vendor -
-herm=N vec=none m=1024 n=24 | vendor -
-herm=N vec=none m=1024 n=32 | vendor -
-herm=N vec=none m=1024 n=33 | vendor -
-herm=N vec=none m=1024 n=48 | vendor -
-herm=N vec=none m=1024 n=64 | vendor -
-herm=N vec=none m=1024 n=65 | vendor -
-herm=N vec=none m=1024 n=128 | vendor -
-herm=N vec=none m=1024 n=256 | vendor -
-herm=N vec=none m=1024 n=512 | vendor -
-herm=N vec=none m=1024 n=1024 | vendor -
-herm=N vec=thin m=1 n=1 | jacobi - | vendor -
-herm=N vec=thin m=1 n=2 | jacobi - | vendor -
-herm=N vec=thin m=1 n=4 | jacobi - | vendor -
-herm=N vec=thin m=1 n=8 | jacobi - | vendor -
-herm=N vec=thin m=1 n=16 | jacobi - | vendor -
-herm=N vec=thin m=1 n=24 | jacobi - | vendor -
-herm=N vec=thin m=1 n=32 | jacobi - | vendor -
-herm=N vec=thin m=1 n=33 | jacobi - | vendor -
-herm=N vec=thin m=1 n=48 | jacobi - | vendor -
-herm=N vec=thin m=1 n=64 | jacobi - | vendor -
-herm=N vec=thin m=1 n=65 | vendor -
-herm=N vec=thin m=1 n=128 | vendor -
-herm=N vec=thin m=1 n=256 | vendor -
-herm=N vec=thin m=1 n=512 | vendor -
-herm=N vec=thin m=1 n=1024 | vendor -
-herm=N vec=thin m=2 n=1 | jacobi - | vendor -
-herm=N vec=thin m=2 n=2 | jacobi - | vendor -
-herm=N vec=thin m=2 n=4 | jacobi - | vendor -
-herm=N vec=thin m=2 n=8 | jacobi - | vendor -
-herm=N vec=thin m=2 n=16 | jacobi - | vendor -
-herm=N vec=thin m=2 n=24 | jacobi - | vendor -
-herm=N vec=thin m=2 n=32 | jacobi - | vendor -
-herm=N vec=thin m=2 n=33 | jacobi - | vendor -
-herm=N vec=thin m=2 n=48 | jacobi - | vendor -
-herm=N vec=thin m=2 n=64 | jacobi - | vendor -
-herm=N vec=thin m=2 n=65 | vendor -
-herm=N vec=thin m=2 n=128 | vendor -
-herm=N vec=thin m=2 n=256 | vendor -
-herm=N vec=thin m=2 n=512 | vendor -
-herm=N vec=thin m=2 n=1024 | vendor -
-herm=N vec=thin m=4 n=1 | jacobi - | vendor -
-herm=N vec=thin m=4 n=2 | jacobi - | vendor -
-herm=N vec=thin m=4 n=4 | jacobi - | vendor -
-herm=N vec=thin m=4 n=8 | jacobi - | vendor -
-herm=N vec=thin m=4 n=16 | jacobi - | vendor -
-herm=N vec=thin m=4 n=24 | jacobi - | vendor -
-herm=N vec=thin m=4 n=32 | jacobi - | vendor -
-herm=N vec=thin m=4 n=33 | jacobi - | vendor -
-herm=N vec=thin m=4 n=48 | jacobi - | vendor -
-herm=N vec=thin m=4 n=64 | jacobi - | vendor -
-herm=N vec=thin m=4 n=65 | vendor -
-herm=N vec=thin m=4 n=128 | vendor -
-herm=N vec=thin m=4 n=256 | vendor -
-herm=N vec=thin m=4 n=512 | vendor -
-herm=N vec=thin m=4 n=1024 | vendor -
-herm=N vec=thin m=8 n=1 | jacobi - | vendor -
-herm=N vec=thin m=8 n=2 | jacobi - | vendor -
-herm=N vec=thin m=8 n=4 | jacobi - | vendor -
-herm=N vec=thin m=8 n=8 | jacobi - | vendor -
-herm=N vec=thin m=8 n=16 | jacobi - | vendor -
-herm=N vec=thin m=8 n=24 | jacobi - | vendor -
-herm=N vec=thin m=8 n=32 | jacobi - | vendor -
-herm=N vec=thin m=8 n=33 | jacobi - | vendor -
-herm=N vec=thin m=8 n=48 | jacobi - | vendor -
-herm=N vec=thin m=8 n=64 | jacobi - | vendor -
-herm=N vec=thin m=8 n=65 | vendor -
-herm=N vec=thin m=8 n=128 | vendor -
-herm=N vec=thin m=8 n=256 | vendor -
-herm=N vec=thin m=8 n=512 | vendor -
-herm=N vec=thin m=8 n=1024 | vendor -
-herm=N vec=thin m=16 n=1 | jacobi - | vendor -
-herm=N vec=thin m=16 n=2 | jacobi - | vendor -
-herm=N vec=thin m=16 n=4 | jacobi - | vendor -
-herm=N vec=thin m=16 n=8 | jacobi - | vendor -
-herm=N vec=thin m=16 n=16 | jacobi - | vendor -
-herm=N vec=thin m=16 n=24 | jacobi - | vendor -
-herm=N vec=thin m=16 n=32 | jacobi - | vendor -
-herm=N vec=thin m=16 n=33 | jacobi - | vendor -
-herm=N vec=thin m=16 n=48 | jacobi - | vendor -
-herm=N vec=thin m=16 n=64 | jacobi - | vendor -
-herm=N vec=thin m=16 n=65 | vendor -
-herm=N vec=thin m=16 n=128 | vendor -
-herm=N vec=thin m=16 n=256 | vendor -
-herm=N vec=thin m=16 n=512 | vendor -
-herm=N vec=thin m=16 n=1024 | vendor -
-herm=N vec=thin m=24 n=1 | jacobi - | vendor -
-herm=N vec=thin m=24 n=2 | jacobi - | vendor -
-herm=N vec=thin m=24 n=4 | jacobi - | vendor -
-herm=N vec=thin m=24 n=8 | jacobi - | vendor -
-herm=N vec=thin m=24 n=16 | jacobi - | vendor -
-herm=N vec=thin m=24 n=24 | jacobi - | vendor -
-herm=N vec=thin m=24 n=32 | jacobi - | vendor -
-herm=N vec=thin m=24 n=33 | jacobi - | vendor -
-herm=N vec=thin m=24 n=48 | jacobi - | vendor -
-herm=N vec=thin m=24 n=64 | jacobi - | vendor -
-herm=N vec=thin m=24 n=65 | vendor -
-herm=N vec=thin m=24 n=128 | vendor -
-herm=N vec=thin m=24 n=256 | vendor -
-herm=N vec=thin m=24 n=512 | vendor -
-herm=N vec=thin m=24 n=1024 | vendor -
-herm=N vec=thin m=32 n=1 | jacobi - | vendor -
-herm=N vec=thin m=32 n=2 | jacobi - | vendor -
-herm=N vec=thin m=32 n=4 | jacobi - | vendor -
-herm=N vec=thin m=32 n=8 | jacobi - | vendor -
-herm=N vec=thin m=32 n=16 | jacobi - | vendor -
-herm=N vec=thin m=32 n=24 | jacobi - | vendor -
-herm=N vec=thin m=32 n=32 | jacobi - | vendor -
-herm=N vec=thin m=32 n=33 | jacobi - | vendor -
-herm=N vec=thin m=32 n=48 | jacobi - | vendor -
-herm=N vec=thin m=32 n=64 | jacobi - | vendor -
-herm=N vec=thin m=32 n=65 | vendor -
-herm=N vec=thin m=32 n=128 | vendor -
-herm=N vec=thin m=32 n=256 | vendor -
-herm=N vec=thin m=32 n=512 | vendor -
-herm=N vec=thin m=32 n=1024 | vendor -
-herm=N vec=thin m=33 n=1 | jacobi - | vendor -
-herm=N vec=thin m=33 n=2 | jacobi - | vendor -
-herm=N vec=thin m=33 n=4 | jacobi - | vendor -
-herm=N vec=thin m=33 n=8 | jacobi - | vendor -
-herm=N vec=thin m=33 n=16 | jacobi - | vendor -
-herm=N vec=thin m=33 n=24 | jacobi - | vendor -
-herm=N vec=thin m=33 n=32 | jacobi - | vendor -
-herm=N vec=thin m=33 n=33 | jacobi - | vendor -
-herm=N vec=thin m=33 n=48 | jacobi - | vendor -
-herm=N vec=thin m=33 n=64 | jacobi - | vendor -
-herm=N vec=thin m=33 n=65 | vendor -
-herm=N vec=thin m=33 n=128 | vendor -
-herm=N vec=thin m=33 n=256 | vendor -
-herm=N vec=thin m=33 n=512 | vendor -
-herm=N vec=thin m=33 n=1024 | vendor -
-herm=N vec=thin m=48 n=1 | jacobi - | vendor -
-herm=N vec=thin m=48 n=2 | jacobi - | vendor -
-herm=N vec=thin m=48 n=4 | jacobi - | vendor -
-herm=N vec=thin m=48 n=8 | jacobi - | vendor -
-herm=N vec=thin m=48 n=16 | jacobi - | vendor -
-herm=N vec=thin m=48 n=24 | jacobi - | vendor -
-herm=N vec=thin m=48 n=32 | jacobi - | vendor -
-herm=N vec=thin m=48 n=33 | jacobi - | vendor -
-herm=N vec=thin m=48 n=48 | jacobi - | vendor -
-herm=N vec=thin m=48 n=64 | jacobi - | vendor -
-herm=N vec=thin m=48 n=65 | vendor -
-herm=N vec=thin m=48 n=128 | vendor -
-herm=N vec=thin m=48 n=256 | vendor -
-herm=N vec=thin m=48 n=512 | vendor -
-herm=N vec=thin m=48 n=1024 | vendor -
-herm=N vec=thin m=64 n=1 | jacobi - | vendor -
-herm=N vec=thin m=64 n=2 | jacobi - | vendor -
-herm=N vec=thin m=64 n=4 | jacobi - | vendor -
-herm=N vec=thin m=64 n=8 | jacobi - | vendor -
-herm=N vec=thin m=64 n=16 | jacobi - | vendor -
-herm=N vec=thin m=64 n=24 | jacobi - | vendor -
-herm=N vec=thin m=64 n=32 | jacobi - | vendor -
-herm=N vec=thin m=64 n=33 | jacobi - | vendor -
-herm=N vec=thin m=64 n=48 | jacobi - | vendor -
-herm=N vec=thin m=64 n=64 | jacobi - | vendor -
-herm=N vec=thin m=64 n=65 | vendor -
-herm=N vec=thin m=64 n=128 | vendor -
-herm=N vec=thin m=64 n=256 | vendor -
-herm=N vec=thin m=64 n=512 | vendor -
-herm=N vec=thin m=64 n=1024 | vendor -
-herm=N vec=thin m=65 n=1 | vendor -
-herm=N vec=thin m=65 n=2 | vendor -
-herm=N vec=thin m=65 n=4 | vendor -
-herm=N vec=thin m=65 n=8 | vendor -
-herm=N vec=thin m=65 n=16 | vendor -
-herm=N vec=thin m=65 n=24 | vendor -
-herm=N vec=thin m=65 n=32 | vendor -
-herm=N vec=thin m=65 n=33 | vendor -
-herm=N vec=thin m=65 n=48 | vendor -
-herm=N vec=thin m=65 n=64 | vendor -
-herm=N vec=thin m=65 n=65 | vendor -
-herm=N vec=thin m=65 n=128 | vendor -
-herm=N vec=thin m=65 n=256 | vendor -
-herm=N vec=thin m=65 n=512 | vendor -
-herm=N vec=thin m=65 n=1024 | vendor -
-herm=N vec=thin m=128 n=1 | vendor -
-herm=N vec=thin m=128 n=2 | vendor -
-herm=N vec=thin m=128 n=4 | vendor -
-herm=N vec=thin m=128 n=8 | vendor -
-herm=N vec=thin m=128 n=16 | vendor -
-herm=N vec=thin m=128 n=24 | vendor -
-herm=N vec=thin m=128 n=32 | vendor -
-herm=N vec=thin m=128 n=33 | vendor -
-herm=N vec=thin m=128 n=48 | vendor -
-herm=N vec=thin m=128 n=64 | vendor -
-herm=N vec=thin m=128 n=65 | vendor -
-herm=N vec=thin m=128 n=128 | vendor -
-herm=N vec=thin m=128 n=256 | vendor -
-herm=N vec=thin m=128 n=512 | vendor -
-herm=N vec=thin m=128 n=1024 | vendor -
-herm=N vec=thin m=256 n=1 | vendor -
-herm=N vec=thin m=256 n=2 | vendor -
-herm=N vec=thin m=256 n=4 | vendor -
-herm=N vec=thin m=256 n=8 | vendor -
-herm=N vec=thin m=256 n=16 | vendor -
-herm=N vec=thin m=256 n=24 | vendor -
-herm=N vec=thin m=256 n=32 | vendor -
-herm=N vec=thin m=256 n=33 | vendor -
-herm=N vec=thin m=256 n=48 | vendor -
-herm=N vec=thin m=256 n=64 | vendor -
-herm=N vec=thin m=256 n=65 | vendor -
-herm=N vec=thin m=256 n=128 | vendor -
-herm=N vec=thin m=256 n=256 | vendor -
-herm=N vec=thin m=256 n=512 | vendor -
-herm=N vec=thin m=256 n=1024 | vendor -
-herm=N vec=thin m=512 n=1 | vendor -
-herm=N vec=thin m=512 n=2 | vendor -
-herm=N vec=thin m=512 n=4 | vendor -
-herm=N vec=thin m=512 n=8 | vendor -
-herm=N vec=thin m=512 n=16 | vendor -
-herm=N vec=thin m=512 n=24 | vendor -
-herm=N vec=thin m=512 n=32 | vendor -
-herm=N vec=thin m=512 n=33 | vendor -
-herm=N vec=thin m=512 n=48 | vendor -
-herm=N vec=thin m=512 n=64 | vendor -
-herm=N vec=thin m=512 n=65 | vendor -
-herm=N vec=thin m=512 n=128 | vendor -
-herm=N vec=thin m=512 n=256 | vendor -
-herm=N vec=thin m=512 n=512 | vendor -
-herm=N vec=thin m=512 n=1024 | vendor -
-herm=N vec=thin m=1024 n=1 | vendor -
-herm=N vec=thin m=1024 n=2 | vendor -
-herm=N vec=thin m=1024 n=4 | vendor -
-herm=N vec=thin m=1024 n=8 | vendor -
-herm=N vec=thin m=1024 n=16 | vendor -
-herm=N vec=thin m=1024 n=24 | vendor -
-herm=N vec=thin m=1024 n=32 | vendor -
-herm=N vec=thin m=1024 n=33 | vendor -
-herm=N vec=thin m=1024 n=48 | vendor -
-herm=N vec=thin m=1024 n=64 | vendor -
-herm=N vec=thin m=1024 n=65 | vendor -
-herm=N vec=thin m=1024 n=128 | vendor -
-herm=N vec=thin m=1024 n=256 | vendor -
-herm=N vec=thin m=1024 n=512 | vendor -
-herm=N vec=thin m=1024 n=1024 | vendor -
-herm=U vec=all m=1 n=1 | cta - | vendor -
-herm=U vec=all m=1 n=2 | vendor -
-herm=U vec=all m=1 n=4 | vendor -
-herm=U vec=all m=1 n=8 | vendor -
-herm=U vec=all m=1 n=16 | vendor -
-herm=U vec=all m=1 n=24 | vendor -
-herm=U vec=all m=1 n=32 | vendor -
-herm=U vec=all m=1 n=33 | vendor -
-herm=U vec=all m=1 n=48 | vendor -
-herm=U vec=all m=1 n=64 | vendor -
-herm=U vec=all m=1 n=65 | vendor -
-herm=U vec=all m=1 n=128 | vendor -
-herm=U vec=all m=1 n=256 | vendor -
-herm=U vec=all m=1 n=512 | vendor -
-herm=U vec=all m=1 n=1024 | vendor -
-herm=U vec=all m=2 n=1 | vendor -
-herm=U vec=all m=2 n=2 | cta - | vendor -
-herm=U vec=all m=2 n=4 | vendor -
-herm=U vec=all m=2 n=8 | vendor -
-herm=U vec=all m=2 n=16 | vendor -
-herm=U vec=all m=2 n=24 | vendor -
-herm=U vec=all m=2 n=32 | vendor -
-herm=U vec=all m=2 n=33 | vendor -
-herm=U vec=all m=2 n=48 | vendor -
-herm=U vec=all m=2 n=64 | vendor -
-herm=U vec=all m=2 n=65 | vendor -
-herm=U vec=all m=2 n=128 | vendor -
-herm=U vec=all m=2 n=256 | vendor -
-herm=U vec=all m=2 n=512 | vendor -
-herm=U vec=all m=2 n=1024 | vendor -
-herm=U vec=all m=4 n=1 | vendor -
-herm=U vec=all m=4 n=2 | vendor -
-herm=U vec=all m=4 n=4 | cta - | vendor -
-herm=U vec=all m=4 n=8 | vendor -
-herm=U vec=all m=4 n=16 | vendor -
-herm=U vec=all m=4 n=24 | vendor -
-herm=U vec=all m=4 n=32 | vendor -
-herm=U vec=all m=4 n=33 | vendor -
-herm=U vec=all m=4 n=48 | vendor -
-herm=U vec=all m=4 n=64 | vendor -
-herm=U vec=all m=4 n=65 | vendor -
-herm=U vec=all m=4 n=128 | vendor -
-herm=U vec=all m=4 n=256 | vendor -
-herm=U vec=all m=4 n=512 | vendor -
-herm=U vec=all m=4 n=1024 | vendor -
-herm=U vec=all m=8 n=1 | vendor -
-herm=U vec=all m=8 n=2 | vendor -
-herm=U vec=all m=8 n=4 | vendor -
-herm=U vec=all m=8 n=8 | cta - | vendor -
-herm=U vec=all m=8 n=16 | vendor -
-herm=U vec=all m=8 n=24 | vendor -
-herm=U vec=all m=8 n=32 | vendor -
-herm=U vec=all m=8 n=33 | vendor -
-herm=U vec=all m=8 n=48 | vendor -
-herm=U vec=all m=8 n=64 | vendor -
-herm=U vec=all m=8 n=65 | vendor -
-herm=U vec=all m=8 n=128 | vendor -
-herm=U vec=all m=8 n=256 | vendor -
-herm=U vec=all m=8 n=512 | vendor -
-herm=U vec=all m=8 n=1024 | vendor -
-herm=U vec=all m=16 n=1 | vendor -
-herm=U vec=all m=16 n=2 | vendor -
-herm=U vec=all m=16 n=4 | vendor -
-herm=U vec=all m=16 n=8 | vendor -
-herm=U vec=all m=16 n=16 | cta - | vendor -
-herm=U vec=all m=16 n=24 | vendor -
-herm=U vec=all m=16 n=32 | vendor -
-herm=U vec=all m=16 n=33 | vendor -
-herm=U vec=all m=16 n=48 | vendor -
-herm=U vec=all m=16 n=64 | vendor -
-herm=U vec=all m=16 n=65 | vendor -
-herm=U vec=all m=16 n=128 | vendor -
-herm=U vec=all m=16 n=256 | vendor -
-herm=U vec=all m=16 n=512 | vendor -
-herm=U vec=all m=16 n=1024 | vendor -
-herm=U vec=all m=24 n=1 | vendor -
-herm=U vec=all m=24 n=2 | vendor -
-herm=U vec=all m=24 n=4 | vendor -
-herm=U vec=all m=24 n=8 | vendor -
-herm=U vec=all m=24 n=16 | vendor -
-herm=U vec=all m=24 n=24 | cta - | vendor -
-herm=U vec=all m=24 n=32 | vendor -
-herm=U vec=all m=24 n=33 | vendor -
-herm=U vec=all m=24 n=48 | vendor -
-herm=U vec=all m=24 n=64 | vendor -
-herm=U vec=all m=24 n=65 | vendor -
-herm=U vec=all m=24 n=128 | vendor -
-herm=U vec=all m=24 n=256 | vendor -
-herm=U vec=all m=24 n=512 | vendor -
-herm=U vec=all m=24 n=1024 | vendor -
-herm=U vec=all m=32 n=1 | vendor -
-herm=U vec=all m=32 n=2 | vendor -
-herm=U vec=all m=32 n=4 | vendor -
-herm=U vec=all m=32 n=8 | vendor -
-herm=U vec=all m=32 n=16 | vendor -
-herm=U vec=all m=32 n=24 | vendor -
-herm=U vec=all m=32 n=32 | cta - | vendor -
-herm=U vec=all m=32 n=33 | vendor -
-herm=U vec=all m=32 n=48 | vendor -
-herm=U vec=all m=32 n=64 | vendor -
-herm=U vec=all m=32 n=65 | vendor -
-herm=U vec=all m=32 n=128 | vendor -
-herm=U vec=all m=32 n=256 | vendor -
-herm=U vec=all m=32 n=512 | vendor -
-herm=U vec=all m=32 n=1024 | vendor -
-herm=U vec=all m=33 n=1 | vendor -
-herm=U vec=all m=33 n=2 | vendor -
-herm=U vec=all m=33 n=4 | vendor -
-herm=U vec=all m=33 n=8 | vendor -
-herm=U vec=all m=33 n=16 | vendor -
-herm=U vec=all m=33 n=24 | vendor -
-herm=U vec=all m=33 n=32 | vendor -
-herm=U vec=all m=33 n=33 | vendor -
-herm=U vec=all m=33 n=48 | vendor -
-herm=U vec=all m=33 n=64 | vendor -
-herm=U vec=all m=33 n=65 | vendor -
-herm=U vec=all m=33 n=128 | vendor -
-herm=U vec=all m=33 n=256 | vendor -
-herm=U vec=all m=33 n=512 | vendor -
-herm=U vec=all m=33 n=1024 | vendor -
-herm=U vec=all m=48 n=1 | vendor -
-herm=U vec=all m=48 n=2 | vendor -
-herm=U vec=all m=48 n=4 | vendor -
-herm=U vec=all m=48 n=8 | vendor -
-herm=U vec=all m=48 n=16 | vendor -
-herm=U vec=all m=48 n=24 | vendor -
-herm=U vec=all m=48 n=32 | vendor -
-herm=U vec=all m=48 n=33 | vendor -
-herm=U vec=all m=48 n=48 | vendor -
-herm=U vec=all m=48 n=64 | vendor -
-herm=U vec=all m=48 n=65 | vendor -
-herm=U vec=all m=48 n=128 | vendor -
-herm=U vec=all m=48 n=256 | vendor -
-herm=U vec=all m=48 n=512 | vendor -
-herm=U vec=all m=48 n=1024 | vendor -
-herm=U vec=all m=64 n=1 | vendor -
-herm=U vec=all m=64 n=2 | vendor -
-herm=U vec=all m=64 n=4 | vendor -
-herm=U vec=all m=64 n=8 | vendor -
-herm=U vec=all m=64 n=16 | vendor -
-herm=U vec=all m=64 n=24 | vendor -
-herm=U vec=all m=64 n=32 | vendor -
-herm=U vec=all m=64 n=33 | vendor -
-herm=U vec=all m=64 n=48 | vendor -
-herm=U vec=all m=64 n=64 | vendor -
-herm=U vec=all m=64 n=65 | vendor -
-herm=U vec=all m=64 n=128 | vendor -
-herm=U vec=all m=64 n=256 | vendor -
-herm=U vec=all m=64 n=512 | vendor -
-herm=U vec=all m=64 n=1024 | vendor -
-herm=U vec=all m=65 n=1 | vendor -
-herm=U vec=all m=65 n=2 | vendor -
-herm=U vec=all m=65 n=4 | vendor -
-herm=U vec=all m=65 n=8 | vendor -
-herm=U vec=all m=65 n=16 | vendor -
-herm=U vec=all m=65 n=24 | vendor -
-herm=U vec=all m=65 n=32 | vendor -
-herm=U vec=all m=65 n=33 | vendor -
-herm=U vec=all m=65 n=48 | vendor -
-herm=U vec=all m=65 n=64 | vendor -
-herm=U vec=all m=65 n=65 | vendor -
-herm=U vec=all m=65 n=128 | vendor -
-herm=U vec=all m=65 n=256 | vendor -
-herm=U vec=all m=65 n=512 | vendor -
-herm=U vec=all m=65 n=1024 | vendor -
-herm=U vec=all m=128 n=1 | vendor -
-herm=U vec=all m=128 n=2 | vendor -
-herm=U vec=all m=128 n=4 | vendor -
-herm=U vec=all m=128 n=8 | vendor -
-herm=U vec=all m=128 n=16 | vendor -
-herm=U vec=all m=128 n=24 | vendor -
-herm=U vec=all m=128 n=32 | vendor -
-herm=U vec=all m=128 n=33 | vendor -
-herm=U vec=all m=128 n=48 | vendor -
-herm=U vec=all m=128 n=64 | vendor -
-herm=U vec=all m=128 n=65 | vendor -
-herm=U vec=all m=128 n=128 | vendor -
-herm=U vec=all m=128 n=256 | vendor -
-herm=U vec=all m=128 n=512 | vendor -
-herm=U vec=all m=128 n=1024 | vendor -
-herm=U vec=all m=256 n=1 | vendor -
-herm=U vec=all m=256 n=2 | vendor -
-herm=U vec=all m=256 n=4 | vendor -
-herm=U vec=all m=256 n=8 | vendor -
-herm=U vec=all m=256 n=16 | vendor -
-herm=U vec=all m=256 n=24 | vendor -
-herm=U vec=all m=256 n=32 | vendor -
-herm=U vec=all m=256 n=33 | vendor -
-herm=U vec=all m=256 n=48 | vendor -
-herm=U vec=all m=256 n=64 | vendor -
-herm=U vec=all m=256 n=65 | vendor -
-herm=U vec=all m=256 n=128 | vendor -
-herm=U vec=all m=256 n=256 | vendor -
-herm=U vec=all m=256 n=512 | vendor -
-herm=U vec=all m=256 n=1024 | vendor -
-herm=U vec=all m=512 n=1 | vendor -
-herm=U vec=all m=512 n=2 | vendor -
-herm=U vec=all m=512 n=4 | vendor -
-herm=U vec=all m=512 n=8 | vendor -
-herm=U vec=all m=512 n=16 | vendor -
-herm=U vec=all m=512 n=24 | vendor -
-herm=U vec=all m=512 n=32 | vendor -
-herm=U vec=all m=512 n=33 | vendor -
-herm=U vec=all m=512 n=48 | vendor -
-herm=U vec=all m=512 n=64 | vendor -
-herm=U vec=all m=512 n=65 | vendor -
-herm=U vec=all m=512 n=128 | vendor -
-herm=U vec=all m=512 n=256 | vendor -
-herm=U vec=all m=512 n=512 | vendor -
-herm=U vec=all m=512 n=1024 | vendor -
-herm=U vec=all m=1024 n=1 | vendor -
-herm=U vec=all m=1024 n=2 | vendor -
-herm=U vec=all m=1024 n=4 | vendor -
-herm=U vec=all m=1024 n=8 | vendor -
-herm=U vec=all m=1024 n=16 | vendor -
-herm=U vec=all m=1024 n=24 | vendor -
-herm=U vec=all m=1024 n=32 | vendor -
-herm=U vec=all m=1024 n=33 | vendor -
-herm=U vec=all m=1024 n=48 | vendor -
-herm=U vec=all m=1024 n=64 | vendor -
-herm=U vec=all m=1024 n=65 | vendor -
-herm=U vec=all m=1024 n=128 | vendor -
-herm=U vec=all m=1024 n=256 | vendor -
-herm=U vec=all m=1024 n=512 | vendor -
-herm=U vec=all m=1024 n=1024 | vendor -
-herm=U vec=none m=1 n=1 | cta - | vendor -
-herm=U vec=none m=1 n=2 | vendor -
-herm=U vec=none m=1 n=4 | vendor -
-herm=U vec=none m=1 n=8 | vendor -
-herm=U vec=none m=1 n=16 | vendor -
-herm=U vec=none m=1 n=24 | vendor -
-herm=U vec=none m=1 n=32 | vendor -
-herm=U vec=none m=1 n=33 | vendor -
-herm=U vec=none m=1 n=48 | vendor -
-herm=U vec=none m=1 n=64 | vendor -
-herm=U vec=none m=1 n=65 | vendor -
-herm=U vec=none m=1 n=128 | vendor -
-herm=U vec=none m=1 n=256 | vendor -
-herm=U vec=none m=1 n=512 | vendor -
-herm=U vec=none m=1 n=1024 | vendor -
-herm=U vec=none m=2 n=1 | vendor -
-herm=U vec=none m=2 n=2 | cta - | vendor -
-herm=U vec=none m=2 n=4 | vendor -
-herm=U vec=none m=2 n=8 | vendor -
-herm=U vec=none m=2 n=16 | vendor -
-herm=U vec=none m=2 n=24 | vendor -
-herm=U vec=none m=2 n=32 | vendor -
-herm=U vec=none m=2 n=33 | vendor -
-herm=U vec=none m=2 n=48 | vendor -
-herm=U vec=none m=2 n=64 | vendor -
-herm=U vec=none m=2 n=65 | vendor -
-herm=U vec=none m=2 n=128 | vendor -
-herm=U vec=none m=2 n=256 | vendor -
-herm=U vec=none m=2 n=512 | vendor -
-herm=U vec=none m=2 n=1024 | vendor -
-herm=U vec=none m=4 n=1 | vendor -
-herm=U vec=none m=4 n=2 | vendor -
-herm=U vec=none m=4 n=4 | cta - | vendor -
-herm=U vec=none m=4 n=8 | vendor -
-herm=U vec=none m=4 n=16 | vendor -
-herm=U vec=none m=4 n=24 | vendor -
-herm=U vec=none m=4 n=32 | vendor -
-herm=U vec=none m=4 n=33 | vendor -
-herm=U vec=none m=4 n=48 | vendor -
-herm=U vec=none m=4 n=64 | vendor -
-herm=U vec=none m=4 n=65 | vendor -
-herm=U vec=none m=4 n=128 | vendor -
-herm=U vec=none m=4 n=256 | vendor -
-herm=U vec=none m=4 n=512 | vendor -
-herm=U vec=none m=4 n=1024 | vendor -
-herm=U vec=none m=8 n=1 | vendor -
-herm=U vec=none m=8 n=2 | vendor -
-herm=U vec=none m=8 n=4 | vendor -
-herm=U vec=none m=8 n=8 | cta - | vendor -
-herm=U vec=none m=8 n=16 | vendor -
-herm=U vec=none m=8 n=24 | vendor -
-herm=U vec=none m=8 n=32 | vendor -
-herm=U vec=none m=8 n=33 | vendor -
-herm=U vec=none m=8 n=48 | vendor -
-herm=U vec=none m=8 n=64 | vendor -
-herm=U vec=none m=8 n=65 | vendor -
-herm=U vec=none m=8 n=128 | vendor -
-herm=U vec=none m=8 n=256 | vendor -
-herm=U vec=none m=8 n=512 | vendor -
-herm=U vec=none m=8 n=1024 | vendor -
-herm=U vec=none m=16 n=1 | vendor -
-herm=U vec=none m=16 n=2 | vendor -
-herm=U vec=none m=16 n=4 | vendor -
-herm=U vec=none m=16 n=8 | vendor -
-herm=U vec=none m=16 n=16 | cta - | vendor -
-herm=U vec=none m=16 n=24 | vendor -
-herm=U vec=none m=16 n=32 | vendor -
-herm=U vec=none m=16 n=33 | vendor -
-herm=U vec=none m=16 n=48 | vendor -
-herm=U vec=none m=16 n=64 | vendor -
-herm=U vec=none m=16 n=65 | vendor -
-herm=U vec=none m=16 n=128 | vendor -
-herm=U vec=none m=16 n=256 | vendor -
-herm=U vec=none m=16 n=512 | vendor -
-herm=U vec=none m=16 n=1024 | vendor -
-herm=U vec=none m=24 n=1 | vendor -
-herm=U vec=none m=24 n=2 | vendor -
-herm=U vec=none m=24 n=4 | vendor -
-herm=U vec=none m=24 n=8 | vendor -
-herm=U vec=none m=24 n=16 | vendor -
-herm=U vec=none m=24 n=24 | cta - | vendor -
-herm=U vec=none m=24 n=32 | vendor -
-herm=U vec=none m=24 n=33 | vendor -
-herm=U vec=none m=24 n=48 | vendor -
-herm=U vec=none m=24 n=64 | vendor -
-herm=U vec=none m=24 n=65 | vendor -
-herm=U vec=none m=24 n=128 | vendor -
-herm=U vec=none m=24 n=256 | vendor -
-herm=U vec=none m=24 n=512 | vendor -
-herm=U vec=none m=24 n=1024 | vendor -
-herm=U vec=none m=32 n=1 | vendor -
-herm=U vec=none m=32 n=2 | vendor -
-herm=U vec=none m=32 n=4 | vendor -
-herm=U vec=none m=32 n=8 | vendor -
-herm=U vec=none m=32 n=16 | vendor -
-herm=U vec=none m=32 n=24 | vendor -
-herm=U vec=none m=32 n=32 | cta - | vendor -
-herm=U vec=none m=32 n=33 | vendor -
-herm=U vec=none m=32 n=48 | vendor -
-herm=U vec=none m=32 n=64 | vendor -
-herm=U vec=none m=32 n=65 | vendor -
-herm=U vec=none m=32 n=128 | vendor -
-herm=U vec=none m=32 n=256 | vendor -
-herm=U vec=none m=32 n=512 | vendor -
-herm=U vec=none m=32 n=1024 | vendor -
-herm=U vec=none m=33 n=1 | vendor -
-herm=U vec=none m=33 n=2 | vendor -
-herm=U vec=none m=33 n=4 | vendor -
-herm=U vec=none m=33 n=8 | vendor -
-herm=U vec=none m=33 n=16 | vendor -
-herm=U vec=none m=33 n=24 | vendor -
-herm=U vec=none m=33 n=32 | vendor -
-herm=U vec=none m=33 n=33 | vendor -
-herm=U vec=none m=33 n=48 | vendor -
-herm=U vec=none m=33 n=64 | vendor -
-herm=U vec=none m=33 n=65 | vendor -
-herm=U vec=none m=33 n=128 | vendor -
-herm=U vec=none m=33 n=256 | vendor -
-herm=U vec=none m=33 n=512 | vendor -
-herm=U vec=none m=33 n=1024 | vendor -
-herm=U vec=none m=48 n=1 | vendor -
-herm=U vec=none m=48 n=2 | vendor -
-herm=U vec=none m=48 n=4 | vendor -
-herm=U vec=none m=48 n=8 | vendor -
-herm=U vec=none m=48 n=16 | vendor -
-herm=U vec=none m=48 n=24 | vendor -
-herm=U vec=none m=48 n=32 | vendor -
-herm=U vec=none m=48 n=33 | vendor -
-herm=U vec=none m=48 n=48 | vendor -
-herm=U vec=none m=48 n=64 | vendor -
-herm=U vec=none m=48 n=65 | vendor -
-herm=U vec=none m=48 n=128 | vendor -
-herm=U vec=none m=48 n=256 | vendor -
-herm=U vec=none m=48 n=512 | vendor -
-herm=U vec=none m=48 n=1024 | vendor -
-herm=U vec=none m=64 n=1 | vendor -
-herm=U vec=none m=64 n=2 | vendor -
-herm=U vec=none m=64 n=4 | vendor -
-herm=U vec=none m=64 n=8 | vendor -
-herm=U vec=none m=64 n=16 | vendor -
-herm=U vec=none m=64 n=24 | vendor -
-herm=U vec=none m=64 n=32 | vendor -
-herm=U vec=none m=64 n=33 | vendor -
-herm=U vec=none m=64 n=48 | vendor -
-herm=U vec=none m=64 n=64 | vendor -
-herm=U vec=none m=64 n=65 | vendor -
-herm=U vec=none m=64 n=128 | vendor -
-herm=U vec=none m=64 n=256 | vendor -
-herm=U vec=none m=64 n=512 | vendor -
-herm=U vec=none m=64 n=1024 | vendor -
-herm=U vec=none m=65 n=1 | vendor -
-herm=U vec=none m=65 n=2 | vendor -
-herm=U vec=none m=65 n=4 | vendor -
-herm=U vec=none m=65 n=8 | vendor -
-herm=U vec=none m=65 n=16 | vendor -
-herm=U vec=none m=65 n=24 | vendor -
-herm=U vec=none m=65 n=32 | vendor -
-herm=U vec=none m=65 n=33 | vendor -
-herm=U vec=none m=65 n=48 | vendor -
-herm=U vec=none m=65 n=64 | vendor -
-herm=U vec=none m=65 n=65 | vendor -
-herm=U vec=none m=65 n=128 | vendor -
-herm=U vec=none m=65 n=256 | vendor -
-herm=U vec=none m=65 n=512 | vendor -
-herm=U vec=none m=65 n=1024 | vendor -
-herm=U vec=none m=128 n=1 | vendor -
-herm=U vec=none m=128 n=2 | vendor -
-herm=U vec=none m=128 n=4 | vendor -
-herm=U vec=none m=128 n=8 | vendor -
-herm=U vec=none m=128 n=16 | vendor -
-herm=U vec=none m=128 n=24 | vendor -
-herm=U vec=none m=128 n=32 | vendor -
-herm=U vec=none m=128 n=33 | vendor -
-herm=U vec=none m=128 n=48 | vendor -
-herm=U vec=none m=128 n=64 | vendor -
-herm=U vec=none m=128 n=65 | vendor -
-herm=U vec=none m=128 n=128 | vendor -
-herm=U vec=none m=128 n=256 | vendor -
-herm=U vec=none m=128 n=512 | vendor -
-herm=U vec=none m=128 n=1024 | vendor -
-herm=U vec=none m=256 n=1 | vendor -
-herm=U vec=none m=256 n=2 | vendor -
-herm=U vec=none m=256 n=4 | vendor -
-herm=U vec=none m=256 n=8 | vendor -
-herm=U vec=none m=256 n=16 | vendor -
-herm=U vec=none m=256 n=24 | vendor -
-herm=U vec=none m=256 n=32 | vendor -
-herm=U vec=none m=256 n=33 | vendor -
-herm=U vec=none m=256 n=48 | vendor -
-herm=U vec=none m=256 n=64 | vendor -
-herm=U vec=none m=256 n=65 | vendor -
-herm=U vec=none m=256 n=128 | vendor -
-herm=U vec=none m=256 n=256 | vendor -
-herm=U vec=none m=256 n=512 | vendor -
-herm=U vec=none m=256 n=1024 | vendor -
-herm=U vec=none m=512 n=1 | vendor -
-herm=U vec=none m=512 n=2 | vendor -
-herm=U vec=none m=512 n=4 | vendor -
-herm=U vec=none m=512 n=8 | vendor -
-herm=U vec=none m=512 n=16 | vendor -
-herm=U vec=none m=512 n=24 | vendor -
-herm=U vec=none m=512 n=32 | vendor -
-herm=U vec=none m=512 n=33 | vendor -
-herm=U vec=none m=512 n=48 | vendor -
-herm=U vec=none m=512 n=64 | vendor -
-herm=U vec=none m=512 n=65 | vendor -
-herm=U vec=none m=512 n=128 | vendor -
-herm=U vec=none m=512 n=256 | vendor -
-herm=U vec=none m=512 n=512 | vendor -
-herm=U vec=none m=512 n=1024 | vendor -
-herm=U vec=none m=1024 n=1 | vendor -
-herm=U vec=none m=1024 n=2 | vendor -
-herm=U vec=none m=1024 n=4 | vendor -
-herm=U vec=none m=1024 n=8 | vendor -
-herm=U vec=none m=1024 n=16 | vendor -
-herm=U vec=none m=1024 n=24 | vendor -
-herm=U vec=none m=1024 n=32 | vendor -
-herm=U vec=none m=1024 n=33 | vendor -
-herm=U vec=none m=1024 n=48 | vendor -
-herm=U vec=none m=1024 n=64 | vendor -
-herm=U vec=none m=1024 n=65 | vendor -
-herm=U vec=none m=1024 n=128 | vendor -
-herm=U vec=none m=1024 n=256 | vendor -
-herm=U vec=none m=1024 n=512 | vendor -
-herm=U vec=none m=1024 n=1024 | vendor -
-herm=U vec=thin m=1 n=1 | vendor -
-herm=U vec=thin m=1 n=2 | vendor -
-herm=U vec=thin m=1 n=4 | vendor -
-herm=U vec=thin m=1 n=8 | vendor -
-herm=U vec=thin m=1 n=16 | vendor -
-herm=U vec=thin m=1 n=24 | vendor -
-herm=U vec=thin m=1 n=32 | vendor -
-herm=U vec=thin m=1 n=33 | vendor -
-herm=U vec=thin m=1 n=48 | vendor -
-herm=U vec=thin m=1 n=64 | vendor -
-herm=U vec=thin m=1 n=65 | vendor -
-herm=U vec=thin m=1 n=128 | vendor -
-herm=U vec=thin m=1 n=256 | vendor -
-herm=U vec=thin m=1 n=512 | vendor -
-herm=U vec=thin m=1 n=1024 | vendor -
-herm=U vec=thin m=2 n=1 | vendor -
-herm=U vec=thin m=2 n=2 | vendor -
-herm=U vec=thin m=2 n=4 | vendor -
-herm=U vec=thin m=2 n=8 | vendor -
-herm=U vec=thin m=2 n=16 | vendor -
-herm=U vec=thin m=2 n=24 | vendor -
-herm=U vec=thin m=2 n=32 | vendor -
-herm=U vec=thin m=2 n=33 | vendor -
-herm=U vec=thin m=2 n=48 | vendor -
-herm=U vec=thin m=2 n=64 | vendor -
-herm=U vec=thin m=2 n=65 | vendor -
-herm=U vec=thin m=2 n=128 | vendor -
-herm=U vec=thin m=2 n=256 | vendor -
-herm=U vec=thin m=2 n=512 | vendor -
-herm=U vec=thin m=2 n=1024 | vendor -
-herm=U vec=thin m=4 n=1 | vendor -
-herm=U vec=thin m=4 n=2 | vendor -
-herm=U vec=thin m=4 n=4 | vendor -
-herm=U vec=thin m=4 n=8 | vendor -
-herm=U vec=thin m=4 n=16 | vendor -
-herm=U vec=thin m=4 n=24 | vendor -
-herm=U vec=thin m=4 n=32 | vendor -
-herm=U vec=thin m=4 n=33 | vendor -
-herm=U vec=thin m=4 n=48 | vendor -
-herm=U vec=thin m=4 n=64 | vendor -
-herm=U vec=thin m=4 n=65 | vendor -
-herm=U vec=thin m=4 n=128 | vendor -
-herm=U vec=thin m=4 n=256 | vendor -
-herm=U vec=thin m=4 n=512 | vendor -
-herm=U vec=thin m=4 n=1024 | vendor -
-herm=U vec=thin m=8 n=1 | vendor -
-herm=U vec=thin m=8 n=2 | vendor -
-herm=U vec=thin m=8 n=4 | vendor -
-herm=U vec=thin m=8 n=8 | vendor -
-herm=U vec=thin m=8 n=16 | vendor -
-herm=U vec=thin m=8 n=24 | vendor -
-herm=U vec=thin m=8 n=32 | vendor -
-herm=U vec=thin m=8 n=33 | vendor -
-herm=U vec=thin m=8 n=48 | vendor -
-herm=U vec=thin m=8 n=64 | vendor -
-herm=U vec=thin m=8 n=65 | vendor -
-herm=U vec=thin m=8 n=128 | vendor -
-herm=U vec=thin m=8 n=256 | vendor -
-herm=U vec=thin m=8 n=512 | vendor -
-herm=U vec=thin m=8 n=1024 | vendor -
-herm=U vec=thin m=16 n=1 | vendor -
-herm=U vec=thin m=16 n=2 | vendor -
-herm=U vec=thin m=16 n=4 | vendor -
-herm=U vec=thin m=16 n=8 | vendor -
-herm=U vec=thin m=16 n=16 | vendor -
-herm=U vec=thin m=16 n=24 | vendor -
-herm=U vec=thin m=16 n=32 | vendor -
-herm=U vec=thin m=16 n=33 | vendor -
-herm=U vec=thin m=16 n=48 | vendor -
-herm=U vec=thin m=16 n=64 | vendor -
-herm=U vec=thin m=16 n=65 | vendor -
-herm=U vec=thin m=16 n=128 | vendor -
-herm=U vec=thin m=16 n=256 | vendor -
-herm=U vec=thin m=16 n=512 | vendor -
-herm=U vec=thin m=16 n=1024 | vendor -
-herm=U vec=thin m=24 n=1 | vendor -
-herm=U vec=thin m=24 n=2 | vendor -
-herm=U vec=thin m=24 n=4 | vendor -
-herm=U vec=thin m=24 n=8 | vendor -
-herm=U vec=thin m=24 n=16 | vendor -
-herm=U vec=thin m=24 n=24 | vendor -
-herm=U vec=thin m=24 n=32 | vendor -
-herm=U vec=thin m=24 n=33 | vendor -
-herm=U vec=thin m=24 n=48 | vendor -
-herm=U vec=thin m=24 n=64 | vendor -
-herm=U vec=thin m=24 n=65 | vendor -
-herm=U vec=thin m=24 n=128 | vendor -
-herm=U vec=thin m=24 n=256 | vendor -
-herm=U vec=thin m=24 n=512 | vendor -
-herm=U vec=thin m=24 n=1024 | vendor -
-herm=U vec=thin m=32 n=1 | vendor -
-herm=U vec=thin m=32 n=2 | vendor -
-herm=U vec=thin m=32 n=4 | vendor -
-herm=U vec=thin m=32 n=8 | vendor -
-herm=U vec=thin m=32 n=16 | vendor -
-herm=U vec=thin m=32 n=24 | vendor -
-herm=U vec=thin m=32 n=32 | vendor -
-herm=U vec=thin m=32 n=33 | vendor -
-herm=U vec=thin m=32 n=48 | vendor -
-herm=U vec=thin m=32 n=64 | vendor -
-herm=U vec=thin m=32 n=65 | vendor -
-herm=U vec=thin m=32 n=128 | vendor -
-herm=U vec=thin m=32 n=256 | vendor -
-herm=U vec=thin m=32 n=512 | vendor -
-herm=U vec=thin m=32 n=1024 | vendor -
-herm=U vec=thin m=33 n=1 | vendor -
-herm=U vec=thin m=33 n=2 | vendor -
-herm=U vec=thin m=33 n=4 | vendor -
-herm=U vec=thin m=33 n=8 | vendor -
-herm=U vec=thin m=33 n=16 | vendor -
-herm=U vec=thin m=33 n=24 | vendor -
-herm=U vec=thin m=33 n=32 | vendor -
-herm=U vec=thin m=33 n=33 | vendor -
-herm=U vec=thin m=33 n=48 | vendor -
-herm=U vec=thin m=33 n=64 | vendor -
-herm=U vec=thin m=33 n=65 | vendor -
-herm=U vec=thin m=33 n=128 | vendor -
-herm=U vec=thin m=33 n=256 | vendor -
-herm=U vec=thin m=33 n=512 | vendor -
-herm=U vec=thin m=33 n=1024 | vendor -
-herm=U vec=thin m=48 n=1 | vendor -
-herm=U vec=thin m=48 n=2 | vendor -
-herm=U vec=thin m=48 n=4 | vendor -
-herm=U vec=thin m=48 n=8 | vendor -
-herm=U vec=thin m=48 n=16 | vendor -
-herm=U vec=thin m=48 n=24 | vendor -
-herm=U vec=thin m=48 n=32 | vendor -
-herm=U vec=thin m=48 n=33 | vendor -
-herm=U vec=thin m=48 n=48 | vendor -
-herm=U vec=thin m=48 n=64 | vendor -
-herm=U vec=thin m=48 n=65 | vendor -
-herm=U vec=thin m=48 n=128 | vendor -
-herm=U vec=thin m=48 n=256 | vendor -
-herm=U vec=thin m=48 n=512 | vendor -
-herm=U vec=thin m=48 n=1024 | vendor -
-herm=U vec=thin m=64 n=1 | vendor -
-herm=U vec=thin m=64 n=2 | vendor -
-herm=U vec=thin m=64 n=4 | vendor -
-herm=U vec=thin m=64 n=8 | vendor -
-herm=U vec=thin m=64 n=16 | vendor -
-herm=U vec=thin m=64 n=24 | vendor -
-herm=U vec=thin m=64 n=32 | vendor -
-herm=U vec=thin m=64 n=33 | vendor -
-herm=U vec=thin m=64 n=48 | vendor -
-herm=U vec=thin m=64 n=64 | vendor -
-herm=U vec=thin m=64 n=65 | vendor -
-herm=U vec=thin m=64 n=128 | vendor -
-herm=U vec=thin m=64 n=256 | vendor -
-herm=U vec=thin m=64 n=512 | vendor -
-herm=U vec=thin m=64 n=1024 | vendor -
-herm=U vec=thin m=65 n=1 | vendor -
-herm=U vec=thin m=65 n=2 | vendor -
-herm=U vec=thin m=65 n=4 | vendor -
-herm=U vec=thin m=65 n=8 | vendor -
-herm=U vec=thin m=65 n=16 | vendor -
-herm=U vec=thin m=65 n=24 | vendor -
-herm=U vec=thin m=65 n=32 | vendor -
-herm=U vec=thin m=65 n=33 | vendor -
-herm=U vec=thin m=65 n=48 | vendor -
-herm=U vec=thin m=65 n=64 | vendor -
-herm=U vec=thin m=65 n=65 | vendor -
-herm=U vec=thin m=65 n=128 | vendor -
-herm=U vec=thin m=65 n=256 | vendor -
-herm=U vec=thin m=65 n=512 | vendor -
-herm=U vec=thin m=65 n=1024 | vendor -
-herm=U vec=thin m=128 n=1 | vendor -
-herm=U vec=thin m=128 n=2 | vendor -
-herm=U vec=thin m=128 n=4 | vendor -
-herm=U vec=thin m=128 n=8 | vendor -
-herm=U vec=thin m=128 n=16 | vendor -
-herm=U vec=thin m=128 n=24 | vendor -
-herm=U vec=thin m=128 n=32 | vendor -
-herm=U vec=thin m=128 n=33 | vendor -
-herm=U vec=thin m=128 n=48 | vendor -
-herm=U vec=thin m=128 n=64 | vendor -
-herm=U vec=thin m=128 n=65 | vendor -
-herm=U vec=thin m=128 n=128 | vendor -
-herm=U vec=thin m=128 n=256 | vendor -
-herm=U vec=thin m=128 n=512 | vendor -
-herm=U vec=thin m=128 n=1024 | vendor -
-herm=U vec=thin m=256 n=1 | vendor -
-herm=U vec=thin m=256 n=2 | vendor -
-herm=U vec=thin m=256 n=4 | vendor -
-herm=U vec=thin m=256 n=8 | vendor -
-herm=U vec=thin m=256 n=16 | vendor -
-herm=U vec=thin m=256 n=24 | vendor -
-herm=U vec=thin m=256 n=32 | vendor -
-herm=U vec=thin m=256 n=33 | vendor -
-herm=U vec=thin m=256 n=48 | vendor -
-herm=U vec=thin m=256 n=64 | vendor -
-herm=U vec=thin m=256 n=65 | vendor -
-herm=U vec=thin m=256 n=128 | vendor -
-herm=U vec=thin m=256 n=256 | vendor -
-herm=U vec=thin m=256 n=512 | vendor -
-herm=U vec=thin m=256 n=1024 | vendor -
-herm=U vec=thin m=512 n=1 | vendor -
-herm=U vec=thin m=512 n=2 | vendor -
-herm=U vec=thin m=512 n=4 | vendor -
-herm=U vec=thin m=512 n=8 | vendor -
-herm=U vec=thin m=512 n=16 | vendor -
-herm=U vec=thin m=512 n=24 | vendor -
-herm=U vec=thin m=512 n=32 | vendor -
-herm=U vec=thin m=512 n=33 | vendor -
-herm=U vec=thin m=512 n=48 | vendor -
-herm=U vec=thin m=512 n=64 | vendor -
-herm=U vec=thin m=512 n=65 | vendor -
-herm=U vec=thin m=512 n=128 | vendor -
-herm=U vec=thin m=512 n=256 | vendor -
-herm=U vec=thin m=512 n=512 | vendor -
-herm=U vec=thin m=512 n=1024 | vendor -
-herm=U vec=thin m=1024 n=1 | vendor -
-herm=U vec=thin m=1024 n=2 | vendor -
-herm=U vec=thin m=1024 n=4 | vendor -
-herm=U vec=thin m=1024 n=8 | vendor -
-herm=U vec=thin m=1024 n=16 | vendor -
-herm=U vec=thin m=1024 n=24 | vendor -
-herm=U vec=thin m=1024 n=32 | vendor -
-herm=U vec=thin m=1024 n=33 | vendor -
-herm=U vec=thin m=1024 n=48 | vendor -
-herm=U vec=thin m=1024 n=64 | vendor -
-herm=U vec=thin m=1024 n=65 | vendor -
-herm=U vec=thin m=1024 n=128 | vendor -
-herm=U vec=thin m=1024 n=256 | vendor -
-herm=U vec=thin m=1024 n=512 | vendor -
-herm=U vec=thin m=1024 n=1024 | vendor -
+herm=L vec=all m=1 n=1 | blocked 0.06641 | cta 0.07085 | vendor 0.1900 # deep
+herm=L vec=all m=1 n=4 | vendor - # transcribed
+herm=L vec=all m=1 n=8 | vendor - # transcribed
+herm=L vec=all m=1 n=16 | vendor - # transcribed
+herm=L vec=all m=1 n=24 | vendor - # transcribed
+herm=L vec=all m=1 n=32 | vendor - # transcribed
+herm=L vec=all m=1 n=33 | vendor - # transcribed
+herm=L vec=all m=1 n=48 | vendor - # transcribed
+herm=L vec=all m=1 n=64 | vendor - # transcribed
+herm=L vec=all m=1 n=65 | vendor - # transcribed
+herm=L vec=all m=1 n=128 | vendor - # transcribed
+herm=L vec=all m=1 n=256 | vendor - # transcribed
+herm=L vec=all m=1 n=512 | vendor - # transcribed
+herm=L vec=all m=1 n=1024 | vendor - # transcribed
+herm=L vec=all m=2 n=2 | cta 0.08087 | blocked 0.2092 | vendor 1.583 # deep
+herm=L vec=all m=2 n=4 | vendor - # transcribed
+herm=L vec=all m=2 n=8 | vendor - # transcribed
+herm=L vec=all m=2 n=16 | vendor - # transcribed
+herm=L vec=all m=2 n=24 | vendor - # transcribed
+herm=L vec=all m=2 n=32 | vendor - # transcribed
+herm=L vec=all m=2 n=33 | vendor - # transcribed
+herm=L vec=all m=2 n=48 | vendor - # transcribed
+herm=L vec=all m=2 n=64 | vendor - # transcribed
+herm=L vec=all m=2 n=65 | vendor - # transcribed
+herm=L vec=all m=2 n=128 | vendor - # transcribed
+herm=L vec=all m=2 n=256 | vendor - # transcribed
+herm=L vec=all m=2 n=512 | vendor - # transcribed
+herm=L vec=all m=2 n=1024 | vendor - # transcribed
+herm=L vec=all m=4 n=1 | vendor - # transcribed
+herm=L vec=all m=4 n=2 | vendor - # transcribed
+herm=L vec=all m=4 n=4 | cta 0.09129 | blocked 0.5863 | vendor 4.826 # deep
+herm=L vec=all m=4 n=16 | vendor - # transcribed
+herm=L vec=all m=4 n=24 | vendor - # transcribed
+herm=L vec=all m=4 n=32 | vendor - # transcribed
+herm=L vec=all m=4 n=33 | vendor - # transcribed
+herm=L vec=all m=4 n=48 | vendor - # transcribed
+herm=L vec=all m=4 n=64 | vendor - # transcribed
+herm=L vec=all m=4 n=65 | vendor - # transcribed
+herm=L vec=all m=4 n=128 | vendor - # transcribed
+herm=L vec=all m=4 n=256 | vendor - # transcribed
+herm=L vec=all m=4 n=512 | vendor - # transcribed
+herm=L vec=all m=4 n=1024 | vendor - # transcribed
+herm=L vec=all m=8 n=1 | vendor - # transcribed
+herm=L vec=all m=8 n=2 | vendor - # transcribed
+herm=L vec=all m=8 n=8 | cta 0.2296 | blocked 0.7519 | vendor 7.328 # deep
+herm=L vec=all m=8 n=16 | vendor - # transcribed
+herm=L vec=all m=8 n=24 | vendor - # transcribed
+herm=L vec=all m=8 n=32 | vendor - # transcribed
+herm=L vec=all m=8 n=33 | vendor - # transcribed
+herm=L vec=all m=8 n=48 | vendor - # transcribed
+herm=L vec=all m=8 n=64 | vendor - # transcribed
+herm=L vec=all m=8 n=65 | vendor - # transcribed
+herm=L vec=all m=8 n=128 | vendor - # transcribed
+herm=L vec=all m=8 n=256 | vendor - # transcribed
+herm=L vec=all m=8 n=512 | vendor - # transcribed
+herm=L vec=all m=8 n=1024 | vendor - # transcribed
+herm=L vec=all m=16 n=1 | vendor - # transcribed
+herm=L vec=all m=16 n=2 | vendor - # transcribed
+herm=L vec=all m=16 n=4 | vendor - # transcribed
+herm=L vec=all m=16 n=8 | vendor - # transcribed
+herm=L vec=all m=16 n=16 | cta 0.9839 | blocked 2.187 | vendor 13.04 # deep
+herm=L vec=all m=16 n=24 | vendor - # transcribed
+herm=L vec=all m=16 n=32 | vendor - # transcribed
+herm=L vec=all m=16 n=33 | vendor - # transcribed
+herm=L vec=all m=16 n=48 | vendor - # transcribed
+herm=L vec=all m=16 n=64 | vendor - # transcribed
+herm=L vec=all m=16 n=65 | vendor - # transcribed
+herm=L vec=all m=16 n=128 | vendor - # transcribed
+herm=L vec=all m=16 n=256 | vendor - # transcribed
+herm=L vec=all m=16 n=512 | vendor - # transcribed
+herm=L vec=all m=16 n=1024 | vendor - # transcribed
+herm=L vec=all m=24 n=1 | vendor - # transcribed
+herm=L vec=all m=24 n=2 | vendor - # transcribed
+herm=L vec=all m=24 n=4 | vendor - # transcribed
+herm=L vec=all m=24 n=8 | vendor - # transcribed
+herm=L vec=all m=24 n=16 | vendor - # transcribed
+herm=L vec=all m=24 n=24 | cta 3.290 | blocked 4.953 | vendor 18.42 # deep
+herm=L vec=all m=24 n=33 | vendor - # transcribed
+herm=L vec=all m=24 n=48 | vendor - # transcribed
+herm=L vec=all m=24 n=64 | vendor - # transcribed
+herm=L vec=all m=24 n=65 | vendor - # transcribed
+herm=L vec=all m=24 n=128 | vendor - # transcribed
+herm=L vec=all m=24 n=256 | vendor - # transcribed
+herm=L vec=all m=24 n=512 | vendor - # transcribed
+herm=L vec=all m=24 n=1024 | vendor - # transcribed
+herm=L vec=all m=32 n=1 | vendor - # transcribed
+herm=L vec=all m=32 n=2 | vendor - # transcribed
+herm=L vec=all m=32 n=4 | vendor - # transcribed
+herm=L vec=all m=32 n=8 | vendor - # transcribed
+herm=L vec=all m=32 n=16 | vendor - # transcribed
+herm=L vec=all m=32 n=32 | cta 5.645 | blocked 7.641 | vendor 26.33 # deep
+herm=L vec=all m=32 n=64 | vendor - # transcribed
+herm=L vec=all m=32 n=65 | vendor - # transcribed
+herm=L vec=all m=32 n=128 | vendor - # transcribed
+herm=L vec=all m=32 n=256 | vendor - # transcribed
+herm=L vec=all m=32 n=512 | vendor - # transcribed
+herm=L vec=all m=32 n=1024 | vendor - # transcribed
+herm=L vec=all m=33 n=1 | vendor - # transcribed
+herm=L vec=all m=33 n=2 | vendor - # transcribed
+herm=L vec=all m=33 n=4 | vendor - # transcribed
+herm=L vec=all m=33 n=8 | vendor - # transcribed
+herm=L vec=all m=33 n=16 | vendor - # transcribed
+herm=L vec=all m=33 n=33 | blocked 5.804 # deep
+herm=L vec=all m=33 n=65 | vendor - # transcribed
+herm=L vec=all m=33 n=128 | vendor - # transcribed
+herm=L vec=all m=33 n=256 | vendor - # transcribed
+herm=L vec=all m=33 n=512 | vendor - # transcribed
+herm=L vec=all m=33 n=1024 | vendor - # transcribed
+herm=L vec=all m=48 n=1 | vendor - # transcribed
+herm=L vec=all m=48 n=2 | vendor - # transcribed
+herm=L vec=all m=48 n=4 | vendor - # transcribed
+herm=L vec=all m=48 n=8 | vendor - # transcribed
+herm=L vec=all m=48 n=16 | vendor - # transcribed
+herm=L vec=all m=48 n=24 | vendor - # transcribed
+herm=L vec=all m=48 n=48 | blocked 5.612 # deep
+herm=L vec=all m=48 n=128 | vendor - # transcribed
+herm=L vec=all m=48 n=256 | vendor - # transcribed
+herm=L vec=all m=48 n=512 | vendor - # transcribed
+herm=L vec=all m=48 n=1024 | vendor - # transcribed
+herm=L vec=all m=64 n=1 | vendor - # transcribed
+herm=L vec=all m=64 n=2 | vendor - # transcribed
+herm=L vec=all m=64 n=4 | vendor - # transcribed
+herm=L vec=all m=64 n=8 | vendor - # transcribed
+herm=L vec=all m=64 n=16 | vendor - # transcribed
+herm=L vec=all m=64 n=24 | vendor - # transcribed
+herm=L vec=all m=64 n=32 | vendor - # transcribed
+herm=L vec=all m=64 n=64 | blocked 9.281 # deep
+herm=L vec=all m=64 n=256 | vendor - # transcribed
+herm=L vec=all m=64 n=512 | vendor - # transcribed
+herm=L vec=all m=64 n=1024 | vendor - # transcribed
+herm=L vec=all m=65 n=1 | vendor - # transcribed
+herm=L vec=all m=65 n=2 | vendor - # transcribed
+herm=L vec=all m=65 n=4 | vendor - # transcribed
+herm=L vec=all m=65 n=8 | vendor - # transcribed
+herm=L vec=all m=65 n=16 | vendor - # transcribed
+herm=L vec=all m=65 n=24 | vendor - # transcribed
+herm=L vec=all m=65 n=32 | vendor - # transcribed
+herm=L vec=all m=65 n=33 | vendor - # transcribed
+herm=L vec=all m=65 n=65 | blocked 6.775 # deep
+herm=L vec=all m=65 n=512 | vendor - # transcribed
+herm=L vec=all m=65 n=1024 | vendor - # transcribed
+herm=L vec=all m=128 n=1 | vendor - # transcribed
+herm=L vec=all m=128 n=2 | vendor - # transcribed
+herm=L vec=all m=128 n=4 | vendor - # transcribed
+herm=L vec=all m=128 n=8 | vendor - # transcribed
+herm=L vec=all m=128 n=16 | vendor - # transcribed
+herm=L vec=all m=128 n=24 | vendor - # transcribed
+herm=L vec=all m=128 n=32 | vendor - # transcribed
+herm=L vec=all m=128 n=33 | vendor - # transcribed
+herm=L vec=all m=128 n=48 | vendor - # transcribed
+herm=L vec=all m=128 n=128 | blocked 14.50 # deep
+herm=L vec=all m=128 n=1024 | vendor - # transcribed
+herm=L vec=all m=256 n=1 | vendor - # transcribed
+herm=L vec=all m=256 n=2 | vendor - # transcribed
+herm=L vec=all m=256 n=4 | vendor - # transcribed
+herm=L vec=all m=256 n=8 | vendor - # transcribed
+herm=L vec=all m=256 n=16 | vendor - # transcribed
+herm=L vec=all m=256 n=24 | vendor - # transcribed
+herm=L vec=all m=256 n=32 | vendor - # transcribed
+herm=L vec=all m=256 n=33 | vendor - # transcribed
+herm=L vec=all m=256 n=48 | vendor - # transcribed
+herm=L vec=all m=256 n=64 | vendor - # transcribed
+herm=L vec=all m=256 n=256 | blocked 25.74 # deep
+herm=L vec=all m=512 n=1 | vendor - # transcribed
+herm=L vec=all m=512 n=2 | vendor - # transcribed
+herm=L vec=all m=512 n=4 | vendor - # transcribed
+herm=L vec=all m=512 n=8 | vendor - # transcribed
+herm=L vec=all m=512 n=16 | vendor - # transcribed
+herm=L vec=all m=512 n=24 | vendor - # transcribed
+herm=L vec=all m=512 n=32 | vendor - # transcribed
+herm=L vec=all m=512 n=33 | vendor - # transcribed
+herm=L vec=all m=512 n=48 | vendor - # transcribed
+herm=L vec=all m=512 n=64 | vendor - # transcribed
+herm=L vec=all m=512 n=65 | vendor - # transcribed
+herm=L vec=all m=512 n=512 | blocked 96.95 # deep
+herm=L vec=all m=1024 n=1 | vendor - # transcribed
+herm=L vec=all m=1024 n=2 | vendor - # transcribed
+herm=L vec=all m=1024 n=4 | vendor - # transcribed
+herm=L vec=all m=1024 n=8 | vendor - # transcribed
+herm=L vec=all m=1024 n=16 | vendor - # transcribed
+herm=L vec=all m=1024 n=24 | vendor - # transcribed
+herm=L vec=all m=1024 n=32 | vendor - # transcribed
+herm=L vec=all m=1024 n=33 | vendor - # transcribed
+herm=L vec=all m=1024 n=48 | vendor - # transcribed
+herm=L vec=all m=1024 n=64 | vendor - # transcribed
+herm=L vec=all m=1024 n=65 | vendor - # transcribed
+herm=L vec=all m=1024 n=128 | vendor - # transcribed
+herm=L vec=all m=1024 n=1024 | blocked 639.7 # deep
+herm=L vec=none m=1 n=1 | blocked 0.02877 | cta 0.05129 | vendor 0.1831 # deep
+herm=L vec=none m=1 n=4 | vendor - # transcribed
+herm=L vec=none m=1 n=8 | vendor - # transcribed
+herm=L vec=none m=1 n=16 | vendor - # transcribed
+herm=L vec=none m=1 n=24 | vendor - # transcribed
+herm=L vec=none m=1 n=32 | vendor - # transcribed
+herm=L vec=none m=1 n=33 | vendor - # transcribed
+herm=L vec=none m=1 n=48 | vendor - # transcribed
+herm=L vec=none m=1 n=64 | vendor - # transcribed
+herm=L vec=none m=1 n=65 | vendor - # transcribed
+herm=L vec=none m=1 n=128 | vendor - # transcribed
+herm=L vec=none m=1 n=256 | vendor - # transcribed
+herm=L vec=none m=1 n=512 | vendor - # transcribed
+herm=L vec=none m=1 n=1024 | vendor - # transcribed
+herm=L vec=none m=2 n=2 | blocked 0.04056 | cta 0.05373 | vendor 1.554 # deep
+herm=L vec=none m=2 n=4 | vendor - # transcribed
+herm=L vec=none m=2 n=8 | vendor - # transcribed
+herm=L vec=none m=2 n=16 | vendor - # transcribed
+herm=L vec=none m=2 n=24 | vendor - # transcribed
+herm=L vec=none m=2 n=32 | vendor - # transcribed
+herm=L vec=none m=2 n=33 | vendor - # transcribed
+herm=L vec=none m=2 n=48 | vendor - # transcribed
+herm=L vec=none m=2 n=64 | vendor - # transcribed
+herm=L vec=none m=2 n=65 | vendor - # transcribed
+herm=L vec=none m=2 n=128 | vendor - # transcribed
+herm=L vec=none m=2 n=256 | vendor - # transcribed
+herm=L vec=none m=2 n=512 | vendor - # transcribed
+herm=L vec=none m=2 n=1024 | vendor - # transcribed
+herm=L vec=none m=4 n=1 | vendor - # transcribed
+herm=L vec=none m=4 n=2 | vendor - # transcribed
+herm=L vec=none m=4 n=4 | cta 0.06445 | blocked 0.07398 | vendor 4.666 # deep
+herm=L vec=none m=4 n=16 | vendor - # transcribed
+herm=L vec=none m=4 n=24 | vendor - # transcribed
+herm=L vec=none m=4 n=32 | vendor - # transcribed
+herm=L vec=none m=4 n=33 | vendor - # transcribed
+herm=L vec=none m=4 n=48 | vendor - # transcribed
+herm=L vec=none m=4 n=64 | vendor - # transcribed
+herm=L vec=none m=4 n=65 | vendor - # transcribed
+herm=L vec=none m=4 n=128 | vendor - # transcribed
+herm=L vec=none m=4 n=256 | vendor - # transcribed
+herm=L vec=none m=4 n=512 | vendor - # transcribed
+herm=L vec=none m=4 n=1024 | vendor - # transcribed
+herm=L vec=none m=8 n=1 | vendor - # transcribed
+herm=L vec=none m=8 n=2 | vendor - # transcribed
+herm=L vec=none m=8 n=8 | cta 0.1315 | blocked 0.1600 | vendor 6.917 # deep
+herm=L vec=none m=8 n=16 | vendor - # transcribed
+herm=L vec=none m=8 n=24 | vendor - # transcribed
+herm=L vec=none m=8 n=32 | vendor - # transcribed
+herm=L vec=none m=8 n=33 | vendor - # transcribed
+herm=L vec=none m=8 n=48 | vendor - # transcribed
+herm=L vec=none m=8 n=64 | vendor - # transcribed
+herm=L vec=none m=8 n=65 | vendor - # transcribed
+herm=L vec=none m=8 n=128 | vendor - # transcribed
+herm=L vec=none m=8 n=256 | vendor - # transcribed
+herm=L vec=none m=8 n=512 | vendor - # transcribed
+herm=L vec=none m=8 n=1024 | vendor - # transcribed
+herm=L vec=none m=16 n=1 | vendor - # transcribed
+herm=L vec=none m=16 n=2 | vendor - # transcribed
+herm=L vec=none m=16 n=4 | vendor - # transcribed
+herm=L vec=none m=16 n=8 | vendor - # transcribed
+herm=L vec=none m=16 n=16 | blocked 0.4658 | cta 0.4945 | vendor 12.05 # deep
+herm=L vec=none m=16 n=24 | vendor - # transcribed
+herm=L vec=none m=16 n=32 | vendor - # transcribed
+herm=L vec=none m=16 n=33 | vendor - # transcribed
+herm=L vec=none m=16 n=48 | vendor - # transcribed
+herm=L vec=none m=16 n=64 | vendor - # transcribed
+herm=L vec=none m=16 n=65 | vendor - # transcribed
+herm=L vec=none m=16 n=128 | vendor - # transcribed
+herm=L vec=none m=16 n=256 | vendor - # transcribed
+herm=L vec=none m=16 n=512 | vendor - # transcribed
+herm=L vec=none m=16 n=1024 | vendor - # transcribed
+herm=L vec=none m=24 n=1 | vendor - # transcribed
+herm=L vec=none m=24 n=2 | vendor - # transcribed
+herm=L vec=none m=24 n=4 | vendor - # transcribed
+herm=L vec=none m=24 n=8 | vendor - # transcribed
+herm=L vec=none m=24 n=16 | vendor - # transcribed
+herm=L vec=none m=24 n=24 | blocked 1.266 | cta 1.649 | vendor 16.91 # deep
+herm=L vec=none m=24 n=33 | vendor - # transcribed
+herm=L vec=none m=24 n=48 | vendor - # transcribed
+herm=L vec=none m=24 n=64 | vendor - # transcribed
+herm=L vec=none m=24 n=65 | vendor - # transcribed
+herm=L vec=none m=24 n=128 | vendor - # transcribed
+herm=L vec=none m=24 n=256 | vendor - # transcribed
+herm=L vec=none m=24 n=512 | vendor - # transcribed
+herm=L vec=none m=24 n=1024 | vendor - # transcribed
+herm=L vec=none m=32 n=1 | vendor - # transcribed
+herm=L vec=none m=32 n=2 | vendor - # transcribed
+herm=L vec=none m=32 n=4 | vendor - # transcribed
+herm=L vec=none m=32 n=8 | vendor - # transcribed
+herm=L vec=none m=32 n=16 | vendor - # transcribed
+herm=L vec=none m=32 n=32 | blocked 2.141 | cta 2.865 | vendor 23.16 # deep
+herm=L vec=none m=32 n=64 | vendor - # transcribed
+herm=L vec=none m=32 n=65 | vendor - # transcribed
+herm=L vec=none m=32 n=128 | vendor - # transcribed
+herm=L vec=none m=32 n=256 | vendor - # transcribed
+herm=L vec=none m=32 n=512 | vendor - # transcribed
+herm=L vec=none m=32 n=1024 | vendor - # transcribed
+herm=L vec=none m=33 n=1 | vendor - # transcribed
+herm=L vec=none m=33 n=2 | vendor - # transcribed
+herm=L vec=none m=33 n=4 | vendor - # transcribed
+herm=L vec=none m=33 n=8 | vendor - # transcribed
+herm=L vec=none m=33 n=16 | vendor - # transcribed
+herm=L vec=none m=33 n=33 | blocked 2.493 # deep
+herm=L vec=none m=33 n=65 | vendor - # transcribed
+herm=L vec=none m=33 n=128 | vendor - # transcribed
+herm=L vec=none m=33 n=256 | vendor - # transcribed
+herm=L vec=none m=33 n=512 | vendor - # transcribed
+herm=L vec=none m=33 n=1024 | vendor - # transcribed
+herm=L vec=none m=48 n=1 | vendor - # transcribed
+herm=L vec=none m=48 n=2 | vendor - # transcribed
+herm=L vec=none m=48 n=4 | vendor - # transcribed
+herm=L vec=none m=48 n=8 | vendor - # transcribed
+herm=L vec=none m=48 n=16 | vendor - # transcribed
+herm=L vec=none m=48 n=24 | vendor - # transcribed
+herm=L vec=none m=48 n=48 | blocked 2.611 # deep
+herm=L vec=none m=48 n=128 | vendor - # transcribed
+herm=L vec=none m=48 n=256 | vendor - # transcribed
+herm=L vec=none m=48 n=512 | vendor - # transcribed
+herm=L vec=none m=48 n=1024 | vendor - # transcribed
+herm=L vec=none m=64 n=1 | vendor - # transcribed
+herm=L vec=none m=64 n=2 | vendor - # transcribed
+herm=L vec=none m=64 n=4 | vendor - # transcribed
+herm=L vec=none m=64 n=8 | vendor - # transcribed
+herm=L vec=none m=64 n=16 | vendor - # transcribed
+herm=L vec=none m=64 n=24 | vendor - # transcribed
+herm=L vec=none m=64 n=32 | vendor - # transcribed
+herm=L vec=none m=64 n=64 | blocked 4.613 # deep
+herm=L vec=none m=64 n=256 | vendor - # transcribed
+herm=L vec=none m=64 n=512 | vendor - # transcribed
+herm=L vec=none m=64 n=1024 | vendor - # transcribed
+herm=L vec=none m=65 n=1 | vendor - # transcribed
+herm=L vec=none m=65 n=2 | vendor - # transcribed
+herm=L vec=none m=65 n=4 | vendor - # transcribed
+herm=L vec=none m=65 n=8 | vendor - # transcribed
+herm=L vec=none m=65 n=16 | vendor - # transcribed
+herm=L vec=none m=65 n=24 | vendor - # transcribed
+herm=L vec=none m=65 n=32 | vendor - # transcribed
+herm=L vec=none m=65 n=33 | vendor - # transcribed
+herm=L vec=none m=65 n=65 | blocked 3.873 # deep
+herm=L vec=none m=65 n=512 | vendor - # transcribed
+herm=L vec=none m=65 n=1024 | vendor - # transcribed
+herm=L vec=none m=128 n=1 | vendor - # transcribed
+herm=L vec=none m=128 n=2 | vendor - # transcribed
+herm=L vec=none m=128 n=4 | vendor - # transcribed
+herm=L vec=none m=128 n=8 | vendor - # transcribed
+herm=L vec=none m=128 n=16 | vendor - # transcribed
+herm=L vec=none m=128 n=24 | vendor - # transcribed
+herm=L vec=none m=128 n=32 | vendor - # transcribed
+herm=L vec=none m=128 n=33 | vendor - # transcribed
+herm=L vec=none m=128 n=48 | vendor - # transcribed
+herm=L vec=none m=128 n=128 | blocked 9.433 # deep
+herm=L vec=none m=128 n=1024 | vendor - # transcribed
+herm=L vec=none m=256 n=1 | vendor - # transcribed
+herm=L vec=none m=256 n=2 | vendor - # transcribed
+herm=L vec=none m=256 n=4 | vendor - # transcribed
+herm=L vec=none m=256 n=8 | vendor - # transcribed
+herm=L vec=none m=256 n=16 | vendor - # transcribed
+herm=L vec=none m=256 n=24 | vendor - # transcribed
+herm=L vec=none m=256 n=32 | vendor - # transcribed
+herm=L vec=none m=256 n=33 | vendor - # transcribed
+herm=L vec=none m=256 n=48 | vendor - # transcribed
+herm=L vec=none m=256 n=64 | vendor - # transcribed
+herm=L vec=none m=256 n=256 | blocked 18.10 # deep
+herm=L vec=none m=512 n=1 | vendor - # transcribed
+herm=L vec=none m=512 n=2 | vendor - # transcribed
+herm=L vec=none m=512 n=4 | vendor - # transcribed
+herm=L vec=none m=512 n=8 | vendor - # transcribed
+herm=L vec=none m=512 n=16 | vendor - # transcribed
+herm=L vec=none m=512 n=24 | vendor - # transcribed
+herm=L vec=none m=512 n=32 | vendor - # transcribed
+herm=L vec=none m=512 n=33 | vendor - # transcribed
+herm=L vec=none m=512 n=48 | vendor - # transcribed
+herm=L vec=none m=512 n=64 | vendor - # transcribed
+herm=L vec=none m=512 n=65 | vendor - # transcribed
+herm=L vec=none m=512 n=512 | blocked 64.16 # deep
+herm=L vec=none m=1024 n=1 | vendor - # transcribed
+herm=L vec=none m=1024 n=2 | vendor - # transcribed
+herm=L vec=none m=1024 n=4 | vendor - # transcribed
+herm=L vec=none m=1024 n=8 | vendor - # transcribed
+herm=L vec=none m=1024 n=16 | vendor - # transcribed
+herm=L vec=none m=1024 n=24 | vendor - # transcribed
+herm=L vec=none m=1024 n=32 | vendor - # transcribed
+herm=L vec=none m=1024 n=33 | vendor - # transcribed
+herm=L vec=none m=1024 n=48 | vendor - # transcribed
+herm=L vec=none m=1024 n=64 | vendor - # transcribed
+herm=L vec=none m=1024 n=65 | vendor - # transcribed
+herm=L vec=none m=1024 n=128 | vendor - # transcribed
+herm=L vec=none m=1024 n=1024 | blocked 511.0 # deep
+herm=L vec=thin m=1 n=1 | blocked - | vendor - # transcribed
+herm=L vec=thin m=1 n=2 | vendor - # transcribed
+herm=L vec=thin m=1 n=4 | vendor - # transcribed
+herm=L vec=thin m=1 n=8 | vendor - # transcribed
+herm=L vec=thin m=1 n=16 | vendor - # transcribed
+herm=L vec=thin m=1 n=24 | vendor - # transcribed
+herm=L vec=thin m=1 n=32 | vendor - # transcribed
+herm=L vec=thin m=1 n=33 | vendor - # transcribed
+herm=L vec=thin m=1 n=48 | vendor - # transcribed
+herm=L vec=thin m=1 n=64 | vendor - # transcribed
+herm=L vec=thin m=1 n=65 | vendor - # transcribed
+herm=L vec=thin m=1 n=128 | vendor - # transcribed
+herm=L vec=thin m=1 n=256 | vendor - # transcribed
+herm=L vec=thin m=1 n=512 | vendor - # transcribed
+herm=L vec=thin m=1 n=1024 | vendor - # transcribed
+herm=L vec=thin m=2 n=1 | vendor - # transcribed
+herm=L vec=thin m=2 n=2 | blocked - | vendor - # transcribed
+herm=L vec=thin m=2 n=4 | vendor - # transcribed
+herm=L vec=thin m=2 n=8 | vendor - # transcribed
+herm=L vec=thin m=2 n=16 | vendor - # transcribed
+herm=L vec=thin m=2 n=24 | vendor - # transcribed
+herm=L vec=thin m=2 n=32 | vendor - # transcribed
+herm=L vec=thin m=2 n=33 | vendor - # transcribed
+herm=L vec=thin m=2 n=48 | vendor - # transcribed
+herm=L vec=thin m=2 n=64 | vendor - # transcribed
+herm=L vec=thin m=2 n=65 | vendor - # transcribed
+herm=L vec=thin m=2 n=128 | vendor - # transcribed
+herm=L vec=thin m=2 n=256 | vendor - # transcribed
+herm=L vec=thin m=2 n=512 | vendor - # transcribed
+herm=L vec=thin m=2 n=1024 | vendor - # transcribed
+herm=L vec=thin m=4 n=1 | vendor - # transcribed
+herm=L vec=thin m=4 n=2 | vendor - # transcribed
+herm=L vec=thin m=4 n=4 | blocked - | vendor - # transcribed
+herm=L vec=thin m=4 n=8 | vendor - # transcribed
+herm=L vec=thin m=4 n=16 | vendor - # transcribed
+herm=L vec=thin m=4 n=24 | vendor - # transcribed
+herm=L vec=thin m=4 n=32 | vendor - # transcribed
+herm=L vec=thin m=4 n=33 | vendor - # transcribed
+herm=L vec=thin m=4 n=48 | vendor - # transcribed
+herm=L vec=thin m=4 n=64 | vendor - # transcribed
+herm=L vec=thin m=4 n=65 | vendor - # transcribed
+herm=L vec=thin m=4 n=128 | vendor - # transcribed
+herm=L vec=thin m=4 n=256 | vendor - # transcribed
+herm=L vec=thin m=4 n=512 | vendor - # transcribed
+herm=L vec=thin m=4 n=1024 | vendor - # transcribed
+herm=L vec=thin m=8 n=1 | vendor - # transcribed
+herm=L vec=thin m=8 n=2 | vendor - # transcribed
+herm=L vec=thin m=8 n=4 | vendor - # transcribed
+herm=L vec=thin m=8 n=8 | blocked - | vendor - # transcribed
+herm=L vec=thin m=8 n=16 | vendor - # transcribed
+herm=L vec=thin m=8 n=24 | vendor - # transcribed
+herm=L vec=thin m=8 n=32 | vendor - # transcribed
+herm=L vec=thin m=8 n=33 | vendor - # transcribed
+herm=L vec=thin m=8 n=48 | vendor - # transcribed
+herm=L vec=thin m=8 n=64 | vendor - # transcribed
+herm=L vec=thin m=8 n=65 | vendor - # transcribed
+herm=L vec=thin m=8 n=128 | vendor - # transcribed
+herm=L vec=thin m=8 n=256 | vendor - # transcribed
+herm=L vec=thin m=8 n=512 | vendor - # transcribed
+herm=L vec=thin m=8 n=1024 | vendor - # transcribed
+herm=L vec=thin m=16 n=1 | vendor - # transcribed
+herm=L vec=thin m=16 n=2 | vendor - # transcribed
+herm=L vec=thin m=16 n=4 | vendor - # transcribed
+herm=L vec=thin m=16 n=8 | vendor - # transcribed
+herm=L vec=thin m=16 n=16 | blocked - | vendor - # transcribed
+herm=L vec=thin m=16 n=24 | vendor - # transcribed
+herm=L vec=thin m=16 n=32 | vendor - # transcribed
+herm=L vec=thin m=16 n=33 | vendor - # transcribed
+herm=L vec=thin m=16 n=48 | vendor - # transcribed
+herm=L vec=thin m=16 n=64 | vendor - # transcribed
+herm=L vec=thin m=16 n=65 | vendor - # transcribed
+herm=L vec=thin m=16 n=128 | vendor - # transcribed
+herm=L vec=thin m=16 n=256 | vendor - # transcribed
+herm=L vec=thin m=16 n=512 | vendor - # transcribed
+herm=L vec=thin m=16 n=1024 | vendor - # transcribed
+herm=L vec=thin m=24 n=1 | vendor - # transcribed
+herm=L vec=thin m=24 n=2 | vendor - # transcribed
+herm=L vec=thin m=24 n=4 | vendor - # transcribed
+herm=L vec=thin m=24 n=8 | vendor - # transcribed
+herm=L vec=thin m=24 n=16 | vendor - # transcribed
+herm=L vec=thin m=24 n=24 | blocked - | vendor - # transcribed
+herm=L vec=thin m=24 n=32 | vendor - # transcribed
+herm=L vec=thin m=24 n=33 | vendor - # transcribed
+herm=L vec=thin m=24 n=48 | vendor - # transcribed
+herm=L vec=thin m=24 n=64 | vendor - # transcribed
+herm=L vec=thin m=24 n=65 | vendor - # transcribed
+herm=L vec=thin m=24 n=128 | vendor - # transcribed
+herm=L vec=thin m=24 n=256 | vendor - # transcribed
+herm=L vec=thin m=24 n=512 | vendor - # transcribed
+herm=L vec=thin m=24 n=1024 | vendor - # transcribed
+herm=L vec=thin m=32 n=1 | vendor - # transcribed
+herm=L vec=thin m=32 n=2 | vendor - # transcribed
+herm=L vec=thin m=32 n=4 | vendor - # transcribed
+herm=L vec=thin m=32 n=8 | vendor - # transcribed
+herm=L vec=thin m=32 n=16 | vendor - # transcribed
+herm=L vec=thin m=32 n=24 | vendor - # transcribed
+herm=L vec=thin m=32 n=32 | blocked - | vendor - # transcribed
+herm=L vec=thin m=32 n=33 | vendor - # transcribed
+herm=L vec=thin m=32 n=48 | vendor - # transcribed
+herm=L vec=thin m=32 n=64 | vendor - # transcribed
+herm=L vec=thin m=32 n=65 | vendor - # transcribed
+herm=L vec=thin m=32 n=128 | vendor - # transcribed
+herm=L vec=thin m=32 n=256 | vendor - # transcribed
+herm=L vec=thin m=32 n=512 | vendor - # transcribed
+herm=L vec=thin m=32 n=1024 | vendor - # transcribed
+herm=L vec=thin m=33 n=1 | vendor - # transcribed
+herm=L vec=thin m=33 n=2 | vendor - # transcribed
+herm=L vec=thin m=33 n=4 | vendor - # transcribed
+herm=L vec=thin m=33 n=8 | vendor - # transcribed
+herm=L vec=thin m=33 n=16 | vendor - # transcribed
+herm=L vec=thin m=33 n=24 | vendor - # transcribed
+herm=L vec=thin m=33 n=32 | vendor - # transcribed
+herm=L vec=thin m=33 n=33 | blocked - | vendor - # transcribed
+herm=L vec=thin m=33 n=48 | vendor - # transcribed
+herm=L vec=thin m=33 n=64 | vendor - # transcribed
+herm=L vec=thin m=33 n=65 | vendor - # transcribed
+herm=L vec=thin m=33 n=128 | vendor - # transcribed
+herm=L vec=thin m=33 n=256 | vendor - # transcribed
+herm=L vec=thin m=33 n=512 | vendor - # transcribed
+herm=L vec=thin m=33 n=1024 | vendor - # transcribed
+herm=L vec=thin m=48 n=1 | vendor - # transcribed
+herm=L vec=thin m=48 n=2 | vendor - # transcribed
+herm=L vec=thin m=48 n=4 | vendor - # transcribed
+herm=L vec=thin m=48 n=8 | vendor - # transcribed
+herm=L vec=thin m=48 n=16 | vendor - # transcribed
+herm=L vec=thin m=48 n=24 | vendor - # transcribed
+herm=L vec=thin m=48 n=32 | vendor - # transcribed
+herm=L vec=thin m=48 n=33 | vendor - # transcribed
+herm=L vec=thin m=48 n=48 | blocked - | vendor - # transcribed
+herm=L vec=thin m=48 n=64 | vendor - # transcribed
+herm=L vec=thin m=48 n=65 | vendor - # transcribed
+herm=L vec=thin m=48 n=128 | vendor - # transcribed
+herm=L vec=thin m=48 n=256 | vendor - # transcribed
+herm=L vec=thin m=48 n=512 | vendor - # transcribed
+herm=L vec=thin m=48 n=1024 | vendor - # transcribed
+herm=L vec=thin m=64 n=1 | vendor - # transcribed
+herm=L vec=thin m=64 n=2 | vendor - # transcribed
+herm=L vec=thin m=64 n=4 | vendor - # transcribed
+herm=L vec=thin m=64 n=8 | vendor - # transcribed
+herm=L vec=thin m=64 n=16 | vendor - # transcribed
+herm=L vec=thin m=64 n=24 | vendor - # transcribed
+herm=L vec=thin m=64 n=32 | vendor - # transcribed
+herm=L vec=thin m=64 n=33 | vendor - # transcribed
+herm=L vec=thin m=64 n=48 | vendor - # transcribed
+herm=L vec=thin m=64 n=64 | blocked - | vendor - # transcribed
+herm=L vec=thin m=64 n=65 | vendor - # transcribed
+herm=L vec=thin m=64 n=128 | vendor - # transcribed
+herm=L vec=thin m=64 n=256 | vendor - # transcribed
+herm=L vec=thin m=64 n=512 | vendor - # transcribed
+herm=L vec=thin m=64 n=1024 | vendor - # transcribed
+herm=L vec=thin m=65 n=1 | vendor - # transcribed
+herm=L vec=thin m=65 n=2 | vendor - # transcribed
+herm=L vec=thin m=65 n=4 | vendor - # transcribed
+herm=L vec=thin m=65 n=8 | vendor - # transcribed
+herm=L vec=thin m=65 n=16 | vendor - # transcribed
+herm=L vec=thin m=65 n=24 | vendor - # transcribed
+herm=L vec=thin m=65 n=32 | vendor - # transcribed
+herm=L vec=thin m=65 n=33 | vendor - # transcribed
+herm=L vec=thin m=65 n=48 | vendor - # transcribed
+herm=L vec=thin m=65 n=64 | vendor - # transcribed
+herm=L vec=thin m=65 n=65 | blocked - | vendor - # transcribed
+herm=L vec=thin m=65 n=128 | vendor - # transcribed
+herm=L vec=thin m=65 n=256 | vendor - # transcribed
+herm=L vec=thin m=65 n=512 | vendor - # transcribed
+herm=L vec=thin m=65 n=1024 | vendor - # transcribed
+herm=L vec=thin m=128 n=1 | vendor - # transcribed
+herm=L vec=thin m=128 n=2 | vendor - # transcribed
+herm=L vec=thin m=128 n=4 | vendor - # transcribed
+herm=L vec=thin m=128 n=8 | vendor - # transcribed
+herm=L vec=thin m=128 n=16 | vendor - # transcribed
+herm=L vec=thin m=128 n=24 | vendor - # transcribed
+herm=L vec=thin m=128 n=32 | vendor - # transcribed
+herm=L vec=thin m=128 n=33 | vendor - # transcribed
+herm=L vec=thin m=128 n=48 | vendor - # transcribed
+herm=L vec=thin m=128 n=64 | vendor - # transcribed
+herm=L vec=thin m=128 n=65 | vendor - # transcribed
+herm=L vec=thin m=128 n=128 | blocked - | vendor - # transcribed
+herm=L vec=thin m=128 n=256 | vendor - # transcribed
+herm=L vec=thin m=128 n=512 | vendor - # transcribed
+herm=L vec=thin m=128 n=1024 | vendor - # transcribed
+herm=L vec=thin m=256 n=1 | vendor - # transcribed
+herm=L vec=thin m=256 n=2 | vendor - # transcribed
+herm=L vec=thin m=256 n=4 | vendor - # transcribed
+herm=L vec=thin m=256 n=8 | vendor - # transcribed
+herm=L vec=thin m=256 n=16 | vendor - # transcribed
+herm=L vec=thin m=256 n=24 | vendor - # transcribed
+herm=L vec=thin m=256 n=32 | vendor - # transcribed
+herm=L vec=thin m=256 n=33 | vendor - # transcribed
+herm=L vec=thin m=256 n=48 | vendor - # transcribed
+herm=L vec=thin m=256 n=64 | vendor - # transcribed
+herm=L vec=thin m=256 n=65 | vendor - # transcribed
+herm=L vec=thin m=256 n=128 | vendor - # transcribed
+herm=L vec=thin m=256 n=256 | blocked - | vendor - # transcribed
+herm=L vec=thin m=256 n=512 | vendor - # transcribed
+herm=L vec=thin m=256 n=1024 | vendor - # transcribed
+herm=L vec=thin m=512 n=1 | vendor - # transcribed
+herm=L vec=thin m=512 n=2 | vendor - # transcribed
+herm=L vec=thin m=512 n=4 | vendor - # transcribed
+herm=L vec=thin m=512 n=8 | vendor - # transcribed
+herm=L vec=thin m=512 n=16 | vendor - # transcribed
+herm=L vec=thin m=512 n=24 | vendor - # transcribed
+herm=L vec=thin m=512 n=32 | vendor - # transcribed
+herm=L vec=thin m=512 n=33 | vendor - # transcribed
+herm=L vec=thin m=512 n=48 | vendor - # transcribed
+herm=L vec=thin m=512 n=64 | vendor - # transcribed
+herm=L vec=thin m=512 n=65 | vendor - # transcribed
+herm=L vec=thin m=512 n=128 | vendor - # transcribed
+herm=L vec=thin m=512 n=256 | vendor - # transcribed
+herm=L vec=thin m=512 n=512 | blocked - | vendor - # transcribed
+herm=L vec=thin m=512 n=1024 | vendor - # transcribed
+herm=L vec=thin m=1024 n=1 | vendor - # transcribed
+herm=L vec=thin m=1024 n=2 | vendor - # transcribed
+herm=L vec=thin m=1024 n=4 | vendor - # transcribed
+herm=L vec=thin m=1024 n=8 | vendor - # transcribed
+herm=L vec=thin m=1024 n=16 | vendor - # transcribed
+herm=L vec=thin m=1024 n=24 | vendor - # transcribed
+herm=L vec=thin m=1024 n=32 | vendor - # transcribed
+herm=L vec=thin m=1024 n=33 | vendor - # transcribed
+herm=L vec=thin m=1024 n=48 | vendor - # transcribed
+herm=L vec=thin m=1024 n=64 | vendor - # transcribed
+herm=L vec=thin m=1024 n=65 | vendor - # transcribed
+herm=L vec=thin m=1024 n=128 | vendor - # transcribed
+herm=L vec=thin m=1024 n=256 | vendor - # transcribed
+herm=L vec=thin m=1024 n=512 | vendor - # transcribed
+herm=L vec=thin m=1024 n=1024 | blocked - | vendor - # transcribed
+herm=N vec=all m=1 n=1 | jacobi 0.01311 | vendor 0.1906 # deep
+herm=N vec=all m=1 n=2 | jacobi 0.01530 | vendor 0.2714 # deep
+herm=N vec=all m=1 n=4 | jacobi 0.01621 | vendor 0.2706 # deep
+herm=N vec=all m=1 n=8 | jacobi 0.1028 | vendor 0.2892 # deep
+herm=N vec=all m=1 n=11 | jacobi 0.2822 | vendor 0.3328 # deep
+herm=N vec=all m=1 n=16 | vendor 0.3602 | jacobi 0.4493 # deep
+herm=N vec=all m=1 n=24 | vendor 0.5038 | jacobi 2.584 # deep
+herm=N vec=all m=1 n=32 | vendor 0.7988 | jacobi 4.021 # deep
+herm=N vec=all m=1 n=33 | jacobi 31.84 # deep
+herm=N vec=all m=1 n=48 | jacobi 60.54 # deep
+herm=N vec=all m=1 n=64 | jacobi 103.1 # deep
+herm=N vec=all m=1 n=128 | vendor - # transcribed
+herm=N vec=all m=1 n=256 | vendor - # transcribed
+herm=N vec=all m=1 n=512 | vendor - # transcribed
+herm=N vec=all m=1 n=1024 | vendor - # transcribed
+herm=N vec=all m=2 n=1 | jacobi 0.01394 | vendor 0.2533 # deep
+herm=N vec=all m=2 n=2 | jacobi 0.01585 | vendor 1.598 # deep
+herm=N vec=all m=2 n=4 | jacobi 0.02214 | vendor 1.704 # deep
+herm=N vec=all m=2 n=8 | jacobi 0.1125 | vendor 1.810 # deep
+herm=N vec=all m=2 n=16 | jacobi 0.4667 | vendor 1.952 # deep
+herm=N vec=all m=2 n=20 | vendor 1.915 | jacobi 2.065 # deep
+herm=N vec=all m=2 n=24 | vendor 1.993 | jacobi 2.689 # deep
+herm=N vec=all m=2 n=32 | vendor 2.359 | jacobi 4.195 # deep
+herm=N vec=all m=2 n=33 | jacobi 33.14 # deep
+herm=N vec=all m=2 n=48 | jacobi 61.80 # deep
+herm=N vec=all m=2 n=64 | jacobi 104.2 # deep
+herm=N vec=all m=2 n=128 | vendor - # transcribed
+herm=N vec=all m=2 n=256 | vendor - # transcribed
+herm=N vec=all m=2 n=512 | vendor - # transcribed
+herm=N vec=all m=2 n=1024 | vendor - # transcribed
+herm=N vec=all m=3 n=24 | jacobi 3.483 | vendor 5.381 # deep
+herm=N vec=all m=3 n=32 | jacobi 4.987 | vendor 5.857 # deep
+herm=N vec=all m=4 n=1 | jacobi 0.01672 | vendor 0.2522 # deep
+herm=N vec=all m=4 n=2 | jacobi 0.01969 | vendor 1.757 # deep
+herm=N vec=all m=4 n=4 | jacobi 0.02944 | vendor 4.689 # deep
+herm=N vec=all m=4 n=8 | jacobi 0.1998 | vendor 4.990 # deep
+herm=N vec=all m=4 n=16 | jacobi 0.6459 | vendor 6.101 # deep
+herm=N vec=all m=4 n=24 | jacobi 3.504 | vendor 5.330 # deep
+herm=N vec=all m=4 n=32 | jacobi 5.023 | vendor 6.127 # deep
+herm=N vec=all m=4 n=33 | jacobi 45.16 # deep
+herm=N vec=all m=4 n=48 | jacobi 73.75 # deep
+herm=N vec=all m=4 n=64 | jacobi 116.3 # deep
+herm=N vec=all m=4 n=128 | vendor - # transcribed
+herm=N vec=all m=4 n=256 | vendor - # transcribed
+herm=N vec=all m=4 n=512 | vendor - # transcribed
+herm=N vec=all m=4 n=1024 | vendor - # transcribed
+herm=N vec=all m=8 n=1 | jacobi 0.1048 | vendor 0.2664 # deep
+herm=N vec=all m=8 n=2 | jacobi 0.1134 | vendor 1.751 # deep
+herm=N vec=all m=8 n=4 | jacobi 0.1810 | vendor 3.520 # deep
+herm=N vec=all m=8 n=8 | jacobi 0.3728 | vendor 8.596 # deep
+herm=N vec=all m=8 n=16 | jacobi 1.277 | vendor 7.848 # deep
+herm=N vec=all m=8 n=24 | jacobi 6.401 | vendor 8.889 # deep
+herm=N vec=all m=8 n=32 | jacobi 7.981 | vendor 9.554 # deep
+herm=N vec=all m=8 n=33 | jacobi 91.50 # deep
+herm=N vec=all m=8 n=48 | jacobi 117.5 # deep
+herm=N vec=all m=8 n=64 | jacobi 154.4 # deep
+herm=N vec=all m=8 n=128 | vendor - # transcribed
+herm=N vec=all m=8 n=256 | vendor - # transcribed
+herm=N vec=all m=8 n=512 | vendor - # transcribed
+herm=N vec=all m=8 n=1024 | vendor - # transcribed
+herm=N vec=all m=11 n=1 | vendor 0.2867 | jacobi 0.2967 # deep
+herm=N vec=all m=11 n=24 | jacobi 9.468 | vendor 11.23 # deep
+herm=N vec=all m=11 n=32 | jacobi 11.47 | vendor 11.81 # deep
+herm=N vec=all m=16 n=1 | vendor 0.3097 | jacobi 0.4348 # deep
+herm=N vec=all m=16 n=2 | jacobi 0.4460 | vendor 1.848 # deep
+herm=N vec=all m=16 n=4 | jacobi 0.5626 | vendor 3.639 # deep
+herm=N vec=all m=16 n=8 | jacobi 1.120 | vendor 6.342 # deep
+herm=N vec=all m=16 n=16 | jacobi 2.923 | vendor 14.29 # deep
+herm=N vec=all m=16 n=20 | vendor 12.71 | jacobi 17.12 # deep
+herm=N vec=all m=16 n=24 | vendor 13.02 | jacobi 17.68 # deep
+herm=N vec=all m=16 n=32 | vendor 16.06 | jacobi 18.69 # deep
+herm=N vec=all m=16 n=33 | jacobi 255.5 # deep
+herm=N vec=all m=16 n=48 | jacobi 286.0 # deep
+herm=N vec=all m=16 n=64 | jacobi 312.7 # deep
+herm=N vec=all m=16 n=128 | vendor - # transcribed
+herm=N vec=all m=16 n=256 | vendor - # transcribed
+herm=N vec=all m=16 n=512 | vendor - # transcribed
+herm=N vec=all m=16 n=1024 | vendor - # transcribed
+herm=N vec=all m=20 n=2 | vendor 1.816 | jacobi 2.025 # deep
+herm=N vec=all m=20 n=16 | vendor 10.78 | jacobi 14.25 # deep
+herm=N vec=all m=24 n=1 | vendor 0.3734 | jacobi 2.568 # deep
+herm=N vec=all m=24 n=2 | vendor 1.879 | jacobi 2.626 # deep
+herm=N vec=all m=24 n=3 | jacobi 3.239 | vendor 3.376 # deep
+herm=N vec=all m=24 n=4 | jacobi 3.291 | vendor 3.887 # deep
+herm=N vec=all m=24 n=8 | jacobi 5.425 | vendor 6.410 # deep
+herm=N vec=all m=24 n=11 | vendor 7.101 | jacobi 7.896 # deep
+herm=N vec=all m=24 n=16 | vendor 11.36 | jacobi 13.92 # deep
+herm=N vec=all m=24 n=24 | vendor 16.75 | jacobi 39.43 # deep
+herm=N vec=all m=24 n=32 | vendor 20.84 | jacobi 52.42 # deep
+herm=N vec=all m=24 n=33 | jacobi 488.4 # deep
+herm=N vec=all m=24 n=48 | jacobi 245.4 # deep
+herm=N vec=all m=24 n=64 | jacobi 267.4 # deep
+herm=N vec=all m=24 n=128 | vendor - # transcribed
+herm=N vec=all m=24 n=256 | vendor - # transcribed
+herm=N vec=all m=24 n=512 | vendor - # transcribed
+herm=N vec=all m=24 n=1024 | vendor - # transcribed
+herm=N vec=all m=28 n=4 | jacobi 3.922 | vendor 3.886 # deep
+herm=N vec=all m=32 n=1 | vendor 0.4798 | jacobi 4.081 # deep
+herm=N vec=all m=32 n=2 | vendor 2.072 | jacobi 4.190 # deep
+herm=N vec=all m=32 n=4 | vendor 3.939 | jacobi 4.790 # deep
+herm=N vec=all m=32 n=6 | jacobi 5.742 | vendor 6.553 # deep
+herm=N vec=all m=32 n=8 | jacobi 6.827 | vendor 6.985 # deep
+herm=N vec=all m=32 n=11 | vendor 8.440 | jacobi 9.720 # deep
+herm=N vec=all m=32 n=16 | vendor 12.49 | jacobi 14.80 # deep
+herm=N vec=all m=32 n=24 | vendor 17.76 | jacobi 40.97 # deep
+herm=N vec=all m=32 n=32 | vendor 23.12 | jacobi 68.44 # deep
+herm=N vec=all m=32 n=33 | jacobi 437.1 # deep
+herm=N vec=all m=32 n=48 | jacobi 434.3 # deep
+herm=N vec=all m=32 n=64 | jacobi 432.3 # deep
+herm=N vec=all m=32 n=128 | vendor - # transcribed
+herm=N vec=all m=32 n=256 | vendor - # transcribed
+herm=N vec=all m=32 n=512 | vendor - # transcribed
+herm=N vec=all m=32 n=1024 | vendor - # transcribed
+herm=N vec=all m=33 n=1 | jacobi 31.56 # deep
+herm=N vec=all m=33 n=2 | jacobi 32.93 # deep
+herm=N vec=all m=33 n=4 | jacobi 41.59 # deep
+herm=N vec=all m=33 n=8 | jacobi 80.77 # deep
+herm=N vec=all m=33 n=16 | jacobi 199.2 # deep
+herm=N vec=all m=33 n=24 | jacobi 375.4 # deep
+herm=N vec=all m=33 n=32 | jacobi 346.7 # deep
+herm=N vec=all m=33 n=33 | jacobi 327.2 # deep
+herm=N vec=all m=33 n=48 | jacobi 409.6 # deep
+herm=N vec=all m=33 n=64 | jacobi 203.9 # deep
+herm=N vec=all m=33 n=128 | vendor - # transcribed
+herm=N vec=all m=33 n=256 | vendor - # transcribed
+herm=N vec=all m=33 n=512 | vendor - # transcribed
+herm=N vec=all m=33 n=1024 | vendor - # transcribed
+herm=N vec=all m=48 n=1 | jacobi 60.67 # deep
+herm=N vec=all m=48 n=2 | jacobi 61.41 # deep
+herm=N vec=all m=48 n=4 | jacobi 70.00 # deep
+herm=N vec=all m=48 n=8 | jacobi 104.1 # deep
+herm=N vec=all m=48 n=16 | jacobi 223.9 # deep
+herm=N vec=all m=48 n=24 | jacobi 199.4 # deep
+herm=N vec=all m=48 n=32 | jacobi 343.5 # deep
+herm=N vec=all m=48 n=33 | jacobi 316.8 # deep
+herm=N vec=all m=48 n=48 | jacobi 372.0 # deep
+herm=N vec=all m=48 n=64 | jacobi 439.5 # deep
+herm=N vec=all m=48 n=128 | vendor - # transcribed
+herm=N vec=all m=48 n=256 | vendor - # transcribed
+herm=N vec=all m=48 n=512 | vendor - # transcribed
+herm=N vec=all m=48 n=1024 | vendor - # transcribed
+herm=N vec=all m=64 n=1 | jacobi 102.9 # deep
+herm=N vec=all m=64 n=2 | jacobi 104.6 # deep
+herm=N vec=all m=64 n=4 | jacobi 113.0 # deep
+herm=N vec=all m=64 n=8 | jacobi 143.6 # deep
+herm=N vec=all m=64 n=16 | jacobi 259.6 # deep
+herm=N vec=all m=64 n=24 | jacobi 212.1 # deep
+herm=N vec=all m=64 n=32 | jacobi 351.7 # deep
+herm=N vec=all m=64 n=33 | jacobi 178.1 # deep
+herm=N vec=all m=64 n=48 | jacobi 356.1 # deep
+herm=N vec=all m=64 n=64 | jacobi 632.2 # deep
+herm=N vec=all m=64 n=128 | vendor - # transcribed
+herm=N vec=all m=64 n=256 | vendor - # transcribed
+herm=N vec=all m=64 n=512 | vendor - # transcribed
+herm=N vec=all m=64 n=1024 | vendor - # transcribed
+herm=N vec=all m=65 n=128 | vendor - # transcribed
+herm=N vec=all m=65 n=256 | vendor - # transcribed
+herm=N vec=all m=65 n=512 | vendor - # transcribed
+herm=N vec=all m=65 n=1024 | vendor - # transcribed
+herm=N vec=all m=128 n=1 | vendor - # transcribed
+herm=N vec=all m=128 n=2 | vendor - # transcribed
+herm=N vec=all m=128 n=4 | vendor - # transcribed
+herm=N vec=all m=128 n=8 | vendor - # transcribed
+herm=N vec=all m=128 n=16 | vendor - # transcribed
+herm=N vec=all m=128 n=24 | vendor - # transcribed
+herm=N vec=all m=128 n=32 | vendor - # transcribed
+herm=N vec=all m=128 n=33 | vendor - # transcribed
+herm=N vec=all m=128 n=48 | vendor - # transcribed
+herm=N vec=all m=128 n=64 | vendor - # transcribed
+herm=N vec=all m=128 n=65 | vendor - # transcribed
+herm=N vec=all m=128 n=128 | vendor - # transcribed
+herm=N vec=all m=128 n=256 | vendor - # transcribed
+herm=N vec=all m=128 n=512 | vendor - # transcribed
+herm=N vec=all m=128 n=1024 | vendor - # transcribed
+herm=N vec=all m=256 n=1 | vendor - # transcribed
+herm=N vec=all m=256 n=2 | vendor - # transcribed
+herm=N vec=all m=256 n=4 | vendor - # transcribed
+herm=N vec=all m=256 n=8 | vendor - # transcribed
+herm=N vec=all m=256 n=16 | vendor - # transcribed
+herm=N vec=all m=256 n=24 | vendor - # transcribed
+herm=N vec=all m=256 n=32 | vendor - # transcribed
+herm=N vec=all m=256 n=33 | vendor - # transcribed
+herm=N vec=all m=256 n=48 | vendor - # transcribed
+herm=N vec=all m=256 n=64 | vendor - # transcribed
+herm=N vec=all m=256 n=65 | vendor - # transcribed
+herm=N vec=all m=256 n=128 | vendor - # transcribed
+herm=N vec=all m=256 n=256 | vendor - # transcribed
+herm=N vec=all m=256 n=512 | vendor - # transcribed
+herm=N vec=all m=256 n=1024 | vendor - # transcribed
+herm=N vec=all m=512 n=1 | vendor - # transcribed
+herm=N vec=all m=512 n=2 | vendor - # transcribed
+herm=N vec=all m=512 n=4 | vendor - # transcribed
+herm=N vec=all m=512 n=8 | vendor - # transcribed
+herm=N vec=all m=512 n=16 | vendor - # transcribed
+herm=N vec=all m=512 n=24 | vendor - # transcribed
+herm=N vec=all m=512 n=32 | vendor - # transcribed
+herm=N vec=all m=512 n=33 | vendor - # transcribed
+herm=N vec=all m=512 n=48 | vendor - # transcribed
+herm=N vec=all m=512 n=64 | vendor - # transcribed
+herm=N vec=all m=512 n=65 | vendor - # transcribed
+herm=N vec=all m=512 n=128 | vendor - # transcribed
+herm=N vec=all m=512 n=256 | vendor - # transcribed
+herm=N vec=all m=512 n=512 | vendor - # transcribed
+herm=N vec=all m=512 n=1024 | vendor - # transcribed
+herm=N vec=all m=1024 n=1 | vendor - # transcribed
+herm=N vec=all m=1024 n=2 | vendor - # transcribed
+herm=N vec=all m=1024 n=4 | vendor - # transcribed
+herm=N vec=all m=1024 n=8 | vendor - # transcribed
+herm=N vec=all m=1024 n=16 | vendor - # transcribed
+herm=N vec=all m=1024 n=24 | vendor - # transcribed
+herm=N vec=all m=1024 n=32 | vendor - # transcribed
+herm=N vec=all m=1024 n=33 | vendor - # transcribed
+herm=N vec=all m=1024 n=48 | vendor - # transcribed
+herm=N vec=all m=1024 n=64 | vendor - # transcribed
+herm=N vec=all m=1024 n=65 | vendor - # transcribed
+herm=N vec=all m=1024 n=128 | vendor - # transcribed
+herm=N vec=all m=1024 n=256 | vendor - # transcribed
+herm=N vec=all m=1024 n=512 | vendor - # transcribed
+herm=N vec=all m=1024 n=1024 | vendor - # transcribed
+herm=N vec=none m=1 n=1 | jacobi 0.01197 | vendor 0.1847 # deep
+herm=N vec=none m=1 n=2 | jacobi 0.01241 # deep
+herm=N vec=none m=1 n=4 | jacobi 0.01180 # deep
+herm=N vec=none m=1 n=8 | jacobi 0.06537 # deep
+herm=N vec=none m=1 n=16 | jacobi 0.1363 # deep
+herm=N vec=none m=1 n=24 | jacobi 0.4268 # deep
+herm=N vec=none m=1 n=32 | jacobi 0.4227 # deep
+herm=N vec=none m=1 n=33 | jacobi 2.091 # deep
+herm=N vec=none m=1 n=48 | jacobi 2.096 # deep
+herm=N vec=none m=1 n=64 | jacobi 2.075 # deep
+herm=N vec=none m=1 n=128 | vendor - # transcribed
+herm=N vec=none m=1 n=256 | vendor - # transcribed
+herm=N vec=none m=1 n=512 | vendor - # transcribed
+herm=N vec=none m=1 n=1024 | vendor - # transcribed
+herm=N vec=none m=2 n=1 | jacobi 0.01165 # deep
+herm=N vec=none m=2 n=2 | jacobi 0.01502 | vendor 1.616 # deep
+herm=N vec=none m=2 n=4 | jacobi 0.01459 # deep
+herm=N vec=none m=2 n=8 | jacobi 0.07387 # deep
+herm=N vec=none m=2 n=16 | jacobi 0.1560 # deep
+herm=N vec=none m=2 n=24 | jacobi 0.5326 # deep
+herm=N vec=none m=2 n=32 | jacobi 0.5284 # deep
+herm=N vec=none m=2 n=33 | jacobi 2.574 # deep
+herm=N vec=none m=2 n=48 | jacobi 2.619 # deep
+herm=N vec=none m=2 n=64 | jacobi 2.600 # deep
+herm=N vec=none m=2 n=128 | vendor - # transcribed
+herm=N vec=none m=2 n=256 | vendor - # transcribed
+herm=N vec=none m=2 n=512 | vendor - # transcribed
+herm=N vec=none m=2 n=1024 | vendor - # transcribed
+herm=N vec=none m=4 n=1 | jacobi 0.01242 # deep
+herm=N vec=none m=4 n=2 | jacobi 0.01427 # deep
+herm=N vec=none m=4 n=4 | jacobi 0.02502 | vendor 4.777 # deep
+herm=N vec=none m=4 n=8 | jacobi 0.1378 # deep
+herm=N vec=none m=4 n=16 | jacobi 0.3110 # deep
+herm=N vec=none m=4 n=24 | jacobi 1.263 # deep
+herm=N vec=none m=4 n=32 | jacobi 1.263 # deep
+herm=N vec=none m=4 n=33 | jacobi 6.673 # deep
+herm=N vec=none m=4 n=48 | jacobi 6.743 # deep
+herm=N vec=none m=4 n=64 | jacobi 6.732 # deep
+herm=N vec=none m=4 n=128 | vendor - # transcribed
+herm=N vec=none m=4 n=256 | vendor - # transcribed
+herm=N vec=none m=4 n=512 | vendor - # transcribed
+herm=N vec=none m=4 n=1024 | vendor - # transcribed
+herm=N vec=none m=8 n=1 | jacobi 0.06868 # deep
+herm=N vec=none m=8 n=2 | jacobi 0.07606 # deep
+herm=N vec=none m=8 n=4 | jacobi 0.1269 # deep
+herm=N vec=none m=8 n=8 | jacobi 0.2858 | vendor 8.424 # deep
+herm=N vec=none m=8 n=16 | jacobi 0.8030 # deep
+herm=N vec=none m=8 n=24 | jacobi 3.293 # deep
+herm=N vec=none m=8 n=32 | jacobi 3.310 # deep
+herm=N vec=none m=8 n=33 | jacobi 19.01 # deep
+herm=N vec=none m=8 n=48 | jacobi 19.10 # deep
+herm=N vec=none m=8 n=64 | jacobi 17.14 # deep
+herm=N vec=none m=8 n=128 | vendor - # transcribed
+herm=N vec=none m=8 n=256 | vendor - # transcribed
+herm=N vec=none m=8 n=512 | vendor - # transcribed
+herm=N vec=none m=8 n=1024 | vendor - # transcribed
+herm=N vec=none m=16 n=1 | jacobi 0.1359 # deep
+herm=N vec=none m=16 n=2 | jacobi 0.1464 # deep
+herm=N vec=none m=16 n=4 | jacobi 0.2542 # deep
+herm=N vec=none m=16 n=8 | jacobi 0.6780 # deep
+herm=N vec=none m=16 n=16 | jacobi 1.997 | vendor 13.45 # deep
+herm=N vec=none m=16 n=24 | jacobi 8.850 # deep
+herm=N vec=none m=16 n=32 | jacobi 8.865 # deep
+herm=N vec=none m=16 n=33 | jacobi 66.99 # deep
+herm=N vec=none m=16 n=48 | jacobi 68.63 # deep
+herm=N vec=none m=16 n=64 | jacobi 63.50 # deep
+herm=N vec=none m=16 n=128 | vendor - # transcribed
+herm=N vec=none m=16 n=256 | vendor - # transcribed
+herm=N vec=none m=16 n=512 | vendor - # transcribed
+herm=N vec=none m=16 n=1024 | vendor - # transcribed
+herm=N vec=none m=24 n=1 | jacobi 0.4275 # deep
+herm=N vec=none m=24 n=2 | jacobi 0.4735 # deep
+herm=N vec=none m=24 n=4 | jacobi 0.9708 # deep
+herm=N vec=none m=24 n=8 | jacobi 2.809 # deep
+herm=N vec=none m=24 n=16 | jacobi 7.356 # deep
+herm=N vec=none m=24 n=24 | jacobi 13.80 | vendor 16.69 # deep
+herm=N vec=none m=24 n=32 | jacobi 16.80 # deep
+herm=N vec=none m=24 n=33 | jacobi 164.6 # deep
+herm=N vec=none m=24 n=48 | jacobi 75.21 # deep
+herm=N vec=none m=24 n=64 | jacobi 76.28 # deep
+herm=N vec=none m=24 n=128 | vendor - # transcribed
+herm=N vec=none m=24 n=256 | vendor - # transcribed
+herm=N vec=none m=24 n=512 | vendor - # transcribed
+herm=N vec=none m=24 n=1024 | vendor - # transcribed
+herm=N vec=none m=32 n=1 | jacobi 0.4221 # deep
+herm=N vec=none m=32 n=2 | jacobi 0.5281 # deep
+herm=N vec=none m=32 n=4 | jacobi 1.034 # deep
+herm=N vec=none m=32 n=8 | jacobi 2.643 # deep
+herm=N vec=none m=32 n=16 | jacobi 6.995 # deep
+herm=N vec=none m=32 n=24 | jacobi 13.94 # deep
+herm=N vec=none m=32 n=32 | jacobi 23.98 | vendor 23.37 # deep
+herm=N vec=none m=32 n=33 | jacobi 141.5 # deep
+herm=N vec=none m=32 n=48 | jacobi 131.4 # deep
+herm=N vec=none m=32 n=64 | jacobi 125.7 # deep
+herm=N vec=none m=32 n=128 | vendor - # transcribed
+herm=N vec=none m=32 n=256 | vendor - # transcribed
+herm=N vec=none m=32 n=512 | vendor - # transcribed
+herm=N vec=none m=32 n=1024 | vendor - # transcribed
+herm=N vec=none m=33 n=1 | jacobi 2.099 # deep
+herm=N vec=none m=33 n=2 | jacobi 2.598 # deep
+herm=N vec=none m=33 n=4 | jacobi 5.525 # deep
+herm=N vec=none m=33 n=8 | jacobi 16.23 # deep
+herm=N vec=none m=33 n=16 | jacobi 49.65 # deep
+herm=N vec=none m=33 n=24 | jacobi 127.0 # deep
+herm=N vec=none m=33 n=32 | jacobi 114.2 # deep
+herm=N vec=none m=33 n=33 | jacobi 101.7 # deep
+herm=N vec=none m=33 n=48 | jacobi 115.7 # deep
+herm=N vec=none m=33 n=64 | jacobi 57.06 # deep
+herm=N vec=none m=33 n=128 | vendor - # transcribed
+herm=N vec=none m=33 n=256 | vendor - # transcribed
+herm=N vec=none m=33 n=512 | vendor - # transcribed
+herm=N vec=none m=33 n=1024 | vendor - # transcribed
+herm=N vec=none m=48 n=1 | jacobi 2.076 # deep
+herm=N vec=none m=48 n=2 | jacobi 2.621 # deep
+herm=N vec=none m=48 n=4 | jacobi 5.617 # deep
+herm=N vec=none m=48 n=8 | jacobi 15.42 # deep
+herm=N vec=none m=48 n=16 | jacobi 51.12 # deep
+herm=N vec=none m=48 n=24 | jacobi 60.44 # deep
+herm=N vec=none m=48 n=32 | jacobi 104.6 # deep
+herm=N vec=none m=48 n=33 | jacobi 108.4 # deep
+herm=N vec=none m=48 n=48 | jacobi 126.0 # deep
+herm=N vec=none m=48 n=64 | jacobi 139.2 # deep
+herm=N vec=none m=48 n=128 | vendor - # transcribed
+herm=N vec=none m=48 n=256 | vendor - # transcribed
+herm=N vec=none m=48 n=512 | vendor - # transcribed
+herm=N vec=none m=48 n=1024 | vendor - # transcribed
+herm=N vec=none m=64 n=1 | jacobi 2.077 # deep
+herm=N vec=none m=64 n=2 | jacobi 2.600 # deep
+herm=N vec=none m=64 n=4 | jacobi 5.566 # deep
+herm=N vec=none m=64 n=8 | jacobi 14.00 # deep
+herm=N vec=none m=64 n=16 | jacobi 49.03 # deep
+herm=N vec=none m=64 n=24 | jacobi 55.86 # deep
+herm=N vec=none m=64 n=32 | jacobi 101.4 # deep
+herm=N vec=none m=64 n=33 | jacobi 56.12 # deep
+herm=N vec=none m=64 n=48 | jacobi 113.4 # deep
+herm=N vec=none m=64 n=64 | jacobi 217.6 # deep
+herm=N vec=none m=64 n=128 | vendor - # transcribed
+herm=N vec=none m=64 n=256 | vendor - # transcribed
+herm=N vec=none m=64 n=512 | vendor - # transcribed
+herm=N vec=none m=64 n=1024 | vendor - # transcribed
+herm=N vec=none m=65 n=128 | vendor - # transcribed
+herm=N vec=none m=65 n=256 | vendor - # transcribed
+herm=N vec=none m=65 n=512 | vendor - # transcribed
+herm=N vec=none m=65 n=1024 | vendor - # transcribed
+herm=N vec=none m=128 n=1 | vendor - # transcribed
+herm=N vec=none m=128 n=2 | vendor - # transcribed
+herm=N vec=none m=128 n=4 | vendor - # transcribed
+herm=N vec=none m=128 n=8 | vendor - # transcribed
+herm=N vec=none m=128 n=16 | vendor - # transcribed
+herm=N vec=none m=128 n=24 | vendor - # transcribed
+herm=N vec=none m=128 n=32 | vendor - # transcribed
+herm=N vec=none m=128 n=33 | vendor - # transcribed
+herm=N vec=none m=128 n=48 | vendor - # transcribed
+herm=N vec=none m=128 n=64 | vendor - # transcribed
+herm=N vec=none m=128 n=65 | vendor - # transcribed
+herm=N vec=none m=128 n=128 | vendor - # transcribed
+herm=N vec=none m=128 n=256 | vendor - # transcribed
+herm=N vec=none m=128 n=512 | vendor - # transcribed
+herm=N vec=none m=128 n=1024 | vendor - # transcribed
+herm=N vec=none m=256 n=1 | vendor - # transcribed
+herm=N vec=none m=256 n=2 | vendor - # transcribed
+herm=N vec=none m=256 n=4 | vendor - # transcribed
+herm=N vec=none m=256 n=8 | vendor - # transcribed
+herm=N vec=none m=256 n=16 | vendor - # transcribed
+herm=N vec=none m=256 n=24 | vendor - # transcribed
+herm=N vec=none m=256 n=32 | vendor - # transcribed
+herm=N vec=none m=256 n=33 | vendor - # transcribed
+herm=N vec=none m=256 n=48 | vendor - # transcribed
+herm=N vec=none m=256 n=64 | vendor - # transcribed
+herm=N vec=none m=256 n=65 | vendor - # transcribed
+herm=N vec=none m=256 n=128 | vendor - # transcribed
+herm=N vec=none m=256 n=256 | vendor - # transcribed
+herm=N vec=none m=256 n=512 | vendor - # transcribed
+herm=N vec=none m=256 n=1024 | vendor - # transcribed
+herm=N vec=none m=512 n=1 | vendor - # transcribed
+herm=N vec=none m=512 n=2 | vendor - # transcribed
+herm=N vec=none m=512 n=4 | vendor - # transcribed
+herm=N vec=none m=512 n=8 | vendor - # transcribed
+herm=N vec=none m=512 n=16 | vendor - # transcribed
+herm=N vec=none m=512 n=24 | vendor - # transcribed
+herm=N vec=none m=512 n=32 | vendor - # transcribed
+herm=N vec=none m=512 n=33 | vendor - # transcribed
+herm=N vec=none m=512 n=48 | vendor - # transcribed
+herm=N vec=none m=512 n=64 | vendor - # transcribed
+herm=N vec=none m=512 n=65 | vendor - # transcribed
+herm=N vec=none m=512 n=128 | vendor - # transcribed
+herm=N vec=none m=512 n=256 | vendor - # transcribed
+herm=N vec=none m=512 n=512 | vendor - # transcribed
+herm=N vec=none m=512 n=1024 | vendor - # transcribed
+herm=N vec=none m=1024 n=1 | vendor - # transcribed
+herm=N vec=none m=1024 n=2 | vendor - # transcribed
+herm=N vec=none m=1024 n=4 | vendor - # transcribed
+herm=N vec=none m=1024 n=8 | vendor - # transcribed
+herm=N vec=none m=1024 n=16 | vendor - # transcribed
+herm=N vec=none m=1024 n=24 | vendor - # transcribed
+herm=N vec=none m=1024 n=32 | vendor - # transcribed
+herm=N vec=none m=1024 n=33 | vendor - # transcribed
+herm=N vec=none m=1024 n=48 | vendor - # transcribed
+herm=N vec=none m=1024 n=64 | vendor - # transcribed
+herm=N vec=none m=1024 n=65 | vendor - # transcribed
+herm=N vec=none m=1024 n=128 | vendor - # transcribed
+herm=N vec=none m=1024 n=256 | vendor - # transcribed
+herm=N vec=none m=1024 n=512 | vendor - # transcribed
+herm=N vec=none m=1024 n=1024 | vendor - # transcribed
+herm=N vec=thin m=1 n=2 | jacobi 0.01295 # deep
+herm=N vec=thin m=1 n=4 | jacobi 0.01314 # deep
+herm=N vec=thin m=1 n=8 | jacobi 0.07092 # deep
+herm=N vec=thin m=1 n=16 | jacobi 0.1571 # deep
+herm=N vec=thin m=1 n=24 | jacobi 0.5654 # deep
+herm=N vec=thin m=1 n=32 | jacobi 0.5686 # deep
+herm=N vec=thin m=1 n=33 | jacobi 5.716 # deep
+herm=N vec=thin m=1 n=48 | jacobi 5.760 # deep
+herm=N vec=thin m=1 n=64 | jacobi 5.803 # deep
+herm=N vec=thin m=1 n=128 | vendor - # transcribed
+herm=N vec=thin m=1 n=256 | vendor - # transcribed
+herm=N vec=thin m=1 n=512 | vendor - # transcribed
+herm=N vec=thin m=1 n=1024 | vendor - # transcribed
+herm=N vec=thin m=2 n=1 | jacobi 0.01309 # deep
+herm=N vec=thin m=2 n=4 | jacobi 0.01535 # deep
+herm=N vec=thin m=2 n=8 | jacobi 0.07872 # deep
+herm=N vec=thin m=2 n=16 | jacobi 0.1803 # deep
+herm=N vec=thin m=2 n=24 | jacobi 0.6957 # deep
+herm=N vec=thin m=2 n=32 | jacobi 0.6983 # deep
+herm=N vec=thin m=2 n=33 | jacobi 7.173 # deep
+herm=N vec=thin m=2 n=48 | jacobi 7.259 # deep
+herm=N vec=thin m=2 n=64 | jacobi 7.290 # deep
+herm=N vec=thin m=2 n=128 | vendor - # transcribed
+herm=N vec=thin m=2 n=256 | vendor - # transcribed
+herm=N vec=thin m=2 n=512 | vendor - # transcribed
+herm=N vec=thin m=2 n=1024 | vendor - # transcribed
+herm=N vec=thin m=4 n=1 | jacobi 0.01336 # deep
+herm=N vec=thin m=4 n=2 | jacobi 0.01545 # deep
+herm=N vec=thin m=4 n=8 | jacobi 0.1519 # deep
+herm=N vec=thin m=4 n=16 | jacobi 0.3603 # deep
+herm=N vec=thin m=4 n=24 | jacobi 1.614 # deep
+herm=N vec=thin m=4 n=32 | jacobi 1.602 # deep
+herm=N vec=thin m=4 n=33 | jacobi 19.53 # deep
+herm=N vec=thin m=4 n=48 | jacobi 19.63 # deep
+herm=N vec=thin m=4 n=64 | jacobi 19.92 # deep
+herm=N vec=thin m=4 n=128 | vendor - # transcribed
+herm=N vec=thin m=4 n=256 | vendor - # transcribed
+herm=N vec=thin m=4 n=512 | vendor - # transcribed
+herm=N vec=thin m=4 n=1024 | vendor - # transcribed
+herm=N vec=thin m=8 n=1 | jacobi 0.07192 # deep
+herm=N vec=thin m=8 n=2 | jacobi 0.08034 # deep
+herm=N vec=thin m=8 n=4 | jacobi 0.1357 # deep
+herm=N vec=thin m=8 n=16 | jacobi 1.026 # deep
+herm=N vec=thin m=8 n=24 | jacobi 4.566 # deep
+herm=N vec=thin m=8 n=32 | jacobi 4.667 # deep
+herm=N vec=thin m=8 n=33 | jacobi 65.41 # deep
+herm=N vec=thin m=8 n=48 | jacobi 64.01 # deep
+herm=N vec=thin m=8 n=64 | jacobi 58.22 # deep
+herm=N vec=thin m=8 n=128 | vendor - # transcribed
+herm=N vec=thin m=8 n=256 | vendor - # transcribed
+herm=N vec=thin m=8 n=512 | vendor - # transcribed
+herm=N vec=thin m=8 n=1024 | vendor - # transcribed
+herm=N vec=thin m=16 n=1 | jacobi 0.1512 # deep
+herm=N vec=thin m=16 n=2 | jacobi 0.1675 # deep
+herm=N vec=thin m=16 n=4 | jacobi 0.2975 # deep
+herm=N vec=thin m=16 n=8 | jacobi 0.8294 # deep
+herm=N vec=thin m=16 n=16 | jacobi - | vendor - # transcribed
+herm=N vec=thin m=16 n=24 | jacobi 15.50 # deep
+herm=N vec=thin m=16 n=32 | jacobi 15.14 # deep
+herm=N vec=thin m=16 n=33 | jacobi 232.8 # deep
+herm=N vec=thin m=16 n=48 | jacobi 234.4 # deep
+herm=N vec=thin m=16 n=64 | jacobi 215.3 # deep
+herm=N vec=thin m=16 n=128 | vendor - # transcribed
+herm=N vec=thin m=16 n=256 | vendor - # transcribed
+herm=N vec=thin m=16 n=512 | vendor - # transcribed
+herm=N vec=thin m=16 n=1024 | vendor - # transcribed
+herm=N vec=thin m=24 n=1 | jacobi 0.5403 # deep
+herm=N vec=thin m=24 n=2 | jacobi 0.6029 # deep
+herm=N vec=thin m=24 n=4 | jacobi 1.265 # deep
+herm=N vec=thin m=24 n=8 | jacobi 3.723 # deep
+herm=N vec=thin m=24 n=16 | jacobi 12.90 # deep
+herm=N vec=thin m=24 n=32 | jacobi 49.45 # deep
+herm=N vec=thin m=24 n=33 | jacobi 467.2 # deep
+herm=N vec=thin m=24 n=48 | jacobi 221.3 # deep
+herm=N vec=thin m=24 n=64 | jacobi 222.0 # deep
+herm=N vec=thin m=24 n=128 | vendor - # transcribed
+herm=N vec=thin m=24 n=256 | vendor - # transcribed
+herm=N vec=thin m=24 n=512 | vendor - # transcribed
+herm=N vec=thin m=24 n=1024 | vendor - # transcribed
+herm=N vec=thin m=32 n=1 | jacobi 0.5338 # deep
+herm=N vec=thin m=32 n=2 | jacobi 0.6634 # deep
+herm=N vec=thin m=32 n=4 | jacobi 1.333 # deep
+herm=N vec=thin m=32 n=8 | jacobi 3.627 # deep
+herm=N vec=thin m=32 n=16 | jacobi 12.23 # deep
+herm=N vec=thin m=32 n=24 | jacobi 38.88 # deep
+herm=N vec=thin m=32 n=33 | jacobi 417.1 # deep
+herm=N vec=thin m=32 n=48 | jacobi 397.9 # deep
+herm=N vec=thin m=32 n=64 | jacobi 386.3 # deep
+herm=N vec=thin m=32 n=128 | vendor - # transcribed
+herm=N vec=thin m=32 n=256 | vendor - # transcribed
+herm=N vec=thin m=32 n=512 | vendor - # transcribed
+herm=N vec=thin m=32 n=1024 | vendor - # transcribed
+herm=N vec=thin m=33 n=1 | jacobi 5.571 # deep
+herm=N vec=thin m=33 n=2 | jacobi 7.003 # deep
+herm=N vec=thin m=33 n=4 | jacobi 15.99 # deep
+herm=N vec=thin m=33 n=8 | jacobi 55.26 # deep
+herm=N vec=thin m=33 n=16 | jacobi 173.8 # deep
+herm=N vec=thin m=33 n=24 | jacobi 361.1 # deep
+herm=N vec=thin m=33 n=32 | jacobi 340.5 # deep
+herm=N vec=thin m=33 n=48 | jacobi 384.6 # deep
+herm=N vec=thin m=33 n=64 | jacobi 183.9 # deep
+herm=N vec=thin m=33 n=128 | vendor - # transcribed
+herm=N vec=thin m=33 n=256 | vendor - # transcribed
+herm=N vec=thin m=33 n=512 | vendor - # transcribed
+herm=N vec=thin m=33 n=1024 | vendor - # transcribed
+herm=N vec=thin m=48 n=1 | jacobi 5.569 # deep
+herm=N vec=thin m=48 n=2 | jacobi 6.967 # deep
+herm=N vec=thin m=48 n=4 | jacobi 16.17 # deep
+herm=N vec=thin m=48 n=8 | jacobi 50.84 # deep
+herm=N vec=thin m=48 n=16 | jacobi 171.4 # deep
+herm=N vec=thin m=48 n=24 | jacobi 180.0 # deep
+herm=N vec=thin m=48 n=32 | jacobi 324.9 # deep
+herm=N vec=thin m=48 n=33 | jacobi 300.2 # deep
+herm=N vec=thin m=48 n=64 | jacobi 422.3 # deep
+herm=N vec=thin m=48 n=128 | vendor - # transcribed
+herm=N vec=thin m=48 n=256 | vendor - # transcribed
+herm=N vec=thin m=48 n=512 | vendor - # transcribed
+herm=N vec=thin m=48 n=1024 | vendor - # transcribed
+herm=N vec=thin m=64 n=1 | jacobi 5.525 # deep
+herm=N vec=thin m=64 n=2 | jacobi 6.923 # deep
+herm=N vec=thin m=64 n=4 | jacobi 16.13 # deep
+herm=N vec=thin m=64 n=8 | jacobi 47.80 # deep
+herm=N vec=thin m=64 n=16 | jacobi 166.5 # deep
+herm=N vec=thin m=64 n=24 | jacobi 169.2 # deep
+herm=N vec=thin m=64 n=32 | jacobi 316.8 # deep
+herm=N vec=thin m=64 n=33 | jacobi 160.0 # deep
+herm=N vec=thin m=64 n=48 | jacobi 345.3 # deep
+herm=N vec=thin m=64 n=128 | vendor - # transcribed
+herm=N vec=thin m=64 n=256 | vendor - # transcribed
+herm=N vec=thin m=64 n=512 | vendor - # transcribed
+herm=N vec=thin m=64 n=1024 | vendor - # transcribed
+herm=N vec=thin m=65 n=65 | vendor - # transcribed
+herm=N vec=thin m=65 n=128 | vendor - # transcribed
+herm=N vec=thin m=65 n=256 | vendor - # transcribed
+herm=N vec=thin m=65 n=512 | vendor - # transcribed
+herm=N vec=thin m=65 n=1024 | vendor - # transcribed
+herm=N vec=thin m=128 n=1 | vendor - # transcribed
+herm=N vec=thin m=128 n=2 | vendor - # transcribed
+herm=N vec=thin m=128 n=4 | vendor - # transcribed
+herm=N vec=thin m=128 n=8 | vendor - # transcribed
+herm=N vec=thin m=128 n=16 | vendor - # transcribed
+herm=N vec=thin m=128 n=24 | vendor - # transcribed
+herm=N vec=thin m=128 n=32 | vendor - # transcribed
+herm=N vec=thin m=128 n=33 | vendor - # transcribed
+herm=N vec=thin m=128 n=48 | vendor - # transcribed
+herm=N vec=thin m=128 n=64 | vendor - # transcribed
+herm=N vec=thin m=128 n=65 | vendor - # transcribed
+herm=N vec=thin m=128 n=128 | vendor - # transcribed
+herm=N vec=thin m=128 n=256 | vendor - # transcribed
+herm=N vec=thin m=128 n=512 | vendor - # transcribed
+herm=N vec=thin m=128 n=1024 | vendor - # transcribed
+herm=N vec=thin m=256 n=1 | vendor - # transcribed
+herm=N vec=thin m=256 n=2 | vendor - # transcribed
+herm=N vec=thin m=256 n=4 | vendor - # transcribed
+herm=N vec=thin m=256 n=8 | vendor - # transcribed
+herm=N vec=thin m=256 n=16 | vendor - # transcribed
+herm=N vec=thin m=256 n=24 | vendor - # transcribed
+herm=N vec=thin m=256 n=32 | vendor - # transcribed
+herm=N vec=thin m=256 n=33 | vendor - # transcribed
+herm=N vec=thin m=256 n=48 | vendor - # transcribed
+herm=N vec=thin m=256 n=64 | vendor - # transcribed
+herm=N vec=thin m=256 n=65 | vendor - # transcribed
+herm=N vec=thin m=256 n=128 | vendor - # transcribed
+herm=N vec=thin m=256 n=256 | vendor - # transcribed
+herm=N vec=thin m=256 n=512 | vendor - # transcribed
+herm=N vec=thin m=256 n=1024 | vendor - # transcribed
+herm=N vec=thin m=512 n=1 | vendor - # transcribed
+herm=N vec=thin m=512 n=2 | vendor - # transcribed
+herm=N vec=thin m=512 n=4 | vendor - # transcribed
+herm=N vec=thin m=512 n=8 | vendor - # transcribed
+herm=N vec=thin m=512 n=16 | vendor - # transcribed
+herm=N vec=thin m=512 n=24 | vendor - # transcribed
+herm=N vec=thin m=512 n=32 | vendor - # transcribed
+herm=N vec=thin m=512 n=33 | vendor - # transcribed
+herm=N vec=thin m=512 n=48 | vendor - # transcribed
+herm=N vec=thin m=512 n=64 | vendor - # transcribed
+herm=N vec=thin m=512 n=65 | vendor - # transcribed
+herm=N vec=thin m=512 n=128 | vendor - # transcribed
+herm=N vec=thin m=512 n=256 | vendor - # transcribed
+herm=N vec=thin m=512 n=512 | vendor - # transcribed
+herm=N vec=thin m=512 n=1024 | vendor - # transcribed
+herm=N vec=thin m=1024 n=1 | vendor - # transcribed
+herm=N vec=thin m=1024 n=2 | vendor - # transcribed
+herm=N vec=thin m=1024 n=4 | vendor - # transcribed
+herm=N vec=thin m=1024 n=8 | vendor - # transcribed
+herm=N vec=thin m=1024 n=16 | vendor - # transcribed
+herm=N vec=thin m=1024 n=24 | vendor - # transcribed
+herm=N vec=thin m=1024 n=32 | vendor - # transcribed
+herm=N vec=thin m=1024 n=33 | vendor - # transcribed
+herm=N vec=thin m=1024 n=48 | vendor - # transcribed
+herm=N vec=thin m=1024 n=64 | vendor - # transcribed
+herm=N vec=thin m=1024 n=65 | vendor - # transcribed
+herm=N vec=thin m=1024 n=128 | vendor - # transcribed
+herm=N vec=thin m=1024 n=256 | vendor - # transcribed
+herm=N vec=thin m=1024 n=512 | vendor - # transcribed
+herm=N vec=thin m=1024 n=1024 | vendor - # transcribed
+herm=U vec=all m=1 n=1 | cta 0.06762 | vendor 0.1925 # deep
+herm=U vec=all m=1 n=4 | vendor - # transcribed
+herm=U vec=all m=1 n=8 | vendor - # transcribed
+herm=U vec=all m=1 n=16 | vendor - # transcribed
+herm=U vec=all m=1 n=24 | vendor - # transcribed
+herm=U vec=all m=1 n=32 | vendor - # transcribed
+herm=U vec=all m=1 n=33 | vendor - # transcribed
+herm=U vec=all m=1 n=48 | vendor - # transcribed
+herm=U vec=all m=1 n=64 | vendor - # transcribed
+herm=U vec=all m=1 n=65 | vendor - # transcribed
+herm=U vec=all m=1 n=128 | vendor - # transcribed
+herm=U vec=all m=1 n=256 | vendor - # transcribed
+herm=U vec=all m=1 n=512 | vendor - # transcribed
+herm=U vec=all m=1 n=1024 | vendor - # transcribed
+herm=U vec=all m=2 n=2 | cta 0.07433 | vendor 1.599 # deep
+herm=U vec=all m=2 n=4 | vendor - # transcribed
+herm=U vec=all m=2 n=8 | vendor - # transcribed
+herm=U vec=all m=2 n=16 | vendor - # transcribed
+herm=U vec=all m=2 n=24 | vendor - # transcribed
+herm=U vec=all m=2 n=32 | vendor - # transcribed
+herm=U vec=all m=2 n=33 | vendor - # transcribed
+herm=U vec=all m=2 n=48 | vendor - # transcribed
+herm=U vec=all m=2 n=64 | vendor - # transcribed
+herm=U vec=all m=2 n=65 | vendor - # transcribed
+herm=U vec=all m=2 n=128 | vendor - # transcribed
+herm=U vec=all m=2 n=256 | vendor - # transcribed
+herm=U vec=all m=2 n=512 | vendor - # transcribed
+herm=U vec=all m=2 n=1024 | vendor - # transcribed
+herm=U vec=all m=4 n=1 | vendor - # transcribed
+herm=U vec=all m=4 n=2 | vendor - # transcribed
+herm=U vec=all m=4 n=4 | cta 0.08793 | vendor 4.702 # deep
+herm=U vec=all m=4 n=16 | vendor - # transcribed
+herm=U vec=all m=4 n=24 | vendor - # transcribed
+herm=U vec=all m=4 n=32 | vendor - # transcribed
+herm=U vec=all m=4 n=33 | vendor - # transcribed
+herm=U vec=all m=4 n=48 | vendor - # transcribed
+herm=U vec=all m=4 n=64 | vendor - # transcribed
+herm=U vec=all m=4 n=65 | vendor - # transcribed
+herm=U vec=all m=4 n=128 | vendor - # transcribed
+herm=U vec=all m=4 n=256 | vendor - # transcribed
+herm=U vec=all m=4 n=512 | vendor - # transcribed
+herm=U vec=all m=4 n=1024 | vendor - # transcribed
+herm=U vec=all m=8 n=1 | vendor - # transcribed
+herm=U vec=all m=8 n=2 | vendor - # transcribed
+herm=U vec=all m=8 n=8 | cta 0.2117 | vendor 7.095 # deep
+herm=U vec=all m=8 n=16 | vendor - # transcribed
+herm=U vec=all m=8 n=24 | vendor - # transcribed
+herm=U vec=all m=8 n=32 | vendor - # transcribed
+herm=U vec=all m=8 n=33 | vendor - # transcribed
+herm=U vec=all m=8 n=48 | vendor - # transcribed
+herm=U vec=all m=8 n=64 | vendor - # transcribed
+herm=U vec=all m=8 n=65 | vendor - # transcribed
+herm=U vec=all m=8 n=128 | vendor - # transcribed
+herm=U vec=all m=8 n=256 | vendor - # transcribed
+herm=U vec=all m=8 n=512 | vendor - # transcribed
+herm=U vec=all m=8 n=1024 | vendor - # transcribed
+herm=U vec=all m=16 n=1 | vendor - # transcribed
+herm=U vec=all m=16 n=2 | vendor - # transcribed
+herm=U vec=all m=16 n=4 | vendor - # transcribed
+herm=U vec=all m=16 n=8 | vendor - # transcribed
+herm=U vec=all m=16 n=16 | cta 0.9479 | vendor 12.80 # deep
+herm=U vec=all m=16 n=24 | vendor - # transcribed
+herm=U vec=all m=16 n=32 | vendor - # transcribed
+herm=U vec=all m=16 n=33 | vendor - # transcribed
+herm=U vec=all m=16 n=48 | vendor - # transcribed
+herm=U vec=all m=16 n=64 | vendor - # transcribed
+herm=U vec=all m=16 n=65 | vendor - # transcribed
+herm=U vec=all m=16 n=128 | vendor - # transcribed
+herm=U vec=all m=16 n=256 | vendor - # transcribed
+herm=U vec=all m=16 n=512 | vendor - # transcribed
+herm=U vec=all m=16 n=1024 | vendor - # transcribed
+herm=U vec=all m=24 n=1 | vendor - # transcribed
+herm=U vec=all m=24 n=2 | vendor - # transcribed
+herm=U vec=all m=24 n=4 | vendor - # transcribed
+herm=U vec=all m=24 n=8 | vendor - # transcribed
+herm=U vec=all m=24 n=16 | vendor - # transcribed
+herm=U vec=all m=24 n=24 | cta 3.258 | vendor 18.55 # deep
+herm=U vec=all m=24 n=33 | vendor - # transcribed
+herm=U vec=all m=24 n=48 | vendor - # transcribed
+herm=U vec=all m=24 n=64 | vendor - # transcribed
+herm=U vec=all m=24 n=65 | vendor - # transcribed
+herm=U vec=all m=24 n=128 | vendor - # transcribed
+herm=U vec=all m=24 n=256 | vendor - # transcribed
+herm=U vec=all m=24 n=512 | vendor - # transcribed
+herm=U vec=all m=24 n=1024 | vendor - # transcribed
+herm=U vec=all m=32 n=1 | vendor - # transcribed
+herm=U vec=all m=32 n=2 | vendor - # transcribed
+herm=U vec=all m=32 n=4 | vendor - # transcribed
+herm=U vec=all m=32 n=8 | vendor - # transcribed
+herm=U vec=all m=32 n=16 | vendor - # transcribed
+herm=U vec=all m=32 n=32 | cta 5.498 | vendor 26.29 # deep
+herm=U vec=all m=32 n=48 | vendor - # transcribed
+herm=U vec=all m=32 n=64 | vendor - # transcribed
+herm=U vec=all m=32 n=65 | vendor - # transcribed
+herm=U vec=all m=32 n=128 | vendor - # transcribed
+herm=U vec=all m=32 n=256 | vendor - # transcribed
+herm=U vec=all m=32 n=512 | vendor - # transcribed
+herm=U vec=all m=32 n=1024 | vendor - # transcribed
+herm=U vec=all m=33 n=1 | vendor - # transcribed
+herm=U vec=all m=33 n=2 | vendor - # transcribed
+herm=U vec=all m=33 n=4 | vendor - # transcribed
+herm=U vec=all m=33 n=8 | vendor - # transcribed
+herm=U vec=all m=33 n=16 | vendor - # transcribed
+herm=U vec=all m=33 n=48 | vendor - # transcribed
+herm=U vec=all m=33 n=64 | vendor - # transcribed
+herm=U vec=all m=33 n=65 | vendor - # transcribed
+herm=U vec=all m=33 n=128 | vendor - # transcribed
+herm=U vec=all m=33 n=256 | vendor - # transcribed
+herm=U vec=all m=33 n=512 | vendor - # transcribed
+herm=U vec=all m=33 n=1024 | vendor - # transcribed
+herm=U vec=all m=48 n=1 | vendor - # transcribed
+herm=U vec=all m=48 n=2 | vendor - # transcribed
+herm=U vec=all m=48 n=4 | vendor - # transcribed
+herm=U vec=all m=48 n=8 | vendor - # transcribed
+herm=U vec=all m=48 n=16 | vendor - # transcribed
+herm=U vec=all m=48 n=24 | vendor - # transcribed
+herm=U vec=all m=48 n=32 | vendor - # transcribed
+herm=U vec=all m=48 n=33 | vendor - # transcribed
+herm=U vec=all m=48 n=48 | vendor - # transcribed
+herm=U vec=all m=48 n=64 | vendor - # transcribed
+herm=U vec=all m=48 n=65 | vendor - # transcribed
+herm=U vec=all m=48 n=128 | vendor - # transcribed
+herm=U vec=all m=48 n=256 | vendor - # transcribed
+herm=U vec=all m=48 n=512 | vendor - # transcribed
+herm=U vec=all m=48 n=1024 | vendor - # transcribed
+herm=U vec=all m=64 n=1 | vendor - # transcribed
+herm=U vec=all m=64 n=2 | vendor - # transcribed
+herm=U vec=all m=64 n=4 | vendor - # transcribed
+herm=U vec=all m=64 n=8 | vendor - # transcribed
+herm=U vec=all m=64 n=16 | vendor - # transcribed
+herm=U vec=all m=64 n=24 | vendor - # transcribed
+herm=U vec=all m=64 n=32 | vendor - # transcribed
+herm=U vec=all m=64 n=33 | vendor - # transcribed
+herm=U vec=all m=64 n=48 | vendor - # transcribed
+herm=U vec=all m=64 n=64 | vendor - # transcribed
+herm=U vec=all m=64 n=65 | vendor - # transcribed
+herm=U vec=all m=64 n=128 | vendor - # transcribed
+herm=U vec=all m=64 n=256 | vendor - # transcribed
+herm=U vec=all m=64 n=512 | vendor - # transcribed
+herm=U vec=all m=64 n=1024 | vendor - # transcribed
+herm=U vec=all m=65 n=1 | vendor - # transcribed
+herm=U vec=all m=65 n=2 | vendor - # transcribed
+herm=U vec=all m=65 n=4 | vendor - # transcribed
+herm=U vec=all m=65 n=8 | vendor - # transcribed
+herm=U vec=all m=65 n=16 | vendor - # transcribed
+herm=U vec=all m=65 n=24 | vendor - # transcribed
+herm=U vec=all m=65 n=32 | vendor - # transcribed
+herm=U vec=all m=65 n=33 | vendor - # transcribed
+herm=U vec=all m=65 n=48 | vendor - # transcribed
+herm=U vec=all m=65 n=64 | vendor - # transcribed
+herm=U vec=all m=65 n=65 | vendor - # transcribed
+herm=U vec=all m=65 n=128 | vendor - # transcribed
+herm=U vec=all m=65 n=256 | vendor - # transcribed
+herm=U vec=all m=65 n=512 | vendor - # transcribed
+herm=U vec=all m=65 n=1024 | vendor - # transcribed
+herm=U vec=all m=128 n=1 | vendor - # transcribed
+herm=U vec=all m=128 n=2 | vendor - # transcribed
+herm=U vec=all m=128 n=4 | vendor - # transcribed
+herm=U vec=all m=128 n=8 | vendor - # transcribed
+herm=U vec=all m=128 n=16 | vendor - # transcribed
+herm=U vec=all m=128 n=24 | vendor - # transcribed
+herm=U vec=all m=128 n=32 | vendor - # transcribed
+herm=U vec=all m=128 n=33 | vendor - # transcribed
+herm=U vec=all m=128 n=48 | vendor - # transcribed
+herm=U vec=all m=128 n=64 | vendor - # transcribed
+herm=U vec=all m=128 n=65 | vendor - # transcribed
+herm=U vec=all m=128 n=128 | vendor - # transcribed
+herm=U vec=all m=128 n=256 | vendor - # transcribed
+herm=U vec=all m=128 n=512 | vendor - # transcribed
+herm=U vec=all m=128 n=1024 | vendor - # transcribed
+herm=U vec=all m=256 n=1 | vendor - # transcribed
+herm=U vec=all m=256 n=2 | vendor - # transcribed
+herm=U vec=all m=256 n=4 | vendor - # transcribed
+herm=U vec=all m=256 n=8 | vendor - # transcribed
+herm=U vec=all m=256 n=16 | vendor - # transcribed
+herm=U vec=all m=256 n=24 | vendor - # transcribed
+herm=U vec=all m=256 n=32 | vendor - # transcribed
+herm=U vec=all m=256 n=33 | vendor - # transcribed
+herm=U vec=all m=256 n=48 | vendor - # transcribed
+herm=U vec=all m=256 n=64 | vendor - # transcribed
+herm=U vec=all m=256 n=65 | vendor - # transcribed
+herm=U vec=all m=256 n=128 | vendor - # transcribed
+herm=U vec=all m=256 n=256 | vendor - # transcribed
+herm=U vec=all m=256 n=512 | vendor - # transcribed
+herm=U vec=all m=256 n=1024 | vendor - # transcribed
+herm=U vec=all m=512 n=1 | vendor - # transcribed
+herm=U vec=all m=512 n=2 | vendor - # transcribed
+herm=U vec=all m=512 n=4 | vendor - # transcribed
+herm=U vec=all m=512 n=8 | vendor - # transcribed
+herm=U vec=all m=512 n=16 | vendor - # transcribed
+herm=U vec=all m=512 n=24 | vendor - # transcribed
+herm=U vec=all m=512 n=32 | vendor - # transcribed
+herm=U vec=all m=512 n=33 | vendor - # transcribed
+herm=U vec=all m=512 n=48 | vendor - # transcribed
+herm=U vec=all m=512 n=64 | vendor - # transcribed
+herm=U vec=all m=512 n=65 | vendor - # transcribed
+herm=U vec=all m=512 n=128 | vendor - # transcribed
+herm=U vec=all m=512 n=256 | vendor - # transcribed
+herm=U vec=all m=512 n=512 | vendor - # transcribed
+herm=U vec=all m=512 n=1024 | vendor - # transcribed
+herm=U vec=all m=1024 n=1 | vendor - # transcribed
+herm=U vec=all m=1024 n=2 | vendor - # transcribed
+herm=U vec=all m=1024 n=4 | vendor - # transcribed
+herm=U vec=all m=1024 n=8 | vendor - # transcribed
+herm=U vec=all m=1024 n=16 | vendor - # transcribed
+herm=U vec=all m=1024 n=24 | vendor - # transcribed
+herm=U vec=all m=1024 n=32 | vendor - # transcribed
+herm=U vec=all m=1024 n=33 | vendor - # transcribed
+herm=U vec=all m=1024 n=48 | vendor - # transcribed
+herm=U vec=all m=1024 n=64 | vendor - # transcribed
+herm=U vec=all m=1024 n=65 | vendor - # transcribed
+herm=U vec=all m=1024 n=128 | vendor - # transcribed
+herm=U vec=all m=1024 n=256 | vendor - # transcribed
+herm=U vec=all m=1024 n=512 | vendor - # transcribed
+herm=U vec=all m=1024 n=1024 | vendor - # transcribed
+herm=U vec=none m=1 n=1 | cta 0.04796 | vendor 0.1836 # deep
+herm=U vec=none m=1 n=4 | vendor - # transcribed
+herm=U vec=none m=1 n=8 | vendor - # transcribed
+herm=U vec=none m=1 n=16 | vendor - # transcribed
+herm=U vec=none m=1 n=24 | vendor - # transcribed
+herm=U vec=none m=1 n=32 | vendor - # transcribed
+herm=U vec=none m=1 n=33 | vendor - # transcribed
+herm=U vec=none m=1 n=48 | vendor - # transcribed
+herm=U vec=none m=1 n=64 | vendor - # transcribed
+herm=U vec=none m=1 n=65 | vendor - # transcribed
+herm=U vec=none m=1 n=128 | vendor - # transcribed
+herm=U vec=none m=1 n=256 | vendor - # transcribed
+herm=U vec=none m=1 n=512 | vendor - # transcribed
+herm=U vec=none m=1 n=1024 | vendor - # transcribed
+herm=U vec=none m=2 n=2 | cta 0.05362 | vendor 1.615 # deep
+herm=U vec=none m=2 n=4 | vendor - # transcribed
+herm=U vec=none m=2 n=8 | vendor - # transcribed
+herm=U vec=none m=2 n=16 | vendor - # transcribed
+herm=U vec=none m=2 n=24 | vendor - # transcribed
+herm=U vec=none m=2 n=32 | vendor - # transcribed
+herm=U vec=none m=2 n=33 | vendor - # transcribed
+herm=U vec=none m=2 n=48 | vendor - # transcribed
+herm=U vec=none m=2 n=64 | vendor - # transcribed
+herm=U vec=none m=2 n=65 | vendor - # transcribed
+herm=U vec=none m=2 n=128 | vendor - # transcribed
+herm=U vec=none m=2 n=256 | vendor - # transcribed
+herm=U vec=none m=2 n=512 | vendor - # transcribed
+herm=U vec=none m=2 n=1024 | vendor - # transcribed
+herm=U vec=none m=4 n=1 | vendor - # transcribed
+herm=U vec=none m=4 n=2 | vendor - # transcribed
+herm=U vec=none m=4 n=4 | cta 0.06114 | vendor 4.727 # deep
+herm=U vec=none m=4 n=16 | vendor - # transcribed
+herm=U vec=none m=4 n=24 | vendor - # transcribed
+herm=U vec=none m=4 n=32 | vendor - # transcribed
+herm=U vec=none m=4 n=33 | vendor - # transcribed
+herm=U vec=none m=4 n=48 | vendor - # transcribed
+herm=U vec=none m=4 n=64 | vendor - # transcribed
+herm=U vec=none m=4 n=65 | vendor - # transcribed
+herm=U vec=none m=4 n=128 | vendor - # transcribed
+herm=U vec=none m=4 n=256 | vendor - # transcribed
+herm=U vec=none m=4 n=512 | vendor - # transcribed
+herm=U vec=none m=4 n=1024 | vendor - # transcribed
+herm=U vec=none m=8 n=1 | vendor - # transcribed
+herm=U vec=none m=8 n=2 | vendor - # transcribed
+herm=U vec=none m=8 n=8 | cta 0.1288 | vendor 7.037 # deep
+herm=U vec=none m=8 n=16 | vendor - # transcribed
+herm=U vec=none m=8 n=24 | vendor - # transcribed
+herm=U vec=none m=8 n=32 | vendor - # transcribed
+herm=U vec=none m=8 n=33 | vendor - # transcribed
+herm=U vec=none m=8 n=48 | vendor - # transcribed
+herm=U vec=none m=8 n=64 | vendor - # transcribed
+herm=U vec=none m=8 n=65 | vendor - # transcribed
+herm=U vec=none m=8 n=128 | vendor - # transcribed
+herm=U vec=none m=8 n=256 | vendor - # transcribed
+herm=U vec=none m=8 n=512 | vendor - # transcribed
+herm=U vec=none m=8 n=1024 | vendor - # transcribed
+herm=U vec=none m=16 n=1 | vendor - # transcribed
+herm=U vec=none m=16 n=2 | vendor - # transcribed
+herm=U vec=none m=16 n=4 | vendor - # transcribed
+herm=U vec=none m=16 n=8 | vendor - # transcribed
+herm=U vec=none m=16 n=16 | cta 0.4793 | vendor 12.19 # deep
+herm=U vec=none m=16 n=24 | vendor - # transcribed
+herm=U vec=none m=16 n=32 | vendor - # transcribed
+herm=U vec=none m=16 n=33 | vendor - # transcribed
+herm=U vec=none m=16 n=48 | vendor - # transcribed
+herm=U vec=none m=16 n=64 | vendor - # transcribed
+herm=U vec=none m=16 n=65 | vendor - # transcribed
+herm=U vec=none m=16 n=128 | vendor - # transcribed
+herm=U vec=none m=16 n=256 | vendor - # transcribed
+herm=U vec=none m=16 n=512 | vendor - # transcribed
+herm=U vec=none m=16 n=1024 | vendor - # transcribed
+herm=U vec=none m=24 n=1 | vendor - # transcribed
+herm=U vec=none m=24 n=2 | vendor - # transcribed
+herm=U vec=none m=24 n=4 | vendor - # transcribed
+herm=U vec=none m=24 n=8 | vendor - # transcribed
+herm=U vec=none m=24 n=16 | vendor - # transcribed
+herm=U vec=none m=24 n=24 | cta 1.559 | vendor 16.17 # deep
+herm=U vec=none m=24 n=33 | vendor - # transcribed
+herm=U vec=none m=24 n=48 | vendor - # transcribed
+herm=U vec=none m=24 n=64 | vendor - # transcribed
+herm=U vec=none m=24 n=65 | vendor - # transcribed
+herm=U vec=none m=24 n=128 | vendor - # transcribed
+herm=U vec=none m=24 n=256 | vendor - # transcribed
+herm=U vec=none m=24 n=512 | vendor - # transcribed
+herm=U vec=none m=24 n=1024 | vendor - # transcribed
+herm=U vec=none m=32 n=1 | vendor - # transcribed
+herm=U vec=none m=32 n=2 | vendor - # transcribed
+herm=U vec=none m=32 n=4 | vendor - # transcribed
+herm=U vec=none m=32 n=8 | vendor - # transcribed
+herm=U vec=none m=32 n=16 | vendor - # transcribed
+herm=U vec=none m=32 n=32 | cta 2.691 | vendor 22.55 # deep
+herm=U vec=none m=32 n=48 | vendor - # transcribed
+herm=U vec=none m=32 n=64 | vendor - # transcribed
+herm=U vec=none m=32 n=65 | vendor - # transcribed
+herm=U vec=none m=32 n=128 | vendor - # transcribed
+herm=U vec=none m=32 n=256 | vendor - # transcribed
+herm=U vec=none m=32 n=512 | vendor - # transcribed
+herm=U vec=none m=32 n=1024 | vendor - # transcribed
+herm=U vec=none m=33 n=1 | vendor - # transcribed
+herm=U vec=none m=33 n=2 | vendor - # transcribed
+herm=U vec=none m=33 n=4 | vendor - # transcribed
+herm=U vec=none m=33 n=8 | vendor - # transcribed
+herm=U vec=none m=33 n=16 | vendor - # transcribed
+herm=U vec=none m=33 n=48 | vendor - # transcribed
+herm=U vec=none m=33 n=64 | vendor - # transcribed
+herm=U vec=none m=33 n=65 | vendor - # transcribed
+herm=U vec=none m=33 n=128 | vendor - # transcribed
+herm=U vec=none m=33 n=256 | vendor - # transcribed
+herm=U vec=none m=33 n=512 | vendor - # transcribed
+herm=U vec=none m=33 n=1024 | vendor - # transcribed
+herm=U vec=none m=48 n=1 | vendor - # transcribed
+herm=U vec=none m=48 n=2 | vendor - # transcribed
+herm=U vec=none m=48 n=4 | vendor - # transcribed
+herm=U vec=none m=48 n=8 | vendor - # transcribed
+herm=U vec=none m=48 n=16 | vendor - # transcribed
+herm=U vec=none m=48 n=24 | vendor - # transcribed
+herm=U vec=none m=48 n=32 | vendor - # transcribed
+herm=U vec=none m=48 n=33 | vendor - # transcribed
+herm=U vec=none m=48 n=48 | vendor - # transcribed
+herm=U vec=none m=48 n=64 | vendor - # transcribed
+herm=U vec=none m=48 n=65 | vendor - # transcribed
+herm=U vec=none m=48 n=128 | vendor - # transcribed
+herm=U vec=none m=48 n=256 | vendor - # transcribed
+herm=U vec=none m=48 n=512 | vendor - # transcribed
+herm=U vec=none m=48 n=1024 | vendor - # transcribed
+herm=U vec=none m=64 n=1 | vendor - # transcribed
+herm=U vec=none m=64 n=2 | vendor - # transcribed
+herm=U vec=none m=64 n=4 | vendor - # transcribed
+herm=U vec=none m=64 n=8 | vendor - # transcribed
+herm=U vec=none m=64 n=16 | vendor - # transcribed
+herm=U vec=none m=64 n=24 | vendor - # transcribed
+herm=U vec=none m=64 n=32 | vendor - # transcribed
+herm=U vec=none m=64 n=33 | vendor - # transcribed
+herm=U vec=none m=64 n=48 | vendor - # transcribed
+herm=U vec=none m=64 n=64 | vendor - # transcribed
+herm=U vec=none m=64 n=65 | vendor - # transcribed
+herm=U vec=none m=64 n=128 | vendor - # transcribed
+herm=U vec=none m=64 n=256 | vendor - # transcribed
+herm=U vec=none m=64 n=512 | vendor - # transcribed
+herm=U vec=none m=64 n=1024 | vendor - # transcribed
+herm=U vec=none m=65 n=1 | vendor - # transcribed
+herm=U vec=none m=65 n=2 | vendor - # transcribed
+herm=U vec=none m=65 n=4 | vendor - # transcribed
+herm=U vec=none m=65 n=8 | vendor - # transcribed
+herm=U vec=none m=65 n=16 | vendor - # transcribed
+herm=U vec=none m=65 n=24 | vendor - # transcribed
+herm=U vec=none m=65 n=32 | vendor - # transcribed
+herm=U vec=none m=65 n=33 | vendor - # transcribed
+herm=U vec=none m=65 n=48 | vendor - # transcribed
+herm=U vec=none m=65 n=64 | vendor - # transcribed
+herm=U vec=none m=65 n=65 | vendor - # transcribed
+herm=U vec=none m=65 n=128 | vendor - # transcribed
+herm=U vec=none m=65 n=256 | vendor - # transcribed
+herm=U vec=none m=65 n=512 | vendor - # transcribed
+herm=U vec=none m=65 n=1024 | vendor - # transcribed
+herm=U vec=none m=128 n=1 | vendor - # transcribed
+herm=U vec=none m=128 n=2 | vendor - # transcribed
+herm=U vec=none m=128 n=4 | vendor - # transcribed
+herm=U vec=none m=128 n=8 | vendor - # transcribed
+herm=U vec=none m=128 n=16 | vendor - # transcribed
+herm=U vec=none m=128 n=24 | vendor - # transcribed
+herm=U vec=none m=128 n=32 | vendor - # transcribed
+herm=U vec=none m=128 n=33 | vendor - # transcribed
+herm=U vec=none m=128 n=48 | vendor - # transcribed
+herm=U vec=none m=128 n=64 | vendor - # transcribed
+herm=U vec=none m=128 n=65 | vendor - # transcribed
+herm=U vec=none m=128 n=128 | vendor - # transcribed
+herm=U vec=none m=128 n=256 | vendor - # transcribed
+herm=U vec=none m=128 n=512 | vendor - # transcribed
+herm=U vec=none m=128 n=1024 | vendor - # transcribed
+herm=U vec=none m=256 n=1 | vendor - # transcribed
+herm=U vec=none m=256 n=2 | vendor - # transcribed
+herm=U vec=none m=256 n=4 | vendor - # transcribed
+herm=U vec=none m=256 n=8 | vendor - # transcribed
+herm=U vec=none m=256 n=16 | vendor - # transcribed
+herm=U vec=none m=256 n=24 | vendor - # transcribed
+herm=U vec=none m=256 n=32 | vendor - # transcribed
+herm=U vec=none m=256 n=33 | vendor - # transcribed
+herm=U vec=none m=256 n=48 | vendor - # transcribed
+herm=U vec=none m=256 n=64 | vendor - # transcribed
+herm=U vec=none m=256 n=65 | vendor - # transcribed
+herm=U vec=none m=256 n=128 | vendor - # transcribed
+herm=U vec=none m=256 n=256 | vendor - # transcribed
+herm=U vec=none m=256 n=512 | vendor - # transcribed
+herm=U vec=none m=256 n=1024 | vendor - # transcribed
+herm=U vec=none m=512 n=1 | vendor - # transcribed
+herm=U vec=none m=512 n=2 | vendor - # transcribed
+herm=U vec=none m=512 n=4 | vendor - # transcribed
+herm=U vec=none m=512 n=8 | vendor - # transcribed
+herm=U vec=none m=512 n=16 | vendor - # transcribed
+herm=U vec=none m=512 n=24 | vendor - # transcribed
+herm=U vec=none m=512 n=32 | vendor - # transcribed
+herm=U vec=none m=512 n=33 | vendor - # transcribed
+herm=U vec=none m=512 n=48 | vendor - # transcribed
+herm=U vec=none m=512 n=64 | vendor - # transcribed
+herm=U vec=none m=512 n=65 | vendor - # transcribed
+herm=U vec=none m=512 n=128 | vendor - # transcribed
+herm=U vec=none m=512 n=256 | vendor - # transcribed
+herm=U vec=none m=512 n=512 | vendor - # transcribed
+herm=U vec=none m=512 n=1024 | vendor - # transcribed
+herm=U vec=none m=1024 n=1 | vendor - # transcribed
+herm=U vec=none m=1024 n=2 | vendor - # transcribed
+herm=U vec=none m=1024 n=4 | vendor - # transcribed
+herm=U vec=none m=1024 n=8 | vendor - # transcribed
+herm=U vec=none m=1024 n=16 | vendor - # transcribed
+herm=U vec=none m=1024 n=24 | vendor - # transcribed
+herm=U vec=none m=1024 n=32 | vendor - # transcribed
+herm=U vec=none m=1024 n=33 | vendor - # transcribed
+herm=U vec=none m=1024 n=48 | vendor - # transcribed
+herm=U vec=none m=1024 n=64 | vendor - # transcribed
+herm=U vec=none m=1024 n=65 | vendor - # transcribed
+herm=U vec=none m=1024 n=128 | vendor - # transcribed
+herm=U vec=none m=1024 n=256 | vendor - # transcribed
+herm=U vec=none m=1024 n=512 | vendor - # transcribed
+herm=U vec=none m=1024 n=1024 | vendor - # transcribed
+herm=U vec=thin m=1 n=1 | vendor - # transcribed
+herm=U vec=thin m=1 n=2 | vendor - # transcribed
+herm=U vec=thin m=1 n=4 | vendor - # transcribed
+herm=U vec=thin m=1 n=8 | vendor - # transcribed
+herm=U vec=thin m=1 n=16 | vendor - # transcribed
+herm=U vec=thin m=1 n=24 | vendor - # transcribed
+herm=U vec=thin m=1 n=32 | vendor - # transcribed
+herm=U vec=thin m=1 n=33 | vendor - # transcribed
+herm=U vec=thin m=1 n=48 | vendor - # transcribed
+herm=U vec=thin m=1 n=64 | vendor - # transcribed
+herm=U vec=thin m=1 n=65 | vendor - # transcribed
+herm=U vec=thin m=1 n=128 | vendor - # transcribed
+herm=U vec=thin m=1 n=256 | vendor - # transcribed
+herm=U vec=thin m=1 n=512 | vendor - # transcribed
+herm=U vec=thin m=1 n=1024 | vendor - # transcribed
+herm=U vec=thin m=2 n=1 | vendor - # transcribed
+herm=U vec=thin m=2 n=2 | vendor - # transcribed
+herm=U vec=thin m=2 n=4 | vendor - # transcribed
+herm=U vec=thin m=2 n=8 | vendor - # transcribed
+herm=U vec=thin m=2 n=16 | vendor - # transcribed
+herm=U vec=thin m=2 n=24 | vendor - # transcribed
+herm=U vec=thin m=2 n=32 | vendor - # transcribed
+herm=U vec=thin m=2 n=33 | vendor - # transcribed
+herm=U vec=thin m=2 n=48 | vendor - # transcribed
+herm=U vec=thin m=2 n=64 | vendor - # transcribed
+herm=U vec=thin m=2 n=65 | vendor - # transcribed
+herm=U vec=thin m=2 n=128 | vendor - # transcribed
+herm=U vec=thin m=2 n=256 | vendor - # transcribed
+herm=U vec=thin m=2 n=512 | vendor - # transcribed
+herm=U vec=thin m=2 n=1024 | vendor - # transcribed
+herm=U vec=thin m=4 n=1 | vendor - # transcribed
+herm=U vec=thin m=4 n=2 | vendor - # transcribed
+herm=U vec=thin m=4 n=4 | vendor - # transcribed
+herm=U vec=thin m=4 n=8 | vendor - # transcribed
+herm=U vec=thin m=4 n=16 | vendor - # transcribed
+herm=U vec=thin m=4 n=24 | vendor - # transcribed
+herm=U vec=thin m=4 n=32 | vendor - # transcribed
+herm=U vec=thin m=4 n=33 | vendor - # transcribed
+herm=U vec=thin m=4 n=48 | vendor - # transcribed
+herm=U vec=thin m=4 n=64 | vendor - # transcribed
+herm=U vec=thin m=4 n=65 | vendor - # transcribed
+herm=U vec=thin m=4 n=128 | vendor - # transcribed
+herm=U vec=thin m=4 n=256 | vendor - # transcribed
+herm=U vec=thin m=4 n=512 | vendor - # transcribed
+herm=U vec=thin m=4 n=1024 | vendor - # transcribed
+herm=U vec=thin m=8 n=1 | vendor - # transcribed
+herm=U vec=thin m=8 n=2 | vendor - # transcribed
+herm=U vec=thin m=8 n=4 | vendor - # transcribed
+herm=U vec=thin m=8 n=8 | vendor - # transcribed
+herm=U vec=thin m=8 n=16 | vendor - # transcribed
+herm=U vec=thin m=8 n=24 | vendor - # transcribed
+herm=U vec=thin m=8 n=32 | vendor - # transcribed
+herm=U vec=thin m=8 n=33 | vendor - # transcribed
+herm=U vec=thin m=8 n=48 | vendor - # transcribed
+herm=U vec=thin m=8 n=64 | vendor - # transcribed
+herm=U vec=thin m=8 n=65 | vendor - # transcribed
+herm=U vec=thin m=8 n=128 | vendor - # transcribed
+herm=U vec=thin m=8 n=256 | vendor - # transcribed
+herm=U vec=thin m=8 n=512 | vendor - # transcribed
+herm=U vec=thin m=8 n=1024 | vendor - # transcribed
+herm=U vec=thin m=16 n=1 | vendor - # transcribed
+herm=U vec=thin m=16 n=2 | vendor - # transcribed
+herm=U vec=thin m=16 n=4 | vendor - # transcribed
+herm=U vec=thin m=16 n=8 | vendor - # transcribed
+herm=U vec=thin m=16 n=16 | vendor - # transcribed
+herm=U vec=thin m=16 n=24 | vendor - # transcribed
+herm=U vec=thin m=16 n=32 | vendor - # transcribed
+herm=U vec=thin m=16 n=33 | vendor - # transcribed
+herm=U vec=thin m=16 n=48 | vendor - # transcribed
+herm=U vec=thin m=16 n=64 | vendor - # transcribed
+herm=U vec=thin m=16 n=65 | vendor - # transcribed
+herm=U vec=thin m=16 n=128 | vendor - # transcribed
+herm=U vec=thin m=16 n=256 | vendor - # transcribed
+herm=U vec=thin m=16 n=512 | vendor - # transcribed
+herm=U vec=thin m=16 n=1024 | vendor - # transcribed
+herm=U vec=thin m=24 n=1 | vendor - # transcribed
+herm=U vec=thin m=24 n=2 | vendor - # transcribed
+herm=U vec=thin m=24 n=4 | vendor - # transcribed
+herm=U vec=thin m=24 n=8 | vendor - # transcribed
+herm=U vec=thin m=24 n=16 | vendor - # transcribed
+herm=U vec=thin m=24 n=24 | vendor - # transcribed
+herm=U vec=thin m=24 n=32 | vendor - # transcribed
+herm=U vec=thin m=24 n=33 | vendor - # transcribed
+herm=U vec=thin m=24 n=48 | vendor - # transcribed
+herm=U vec=thin m=24 n=64 | vendor - # transcribed
+herm=U vec=thin m=24 n=65 | vendor - # transcribed
+herm=U vec=thin m=24 n=128 | vendor - # transcribed
+herm=U vec=thin m=24 n=256 | vendor - # transcribed
+herm=U vec=thin m=24 n=512 | vendor - # transcribed
+herm=U vec=thin m=24 n=1024 | vendor - # transcribed
+herm=U vec=thin m=32 n=1 | vendor - # transcribed
+herm=U vec=thin m=32 n=2 | vendor - # transcribed
+herm=U vec=thin m=32 n=4 | vendor - # transcribed
+herm=U vec=thin m=32 n=8 | vendor - # transcribed
+herm=U vec=thin m=32 n=16 | vendor - # transcribed
+herm=U vec=thin m=32 n=24 | vendor - # transcribed
+herm=U vec=thin m=32 n=32 | vendor - # transcribed
+herm=U vec=thin m=32 n=33 | vendor - # transcribed
+herm=U vec=thin m=32 n=48 | vendor - # transcribed
+herm=U vec=thin m=32 n=64 | vendor - # transcribed
+herm=U vec=thin m=32 n=65 | vendor - # transcribed
+herm=U vec=thin m=32 n=128 | vendor - # transcribed
+herm=U vec=thin m=32 n=256 | vendor - # transcribed
+herm=U vec=thin m=32 n=512 | vendor - # transcribed
+herm=U vec=thin m=32 n=1024 | vendor - # transcribed
+herm=U vec=thin m=33 n=1 | vendor - # transcribed
+herm=U vec=thin m=33 n=2 | vendor - # transcribed
+herm=U vec=thin m=33 n=4 | vendor - # transcribed
+herm=U vec=thin m=33 n=8 | vendor - # transcribed
+herm=U vec=thin m=33 n=16 | vendor - # transcribed
+herm=U vec=thin m=33 n=24 | vendor - # transcribed
+herm=U vec=thin m=33 n=32 | vendor - # transcribed
+herm=U vec=thin m=33 n=33 | vendor - # transcribed
+herm=U vec=thin m=33 n=48 | vendor - # transcribed
+herm=U vec=thin m=33 n=64 | vendor - # transcribed
+herm=U vec=thin m=33 n=65 | vendor - # transcribed
+herm=U vec=thin m=33 n=128 | vendor - # transcribed
+herm=U vec=thin m=33 n=256 | vendor - # transcribed
+herm=U vec=thin m=33 n=512 | vendor - # transcribed
+herm=U vec=thin m=33 n=1024 | vendor - # transcribed
+herm=U vec=thin m=48 n=1 | vendor - # transcribed
+herm=U vec=thin m=48 n=2 | vendor - # transcribed
+herm=U vec=thin m=48 n=4 | vendor - # transcribed
+herm=U vec=thin m=48 n=8 | vendor - # transcribed
+herm=U vec=thin m=48 n=16 | vendor - # transcribed
+herm=U vec=thin m=48 n=24 | vendor - # transcribed
+herm=U vec=thin m=48 n=32 | vendor - # transcribed
+herm=U vec=thin m=48 n=33 | vendor - # transcribed
+herm=U vec=thin m=48 n=48 | vendor - # transcribed
+herm=U vec=thin m=48 n=64 | vendor - # transcribed
+herm=U vec=thin m=48 n=65 | vendor - # transcribed
+herm=U vec=thin m=48 n=128 | vendor - # transcribed
+herm=U vec=thin m=48 n=256 | vendor - # transcribed
+herm=U vec=thin m=48 n=512 | vendor - # transcribed
+herm=U vec=thin m=48 n=1024 | vendor - # transcribed
+herm=U vec=thin m=64 n=1 | vendor - # transcribed
+herm=U vec=thin m=64 n=2 | vendor - # transcribed
+herm=U vec=thin m=64 n=4 | vendor - # transcribed
+herm=U vec=thin m=64 n=8 | vendor - # transcribed
+herm=U vec=thin m=64 n=16 | vendor - # transcribed
+herm=U vec=thin m=64 n=24 | vendor - # transcribed
+herm=U vec=thin m=64 n=32 | vendor - # transcribed
+herm=U vec=thin m=64 n=33 | vendor - # transcribed
+herm=U vec=thin m=64 n=48 | vendor - # transcribed
+herm=U vec=thin m=64 n=64 | vendor - # transcribed
+herm=U vec=thin m=64 n=65 | vendor - # transcribed
+herm=U vec=thin m=64 n=128 | vendor - # transcribed
+herm=U vec=thin m=64 n=256 | vendor - # transcribed
+herm=U vec=thin m=64 n=512 | vendor - # transcribed
+herm=U vec=thin m=64 n=1024 | vendor - # transcribed
+herm=U vec=thin m=65 n=1 | vendor - # transcribed
+herm=U vec=thin m=65 n=2 | vendor - # transcribed
+herm=U vec=thin m=65 n=4 | vendor - # transcribed
+herm=U vec=thin m=65 n=8 | vendor - # transcribed
+herm=U vec=thin m=65 n=16 | vendor - # transcribed
+herm=U vec=thin m=65 n=24 | vendor - # transcribed
+herm=U vec=thin m=65 n=32 | vendor - # transcribed
+herm=U vec=thin m=65 n=33 | vendor - # transcribed
+herm=U vec=thin m=65 n=48 | vendor - # transcribed
+herm=U vec=thin m=65 n=64 | vendor - # transcribed
+herm=U vec=thin m=65 n=65 | vendor - # transcribed
+herm=U vec=thin m=65 n=128 | vendor - # transcribed
+herm=U vec=thin m=65 n=256 | vendor - # transcribed
+herm=U vec=thin m=65 n=512 | vendor - # transcribed
+herm=U vec=thin m=65 n=1024 | vendor - # transcribed
+herm=U vec=thin m=128 n=1 | vendor - # transcribed
+herm=U vec=thin m=128 n=2 | vendor - # transcribed
+herm=U vec=thin m=128 n=4 | vendor - # transcribed
+herm=U vec=thin m=128 n=8 | vendor - # transcribed
+herm=U vec=thin m=128 n=16 | vendor - # transcribed
+herm=U vec=thin m=128 n=24 | vendor - # transcribed
+herm=U vec=thin m=128 n=32 | vendor - # transcribed
+herm=U vec=thin m=128 n=33 | vendor - # transcribed
+herm=U vec=thin m=128 n=48 | vendor - # transcribed
+herm=U vec=thin m=128 n=64 | vendor - # transcribed
+herm=U vec=thin m=128 n=65 | vendor - # transcribed
+herm=U vec=thin m=128 n=128 | vendor - # transcribed
+herm=U vec=thin m=128 n=256 | vendor - # transcribed
+herm=U vec=thin m=128 n=512 | vendor - # transcribed
+herm=U vec=thin m=128 n=1024 | vendor - # transcribed
+herm=U vec=thin m=256 n=1 | vendor - # transcribed
+herm=U vec=thin m=256 n=2 | vendor - # transcribed
+herm=U vec=thin m=256 n=4 | vendor - # transcribed
+herm=U vec=thin m=256 n=8 | vendor - # transcribed
+herm=U vec=thin m=256 n=16 | vendor - # transcribed
+herm=U vec=thin m=256 n=24 | vendor - # transcribed
+herm=U vec=thin m=256 n=32 | vendor - # transcribed
+herm=U vec=thin m=256 n=33 | vendor - # transcribed
+herm=U vec=thin m=256 n=48 | vendor - # transcribed
+herm=U vec=thin m=256 n=64 | vendor - # transcribed
+herm=U vec=thin m=256 n=65 | vendor - # transcribed
+herm=U vec=thin m=256 n=128 | vendor - # transcribed
+herm=U vec=thin m=256 n=256 | vendor - # transcribed
+herm=U vec=thin m=256 n=512 | vendor - # transcribed
+herm=U vec=thin m=256 n=1024 | vendor - # transcribed
+herm=U vec=thin m=512 n=1 | vendor - # transcribed
+herm=U vec=thin m=512 n=2 | vendor - # transcribed
+herm=U vec=thin m=512 n=4 | vendor - # transcribed
+herm=U vec=thin m=512 n=8 | vendor - # transcribed
+herm=U vec=thin m=512 n=16 | vendor - # transcribed
+herm=U vec=thin m=512 n=24 | vendor - # transcribed
+herm=U vec=thin m=512 n=32 | vendor - # transcribed
+herm=U vec=thin m=512 n=33 | vendor - # transcribed
+herm=U vec=thin m=512 n=48 | vendor - # transcribed
+herm=U vec=thin m=512 n=64 | vendor - # transcribed
+herm=U vec=thin m=512 n=65 | vendor - # transcribed
+herm=U vec=thin m=512 n=128 | vendor - # transcribed
+herm=U vec=thin m=512 n=256 | vendor - # transcribed
+herm=U vec=thin m=512 n=512 | vendor - # transcribed
+herm=U vec=thin m=512 n=1024 | vendor - # transcribed
+herm=U vec=thin m=1024 n=1 | vendor - # transcribed
+herm=U vec=thin m=1024 n=2 | vendor - # transcribed
+herm=U vec=thin m=1024 n=4 | vendor - # transcribed
+herm=U vec=thin m=1024 n=8 | vendor - # transcribed
+herm=U vec=thin m=1024 n=16 | vendor - # transcribed
+herm=U vec=thin m=1024 n=24 | vendor - # transcribed
+herm=U vec=thin m=1024 n=32 | vendor - # transcribed
+herm=U vec=thin m=1024 n=33 | vendor - # transcribed
+herm=U vec=thin m=1024 n=48 | vendor - # transcribed
+herm=U vec=thin m=1024 n=64 | vendor - # transcribed
+herm=U vec=thin m=1024 n=65 | vendor - # transcribed
+herm=U vec=thin m=1024 n=128 | vendor - # transcribed
+herm=U vec=thin m=1024 n=256 | vendor - # transcribed
+herm=U vec=thin m=1024 n=512 | vendor - # transcribed
+herm=U vec=thin m=1024 n=1024 | vendor - # transcribed
