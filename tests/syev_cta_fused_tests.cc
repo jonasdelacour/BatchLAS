@@ -227,9 +227,11 @@ TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
+		// The NETLIB queue, not the GPU one: that follows the tuned table (see syev_cta_tests.cc).
+		Queue host(Device("cpu"), Backend::NETLIB, true);
 		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(
-			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev(*this->ctx,
+			host, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+		syev(host,
                         A_ref.view(),
                         W_ref.to_span(),
                         {.jobz = JobType::NoEigenVectors},

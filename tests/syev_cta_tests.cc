@@ -211,11 +211,13 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
 	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
 
-	// Reference (CPU LAPACKE)
+	// Reference (CPU LAPACKE). On the NETLIB queue: the GPU queue's syev follows the tuned table, and
+	// the sm_120 table's vendor pick (cuSOLVER, 1.9e-5 off a double reference) failed the tolerance.
 #if BATCHLAS_HAS_HOST_BACKEND
 	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev(*this->ctx,
+		Queue host(Device("cpu"), Backend::NETLIB, true);
+		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(host, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+		syev(host,
                         A_ref.view(),
                         W_ref.to_span(),
                         {.jobz = JobType::NoEigenVectors},
