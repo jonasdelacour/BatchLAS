@@ -540,12 +540,12 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
 
     if (!want_vectors) return;
 
-    // Residual against the ORIGINAL A: this is what proves the back-transform. V is n x neig, so the
-    // orthogonality n is its row count (verification.md).
+    // Residual against the ORIGINAL A: this is what proves the back-transform. Rotation-kind
+    // orthogonality counts the vectors checked: n = neig (verification.md).
     const auto items = verify::all_items(batch);
     const VectorView<float> w(W, neig, batch);
     EXPECT_VERIFY(float, verify::Check::eigen_residual, n, verify::eigen_residual(A.view(), V.view(), w, items));
-    EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, n, verify::orthogonality(V.view(), items));
+    EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, neig, verify::orthogonality(V.view(), items));
 }
 
 TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {

@@ -26,7 +26,7 @@ std::vector<Real> dense_tridiag(const std::vector<Real>& d, const std::vector<Re
     return t;
 }
 
-// eigen_residual and (unless residual_only) orthogonality_rotations (n = the vector length) of item
+// eigen_residual and (unless residual_only) orthogonality_rotations (n = kb, the vectors checked) of item
 // b's first kb columns.
 template <typename Real>
 void expect_stein_pairs(const std::vector<Real>& t, const MatrixView<Real, MatrixFormat::Dense>& Z,
@@ -37,7 +37,7 @@ void expect_stein_pairs(const std::vector<Real>& t, const MatrixView<Real, Matri
     EXPECT_VERIFY(Real, Check::eigen_residual, n, batchlas::verify::eigen_residual(batchlas::verify::view(t.data(), n, n, n), zb, wb))
         << "batch " << b << ", " << kb << " vectors";
     if (!residual_only)
-        EXPECT_VERIFY(Real, Check::orthogonality_rotations, n, batchlas::verify::orthogonality(zb)) << "batch " << b;
+        EXPECT_VERIFY(Real, Check::orthogonality_rotations, kb, batchlas::verify::orthogonality(zb)) << "batch " << b;
 }
 
 template <typename Real>

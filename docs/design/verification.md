@@ -76,7 +76,7 @@ through the tables or routes under test (agent guide §8 rule 7).
 | `solve` | `‖AX − B‖_F / (‖A‖_F ‖X‖_F)`; `trsm_residual`'s normwise `‖op(A)X − αB‖_F / (‖A‖_F‖X‖_F + |α|‖B‖_F)` | n | 16 |
 | `blas` | componentwise backward error (gemm, gemv, spmm, rank-k, trmm; the tuner's componentwise trsm check) | k + 2 (k the inner dimension; trmm and trsm: the order of A) | 8 |
 | `orthogonality` | `‖QᴴQ − I‖_F`, Q built from Householder reflectors or by a direct orthogonalization of given columns (geqrf, orgqr, `form_q`; every `ortho` algorithm) | n = rows of Q | 32 |
-| `orthogonality_rotations` | `‖QᴴQ − I‖_F`, eigen- or singular vectors from an iterative solver (Jacobi, steqr/stedc-based syev, syevx, stein, bdsqr, bdsdc, gesvd's U and V) | n = rows of Q | 256 |
+| `orthogonality_rotations` | `‖QᴴQ − I‖_F`, eigen- or singular vectors from an iterative solver (Jacobi, steqr/stedc-based syev, syevx, stein, bdsqr, bdsdc, gesvd's U and V) | n = columns of Q (vectors checked) | 256 |
 | `eigen_residual` | `‖AV − VΛ‖_F / ‖A‖_F` | n | 32 |
 | `values` | `max |λ − λ_ref| / ‖A‖_2` (eigenvalues and singular values) | n | 32 |
 
@@ -91,9 +91,11 @@ Householder reflectors is orthogonal to a few ulps per column, while vectors acc
 sweeps of rotations (or rebuilt by divide and conquer) lose orthogonality with the sweep count.
 One c for both is either 8× too loose for QR or red for the Jacobi solvers (measured below).
 
-For both orthogonality kinds n is the length of the vectors checked, the number of rows of the Q whose
-columns are tested (for a row check, the rows of Qᴴ): Householder error grows with the reflector length.
-A square eigenvector or singular-vector matrix is unaffected, and rows ≥ columns only lowers the need.
+The two orthogonality kinds count n as each was calibrated. `orthogonality` takes the number of rows
+of Q: Householder error grows with the reflector length (the QR sites and factor_bench always passed
+m). `orthogonality_rotations` takes the number of vectors checked, the columns of Q (for a row check,
+the columns of Qᴴ): its c was calibrated that way, and counting rows would loosen thin and partial
+sets of vectors (stein's kb of n, gesvd's thin U) by up to 32×.
 
 The `blas` growth is k + 2, not k: the α and β scalings and the complex multiply add roundings
 that a k = 1 cell hits (cdouble rows reached 0.88 of `4·k·eps` at k = 1).
@@ -143,10 +145,10 @@ that kind). Before the split, 26 cases (Jacobi syev, `gesvdj_cta`, the Jacobi an
 `syev_candidates`, `BdsdcTest.Graded`, `GesvdGeneralComplexTest.GeneralComplexAboveThirtyTwo`) were
 red at c = 16 with needs from 16.3 to 59.4.
 
-**Re-check after the final pass** (orthogonality n = rows of Q; `ortho`, `trmm`, `syevx`, the syev
-CTA and Jacobi eigenvalues, `syev`'s and `gesvd`'s known spectra newly on the library): 213,235 rows
-over 22 changed test binaries (20 of them record), 2026-10-09, same machine. Every kind's need stays at or below
-c/4, so no c changes:
+**Re-check after the final pass** (the per-kind n convention above; `ortho`, `trmm`, `syevx`, the
+syev CTA and Jacobi eigenvalues, `syev`'s and `gesvd`'s known spectra newly on the library): 213,235
+rows over 22 changed test binaries (20 of them record), 2026-10-09, same machine. Every kind's need
+stays at or below c/4, so no c changes:
 
 | Kind | Need, float/cfloat | Need, double/cdouble |
 | --- | --- | --- |
@@ -158,9 +160,8 @@ c/4, so no c changes:
 | `eigen_residual` | 5.09 (float, n = 31) | 4.14 (cdouble, n = 32) |
 | `values` | 4.62 (float, n = 31, Jacobi) | 4.66 (cdouble, n = 32) |
 
-Counting rows instead of columns raised n, and so the bound, at the sites whose Q is not square:
-`stein` (by n / kb: 3.5 for 6 vectors of n = 21, 6 to 8 for 8 vectors of n = 48 or 64, more where the counts fixture finds fewer), `gesvd` thin U and V (up to 32 at 256 × 8), `gesvdj_cta` thin (up to 4).
-The square eigenvector and singular-vector sites are unchanged.
+The only `orthogonality` site that changed from columns to rows is `orgqr_tests` (4 × 4, factor 1);
+`ortho_tests` is new on the library. No bound moved by more than 4× through the n convention.
 
 **Accepted slack.** Every site whose factor is not 1, with the user's decision of 2026-10-09:
 
@@ -168,7 +169,7 @@ The square eigenvector and singular-vector sites are unchanged.
 | --- | --- | --- | --- | --- |
 | `tests/bdsdc_tests.cc` `GradedWithVectorsHighCondition` | `orthogonality_rotations` | 8 float, 0.5 double | 2048 n eps, 128 n eps | graded κ ~ 1e6 divide and conquer at n = 64: the repair's Gram-Schmidt accumulates error; measured need 1246 float (4.75e-3), 71.5 double |
 | `tests/gesvd_tests.cc` `gesvd_cta_slack` (real `cta` pins) | `orthogonality_rotations` | 0.25 float, 0.5 double | 64 n eps, 128 n eps | the cta provider always takes the normal-equations bidiagonal path, which squares the condition number; measured need 52 float, 113 double |
-| `tests/gesvd_tests.cc` `expect_orthonormal_columns` under `BATCHLAS_GESVD_BIDIAG=normal`, float | `orthogonality_rotations` | 0.5 | 128 n eps | normal equations square the condition number; measured on one site only (`ThinTallUnderNormalEquationsBidiag`, 128 × 48, n = 128 rows): need 2.69 (2.05e-5; 7.18 under the old n = columns); a whole-binary sweep under `BATCHLAS_GESVD_BIDIAG=normal` is not measured |
+| `tests/gesvd_tests.cc` `expect_orthonormal_columns` under `BATCHLAS_GESVD_BIDIAG=normal`, float | `orthogonality_rotations` | 0.5 | 128 n eps | normal equations square the condition number; measured on one site only (`ThinTallUnderNormalEquationsBidiag`, n = 48): need 7.18 (2.05e-5); a whole-binary sweep under `BATCHLAS_GESVD_BIDIAG=normal` is not measured |
 | `tests/geqrf_tests.cc` `orth_slack`, `tests/orgqr_tests.cc` `orth_slack` | `orthogonality` | ≤ 1 | the file's old `0.5 (m+k) eps / √k`, at most the kind's bound | tightening: keeps each file's pre-migration tolerance |
 | `tests/geqrf_tests.cc` `residual_slack`, `tests/geqrf_candidates_tests.cc` `tol`, `tests/orgqr_tests.cc` `recon_slack` | `factorization` | ≤ 1 | the file's old `0.5 (m+n) eps` with its tiny-order floor | tightening (docs/perf/qr.md) |
 | `tests/potrf_tests.cc` `kLeafSlack` | `factorization` | 0.5 | 8 n eps | tightening: the leaf tolerance 4 n eps of docs/perf/potrf.md |

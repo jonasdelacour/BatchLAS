@@ -16,8 +16,9 @@ namespace batchlas::verify {
 
 /// orthogonality: Q from Householder reflectors or a direct orthogonalization (geqrf, orgqr, form_q, ortho);
 /// orthogonality_rotations: eigen- and singular vectors from an iterative solver (Jacobi, QR iteration,
-/// divide and conquer, inverse iteration). For both, n is the length of the vectors checked: the number
-/// of rows of Q (Householder error grows with the reflector length). blas: n is the inner dimension k
+/// divide and conquer, inverse iteration). n per kind, as each was calibrated: orthogonality, the rows
+/// of Q (Householder error grows with the reflector length); orthogonality_rotations, the number of
+/// vectors checked (columns of Q). blas: n is the inner dimension k
 /// (the tuner's componentwise trsm check: k = the order); trsm_residual is normwise and judged under solve.
 enum class Check { factorization, solve, blas, orthogonality, orthogonality_rotations, eigen_residual, values };
 

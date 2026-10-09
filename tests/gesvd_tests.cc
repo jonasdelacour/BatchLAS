@@ -334,21 +334,21 @@ void expect_sorted_singular_values(const UnifiedVector<Real>& s,
     expect_singular_values_near(s, ref, n, batch, batchlas::verify::all_items(batch));
 }
 
-// Orthogonality n is the length of the vectors checked: M.rows() here, and M.cols() for
-// expect_orthonormal_rows (the rows of M^H).
+// Orthogonality_rotations n is the number of vectors checked: M.cols() here, and M.rows() for
+// expect_orthonormal_rows (the columns of M^H).
 template <typename Scalar>
 void expect_orthonormal_columns(const Matrix<Scalar, MatrixFormat::Dense>& M,
                                 batchlas::verify::Slack slack = {1.0, "-"}) {
     using Real = typename base_type<Scalar>::type;
     const double err = batchlas::verify::orthogonality(M.view(), batchlas::verify::all_items(M.batch_size()));
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
-        const batchlas::verify::Slack normal{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag 128 x 48 (n = 128 rows), c 2.69 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"};
+        const batchlas::verify::Slack normal{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag n=48, c 7.18 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"};
         // A tighter slack the caller passed wins, with its own reason.
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err, slack.factor < normal.factor ? slack : normal);
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err, slack.factor < normal.factor ? slack : normal);
     } else if (slack.factor != 1.0) {
-        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err, slack);
+        EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err, slack);
     } else {
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, M.rows(), err);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, M.cols(), err);
     }
 }
 
