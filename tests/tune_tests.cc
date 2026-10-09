@@ -2429,8 +2429,12 @@ TEST(TuneTieredDriver, RoundsRefineToTheEdgeRecordAndSkipOnRerun) {
         EXPECT_EQ(c.cands[1].hash, *kernel_hash(repo.str(), {"k.cc", "b.cc"}));
     }
     const std::string ev = read_file(events);
-    EXPECT_EQ(ev.rfind("{\"ev\": \"plan\", \"cells\": 4", 0), 0u) << ev;
-    EXPECT_NE(ev.find("{\"ev\": \"done\"}"), std::string::npos);
+    // plan_job events (one per op and dtype) come first, then the run's plan; every event carries t.
+    EXPECT_EQ(ev.rfind("{\"ev\": \"plan_job\", \"op\": \"fakeop\", \"dtype\": \"float\"", 0), 0u) << ev;
+    EXPECT_NE(ev.find("\n{\"ev\": \"plan\", \"cells\": 4"), std::string::npos) << ev;
+    EXPECT_NE(ev.find("{\"ev\": \"done\", \"t\": "), std::string::npos) << ev;
+    for (std::size_t b = 0, e; (e = ev.find('\n', b)) != std::string::npos; b = e + 1)
+        EXPECT_NE(ev.substr(b, e - b).find(", \"t\": "), std::string::npos) << ev.substr(b, e - b);
     std::size_t done = 0;
     for (std::size_t p = 0; (p = ev.find("\"cell_done\"", p)) != std::string::npos; ++p) ++done;
     EXPECT_EQ(done, 8u);
@@ -3243,7 +3247,7 @@ TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
     ::close(fd);
     EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64", "n=8", "n=11"}));
     const std::string ev = read_file(events);
-    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1}"),
+    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1, \"t\": "),
               std::string::npos) << ev;
     EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
 }
