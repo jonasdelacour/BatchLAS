@@ -14,9 +14,7 @@
 #include <random>
 #include <string>
 #include <cstring>
-#if BATCHLAS_HAS_HOST_BACKEND
-#include <lapacke.h>
-#endif
+#include <batchlas/verify/reference.hh>
 #include <limits>
 #include <type_traits>
 
@@ -146,17 +144,14 @@ struct SytrdSb2stConfig {
 };
 
 #if BATCHLAS_HAS_HOST_BACKEND
+// Ascending eigenvalues of the tridiagonal (d, e), overwriting d; e is not modified. Computed in
+// double by the library's LAPACKE reference.
 template <typename Real>
-int lapack_sterf(int n, Real* d, Real* e);
-
-template <>
-int lapack_sterf<float>(int n, float* d, float* e) {
-    return LAPACKE_ssterf(static_cast<lapack_int>(n), d, e);
-}
-
-template <>
-int lapack_sterf<double>(int n, double* d, double* e) {
-    return LAPACKE_dsterf(static_cast<lapack_int>(n), d, e);
+bool tridiagonal_spectrum(int n, Real* d, const Real* e) {
+    std::vector<double> dd(d, d + n), ee(e, e + std::max(0, n - 1));
+    if (!batchlas::verify::tridiagonal_eigenvalues(dd, ee)) return false;
+    std::copy(dd.begin(), dd.end(), d);
+    return true;
 }
 #endif
 
@@ -260,8 +255,8 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
         for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
         for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);
 
-        ASSERT_EQ(lapack_sterf<Real>(n, d_tri.data(), e_tri.data()), 0)
-            << "LAPACKE_xsterf failed for SB2ST tridiagonal (batch=" << b << ")";
+        ASSERT_TRUE(tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data()))
+            << "LAPACKE_dsterf failed for SB2ST tridiagonal (batch=" << b << ")";
         std::sort(d_tri.begin(), d_tri.end());
 
         for (int i = 0; i < n; ++i) {
@@ -364,11 +359,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
             for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_vec(i, bb);
             for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_vec(i, bb);
 
-            const int sterf_info = lapack_sterf<Real>(n, d_tri.data(), e_tri.data());
-            if (sterf_info != 0) {
+            if (!tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data())) {
                 return ::testing::AssertionFailure()
-                       << "LAPACKE_xsterf failed for band_reduction tridiagonal (" << label
-                       << ", batch=" << bb << ") info=" << sterf_info;
+                       << "LAPACKE_dsterf failed for band_reduction tridiagonal (" << label
+                       << ", batch=" << bb << ")";
             }
             std::sort(d_tri.begin(), d_tri.end());
 
@@ -448,8 +442,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
                 for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
                 for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);
 
-                ASSERT_EQ(lapack_sterf<Real>(n, d_tri.data(), e_tri.data()), 0)
-                    << "LAPACKE_xsterf failed (kd=" << kd << ", block_size=" << block_size << ", batch=" << b << ")";
+                ASSERT_TRUE(tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data()))
+                    << "LAPACKE_dsterf failed (kd=" << kd << ", block_size=" << block_size << ", batch=" << b << ")";
                 std::sort(d_tri.begin(), d_tri.end());
 
                 for (int i = 0; i < n; ++i) {

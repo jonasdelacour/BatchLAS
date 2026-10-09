@@ -19,6 +19,9 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -117,29 +120,16 @@ protected:
                     den += std::norm(a);
                 }
             }
-            worst = std::max(worst, den > 0.0 ? std::sqrt(num / den) : std::sqrt(num));
+            worst = batchlas::verify::nanmax(worst, den > 0.0 ? std::sqrt(num / den) : std::sqrt(num));
         }
         return worst;
     }
 
-    // max |M^H M - I| over the leading `cols` columns of an ld x cols block.
+    // ||M^H M - I||_F over the leading `cols` columns of an ld x cols block, worst over the batch.
     static double col_orthogonality(int rows, int cols, int batch,
                                     const Scalar* M, int64_t stride, int ld) {
-        double worst = 0.0;
-        for (int b = 0; b < batch; ++b) {
-            for (int p = 0; p < cols; ++p) {
-                for (int q = 0; q < cols; ++q) {
-                    std::complex<double> acc(0.0, 0.0);
-                    for (int t = 0; t < rows; ++t) {
-                        acc += std::conj(to_cd(M[b * stride + static_cast<size_t>(p) * ld + t]))
-                             * to_cd(M[b * stride + static_cast<size_t>(q) * ld + t]);
-                    }
-                    const double target = (p == q) ? 1.0 : 0.0;
-                    worst = std::max(worst, std::abs(acc - target));
-                }
-            }
-        }
-        return worst;
+        const MatrixView<Scalar, MatrixFormat::Dense> V(const_cast<Scalar*>(M), rows, cols, ld, static_cast<int>(stride), batch);
+        return batchlas::verify::orthogonality(V, batchlas::verify::all_items(batch));
     }
 
     static std::complex<double> to_cd(const Scalar& x) {
@@ -191,9 +181,9 @@ protected:
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
 
-        EXPECT_LE(col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld())),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, m,
+                                                   col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld()))))
             << "U orthogonality m=" << m << " n=" << n;
 
         // Vh's ROWS are the right singular vectors, so check Vh^H's columns by
@@ -207,8 +197,8 @@ protected:
                 }
             }
         }
-        EXPECT_LE(col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, n,
+                                                   col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n)))
             << "V orthogonality m=" << m << " n=" << n;
     }
 
@@ -262,9 +252,9 @@ protected:
                   static_cast<double>(recon_tol()))
             << "thin reconstruction m=" << m << " n=" << n;
 
-        EXPECT_LE(col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld())),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, k,
+                                                   col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld()))))
             << "thin U orthogonality m=" << m << " n=" << n;
 
         // Vh is k x n; its k ROWS must be orthonormal, so build Vh^H (n x k)
@@ -278,8 +268,8 @@ protected:
                 }
             }
         }
-        EXPECT_LE(col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_TRUE(batchlas::verify::pass<Scalar>(batchlas::verify::Check::orthogonality, k,
+                                                   col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n)))
             << "thin V orthogonality m=" << m << " n=" << n;
     }
 

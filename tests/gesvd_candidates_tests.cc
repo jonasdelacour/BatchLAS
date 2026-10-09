@@ -15,6 +15,8 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/scalar.hh>
+
 #include "../src/extensions/gesvd_native.hh"
 #include "../src/ops/gesvd/choice.hh"
 
@@ -181,7 +183,7 @@ void expect_solved(Svd<T>& p, const std::string& what) {
                 cd acc = 0;
                 for (int l = 0; l < p.k; ++l)
                     acc += up(p.U(i, l, b)) * double(p.sv[std::size_t(b) * p.k + l]) * up(p.Vh(l, j, b));
-                worst = std::max(worst, std::abs(acc - p.full[b][j * s.m + i]));
+                worst = batchlas::verify::nanmax(worst, std::abs(acc - p.full[b][j * s.m + i]));
             }
     EXPECT_LE(worst, tol * 10) << what << ": reconstruction";
 }
