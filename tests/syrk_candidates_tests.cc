@@ -1009,10 +1009,11 @@ TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
     EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
-// The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N
-// and T, the n axis at k = batch = 1 for C), sm_120's rows equal sm_89's, every row untimed under
-// source=transcribed:ff340fc6, and the keys line is choice.hh's key_names.
-TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
+// The sm_89 transcription (no GPU): each table holds exactly choice.hh's grid (the full product
+// for N and T, the n axis at k = batch = 1 for C), every row untimed under
+// source=transcribed:ff340fc6; every syrk table's keys line is choice.hh's key_names. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
     std::set<std::string> want;
     for (const char* f : {"sq", "tall", "wide"})
         for (std::string_view t : sk::grid_trans)
@@ -1025,8 +1026,7 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
     std::string keys = "# keys:";
     for (auto k : sk::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double"}) {
-        std::map<std::string, std::string> rows_89;
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syrk", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
@@ -1039,10 +1039,6 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
                     row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
                 got.insert(key);
                 EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
-                std::string ranked;
-                for (const auto& e : row.ranked) ranked += e.spelling + "|";
-                if (std::string(dev) == "sm_89") rows_89[key] = ranked;
-                else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
             }
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;

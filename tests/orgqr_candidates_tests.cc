@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/orgqr_native.hh"
 #include "../src/ops/orgqr/choice.hh"
@@ -574,21 +575,23 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
     }
 }
 
-// Auto against the transcribed table this device reads (sm_89 or sm_120, the same rows): the old
-// 512 ceiling straddled on each extent, on and off the grid (RouteOrgqr.PreferredIsNative-
+// Auto against the shipped table this device reads (shipped_table_pick.hh): the old 512 ceiling
+// straddled on each extent, on and off the grid (RouteOrgqr.PreferredIsNative-
 // UpToTheMeasuredCeiling and VendorFreeFallbackHandsOverTheNativeRoute, ported, live).
-TYPED_TEST(OrgqrCandidates, AutoReadsTheTranscribedTable) {
+TYPED_TEST(OrgqrCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
-    const auto tables = select::tables_in_borrow_order("orgqr", select::dtype_name<T>(),
-                                                       select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed orgqr table";
     struct Row { int m, n, batch; };
     const Row rows[] = {{1, 1, 3},     {96, 96, 2},  {200, 150, 2}, {512, 512, 1}, {512, 40, 1},
                         {513, 40, 1},  {520, 8, 1},  {700, 33, 1},  {513, 513, 1}, {530, 500, 1}};
     for (const Row& r : rows) {
         auto p = this->prob(r.m, r.n, r.batch, 41u + r.m);
-        const std::string want = old_first(r.m, r.n, TestFixture::kVendor);
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "orgqr", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx),
+            select::Key{{"m", r.m}, {"n", r.n}}, [&] {
+                auto q = this->prob(r.m, r.n, r.batch, 41u + r.m);
+                (void)this->auto_choice(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(r.m, r.n, r.batch);
         EXPECT_EQ(this->auto_choice(p), want) << label(r.m, r.n, r.batch);
         expect_q(p, "auto " + label(r.m, r.n, r.batch));
     }
@@ -737,14 +740,14 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())), batchlas::NoRouteError);
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: at grid
-// and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice on both
-// devices, and every row ranks both candidates.
-TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: at
+// grid and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice, and
+// every row ranks both candidates. sm_120 is deep-measured since 2026-10-09.
+TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
     const std::pair<int, int> points[] = {{1, 1},     {96, 96},    {300, 299},  {511, 511}, {512, 512},
                                           {513, 1},   {513, 513},  {514, 300},  {600, 512}, {640, 513},
                                           {1000, 10}, {2000, 600}, {9000, 9000}, {450, 449}, {512, 384}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("orgqr", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt;

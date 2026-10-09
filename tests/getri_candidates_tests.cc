@@ -17,6 +17,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/getri/choice.hh"
 #include "../src/extensions/getri_native.hh"
@@ -633,23 +634,25 @@ TYPED_TEST(GetriCandidates, ScopedPinBeatsTheEnvironment) {
     this->expect_inverted(r, "outer blocked");
 }
 
-// Auto against the transcribed table on a device that reads it (sm_89 and sm_120 own one; other
-// sm devices borrow): the old preference at both sides of each window edge, on and off the grid,
-// at batch 2 and 3 (inverse_tests' extents, below the grid) and 300. Vendor-free: Blocked
-// everywhere (RouteGetri.VendorFreeFallbackHandsOverTheNativeRoute and getrf_tests' L12 getri
-// readbacks, ported).
-TYPED_TEST(GetriCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh): both sides of each old
+// window edge, on and off the grid, at batch 2 and 3 (inverse_tests' extents, below the grid) and
+// 300. Vendor-free that is Blocked everywhere (RouteGetri.VendorFreeFallbackHandsOverTheNativeRoute
+// and getrf_tests' L12 getri readbacks, ported).
+TYPED_TEST(GetriCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    ASSERT_FALSE(tables.empty());
-    ASSERT_EQ(tables.front()->source.rfind("transcribed:", 0), 0u) << tables.front()->file;
     for (const auto& [n, batch] : {std::pair{40, 2}, std::pair{127, 3}, std::pair{128, 3}, std::pair{129, 300},
                                    std::pair{200, 2}, std::pair{255, 2}, std::pair{256, 2}, std::pair{512, 2}}) {
         const Spec s{n, batch, 0, 23u + unsigned(n)};
         auto p = this->make(s);
-        const std::string want = TestFixture::kVendor ? old_auto<T>(n) : "blocked";
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
+            [&] {
+                auto q = this->make(s);
+                this->run(q);
+            });
+        if (!TestFixture::kVendor) EXPECT_EQ(want, "blocked") << label(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
         this->expect_inverted(p, "auto " + label(s));
     }
@@ -826,10 +829,11 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: the old
-// preference on both devices' tables, every dtype, at on-grid, edge and off-grid keys.
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
+// old preference, every dtype, at on-grid, edge and off-grid keys. sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getri", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt;

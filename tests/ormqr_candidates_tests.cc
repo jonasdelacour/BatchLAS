@@ -799,14 +799,15 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: both
-// devices, blocked | vendor except complex Trans (vendor alone), on and off the grid.
-TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
+// blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
                         {"cfloat", "L", "T", 64, 1, 1024, 2048, "vendor", 1}, {"cfloat", "R", "C", 5, 2, 3, 4, "blocked", 2},
                         {"cdouble", "R", "T", 512, 512, 2, 32768, "vendor", 1}, {"cdouble", "L", "N", 1, 1, 1, 1, "blocked", 2}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("ormqr", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;

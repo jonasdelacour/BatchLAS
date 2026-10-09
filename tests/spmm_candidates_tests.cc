@@ -14,6 +14,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/spmm/choice.hh"
 #include "../src/sycl/spmm_native.hh"
@@ -707,12 +708,11 @@ TYPED_TEST(SpmmCandidates, ScopedPinBeatsTheEnvironment) {
     expect_correct(r, "outer direct");
 }
 
-// The old preferred() clause, read back through Auto on the shipped tables (RouteSpmm's
-// Preferred* and AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot): direct for
-// transA == N except complex<float> with transB != N; the vendor otherwise; direct for
-// everything once the vendor is gone. No extent, batch or GPU term: grid and off-grid sizes, and
-// the CPU queue (its own cpu table) read the same.
-TYPED_TEST(SpmmCandidates, AutoReadsTheTranscribedTables) {
+// Auto against the shipped table of this device (shipped_table_pick.hh; RouteSpmm's Preferred*
+// and AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot, ported): every trans pair at grid
+// and off-grid sizes, and on the CPU queue its own cpu table. Direct everywhere once the vendor is
+// gone.
+TYPED_TEST(SpmmCandidates, AutoReadsTheShippedTables) {
     using T = typename TestFixture::T;
     const auto& d = select::device_of<TestFixture::B>(*this->ctx);
     const auto tables = select::tables_in_borrow_order("spmm", select::dtype_name<T>(), d);
@@ -722,12 +722,17 @@ TYPED_TEST(SpmmCandidates, AutoReadsTheTranscribedTables) {
     for (const Size& z : sizes)
         for (Transpose ta : kAllTrans)
             for (Transpose tb : kAllTrans) {
-                const bool cf = std::is_same_v<T, std::complex<float>>;
-                const bool window = ta == Transpose::NoTrans && !(cf && tb != Transpose::NoTrans);
                 Spec s{z.m, z.k, z.nrhs, z.batch, ta, tb};
-                const bool vendor_ok = TestFixture::expect_runs(C{sp::Vendor{}}, s);
-                const std::string want = (window || !vendor_ok) ? "direct" : "vendor";
                 s.seed = 31u + z.m;
+                const select::Key key{{"transA", ta == Transpose::NoTrans ? "N" : "T"},
+                                      {"transB", tb == Transpose::NoTrans ? "N" : "T"},
+                                      {"m", z.m}, {"nrhs", z.nrhs}, {"batch", z.batch}};
+                const std::string want = test_utils::shipped_table_pick<C>("spmm", select::dtype_name<T>(), d, key, [&] {
+                    auto q = make<T>(s);
+                    this->run(q);
+                });
+                ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+                if (!TestFixture::kVendor) EXPECT_EQ(want, "direct") << label(s);
                 auto p = make<T>(s);
                 bool threw = false;
                 EXPECT_EQ(this->auto_choice(p, &threw), want) << label(s) << " on " << tables.front()->file;
@@ -869,10 +874,11 @@ TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every build checks them on every
-// device key: the old clause at grid and off-grid sizes (no size term, so any size reads the same).
+// The sm_89 and cpu transcribed rows, read with Table::nearest directly so every build checks
+// them: the old clause at grid and off-grid sizes (no size term, so any size reads the same).
+// sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
-    for (const char* dev : {"sm_89", "sm_120", "cpu"})
+    for (const char* dev : {"sm_89", "cpu"})
         for (const char* dtype : {"float", "double", "cfloat", "cdouble"})
             for (const char* ta : {"N", "T"})
                 for (const char* tb : {"N", "T"})

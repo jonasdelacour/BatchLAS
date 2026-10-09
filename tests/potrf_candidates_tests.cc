@@ -14,6 +14,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/ops/potrf/choice.hh"
@@ -678,41 +679,37 @@ TYPED_TEST(PotrfCandidates, ClassWordsAndSpellingsSelectTheirChoice) {
 }
 
 // §5.3: bare `native` is the best runnable non-vendor entry of the row, not the first native
-// candidate in list order; with none runnable it warns and runs the automatic choice.
+// candidate in list order; with none runnable it warns and runs the automatic choice. Auto and
+// `native` are read off the shipped table of this device (shipped_table_pick.hh).
 TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
-    const std::string dtype(select::dtype_name<T>());
-    const bool sm120 = select::device_of<B>(*this->ctx).key == "sm_120";
-
-    // Rows of tuned/potrf.<dtype>.sm_120.txt that rank vendor first, so `native` must move;
-    // the expected pick is the row's first entry that can run, read off the file by hand.
-    struct Row { const char* dtype; int n; const char* native; };
-    const Row rows[] = {{"float", 128, "lpanel:panel=8"}, {"float", 512, "blocked"},
-                        {"double", 64, "lpanel:panel=8"}, {"double", 256, "blocked"},
-                        {"cfloat", 64, "lpanel:panel=8"}, {"cfloat", 256, "lpanel:panel=8"},
-                        {"cdouble", 16, "tiny"},          {"cdouble", 256, "blocked"}};
-    int checked = 0;
-    for (const Row& r : rows) {
-        if (!sm120 || dtype != r.dtype) continue;
-        auto a = make_prob<T>(r.n, 128, Uplo::Lower, 21u);
+    const auto& dev = select::device_of<B>(*this->ctx, select::Lib::solver);
+    for (int n : {16, 64, 128, 256, 512}) {
+        auto pick = [&](bool native_only) {
+            return test_utils::shipped_table_pick<C>(
+                "potrf", select::dtype_name<T>(), dev, select::Key{{"uplo", "L"}, {"n", n}, {"batch", 128}}, [&] {
+                    auto q = make_prob<T>(n, 128, Uplo::Lower, 20u);
+                    (void)this->run_auto(q);
+                }, native_only);
+        };
+        const std::string auto_pick = pick(false), native_pick = pick(true);
+        ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns) << "n=" << n;
+        EXPECT_NE(native_pick.rfind("vendor", 0), 0u) << "n=" << n;
+        auto a = make_prob<T>(n, 128, Uplo::Lower, 21u);
         std::vector<int32_t> info;
-        // Vendor-free, Auto skips the vendor entry and lands where `native` does.
-        const char* auto_pick = batchlas::select::solver_vendor_available<B> ? "vendor" : r.native;
-        EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), auto_pick) << "auto, n=" << r.n;
+        EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), auto_pick) << "auto, n=" << n;
         expect_factored(a, info, "auto");
-        auto p = make_prob<T>(r.n, 128, Uplo::Lower, 22u);
+        auto p = make_prob<T>(n, 128, Uplo::Lower, 22u);
         EXPECT_EQ(traced_choice([&] {
                       const Pin pin("potrf", "native");
                       info = this->run_auto(p);
                   }),
-                  r.native)
-            << "native, n=" << r.n;
+                  native_pick)
+            << "native, n=" << n;
         expect_factored(p, info, "native");
-        ++checked;
     }
-    if (sm120) EXPECT_EQ(checked, 2) << "no sm_120 rows for " << dtype;
 
     for (int n : {16, 64, 200}) {
         auto p = make_prob<T>(n, 4, Uplo::Lower, 23u);
@@ -824,45 +821,40 @@ TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
     EXPECT_GT(checked, 0);
 }
 
-// key_of's every field reaches the table: hand-read Auto rows on each side of a batch edge
-// (per dtype) and of the uplo key (float, the only dtype with Upper rows). Fixing batch or
-// uplo in key_of turns exactly these red; ScopedPin-based tests bypass the key entirely.
+// key_of's every field reaches choose(): a synthetic table for this device whose winner changes
+// with uplo, n and batch alone. Fixing a field in key_of turns exactly its probe red; ScopedPin-
+// based tests bypass the key entirely. (Blocked and lpanel run Lower only.)
 TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const std::string dev = select::device_of<B>(*this->ctx).key;
     const std::string dtype(select::dtype_name<T>());
-    // `vf`: the vendor-free pick, the row's first non-vendor entry (each runs at its n).
-    struct Row { const char* dev; const char* dtype; Uplo uplo; int n, batch; const char* expect; const char* vf; };
-    const Row rows[] = {
-        {"sm_120", "float", Uplo::Lower, 128, 128, "vendor", "lpanel:panel=8"},
-        {"sm_120", "float", Uplo::Lower, 128, 512, "lpanel:panel=8", "lpanel:panel=8"},
-        {"sm_120", "float", Uplo::Upper, 64, 8192, "cta", "cta"},  // the L row gives lpanel, then vendor
-        {"sm_120", "float", Uplo::Upper, 16, 8192, "tiny", "tiny"},
-        {"sm_120", "double", Uplo::Lower, 32, 512, "vendor", "lpanel:panel=8"},
-        {"sm_120", "double", Uplo::Lower, 32, 2048, "lpanel:panel=8", "lpanel:panel=8"},
-        {"sm_120", "cfloat", Uplo::Lower, 24, 2048, "tiny", "tiny"},
-        {"sm_120", "cfloat", Uplo::Lower, 24, 8192, "lpanel:panel=8", "lpanel:panel=8"},
-        {"sm_120", "cdouble", Uplo::Lower, 16, 512, "vendor", "tiny"},
-        {"sm_120", "cdouble", Uplo::Lower, 16, 8192, "tiny", "tiny"},
-        {"sm_89", "float", Uplo::Lower, 44, 8192, "vendor", "cta"},
-        {"sm_89", "float", Uplo::Lower, 44, 16384, "cta", "cta"},
-    };
-    int checked = 0;
-    for (const Row& r : rows) {
-        if (dev != r.dev || dtype != r.dtype) continue;
-        auto p = make_prob<T>(r.n, r.batch, r.uplo, 41u);
+    std::vector<std::pair<std::string, std::string>> files;
+    for (const auto& t : select::embedded_tables())
+        if (t.name.rfind("potrf.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
+    files.emplace_back("potrf." + dtype + "." + dev + ".txt",
+                       "# op=potrf dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
+                       "# keys: uplo:exact n:log:3 batch:log\n"
+                       "uplo=L n=16 batch=128 | tiny 1 | cta 2\n"
+                       "uplo=L n=16 batch=8192 | cta 1 | tiny 2\n"
+                       "uplo=U n=16 batch=128 | cta 1 | tiny 2\n"
+                       "uplo=L n=128 batch=128 | blocked 1 | cta 2\n");
+    struct Restore {
+        ~Restore() { select::testing::use_embedded_tables(); }
+    } restore;
+    select::testing::set_builtin_tables(std::move(files));
+    struct Probe { Uplo uplo; int n, batch; const char* expect; const char* field; };
+    const Probe probes[] = {{Uplo::Lower, 16, 128, "tiny", "base"},
+                            {Uplo::Lower, 16, 8192, "cta", "batch"},
+                            {Uplo::Upper, 16, 128, "cta", "uplo"},
+                            {Uplo::Lower, 128, 128, "blocked", "n"}};
+    for (const Probe& k : probes) {
+        auto p = make_prob<T>(k.n, k.batch, k.uplo, 41u);
         std::vector<int32_t> info;
-        const std::string what = std::string(r.uplo == Uplo::Lower ? "L" : "U") + " n=" + std::to_string(r.n) +
-                                 " batch=" + std::to_string(r.batch);
-        const char* want = batchlas::select::solver_vendor_available<B> ? r.expect : r.vf;
-        EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
-        expect_factored(p, info, what, r.uplo == Uplo::Upper && std::string(want) == "vendor");
-        ++checked;
+        EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), k.expect) << "the " << k.field << " probe";
+        expect_factored(p, info, std::string("the ") + k.field + " probe", false);
     }
-    if (dev == "sm_120" || (dev == "sm_89" && dtype == "float")) EXPECT_GT(checked, 0) << dev << " " << dtype;
-    if (checked == 0) GTEST_SKIP() << "no hand-read rows for " << dev << " " << dtype;
 }
 
 // Not square never reaches choose() (potrf_validate_params), so each driver checks it itself.

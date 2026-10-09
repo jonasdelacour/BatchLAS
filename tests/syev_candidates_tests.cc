@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/syev/choice.hh"
 
@@ -540,8 +541,18 @@ TYPED_TEST(SyevCandidates, ClassWordsAndSpellings) {
         auto p = make_eig<T>(s);
         auto_pick = traced_choice([&] { this->run(p); });
     }
+    const auto table_pick = [&](bool native_only) {
+        const select::Key key{{"jobz", s.jobz == JobType::EigenVectors ? "V" : "N"}, {"n", s.n}, {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("syev", select::dtype_name<T>(),
+                                                 select::device_of<TestFixture::B>(*this->ctx), key, [&] {
+                                                     auto q = make_eig<T>(s);
+                                                     this->run(q);
+                                                 }, native_only);
+    };
+    EXPECT_EQ(auto_pick, table_pick(false)) << "Auto against the shipped table";
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
-    const std::string native_pick = auto_pick == "vendor" ? "cta" : auto_pick;
+    const std::string native_pick = table_pick(true);  // the row's best runnable non-vendor
+    ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
     {
         const ScopedEnvVar retired("BATCHLAS_SYEV_PROVIDER", auto_pick == "blocked" ? "cta" : "blocked");
         auto p = make_eig<T>(s);
@@ -755,8 +766,9 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks both tables:
-// each old threshold on its two sides, per type and jobz (the old predicates, syev.hh@424a45bc).
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
+// old threshold on its two sides, per type and jobz (the old predicates, syev.hh@424a45bc). sm_120
+// is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* jobz; int n; const char* ranked; };
     const Row rows[] = {
@@ -770,7 +782,7 @@ TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
         {"cdouble", "V", 24, "cta|blocked|two_stage|vendor"},      {"cdouble", "V", 25, "vendor|cta|blocked|two_stage"},
         {"cdouble", "N", 25, "cta|blocked|two_stage|vendor"},      {"cdouble", "V", 256, "blocked|vendor|two_stage"},
         {"cdouble", "V", 257, "vendor|blocked|two_stage"},         {"cdouble", "N", 4000, "two_stage|vendor|blocked"}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows)
             for (int batch : {1, 300, 100000}) {
                 const auto tables = select::tables_in_borrow_order("syev", r.dtype, select::device_from_key(dev));

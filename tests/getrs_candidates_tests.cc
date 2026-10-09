@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/getrs_native.hh"
 #include "../src/ops/getrs/choice.hh"
@@ -314,6 +315,14 @@ protected:
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getrs_buffer_size<B, T>(*this->ctx, A, Bm, p.s.trans)));
         (void)getrs<B, T>(*this->ctx, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span());
         this->ctx->wait();
+    }
+    // What Auto (or, native_only, the class word `native`) must pick for `s`, from the shipped tables.
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        return test_utils::shipped_table_pick<C>("getrs", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 select::Key{{"n", s.n}, {"nrhs", s.nrhs}, {"batch", s.batch}}, [&] {
+                                                     auto p = make_sys<T>(s);
+                                                     run(p);
+                                                 }, native_only);
     }
     void run_pinned(const C& c, Sys<T>& p) {
         const Pin pin("getrs", c);
@@ -637,18 +646,20 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
 }
 
-// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment. Auto
+// and bare `native` (the row's best runnable non-vendor) come from the shipped table.
 TYPED_TEST(GetrsCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
-    const Spec s{40, 6, 4};  // the old router: vendor with a vendor, cta without
+    const Spec s{40, 6, 4};
     std::string auto_pick;
     {
         auto p = make_sys<T>(s);
         auto_pick = this->auto_choice(p);
     }
-    ASSERT_EQ(auto_pick, TestFixture::kVendor ? "vendor" : "cta");
-    const std::string native_pick = "cta";
+    ASSERT_EQ(auto_pick, this->table_pick(s));
+    const std::string native_pick = this->table_pick(s, true);
+    ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
     const std::pair<const char*, std::string> expect[] = {
         {"CTA", "cta"}, {"cta", "cta"},
         {"Blocked", "blocked"}, {"vendor", TestFixture::kVendor ? "vendor" : auto_pick}, {"native", native_pick},
@@ -698,17 +709,12 @@ TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
     expect_solved(r, "outer cta");
 }
 
-// Auto on the shipped (transcribed) table equals the old router on both sides of every
-// threshold it read, with and without a vendor: n 31/32, nrhs 2/3, 4/5 (float), 8/9, 63/64,
-// 127/128, batch 127/128; on- and off-grid. Skips on a device without its own getrs table.
-TYPED_TEST(GetrsCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh) on both sides of every
+// threshold the old router read: n 31/32, nrhs 2/3, 4/5 (float), 8/9, 63/64, 127/128, batch
+// 127/128; on- and off-grid.
+TYPED_TEST(GetrsCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
-    const std::string dt(select::dtype_name<T>());
-    const auto& d = select::device_of<B>(*this->ctx);
-    const auto tables = select::tables_in_borrow_order("getrs", dt, d);
-    if (tables.empty() || tables.front()->device != d.key) GTEST_SKIP() << "no own getrs table for " << d.key;
     struct Cell { int n, nrhs, batch; };
     const Cell cells[] = {{31, 1, 128}, {32, 1, 128}, {40, 2, 200},  {40, 3, 200},   {45, 4, 128},  {45, 5, 128},
                           {36, 8, 128}, {36, 9, 128}, {20, 63, 128}, {20, 64, 128},  {20, 64, 127}, {24, 100, 300},
@@ -716,8 +722,9 @@ TYPED_TEST(GetrsCandidates, AutoReadsTheTranscribedTable) {
     for (const Cell& k : cells) {
         Spec s{k.n, k.nrhs, k.batch, Transpose::Trans};
         s.seed = 41u + k.n;
+        const std::string want = this->table_pick(s);
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
         auto p = make_sys<T>(s);
-        const std::string want = old_auto(dt, k.n, k.nrhs, k.batch, TestFixture::kVendor, this->cta_fits(k.n, k.nrhs));
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
         expect_solved(p, "auto " + label(s));
     }
@@ -851,12 +858,12 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, A, Bm, Transpose::NoTrans)), batchlas::NoRouteError);
 }
 
-// The transcribed rows, read with Table::nearest directly so every machine checks them: for
-// both devices and every dtype, the first entry (vendor present) and the first native entry
-// that fits (vendor-free) equal the old router at straddles of each threshold.
+// The sm_89 transcribed rows, read with Table::nearest directly so every machine checks them: for
+// every dtype, the first entry (vendor present) and the first native entry that fits (vendor-free)
+// equal the old router at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold) {
     const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getrs", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt;

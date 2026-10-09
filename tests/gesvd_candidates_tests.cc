@@ -14,6 +14,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/gesvd_native.hh"
 #include "../src/ops/gesvd/choice.hh"
@@ -284,6 +285,17 @@ protected:
     void run_pinned(const C& c, Svd<T>& p) {
         const Pin pin("gesvd", c);
         run(p);
+    }
+    // What Auto must pick for `s`, from the shipped tables (shipped_table_pick.hh).
+    std::string table_pick(const Spec& s) {
+        const char* herm = s.herm == 'N' ? "N" : (s.herm == 'L' ? "L" : "U");
+        const char* vec = canonical_thin(s) ? "thin" : (vectors(s) ? "all" : "none");
+        const select::Key key{{"herm", herm}, {"vec", vec}, {"m", s.m}, {"n", s.n}};
+        return test_utils::shipped_table_pick<C>("gesvd", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_svd<T>(s);
+                                                     run(p);
+                                                 });
     }
     // Acceptance is asked of the sizing call, which runs the same choose() (R5).
     bool pin_accepted(const C& c, Svd<T>& p) {
@@ -690,29 +702,28 @@ TYPED_TEST(GesvdCandidates, PinPrecedence) {
     expect_solved(r, "outer cta");
 }
 
-// Auto on the shipped (transcribed) tables reproduces the old router (ported from gesvd_tests'
-// DefaultProviderRoutesSmallGeneralToJacobi): jacobi leads general n <= 32 for every job, cta
-// Hermitian n <= 32, blocked real general above 32, and the vendor elsewhere.
-TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh), on the shapes that
+// straddled the old router's edges (ported from gesvd_tests' DefaultProviderRoutesSmallGeneralToJacobi):
+// general n = 32 for every job, Hermitian 30..33 both triangles, thin 32|40 x 9, 48, 64, 70 x 50.
+TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    constexpr bool kCd = std::is_same_v<T, std::complex<double>>;
-    const char* none = TestFixture::kVendor ? "vendor" : "<none>";
-    struct Row { Spec s; const char* expect; };
-    std::vector<Row> rows;
-    for (const auto& jobs : kJobs) rows.push_back({{32, 32, 2, 'N', jobs[0], jobs[1]}, "jacobi"});
-    rows.push_back({{32, 32, 2, 'L'}, "cta"});
-    rows.push_back({{30, 30, 2, 'U'}, "cta"});
-    rows.push_back({{33, 33, 2, 'L'}, "blocked"});
-    rows.push_back({{32, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, "jacobi"});
-    rows.push_back({{40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, TestFixture::kReal ? "blocked" : (kCd ? none : "jacobi")});
-    rows.push_back({{64, 64, 2, 'N'}, TestFixture::kReal ? "blocked" : (kCd ? none : "jacobi")});
-    rows.push_back({{48, 48, 2, 'N', SvdVectors::None, SvdVectors::None}, TestFixture::kReal ? "blocked" : "jacobi"});
-    rows.push_back({{70, 50, 2, 'N'}, TestFixture::kReal ? "blocked" : none});
-    for (const Row& r : rows) {
-        auto p = make_svd<T>(r.s);
-        if (std::string(r.expect) == "<none>") {
-            EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(r.s);
+    std::vector<Spec> rows;
+    for (const auto& jobs : kJobs) rows.push_back({32, 32, 2, 'N', jobs[0], jobs[1]});
+    rows.push_back({32, 32, 2, 'L'});
+    rows.push_back({30, 30, 2, 'U'});
+    rows.push_back({33, 33, 2, 'L'});
+    rows.push_back({32, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin});
+    rows.push_back({40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin});
+    rows.push_back({64, 64, 2, 'N'});
+    rows.push_back({48, 48, 2, 'N', SvdVectors::None, SvdVectors::None});
+    rows.push_back({70, 50, 2, 'N'});
+    for (const Spec& s : rows) {
+        const std::string want = this->table_pick(s);
+        auto p = make_svd<T>(s);
+        if (want == test_utils::kNoTableEntryRuns) {
+            if (TestFixture::kVendor) ADD_FAILURE() << "no shipped entry runs " << label(s);
+            else EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
             continue;
         }
         // cuSOLVER refuses past 32 (the old outcome too), in its sizing call, before any trace.
@@ -721,13 +732,13 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
             try {
                 this->run(p);
             } catch (const std::exception& e) {
-                if (std::string(r.expect) != "vendor") throw;
+                if (want != "vendor") throw;
                 refused = e.what();
             }
         });
         if (refused.find("gesvd_vendor (CUSOLVER)") != std::string::npos) got = "vendor";
-        EXPECT_EQ(got, r.expect) << label(r.s);
-        if (std::string(r.expect) != "vendor") expect_solved(p, "auto " + label(r.s));
+        EXPECT_EQ(got, want) << label(s);
+        if (want != "vendor") expect_solved(p, "auto " + label(s));
     }
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
     auto big = make_svd<T>(Spec{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None});
@@ -922,8 +933,8 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them, on both
-// transcribed devices.
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them.
+// sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* herm; const char* vec; int m, n; const char* ranked; };
     const Row rows[] = {
@@ -933,7 +944,7 @@ TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
         {"double", "U", "all", 33, 33, "vendor"},                  {"cfloat", "N", "all", 64, 64, "jacobi|vendor"},
         {"cfloat", "N", "all", 65, 65, "vendor"},                  {"cdouble", "N", "all", 33, 33, "vendor"},
         {"cdouble", "N", "none", 64, 64, "jacobi|vendor"},         {"cdouble", "L", "none", 48, 48, "blocked|vendor"}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gesvd", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;

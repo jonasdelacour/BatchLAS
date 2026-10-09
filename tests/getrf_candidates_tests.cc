@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/ops/getrf/choice.hh"
@@ -620,41 +621,25 @@ TYPED_TEST(GetrfCandidates, ScopedPinBeatsTheEnvironment) {
     expect_factored(r, "outer cta");
 }
 
-// Auto against the transcribed tables on the real device (getrf_tests' L12/T9 and the RouteGetrf
-// windows, ported): the old tiny window, the old blocked windows on both of cfloat's axes, and
-// the old vendor-free walk (tiny for the single types up to 32, cta for double up to 32, blocked
-// above; cta wherever it fits otherwise). Off-grid orders and batches on purpose.
-TYPED_TEST(GetrfCandidates, AutoReproducesTheOldRouterOnTheRealDevice) {
+// Auto against the shipped tables on the real device (shipped_table_pick.hh), on the cells that
+// straddled the old router's edges (getrf_tests' L12/T9 and the RouteGetrf windows, ported): the
+// tiny window, the blocked windows on both of cfloat's axes; off-grid orders and batches on purpose.
+TYPED_TEST(GetrfCandidates, AutoReadsTheShippedTablesOnTheRealDevice) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const auto tables = select::tables_in_borrow_order("getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed getrf table";
-    constexpr bool kF = std::is_same_v<T, float>, kCF = std::is_same_v<T, std::complex<float>>;
-    constexpr bool kD = std::is_same_v<T, double>;
-    const int cta = this->cta_n();
-    auto old_free = [&](int n, int batch) -> std::string {  // route_getrf.hh's vendor-free walk
-        if (kF && n >= 256) return "blocked";
-        if (kCF && (n >= 512 || (n >= 256 && batch >= 256))) return "blocked";
-        if ((kF || kCF) && n <= 32) return "tiny";
-        if (kD && n > 32) return "blocked";
-        if (n <= cta) return "cta";
-        return n <= this->tiny_n() ? "tiny" : "blocked";
-    };
-    auto old_vendor = [&](int n, int batch) -> std::string {  // preferred(), else the vendor
-        if (kF && n >= 5 && n <= 32) return "tiny";
-        if (kCF && ((n >= 5 && n <= 7) || (n >= 9 && n <= 24))) return "tiny";
-        if (kF && n >= 256) return "blocked";
-        if (kCF && (n >= 512 || (n >= 256 && batch >= 256))) return "blocked";
-        return "vendor";
-    };
     const std::pair<int, int> cells[] = {{3, 3},    {4, 7},     {5, 3},     {7, 300},   {8, 2},    {9, 3},
                                          {13, 600}, {24, 5},    {25, 5},    {31, 1000}, {33, 3},   {40, 2},
                                          {200, 2},  {255, 300}, {256, 2},   {256, 256}, {300, 255}, {300, 257},
                                          {511, 2},  {512, 2},   {600, 3}};
     for (auto [n, batch] : cells) {
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
+            [&, n = n, batch = batch] {
+                auto q = make_lu<T>(n, batch, 41u + n);
+                this->run(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << "n=" << n << " batch=" << batch;
         auto p = make_lu<T>(n, batch, 41u + n);
-        const std::string want = TestFixture::kVendor ? old_vendor(n, batch) : old_free(n, batch);
         EXPECT_EQ(this->auto_choice(p), want) << "n=" << n << " batch=" << batch;
         expect_factored(p, "auto n=" + std::to_string(n) + " batch=" + std::to_string(batch));
     }
@@ -790,9 +775,9 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them, on both
-// transcribed devices: each threshold of the old predicates from both sides.
-TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
+// threshold of the old predicates from both sides. sm_120 is deep-measured since 2026-10-09.
+TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
     struct Row { const char* dtype; int n, batch; const char* ranked; };
     const Row rows[] = {
         {"float", 4, 128, "vendor tiny cta blocked"},      {"float", 5, 128, "tiny vendor cta blocked"},
@@ -807,7 +792,7 @@ TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
         {"double", 1024, 32768, "vendor blocked cta"},     {"cdouble", 16, 128, "vendor cta tiny blocked"},
         {"cdouble", 17, 128, "vendor cta blocked"},        {"cdouble", 1024, 32768, "vendor cta blocked"},
     };
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("getrf", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;

@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/gemv/choice.hh"
 #include "../src/sycl/gemv_native.hh"
@@ -32,6 +33,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -313,6 +315,16 @@ protected:
     void run(Problem<T>& p) {
         (void)gemv<B, T>(*this->ctx, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
         this->ctx->wait();
+    }
+    // Auto's expected pick for `s` from the shipped tables (shipped_table_pick.hh).
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        const select::Key key{{"trans", s.trans == Transpose::NoTrans ? "N" : "T"}, {"out", s.out()},
+                              {"red", s.red()}, {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("gemv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_problem<T>(s);
+                                                     run(p);
+                                                 }, native_only);
     }
     void run_pinned(const C& c, Problem<T>& p) {
         const Pin pin("gemv", c);
@@ -624,25 +636,34 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
 }
 
-// §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Bare
-// `native` is the row's best runnable non-vendor: cta under Trans, direct under NoTrans.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Auto and
+// bare `native` (the row's best runnable non-vendor) come from the shipped table; `vendor` is the
+// vendor where it can run (not complex<double> on CUDA, known defect 13), else Auto with a warning.
 TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
     for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
         const Spec s{t, 24, 10, 4};
-        const std::string auto_pick = TestFixture::kVendor ? "vendor" : (t == Transpose::NoTrans ? "direct" : "cta");
-        if (TestFixture::vendor_launch_ok()) {
+        const std::string auto_pick = this->table_pick(s);
+        const std::string native_pick = this->table_pick(s, true);
+        ASSERT_NE(auto_pick, test_utils::kNoTableEntryRuns);
+        ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
+        bool vendor_runs = true;
+        try {
+            const Pin strict("gemv", "vendor", select::StrictPin{});
+            auto p = make_problem<T>(s);
+            this->run(p);
+        } catch (const std::invalid_argument&) {
+            vendor_runs = false;
+        }
+        {
             auto p = make_problem<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), auto_pick);
         }
-        const std::string native_pick = t == Transpose::NoTrans ? "direct" : "cta";
         std::vector<std::pair<const char*, std::string>> expect{
             {"Direct", "direct"}, {"DIRECT", "direct"}, {"native", native_pick}};
-        if (TestFixture::vendor_launch_ok()) {
-            expect.emplace_back("vendor", auto_pick);
-            expect.emplace_back("auto", auto_pick);
-        }
+        expect.emplace_back("vendor", vendor_runs ? "vendor" : auto_pick);
+        expect.emplace_back("auto", auto_pick);
         if (t != Transpose::NoTrans) {
             expect.emplace_back("cta", "cta");
             expect.emplace_back("CTA", "cta");
@@ -660,7 +681,7 @@ TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
                 }, &err);
                 const std::string what = std::string(word) + " " + label(s) + (via_env ? " via env" : " via ScopedPin");
                 EXPECT_EQ(got, spelling) << what;
-                const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
+                const bool warns = std::string(word) == "vendor" && !vendor_runs;
                 EXPECT_EQ(err.find("gemv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
                 expect_gemv(p, what);
@@ -696,40 +717,33 @@ TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
     expect_gemv(r, "outer cta");
 }
 
-// Auto against the shipped transcribed table (sm_89 and sm_120 hold identical rows; any other
-// device borrows one). RouteGemv.CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned,
-// ported: complex<double> Trans/ConjTrans is cta inside 64 <= red <= 352, out >= 256,
-// batch >= 320 and the vendor outside, each edge from both sides, on- and off-grid; every other
-// type and NoTrans is the vendor. Vendor-free it is cta for any transposed call, direct for N.
-TYPED_TEST(GemvCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh), on the shapes that
+// straddled every edge of the old complex<double> transposed window (64 <= red <= 352, out >= 256,
+// batch >= 320) from both sides, on- and off-grid, all three trans forms. Each result is checked.
+TYPED_TEST(GemvCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
-    const auto tables =
-        select::tables_in_borrow_order("gemv", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx));
-    ASSERT_FALSE(tables.empty());
-    ASSERT_EQ(tables.front()->source.rfind("transcribed:", 0), 0u) << tables.front()->file;
-    constexpr bool kCd = std::is_same_v<T, std::complex<double>>;
-    struct Row { int out, red, batch; bool in; };
-    const Row rows[] = {{256, 64, 320, true},   {257, 65, 321, true},   {300, 352, 321, true},
-                        {256, 351, 321, true},  {1024, 128, 320, true}, {256, 63, 320, false},
-                        {256, 62, 321, false},  {256, 353, 320, false}, {260, 354, 321, false},
-                        {255, 128, 320, false}, {254, 100, 321, false}, {512, 128, 319, false},
-                        {300, 100, 318, false}, {64, 32, 64, false}};
+    struct Row { int out, red, batch; };
+    const Row rows[] = {{256, 64, 320},  {257, 65, 321},  {300, 352, 321}, {256, 351, 321}, {1024, 128, 320},
+                        {256, 63, 320},  {256, 62, 321},  {256, 353, 320}, {260, 354, 321}, {255, 128, 320},
+                        {254, 100, 321}, {512, 128, 319}, {300, 100, 318}, {64, 32, 64}};
+    std::set<std::string> seen;
     for (const Row& r : rows)
         for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             Spec s{t, t == Transpose::NoTrans ? r.out : r.red, t == Transpose::NoTrans ? r.red : r.out, r.batch};
             s.period = 1;  // one random item, the rest copies: the decision, not the data, is under test
             s.seed = 41u + r.red;
+            const std::string want = this->table_pick(s);
+            ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+            seen.insert(want);
             auto p = make_problem<T>(s);
-            std::string want;
-            if (!TestFixture::kVendor) want = t == Transpose::NoTrans ? "direct" : "cta";
-            else want = (kCd && r.in && t != Transpose::NoTrans) ? "cta" : "vendor";
-            if (want == "vendor" && !TestFixture::vendor_launch_ok()) continue;  // known-defects #13
-            EXPECT_EQ(traced_choice([&] { this->run(p); }), want)
-                << label(s) << " out=" << r.out << " red=" << r.red;
+            EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s) << " out=" << r.out << " red=" << r.red;
             expect_gemv(p, "auto " + label(s));
             if (::testing::Test::HasFatalFailure()) return;
         }
+    std::string all;
+    for (const std::string& w : seen) all += w + " ";
+    std::cout << "gemv " << select::dtype_name<T>() << " Auto picks over the straddle set: " << all << "\n";
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with trans
@@ -916,9 +930,10 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
     }
 }
 
-// The transcribed rows of both devices, read with Table::nearest directly so every machine checks
-// them: cta | vendor | direct in the complex<double> window, vendor | cta | direct for other
-// transposed cells, vendor | direct under N; on-grid and off-grid keys.
+// The sm_89 transcribed rows, read with Table::nearest directly so every machine checks them:
+// cta | vendor | direct in the complex<double> window, vendor | cta | direct for other transposed
+// cells, vendor | direct under N; on-grid and off-grid keys. sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance; AutoReadsTheShippedTable its use).
 TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* trans; int out, red, batch; const char* ranked; };
     const Row rows[] = {
@@ -928,7 +943,7 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
         {"cdouble", "T", 256, 64, 319, "vendor|cta|direct"},    {"cdouble", "N", 700, 200, 5000, "vendor|direct"},
         {"float", "T", 700, 200, 5000, "vendor|cta|direct"},    {"double", "N", 3, 9000, 2, "vendor|direct"},
         {"cfloat", "T", 256, 64, 320, "vendor|cta|direct"},     {"double", "T", 1, 1, 1, "vendor|cta|direct"}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gemv", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;

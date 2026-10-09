@@ -17,6 +17,7 @@
 #include "../src/select/vendor.hh"
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/backends/triangular_expand.hh"
 #include "../src/backends/trmm_triangular_tiles.hh"
@@ -340,6 +341,31 @@ protected:
         auto p = make_prob<T>(s);
         return traced_choice([&] { run(p); });
     }
+    // What Auto (or, native_only, the class word `native`) must pick, from the shipped tables.
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        const select::Key key{{"side", s.side == Side::Left ? "L" : "R"}, {"order", s.n}, {"q", s.q},
+                              {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_prob<T>(s);
+                                                     run(p);
+                                                 }, native_only);
+    }
+    // This device's trmm table replaced by one row per side (other tables kept), so a test of
+    // can_run's fallthrough does not hang on what the shipped table ranks first. Pair with TableGuard.
+    void rank_trmm(const std::string& left, const std::string& right) {
+        const std::string dtype(select::dtype_name<T>());
+        const std::string dev = select::device_of<B>(*this->ctx).key;
+        std::vector<std::pair<std::string, std::string>> files;
+        for (const auto& t : select::embedded_tables())
+            if (t.name.rfind("trmm.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
+        files.emplace_back("trmm." + dtype + "." + dev + ".txt",
+                           "# op=trmm dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
+                           "# keys: side:exact order:log:2 q:log batch:log\n"
+                           "side=L order=8 q=8 batch=8 | " + left + "\n"
+                           "side=R order=8 q=8 batch=8 | " + right + "\n");
+        select::testing::set_builtin_tables(std::move(files));
+    }
 
     // Each family's own launch: the tile kernel (it takes no side, so it cannot serve Right), the
     // expansion plus the public gemm, the vendor library.
@@ -414,9 +440,12 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: the exact scratch
-// size runs, one byte less is refused, and Auto then takes the other route.
+// size runs, one byte less is refused, and Auto, under a table ranking expand first, then takes the
+// next route (triangular on the Left, the vendor on the Right).
 TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
     using T = typename TestFixture::T;
+    const TableGuard restore;
+    this->rank_trmm("expand 1 | triangular 2 | vendor 3", "expand 1 | vendor 2");
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Upper, Transpose::Trans, Diag::Unit, 37, 6, 4};
         const std::size_t bytes = this->expand_bytes(s.n, s.batch);
@@ -563,13 +592,16 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
 // in grid y, capped at 65535. float's row tile is 32 at order 16 (one row tile) and 64 at order 65
 // (two), so the last q that fits is 65535*128 and 32767*128. There the pin launches and writes C's
 // last column; one column past it the direct launch throws, the pin is refused and writes nothing,
-// and Auto takes expand. B and C live on the device (~2.2 GB at order 65).
+// and Auto, under a table ranking triangular first, takes expand. B and C live on the device
+// (~2.2 GB at order 65).
 TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
     static constexpr Backend B = TestFixture::B;
     if constexpr (!std::is_same_v<typename TestFixture::T, float>) {
         GTEST_SKIP() << "one dtype exercises the term; each launch costs GBs";
     } else {
         const ScopedEnvVar tile("BATCHLAS_TRMM_TILE_M", nullptr);
+        const TableGuard restore;
+        this->rank_trmm("triangular 1 | expand 2 | vendor 3", "expand 1 | vendor 2");
         auto& q = batchlas::sycl_queue(*this->ctx);
         for (const auto [n, row_tiles] : {std::pair{16, 1}, std::pair{65, 2}}) {
             const int last = int(65535 / row_tiles) * 128;
@@ -745,7 +777,9 @@ TYPED_TEST(TrmmCandidates, ClassWordsAndSpellings) {
     for (Side side : {Side::Left, Side::Right}) {
         const Spec s{side, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 24, 5, 4};
         const std::string auto_pick = this->auto_choice(s);
-        const std::string native_pick = side == Side::Left ? "triangular" : "expand";
+        EXPECT_EQ(auto_pick, this->table_pick(s)) << "Auto against the shipped table " << label(s);
+        const std::string native_pick = this->table_pick(s, true);  // the row's best runnable non-vendor
+        ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns) << label(s);
         const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
         std::vector<std::pair<const char*, std::string>> expect{
             {"Expand", "expand"}, {" EXPAND ", "expand"}, {"vendor", vendor_pick}, {"native", native_pick},
@@ -910,10 +944,13 @@ TYPED_TEST(TrmmCandidates, VendorOnlyTableFallsToTheLastResort) {
 
 // The coverage row (§5.6): the real backend and scalar (the old recorder hard-coded CUDA/F32),
 // the old key (m = C.rows, n = C.cols, k = A's order, uplo, side, diag, transA), native flags.
+// Under a table ranking the natives first, so the native choice spellings are what is recorded.
 // threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
 TYPED_TEST(TrmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
+    const TableGuard restore;
+    this->rank_trmm("triangular 1 | expand 2 | vendor 3", "expand 1 | vendor 2");
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "trmm_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
@@ -1006,9 +1043,9 @@ TYPED_TEST(TrmmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// The transcribed tables (no GPU): every dtype on sm_89 and sm_120 holds exactly choice.hh's
-// grid with identical rows, names the transcribed commit and choice.hh's keys, and reads
-// `triangular | expand | vendor` on Side::Left and `expand | vendor` on Side::Right.
+// The sm_89 transcribed tables (no GPU): every dtype holds exactly choice.hh's grid, names the
+// transcribed commit and choice.hh's keys, and reads `triangular | expand | vendor` on Side::Left
+// and `expand | vendor` on Side::Right. sm_120 is deep-measured since 2026-10-09.
 TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
     std::set<std::string> want;
     for (const char* s : {"L", "R"})
@@ -1020,8 +1057,7 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
     std::string keys = "# keys:";
     for (auto k : tm::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-        std::map<std::string, std::string> first;
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const std::string file = std::string("trmm.") + dt + "." + dev + ".txt";
             const auto& all = select::embedded_tables();
             const auto e = std::find_if(all.begin(), all.end(), [&](const auto& t) { return t.name == file; });
@@ -1037,8 +1073,6 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
                 for (const auto& x : row.ranked) ranked += x.spelling + "|";
                 EXPECT_EQ(ranked, row.keys[0] == "L" ? "triangular|expand|vendor|" : "expand|vendor|") << file << " " << k;
                 EXPECT_FALSE(row.timed) << file;
-                if (std::string(dev) == "sm_89") first[k] = ranked;
-                else EXPECT_EQ(ranked, first[k]) << file << " " << k << ": sm_120 differs from sm_89";
             }
             EXPECT_EQ(got, want) << file;
             EXPECT_EQ(t.rows.size(), want.size()) << file;

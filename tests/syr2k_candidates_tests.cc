@@ -14,6 +14,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/syr2k/choice.hh"
 
@@ -676,11 +677,10 @@ TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "triangular") << "the inner pin did not restore the outer";
 }
 
-// Auto against the shipped transcription on either side of its only threshold (batch 1|2, the
-// old prefer_triangular_tiles), at grid and off-grid n, k and batch: float batch >= 2 runs the
-// tile kernel, batch 1 the vendor (vendor-free: the row's second entry, triangular); double is
-// the vendor at every shape (vendor-free: no route).
-TYPED_TEST(Syr2kCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh) on either side of the old
+// transcription's only threshold (batch 1|2, the old prefer_triangular_tiles), at grid and
+// off-grid n, k and batch. Vendor-free, double has no route.
+TYPED_TEST(Syr2kCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     struct Cell { int n, k, batch; Transpose t; };
     const Cell cells[] = {{200, 53, 1, Transpose::NoTrans}, {200, 53, 2, Transpose::Trans},
@@ -690,9 +690,11 @@ TYPED_TEST(Syr2kCandidates, AutoReadsTheTranscribedTable) {
                           {700, 2, 1, Transpose::Trans},      {2, 700, 2, Transpose::NoTrans}};
     for (const Cell& c : cells) {
         const Spec s{Uplo::Lower, c.t, c.n, c.k, c.batch, 0, false, unsigned(c.n + c.k)};
-        std::string want;
-        if constexpr (TestFixture::kFloat) want = (c.batch >= 2 || !TestFixture::kVendor) ? "triangular" : "vendor";
-        else want = TestFixture::kVendor ? "vendor" : "<no route>";
+        std::string want = test_utils::shipped_table_pick<C>(
+            "syr2k", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx),
+            select::Key{{"n", c.n}, {"k", c.k}, {"batch", c.batch}}, [&] { (void)this->auto_choice(s); });
+        if (want == test_utils::kNoTableEntryRuns) want = "<no route>";
+        if constexpr (!TestFixture::kVendor) EXPECT_EQ(want, TestFixture::kFloat ? "triangular" : "<no route>") << label(s);
         std::string got;
         try {
             got = this->auto_choice(s);
@@ -908,13 +910,13 @@ TYPED_TEST(Syr2kCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// The shipped tables (no GPU): one row per grid cell of choice.hh on sm_89 and sm_120, the same
-// rows on both, untimed, source transcribed:ff340fc6; float `triangular | vendor` from batch 2
-// and `vendor | triangular` at batch 1, double `vendor` everywhere; spot rows through nearest().
+// The sm_89 tables (no GPU): one row per grid cell of choice.hh, untimed, source
+// transcribed:ff340fc6; float `triangular | vendor` from batch 2 and `vendor | triangular` at
+// batch 1, double `vendor` everywhere; spot rows through nearest(). sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
-    std::map<std::string, std::vector<std::string>> by_dev;
     for (const char* dt : {"float", "double"})
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syr2k", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
@@ -947,7 +949,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                         EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                         const select::TableRow* hit = t.nearest({{"n", n}, {"k", k}, {"batch", b}});
                         ASSERT_EQ(hit, &row) << t.file << ": grid cell n=" << n << " k=" << k << " batch=" << b;
-                        by_dev[std::string(dt) + dev].push_back(std::to_string(row.line) + ":" + ranked.front());
                     }
             const select::TableRow* off = t.nearest({{"n", 300}, {"k", 33}, {"batch", 2}});
             ASSERT_NE(off, nullptr);
@@ -955,8 +956,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             off = t.nearest({{"n", 3000}, {"k", 2}, {"batch", 1}});
             EXPECT_EQ(off->ranked.front().spelling, "vendor") << t.file;
         }
-    EXPECT_EQ(by_dev["floatsm_89"], by_dev["floatsm_120"]);
-    EXPECT_EQ(by_dev["doublesm_89"], by_dev["doublesm_120"]);
 }
 
 }  // namespace

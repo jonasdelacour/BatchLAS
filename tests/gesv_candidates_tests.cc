@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
@@ -260,6 +261,18 @@ protected:
     std::vector<int32_t> run_pinned(const C& c, Sys<T>& p) {
         const Pin pin("gesv", c);
         return run_auto(p);
+    }
+    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A child without a
+    // route (vendor-free) still means the gesv pin itself was taken.
+    std::string table_pick(int n, int nrhs, int batch) {
+        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 select::Key{{"n", n}, {"nrhs", nrhs}}, [&] {
+                                                     auto p = make_sys<T>(n, nrhs, batch, 7u);
+                                                     try {
+                                                         (void)run_auto(p);
+                                                     } catch (const batchlas::NoRouteError&) {
+                                                     }
+                                                 });
     }
 
     // The family's own kernels, called directly: Tiny's driver; Blocked = public getrf + getrs.
@@ -566,8 +579,8 @@ TYPED_TEST(GesvCandidates, CanRunFalsePinsThrow) {
 }
 
 // §5.3: spellings (case-folded) and the class words select their choice, via ScopedPin and via the environment. gesv
-// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick.
-// float n=16 is inside every transcribed window except double/cdouble's, so Auto differs by type.
+// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick, which
+// is the shipped table's at n=16 nrhs=2.
 TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
@@ -576,8 +589,7 @@ TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
         auto p = make_sys<T>(16, 2, 4, 5u);
         auto_pick = traced_choice([&] { (void)this->run_auto(p); });
     }
-    const bool window = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    ASSERT_EQ(auto_pick, window ? "tiny" : "blocked") << "the transcribed tables at n=16 nrhs=2";
+    ASSERT_EQ(auto_pick, this->table_pick(16, 2, 4)) << "the shipped table at n=16 nrhs=2";
     const std::pair<const char*, const char*> expect[] = {
         {"BLOCKED", "blocked"}, {"tiny", "tiny"},
         {"Blocked", "blocked"},  {"vendor", auto_pick.c_str()}, {"native", auto_pick.c_str()},
@@ -642,38 +654,27 @@ TYPED_TEST(GesvCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_EQ(traced_choice([&] { (void)this->run_auto(s); }), "blocked") << "the inner pin did not restore the outer";
 }
 
-// Auto against the transcribed table this device reads (sm_89 or sm_120, or borrowed): rows
-// straddling the old window (float 32|33, cfloat 16|17) and the tiny nrhs ceiling (4|5), where
-// both answers can run unless can_run says otherwise. Absorbs gesv_tests' old G7.
-TYPED_TEST(GesvCandidates, AutoReadsTheTranscribedTables) {
+// Auto against the shipped table this device reads, on rows straddling the old window (float
+// 32|33, cfloat 16|17) and the tiny nrhs ceiling (4|5) from both sides, where both answers can run
+// unless can_run says otherwise. Absorbs gesv_tests' old G7.
+TYPED_TEST(GesvCandidates, AutoReadsTheShippedTables) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
-    const std::string dtype(select::dtype_name<T>());
-    const auto tables = select::tables_in_borrow_order("gesv", dtype, select::device_of<B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed gesv table";
-    struct Row { const char* dtype; int n, nrhs; const char* expect; };
-    const Row rows[] = {{"float", 4, 1, "tiny"},      {"float", 32, 4, "tiny"},     {"float", 33, 1, "blocked"},
-                        {"float", 25, 3, "tiny"},     {"float", 8, 5, "blocked"},   {"float", 64, 1, "blocked"},
-                        {"cfloat", 16, 4, "tiny"},    {"cfloat", 17, 1, "blocked"}, {"cfloat", 9, 2, "tiny"},
-                        {"cfloat", 32, 1, "blocked"}, {"double", 4, 1, "blocked"},  {"double", 32, 2, "blocked"},
-                        {"cdouble", 8, 1, "blocked"}, {"cdouble", 16, 4, "blocked"}};
-    int checked = 0;
-    for (const Row& r : rows) {
-        if (dtype != r.dtype) continue;
-        auto p = make_sys<T>(r.n, r.nrhs, 512, 41u);
+    const std::pair<int, int> rows[] = {{4, 1},  {32, 4}, {33, 1}, {25, 3}, {8, 5},  {64, 1}, {16, 4},
+                                        {17, 1}, {9, 2},  {32, 1}, {32, 2}, {8, 1},  {16, 5}};
+    for (const auto& [n, nrhs] : rows) {
+        const std::string want = this->table_pick(n, nrhs, 512);
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << n << " " << nrhs;
+        auto p = make_sys<T>(n, nrhs, 512, 41u);
         std::vector<int32_t> info;
-        const std::string what = "n=" + std::to_string(r.n) + " nrhs=" + std::to_string(r.nrhs);
+        const std::string what = "n=" + std::to_string(n) + " nrhs=" + std::to_string(nrhs);
         try {
-            EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
+            EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
             expect_solved(p, info, what);
         } catch (const batchlas::NoRouteError& e) {
             if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
         }
-        ++checked;
     }
-    EXPECT_GT(checked, 0) << dtype;
 }
 
 // key_of's every field reaches choose(): a synthetic table for this device whose winner changes
@@ -765,10 +766,10 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
     }
 }
 
-// The transcribed rows of both devices, read with Table::nearest directly so every device checks
-// them: the old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first
-// entry, then blocked. Off-grid probes (25, 30, 36, 3000) included.
-TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
+// old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first entry, then
+// blocked. Off-grid probes (25, 30, 36, 3000) included. sm_120 is deep-measured since 2026-10-09.
+TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
     struct Row { const char* dtype; int n, nrhs; const char* first; std::size_t len; };
     const Row rows[] = {
         {"float", 1, 1, "tiny", 2},        {"float", 32, 64, "tiny", 2},   {"float", 33, 1, "blocked", 1},
@@ -776,7 +777,7 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
         {"cfloat", 17, 1, "blocked", 1},   {"cfloat", 25, 2, "blocked", 1}, {"double", 1, 1, "blocked", 1},
         {"cdouble", 16, 4, "blocked", 1},  {"double", 3000, 300, "blocked", 1},
     };
-    for (const char* dev : {"sm_89", "sm_120"}) {
+    for (const char* dev : {"sm_89"}) {
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gesv", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
