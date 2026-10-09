@@ -534,20 +534,20 @@ static int run(const Cfg& c) {
             reset();
             if (!run_arm(a)) continue;
         }
-        // Items 0 AND batch-1: item 0 alone is blind to a wrong batch stride.
+        // Items 0 and batch-1 (item 0 is blind to a wrong stride); within, not pass: arms may be wrong by design.
         const std::vector<int> items{0, batch - 1};
         using Check = verify::Check;
         bool within = false;
         switch (c.op) {
             case OpKind::potrf:
                 a.residual = verify::potrf_residual(A0v, Av, up_of(c), items);
-                within = verify::pass<T>(Check::factorization, n, a.residual);
+                within = verify::within<T>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
                 // Packed 1-based int32 pivots, n per item, in the first half of the int64 span.
                 VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), n, batch, 1, pstride);
                 a.residual = verify::getrf_residual(A0v, Av, pivv, items);
-                within = verify::pass<T>(Check::factorization, n, a.residual);
+                within = verify::within<T>(Check::factorization, n, a.residual);
                 // The discriminating oracle: pivots elementwise against host xGETRF.
                 int mism = 0;
                 std::vector<int32_t> hp;
@@ -568,7 +568,7 @@ static int run(const Cfg& c) {
             case OpKind::posv:
             case OpKind::getrs:
                 a.residual = verify::solve_residual(A0v, Xv, B0v, items);
-                within = verify::pass<T>(Check::solve, n, a.residual);
+                within = verify::within<T>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
                 using D = verify::promoted_t<T>;
@@ -583,14 +583,14 @@ static int run(const Cfg& c) {
                     orth = verify::nanmax(orth, verify::orthogonality(Qv));
                 }
                 a.extra = orth;
-                within = verify::pass<T>(Check::factorization, n, a.residual);
-                if (!verify::pass<T>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
+                within = verify::within<T>(Check::factorization, n, a.residual);
+                if (!verify::within<T>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
                 break;
             }
             case OpKind::orgqr: {
                 a.residual = verify::orthogonality(Av, items);
                 a.extra = a.residual;
-                within = verify::pass<T>(Check::orthogonality, m, a.residual);
+                within = verify::within<T>(Check::orthogonality, m, a.residual);
                 break;
             }
         }

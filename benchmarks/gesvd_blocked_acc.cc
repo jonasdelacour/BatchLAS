@@ -234,6 +234,8 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
             }
             const double recon_rel = std::sqrt(err2 / std::max(ref2, 1e-30));
 
+            // Reference: double ?gesdd since 2026-10-09 (was working-precision ?gesvd), so older CSVs'
+            // sv_max_abs_err is not like for like. evidence: docs/perf/gesvd.md#gesvd-defect-c-an-accuracy-harness-that-could-not-see-relative-error
             double sv_max_abs_err = std::numeric_limits<double>::quiet_NaN();
             {
                 auto a_host = batchlas::verify::copy_item(Ab_ref, 0);
