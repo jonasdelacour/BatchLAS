@@ -30,11 +30,12 @@ struct PlanSpec {  // plain data, so tests need no OpSpec
 
 struct PlannedCell {
     CellKey key;
-    std::string reason;  // "" = measure, "skip:current", "skip:single", "skip:cap", "skip:dim", "partial:<fams>"
+    std::string reason;  // "" = measure, "remeasure", "skip:current", "skip:single", "skip:cap", "skip:dim", "partial:<fams>"
     std::vector<std::string> arms;
     double est_s = 0;
     Tier tier = Tier::preview;            // a partial re-race keeps the stored record's tier
     const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
+    int round = -1;                       // remeasure: the stored record's round (-1: the running round)
 };
 
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand,
@@ -48,7 +49,12 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
                                     const std::map<CellKey, std::vector<std::string>>* runnable = nullptr,
-                                    std::int64_t max_dim = 0);  // > 0: a cell with a larger matrix dimension is skip:dim
+                                    std::int64_t max_dim = 0,  // > 0: a cell with a larger matrix dimension is skip:dim
+                                    const std::set<CellKey>* remeasure = nullptr);  // missing, past max_dim too: "remeasure"
+
+// --remeasure-keys: "<op> <dtype> <key_arg>" lines -> "op.dtype" -> cells; throws std::runtime_error on a bad
+// line. evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
+std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& path);
 
 // op -> the ops whose tables its timings read. evidence: docs/design/tiered-tuning.md#engine-op-order-over-all-19-ops
 const std::map<std::string, std::vector<std::string>>& op_dependencies();

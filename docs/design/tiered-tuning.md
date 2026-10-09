@@ -907,6 +907,22 @@ batch=2:256` sweep reported `ld audit FAILED: vendor ... bad residual` on its fi
 `5 passed, 0 skipped, 1 failed`. With the break removed, the same sweep reported `6 passed, 0
 skipped, 0 failed`.
 
+## Engine: re-measuring named cells
+
+Added 2026-10-09 for the cells of the sm_120 deep run that the box's other user damaged.
+`--remeasure-keys FILE` takes one `<op> <dtype> <key>` line per cell, the key in the ledger's
+own `name=value,...` form and field order. Each named cell counts as missing, whatever the
+ledger holds: `plan_round` gives it the reason `remeasure`, every runnable candidate, the
+running tier and a fresh record, not a merge. The stored record's `round` carries over, so a
+re-measured refinement midpoint stays a refinement record for the cap and the margin hedge. The
+driver appends the named cells to round 0 when they are off the lattice. Round 0 is never
+budgeted, so `--budget 1e-9` runs exactly the named cells and starts no refinement. A named cell
+is measured past `--max-dim`, because the deep run measured some cells before the cap existed,
+but not past `--cap-gib`. A key whose fields do not match the op's, or an op and dtype the run
+does not tune, stops the run. The newer record wins in `best_records` (same tier, later date or
+run id), so the tables pick up the re-measure with no other change. Host tests: `TuneRemeasure.*`
+(a deliberate break of the planner or of the round-0 append turns them red).
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps

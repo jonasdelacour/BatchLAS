@@ -2458,6 +2458,101 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0) << "--plan needs no measurer";
 }
 
+// --remeasure-keys: a named cell counts as missing whatever the ledger holds, at the running tier,
+// with every candidate; the other cells keep their skip reasons.
+// evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
+TEST(TuneRemeasure, PlanRoundTreatsANamedCellAsMissing) {
+    Ledger l;
+    CellRecord r = two_family_cell();
+    r.tier = Tier::deep;
+    r.round = 3;
+    l.cells.push_back(r);
+    const std::set<CellKey> named{nkey(64)};
+    const auto plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64), nkey(128)}, l, kHashes, 4, kChildOverheadS,
+                                 nullptr, 0, &named);
+    ASSERT_EQ(plan.size(), 2u);
+    EXPECT_EQ(plan[0].reason, "remeasure") << "a current deep record does not save a named cell";
+    EXPECT_EQ(plan[0].arms, kTwo);
+    EXPECT_EQ(plan[0].tier, Tier::coarse) << "the running tier, not the stored one";
+    EXPECT_EQ(plan[0].round, 3) << "the stored record's round";
+    EXPECT_EQ(plan[0].stored, nullptr) << "a fresh record, not a merge";
+    EXPECT_GT(plan[0].est_s, kChildOverheadS);
+    EXPECT_EQ(plan[1].reason, "");
+    EXPECT_EQ(plan[1].round, -1);
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64, 1 << 20)}, l, kHashes, 1e-9, 0, nullptr, 0,
+                         &named)[0].reason, "skip:cap") << "a different key is not named";
+    PlanSpec capped = plan_spec(kTwo);
+    capped.max_dim = [](const CellKey& k) { return key_int(k, "n"); };
+    const auto dim = plan_round(capped, Tier::coarse, {nkey(64), nkey(128)}, l, kHashes, 4, 0, nullptr, 32, &named);
+    EXPECT_EQ(dim[0].reason, "remeasure") << "named, so measured past --max-dim (it was measured before the cap)";
+    EXPECT_EQ(dim[1].reason, "skip:dim");
+    EXPECT_EQ(plan_round(capped, Tier::coarse, {nkey(64)}, l, kHashes, 1e-9, 0, nullptr, 32, &named)[0].reason,
+              "skip:cap") << "the byte cap still holds";
+}
+
+TEST(TuneRemeasure, ReadsOpDtypeKeyLinesAndRefusesMalformedOnes) {
+    TempDir d;
+    const fs::path f = d.path / "keys.txt";
+    std::ofstream(f) << "# outliers\n\ntrsm float side=L,n=64,batch=128   # a comment\ntrsm float n=8\ngemv cdouble m=4\n";
+    const auto k = read_remeasure_keys(f.string());
+    ASSERT_EQ(k.size(), 2u);
+    EXPECT_EQ(k.at("trsm.float"), (std::set<CellKey>{{{"side", "L"}, {"n", "64"}, {"batch", "128"}}, {{"n", "8"}}}));
+    EXPECT_EQ(k.at("gemv.cdouble"), (std::set<CellKey>{{{"m", "4"}}}));
+    for (const char* bad : {"trsm float\n", "trsm float n=8 extra\n", "trsm float n\n"}) {
+        std::ofstream(f) << bad;
+        EXPECT_THROW((void)read_remeasure_keys(f.string()), std::runtime_error) << bad;
+    }
+    EXPECT_THROW((void)read_remeasure_keys((d.path / "missing").string()), std::runtime_error);
+}
+
+TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPastTheBudget) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.run_id = "20261009T000001-box-1";  // make_run_id() repeats within one second and pid
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    ASSERT_EQ(sorted(first.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}));
+    const Ledger before = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    int round9 = -1;
+    for (const CellRecord& c : before.cells)
+        if (key_arg(c.key) == "n=9") round9 = c.round;
+    ASSERT_GT(round9, 0) << "n=9 is a refinement midpoint";
+
+    o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "9"}}}}};
+    o.budget_h = 1e-12;  // spent before round 0 ends: refinement never starts, round 0 still runs
+    o.run_id = "20261009T000002-box-1";
+    FakeMeasurer again;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_EQ(sorted(again.keys), sorted({"n=4", "n=9"}));
+    const Ledger after = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    ASSERT_EQ(after.runs.size(), 2u) << "the re-measure appends its own run file";
+    ASSERT_EQ(after.cells.size(), before.cells.size() + 2);
+    std::map<std::string, std::string> fh;  // the hashes the new run stored are the current ones
+    for (const CandResult& c : after.cells.back().cands) fh[c.cand] = c.hash;  // fakeop: family == spelling
+    const auto best = best_records(after, fh);
+    for (const auto& [k, round] : {std::pair{std::string("n=4"), 0}, std::pair{std::string("n=9"), round9}}) {
+        const auto it = std::find_if(best.begin(), best.end(), [&](const auto& b) { return key_arg(b.first) == k; });
+        ASSERT_NE(it, best.end()) << k;
+        EXPECT_EQ(it->second->run_id, after.runs[1].run_id) << k << ": the new record wins";
+        EXPECT_EQ(it->second->round, round) << k;
+        EXPECT_EQ(it->second->tier, Tier::preview) << k;
+    }
+
+    o.budget_h = 0;  // no budget: the converged ledger plans no refinement either
+    o.run_id = "20261009T000003-box-1";
+    FakeMeasurer third;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &third), 0);
+    EXPECT_EQ(sorted(third.keys), sorted({"n=4", "n=9"}));
+
+    o.remeasure = {{"fakeop.float", {{{"m", "4"}}}}};
+    FakeMeasurer none;
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "a key with the wrong fields";
+    o.remeasure = {{"fakeop.double", {{{"n", "4"}}}}};
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "an op and dtype not in the run";
+    EXPECT_TRUE(none.keys.empty());
+}
+
 namespace {
 
 // m is derived (4 n), as geqrf's and orgqr's extents are: the keys alone name only n.

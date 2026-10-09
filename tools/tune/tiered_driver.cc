@@ -134,6 +134,7 @@ struct Job {
     std::vector<CellKey> next;
     std::map<CellKey, CellRecord> mine;
     std::map<CellKey, std::vector<std::string>> runnable;
+    std::set<CellKey> remeasure;  // --remeasure-keys for this op and dtype
     std::set<CellKey> planned;  // never planned twice in a run: a skip:cap or skip:dim midpoint would come back forever
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
@@ -159,6 +160,10 @@ struct Job {
                 }};
     }
 };
+
+bool measurable(const PlannedCell& c) {
+    return c.reason.empty() || c.reason == "remeasure" || c.reason.rfind("partial:", 0) == 0;
+}
 
 class TieredRun {
 public:
@@ -231,6 +236,20 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
     j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
+    if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
+        j->remeasure = r->second;
+        std::vector<std::string> names;
+        for (const KV& f : j->next.empty() ? grid.front() : j->next.front()) names.push_back(f.name);
+        for (const CellKey& k : r->second) {
+            std::vector<std::string> got;
+            for (const KV& f : k) got.push_back(f.name);
+            if (got != names)
+                throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " " + key_arg(k) + ": want the fields " +
+                                         join(names, ",") + " in that order");
+            if (std::find(j->next.begin(), j->next.end(), k) == j->next.end()) j->next.push_back(k);
+        }
+    }
     j->region = std::make_unique<Region>(grid);
     jobs_.push_back(std::move(j));
 }
@@ -238,7 +257,7 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
 std::vector<PlannedCell> TieredRun::plan(Job& j) {
     j.planned.insert(j.next.begin(), j.next.end());
     return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable,
-                      o_.max_dim);
+                      o_.max_dim, j.round == 0 ? &j.remeasure : nullptr);
 }
 
 void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
@@ -375,6 +394,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                  .str("tier", to_string(c.tier)).str("error", b.error));
         return;
     }
+    if (c.round >= 0) round = c.round;  // a re-measured refinement midpoint stays a refinement record
     CellRecord r = record_from_arms(c.key, round, b.arms, j.cands, j.fh, c.stored);
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -413,7 +433,7 @@ std::size_t TieredRun::stage(Job& j) {
             record(j, single_record(c.key, j.round, c.arms.empty() ? "" : c.arms[0], j.cands, j.fh), c.tier);
             emit(Json().str("ev", "cell_done").str("op", j.spec->op()).str("dtype", j.dtype).key(c.key)
                      .str("ranked", join(c.arms, "|")).str("tier", to_string(c.tier)));
-        } else if (c.reason.empty() || c.reason.rfind("partial:", 0) == 0) {
+        } else if (measurable(c)) {
             todo.push_back(&c);
         }
     }
@@ -493,8 +513,6 @@ void TieredRun::gpu_loop(std::size_t g) {
     }
 }
 
-bool measurable(const PlannedCell& c) { return c.reason.empty() || c.reason.rfind("partial:", 0) == 0; }
-
 // (round-0, refined) records at the running tier: the ledger's current ones overlaid by this run's,
 // so a resumed or budget-stopped run refines against the lattice an earlier run measured.
 std::pair<std::size_t, std::size_t> TieredRun::cap_base(const Job& j) const {
@@ -570,6 +588,9 @@ int TieredRun::go() {
             }
             build(op, dtype);
         }
+    for (const auto& [od, keys] : o_.remeasure)
+        if (std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& j) { return j->spec->op() + "." + j->dtype == od; }))
+            throw std::runtime_error("--remeasure-keys names " + od + ", which this run does not tune");
     double est = 0, est_refine = 0, refine_cells = 0;
     std::size_t to_measure = 0;
     for (auto& j : jobs_) {

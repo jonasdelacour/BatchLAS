@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <set>
+#include <stdexcept>
 
 namespace batchlas::tune {
 
@@ -105,7 +107,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
                                     const std::map<CellKey, std::vector<std::string>>* runnable,
-                                    std::int64_t max_dim) {
+                                    std::int64_t max_dim, const std::set<CellKey>* remeasure) {
     const TimeIndex idx(l);
     const auto best = best_records(l, family_hash);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
@@ -116,7 +118,9 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
         c.tier = tier;
         const double bytes = spec.bytes(key);
         auto finish = [&] { out.emplace_back(bytes, std::move(c)); };
-        if (max_dim > 0 && spec.max_dim && spec.max_dim(key) > max_dim) {
+        const bool named = remeasure && remeasure->count(key);
+        // A named cell was measured once already, maybe before the cap: the user asked for it again.
+        if (!named && max_dim > 0 && spec.max_dim && spec.max_dim(key) > max_dim) {
             c.reason = "skip:dim";
             finish();
             continue;
@@ -141,7 +145,11 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
             }
         }
         const auto b = best.find(key);
-        if (b != best.end() && tier_rank(b->second->tier) >= tier_rank(tier)) {
+        if (named) {  // whatever the ledger holds, at the running tier
+            c.reason = "remeasure";
+            c.arms = live;
+            if (b != best.end()) c.round = b->second->round;
+        } else if (b != best.end() && tier_rank(b->second->tier) >= tier_rank(tier)) {
             const CellRecord& rec = *b->second;
             if (freshness(rec, family_hash) == Freshness::current) {
                 c.reason = "skip:current";
@@ -177,6 +185,24 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
     std::vector<PlannedCell> plan;
     for (auto& [bytes, c] : out) plan.push_back(std::move(c));
     return plan;
+}
+
+std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("--remeasure-keys: cannot read " + path);
+    std::map<std::string, std::set<CellKey>> out;
+    int n = 0;
+    for (std::string line; std::getline(in, line);) {
+        ++n;
+        if (const auto hash = line.find('#'); hash != std::string::npos) line.erase(hash);
+        const std::vector<std::string> f = split(line, ' ');
+        if (f.empty()) continue;
+        const auto key = f.size() == 3 ? parse_key_arg(f[2]) : std::nullopt;
+        if (!key)
+            throw std::runtime_error(path + ":" + std::to_string(n) + ": want '<op> <dtype> <name=v,...>', got '" + line + "'");
+        out[f[0] + "." + f[1]].insert(*key);
+    }
+    return out;
 }
 
 const std::map<std::string, std::vector<std::string>>& op_dependencies() {

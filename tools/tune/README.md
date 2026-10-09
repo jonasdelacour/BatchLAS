@@ -78,6 +78,7 @@ neither mode, the tuner stops and asks.
 | `--tier` | none | `preview`, `coarse` or `deep`; see "Tiered mode" |
 | `--plan` | off | print the starting lattice's cells, skips with reasons and the time estimate, then exit; no GPU |
 | `--budget H` | none | stop refinement after H hours of measuring; the starting lattice always completes (`--plan` warns when its estimate with refinement exceeds H) |
+| `--remeasure-keys FILE` | none | lines `<op> <dtype> <name=v,...>` (the ledger key, in its field order): those cells are measured again in round 0 at the run's tier whatever the ledger holds, refinement midpoints and cells past `--max-dim` included (not past `--cap-gib`); every op and dtype named must be in the run. With `--budget 1e-9` nothing else is measured. See "Engine: re-measuring named cells" in docs/design/tiered-tuning.md |
 | `--progress-fd N` | none | one JSON event per line on fd N; see "Tiered mode" |
 | `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table; a custom run records into it only when this flag is given |
 | `--device-key sm_NN` | nvidia-smi compute capability of the first `--devices` GPU | the device `--plan` reads the ledger for |

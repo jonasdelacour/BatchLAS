@@ -8,6 +8,7 @@
 #include "tier.hh"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,8 @@ struct TieredOpts {
     std::string repo, ledger_root, out, argv;
     std::string run_id;  // empty: make_run_id()
     std::map<std::string, std::vector<std::string>> grid;
+    // --remeasure-keys, "op.dtype" -> cells: measured in round 0 at this tier whatever the ledger holds
+    std::map<std::string, std::set<CellKey>> remeasure;
 };
 
 struct RunIdentity {
