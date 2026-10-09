@@ -9,7 +9,7 @@ routing architecture, measurement rules, GPU kernel facts and repository convent
 SYCL 2020 support **and a backend for your GPU vendor**, netlib LAPACK/LAPACKE + CBLAS, oneDPL
 headers. Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised configuration is
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
-Ubuntu 22.04; see "Tested platforms" in `.github/README.md`.
+Ubuntu 22.04; see "Tested platforms" in `docs/guide/build.md`.
 
 > **Warning:** NVIDIA targets need a CUDA-capable DPC++. The stock
 > `intel-oneapi-compiler-dpcpp-cpp` package has **no CUDA adapter**: on an NVIDIA machine it
@@ -20,7 +20,7 @@ Ubuntu 22.04; see "Tested platforms" in `.github/README.md`.
 > - `-- Using SYCL targets: spir64_x86_64` in the configure output means a CPU-only build, whatever
 >   GPUs are present. A CUDA configure names the architecture, e.g. `nvidia_gpu_sm_89`.
 > - `-DBATCHLAS_ENABLE_CUDA=ON` means "require it": without a `[cuda:gpu]` the configure aborts with
->   a `FATAL_ERROR` naming the missing entry (see "Common CMake options" in `.github/README.md`).
+>   a `FATAL_ERROR` naming the missing entry (see "CMake options" in `docs/guide/build.md`).
 >   The default `AUTO` silently builds CPU-only.
 
 ## 1. Prerequisite Packages
@@ -83,7 +83,7 @@ cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++
 ```
 
 A consumer of an installed BatchLAS must configure the *whole* consuming project with this same
-compiler ("Consuming BatchLAS from CMake" in `.github/README.md`).
+compiler ("Building against BatchLAS" in `docs/cpp-api.md`).
 
 ### 2c. oneDPL
 
