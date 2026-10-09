@@ -16,6 +16,10 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "verify_within.hh"
+
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/ops/potrf/choice.hh"
@@ -163,33 +167,25 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
     return A;
 }
 
-// ||L L^H - A||_F / ||A||_F -- the oracle, independent of every other implementation.
+// ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper), read from the stored
+// triangle of the factor F (ld) through batchlas::verify; A is the tight Hermitian reference.
 template <typename T>
-RealOf<T> multiply_back_residual(const std::vector<T>& A, const std::vector<T>& L, int n) {
-    using R = RealOf<T>;
-    R num = R(0), den = R(0);
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            T acc{};
-            for (int k = 0; k <= std::min(i, j); ++k) {
-                acc += L[i + static_cast<size_t>(k) * n] *
-                       host_conj(L[j + static_cast<size_t>(k) * n]);
-            }
-            const T diff = acc - A[i + static_cast<size_t>(j) * n];
-            num += host_real(diff) * host_real(diff) + host_imag(diff) * host_imag(diff);
-            const T a = A[i + static_cast<size_t>(j) * n];
-            den += host_real(a) * host_real(a) + host_imag(a) * host_imag(a);
-        }
-    }
-    if (den == R(0)) return R(0);
-    return std::sqrt(num) / std::sqrt(den);
+double potrf_error(const std::vector<T>& A, const T* F, int ld, int n, Uplo uplo) {
+    using V = MatrixView<T, MatrixFormat::Dense>;
+    return verify::potrf_residual(V(const_cast<T*>(A.data()), n, n, n, n * n, 1), V(const_cast<T*>(F), n, n, ld, ld * n, 1), uplo);
 }
 
-// The leaf's residual bound; the constant is slack for the kernel's reduction order.
 template <typename T>
-RealOf<T> residual_tol(int n) {
-    using R = RealOf<T>;
-    return R(4) * R(n) * std::numeric_limits<R>::epsilon();
+double potrf_error(const std::vector<T>& A, const Matrix<T, MatrixFormat::Dense>& F, int b, Uplo uplo) {
+    return potrf_error<T>(A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
+}
+
+// The leaf's retained bound (4 n eps, tighter than the library's 16 n u) and the blocked driver's
+// (BLKTOL n eps, far tighter) stay as caps on top of verify::pass; the constant is slack for
+// the kernel's reduction order.
+template <typename T>
+::testing::AssertionResult leaf_ok(double res, int n) {
+    return test_utils::within<T>(verify::Check::factorization, n, res, 4.0 * double(n) * double(std::numeric_limits<RealOf<T>>::epsilon()));
 }
 
 template <typename T, Backend B>
@@ -253,17 +249,6 @@ protected:
         }
     }
 
-    // Extract L for item b: for Upper the stored object is U with A = U^H U, so L = U^H.
-    std::vector<T> extract_L(const Matrix<T, MatrixFormat::Dense>& A, int b, int n, Uplo uplo) {
-        std::vector<T> L(static_cast<size_t>(n) * n, T{});
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j <= i; ++j) {
-                L[i + static_cast<size_t>(j) * n] =
-                    (uplo == Uplo::Lower) ? A(i, j, b) : host_conj(A(j, i, b));
-            }
-        }
-        return L;
-    }
 
     std::vector<int32_t> run_cta(Matrix<T, MatrixFormat::Dense>& A, Uplo uplo,
                                  bool pass_info_span = true) {
@@ -317,9 +302,8 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
             for (int b = 0; b < batch; ++b) {
                 ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b
                                       << " uplo=" << static_cast<int>(uplo);
-                const auto L = this->extract_L(A, b, n, uplo);
-                const R res = multiply_back_residual<T>(ref[b], L, n);
-                EXPECT_LE(res, residual_tol<T>(n))
+                const double res = potrf_error<T>(ref[b], A, b, uplo);
+                EXPECT_TRUE(leaf_ok<T>(res, n))
                     << "n=" << n << " b=" << b << " uplo=" << static_cast<int>(uplo);
             }
         }
@@ -557,8 +541,7 @@ TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
     for (int b = 0; b < batch; ++b) {
         if (std::find(bad_items.begin(), bad_items.end(), b) != bad_items.end()) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
             << "healthy item " << b << " next to a failed one";
     }
 }
@@ -589,8 +572,7 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
             // (b) EXACTLY zero, not near zero.
             ASSERT_EQ(host_imag(A(i, i, 0)), R(0)) << "imag(L(" << i << "," << i << ")) != 0";
         }
-        const auto L = this->extract_L(A, 0, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref, L, n)), residual_tol<T>(n));
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref, A, 0, Uplo::Lower)), n));
 
         // (c) conj(A) is a different Hermitian matrix, so it must give a different factor.
         std::vector<T> refc(ref);
@@ -605,8 +587,7 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
             }
         }
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
-        const auto Lc = this->extract_L(Ac, 0, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(refc, Lc, n)), residual_tol<T>(n));
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(refc, Ac, 0, Uplo::Lower)), n));
 
         // (d) imag(diag(A)) IS IGNORED, per LAPACK's contract; the load transform drops it.
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
@@ -642,8 +623,7 @@ TYPED_TEST(PotrfCtaTest, EmptyInfoSpanStillFactorises) {
     }
     this->run_cta(A, Uplo::Lower, /*pass_info_span=*/false);
     for (int b = 0; b < batch; ++b) {
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n)) << "b=" << b;
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n)) << "b=" << b;
     }
 }
 
@@ -689,8 +669,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
                 ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
             }
         }
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n)) << "b=" << b;
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n)) << "b=" << b;
     }
 }
 
@@ -730,17 +709,7 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
 
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "b=" << b << " uplo=" << static_cast<int>(uplo);
-            std::vector<T> L(static_cast<size_t>(n) * n, T{});
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j <= i; ++j) {
-                    const size_t base = static_cast<size_t>(b) * stride;
-                    L[i + static_cast<size_t>(j) * n] =
-                        (uplo == Uplo::Lower)
-                            ? buf[base + i + static_cast<size_t>(j) * ld]
-                            : host_conj(buf[base + j + static_cast<size_t>(i) * ld]);
-                }
-            }
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+            EXPECT_TRUE(leaf_ok<T>(potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, uplo), n))
                 << "b=" << b << " uplo=" << static_cast<int>(uplo)
                 << " (ld=" << ld << " stride=" << stride << ")";
         }
@@ -793,9 +762,9 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
 #define BLKTOL 0.05
 #endif
 template <typename T>
-RealOf<T> blocked_residual_tol(int n) {
-    using R = RealOf<T>;
-    return R(BLKTOL) * R(n) * std::numeric_limits<R>::epsilon();
+::testing::AssertionResult blocked_ok(double res, int n) {
+    return test_utils::within<T>(verify::Check::factorization, n, res,
+                                 double(BLKTOL) * double(n) * double(std::numeric_limits<RealOf<T>>::epsilon()));
 }
 
 template <typename Config>
@@ -910,9 +879,8 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            const R res = multiply_back_residual<T>(ref[b], L, n);
-            EXPECT_LE(res, blocked_residual_tol<T>(n))
+            const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
+            EXPECT_TRUE(blocked_ok<T>(res, n))
                 << "n=" << n << " b=" << b << " nb=" << nb << " W=" << W
                 << " residual/(n*eps)="
                 << (res / (R(n) * std::numeric_limits<R>::epsilon()));
@@ -994,8 +962,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
                     ASSERT_FALSE(std::isnan(host_imag(v)));
                 }
             }
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n));
+            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n));
         }
     }
 }
@@ -1123,8 +1090,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
     for (int b = 0; b < batch; ++b) {
         if (std::find(bad.begin(), bad.end(), b) != bad.end()) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
             << "healthy item " << b << " next to failed ones";
     }
 }
@@ -1159,8 +1125,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
             ASSERT_EQ(host_imag(A(i, i, 0)), R(0))
                 << "imag(L(" << i << "," << i << ")) != 0 at nb=" << nb;
         }
-        const auto L = this->extract_L(A, 0, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref, L, n)), blocked_residual_tol<T>(n));
+        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref, A, 0, Uplo::Lower)), n));
 
         // (c) THE SENSITIVITY: conj(A) must give a different factor. Here the conjugate
         //     that matters is the trailing update's transB (Trans would give L21 L21^T).
@@ -1174,8 +1139,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
             for (int j = 0; j < i && !differs; ++j)
                 if (host_imag(A(i, j, 0)) != host_imag(Ac(i, j, 0))) differs = true;
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
-        const auto Lc = this->extract_L(Ac, 0, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(refc, Lc, n)), blocked_residual_tol<T>(n));
+        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(refc, Ac, 0, Uplo::Lower)), n));
 
         // (d) imag(diag(A)) IS IGNORED end to end: the trailing update ADDS to A22's
         //     diagonal, so caller garbage reaches the NEXT panel's leaf load transform.
@@ -1224,12 +1188,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
     const auto info = this->run_blocked(V, Uplo::Lower);
     for (int b = 0; b < batch; ++b) {
         ASSERT_EQ(info[b], 0) << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
-        std::vector<T> L(static_cast<size_t>(n) * n, T{});
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j <= i; ++j)
-                L[i + static_cast<size_t>(j) * n] =
-                    buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+        EXPECT_TRUE(blocked_ok<T>(potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, Uplo::Lower), n))
             << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
     }
 }
@@ -1273,8 +1232,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
                                 "so the zero pre-pass did not run";
         }
         for (int b = 0; b < batch; ++b) {
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
                 << m.why << " b=" << b;
         }
     }
@@ -1319,8 +1277,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
                 << "n=" << n << " b=" << b << " (nb=" << nb << ", cap=" << cap << ")";
         }
     }
@@ -1386,8 +1343,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
                 ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
             }
         }
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
             << "b=" << b;
     }
 }
@@ -1428,8 +1384,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
         ASSERT_EQ(info[b], 0)
             << "a positive-definite matrix was reported not positive definite from a "
                "POISONED workspace, b=" << b;
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
+        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
             << "b=" << b;
     }
 }
@@ -1454,7 +1409,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
 
 
 // The TINY tier's cases, in their own file only for length; they are inside this
-// anonymous namespace so make_spd, make_planted_ldl and multiply_back_residual
+// anonymous namespace so make_spd, make_planted_ldl and potrf_error
 // above are the same oracles the CTA cases use.
 #include "potrf_tiny_cases.inc"
 

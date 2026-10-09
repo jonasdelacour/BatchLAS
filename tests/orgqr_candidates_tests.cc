@@ -16,6 +16,10 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "verify_within.hh"
+
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/orgqr_native.hh"
 #include "../src/ops/orgqr/choice.hh"
@@ -52,22 +56,12 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 // One factored A at ld = m + 3 and stride = ld * n + 5 inside a buffer of large finite poison,
@@ -97,7 +91,7 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = verify::make<T>(u(gen), u(gen));
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
@@ -119,30 +113,17 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     return p;
 }
 
-template <typename T>
-double tol(int m) {
-    return 64.0 * std::max(m, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-// ||Q^H Q - I||_max and ||Q R - A0||_max / ||A0||_max for one item, in double (R = triu(F)).
+// ||Q^H Q - I||_F and the componentwise |Q R - A0| / (|Q||R|) for one item (R = triu(F)).
 template <typename T>
 std::pair<double, double> q_errors(const Prob<T>& p, int it) {
-    const int m = p.m, n = p.n;
-    double orth = 0, rec = 0, an = 0;
-    for (int a = 0; a < n; ++a)
-        for (int b = 0; b < n; ++b) {
-            std::complex<double> s = 0;
-            for (int i = 0; i < m; ++i) s += std::conj(up(p.mem[p.at(it, i, a)])) * up(p.mem[p.at(it, i, b)]);
-            orth = std::max(orth, std::abs(s - (a == b ? 1.0 : 0.0)));
-        }
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < m; ++i) {
-            std::complex<double> s = 0;
-            for (int l = 0; l <= j; ++l) s += up(p.mem[p.at(it, i, l)]) * up(p.f[p.at(it, l, j)]);
-            rec = std::max(rec, std::abs(s - up(p.a0[p.at(it, i, j)])));
-            an = std::max(an, std::abs(up(p.a0[p.at(it, i, j)])));
-        }
-    return {orth, rec / std::max(an, 1e-300)};
+    using D = verify::promoted_t<T>;
+    const int item[] = {it};
+    const MVof<T> Q(const_cast<T*>(p.mem.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    const MVof<T> R(const_cast<T*>(p.f.data()), p.n, p.n, p.ld, p.stride, p.batch);
+    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    return {verify::orthogonality(Q, item),
+            verify::gemm_backward_error(Q, verify::Shape::general, Transpose::NoTrans, R, verify::Shape::upper, Transpose::NoTrans, A0, A0,
+                                        verify::Shape::general, D(1), D(0), item)};
 }
 
 // Q's checked items, every element outside A's footprint and all of tau bit for bit, and for a
@@ -155,8 +136,8 @@ void expect_q(const Prob<T>& p, const std::string& what) {
     else items = {0, 1, p.batch / 2, p.batch - 1};
     for (int it : items) {
         const auto [orth, rec] = q_errors(p, it);
-        ASSERT_TRUE(std::isfinite(orth) && orth <= tol<T>(p.m)) << what << " item " << it << " |Q^H Q - I| " << orth;
-        ASSERT_TRUE(std::isfinite(rec) && rec <= tol<T>(p.m)) << what << " item " << it << " |QR - A| " << rec;
+        ASSERT_TRUE(test_utils::within<T>(verify::Check::orthogonality, p.m, orth)) << what << " item " << it << " |Q^H Q - I| " << orth;
+        ASSERT_TRUE(test_utils::within<T>(verify::Check::factorization, p.m, rec)) << what << " item " << it << " |QR - A| " << rec;
     }
     std::vector<char> in(p.mem.size(), 0);
     for (int it = 0; it < p.batch; ++it)

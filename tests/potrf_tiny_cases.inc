@@ -1,6 +1,6 @@
 // The TINY tier: one matrix per sub-group partition, held in registers. Included by
 // potrf_tests.cc inside its anonymous namespace, so make_spd, make_planted_ldl,
-// multiply_back_residual and residual_tol are in scope.
+// potrf_error and leaf_ok are in scope.
 //
 // Every case here but the facade one drives sycl_potrf::potrf_tiny_dispatch DIRECTLY.
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
@@ -21,6 +21,11 @@ struct TinyProb {
         return buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
     }
 };
+
+template <typename T>
+double potrf_error(const std::vector<T>& A, const TinyProb<T>& p, int b, Uplo uplo) {
+    return potrf_error<T>(A, p.buf.data() + static_cast<size_t>(b) * p.stride, p.ld, p.n, uplo);
+}
 
 // `seed_shift` scales item b's matrix so a cross-matrix write changes a value rather
 // than reproducing the neighbour's.
@@ -97,17 +102,6 @@ protected:
         return std::vector<int32_t>(info.begin(), info.end());
     }
 
-    // L for item b: for Upper the stored object is U with A = U^H U, so L = U^H.
-    std::vector<T> extract_L(const TinyProb<T>& p, int b, Uplo uplo) {
-        std::vector<T> L(static_cast<size_t>(p.n) * p.n, T{});
-        for (int i = 0; i < p.n; ++i) {
-            for (int j = 0; j <= i; ++j) {
-                L[i + static_cast<size_t>(j) * p.n] =
-                    (uplo == Uplo::Lower) ? p.at(i, j, b) : host_conj(p.at(j, i, b));
-            }
-        }
-        return L;
-    }
 };
 
 TYPED_TEST_SUITE(PotrfTinyTest, PotrfTestTypes);
@@ -139,9 +133,7 @@ TYPED_TEST(PotrfTinyTest, TinyResidualBothTriangles) {
                         ASSERT_EQ(info[b], 0)
                             << "n=" << n << " b=" << b << " ld=" << ld
                             << " uplo=" << static_cast<int>(uplo);
-                        const auto L = this->extract_L(p, b, uplo);
-                        EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)),
-                                  residual_tol<T>(n))
+                        EXPECT_TRUE(leaf_ok<T>(potrf_error<T>(p.ref[b], p, b, uplo), n))
                             << "n=" << n << " b=" << b << " ld=" << ld
                             << " uplo=" << static_cast<int>(uplo);
                     }
@@ -451,8 +443,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
         for (int b = 0; b < batch; ++b) {
             if (std::find(bad_items.begin(), bad_items.end(), b) != bad_items.end()) continue;
             ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-            const auto L = this->extract_L(p, b, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)), residual_tol<T>(n))
+            EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(p.ref[b], p, b, Uplo::Lower)), n))
                 << "healthy item " << b << " next to a failed one";
         }
     }
@@ -476,8 +467,7 @@ TYPED_TEST(PotrfTinyTest, TinyEmptyInfoSpanStillFactorises) {
 
     this->run_tiny(p.view(), Uplo::Lower, /*pass_info_span=*/false);
     for (int b = 0; b < batch; ++b) {
-        const auto L = this->extract_L(p, b, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(p.ref[b], L, n)), residual_tol<T>(n)) << "b=" << b;
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(p.ref[b], p, b, Uplo::Lower)), n)) << "b=" << b;
     }
 }
 

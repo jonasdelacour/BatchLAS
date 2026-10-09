@@ -1,6 +1,6 @@
 // The LPANEL tier's cases, in their own file only for length; they sit inside
 // potrf_tests.cc's anonymous namespace so make_spd, make_planted_ldl and
-// multiply_back_residual above are the same oracles the CTA cases use.
+// potrf_error above are the same oracles the CTA cases use.
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
 template <typename Config>
@@ -83,9 +83,8 @@ TYPED_TEST(PotrfLpanelTest, ResidualAcrossPanelBoundaries) {
         const auto info = this->run_lpanel(A.view());
         for (int b = 0; b < c.batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << c.n << " b=" << b;
-            const auto L = this->extract_L(A, b, c.n, Uplo::Lower);
-            const R res = multiply_back_residual<T>(ref[b], L, c.n);
-            EXPECT_LE(res, residual_tol<T>(c.n))
+            const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
+            EXPECT_TRUE(leaf_ok<T>(res, c.n))
                 << "n=" << c.n << " b=" << b << " residual/(n*eps)="
                 << (res / (R(c.n) * std::numeric_limits<R>::epsilon()));
         }
@@ -129,12 +128,14 @@ TYPED_TEST(PotrfLpanelTest, PanelStoresArePublishedAtSaturatingBatch) {
     const auto info = this->run_lpanel(A.view());
 
     ASSERT_EQ(info[0], 0);
-    const auto L0 = this->extract_L(A, 0, n, Uplo::Lower);
-    EXPECT_LE((multiply_back_residual<T>(ref, L0, n)), residual_tol<T>(n))
+    EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref, A, 0, Uplo::Lower)), n))
         << "item 0, n=" << n << " batch=" << batch;
 
     // The kernel is deterministic for identical input and carries no atomics, so every
     // item must come back BIT-identical to item 0.
+    std::vector<T> L0(static_cast<size_t>(n) * n, T{});
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i < n; ++i) L0[i + static_cast<size_t>(j) * n] = A(i, j, 0);
     int bad_items = 0;
     int first_bad = -1;
     for (int b = 1; b < batch; ++b) {
@@ -192,11 +193,10 @@ TYPED_TEST(PotrfLpanelTest, OtherTriangleIsNeitherReadNorWritten) {
                         << ") b=" << b << " pass=" << pass;
                 }
             }
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            const R res = multiply_back_residual<T>(ref[b], L, n);
+            const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
             ASSERT_FALSE(std::isnan(res))
                 << "the kernel READ the poisoned upper triangle, b=" << b;
-            EXPECT_LE(res, residual_tol<T>(n)) << "b=" << b << " pass=" << pass;
+            EXPECT_TRUE(leaf_ok<T>(res, n)) << "b=" << b << " pass=" << pass;
         }
     }
 }
@@ -351,8 +351,7 @@ TYPED_TEST(PotrfLpanelTest, PackedBatchIsIndependentAndTheTailSlotsAreInert) {
     for (int b = 0; b < batch; ++b) {
         if (b == bad_item) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
             << "item " << b << " (packing G=" << G << ", batch=" << batch << ")";
     }
 }
@@ -389,14 +388,7 @@ TYPED_TEST(PotrfLpanelTest, PaddedLeadingDimensionStrideAndEmptyInfoSpan) {
         const auto info = this->run_lpanel(V, Uplo::Lower, 0, pass_info);
         for (int b = 0; b < batch; ++b) {
             if (pass_info) ASSERT_EQ(info[b], 0) << "b=" << b;
-            std::vector<T> L(static_cast<size_t>(n) * n, T{});
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j <= i; ++j) {
-                    L[i + static_cast<size_t>(j) * n] =
-                        buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
-                }
-            }
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+            EXPECT_TRUE(leaf_ok<T>(potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, Uplo::Lower), n))
                 << "b=" << b << " ld=" << ld << " stride=" << stride
                 << " info_span=" << pass_info;
         }
@@ -474,8 +466,7 @@ TYPED_TEST(PotrfLpanelTest, NbSixteenIsInstantiatedForFloatOnly) {
         const auto info = this->run_lpanel(A.view(), Uplo::Lower, /*nb_hint=*/16);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "b=" << b;
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n));
+            EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n));
         }
     } else {
         EXPECT_EQ(cap16, 0) << "NB = 16 advertises capacity for a type it is not built for";
