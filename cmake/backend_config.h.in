@@ -13,6 +13,11 @@
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
 
+// SYCL implementation (cmake BATCHLAS_SYCL_IMPL). Source code tests these, never
+// __ACPP__ or SYCL_IMPLEMENTATION_ONEAPI directly.
+#cmakedefine01 BATCHLAS_SYCL_IMPL_DPCPP
+#cmakedefine01 BATCHLAS_SYCL_IMPL_ACPP
+
 // Whether batchlas::Settings::unsafe may be set from the process environment
 // (cmake option BATCHLAS_ALLOW_UNSAFE_ENV, default OFF). 0 means settings()
 // pins those fields to their safe values and warns once per variable naming the

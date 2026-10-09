@@ -28,15 +28,19 @@ add_executable(hello_batched_gemm main.cc)
 target_link_libraries(hello_batched_gemm PRIVATE BatchLAS::batchlas)
 
 # BatchLAS's SYCL compile/link flags are build-tree-only ($<BUILD_INTERFACE:>),
-# so a consumer that submits its own kernels has to ask for -fsycl itself. This
+# so a consumer that submits its own kernels has to ask for them itself. The
+# package names them for the implementation it was built with (-fsycl for DPC++,
+# --acpp-targets=... for AdaptiveCpp; BatchLAS_SYCL_IMPL says which). This
 # example submits none -- it only calls into the library -- and compiles clean
-# without the flag, but it is enabled by default because that is the recipe a
-# real consumer needs, and because it is what keeps this example honest about
-# the SYCL runtime being on the link line.
-option(BATCHLAS_CONSUMER_USE_FSYCL "Compile and link the example with -fsycl" ON)
-if(BATCHLAS_CONSUMER_USE_FSYCL)
-    target_compile_options(hello_batched_gemm PRIVATE -fsycl)
-    target_link_options(hello_batched_gemm PRIVATE -fsycl)
+# without them, but they are on by default because that is the recipe a real
+# consumer needs, and because it keeps this example honest about the SYCL
+# runtime being on the link line.
+option(BATCHLAS_CONSUMER_USE_SYCL_FLAGS
+    "Compile and link the example with BatchLAS_SYCL_COMPILE_OPTIONS / BatchLAS_SYCL_LINK_OPTIONS" ON)
+if(BATCHLAS_CONSUMER_USE_SYCL_FLAGS)
+    message(STATUS "BatchLAS ${BatchLAS_SYCL_IMPL}: SYCL flags ${BatchLAS_SYCL_COMPILE_OPTIONS}")
+    target_compile_options(hello_batched_gemm PRIVATE ${BatchLAS_SYCL_COMPILE_OPTIONS})
+    target_link_options(hello_batched_gemm PRIVATE ${BatchLAS_SYCL_LINK_OPTIONS})
 endif()
 
 # The include-root squatting guard. decoy_include/ holds three headers named

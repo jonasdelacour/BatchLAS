@@ -1,3 +1,15 @@
+# DPC++ (intel/llvm, icpx). The AdaptiveCpp counterpart is BatchLASSyclAcpp.cmake, which
+# include()s this file with BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY for the shared derivations.
+#
+# Under `cmake -P` there is no project to configure and no toolchain to detect, so a
+# script that include()s this file gets the derivation functions and nothing else. That
+# is what lets the per-architecture caps be checked for AMD and Intel from a box that has
+# neither.
+if(CMAKE_SCRIPT_MODE_FILE)
+    set(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY TRUE)
+endif()
+
+if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
 if(NOT SYCL_LS)
     find_program(SYCL_LS sycl-ls)
 endif()
@@ -8,6 +20,7 @@ if(SYCL_LS)
     message(STATUS "Using SYCL tools from: ${SYCL_DIR}")
 else()
     message(WARNING "sycl-ls not found - GPU architecture auto-detection will be skipped")
+endif()
 endif()
 
 set(BATCHLAS_SYCL_TARGETS "")
@@ -547,13 +560,6 @@ function(detect_sycl_cpu_target)
     set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
 endfunction()
 
-# Under `cmake -P` there is no project to configure and no toolchain to detect, so a
-# script that include()s this file gets the derivation functions and nothing else. That
-# is what lets the per-architecture caps be checked for AMD and Intel from a box that has
-# neither.
-if(CMAKE_SCRIPT_MODE_FILE)
-    set(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY TRUE)
-endif()
 if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
 
 detect_sycl_gpu_architectures()
@@ -766,6 +772,9 @@ if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
         "$<BUILD_INTERFACE:${_targets_no_cpu_esc}>"
     )
 endif()
+
+# What a consumer's own SYCL translation units need (BatchLAS_SYCL_COMPILE_OPTIONS).
+set(BATCHLAS_SYCL_CONSUMER_OPTIONS -fsycl)
 
 message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
 

@@ -5,6 +5,45 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM|Clang")
     message(WARNING "CMAKE_CXX_COMPILER does not appear to be a SYCL compiler (icpx/clang++). Build may fail.")
 endif()
 
+# The resolved implementation is BATCHLAS_SYCL_IMPL_RESOLVED plus the 0/1 pair
+# BATCHLAS_SYCL_IMPL_DPCPP / _ACPP; the cache entry keeps what the user asked for.
+# Design: docs/design/sycl-implementations.md section 5.1.
+set(BATCHLAS_SYCL_IMPL "AUTO" CACHE STRING
+    "SYCL implementation: AUTO (ACPP when CMAKE_CXX_COMPILER is the acpp driver), DPCPP or ACPP")
+set_property(CACHE BATCHLAS_SYCL_IMPL PROPERTY STRINGS AUTO DPCPP ACPP)
+string(TOUPPER "${BATCHLAS_SYCL_IMPL}" _batchlas_sycl_impl)
+if(NOT _batchlas_sycl_impl MATCHES "^(AUTO|DPCPP|ACPP)$")
+    message(FATAL_ERROR "BATCHLAS_SYCL_IMPL must be AUTO, DPCPP or ACPP (got '${BATCHLAS_SYCL_IMPL}')")
+endif()
+get_filename_component(_batchlas_cxx_name "${CMAKE_CXX_COMPILER}" NAME)
+set(_batchlas_cxx_is_acpp FALSE)
+if(_batchlas_cxx_name MATCHES "^(acpp|syclcc|syclcc-clang)$")
+    set(_batchlas_cxx_is_acpp TRUE)
+elseif(NOT CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --acpp-version
+        OUTPUT_VARIABLE _batchlas_acpp_version ERROR_QUIET RESULT_VARIABLE _batchlas_acpp_rc TIMEOUT 60)
+    if(_batchlas_acpp_rc EQUAL 0 AND _batchlas_acpp_version MATCHES "AdaptiveCpp")
+        set(_batchlas_cxx_is_acpp TRUE)
+    endif()
+endif()
+if(_batchlas_sycl_impl STREQUAL "AUTO")
+    if(_batchlas_cxx_is_acpp)
+        set(_batchlas_sycl_impl ACPP)
+    else()
+        set(_batchlas_sycl_impl DPCPP)
+    endif()
+elseif(_batchlas_sycl_impl STREQUAL "ACPP" AND NOT _batchlas_cxx_is_acpp)
+    message(FATAL_ERROR "BATCHLAS_SYCL_IMPL=ACPP needs the AdaptiveCpp driver as the compiler "
+        "(-DCMAKE_CXX_COMPILER=<prefix>/bin/acpp); got ${CMAKE_CXX_COMPILER}")
+elseif(_batchlas_sycl_impl STREQUAL "DPCPP" AND _batchlas_cxx_is_acpp)
+    message(FATAL_ERROR "BATCHLAS_SYCL_IMPL=DPCPP but ${CMAKE_CXX_COMPILER} is the AdaptiveCpp driver")
+endif()
+set(BATCHLAS_SYCL_IMPL_RESOLVED "${_batchlas_sycl_impl}")
+set(BATCHLAS_SYCL_IMPL_DPCPP OFF)
+set(BATCHLAS_SYCL_IMPL_ACPP OFF)
+set(BATCHLAS_SYCL_IMPL_${_batchlas_sycl_impl} ON)
+message(STATUS "SYCL implementation: ${BATCHLAS_SYCL_IMPL_RESOLVED} (BATCHLAS_SYCL_IMPL=${BATCHLAS_SYCL_IMPL})")
+
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
 # this. PROJECT_IS_TOP_LEVEL would be the idiomatic spelling but needs CMake
@@ -257,7 +296,7 @@ endif()
 # already defaults to precise; this makes both compilers agree.
 # evidence: docs/perf/blackwell.md#icpx-fast-fp-model
 target_compile_options(batchlas_build_options INTERFACE
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:IntelLLVM>>:-ffp-model=precise>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:IntelLLVM>,$<BOOL:${BATCHLAS_SYCL_IMPL_DPCPP}>>:-ffp-model=precise>
     ${_BATCHLAS_DEBUG_COMPILE_OPTIONS}
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:MinSizeRel>>:-Os>

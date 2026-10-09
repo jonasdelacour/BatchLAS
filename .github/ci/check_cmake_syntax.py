@@ -47,7 +47,8 @@ def list_files(roots):
             files.append(root)
             continue
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            # build-*/ is gitignored like build/ (the acpp presets build there).
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith("build-")]
             for name in filenames:
                 if name == "CMakeLists.txt" or name.endswith(".cmake") or name.endswith(".cmake.in"):
                     files.append(os.path.join(dirpath, name))

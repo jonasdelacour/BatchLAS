@@ -84,6 +84,27 @@
       }
     },
     {
+      "name": "acpp",
+      "displayName": "AdaptiveCpp",
+      "description": "dev built with the AdaptiveCpp 25.10 release driver (--acpp-targets=generic, JIT at first launch). docs/design/sycl-implementations.md.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-acpp",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "/opt/adaptivecpp-25.10.0-cuda13.2/bin/acpp",
+        "BATCHLAS_SYCL_IMPL": "ACPP"
+      }
+    },
+    {
+      "name": "acpp-tests",
+      "displayName": "AdaptiveCpp Tests",
+      "description": "acpp plus tests (dev-tests with AdaptiveCpp).",
+      "inherits": "acpp",
+      "binaryDir": "${sourceDir}/build-acpp-tests",
+      "cacheVariables": {
+        "BATCHLAS_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "release",
       "displayName": "Release",
       "description": "The shipping shape: Release, no tests, no benchmarks, and ONE batchlas shared library. Inherits dev for the same toolchain discovery every other preset gets, then overrides the three things a release differs in. Do not iterate in this tree: the unit of SYCL device linking is the shared library, so ANY one-line edit costs the whole 575 s (9m35s), single-threaded, measured device link of all 15 object libraries. CAP THE PARALLELISM: a from-scratch build of this preset was OOM-killed at --parallel 20 AND at --parallel 8 on a 125 GB box with 115 GB free, both times during compilation rather than the link, which puts a single heavy SYCL translation unit above 14 GB. --parallel 4 completes in 728 s wall. That ceiling is a property of the from-scratch compile, not of the monolithic shape, so it applies to any cold full build here.",
@@ -142,6 +163,17 @@
       "configurePreset": "dev-gpu-tests"
     },
     {
+      "name": "acpp",
+      "configurePreset": "acpp",
+      "targets": [
+        "batchlas_components"
+      ]
+    },
+    {
+      "name": "acpp-tests",
+      "configurePreset": "acpp-tests"
+    },
+    {
       "name": "release",
       "configurePreset": "release",
       "targets": [
@@ -170,6 +202,16 @@
     {
       "name": "cuda",
       "configurePreset": "cuda",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1
+      }
+    },
+    {
+      "name": "acpp-tests",
+      "configurePreset": "acpp-tests",
       "output": {
         "outputOnFailure": true
       },

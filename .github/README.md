@@ -199,6 +199,9 @@ Presets:
   `dev-tests` or `cuda` for the pre-push gate, plus a vendor-free tree
   (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) at that gate only. With a `[cuda:gpu]` in `sycl-ls`,
   `scripts/ctest_gpus.sh` runs one test per GPU slot (`tests/README.md`).
+- `acpp` / `acpp-tests`: `dev` / `dev-tests` built with the AdaptiveCpp 25.10 driver
+  (`--acpp-targets=generic`) into `build-acpp` / `build-acpp-tests`. Work in progress: the library
+  does not compile under acpp yet (`docs/design/sycl-implementations.md`).
 
 ### Manual Configuration
 
@@ -235,7 +238,9 @@ Common CMake options:
 | `BATCHLAS_CCACHE_BASEDIR` | ccache base directory (default: deepest common parent of source and build directories, or `$HOME` if that is `/`) |
 | `BATCHLAS_TEST_GPUS` | GPUs written to `<build>/ctest_resources.json` for `scripts/ctest_gpus.sh`: `auto` (`nvidia-smi --list-gpus`), a count, or `0` to disable. Needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error |
 | `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` |
-| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the SYCL device link (default `4`, `1` disables) |
+| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link (default `4`, `1` disables) |
+| `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted |
+| `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
 
 ## Test
 
