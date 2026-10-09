@@ -6,6 +6,7 @@
     python3 benchmarks/benchviz import <campaign> benchmarks/results/factor_baseline_*.csv
     python3 benchmarks/benchviz logs                             # every campaign on this box
     python3 benchmarks/benchviz compare <baseline> <candidate>   # any two logs, cell by cell
+    python3 benchmarks/benchviz ab --build-dir A --build-dir B --ops gemm   # two builds, interleaved
     python3 benchmarks/benchviz list-ops
 """
 from __future__ import annotations
@@ -22,7 +23,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from ops import OPS, PRESETS, TYPES, Grid, parse_list, plan_cells  # noqa: E402
-from store import DEFAULT_ROOT, REPO, Campaign, build_info, describe_build, provenance  # noqa: E402
+from store import (DEFAULT_ROOT, REPO, Campaign, acpp_env_record, build_info, describe_build,  # noqa: E402
+                   impl_name, provenance, sycl_impl_of)
 
 
 def _csv_list(s: str, allowed) -> list:
@@ -79,14 +81,26 @@ def grid_from_args(a) -> Grid:
     return Grid.from_dict(g)
 
 
-def make_campaign(a, build_dirs) -> Campaign:
+def campaign_builds(build_dirs, camp_dir: Path) -> list:
+    """build_info() per directory; an acpp build also records the ACPP_* knobs its runs get."""
+    out = []
+    for d in build_dirs:
+        bi = build_info(d)
+        if bi.get("sycl_impl") == "ACPP":
+            bi["acpp_env"] = acpp_env_record(camp_dir)
+        out.append(bi)
+    return out
+
+
+def make_campaign(a, build_dirs, name=None) -> Campaign:
     ops = _csv_list(a.ops, OPS)
     types = _csv_list(a.types, TYPES)
-    name = a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
+    name = name or a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
     cfg = {
         "ops": ops, "types": types, "preset": a.grid.name, "backend": a.backend,
         "gpu": a.gpus[0], "gpus": a.gpus, "grid": a.grid.to_dict(),
-        "provenance": {**provenance(a.backend, a.gpus[0]), "builds": [build_info(d) for d in build_dirs]},
+        "provenance": {**provenance(a.backend, a.gpus[0]),
+                       "builds": campaign_builds(build_dirs, Path(a.root) / name)},
     }
     return Campaign.create(Path(a.root), name, cfg)
 
@@ -157,6 +171,58 @@ def cmd_run(a):
             render_all(camp)
             camp.set_status(camp.status().get("state", "finished"), plotted=time.time())
             print(f"figures: {camp.figures}")
+
+
+def cmd_ab(a):
+    """Two builds (e.g. DPC++ and AdaptiveCpp) on one grid, interleaved cell by cell on one
+    card, then their comparison. Each build's rows land in their own campaign."""
+    import compare
+    from runner import Runner, detect_gpus
+    if not a.build_dir or len(a.build_dir) != 2:
+        raise SystemExit("ab takes exactly two --build-dir: the baseline, then the candidate")
+    a.grid = grid_from_args(a)
+    a.gpus = parse_list(a.gpu)
+    known = {g["index"] for g in detect_gpus(a.backend)}
+    if known and not set(a.gpus) <= known:
+        raise SystemExit(f"--gpu {a.gpu}: this box has GPU {', '.join(map(str, sorted(known)))}")
+    dirs = [Path(p).resolve() for p in a.build_dir]
+    tags = [sycl_impl_of(d).lower() or f"side{i}" for i, d in enumerate(dirs)]
+    if tags[0] == tags[1]:
+        tags = ["base", "new"]
+    stem = a.campaign or time.strftime(f"ab-{tags[0]}-{tags[1]}-%Y%m%d-%H%M%S")
+    cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), a.grid)
+    if a.dry_run:
+        print(f"grid: {a.grid.to_dict()}")
+        print(f"{len(cells)} cells x 2 builds: {', '.join(f'{t}={d}' for t, d in zip(tags, dirs))}")
+        return
+    camps = [make_campaign(a, [d], f"{stem}-{t}") for d, t in zip(dirs, tags)]
+    logs = [open(c.dir / "run.log", "a") for c in camps]
+
+    def log(msg):
+        print(msg, flush=True)
+        for f in logs:
+            f.write(msg + "\n")
+            f.flush()
+
+    for d in dirs:
+        log("binaries: " + describe_build(build_info(d)))
+    try:
+        Runner(camps[0], [dirs[0]], a.gpus, guard=not a.no_guard, backend=a.backend, log=log,
+               sides=[(c, [d]) for c, d in zip(camps, dirs)]).run()
+    finally:
+        for f in logs:
+            f.close()
+    cmp = compare.create(Path(a.root), stem, str(camps[0].dir), str(camps[1].dir), exact=True)
+    print(compare.report(cmp))
+    if not a.no_plot:
+        from plots import render_all
+        import style
+        if a.no_tex:
+            style.apply(usetex=False)
+        render_all(cmp)
+        cmp.set_status(compare.KIND, plotted=time.time())
+        print(f"figures: {cmp.figures}")
+    print(f"comparison {stem}: {', '.join(c.name for c in camps)}")
 
 
 def cmd_plot(a):
@@ -245,7 +311,7 @@ def cmd_info(a):
     import json
     from store import list_campaigns
     print(f"benchviz from {REPO}")
-    dirs = default_build_dirs()
+    dirs = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
     if not dirs:
         print("no build directory found (looked in build/, build/presets/*)")
     for d in dirs:
@@ -267,7 +333,8 @@ def cmd_info(a):
                   f"{cfg['provenance'].get('ref_label')} ({cfg['base']})")
             continue
         builds = prov.get("builds") or []
-        b = ", ".join(f"~{x.get('built_from', '?')}{' STALE' if x.get('stale') else ''}" for x in builds) \
+        b = ", ".join(f"{impl_name(x.get('sycl_impl', '')) + ' ' if x.get('sycl_impl') else ''}"
+                      f"~{x.get('built_from', '?')}{' STALE' if x.get('stale') else ''}" for x in builds) \
             or "unrecorded (made before build provenance)"
         print(f"  {name:28s} {state:11s} {st.get('done', 0)}/{st.get('total', 0)}  build {b}")
 
@@ -285,31 +352,16 @@ def main():
 
     r = sub.add_parser("run", parents=[common], help="measure a campaign (resumes if it exists)")
     r.add_argument("--campaign", help="name; default <backend>-<timestamp>")
-    r.add_argument("--ops", default="all", help=f"comma list or 'all' ({','.join(OPS)})")
-    r.add_argument("--types", default="all", help="comma list of float,double,cfloat,cdouble or 'all'")
-    r.add_argument("--preset", default="quick", choices=list(PRESETS), help="starting grid; flags below override it")
-    r.add_argument("--orders", help="n values: '16,32,64', '4:512' (doubling), '8:128:8' (step 8)")
-    r.add_argument("--batch-mode", choices=["ladder", "list", "saturated"],
-                   help="ladder: batch-min * step^k up to the cap; list: --batches; saturated: one batch per n at the cap")
-    r.add_argument("--batches", help="explicit batch list (implies --batch-mode list), same syntax as --orders")
-    r.add_argument("--batch-min", type=int)
-    r.add_argument("--batch-max", type=int, help="upper cap on batch, before the memory cap")
-    r.add_argument("--batch-step", type=int, help="ladder factor (2 = every power of two)")
-    r.add_argument("--reps", type=int, help="timed repetitions per arm-cell")
-    r.add_argument("--mem-gib", type=float, help="per-arm device-memory budget that caps batch")
-    r.add_argument("--rect", action=argparse.BooleanOptionalAction, default=None,
-                   help="also sweep the rectangular ops over m x n (or n x k) at the saturated batch "
-                        "(on in every preset)")
-    r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
-    r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
-    r.add_argument("--gpu", default="1", help="GPU index, or a list (0,1) to split the cells across cards; "
-                   "both arms of a cell always share a card (default 1)")
-    r.add_argument("--build-dir", action="append", help="where the benchmark binaries are (repeatable)")
-    r.add_argument("--no-guard", action="store_true", help="skip gpu_guard.sh (exclusive-GPU check)")
-    r.add_argument("--no-plot", action="store_true")
+    add_measure_args(r)
     r.add_argument("--replot-s", type=float, default=8.0)
-    r.add_argument("--dry-run", action="store_true", help="print the grid and exit")
     r.set_defaults(fn=cmd_run)
+
+    ab = sub.add_parser("ab", parents=[common],
+                        help="two builds (e.g. DPC++ vs AdaptiveCpp), interleaved cell by cell, then compared")
+    ab.add_argument("--campaign", help="name stem; the builds' campaigns are <stem>-<impl>, the comparison <stem>")
+    add_measure_args(ab)
+    ab.add_argument("--no-tex", action="store_true", help="mathtext instead of LaTeX")
+    ab.set_defaults(fn=cmd_ab)
 
     pl = sub.add_parser("plot", parents=[common], help="render all figures of a campaign")
     pl.add_argument("campaign")
@@ -356,6 +408,7 @@ def main():
     s.set_defaults(fn=cmd_serve)
 
     i = sub.add_parser("info", parents=[common], help="which build runs would use, and each campaign's state")
+    i.add_argument("--build-dir", action="append", help="describe this build instead of the default search (repeatable)")
     i.set_defaults(fn=cmd_info)
 
     lo = sub.add_parser("list-ops", parents=[common])
@@ -363,6 +416,33 @@ def main():
 
     a = p.parse_args()
     a.fn(a)
+
+
+def add_measure_args(r):
+    """The grid, device and build flags `run` and `ab` share."""
+    r.add_argument("--ops", default="all", help=f"comma list or 'all' ({','.join(OPS)})")
+    r.add_argument("--types", default="all", help="comma list of float,double,cfloat,cdouble or 'all'")
+    r.add_argument("--preset", default="quick", choices=list(PRESETS), help="starting grid; flags below override it")
+    r.add_argument("--orders", help="n values: '16,32,64', '4:512' (doubling), '8:128:8' (step 8)")
+    r.add_argument("--batch-mode", choices=["ladder", "list", "saturated"],
+                   help="ladder: batch-min * step^k up to the cap; list: --batches; saturated: one batch per n at the cap")
+    r.add_argument("--batches", help="explicit batch list (implies --batch-mode list), same syntax as --orders")
+    r.add_argument("--batch-min", type=int)
+    r.add_argument("--batch-max", type=int, help="upper cap on batch, before the memory cap")
+    r.add_argument("--batch-step", type=int, help="ladder factor (2 = every power of two)")
+    r.add_argument("--reps", type=int, help="timed repetitions per arm-cell")
+    r.add_argument("--mem-gib", type=float, help="per-arm device-memory budget that caps batch")
+    r.add_argument("--rect", action=argparse.BooleanOptionalAction, default=None,
+                   help="also sweep the rectangular ops over m x n (or n x k) at the saturated batch "
+                        "(on in every preset)")
+    r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
+    r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
+    r.add_argument("--gpu", default="1", help="GPU index, or a list (0,1) to split the cells across cards; "
+                   "both arms of a cell always share a card (default 1)")
+    r.add_argument("--build-dir", action="append", help="where the benchmark binaries are (repeatable)")
+    r.add_argument("--no-guard", action="store_true", help="skip gpu_guard.sh (exclusive-GPU check)")
+    r.add_argument("--no-plot", action="store_true")
+    r.add_argument("--dry-run", action="store_true", help="print the grid and exit")
 
 
 if __name__ == "__main__":

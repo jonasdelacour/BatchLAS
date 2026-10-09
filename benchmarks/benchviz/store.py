@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -59,12 +60,23 @@ def build_info(build_dir: Path) -> Dict[str, object]:
                 info["compiler"] = line.split("=", 1)[1]
             elif line.startswith("CMAKE_BUILD_TYPE:"):
                 info["build_type"] = line.split("=", 1)[1] or "(none)"
+            elif line.startswith("BATCHLAS_SYCL_IMPL_RESOLVED:"):
+                info["sycl_impl"] = line.split("=", 1)[1]
     info.update(_compile_flags(b))
+    if not info.get("sycl_impl"):  # trees configured before BATCHLAS_SYCL_IMPL existed
+        info["sycl_impl"] = _IMPL_BY_TARGET_FLAG.get(info.get("sycl_targets_flag"), "")
+        info["sycl_impl_inferred"] = True
+    info.pop("sycl_targets_flag", None)
+    info.update(_toolchain_versions(info.get("compiler", ""), info["sycl_impl"]))
+    info["fp_contract_effective"] = effective_fp_contract(info)
     info["warnings"] = build_warnings(info, _has_nvidia_gpu())
     if src is None or not (src / ".git").exists():
         return info
     git = ("git", "-C", str(src))
     info["source"] = str(src)
+    if info["sycl_impl"] == "ACPP":  # a queue property, not an env knob: recorded from the source
+        info["acpp_coarse_grained_events"] = bool(
+            _sh(*git, "grep", "-l", "coarse_grained_events", "--", "src", "include"))
     info["branch"] = _sh(*git, "rev-parse", "--abbrev-ref", "HEAD")
     info["head"] = _sh(*git, "rev-parse", "--short", "HEAD")
     sha = _sh(*git, "rev-list", "-1", f"--before={int(built)}", "HEAD")
@@ -92,16 +104,83 @@ def _compile_flags(b: Path) -> Dict[str, object]:
     if not flags.exists():
         flags = next(iter(sorted((b / "src" / "CMakeFiles").glob("*/flags.make"))), None)
     if flags and flags.exists():
-        text = " ".join(l for l in flags.read_text(errors="replace").splitlines() if l.startswith("CXX_FLAGS"))
-        models = [t.split("=", 1)[1] for t in text.split() if t.startswith("-ffp-model=")]
+        toks = " ".join(l for l in flags.read_text(errors="replace").splitlines() if l.startswith("CXX_FLAGS")).split()
+        models = [t.split("=", 1)[1] for t in toks if t.startswith("-ffp-model=")]
         out["fp_model"] = models[-1] if models else "(compiler default)"  # the last one wins
-        targets = [t.split("=", 1)[1] for t in text.split() if t.startswith("-fsycl-targets=")]
-        out["sycl_targets"] = targets[-1] if targets else ""
+        contract = [t.split("=", 1)[1] for t in toks if t.startswith("-ffp-contract=")]
+        out["fp_contract"] = contract[-1] if contract else "(compiler default)"
+        out["fp_flags"] = [t for t in toks if t.startswith(_FP_FLAG_PREFIXES)]
+        out["sycl_targets"] = ""
+        for t in toks:
+            if t.startswith(("-fsycl-targets=", "--acpp-targets=")):
+                out["sycl_targets_flag"], out["sycl_targets"] = t.split("=", 1)
     return out
+
+
+# Every flag that changes floating-point results, recorded in command-line order.
+_FP_FLAG_PREFIXES = ("-ffp-", "-ffast-math", "-fno-fast-math", "-fcx-", "-fno-cx-", "-ffinite-math",
+                     "-fno-honor-", "-funsafe-math", "-fdenormal-fp-math", "-fno-signed-zeros",
+                     "-freciprocal-math", "-fapprox-func")
+
+IMPL_NAMES = {"DPCPP": "DPC++", "ACPP": "AdaptiveCpp"}
+_IMPL_BY_TARGET_FLAG = {"--acpp-targets": "ACPP", "-fsycl-targets": "DPCPP"}
+
+
+def sycl_impl_of(build_dir: Path) -> str:
+    """DPCPP or ACPP, as the tree was configured (cheap: no compiler call)."""
+    cache = Path(build_dir) / "CMakeCache.txt"
+    if cache.exists():
+        for line in cache.read_text(errors="replace").splitlines():
+            if line.startswith("BATCHLAS_SYCL_IMPL_RESOLVED:"):
+                return line.split("=", 1)[1]
+    return _IMPL_BY_TARGET_FLAG.get(_compile_flags(Path(build_dir)).get("sycl_targets_flag"), "")
+
+
+def impl_name(impl: str) -> str:
+    return IMPL_NAMES.get(impl or "", impl or "")
+
+
+def _toolchain_versions(compiler: str, impl: str) -> Dict[str, str]:
+    """The compiler's own --version head, and the SYCL implementation's release."""
+    if not compiler:
+        return {"compiler_version": "", "sycl_impl_version": ""}
+    head = []
+    for line in _sh(compiler, "--version").splitlines():
+        if line.startswith(("Target:", "Thread model:", "InstalledDir:")):
+            break
+        if line.strip():
+            head.append(line.strip())
+    out = {"compiler_version": " ".join(head)}
+    out["sycl_impl_version"] = out["compiler_version"]  # DPC++: the clang build is the release
+    m = re.search(r"DPC\+\+ compiler (\S+(?: \(pre-release\))?).*?intel/llvm(?:\.git)? ([0-9a-f]{7,})",
+                  out["compiler_version"])
+    if m:
+        out["sycl_impl_version"] = f"{m.group(1)} intel/llvm {m.group(2)[:8]}"
+    if impl == "ACPP":
+        out["sycl_impl_version"] = ""
+        for line in _sh(compiler, "--acpp-version").splitlines():
+            if line.strip().startswith("AdaptiveCpp version:"):
+                out["sycl_impl_version"] = line.split(":", 1)[1].strip()
+    return out
+
+
+def effective_fp_contract(info: dict) -> str:
+    """What the device code was contracted with: the flag, else the driver's default at Release.
+    The acpp driver adds -ffp-contract=fast at -O2 and above; clang (DPC++) defaults to on."""
+    if info.get("fp_contract") and info["fp_contract"] != "(compiler default)":
+        return info["fp_contract"]
+    return {"ACPP": "fast", "DPCPP": "on"}.get(info.get("sycl_impl", ""), "?")
 
 
 def _has_nvidia_gpu() -> bool:
     return bool(_sh("nvidia-smi", "-L"))
+
+
+def _targets_reach_nvidia(info: dict) -> bool:
+    t = str(info.get("sycl_targets", ""))
+    if info.get("sycl_impl") == "ACPP":  # generic (SSCP) JIT-compiles for whatever the runtime finds
+        return any(k in t for k in ("generic", "cuda", "ptx"))
+    return "nvptx" in t
 
 
 def build_warnings(info: dict, nvidia_box: bool) -> List[str]:
@@ -113,10 +192,36 @@ def build_warnings(info: dict, nvidia_box: bool) -> List[str]:
     if info.get("compiler_id") == "IntelLLVM" and "fp_model" in info and info["fp_model"] != "precise":
         w.append(f"icpx build without -ffp-model=precise (fp model: {info['fp_model']}): device code "
                  "calls sycl::fma and barriers out of line, native kernels run 2-15x slow")
-    if nvidia_box and "sycl_targets" in info and "nvptx" not in str(info["sycl_targets"]):
+    if info.get("sycl_impl") == "ACPP" and "fp_contract" in info and info.get("fp_contract_effective") != "on":
+        w.append(f"acpp build without -ffp-contract=on (fp contract: {info.get('fp_contract_effective')}): "
+                 "the acpp driver fuses across statements at -O2+, so results and timings are not like for "
+                 "like with DPC++ (reconfigure from a tree whose cmake/BatchLASSyclAcpp.cmake sets it)")
+    if nvidia_box and "sycl_targets" in info and not _targets_reach_nvidia(info):
         w.append(f"NVIDIA GPU present but SYCL targets are '{info['sycl_targets'] or 'none'}': "
                  "a CPU-only build (put /opt/dpcpp-cuda/lib first on LD_LIBRARY_PATH and reconfigure)")
     return w
+
+
+# Runtime knobs of an acpp build (docs/design/sycl-implementations.md, section 7). benchviz sets these
+# defaults for every acpp process unless the environment already sets them; the environment wins.
+ACPP_ENV_DEFAULTS = {"ACPP_ADAPTIVITY_LEVEL": "1", "ACPP_RT_SCHEDULER": "direct"}
+
+
+def acpp_env(campaign_dir: Optional[Path]) -> Dict[str, str]:
+    """The ACPP_* variables an acpp process of this campaign runs with. The JIT/adaptivity
+    database is per campaign (ACPP_APPDB_DIR) unless the environment names one."""
+    env = dict(ACPP_ENV_DEFAULTS)
+    if campaign_dir is not None:
+        env["ACPP_APPDB_DIR"] = str(Path(campaign_dir) / "acpp-appdb")
+    env.update({k: v for k, v in os.environ.items() if k.startswith(("ACPP_", "HIPSYCL_"))})
+    return env
+
+
+def acpp_env_record(campaign_dir: Optional[Path]) -> Dict[str, object]:
+    """acpp_env() as provenance: the values, and which came from the environment."""
+    env = acpp_env(campaign_dir)
+    return {"vars": env, "from_environment": sorted(k for k in env if k in os.environ),
+            "appdb_per_campaign": "ACPP_APPDB_DIR" not in os.environ}
 
 
 def harness_targets() -> List[str]:
@@ -130,9 +235,21 @@ def describe_build(bi: dict) -> str:
     s = f"{bi['dir']}  built {bi.get('built')}"
     if bi.get("built_from"):
         s += f" from ~{bi['built_from']} ({bi.get('branch')}, HEAD {bi.get('head')})"
+    if bi.get("sycl_impl"):
+        how = " (inferred from flags)" if bi.get("sycl_impl_inferred") else ""
+        s += f"\n  SYCL implementation {impl_name(bi['sycl_impl'])}{how} {bi.get('sycl_impl_version') or '?'}"
+    if bi.get("compiler_version") and bi["compiler_version"] != bi.get("sycl_impl_version"):
+        s += f"\n  compiler {bi.get('compiler')}: {bi['compiler_version']}"
     if bi.get("build_type") or bi.get("compiler_id"):
         s += f"\n  {bi.get('compiler_id', '?')} {bi.get('build_type', '?')}, fp model {bi.get('fp_model', '?')}," \
+             f" fp contract {bi.get('fp_contract', '?')} (effective {bi.get('fp_contract_effective', '?')})," \
              f" targets {bi.get('sycl_targets', '?')}"
+    if bi.get("sycl_impl") == "ACPP":
+        env = dict(bi.get("acpp_env", {}).get("vars") or acpp_env(None))
+        env.setdefault("ACPP_APPDB_DIR", "<campaign>/acpp-appdb")
+        s += "\n  acpp runtime: " + " ".join(f"{k}={v}" for k, v in sorted(env.items()))
+        if "acpp_coarse_grained_events" in bi:
+            s += f", coarse-grained events {'used' if bi['acpp_coarse_grained_events'] else 'not used'}"
     for w in bi.get("warnings") or []:
         s += f"\n  WARNING: {w}"
     if bi.get("behind_main"):

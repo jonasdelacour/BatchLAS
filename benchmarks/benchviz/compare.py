@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from ops import OPS
-from store import Campaign, discover_logs
+from store import Campaign, discover_logs, impl_name
 
 KIND = "compare"
 _SHAPE = ("op", "dtype", "m", "n", "nrhs")
@@ -121,15 +121,59 @@ def build_label(cfg: dict) -> str:
     return cfg.get("name", "?")
 
 
+# How each log's binaries were compiled; a comparison carries these instead of dropping them.
+TOOLCHAIN_KEYS = ("sycl_impl", "sycl_impl_version", "compiler_id", "compiler_version", "build_type",
+                  "fp_model", "fp_contract", "fp_contract_effective", "fp_flags", "sycl_targets", "built_from")
+
+
+def toolchain(cfg: dict) -> dict:
+    """The first recorded build's toolchain, plus the ACPP_* knobs its runs had."""
+    builds = (cfg.get("provenance") or {}).get("builds") or []
+    if not builds:
+        return {}
+    b = builds[0]
+    out = {k: b[k] for k in TOOLCHAIN_KEYS if k in b}
+    if b.get("acpp_env"):
+        out["acpp_env"] = b["acpp_env"].get("vars", {})
+    return out
+
+
+def _toolchain_warnings(tb: dict, tn: dict) -> List[str]:
+    """Differences besides the one under test. An implementation A/B expects the
+    implementation, its version, the compiler and the targets to differ, nothing else."""
+    w = []
+    impl_ab = bool(tb.get("sycl_impl")) and bool(tn.get("sycl_impl")) and tb["sycl_impl"] != tn["sycl_impl"]
+    expected = {"sycl_impl_version", "compiler_version", "sycl_targets", "built_from"} if impl_ab else {"built_from"}
+    for k in ("build_type", "fp_model", "fp_contract_effective", "built_from", "sycl_impl_version",
+              "compiler_version", "sycl_targets"):
+        if k in expected or k not in tb or k not in tn or tb[k] == tn[k]:
+            continue
+        w.append(f"different {k.replace('_', ' ')}: {tb[k] or '(none)'} vs {tn[k] or '(none)'}")
+    if impl_ab and tb.get("built_from") and tn.get("built_from") and tb["built_from"] != tn["built_from"]:
+        w.append(f"the two builds are from different commits (~{tb['built_from']} vs ~{tn['built_from']}): "
+                 "the ratio mixes the implementation with source changes")
+    ea, eb = tb.get("acpp_env") or {}, tn.get("acpp_env") or {}
+    for k in ("ACPP_ADAPTIVITY_LEVEL", "ACPP_RT_SCHEDULER"):
+        if ea and eb and ea.get(k) != eb.get(k):
+            w.append(f"different {k}: {ea.get(k)} vs {eb.get(k)}")
+    return w
+
+
 def _same_build(a: dict, b: dict) -> bool:
     ba = [(x.get("dir"), x.get("built")) for x in a.get("provenance", {}).get("builds") or []]
     bb = [(x.get("dir"), x.get("built")) for x in b.get("provenance", {}).get("builds") or []]
     return bool(ba) and ba == bb
 
 
-def _label(cfg: dict, arm: str, other_arm: str) -> str:
-    """The build, plus the arm whenever it is not BatchLAS on both sides."""
+def _label(cfg: dict, arm: str, other_arm: str, other_cfg: dict = None) -> str:
+    """The build, plus the arm whenever it is not BatchLAS on both sides. When the
+    two logs differ in SYCL implementation, the implementation names the build,
+    with the commit only when the commits differ too."""
     lab = build_label(cfg)
+    mine, theirs = toolchain(cfg), toolchain(other_cfg or {})
+    if mine.get("sycl_impl") and theirs.get("sycl_impl") and mine["sycl_impl"] != theirs["sycl_impl"]:
+        same_src = mine.get("built_from") and mine.get("built_from") == theirs.get("built_from")
+        lab = impl_name(mine["sycl_impl"]) + ("" if same_src else f" ({lab})")
     if arm != other_arm or arm == "vendor":
         lab += " vendor" if arm == "vendor" else " BatchLAS"
     return lab
@@ -151,13 +195,16 @@ def create(root: Path, name: str, base: str, new: str, base_arm: str = "batchlas
         raise ValueError("that compares a log's arm with itself")
     if srcs["base"].get("backend", "cuda") != srcs["new"].get("backend", "cuda"):
         raise ValueError("the two logs ran on different backends")
-    lb, ln = _label(srcs["base"], base_arm, new_arm), _label(srcs["new"], new_arm, base_arm)
+    lb = _label(srcs["base"], base_arm, new_arm, srcs["new"])
+    ln = _label(srcs["new"], new_arm, base_arm, srcs["base"])
     if lb == ln:  # the same commit, e.g. a rerun or a rebuild: say which log
         lb, ln = f"{lb} ({srcs['base']['name']})", f"{ln} ({srcs['new']['name']})"
     pb, pn = srcs["base"].get("provenance", {}), srcs["new"].get("provenance", {})
+    tb, tn = toolchain(srcs["base"]), toolchain(srcs["new"])
     warnings = []
     if pb.get("device") and pn.get("device") and pb["device"] != pn["device"]:
         warnings.append(f"different devices: {pb['device']} vs {pn['device']}")
+    warnings += _toolchain_warnings(tb, tn)
     if base_arm == new_arm == "batchlas" and _same_build(srcs["base"], srcs["new"]):
         warnings.append("both logs measured the same binaries: every speedup here is run-to-run noise")
     gb, gn = (srcs[r].get("grid") or {} for r in ("base", "new"))
@@ -173,9 +220,9 @@ def create(root: Path, name: str, base: str, new: str, base_arm: str = "batchlas
             "kind": KIND, "ref_label": lb, "new_label": ln, "warnings": warnings,
             "base_arm": base_arm, "new_arm": new_arm,
             "device": pn.get("device"), "driver": pn.get("driver"), "vendor_label": pn.get("vendor_label", ""),
-            "base": {"campaign": srcs["base"]["name"], "path": paths["base"],
+            "base": {"campaign": srcs["base"]["name"], "path": paths["base"], "toolchain": tb,
                      **{k: pb.get(k) for k in ("builds", "git_sha", "started", "device", "driver")}},
-            "new": {"campaign": srcs["new"]["name"], "path": paths["new"],
+            "new": {"campaign": srcs["new"]["name"], "path": paths["new"], "toolchain": tn,
                     **{k: pn.get(k) for k in ("builds", "git_sha", "started", "device", "driver")}},
             "started": time.strftime("%Y-%m-%d %H:%M:%S"),
         },
@@ -262,6 +309,15 @@ def report(camp: Campaign) -> str:
     prov = cfg["provenance"]
     w = paired(camp.rows())
     lines = [f"{prov['new_label']} vs {prov['ref_label']}: speedup > 1x means {prov['new_label']} is faster"]
+    for role, lab in (("base", prov["ref_label"]), ("new", prov["new_label"])):
+        t = (prov.get(role) or {}).get("toolchain") or {}
+        if t:
+            impl, ver = impl_name(t.get("sycl_impl", "")) or "?", t.get("sycl_impl_version") or ""
+            lines.append(f"  {lab}: {ver if ver.startswith(impl) else f'{impl} {ver}'.strip()}, "
+                         f"{t.get('build_type', '?')}, fp model {t.get('fp_model', '?')}, fp contract "
+                         f"{t.get('fp_contract_effective', '?')}, targets {t.get('sycl_targets', '?')}, "
+                         f"~{t.get('built_from', '?')}"
+                         + ("".join(f", {k}={v}" for k, v in sorted((t.get("acpp_env") or {}).items()))))
     for msg in prov.get("warnings", []):
         lines.append(f"  WARNING: {msg}")
     ctl = control(camp)
@@ -269,7 +325,10 @@ def report(camp: Campaign) -> str:
                  f"shapes only in the candidate {ctl['only_new']}, only in the baseline {ctl['only_base']}")
     v = ctl["vendor"]
     if v["geomean"]:
-        lines.append(f"  vendor control: {v['geomean']:.3f}x over {v['cells']} cells (1x = same machine state)")
+        impls = {((prov.get(r) or {}).get("toolchain") or {}).get("sycl_impl") for r in ("base", "new")}
+        what = ("each implementation's vendor interop path, not only the machine" if len(impls - {None, ""}) > 1
+                else "1x = same machine state")
+        lines.append(f"  vendor control: {v['geomean']:.3f}x over {v['cells']} cells ({what})")
     s = saturated(w) if not w.empty else w
     if s.empty:
         lines.append("  no shape measured in both logs")

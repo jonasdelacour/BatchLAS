@@ -46,6 +46,7 @@ struct Options {
     SteqrUpdateScheme scheme = SteqrUpdateScheme::PG;
     std::string cta_shift = "wilkinson"; // lapack | wilkinson
     std::string output = "output/accuracy/steqr_accuracy.csv";
+    std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
 };
 
 Options parse_args(int argc, char** argv) {
@@ -59,7 +60,9 @@ Options parse_args(int argc, char** argv) {
             return "";
         };
 
-        if (starts_with(arg, "--impl")) {
+        if (starts_with(arg, "--inputs")) {
+            opt.inputs = get_value(arg);
+        } else if (starts_with(arg, "--impl")) {
             opt.impl = get_value(arg);
         } else if (starts_with(arg, "--scheme")) {
             const auto val = to_lower(get_value(arg));
@@ -107,7 +110,8 @@ Options parse_args(int argc, char** argv) {
                       << "  --seed SEED\n"
                       << "  --max-sweeps N\n"
                       << "  --cta-shift lapack|wilkinson\n"
-                      << "  --output PATH\n";
+                      << "  --output PATH\n"
+                      << "  --inputs DIR  (write each chunk's input on first use, read it on later runs)\n";
             std::exit(0);
         }
     }
@@ -229,7 +233,7 @@ int run_accuracy(const Options& opt) {
         return 4;
     }
 
-    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,relerr,log10_relerr\n";
+    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,relerr,log10_relerr,input_hash\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -263,6 +267,8 @@ int run_accuracy(const Options& opt) {
             MatrixView<Real, MatrixFormat::Dense>::copy(*q, dense_A_view.batch_item(b), A_b.view().batch_item(0)).wait();
         }
         q->wait();
+        accuracy::share_inputs(opt.inputs, sample_id, dense_A_view);
+        const auto in_hash = accuracy::input_hashes(dense_A_view);
 
         auto extract_diag = [&](Vector<Real>& d_out, Vector<Real>& e_out) {
             auto a_view = dense_A_view.kernel_view();
@@ -391,7 +397,8 @@ int run_accuracy(const Options& opt) {
                     << cond << ","
                     << log10_cond << ","
                     << max_rel << ","
-                    << log10_rel << "\n";
+                    << log10_rel << ","
+                    << in_hash[static_cast<std::size_t>(b)] << "\n";
             };
 
             if (run_steqr) {

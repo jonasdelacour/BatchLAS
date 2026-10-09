@@ -428,12 +428,13 @@ class Rerender(unittest.TestCase):
 class BuildProvenance(unittest.TestCase):
     """A campaign records how its binaries were compiled, and flags the known-bad configs."""
 
-    def fake_build(self, compiler_id, flags, build_type="RelWithDebInfo"):
+    def fake_build(self, compiler_id, flags, build_type="RelWithDebInfo", impl=None, compiler="/x/cxx"):
         b = Path(tempfile.mkdtemp(dir=self.tmp.name))
         (b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir").mkdir(parents=True)
         (b / "CMakeFiles" / "3.28.3").mkdir(parents=True)
         (b / "src" / "libbatchlas_sycl.so.0.1.0").write_bytes(b"")
-        (b / "CMakeCache.txt").write_text(f"CMAKE_BUILD_TYPE:STRING={build_type}\nCMAKE_CXX_COMPILER:FILEPATH=/x/cxx\n")
+        (b / "CMakeCache.txt").write_text(f"CMAKE_BUILD_TYPE:STRING={build_type}\nCMAKE_CXX_COMPILER:FILEPATH={compiler}\n"
+                                          + (f"BATCHLAS_SYCL_IMPL_RESOLVED:INTERNAL={impl}\n" if impl else ""))
         (b / "CMakeFiles" / "3.28.3" / "CMakeCXXCompiler.cmake").write_text(
             f'set(CMAKE_CXX_COMPILER_ID "{compiler_id}")\nset(CMAKE_CXX_COMPILER_ID_RUN 1)\n')
         (b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir" / "flags.make").write_text(f"CXX_FLAGS = {flags}\n")
@@ -472,6 +473,150 @@ class BuildProvenance(unittest.TestCase):
         flags = "-ffp-model=precise -fsycl-targets=spir64_x86_64"
         self.assertIn("CPU-only", " ".join(self.info("IntelLLVM", flags, nvidia=True)["warnings"]))
         self.assertEqual(self.info("IntelLLVM", flags, nvidia=False)["warnings"], [])
+
+    def fake_compiler(self):
+        exe = Path(self.tmp.name) / "acpp"
+        exe.write_text('#!/bin/sh\nif [ "$1" = --acpp-version ]; then\n'
+                       '  echo "acpp [driver]"; echo "  AdaptiveCpp version: 25.10.0+git.9f842c7"\n'
+                       'else echo "Ubuntu clang version 20.1.2"; echo "Target: x86_64"; fi\n')
+        exe.chmod(0o755)
+        return exe
+
+    def acpp(self, flags, nvidia=True):
+        return self.info("Clang", flags, nvidia=nvidia, impl="ACPP", compiler=self.fake_compiler())
+
+    def test_acpp_build_records_implementation_versions_and_targets(self):
+        i = self.acpp("-O3 --acpp-targets=generic -include/x/annexg_complex.hh -ffp-contract=on")
+        self.assertEqual((i["sycl_impl"], i["sycl_impl_version"], i["compiler_version"]),
+                         ("ACPP", "25.10.0+git.9f842c7", "Ubuntu clang version 20.1.2"))
+        self.assertEqual((i["sycl_targets"], i["fp_contract"], i["fp_contract_effective"], i["fp_flags"]),
+                         ("generic", "on", "on", ["-ffp-contract=on"]))
+        self.assertNotIn("sycl_impl_inferred", i)
+        self.assertEqual(i["warnings"], [])   # generic reaches the GPU: not a CPU-only build
+
+    def test_acpp_without_the_matched_fp_contract_warns(self):
+        i = self.acpp("-O3 --acpp-targets=generic")
+        self.assertEqual(i["fp_contract_effective"], "fast")   # the acpp driver's own default at -O2+
+        self.assertEqual(len(i["warnings"]), 1)
+        self.assertIn("-ffp-contract=on", i["warnings"][0])
+        self.assertEqual(len(self.acpp("-O3 --acpp-targets=generic -ffp-contract=on -ffp-contract=fast")["warnings"]), 1)
+
+    def test_dpcpp_implementation_is_read_or_inferred(self):
+        i = self.info("Clang", "-O3 -fsycl-targets=nvptx64-nvidia-cuda", impl="DPCPP")
+        self.assertEqual((i["sycl_impl"], i["fp_contract_effective"]), ("DPCPP", "on"))
+        old = self.info("Clang", "-O3 -fsycl-targets=nvptx64-nvidia-cuda")   # configured before P1
+        self.assertEqual((old["sycl_impl"], old["sycl_impl_inferred"]), ("DPCPP", True))
+
+    def test_acpp_env_defaults_yield_to_the_environment(self):
+        import store
+        from unittest import mock
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(("ACPP_", "HIPSYCL_"))}
+        with mock.patch.dict(os.environ, clean, clear=True):
+            e = store.acpp_env(Path("/runs/c"))
+            self.assertEqual((e["ACPP_ADAPTIVITY_LEVEL"], e["ACPP_RT_SCHEDULER"], e["ACPP_APPDB_DIR"]),
+                             ("1", "direct", "/runs/c/acpp-appdb"))
+            os.environ.update(ACPP_ADAPTIVITY_LEVEL="2", ACPP_APPDB_DIR="/shared")
+            r = store.acpp_env_record(Path("/runs/c"))
+        self.assertEqual((r["vars"]["ACPP_ADAPTIVITY_LEVEL"], r["vars"]["ACPP_APPDB_DIR"]), ("2", "/shared"))
+        self.assertEqual((r["from_environment"], r["appdb_per_campaign"]),
+                         (["ACPP_ADAPTIVITY_LEVEL", "ACPP_APPDB_DIR"], False))
+
+
+class ImplementationAB(unittest.TestCase):
+    """DPC++ vs AdaptiveCpp: one grid, two builds, interleaved; the comparison names the implementations."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def camp(self, name, impl, sha="ddf0774", build_type="Release", contract="on", n=(64,)):
+        from store import Campaign
+        b = {"dir": f"/b/{name}", "built": "x", "built_from": sha, "sycl_impl": impl, "build_type": build_type,
+             "compiler_id": "Clang", "fp_model": "(compiler default)", "fp_contract_effective": contract,
+             "sycl_targets": "generic" if impl == "ACPP" else "nvptx64-nvidia-cuda"}
+        if impl == "ACPP":
+            b["acpp_env"] = {"vars": {"ACPP_ADAPTIVITY_LEVEL": "1", "ACPP_RT_SCHEDULER": "direct"}}
+        grid = Grid.from_dict({**PRESETS["quick"].to_dict(), "orders": ",".join(map(str, n)),
+                               "batch_mode": "list", "batches": "256", "rect": False})
+        return Campaign.create(self.root, name, {"ops": ["gemm"], "types": ["float"], "backend": "cuda",
+                                                 "grid": grid.to_dict(), "provenance": {"device": "RTX", "builds": [b]}})
+
+    def test_labels_name_the_implementations_and_carry_the_toolchain(self):
+        import compare
+        for name, impl, t in (("d", "DPCPP", 1.0), ("a", "ACPP", 2.0)):
+            c = self.camp(name, impl)
+            c.append(row("gemm", 64, "batchlas", t, batch=256))
+        cmp = compare.create(self.root, "ab", "d", "a", exact=True)
+        p = cmp.config["provenance"]
+        self.assertEqual((p["ref_label"], p["new_label"]), ("DPC++", "AdaptiveCpp"))
+        self.assertEqual(p["warnings"], [])
+        self.assertEqual((p["base"]["toolchain"]["sycl_impl"], p["new"]["toolchain"]["sycl_targets"]),
+                         ("DPCPP", "generic"))
+        self.assertEqual(p["new"]["toolchain"]["acpp_env"]["ACPP_RT_SCHEDULER"], "direct")
+        self.assertAlmostEqual(float(paired(cmp.rows()).speedup.iloc[0]), 0.5)
+        self.assertIn("AdaptiveCpp: AdaptiveCpp", compare.report(cmp))
+
+    def test_differences_besides_the_implementation_are_warned(self):
+        import compare
+        self.camp("d", "DPCPP")
+        self.camp("a", "ACPP", sha="1234567", build_type="RelWithDebInfo", contract="fast")
+        p = compare.create(self.root, "ab", "d", "a").config["provenance"]
+        self.assertEqual(p["new_label"], "AdaptiveCpp (Build 1234567)")
+        w = " | ".join(p["warnings"])
+        for needle in ("different build type", "different fp contract effective", "different commits"):
+            self.assertIn(needle, w)
+        self.assertEqual(len(p["warnings"]), 3)
+
+    def test_runner_interleaves_two_builds_and_alternates_the_order(self):
+        from unittest import mock
+        from runner import Runner
+        camps = [self.camp("d", "DPCPP", n=(64, 128)), self.camp("a", "ACPP", n=(64, 128))]
+        calls = []
+
+        def fake(_self, gpu, cell, arm, reps, tmp, side=0):
+            calls.append((cell.n, side, arm))
+            return dict(op=cell.op, dtype=cell.dtype, m=cell.m, n=cell.n, nrhs=cell.nrhs, batch=cell.batch,
+                        arm=arm, ok=True, time_ms=1.0, route="native:x", reason="ok", t=0.0)
+        with mock.patch("runner.detect_gpus", return_value=[]), mock.patch.object(Runner, "_run_arm", fake):
+            Runner(camps[0], [Path("/b/d")], [0], guard=False, backend="cuda", log=lambda m: None,
+                   sides=[(camps[0], [Path("/b/d")]), (camps[1], [Path("/b/a")])]).run()
+        self.assertEqual(calls, [(64, 0, "batchlas"), (64, 0, "vendor"), (64, 1, "batchlas"), (64, 1, "vendor"),
+                                 (128, 1, "batchlas"), (128, 1, "vendor"), (128, 0, "batchlas"), (128, 0, "vendor")])
+        self.assertEqual([len(c.rows()) for c in camps], [4, 4])
+        self.assertEqual([c.status()["state"] for c in camps], ["finished", "finished"])
+
+    def test_an_acpp_process_gets_the_knobs_and_its_row_records_jit(self):
+        import subprocess
+        from unittest import mock
+        from ops import Cell
+        from runner import ACPP_JIT_WARNING, Runner
+        b = Path(self.root) / "build-acpp"
+        (b / "benchmarks").mkdir(parents=True)
+        (b / "CMakeCache.txt").write_text("BATCHLAS_SYCL_IMPL_RESOLVED:INTERNAL=ACPP\n")
+        exe = b / "benchmarks" / "gemm_benchmark"
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        camp = self.camp("a", "ACPP")
+        seen = {}
+
+        def fake_exec(_self, gpu, argv, env, timeout):
+            seen.update(env)
+            csv_path = next(x.split("=", 1)[1] for x in argv if x.startswith("--csv="))
+            Path(csv_path).write_text("name,avg_ms,stddev_ms\nx,2.0,0.02\n")
+            return subprocess.CompletedProcess(argv, 0, "", f"[AdaptiveCpp Warning] {ACPP_JIT_WARNING}.")
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(("ACPP_", "HIPSYCL_"))}
+        with mock.patch.dict(os.environ, clean, clear=True), mock.patch("runner.detect_gpus", return_value=[]), \
+                mock.patch.object(Runner, "_exec", fake_exec), tempfile.TemporaryDirectory() as tmp:
+            r = Runner(camp, [b], [0], guard=False, backend="cuda")
+            rec = r._run_arm(0, Cell("gemm", "float", 64, 64, 0, 256), "batchlas", 3, tmp)
+        self.assertEqual((seen["ACPP_ADAPTIVITY_LEVEL"], seen["ACPP_RT_SCHEDULER"]), ("1", "direct"))
+        self.assertEqual(seen["ACPP_APPDB_DIR"], str(camp.dir / "acpp-appdb"))
+        self.assertIn("BATCHLAS_GEMM_ROUTE", seen)   # the arm's own pin is still there
+        self.assertEqual((rec["sycl_impl"], rec["acpp_jit"], rec["time_ms"]), ("ACPP", True, 2.0))
+        self.assertEqual(sorted(rec["acpp_env"]), ["ACPP_ADAPTIVITY_LEVEL", "ACPP_APPDB_DIR", "ACPP_RT_SCHEDULER"])
 
 
 if __name__ == "__main__":

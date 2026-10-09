@@ -797,9 +797,11 @@ $("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
 
 // Which binaries a run started now would measure. The checkout benchviz runs
 // from says nothing about this: a worktree's build/ can be days behind it.
+const IMPL = {DPCPP: "DPC++", ACPP: "AdaptiveCpp"};
 function buildLine(b) {
   if (b.error) return `${b.dir}: ${b.error}`;
-  return `~${b.built_from || "?"} · built ${b.built}` + (b.branch ? ` · ${b.branch}` : "");
+  const impl = b.sycl_impl ? `${IMPL[b.sycl_impl] || b.sycl_impl}${b.sycl_impl_version && b.sycl_impl === "ACPP" ? " " + b.sycl_impl_version.split("+")[0] : ""} · ` : "";
+  return `${impl}~${b.built_from || "?"} · built ${b.built}` + (b.build_type ? ` · ${b.build_type}` : "") + (b.branch ? ` · ${b.branch}` : "");
 }
 function campaignBuilds(p) {
   const bs = p.builds || [];
@@ -815,7 +817,8 @@ function showBuild() {
     const bad = b.stale || b.behind_main || b.error;
     el.textContent = "build " + buildLine(b) + (bad ? "  ⚠ behind" : "");
     el.className = "buildtag hide-md" + (bad ? " stale" : "");
-    el.title = bs.map(x => `${x.dir}\nsource ${x.source || "?"} (HEAD ${x.head || "?"})\ncompiler ${x.compiler || "?"}` +
+    el.title = bs.map(x => `${x.dir}\nsource ${x.source || "?"} (HEAD ${x.head || "?"})\ncompiler ${x.compiler || "?"}${x.compiler_version ? ` (${x.compiler_version})` : ""}` +
+      `\nfp contract ${x.fp_contract_effective || "?"}, targets ${x.sycl_targets || "?"}` +
       (lag(x) ? `\n${lag(x)}` : "")).join("\n\n") + `\n\nbenchviz code: ${meta.repo}`;
   }
   $("dbuild").innerHTML = !b ? `<div class="buildwarn">No build directory found; runs will fail.</div>`

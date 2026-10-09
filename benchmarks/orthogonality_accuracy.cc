@@ -44,6 +44,7 @@ struct Options {
     SteqrUpdateScheme scheme = SteqrUpdateScheme::PG;
     std::string cta_shift = "wilkinson";
     std::string output = "output/accuracy/orthogonality_accuracy.csv";
+    std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
 };
 
 Options parse_args(int argc, char** argv) {
@@ -57,7 +58,9 @@ Options parse_args(int argc, char** argv) {
             return "";
         };
 
-        if (starts_with(arg, "--impl")) {
+        if (starts_with(arg, "--inputs")) {
+            opt.inputs = get_value(arg);
+        } else if (starts_with(arg, "--impl")) {
             opt.impl = to_lower(get_value(arg));
         } else if (starts_with(arg, "--scheme")) {
             const auto val = to_lower(get_value(arg));
@@ -105,7 +108,8 @@ Options parse_args(int argc, char** argv) {
                       << "  --seed SEED\n"
                       << "  --max-sweeps N\n"
                       << "  --cta-shift lapack|wilkinson\n"
-                      << "  --output PATH\n";
+                      << "  --output PATH\n"
+                      << "  --inputs DIR  (write each chunk's input on first use, read it on later runs)\n";
             std::exit(0);
         }
     }
@@ -151,7 +155,7 @@ int run_accuracy(const Options& opt) {
         std::cerr << "Failed to open output file: " << opt.output << "\n";
         return 4;
     }
-    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,orthogonality,log10_orthogonality\n";
+    out << "sample,n,impl,backend,dtype,target_log10_cond,cond,log10_cond,orthogonality,log10_orthogonality,input_hash\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -161,7 +165,8 @@ int run_accuracy(const Options& opt) {
                          const UnifiedVector<Real>& conds,
                          const UnifiedVector<typename batchlas::base_type<Real>::type>& ortho_vals,
                          const char* impl_name,
-                         int cur_batch) {
+                         int cur_batch,
+                         const std::vector<std::string>& in_hash) {
         for (int b = 0; b < cur_batch; ++b) {
             const double cond = static_cast<double>(conds[static_cast<size_t>(b)]);
             const double log10_cond = std::log10(std::max(cond, 1e-300));
@@ -177,7 +182,8 @@ int run_accuracy(const Options& opt) {
                 << cond << ","
                 << log10_cond << ","
                 << orth << ","
-                << log10_orth << "\n";
+                << log10_orth << ","
+                << in_hash[static_cast<size_t>(b)] << "\n";
         }
     };
 
@@ -199,9 +205,11 @@ int run_accuracy(const Options& opt) {
                 cur_batch,
                 opt.seed + static_cast<unsigned int>(sample_id));
             q->wait();
+            accuracy::share_inputs(opt.inputs, sample_id, dense_A.view());
 
             const auto conds = cond<B>(*q, dense_A.view(), NormType::Spectral);
             q->wait();
+            const auto in_hash = accuracy::input_hashes(dense_A.view());
 
             auto run_ortho_case = [&](OrthoAlgorithm algo, const char* impl_name) {
                 auto Q = dense_A.clone();
@@ -209,7 +217,7 @@ int run_accuracy(const Options& opt) {
                 (void)ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), algo);
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, Q);
-                emit_rows(sample_id, target_log10s, conds, ortho_vals, impl_name, cur_batch);
+                emit_rows(sample_id, target_log10s, conds, ortho_vals, impl_name, cur_batch, in_hash);
             };
 
             if (run_ortho_chol2) run_ortho_case(OrthoAlgorithm::Chol2, "ortho_chol2");
@@ -228,7 +236,7 @@ int run_accuracy(const Options& opt) {
                 (void)syev<B>(*q, A.view(), eigvals.to_span(), {}, ws.to_span());
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, A);
-                emit_rows(sample_id, target_log10s, conds, ortho_vals, "syev", cur_batch);
+                emit_rows(sample_id, target_log10s, conds, ortho_vals, "syev", cur_batch, in_hash);
             }
 
             if (run_steqr || run_steqr_cta || run_stedc) {
@@ -257,7 +265,7 @@ int run_accuracy(const Options& opt) {
                                    eigvects);
                     q->wait();
                     const auto ortho_vals = orthogonality_residuals<B, Real>(*q, eigvects);
-                    emit_rows(sample_id, target_log10s, conds, ortho_vals, "steqr", cur_batch);
+                    emit_rows(sample_id, target_log10s, conds, ortho_vals, "steqr", cur_batch, in_hash);
                 }
 
                 if (run_steqr_cta) {
@@ -280,7 +288,7 @@ int run_accuracy(const Options& opt) {
                                        eigvects);
                     q->wait();
                     const auto ortho_vals = orthogonality_residuals<B, Real>(*q, eigvects);
-                    emit_rows(sample_id, target_log10s, conds, ortho_vals, cta_name, cur_batch);
+                    emit_rows(sample_id, target_log10s, conds, ortho_vals, cta_name, cur_batch, in_hash);
                 }
 
                 if (run_stedc) {
@@ -302,7 +310,7 @@ int run_accuracy(const Options& opt) {
                                    eigvects);
                     q->wait();
                     const auto ortho_vals = orthogonality_residuals<B, Real>(*q, eigvects);
-                    emit_rows(sample_id, target_log10s, conds, ortho_vals, "stedc", cur_batch);
+                    emit_rows(sample_id, target_log10s, conds, ortho_vals, "stedc", cur_batch, in_hash);
                 }
             }
 

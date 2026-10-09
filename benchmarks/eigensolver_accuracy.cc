@@ -54,6 +54,7 @@ struct Options {
     int syevx_neigs = -1;
     bool syevx_find_largest = false;
     std::string output = "output/accuracy/eigensolver_accuracy.csv";
+    std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
 };
 
 const char* scheme_name(SteqrUpdateScheme scheme) {
@@ -86,7 +87,9 @@ Options parse_args(int argc, char** argv) {
             return "";
         };
 
-        if (starts_with(arg, "--impl")) {
+        if (starts_with(arg, "--inputs")) {
+            opt.inputs = get_value(arg);
+        } else if (starts_with(arg, "--impl")) {
             opt.impl = to_lower(get_value(arg));
         } else if (starts_with(arg, "--scheme")) {
             const auto val = to_lower(get_value(arg));
@@ -157,7 +160,8 @@ Options parse_args(int argc, char** argv) {
                 << "  --syevx-extra-directions N\n"
                 << "  --syevx-neigs N\n"
                 << "  --syevx-find-largest 0|1\n"
-                << "  --output PATH\n";
+                << "  --output PATH\n"
+                << "  --inputs DIR  (write each chunk's input on first use, read it on later runs)\n";
             std::exit(0);
         }
     }
@@ -257,6 +261,7 @@ void emit_metrics_rows(std::ofstream& out,
     const auto ortho_num = orthogonality_residuals<B, Real>(q, Z);
 
     const double n_scale = static_cast<double>(n);
+    const auto in_hash = accuracy::input_hashes(A.view());
 
     for (int b = 0; b < batch; ++b) {
         const double cond = static_cast<double>(conds[static_cast<size_t>(b)]);
@@ -325,7 +330,8 @@ void emit_metrics_rows(std::ofstream& out,
             << max_rel << ","
             << log10_R << ","
             << log10_O << ","
-            << log10_rel << "\n";
+            << log10_rel << ","
+            << in_hash[static_cast<size_t>(b)] << "\n";
     }
 }
 
@@ -369,7 +375,7 @@ int run_accuracy(const Options& opt) {
         return 4;
     }
 
-    out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr\n";
+    out << "sample,n,neigs,impl,backend,dtype,scheme,cta_shift,target_log10_cond,cond,log10_cond,res_num,res_denom,ortho_num,ortho_denom,R,O,max_relerr,log10_R,log10_O,log10_relerr,input_hash\n";
     out << std::setprecision(12);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -391,6 +397,7 @@ int run_accuracy(const Options& opt) {
                 cur_batch,
                 opt.seed + static_cast<unsigned int>(sample_id));
             q->wait();
+            accuracy::share_inputs(opt.inputs, sample_id, A.view());
 
             const auto conds = cond<B>(*q, A.view(), NormType::Spectral);
             q->wait();

@@ -37,7 +37,7 @@ RESULTS = os.path.join("benchmarks", "results")
 DTYPES = ("cdouble", "cfloat", "double", "float")
 OPS = ("geqrf", "getrf", "getrs", "orgqr", "potrf", "posv", "gesv", "gemm",
        "syevx", "syev", "gesvd", "gesvdj", "getri", "trsm", "ormqr")
-MACHINES = {"rtx4090": "RTX 4090 (sm_89)"}
+MACHINES = {"rtx4090": "RTX 4090 (sm_89)", "sm120": "RTX PRO 6000 Blackwell (sm_120, threadripper02)"}
 DEFAULT_MACHINE = "RTX 4090 (sm_89), primary box — not recorded in file"
 LFS_HEADER = "version https://git-lfs.github.com/spec/v1"
 

@@ -20,6 +20,27 @@ inline double bench_beta() {
     return 1.0;
 }
 
+// BATCHLAS_BENCH_LD_PAD as in gemm_benchmark.cc: every ld = rows + pad, filled by a
+// host xorshift that does not depend on ld. Default 0 keeps Matrix::Random.
+inline int bench_ld_pad() {
+    const char* p = std::getenv("BATCHLAS_BENCH_LD_PAD");
+    return p ? std::atoi(p) : 0;
+}
+
+template <typename T>
+Matrix<T> bench_operand(size_t rows, size_t cols, size_t batch, int pad) {
+    if (pad == 0) return Matrix<T>::Random(rows, cols, false, batch);
+    Matrix<T> M(static_cast<int>(rows), static_cast<int>(cols), static_cast<int>(batch),
+                static_cast<int>(rows) + pad);
+    auto host = M.data();
+    uint32_t s = 0x9E3779B9u;
+    for (size_t i = 0; i < host.size(); ++i) {
+        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+        host[i] = static_cast<T>(static_cast<double>(s) / 4294967296.0 - 0.5);
+    }
+    return M;
+}
+
 inline Transpose transpose_from_arg(int value) {
     switch (value) {
     case 0:
@@ -65,9 +86,10 @@ static void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t b_rows = transB == Transpose::NoTrans ? k : n;
     const size_t b_cols = transB == Transpose::NoTrans ? n : k;
 
-    auto A = Matrix<T>::Random(a_rows, a_cols, false, batch);
-    auto Bm = Matrix<T>::Random(b_rows, b_cols, false, batch);
-    auto C = Matrix<T>::Random(m, n, false, batch);
+    const int pad = bench_ld_pad();
+    auto A = bench_operand<T>(a_rows, a_cols, batch, pad);
+    auto Bm = bench_operand<T>(b_rows, b_cols, batch, pad);
+    auto C = bench_operand<T>(m, n, batch, pad);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
