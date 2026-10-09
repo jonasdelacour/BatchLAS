@@ -17,6 +17,8 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+
 #include "../src/extensions/getrs_native.hh"
 #include "../src/ops/getrs/choice.hh"
 
@@ -53,16 +55,8 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
+using verify::up;
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -104,7 +98,7 @@ struct Sys {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -133,11 +127,11 @@ Sys<T> make_sys(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
-                if (i == j) p.f(it, i, j) = mk<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else p.f(it, i, j) = mk<T>(sg * d(gen) / R(s.n), d(gen) / R(s.n));
+                if (i == j) p.f(it, i, j) = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                else p.f(it, i, j) = verify::make<T>(sg * d(gen) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
-            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = verify::make<T>(u(gen), u(gen));
     }
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -152,46 +146,14 @@ Sys<T> make_sys(const Spec& s) {
     return p;
 }
 
-// ||op(M) X - B0|| / (||L|| ||U|| ||X|| + ||B0||) with M = P^-1 L U, applied factor by factor
-// (O(n^2 nrhs), so the capacity cases stay cheap). getrf's list swaps row k with ipiv[k] in
-// order, so P^-1 is the reversed walk; op(M) = op(U) op(L) P for T and C.
+// ||op(P^-1 L U) X - B0||_F / (||M||_F ||X||_F) for one item, M formed on the host from the factors.
 template <typename T>
 double residual(Sys<T>& p, int it) {
-    const int n = p.s.n, nr = p.s.nrhs;
-    const int rep = p.s.period > 0 ? it % p.s.period : it;
-    const auto& ip = p.ipiv[rep < int(p.ipiv.size()) ? rep : 0];
-    const Transpose t = p.s.trans;
-    auto L = [&](int i, int j) -> cd { return i == j ? cd(1) : (i > j ? up(p.f(it, i, j)) : cd(0)); };
-    auto U = [&](int i, int j) -> cd { return i <= j ? up(p.f(it, i, j)) : cd(0); };
-    auto op = [&](cd v) { return t == Transpose::ConjTrans ? std::conj(v) : v; };
-    double ln = 0, un = 0, xn = 0, bn = 0, num = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) ln += std::norm(L(i, j)), un += std::norm(U(i, j));
-    std::vector<cd> v(n), w(n);
-    for (int c = 0; c < nr; ++c) {
-        for (int i = 0; i < n; ++i) v[i] = up(p.x(it, i, c)), xn += std::norm(v[i]);
-        if (t == Transpose::NoTrans) {
-            for (int i = 0; i < n; ++i) { w[i] = 0; for (int k = i; k < n; ++k) w[i] += U(i, k) * v[k]; }
-            for (int i = 0; i < n; ++i) { v[i] = 0; for (int k = 0; k <= i; ++k) v[i] += L(i, k) * w[k]; }
-            for (int k = n - 1; k >= 0; --k) std::swap(v[k], v[ip[k]]);
-        } else {
-            for (int k = 0; k < n; ++k) std::swap(v[k], v[ip[k]]);
-            for (int i = 0; i < n; ++i) { w[i] = 0; for (int k = i; k < n; ++k) w[i] += op(L(k, i)) * v[k]; }
-            for (int i = 0; i < n; ++i) { v[i] = 0; for (int k = 0; k <= i; ++k) v[i] += op(U(k, i)) * w[k]; }
-        }
-        for (int i = 0; i < n; ++i) {
-            const cd b0 = up(p.b0[std::size_t(it) * p.sb + std::size_t(c) * p.ldb + i]);
-            num += std::norm(v[i] - b0);
-            bn += std::norm(b0);
-        }
-    }
-    const double den = std::sqrt(ln * un * xn) + std::sqrt(bn);
-    return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    const int n = p.s.n, nr = p.s.nrhs, items[] = {it};
+    const VectorView<std::int32_t> piv(p.p32(), n, p.s.batch, 1, n);
+    return verify::lu_solve_residual(verify::view(p.a.data(), n, n, p.lda, p.sa, p.s.batch), piv, p.s.trans,
+                                     verify::view(p.b.data(), n, nr, p.ldb, p.sb, p.s.batch),
+                                     verify::view(p.b0.data(), n, nr, p.ldb, p.sb, p.s.batch), items);
 }
 
 // Residuals of the checked items, everything outside B's footprint and A bit for bit, and for a
@@ -205,7 +167,7 @@ void expect_solved(Sys<T>& p, const std::string& what, const std::vector<T>* a0 
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
+        ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
     }
     for (std::size_t e = 0; e < p.b.size(); ++e) {
         const std::size_t off = e % std::size_t(p.sb), col = off / std::size_t(p.ldb), row = off % std::size_t(p.ldb);

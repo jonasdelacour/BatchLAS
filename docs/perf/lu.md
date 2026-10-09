@@ -660,6 +660,16 @@ Not established: float's 256 floor at batch 64..128 with the register leaf, and 
 
 Eight breaks were armed and observed red, including: dropping the `rowid >= j` candidate mask (an eliminated row wins), dropping barrier B2 (red from float m = 33), and restoring the `regs x wg <= 65536` cap (the cdouble launch fails with `UR_RESULT_ERROR_OUT_OF_RESOURCES`). Publishing the pivot row before the relabel stayed green, since it is a no-op refactor.
 
+| Break (R9, `getrf_panel_reg_device.hh`) | Red cell |
+|---|---|
+| (a) drop `cand`'s `rowid >= j` in the argmax | `RegPanelAgreesWithTheLocalMemoryLeaf`: differing ipiv, pivot ratio above 1 |
+| (b) `rowid = p` for both relabel arms | same test: two work-items claim one row, residual explodes |
+| (c) publish before the relabel | green (the publisher is the same physical item); the break with teeth selects on the pre-swap `rowid == p` |
+| (d) drop barrier B2 | same test, red from the two-sub-group panel m = 33 |
+| (e) `piv_item[j] = p + 1` (drop `piv_base`) | `RegPanelIpivAndInfoAreGlobalAtANonZeroPivBase`; every `piv_base == 0` cell stays green |
+| (f) `info_local = 0` unconditionally | `RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins`, on the second planted column only |
+| (g) store to `a[tid + k*ld]` instead of `a[rowid + k*ld]` | residual explodes at every cell that pivots |
+
 ### The P7 occupancy change moved 27 committed `getrf` baseline cells
 
 Arithmetic, no GPU: the advertised ceilings are 77 / 54 / 54 / 38 at target 4, and 155 / 109 / 109 / 77 at target 1. The committed P0 baselines (`benchmarks/results/factor_baseline_getrf_*.csv`, taken before P7) record `native:cta` up to the old ceilings:
