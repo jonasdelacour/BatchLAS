@@ -1,6 +1,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
 #include "accuracy_utils.hh"
+#include <batchlas/verify/reference.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
@@ -131,6 +132,21 @@ UnifiedVector<OutType> netlib_ref_eigs(const MatrixView<InType, MatrixFormat::De
                                    ws.to_span()).wait();
     ctx_cpu.wait();
     return ref_eigs;
+}
+
+template <typename InType>
+UnifiedVector<double> lapacke_ref_eigs(const MatrixView<InType, MatrixFormat::Dense>& A) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    UnifiedVector<double> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    for (int b = 0; b < batch; ++b) {
+        auto a_host = batchlas::verify::copy_item(A, b);
+        std::vector<double> w;
+        const bool ok = batchlas::verify::eigenvalues(n, a_host, w);
+        for (int i = 0; i < n; ++i)
+            out[static_cast<std::size_t>(i + b * n)] = ok ? w[static_cast<std::size_t>(i)] : std::numeric_limits<double>::quiet_NaN();
+    }
+    return out;
 }
 
 template <typename Real>
@@ -343,7 +359,7 @@ int run_accuracy(const Options& opt) {
         if (run_netlib_sterf) call_lapack_variant(eigs_netlib_sterf, "LAPACKE_xsterf", call_lapack_sterf<Real>);
         if (run_netlib_stedc) call_lapack_variant(eigs_netlib_stedc, "LAPACKE_xstedc", call_lapack_stedc<Real>);
 
-        const auto ref_eigs = netlib_ref_eigs<double>(dense_A.view());
+        const auto ref_eigs = lapacke_ref_eigs(dense_A.view());
         UnifiedVector<float> ref_eigs_f;
         if constexpr (std::is_same_v<Real, float>) {
             if (run_netlib32) {

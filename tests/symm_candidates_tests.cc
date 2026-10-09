@@ -2,6 +2,8 @@
 // docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/symm.hh>
@@ -124,11 +126,6 @@ Prob<T> make_prob(const Spec& s) {
     return p;
 }
 
-template <typename T>
-double tol(int k) {
-    return 64.0 * std::max(k, 1) * double(std::numeric_limits<T>::epsilon());
-}
-
 // Each checked item against a double host reference of the symmetric product (A mirrored from
 // its referenced triangle), every element outside C bit for bit, and for a repeating batch
 // every item bit-identical to its representative.
@@ -144,26 +141,24 @@ void expect_symm(const Prob<T>& p, const std::string& what) {
     } else {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
-    auto asym = [&](int it, int i, int j) {
-        return double(p.referenced(i, j) ? p.mem0[p.at(p.a, it, i, j)] : p.mem0[p.at(p.a, it, j, i)]);
+    // A mirrored from its referenced triangle by the library; operands and C0 from the pristine copy.
+    using namespace batchlas::verify;
+    auto at0 = [&](const Region& g) {
+        return MVof<T>(const_cast<T*>(p.mem0.data()) + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
     };
-    for (int it : items)
-        for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.m; ++i) {
-                double acc = 0, mag = 0;
-                for (int t = 0; t < k; ++t) {
-                    const double x = s.side == Side::Left ? asym(it, i, t) * double(p.mem0[p.at(p.b, it, t, j)])
-                                                          : double(p.mem0[p.at(p.b, it, i, t)]) * asym(it, t, j);
-                    acc += x;
-                    mag += std::abs(x);
-                }
-                const double c0 = double(p.mem0[p.at(p.c, it, i, j)]);
-                const double want = double(p.alpha) * acc + double(p.beta) * c0;
-                const double bound = tol<T>(k) * (std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0)) + 1e-30;
-                const double got = double(p.mem[p.at(p.c, it, i, j)]);
-                ASSERT_TRUE(std::isfinite(got) && std::abs(got - want) <= bound)
-                    << what << " item " << it << " (" << i << "," << j << "): got " << got << " want " << want;
-            }
+    const MVof<T> A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
+    const MVof<T> C1(const_cast<T*>(p.mem.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const Shape sym = s.uplo == Uplo::Lower ? Shape::symmetric_lower : Shape::symmetric_upper;
+    for (int it : items) {
+        const int one[] = {it};
+        const double err = s.side == Side::Left
+            ? gemm_backward_error(A0, sym, Transpose::NoTrans, B0, Shape::general, Transpose::NoTrans, C0, C1, Shape::general,
+                                  up(p.alpha), up(p.beta), one)
+            : gemm_backward_error(B0, Shape::general, Transpose::NoTrans, A0, sym, Transpose::NoTrans, C0, C1, Shape::general,
+                                  up(p.alpha), up(p.beta), one);
+        ASSERT_TRUE(pass<T>(Check::blas, k, err))
+            << what << " item " << it << " backward error " << err << " exceeds " << bound<T>(Check::blas, k);
+    }
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)

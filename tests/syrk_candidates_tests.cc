@@ -3,6 +3,8 @@
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct
 // kernel call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/no_route.hh>
@@ -91,10 +93,6 @@ struct Prob {
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
     bool ref(int i, int j) const { return s.uplo == Uplo::Lower ? i >= j : i <= j; }
-    // op(A)(i, l)
-    T opa(const std::vector<T>& m, int it, int i, int l) const {
-        return s.trans == Transpose::NoTrans ? m[ai(it, i, l)] : m[ai(it, l, i)];
-    }
 };
 
 template <typename T>
@@ -128,30 +126,20 @@ Prob<T> make_prob(const Spec& s) {
     return p;
 }
 
-// Max over C's triangle of |C - ref| / (|alpha| sum |op(A)_il op(A)_jl| + |beta C0_ij|), in double.
+// Componentwise backward error over C's triangle of C = alpha op(A) op(A)^T + beta C0, through the
+// library, from the pristine copy.
 template <typename T>
 double rel_error(const Prob<T>& p, int it) {
-    double worst = 0;
-    for (int j = 0; j < p.s.n; ++j)
-        for (int i = 0; i < p.s.n; ++i) {
-            if (!p.ref(i, j)) continue;
-            double acc = 0, mag = 0;
-            for (int l = 0; l < p.s.k; ++l) {
-                const double x = double(p.opa(p.mem0, it, i, l)) * double(p.opa(p.mem0, it, j, l));
-                acc += x;
-                mag += std::abs(x);
-            }
-            const double c0 = double(p.mem0[p.ci(it, i, j)]);
-            const double want = double(p.alpha) * acc + double(p.beta) * c0;
-            const double den = std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
-        }
-    return worst;
-}
-
-template <typename T>
-double tol(int k) {
-    return 16.0 * (k + 2) * double(std::numeric_limits<T>::epsilon());
+    using namespace batchlas::verify;
+    const Spec& s = p.s;
+    const MVof<T> A0(const_cast<T*>(p.mem0.data()) + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+    const MVof<T> C0(const_cast<T*>(p.mem0.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const MVof<T> C1(const_cast<T*>(p.mem.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const bool nt = s.trans == Transpose::NoTrans;
+    const int one[] = {it};
+    return gemm_backward_error(A0, Shape::general, nt ? Transpose::NoTrans : Transpose::Trans, A0, Shape::general,
+                               nt ? Transpose::Trans : Transpose::NoTrans, C0, C1, s.uplo == Uplo::Lower ? Shape::lower : Shape::upper,
+                               up(p.alpha), up(p.beta), one);
 }
 
 // The checked items' triangles against the host reference, every element outside them bit for
@@ -166,8 +154,9 @@ template <typename T>
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double e = rel_error(p, it);
-        if (!(std::isfinite(e) && e <= tol<T>(s.k)))
-            return ::testing::AssertionFailure() << "item " << it << " relative error " << e;
+        if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e))
+            return ::testing::AssertionFailure() << "item " << it << " backward error " << e << " exceeds "
+                                                 << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     }
     std::vector<char> owned(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
