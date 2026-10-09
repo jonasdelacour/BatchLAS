@@ -17,8 +17,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -148,27 +146,12 @@ Apply<T> make_apply(const Spec& s) {
     return p;
 }
 
-// Q = H_0 ... H_{k-1} (m x m, tight) of one item, formed in double from the stored reflectors and tau:
-// the oracle ormqr is judged against. batchlas::verify has no formed-Q routine.
+// Q = H_0 ... H_{k-1} (m x m) of one item, formed by batchlas::verify from the stored reflectors and tau.
 template <typename T>
 std::vector<verify::promoted_t<T>> host_q(const Apply<T>& p, int it) {
-    using D = verify::promoted_t<T>;
     const Spec& s = p.s;
-    const int m = s.m;
-    std::vector<D> Q(std::size_t(m) * m, 0.0);
-    for (int i = 0; i < m; ++i) Q[i + std::size_t(i) * m] = 1.0;
-    for (int j = 0; j < s.k; ++j) {  // Q <- Q H_j
-        std::vector<D> v(m, 0.0);
-        v[j] = 1.0;
-        for (int i = j + 1; i < m; ++i) v[i] = verify::up(p.mem0[p.ai(it, i, j)]);
-        const D tj = verify::up(p.tau[std::size_t(it) * s.k + j]);
-        for (int r = 0; r < m; ++r) {
-            D w = 0.0;
-            for (int i = 0; i < m; ++i) w += Q[r + std::size_t(i) * m] * v[i];
-            for (int i = 0; i < m; ++i) Q[r + std::size_t(i) * m] -= tj * w * verify::conj(v[i]);
-        }
-    }
-    return Q;
+    const auto F = verify::view(p.mem0.data() + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
+    return verify::form_q(F, VectorView<T>(const_cast<T*>(p.tau.data()), s.k, s.batch, 1, s.k), it, s.m);
 }
 
 // Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item.
@@ -177,9 +160,9 @@ double apply_error(const Apply<T>& p, int it) {
     const Spec& s = p.s;
     using D = verify::promoted_t<T>;
     auto Q = host_q(p, it);
-    const MVof<D> Qv(Q.data(), s.m, s.m, s.m, s.m * s.m, 1);
-    const MVof<T> C0(const_cast<T*>(p.mem0.data()) + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld, p.c.stride, 1);
-    const MVof<T> C(const_cast<T*>(p.mem.data()) + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld, p.c.stride, 1);
+    const auto Qv = verify::view(Q.data(), s.m, s.m, s.m);
+    const auto C0 = verify::view(p.mem0.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
+    const auto C = verify::view(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
     const int item[] = {0};
     if (s.side == Side::Left)
         return verify::gemm_backward_error(Qv, verify::Shape::general, s.trans, C0, verify::Shape::general, Transpose::NoTrans, C0, C,
@@ -199,7 +182,7 @@ void expect_applied(const Apply<T>& p, const std::string& what) {
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double err = apply_error(p, it);
-        ASSERT_TRUE(test_utils::within<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
     }
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)

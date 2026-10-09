@@ -15,8 +15,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -58,11 +56,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -79,7 +72,7 @@ std::vector<T> make_hpd(int n, std::mt19937& gen) {
         for (int i = j + 1; i < n; ++i) {
             const T v = verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = cj(v);
+            A[j + static_cast<size_t>(i) * n] = verify::make<T>(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -136,11 +129,9 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
 // ||A X - B||_F / (||A||_F ||X||_F) in double, A the whole Hermitian matrix of item it.
 template <typename T>
 double residual(const Sys<T>& p, int it) {
-    using V = MatrixView<T, MatrixFormat::Dense>;
-    const int item[] = {0};
-    return verify::solve_residual(V(const_cast<T*>(p.full[it].data()), p.n, p.n, p.n, p.n * p.n, 1),
-                                  V(const_cast<T*>(p.b.data()) + size_t(it) * p.strb, p.n, p.nrhs, p.ldb, p.strb, 1),
-                                  V(const_cast<T*>(p.b0.data()) + size_t(it) * p.strb, p.n, p.nrhs, p.ldb, p.strb, 1), item);
+    return verify::solve_residual(verify::view(p.full[it].data(), p.n, p.n, p.n),
+                                  verify::view(p.b.data() + size_t(it) * p.strb, p.n, p.nrhs, p.ldb),
+                                  verify::view(p.b0.data() + size_t(it) * p.strb, p.n, p.nrhs, p.ldb));
 }
 
 // info, the residual of the first and last item, and every element the solve must not touch,
@@ -151,7 +142,7 @@ void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std:
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
     for (int it : {0, p.batch - 1}) {
         const double r = residual(p, it);
-        EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, p.n, r)) << what << " item " << it << " residual " << r;
+        EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " item " << it << " residual " << r;
     }
     for (size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stra), i = r % p.lda, j = r / p.lda;

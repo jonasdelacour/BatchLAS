@@ -16,8 +16,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -136,8 +134,8 @@ void expect_q(const Prob<T>& p, const std::string& what) {
     else items = {0, 1, p.batch / 2, p.batch - 1};
     for (int it : items) {
         const auto [orth, rec] = q_errors(p, it);
-        ASSERT_TRUE(test_utils::within<T>(verify::Check::orthogonality, p.m, orth)) << what << " item " << it << " |Q^H Q - I| " << orth;
-        ASSERT_TRUE(test_utils::within<T>(verify::Check::factorization, p.m, rec)) << what << " item " << it << " |QR - A| " << rec;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality, p.m, orth)) << what << " item " << it << " |Q^H Q - I| " << orth;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, p.m, rec)) << what << " item " << it << " |QR - A| " << rec;
     }
     std::vector<char> in(p.mem.size(), 0);
     for (int it = 0; it < p.batch; ++it)

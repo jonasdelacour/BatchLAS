@@ -14,8 +14,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -160,23 +158,12 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
                                               p.bptr.data());
 }
 
-// ||A x - b|| / (||A|| ||x||), with A reconstructed HERMITIAN from the owned triangle of the
-// pristine input (the other triangle holds poison, so it cannot be handed to the library as is).
 template <typename T>
 double solve_residual(const Sys<T>& p, int item, Uplo uplo) {
-    using V = MatrixView<T, MatrixFormat::Dense>;
-    const T* A0 = p.a0.data() + size_t(item) * p.stra;
-    std::vector<T> full(size_t(p.n) * p.n);
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) {
-            const bool owned = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
-            const T v = owned ? A0[size_t(j) * p.lda + i] : A0[size_t(i) * p.lda + j];
-            full[size_t(j) * p.n + i] = owned ? v : verify::make<T>(double(std::real(v)), -double(std::imag(v)));
-        }
-    const int it[] = {0};
-    return verify::solve_residual(V(full.data(), p.n, p.n, p.n, p.n * p.n, 1),
-                                  V(const_cast<T*>(p.b.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb, p.strb, 1),
-                                  V(const_cast<T*>(p.b0.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb, p.strb, 1), it);
+    return verify::solve_residual(verify::view(p.a0.data() + size_t(item) * p.stra, p.n, p.n, p.lda),
+                                  uplo == Uplo::Lower ? verify::Shape::hermitian_lower : verify::Shape::hermitian_upper,
+                                  Transpose::NoTrans, verify::view(p.b.data() + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
+                                  verify::view(p.b0.data() + size_t(item) * p.strb, p.n, p.nrhs, p.ldb));
 }
 
 // Everything the kernel may not write: the ld pad, the stride pad, AND the triangle
@@ -252,7 +239,7 @@ TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
                 this->run_tiny(p, uplo);
                 for (int item : {0, p.batch - 1}) {
                     EXPECT_EQ(p.info[item], 0) << "n=" << n << " nrhs=" << nrhs;
-                    EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, n, solve_residual(p, item, uplo)))
+                    EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                         << "n=" << n << " nrhs=" << nrhs << " item=" << item
                         << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
                 }
@@ -354,7 +341,7 @@ TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
             for (int bi = 0; bi < batch; ++bi) {
                 ASSERT_EQ(p.info[bi], 0)
                     << "item " << bi << " of " << batch << " was not written";
-                EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, n, solve_residual(p, bi, Uplo::Lower)))
+                EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, bi, Uplo::Lower))
                     << "item " << bi << " of " << batch;
             }
         }
@@ -396,7 +383,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
 
                 for (int item : {0, p.batch / 2, p.batch - 1}) {
                     EXPECT_EQ(p.info[item], 0) << "n=" << n;
-                    EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, n, solve_residual(p, item, uplo)))
+                    EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                         << "n=" << n << " nrhs=" << nrhs << " item=" << item
                         << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
                 }
@@ -435,7 +422,7 @@ TYPED_TEST(PosvTest, PublicPosvSolvesOnBothTriangles) {
 
             for (int item : {0, p.batch - 1}) {
                 EXPECT_EQ(p.info[item], 0) << "n=" << n;
-                EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, n, solve_residual(p, item, uplo)))
+                EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, uplo))
                     << "n=" << n << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
             }
         }
@@ -468,5 +455,5 @@ TYPED_TEST(PosvTest, LinalgSolveSpdLeavesItsInputsAlone) {
                     X.view().data_ptr()[size_t(bi) * X.view().stride() +
                                         size_t(k) * X.view().ld() + i];
     for (int item : {0, p.batch - 1})
-        EXPECT_TRUE(test_utils::within<T>(verify::Check::solve, n, solve_residual(p, item, Uplo::Lower)));
+        EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(p, item, Uplo::Lower));
 }

@@ -16,7 +16,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
 
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -60,12 +59,6 @@ inline RealOf<T> host_imag(T v) {
 }
 
 template <typename T>
-inline T make_scalar(RealOf<T> re, RealOf<T> im) {
-    if constexpr (test_utils::is_complex<T>::value) return T(re, im);
-    else return re;
-}
-
-template <typename T>
 inline T host_rand(std::mt19937& gen) {
     std::uniform_real_distribution<RealOf<T>> d(RealOf<T>(-1), RealOf<T>(1));
     if constexpr (test_utils::is_complex<T>::value) return T(d(gen), d(gen));
@@ -94,7 +87,7 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            make_scalar<T>(host_real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
+            verify::make<T>(host_real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
     }
     // Force exact Hermitian symmetry and an exactly real diagonal: the kernel is
     // contractually allowed to ignore imag(diag(A)), so the reference must too.
@@ -119,7 +112,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
 
     std::vector<T> L(static_cast<size_t>(n) * n, T{});
     for (int c = 0; c < n; ++c) {
-        L[c + static_cast<size_t>(c) * n] = make_scalar<T>(R(1), R(0));
+        L[c + static_cast<size_t>(c) * n] = verify::make<T>(R(1), R(0));
         for (int i = c + 1; i < n; ++i) {
             if constexpr (test_utils::is_complex<T>::value) {
                 L[i + static_cast<size_t>(c) * n] = T(d(gen), d(gen));
@@ -144,7 +137,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         const R scale = std::sqrt(R(2) / ss);
         for (int p = 0; p < c; ++p) {
             L[c + static_cast<size_t>(p) * n] =
-                make_scalar<T>(host_real(L[c + static_cast<size_t>(p) * n]) * scale,
+                verify::make<T>(host_real(L[c + static_cast<size_t>(p) * n]) * scale,
                                host_imag(L[c + static_cast<size_t>(p) * n]) * scale);
         }
     }
@@ -154,7 +147,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         for (int j = 0; j < n; ++j) {
             T acc{};
             for (int k = 0; k <= std::min(i, j); ++k) {
-                acc += L[i + static_cast<size_t>(k) * n] * make_scalar<T>(D[k], R(0)) *
+                acc += L[i + static_cast<size_t>(k) * n] * verify::make<T>(D[k], R(0)) *
                        host_conj(L[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc;
@@ -162,7 +155,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            make_scalar<T>(host_real(A[i + static_cast<size_t>(i) * n]), R(0));
+            verify::make<T>(host_real(A[i + static_cast<size_t>(i) * n]), R(0));
     }
     return A;
 }
@@ -171,8 +164,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
 // triangle of the factor F (ld) through batchlas::verify; A is the tight Hermitian reference.
 template <typename T>
 double potrf_error(const std::vector<T>& A, const T* F, int ld, int n, Uplo uplo) {
-    using V = MatrixView<T, MatrixFormat::Dense>;
-    return verify::potrf_residual(V(const_cast<T*>(A.data()), n, n, n, n * n, 1), V(const_cast<T*>(F), n, n, ld, ld * n, 1), uplo);
+    return verify::potrf_residual(verify::view(A.data(), n, n, n), verify::view(F, n, n, ld), uplo);
 }
 
 template <typename T>
@@ -180,13 +172,8 @@ double potrf_error(const std::vector<T>& A, const Matrix<T, MatrixFormat::Dense>
     return potrf_error<T>(A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
 }
 
-// The leaf's retained bound (4 n eps, tighter than the library's 16 n u) and the blocked driver's
-// (BLKTOL n eps, far tighter) stay as caps on top of verify::pass; the constant is slack for
-// the kernel's reduction order.
-template <typename T>
-::testing::AssertionResult leaf_ok(double res, int n) {
-    return test_utils::within<T>(verify::Check::factorization, n, res, 4.0 * double(n) * double(std::numeric_limits<RealOf<T>>::epsilon()));
-}
+// The CTA leaf's pre-migration bound 4 n eps = 8 n u, a factor 1/2 on the kind's 16 n u.
+inline const verify::Slack kLeafSlack{0.5, "the CTA leaf is a stale-pivot or dropped-update defect away from O(1); one reduction-order bit is 2 n u"};
 
 template <typename T, Backend B>
 struct PotrfConfig {
@@ -296,14 +283,14 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
             for (int b = 0; b < batch; ++b) {
                 // Every batch item differs: identical items hide a stride bug.
                 ref[b] = make_spd<T>(n, 1000u + 17u * b + 3u * n);
-                this->load_triangle(A, b, n, ref[b], uplo, make_scalar<T>(R(-999), R(777)));
+                this->load_triangle(A, b, n, ref[b], uplo, verify::make<T>(R(-999), R(777)));
             }
             const auto info = this->run_cta(A, uplo);
             for (int b = 0; b < batch; ++b) {
                 ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b
                                       << " uplo=" << static_cast<int>(uplo);
                 const double res = potrf_error<T>(ref[b], A, b, uplo);
-                EXPECT_TRUE(leaf_ok<T>(res, n))
+                EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, res, kLeafSlack)
                     << "n=" << n << " b=" << b << " uplo=" << static_cast<int>(uplo);
             }
         }
@@ -320,7 +307,7 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
 
     Matrix<T, MatrixFormat::Dense> A(cap + 1, cap + 1, 1);
     A.fill(T{});
-    for (int i = 0; i < cap + 1; ++i) A(i, i, 0) = make_scalar<T>(typename TestFixture::R(1),
+    for (int i = 0; i < cap + 1; ++i) A(i, i, 0) = verify::make<T>(typename TestFixture::R(1),
                                                                     typename TestFixture::R(0));
 
     {
@@ -355,7 +342,7 @@ TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
         // Pass 1: not written.
         {
             Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-            const T poison = make_scalar<T>(R(-3.5), R(11.25));
+            const T poison = verify::make<T>(R(-3.5), R(11.25));
             for (int b = 0; b < batch; ++b) {
                 this->load_triangle(A, b, n, make_spd<T>(n, 55u + b), uplo, poison);
             }
@@ -380,7 +367,7 @@ TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
         {
             Matrix<T, MatrixFormat::Dense> A(n, n, batch);
             const R nan = std::numeric_limits<R>::quiet_NaN();
-            const T poison = make_scalar<T>(nan, nan);
+            const T poison = verify::make<T>(nan, nan);
             for (int b = 0; b < batch; ++b) {
                 this->load_triangle(A, b, n, make_spd<T>(n, 55u + b), uplo, poison);
             }
@@ -429,14 +416,14 @@ TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
             // Distinct AND distinctly scaled, so a cross-matrix write changes a value.
             ref[b] = make_spd<T>(n, 2000u + 31u * b, R(1) + R(b));
             this->load_triangle(packed, b, n, ref[b], Uplo::Lower,
-                                make_scalar<T>(R(0), R(0)));
+                                verify::make<T>(R(0), R(0)));
         }
         const auto info_packed = this->run_cta(packed, Uplo::Lower);
 
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info_packed[b], 0) << "n=" << n << " b=" << b;
             Matrix<T, MatrixFormat::Dense> solo(n, n, 1);
-            this->load_triangle(solo, 0, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+            this->load_triangle(solo, 0, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
             const auto info_solo = this->run_cta(solo, Uplo::Lower);
             ASSERT_EQ(info_solo[0], 0);
             for (int i = 0; i < n; ++i) {
@@ -475,7 +462,7 @@ TYPED_TEST(PotrfCtaTest, InfoIndexIsExact) {
             ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
-        this->load_triangle(A, 0, n, ref, uplo, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, uplo, verify::make<T>(R(0), R(0)));
         const auto info = this->run_cta(A, uplo);
         EXPECT_EQ(info[0], c + 1)
             << "planted a non-positive pivot at global column " << c << " of " << n
@@ -495,7 +482,7 @@ TYPED_TEST(PotrfCtaTest, InfoReportsTheFirstFailure) {
         if (c2 >= n) continue;
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         const auto ref = make_planted_ldl<T>(n, {c, c2}, 777u + static_cast<unsigned>(c));
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_cta(A, Uplo::Lower);
         EXPECT_EQ(info[0], c + 1) << "failures planted at " << c << " and " << c2;
     }
@@ -522,7 +509,7 @@ TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
         } else {
             ref[b] = make_spd<T>(n, 300u + 5u * b);
         }
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
     const auto info = this->run_cta(A, Uplo::Lower);
 
@@ -541,7 +528,7 @@ TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
     for (int b = 0; b < batch; ++b) {
         if (std::find(bad_items.begin(), bad_items.end(), b) != bad_items.end()) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack)
             << "healthy item " << b << " next to a failed one";
     }
 }
@@ -566,19 +553,19 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         ASSERT_GT(max_imag, R(0.01)) << "the generated matrix is effectively real";
 
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_cta(A, Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
             // (b) EXACTLY zero, not near zero.
             ASSERT_EQ(host_imag(A(i, i, 0)), R(0)) << "imag(L(" << i << "," << i << ")) != 0";
         }
-        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref, A, 0, Uplo::Lower)), n));
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref, A, 0, Uplo::Lower)), kLeafSlack);
 
         // (c) conj(A) is a different Hermitian matrix, so it must give a different factor.
         std::vector<T> refc(ref);
         for (auto& v : refc) v = host_conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
-        this->load_triangle(Ac, 0, n, refc, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_cta(Ac, Uplo::Lower)[0], 0);
         bool differs = false;
         for (int i = 1; i < n && !differs; ++i) {
@@ -587,13 +574,13 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
             }
         }
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
-        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(refc, Ac, 0, Uplo::Lower)), n));
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(refc, Ac, 0, Uplo::Lower)), kLeafSlack);
 
         // (d) imag(diag(A)) IS IGNORED, per LAPACK's contract; the load transform drops it.
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
-        this->load_triangle(Ap, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(Ap, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i) {
-            Ap(i, i, 0) = make_scalar<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
+            Ap(i, i, 0) = verify::make<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
         }
         ASSERT_EQ(this->run_cta(Ap, Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
@@ -619,11 +606,11 @@ TYPED_TEST(PotrfCtaTest, EmptyInfoSpanStillFactorises) {
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) {
         ref[b] = make_spd<T>(n, 606u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
     this->run_cta(A, Uplo::Lower, /*pass_info_span=*/false);
     for (int b = 0; b < batch; ++b) {
-        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n)) << "b=" << b;
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack) << "b=" << b;
     }
 }
 
@@ -643,7 +630,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) {
         ref[b] = make_spd<T>(n, 8080u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
@@ -654,7 +641,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     // THE GUARD: bit-exactness observes EXECUTION; a residual check would accept either.
     Matrix<T, MatrixFormat::Dense> direct(n, n, batch);
     for (int b = 0; b < batch; ++b) {
-        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
     const auto info_direct = this->run_cta(direct, Uplo::Lower);
 
@@ -669,7 +656,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
                 ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
             }
         }
-        EXPECT_TRUE(leaf_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n)) << "b=" << b;
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack) << "b=" << b;
     }
 }
 
@@ -686,7 +673,7 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
 
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         UnifiedVector<T> buf(static_cast<size_t>(stride) * batch,
-                             make_scalar<T>(R(-11), R(5)));   // non-PD poison
+                             verify::make<T>(R(-11), R(5)));   // non-PD poison
         MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
 
         std::vector<std::vector<T>> ref(batch);
@@ -697,7 +684,7 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
                     const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                     buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld] =
                         in_tri ? ref[b][i + static_cast<size_t>(j) * n]
-                               : make_scalar<T>(R(0), R(0));
+                               : verify::make<T>(R(0), R(0));
                 }
             }
         }
@@ -709,7 +696,7 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
 
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "b=" << b << " uplo=" << static_cast<int>(uplo);
-            EXPECT_TRUE(leaf_ok<T>(potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, uplo), n))
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, uplo), kLeafSlack)
                 << "b=" << b << " uplo=" << static_cast<int>(uplo)
                 << " (ld=" << ld << " stride=" << stride << ")";
         }
@@ -757,15 +744,8 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
 // scribbled on. nb and W are ASKED of potrf_blocked_debug_params, never hardcoded.
 // evidence: docs/perf/potrf.md#the-blocked-driver
 
-// The blocked driver's bound, which is NOT the leaf's: it composes n/nb panels.
-#ifndef BLKTOL
-#define BLKTOL 0.05
-#endif
-template <typename T>
-::testing::AssertionResult blocked_ok(double res, int n) {
-    return test_utils::within<T>(verify::Check::factorization, n, res,
-                                 double(BLKTOL) * double(n) * double(std::numeric_limits<RealOf<T>>::epsilon()));
-}
+// The blocked driver composes n/nb panels and is judged by the library bound (the old BLKTOL = 0.05 n eps
+// named no defect it alone catches, and sat 160x under the kind's 16 n u).
 
 template <typename Config>
 class PotrfBlockedTest : public PotrfCtaTest<Config> {
@@ -874,13 +854,13 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
         for (int b = 0; b < batch; ++b) {
             ref[b] = make_spd<T>(n, 6100u + 29u * b + 7u * static_cast<unsigned>(n));
             this->load_triangle(A, b, n, ref[b], Uplo::Lower,
-                                make_scalar<T>(R(-999), R(777)));
+                                verify::make<T>(R(-999), R(777)));
         }
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
             const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
-            EXPECT_TRUE(blocked_ok<T>(res, n))
+            EXPECT_VERIFY(T, verify::Check::factorization, n, res)
                 << "n=" << n << " b=" << b << " nb=" << nb << " W=" << W
                 << " residual/(n*eps)="
                 << (res / (R(n) * std::numeric_limits<R>::epsilon()));
@@ -918,7 +898,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
     // Pass 1: NOT WRITTEN.
     for (int nn : {n, n_big}) {
         Matrix<T, MatrixFormat::Dense> A(nn, nn, batch);
-        const T poison = make_scalar<T>(R(-3.5), R(11.25));
+        const T poison = verify::make<T>(R(-3.5), R(11.25));
         for (int b = 0; b < batch; ++b) {
             this->load_triangle(A, b, nn, make_spd<T>(nn, 771u + b), Uplo::Lower, poison);
         }
@@ -944,7 +924,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
     {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch);
         const R nan = std::numeric_limits<R>::quiet_NaN();
-        const T poison = make_scalar<T>(nan, nan);
+        const T poison = verify::make<T>(nan, nan);
         std::vector<std::vector<T>> ref(batch);
         for (int b = 0; b < batch; ++b) {
             ref[b] = make_spd<T>(n, 771u + b);
@@ -962,7 +942,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
                     ASSERT_FALSE(std::isnan(host_imag(v)));
                 }
             }
-            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n));
+            EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)));
         }
     }
 }
@@ -987,7 +967,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoIsTheGlobalColumn) {
             ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         EXPECT_EQ(info[0], c + 1)
             << "planted a non-positive pivot at GLOBAL column " << c << " of " << n
@@ -1025,7 +1005,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoFirstFailureWinsAcrossPanels) {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         const auto ref =
             make_planted_ldl<T>(n, cs.cols, 913u + static_cast<unsigned>(cs.expect));
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         EXPECT_EQ(info[0], cs.expect) << cs.why;
     }
@@ -1060,10 +1040,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
         } else {
             ref[b] = make_spd<T>(n, 400u + 5u * b);
         }
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
     A(nan_col, nan_col, nan_item) =
-        make_scalar<T>(std::numeric_limits<R>::quiet_NaN(), R(0));
+        verify::make<T>(std::numeric_limits<R>::quiet_NaN(), R(0));
 
     const auto info = this->run_blocked(A.view(), Uplo::Lower);
 
@@ -1090,7 +1070,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
     for (int b = 0; b < batch; ++b) {
         if (std::find(bad.begin(), bad.end(), b) != bad.end()) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))
             << "healthy item " << b << " next to failed ones";
     }
 }
@@ -1117,7 +1097,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         ASSERT_GT(max_imag, R(0.01)) << "the generated matrix is effectively real";
 
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_blocked(A.view(), Uplo::Lower)[0], 0);
 
         // (b) EXACTLY zero, past every panel boundary, not merely small.
@@ -1125,28 +1105,28 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
             ASSERT_EQ(host_imag(A(i, i, 0)), R(0))
                 << "imag(L(" << i << "," << i << ")) != 0 at nb=" << nb;
         }
-        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref, A, 0, Uplo::Lower)), n));
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref, A, 0, Uplo::Lower)));
 
         // (c) THE SENSITIVITY: conj(A) must give a different factor. Here the conjugate
         //     that matters is the trailing update's transB (Trans would give L21 L21^T).
         std::vector<T> refc(ref);
         for (auto& v : refc) v = host_conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
-        this->load_triangle(Ac, 0, n, refc, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_blocked(Ac.view(), Uplo::Lower)[0], 0);
         bool differs = false;
         for (int i = 1; i < n && !differs; ++i)
             for (int j = 0; j < i && !differs; ++j)
                 if (host_imag(A(i, j, 0)) != host_imag(Ac(i, j, 0))) differs = true;
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
-        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(refc, Ac, 0, Uplo::Lower)), n));
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(refc, Ac, 0, Uplo::Lower)));
 
         // (d) imag(diag(A)) IS IGNORED end to end: the trailing update ADDS to A22's
         //     diagonal, so caller garbage reaches the NEXT panel's leaf load transform.
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
-        this->load_triangle(Ap, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(Ap, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i)
-            Ap(i, i, 0) = make_scalar<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
+            Ap(i, i, 0) = verify::make<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
         ASSERT_EQ(this->run_blocked(Ap.view(), Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
@@ -1173,7 +1153,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
     ASSERT_GT(n, this->ceiling());
 
     UnifiedVector<T> buf(static_cast<size_t>(stride) * batch,
-                         make_scalar<T>(R(-11), R(5)));    // non-PD poison
+                         verify::make<T>(R(-11), R(5)));    // non-PD poison
     MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
 
     std::vector<std::vector<T>> ref(batch);
@@ -1188,7 +1168,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedPaddedLeadingDimensionAndNonDefaultStride) {
     const auto info = this->run_blocked(V, Uplo::Lower);
     for (int b = 0; b < batch; ++b) {
         ASSERT_EQ(info[b], 0) << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
-        EXPECT_TRUE(blocked_ok<T>(potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, Uplo::Lower), n))
+        EXPECT_VERIFY(T, verify::Check::factorization, n, potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, Uplo::Lower))
             << "b=" << b << " (ld=" << ld << " stride=" << stride << ")";
     }
 }
@@ -1223,7 +1203,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
     for (const auto& m : modes) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch);
         for (int b = 0; b < batch; ++b)
-            this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_blocked(A.view(), Uplo::Lower, m.len);
         if (m.len < 0) {
             for (int b = 0; b < batch; ++b)
@@ -1232,7 +1212,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
                                 "so the zero pre-pass did not run";
         }
         for (int b = 0; b < batch; ++b) {
-            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+            EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))
                 << m.why << " b=" << b;
         }
     }
@@ -1272,12 +1252,12 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
         for (int b = 0; b < batch; ++b) {
             ref[b] = make_spd<T>(n, 1717u + 11u * b + static_cast<unsigned>(n));
             this->load_triangle(A, b, n, ref[b], Uplo::Lower,
-                                make_scalar<T>(R(-999), R(777)));
+                                verify::make<T>(R(-999), R(777)));
         }
         const auto info = this->run_blocked(A.view(), Uplo::Lower);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
-            EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+            EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))
                 << "n=" << n << " b=" << b << " (nb=" << nb << ", cap=" << cap << ")";
         }
     }
@@ -1302,7 +1282,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     for (int b = 0; b < batch; ++b)
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));
@@ -1312,7 +1292,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     // THE GUARD.
     Matrix<T, MatrixFormat::Dense> direct(n, n, batch);
     for (int b = 0; b < batch; ++b)
-        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     UnifiedVector<std::byte> dws(
         sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct.view(), Uplo::Lower));
     UnifiedVector<int32_t> dinfo(batch, int32_t(-7));
@@ -1343,7 +1323,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
                 ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
             }
         }
-        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))
             << "b=" << b;
     }
 }
@@ -1365,7 +1345,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) {
         ref[b] = make_spd<T>(n, 9001u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
 
     const std::size_t bytes =
@@ -1384,7 +1364,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
         ASSERT_EQ(info[b], 0)
             << "a positive-definite matrix was reported not positive definite from a "
                "POISONED workspace, b=" << b;
-        EXPECT_TRUE(blocked_ok<T>((potrf_error<T>(ref[b], A, b, Uplo::Lower)), n))
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))
             << "b=" << b;
     }
 }

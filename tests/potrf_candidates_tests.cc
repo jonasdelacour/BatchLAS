@@ -14,8 +14,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -53,11 +51,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -76,7 +69,7 @@ std::vector<T> make_hpd(int n, unsigned seed) {
         for (int i = j + 1; i < n; ++i) {
             const T v = verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = cj(v);
+            A[j + static_cast<size_t>(i) * n] = verify::make<T>(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -128,11 +121,8 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
 // ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper) over the factored triangle.
 template <typename T>
 double residual(const Prob<T>& p, int b) {
-    using V = MatrixView<T, MatrixFormat::Dense>;
-    const int item[] = {0};
-    const V A0(const_cast<T*>(p.ref[b].data()), p.n, p.n, p.n, p.n * p.n, 1);
-    const V F(const_cast<T*>(p.buf.data()) + static_cast<size_t>(b) * p.stride, p.n, p.n, p.ld, p.stride, 1);
-    return verify::potrf_residual(A0, F, p.uplo, item);
+    return verify::potrf_residual(verify::view(p.ref[b].data(), p.n, p.n, p.n),
+                                  verify::view(p.buf.data() + static_cast<size_t>(b) * p.stride, p.n, p.n, p.ld), p.uplo);
 }
 
 // info, the residual of the first and last item, and every element the factor must not
@@ -141,7 +131,7 @@ template <typename T>
 void expect_factored(const Prob<T>& p, const std::vector<int32_t>& info, const std::string& what,
                      bool other_triangle_is_scratch = false) {
     for (int b = 0; b < p.batch; ++b) ASSERT_EQ(info[b], 0) << what << " b=" << b;
-    for (int b : {0, p.batch - 1}) EXPECT_TRUE(test_utils::within<T>(verify::Check::factorization, p.n, residual(p, b))) << what << " b=" << b;
+    for (int b : {0, p.batch - 1}) EXPECT_VERIFY(T, verify::Check::factorization, p.n, residual(p, b)) << what << " b=" << b;
     for (size_t e = 0; e < p.before.size(); ++e) {
         const int b = static_cast<int>(e / p.stride);
         const int r = static_cast<int>(e % p.stride);

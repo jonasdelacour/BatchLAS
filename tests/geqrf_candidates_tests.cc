@@ -15,8 +15,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -106,16 +104,17 @@ template <typename T>
 double qr_residual(const Qr<T>& p, int it) {
     const int k = p.k();
     const int item[] = {it};
-    const MVof<T> F(const_cast<T*>(p.mem.data()), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
-    const MVof<T> A0(const_cast<T*>(p.mem0.data()), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
+    const auto F = verify::view(p.mem.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
+    const auto A0 = verify::view(p.mem0.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
     const VectorView<T> tau(const_cast<T*>(p.tau.data()), k, p.s.batch, 1, k);
     return verify::qr_residual(A0, F, tau, item);
 }
 
-// Tighter than the library's 16 m eps at every m, so it stays as the retained cap.
-template <typename T>
-double tol(int m, int n) {
-    return std::max(0.5 * (m + n), 8.0) * double(std::numeric_limits<RealOf<T>>::epsilon());
+// The pre-migration bound max(m+n, 16) eps as a factor on the kind's 16 m eps.
+verify::Slack tol(int m, int n) {
+    return {std::max(double(m + n), 16.0) / (16.0 * std::max(m, 1)),
+            "Householder QR backward error is (m+n) eps with a 16 eps floor at tiny orders; a dropped or misordered "
+            "reflector misses by O(1)"};
 }
 
 // The checked items' residuals (all of a small batch, the representatives of a repeating one),
@@ -130,7 +129,7 @@ void expect_factored(const Qr<T>& p, const std::string& what) {
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double r = qr_residual(p, it);
-        ASSERT_TRUE(test_utils::within<T>(verify::Check::factorization, s.m, r, tol<T>(s.m, s.n)))
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, s.m, r, tol(s.m, s.n)))
             << what << " item " << it << " residual " << r;
     }
     for (std::size_t e = 0; e < p.mem.size(); ++e) {

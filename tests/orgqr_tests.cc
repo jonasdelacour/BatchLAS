@@ -18,8 +18,6 @@ struct OrgqrConfig {
 };
 
 #include "test_utils.hh"
-#include "verify_within.hh"
-
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
@@ -47,7 +45,7 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
-    EXPECT_TRUE(test_utils::within<T>(verify::Check::orthogonality, n, verify::orthogonality(A.view())));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, n, verify::orthogonality(A.view()));
 }
 
 TYPED_TEST(OrgqrTest, BatchedMatrices) {
@@ -67,7 +65,7 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     const auto all = verify::all_items(batch);
-    EXPECT_TRUE(test_utils::within<T>(verify::Check::orthogonality, n, verify::orthogonality(A.view(), all)));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, n, verify::orthogonality(A.view(), all));
 }
 
 
@@ -98,24 +96,20 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
 namespace orgqr_wp5 {
 
 template <typename T>
-MatrixView<T, MatrixFormat::Dense> window(const T* p, int rows, int cols, int ld) {
-    return MatrixView<T, MatrixFormat::Dense>(const_cast<T*>(p), rows, cols, ld, ld * cols, 1);
-}
-
-// || Q^H Q - I ||_F / sqrt(n), in double.
-template <typename T>
 double orth(const T* Q, int m, int n, int ld) {
-    return verify::orthogonality(window(Q, m, n, ld)) / std::sqrt(double(n));
+    return verify::orthogonality(verify::view(Q, m, n, ld)) / std::sqrt(double(n));
 }
 
-// ||A0 - Q R|| componentwise (|A0 - QR| / |Q||R|), R read out of the geqrf factor's upper triangle.
 template <typename T>
 double recon(const T* Q, const T* F, const T* A0, int m, int n, int ld) {
-    using D = verify::promoted_t<T>;
-    const auto A = window(A0, m, n, ld);
-    return verify::gemm_backward_error(window(Q, m, n, ld), verify::Shape::general, Transpose::NoTrans,
-                                       window(F, n, n, ld), verify::Shape::upper, Transpose::NoTrans, A, A,
-                                       verify::Shape::general, D(1), D(0));
+    return verify::qr_reconstruction(verify::view(A0, m, n, ld), verify::view(Q, m, n, ld), verify::view(F, m, n, ld));
+}
+
+inline verify::Slack recon_slack(int m, int n) {
+    return {double(m + n) / (16.0 * m), "Householder QR backward error is (m+n) eps; a Q of another item or a dropped reflector misses by O(1)"};
+}
+inline verify::Slack orth_slack(int m, int n) {
+    return {double(m + n) * std::sqrt(double(n)) / (16.0 * m), "orgqr's Q is unitary to (m+n) eps/sqrt(n); a lost reflector misses by O(1)"};
 }
 
 }  // namespace orgqr_wp5
@@ -159,16 +153,14 @@ TYPED_TEST(OrgqrTest, QIsOrthonormalAndReconstructsAAtEveryBatchItem) {
         (void)orgqr<B, T>(*this->ctx, V, tau.to_span(), wo.to_span());
         this->ctx->wait();
 
-        const double tol = 0.5 * double(s.m + s.n) *
-                           double(std::numeric_limits<typename base_type<T>::type>::epsilon());
         for (int b = 0; b < s.batch; ++b) {
             const size_t off = static_cast<size_t>(b) * stride;
             const double o = orth<T>(buf.data() + off, s.m, s.n, ld);
-            EXPECT_TRUE(test_utils::within<T>(verify::Check::orthogonality, s.m, o * std::sqrt(double(s.n)),
-                                              tol * std::sqrt(double(s.n))))
+            EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, s.m, o * std::sqrt(double(s.n)), orth_slack(s.m, s.n))
                 << "Q is not orthonormal at b=" << b << " (m=" << s.m << " n=" << s.n << ")";
-            EXPECT_TRUE(test_utils::within<T>(verify::Check::factorization, s.m,
-                                              recon<T>(buf.data() + off, F.data() + off, A0.data() + off, s.m, s.n, ld)))
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, s.m,
+                                recon<T>(buf.data() + off, F.data() + off, A0.data() + off, s.m, s.n, ld),
+                                recon_slack(s.m, s.n))
                 << "Q R != A at b=" << b << " (m=" << s.m << " n=" << s.n
                 << ") -- Q is orthonormal but it is not THIS A's Q";
         }
