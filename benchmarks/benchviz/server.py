@@ -259,6 +259,7 @@ class Handler(BaseHTTPRequestHandler):
     read_only: bool = False
     token: str = ""
     build_dirs: list = []
+    ledgers = None  # tuning.Ledgers, set by serve()
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):  # keep the terminal for the run log
@@ -299,9 +300,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, b"This dashboard needs the full link, including its ?t= token.", "text/plain")
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        if u.path in ("/", "/index.html"):
+        if u.path in ("/", "/index.html", "/tuning"):
             extra = {"Set-Cookie": f"bvt={self.token}; Path=/; HttpOnly; SameSite=Lax; Secure"} if self.token else None
-            return self._send(200, (HERE / "dashboard.html").read_bytes(), "text/html; charset=utf-8", extra)
+            page = "tuning.html" if u.path == "/tuning" else "dashboard.html"
+            return self._send(200, (HERE / page).read_bytes(), "text/html; charset=utf-8", extra)
+        if u.path == "/static/benchviz.css":
+            return self._send(200, (HERE / "benchviz.css").read_bytes(), "text/css; charset=utf-8")
+        if u.path.startswith("/api/tune/"):
+            return self._tune_get(u.path[len("/api/tune/"):], q)
         if u.path == "/api/meta":
             return self._json({
                 "read_only": self.read_only,
@@ -339,7 +345,70 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, p.read_bytes(), ctype, extra)
         self._send(404, b"not found", "text/plain")
 
-    def _events(self, name: str):
+    # ------------------------------------------------------------ tuning tab
+    def _tune_get(self, what: str, q: dict):
+        import tuning
+        arg = lambda k: q.get(k, [""])[0]  # noqa: E731
+        if what == "meta":
+            from runner import detect_gpus
+            binary = tuning.tuner_binary(self.build_dirs)
+            return self._json({"read_only": self.read_only, "ops": tuning.tuner_ops(), "dtypes": tuning.DTYPES,
+                               "tiers": tuning.TIER_NOTES, "gpus": detect_gpus(), "ledger": str(self.ledgers.root),
+                               "tuned": str(self.ledgers.tuned), "binary": str(binary) if binary else None,
+                               "builds": [build_info(d) for d in self.build_dirs]})
+        if what == "status":
+            return self._json(self.ledgers.status())
+        if what == "op":
+            return self._json(self.ledgers.op_view(arg("op"), arg("dtype"), arg("device")))
+        if what == "cell":
+            try:
+                key = json.loads(arg("key") or "[]")
+            except ValueError:
+                return self._json({"error": "bad key"}, 400)
+            return self._json(self.ledgers.cell(arg("op"), arg("dtype"), arg("device"), key))
+        if what == "run":
+            return self._json(tuning.run_state(self.root, arg("run")))
+        if what == "events":
+            return self._events(arg("run"), tune=True)
+        self._send(404, b"not found", "text/plain")
+
+    def _tune_post(self, what: str, b: dict):
+        import tuning
+        binary = tuning.tuner_binary(self.build_dirs)
+        if what in ("plan", "run") and binary is None:
+            return self._json({"error": "no build has tools/tune/batchlas_tune; build the batchlas_tune target"}, 400)
+        if what == "plan":
+            try:
+                return self._json(tuning.plan(binary, b, self.ledgers.root))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+        if what == "run":
+            live = tuning.live_run(self.root)
+            if live:
+                return self._json({"error": f"tuning run {live} is still running; one at a time"}, 409)
+            try:
+                name = tuning.launch(self.root, binary, b, self.ledgers.root, b.get("name"))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            time.sleep(1.5)  # a run that dies at startup (a bad flag, no GPU) says so now
+            st = tuning.run_state(self.root, name)
+            if st["state"] == "failed":
+                return self._json({"error": "the run exited at once: " + " | ".join(st["log"][-3:]), "run": name}, 500)
+            return self._json({"ok": True, "run": name})
+        if what == "stop":
+            return self._json({"ok": tuning.stop(self.root, str(b.get("run", "")))})
+        self._json({"error": "unknown endpoint"}, 404)
+
+    def _tune_snapshot(self, run: str) -> dict:
+        import tuning
+        live, runs = tuning.live_run(self.root), tuning.list_runs(self.root)
+        name = run or live or (runs[0] if runs else "")  # no name: the live run, else the newest
+        snap = tuning.run_state(self.root, name) if name else {}
+        snap["runs"] = runs
+        snap["live"] = live
+        return snap
+
+    def _events(self, name: str, tune: bool = False):
         # Chunked framing: an unframed stream on a keep-alive connection cannot be
         # delimited, and proxies (cloudflared, VS Code forwarding) stall on it.
         self.send_response(200)
@@ -356,8 +425,11 @@ class Handler(BaseHTTPRequestHandler):
         last, beat = None, time.time()
         try:
             while True:
-                snap = snapshot(self.root, name) if name else {}
-                snap["campaigns"] = list_campaigns(self.root)
+                if tune:
+                    snap = self._tune_snapshot(name)
+                else:
+                    snap = snapshot(self.root, name) if name else {}
+                    snap["campaigns"] = list_campaigns(self.root)
                 blob = json.dumps(snap)
                 if blob != last:
                     chunk(f"data: {blob}\n\n".encode())
@@ -376,12 +448,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._json({"error": "forbidden"}, 403)
         # A comparison only reads logs and writes its small config: no GPU, so read-only allows it.
-        if self.read_only and u.path not in ("/api/plan", "/api/compare"):
+        if self.read_only and u.path not in ("/api/plan", "/api/compare", "/api/tune/plan"):
             return self._json({"error": "This copy of the dashboard is read-only; start runs from the GPU box."}, 403)
         try:
             b = self._body()
         except Exception:
             return self._json({"error": "bad json"}, 400)
+        if u.path.startswith("/api/tune/"):
+            return self._tune_post(u.path[len("/api/tune/"):], b)
         if u.path == "/api/run":
             return self._run(b)
         if u.path == "/api/plan":
@@ -468,9 +542,13 @@ class Handler(BaseHTTPRequestHandler):
                            "campaign": name}, 500)
 
 
-def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = False, token: str = ""):
+def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = False, token: str = "",
+          ledger: Path | None = None, tuned: Path | None = None):
+    import tuning
     root.mkdir(parents=True, exist_ok=True)
     threading.Thread(target=_reaper, daemon=True).start()
+    Handler.ledgers = tuning.Ledgers(ledger or tuning.DEFAULT_LEDGER, tuned or tuning.TUNED)
+    threading.Thread(target=Handler.ledgers.status, daemon=True).start()  # warm: the Tuning tab's first view
     Handler.root = root
     Handler.build_dirs = build_dirs
     Handler.read_only = read_only
@@ -491,6 +569,7 @@ def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = 
         except OSError:
             pass
     print(f"benchviz dashboard: http://{host}:{port}/   (campaigns in {root})", flush=True)
+    print(f"  tuning tab: http://{host}:{port}/tuning   (ledger {Handler.ledgers.root})", flush=True)
     for d in build_dirs or []:
         print("  runs use " + describe_build(build_info(d)), flush=True)
     if not build_dirs:

@@ -52,7 +52,7 @@ These were decided with the maintainer on 2026-10-07.
 | --- | --- | --- | --- |
 | 1 | **Engine**: tiers, racing, adaptive grid, persistent worker, ledger, table generation; shown on the 4 existing specs | none | this page, in full |
 | 2 | **Coverage**: specs for the other 15 ops; the constants tuner moved onto the engine and `tuning_params.hh` generated | 1 (spec interface, ledger) | own design pass; interface below |
-| 3 | **benchviz Tuning tab**: the four views | 1 (ledger format, driver progress protocol) | own design pass; interface below |
+| 3 | **benchviz Tuning tab**: the four views | 1 (ledger format, driver progress protocol) | built 2026-10-09; interface and as-built notes below |
 
 Sub-projects 2 and 3 can proceed in parallel once the engine's spec interface, ledger schema and
 progress protocol are frozen.
@@ -347,6 +347,28 @@ The tab reads the ledgers and tables directly, and drives the engine through
   shows the tier. Clicking a cell shows every candidate's timing and interval.
 - **Diff against the shipped table.** Cells whose winner changed, with the predicted per-cell
   speedup or slowdown against the table in `tuned/`, before the tables are written.
+
+Built on 2026-10-09 as `/tuning` in `benchviz serve` (`benchmarks/benchviz/tuning.py`,
+`tuning.html`; user guide in benchmarks/benchviz/README.md "Tuning tab"). Where it departs from the
+interface above:
+
+| Interface above | As built | Why |
+| --- | --- | --- |
+| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (best record, staleness, `ledger_rows`, `nearest`) | the views show exactly what `--ledger` would write next, need no build, and all 70 sm_120 ledgers load in about 2 s |
+| `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`) | the tuner already guards every GPU it uses; a run is not a campaign |
+| figure style | interactive SVG | the map is clicked, not printed |
+
+The diff's two picks are the same section 5.4 lookup: in the shipped table, and in the rows
+`sweep_to_table.py --ledger` would write now. Each takes the first entry the cell's record did not
+refuse (`skipped`, that is `can_run` false). The predicted speedup is the ratio of the two picks'
+medians in that one record. A race calls candidates within 3% a tie and keeps the earlier one, so
+a changed pick can read as low as 0.971×. Against main's tables (2026-10-09), gemm double
+on sm_120 changes 2918 picks, geomean 1.08× where both are timed.
+
+Two engine additions came with it: every progress event carries `t` (Unix seconds), and `--plan`
+emits one `plan_job` event per (op, dtype) (tools/tune/README.md). `ledger_rows` now compares a row
+only with keys in its own and the adjacent `floor(index / stride)` buckets. All 70 sm_120 ledger
+tables came out byte-identical, in 8.4 s instead of 126.6 s.
 
 ## Engine: testing and acceptance
 

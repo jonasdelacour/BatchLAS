@@ -282,6 +282,33 @@ the n × batch cells it covers; the CLI takes the same fields as flags.
 
 On a 4090 an arm-cell takes about 3–8 s, mostly process start, warm-up and the exclusive-GPU check.
 
+## Tuning tab
+
+`serve` also hosts `/tuning`, the selection tuner's dashboard (switch pages in the header). It shows
+what the tuning ledger holds and what a table written from it would change, and starts and watches
+`tools/tune/batchlas_tune` runs. Design: docs/design/tiered-tuning.md, sub-project 3.
+
+```sh
+python3 benchmarks/benchviz serve                                   # then open /tuning
+python3 benchmarks/benchviz serve --tuned ../main-checkout/tuned    # diff against another table set
+python3 benchmarks/benchviz tune --tier coarse --ops potrf,getrs --devices 0,1 --plan   # estimate only
+python3 benchmarks/benchviz tune --tier coarse --ops potrf,getrs --devices 0,1          # a run /tuning shows
+```
+
+| View | Shows |
+|---|---|
+| Status | op × precision for one device: the tier mix of the best records, refined share, stale and partly stale cells, audit mismatches, age, and whether `tuned/` was written from the ledger |
+| Op (click a status cell) | the winner map over two keys with the others fixed: colour is the winning family, paler is a closer runner-up, a mark gives the tier. Click a cell for every record and candidate with its interval. "Change vs table" colours the predicted speedup instead, and the table below lists every changed pick |
+| Runs | per-GPU current cell, per-job progress against the plan, eliminations, audits, worker restarts, rate and ETA, the feed and the log |
+
+The read-only views need no GPU and no build: they read the ledger through
+`scripts/sweep_to_table.py`, the code that writes the tables. A run needs a build with the
+`batchlas_tune` target. One tuning run at a time. Stop sends SIGTERM to the run's process group.
+Every finished cell is already in the ledger, so "Run again" resumes: the tuner skips what the
+ledger holds at the run's tier or better. Runs live in `benchviz_runs/_tuning/<run>/`. A run
+started with `benchviz tune` from a terminal is watched the same way, and keeps going if the
+server stops.
+
 ## ROCm
 
 `factor_bench` selects its backend at compile time, so a ROCm build compares against
