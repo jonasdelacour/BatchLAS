@@ -11,6 +11,7 @@
 
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -113,9 +114,9 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                 };
 
                 T accum[ThreadTile][ThreadTile];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
                         accum[i][j] = T(0);
                     }
@@ -130,7 +131,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             const int kk0 = (flat % (KC / 4)) * 4;
                             const bool col_ok = col < n;
                             const int phys = (swizzle(col >> 2, kk0) << 2) | (col & 3);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 const int gk = k0 + kk0 + i;
                                 sh[(kk0 + i) * SPad + phys] =
@@ -146,7 +147,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             const int gk = k0 + kk;
                             const bool k_ok = gk < k;
                             const int phys = swizzle(col0 >> 2, kk) << 2;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 const int col = col0 + i;
                                 sh[kk * SPad + phys + i] =
@@ -164,7 +165,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                             const T* row = &sh[p * SPad];
                             T af[ThreadTile];
                             T bf[ThreadTile];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int b = 0; b < Bands; ++b) {
                                 // Invariant: a thread's rows/columns are
                                 // contiguous. Two bands 64 apart (as in the
@@ -174,7 +175,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                                 const int qb = swizzle(tc * Bands + b, p);
                                 const TileVec4<T> va = tile_load4(row + qa * 4);
                                 const TileVec4<T> vb = tile_load4(row + qb * 4);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int e = 0; e < 4; ++e) {
                                     // Conjugate the operand carrying the ^H (row
                                     // for ConjTrans, column for NoTrans). The
@@ -188,9 +189,9 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                                     }
                                 }
                             }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int j = 0; j < ThreadTile; ++j) {
                                     accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
                                 }
@@ -207,13 +208,13 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                 // Only the requested triangle is read or written; only
                 // diagonal thread tiles need the element mask.
                 const bool on_diagonal = bi == bj;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < ThreadTile; ++j) {
                     const int col = tc * ThreadTile + j;
                     if (col >= n) {
                         continue;
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < ThreadTile; ++i) {
                         const int row = tr * ThreadTile + i;
                         if (row >= n) {

@@ -623,8 +623,8 @@ TEST_F(Select, EnvPinIsReadOnEveryCallAndScopedPinBeatsIt) {
 
 struct TempDir {
     std::filesystem::path path;
-    TempDir() {
-        path = std::filesystem::temp_directory_path() / ("select_tests." + std::to_string(::getpid()));
+    TempDir() : TempDir("select_tests." + std::to_string(::getpid())) {}
+    explicit TempDir(const std::string& name) : path(std::filesystem::temp_directory_path() / name) {
         std::filesystem::create_directories(path);
     }
     ~TempDir() { std::filesystem::remove_all(path); }
@@ -780,8 +780,12 @@ TEST(SelectDevice, AllOfListsTheVariantInDeclarationOrder) {
 
 // The capture mode of run_factor_grid.sh / route_diff.sh: coverage on, trace off, so no
 // decision is noted and the row's scalar/backend/uplo must come from the shape alone.
+// threadsafe: the child re-executes the binary instead of forking a process whose SYCL runtime
+// already started threads (an AdaptiveCpp child hangs). It re-runs this body, so the path is fixed.
 TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
-    TempDir dir;
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+    std::filesystem::remove_all(std::filesystem::temp_directory_path() / "select_tests.coverage");
+    TempDir dir("select_tests.coverage");
     const std::string out = (dir.path / "cov").string();
     auto child = [&] {
         ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", nullptr);

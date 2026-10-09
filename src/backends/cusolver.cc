@@ -51,7 +51,6 @@ namespace batchlas {
                     Span<std::byte> workspace,
                     Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         // Keep `backend::`: the VENDOR query, never the public facade one (unqualified lookup found
         // the facade and silently passed cuSOLVER a native size). evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
@@ -60,12 +59,19 @@ namespace batchlas {
         if (descrA.batch_size() == 1) {
             auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
             auto info = detail::info_target(ctx, pool, info_out, 1);
-            auto status = call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
-                handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
+                    handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
+            });
         } else {
             auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());
-            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
-                handle, uplo, descrA.rows(), descrA.data_ptrs(ctx).data(), descrA.ld(), info.data(), descrA.batch_size());
+            T** a_ptrs = descrA.data_ptrs(ctx).data();  // fills and waits: never inside run_native
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
+                    handle, uplo, descrA.rows(), a_ptrs, descrA.ld(), info.data(), descrA.batch_size());
+            });
         }
         return ctx.create_event_after_external_work();
     }
@@ -82,7 +88,6 @@ namespace batchlas {
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
-            handle.setStream(ctx);
             BumpAllocator pool(workspace);
             size_t l_work_device_bytes = 0;
             size_t l_work_host_bytes = 0;
@@ -119,24 +124,29 @@ namespace batchlas {
                 // draw -- which is why the int term in syev_vendor_buffer_size
                 // stays unconditional and the size does not change.
                 auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
-                for (int i = 0; i < descrA.batch_size(); ++i) {
-                    check_status(cusolverDnXsyevd(handle,
-                                                 params,
-                                                 eig_mode,
-                                                 fill_mode,
-                                                 descrA.rows(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                 descrA.data_ptr() + i * descrA.stride(),
-                                                 descrA.ld(),
-                                                 BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                 eigenvalues.data() + i * descrA.rows(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                 device_workspace_bytes.data(),
-                                                 l_work_device_bytes,
-                                                 host_workspace.data(),
-                                                 l_work_host_bytes,
-                                                 info.data() + i));
-                }
+                // params is destroyed inside, after its last use by the operation.
+                impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                    handle.setStream(stream);
+                    for (int i = 0; i < descrA.batch_size(); ++i) {
+                        check_status(cusolverDnXsyevd(handle,
+                                                     params,
+                                                     eig_mode,
+                                                     fill_mode,
+                                                     descrA.rows(),
+                                                     BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                     descrA.data_ptr() + i * descrA.stride(),
+                                                     descrA.ld(),
+                                                     BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                     eigenvalues.data() + i * descrA.rows(),
+                                                     BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                     device_workspace_bytes.data(),
+                                                     l_work_device_bytes,
+                                                     host_workspace.data(),
+                                                     l_work_host_bytes,
+                                                     info.data() + i));
+                    }
+                    check_status(cusolverDnDestroyParams(params));
+                });
             } else {
                 // Tightly packed batch: safe to use cuSOLVER batched API.
                 #if USE_CUSOLVER_X_API
@@ -151,23 +161,27 @@ namespace batchlas {
                     auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
                     auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
                     auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
-                    check_status(cusolverDnXsyevBatched(handle,
-                                                       params,
-                                                       eig_mode,
-                                                       fill_mode,
-                                                       descrA.rows(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                       descrA.data_ptr(),
-                                                       descrA.ld(),
-                                                       BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                       eigenvalues.data(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
-                                                       device_workspace_bytes.data(),
-                                                       l_work_device_bytes,
-                                                       host_workspace.data(),
-                                                       l_work_host_bytes,
-                                                       info.data(),
-                                                       descrA.batch_size()));
+                    impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                        handle.setStream(stream);
+                        check_status(cusolverDnXsyevBatched(handle,
+                                                           params,
+                                                           eig_mode,
+                                                           fill_mode,
+                                                           descrA.rows(),
+                                                           BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                           descrA.data_ptr(),
+                                                           descrA.ld(),
+                                                           BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                           eigenvalues.data(),
+                                                           BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                           device_workspace_bytes.data(),
+                                                           l_work_device_bytes,
+                                                           host_workspace.data(),
+                                                           l_work_host_bytes,
+                                                           info.data(),
+                                                           descrA.batch_size()));
+                        check_status(cusolverDnDestroyParams(params));
+                    });
                 #else
                     syevjInfo_t syevj_info;
                     check_status(cusolverDnCreateSyevjInfo(&syevj_info));
@@ -178,12 +192,15 @@ namespace batchlas {
                     // syevj's info IS LAPACK-like (> 0 == did not converge), so
                     // it needs no translation into the contract `info` documents.
                     auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
-                    call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
-                        handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
-                    check_status(cusolverDnDestroySyevjInfo(syevj_info));
+                    impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                        handle.setStream(stream);
+                        call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
+                            handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
+                        check_status(cusolverDnDestroySyevjInfo(syevj_info));
+                        check_status(cusolverDnDestroyParams(params));
+                    });
                 #endif
             }
-            check_status(cusolverDnDestroyParams(params));
             return ctx.create_event_after_external_work();
         }
 
@@ -430,7 +447,6 @@ namespace batchlas {
             }
 
             static LinalgHandle<B> handle;
-            handle.setStream(ctx);
             BumpAllocator pool(workspace);
 
             gesvdjInfo_t params;
@@ -480,17 +496,20 @@ namespace batchlas {
                 }
             }
 
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
-                cusolverDnSgesvdjBatched, cusolverDnDgesvdjBatched,
-                cusolverDnCgesvdjBatched, cusolverDnZgesvdjBatched,
-                handle, jobz, m, n,
-                A.data_ptr(), A.ld(),
-                base_float_ptr_convert(singular_values.data()),
-                u_ptr, want_u ? static_cast<int>(U.ld()) : m,
-                v_ptr, n,
-                work.data(), lwork, info.data(), params, batch);
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUSOLVER, B>(
+                    cusolverDnSgesvdjBatched, cusolverDnDgesvdjBatched,
+                    cusolverDnCgesvdjBatched, cusolverDnZgesvdjBatched,
+                    handle, jobz, m, n,
+                    A.data_ptr(), A.ld(),
+                    base_float_ptr_convert(singular_values.data()),
+                    u_ptr, want_u ? static_cast<int>(U.ld()) : m,
+                    v_ptr, n,
+                    work.data(), lwork, info.data(), params, batch);
 
-            check_status(cusolverDnDestroyGesvdjInfo(params));
+                check_status(cusolverDnDestroyGesvdjInfo(params));
+            });
 
             Event e = ctx.create_event_after_external_work();
             if (want_vh) {

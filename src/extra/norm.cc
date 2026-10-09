@@ -141,7 +141,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
-                    result = sycl::joint_reduce(cta, local_mem.begin(), local_mem.end(), float_t<T>(0), sycl::maximum<float_t<T>>());
+                    result = sycl::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
                     // Initialize local memory with zeros for row sums
                     if (local_idx < rows) {
@@ -161,7 +161,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum row sum (the Inf norm)
-                    result = sycl::joint_reduce(cta, local_mem.begin(), local_mem.end(), float_t<T>(0), sycl::maximum<float_t<T>>());
+                    result = sycl::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Max) {
                     // Find the maximum absolute value in the matrix
                     for (int j = local_idx; j < rows * cols; j += local_size) {

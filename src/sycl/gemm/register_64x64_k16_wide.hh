@@ -11,6 +11,7 @@
 #include "../gemm_kernels.hh"
 
 #include "../../linalg-impl.hh"
+#include "../kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -224,9 +225,9 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
 
                 // Plain local array, fully unrolled: this is the register file.
                 D accum[TT][TT];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < TT; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < TT; ++j) {
                         accum[i][j] = D{};
                     }
@@ -238,7 +239,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                 // float kernels do, is a 4- to 8-way shared-store conflict here.
                 int a_gm[Chunks];
                 int a_gk[Chunks];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int c = 0; c < Chunks; ++c) {
                     const int g = tid + c * Tile::Threads;
                     a_gm[c] = (g % AGranPerRow) * VecN;
@@ -252,7 +253,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
 
                 for (int k0 = 0; k0 < k; k0 += TileK) {
                     if constexpr (AlignedFastPath) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < Chunks; ++c) {
                             raw16_store(
                                 &sa[a_gk[c] * AStride + a_gm[c]],
@@ -260,13 +261,13 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                                            static_cast<std::ptrdiff_t>(k0 + a_gk[c]) * lda));
                         }
                         alignas(16) D vb[Tile::PerThreadB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < Chunks; ++c) {
                             raw16_store(&vb[c * VecN],
                                         raw16_load(Bb + (k0 + b_k + c * VecN) +
                                                    static_cast<std::ptrdiff_t>(n0 + b_n) * ldb));
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < Tile::PerThreadB; ++i) {
                             sb[(b_k + i) * BStride + b_n] = vb[i];
                         }
@@ -274,10 +275,10 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                         // Predicated staging fills the tile to its full 64x16,
                         // zero outside the matrix, so the inner loop below needs
                         // no bounds checks and is identical in both paths.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < Chunks; ++c) {
                             const int gk_a = k0 + a_gk[c];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < VecN; ++e) {
                                 const int gm = m0 + a_gm[c] + e;
                                 sa[a_gk[c] * AStride + a_gm[c] + e] =
@@ -287,7 +288,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                             }
                         }
                         const int gn_b = n0 + b_n;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < Tile::PerThreadB; ++i) {
                             const int gk = k0 + b_k + i;
                             sb[(b_k + i) * BStride + b_n] =
@@ -298,31 +299,31 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
                         D af[TT];
                         D bf[TT];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NB; ++band) {
                             const Vec16<D> t =
                                 vec_ref(&sa[kk * AStride + band * MSep + ty * Wb]);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int w = 0; w < Wb; ++w) {
                                 af[band * Wb + w] = t.v[w];
                             }
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NB; ++band) {
                             const Vec16<D> t =
                                 vec_ref(&sb[kk * BStride + band * NSep + tx * Wb]);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int w = 0; w < Wb; ++w) {
                                 bf[band * Wb + w] = t.v[w];
                             }
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < TT; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < TT; ++j) {
                                 fma_acc(accum[i][j], af[i], bf[j]);
                             }
@@ -334,10 +335,10 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                 // Within a band the Wb rows are consecutive in m, so a whole
                 // band is one 16-byte access into column-major C.
                 const bool beta_zero = dev_is_zero(beta_d);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int bm = 0; bm < NB; ++bm) {
                     const int gm = m0 + bm * MSep + ty * Wb;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < TT; ++j) {
                         const int bn = j / Wb;
                         const int w_n = j % Wb;
@@ -346,14 +347,14 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                             D* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
                             Vec16<D> out;
                             if (beta_zero) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int w = 0; w < Wb; ++w) {
                                     out.v[w] =
                                         lin_epi(alpha_d, D{}, accum[bm * Wb + w][j], D{});
                                 }
                             } else {
                                 const Vec16<D> prior = vec_ref(const_cast<const D*>(p));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int w = 0; w < Wb; ++w) {
                                     out.v[w] = lin_epi(alpha_d, beta_d,
                                                        accum[bm * Wb + w][j], prior.v[w]);
@@ -364,7 +365,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
                             if (gn >= n) {
                                 continue;
                             }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int w = 0; w < Wb; ++w) {
                                 const int row = gm + w;
                                 if (row >= m) {

@@ -43,7 +43,7 @@ specialization constants and no `sycl::stream`.
 | `[[intel::max_work_group_size, min_work_groups_per_cu]]` | `BATCHLAS_LAUNCH_BOUNDS` (`src/queue.hh`), used in 4 kernels | 1 macro |
 | Inline PTX `asm` (L2 prefetch loads) | `src/sycl/gemm/register_128x128.hh` | 1 file, `#if`-guarded |
 | `[[sycl::reqd_sub_group_size(32)]]` | spelled directly | 26 files (acpp warns and ignores it) |
-| oneDPL `<oneapi/dpl/random>` in kernels | `matrix.cc`, `lanczos.cc`, `syevx_lobpcg.cc` | 3 files; hard CMake dependency |
+| oneDPL `<oneapi/dpl/random>` in kernels | `matrix.cc`, `lanczos.cc`, `syevx_lobpcg.cc` | done (C10): `src/util/philox.hh`, oneDPL is no longer a dependency |
 | `info::device::version` parsed as `"8.9"` | `Device::cuda_compute_capability` (`queue-impl.cc`); feeds the table key `sm_<cc>` in `select::describe` | 1 site |
 | PTX inspection: fatbin magic, `cuobjdump`, banned `__spirv_` callees | `scripts/check_device_calls.py`, `register_probe.sh`, `.github/skills/ptx-codegen-comparison` | 3 tools |
 | `/opt/dpcpp-cuda`, `libsycl.so.9`, `-fsycl` | `examples/consumer/`, `consumer_test.sh`, CI, `scripts/rocm_syntax_check.sh` | about 6 files |
@@ -64,7 +64,7 @@ All of these are DPC++ extensions or acpp gaps where a spelling legal in both ex
 | C7 | `sycl::vec<std::complex<T>, N>` | `vec` static assert | plain arrays (`ormqr_cta.cc`) |
 | C8 | `joint_reduce` / `reduce_over_group` of `std::complex` with `sycl::plus` | no overload | reduce `real` and `imag` separately (`ritz_values.cc`; also check `math-helpers.hh:127`, `sycl::vec<R,3>`) |
 | C9 | `select_from_group` of a non-scalar | no overload | same word-split helper as C5 (`device_blas_tests`) |
-| C10 | oneDPL random needs `sycl::isequal`, `sycl::tanpi` | missing in acpp | replace the 3 device RNG uses with an in-tree counter-based generator (Philox) and drop oneDPL as a hard dependency |
+| C10 | oneDPL random needs `sycl::isequal`, `sycl::tanpi` | missing in acpp | **done**: `src/util/philox.hh` (Philox4x32-10) serves the 3 sites; the oneDPL CMake search and `ONEDPL_ROOT` are gone |
 | C11 | `ext_oneapi_submit_barrier` in `tests/linalg_layer_tests.cc` | no member | guard like the library sites |
 
 Exit criterion: all of `src/`, `tests/`, `benchmarks/` and `tools/` compile under both compilers.
@@ -117,7 +117,7 @@ The DPC++ PTX-call gate (`device_calls_tests`) stays green, and the DPC++ route 
   `CMAKE_CXX_COMPILER=/opt/adaptivecpp/bin/acpp`.
 - ccache: the launcher works unchanged. Measure the hit rate on a second acpp tree before claiming it.
 
-### 5.2 Runtime: one interop seam
+### 5.2 Runtime: one interop seam {#sycl-impl-runtime-interop-seam}
 
 One new internal header, `src/sycl/impl.hh`, holds every implementation difference above the
 kernel level. Nothing outside it names an implementation. It provides:
@@ -138,7 +138,7 @@ kernel level. Nothing outside it names an implementation. It provides:
 - The NETLIB host path needs only a CPU `sycl::device`, and acpp's OpenMP backend provides one.
   `submit_host_task` is already synchronous and needs no change beyond `impl::submit_barrier`.
 
-### 5.3 Device: target dispatch at JIT time
+### 5.3 Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
 
 - SSCP compiles device code once, target-agnostically. The NVPTX choice moves from the
   preprocessor to the JIT:

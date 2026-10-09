@@ -2,6 +2,7 @@
 #include "../math-helpers.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../queue.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
@@ -107,7 +108,7 @@ namespace batchlas {
                     sycl::group_barrier(cta);
                     
                     // Reduce across work-group
-                    T numerator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
+                    T numerator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
                     // dot_mem is reused below; no work-item may overwrite it until every
                     // work-item has finished reading it in the reduction above.
                     sycl::group_barrier(cta);
@@ -126,7 +127,7 @@ namespace batchlas {
                     sycl::group_barrier(cta);
                     
                     // Reduce across work-group
-                    T denominator = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.begin() + wg, T(0), sycl::plus<T>());
+                    T denominator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
                     // Likewise before the next grid-stride iteration overwrites dot_mem.
                     sycl::group_barrier(cta);
 

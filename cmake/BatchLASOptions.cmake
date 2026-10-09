@@ -312,11 +312,3 @@ target_include_directories(batchlas_dep_options INTERFACE
     $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
     $<BUILD_INTERFACE:/opt/include>
 )
-
-# oneDPL is a hard dependency (src/matrix.cc, src/extensions/lanczos.cc,
-# src/extensions/tridiag_solver.cc and src/extensions/syevx_lobpcg.cc all
-# include <oneapi/dpl/...> unconditionally). This used to be a plain, non-cache
-# set() to one absolute path, so -DONEDPL_ROOT=... was silently ignored.
-# The actual search lives in BatchLASDependencies.cmake.
-set(ONEDPL_ROOT "" CACHE PATH
-    "Root of a oneDPL installation; the headers are expected at <ONEDPL_ROOT>/include/oneapi/dpl")

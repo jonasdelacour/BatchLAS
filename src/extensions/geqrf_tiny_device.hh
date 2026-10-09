@@ -10,6 +10,7 @@
 
 #include "../sycl/device_scalar.hh"
 #include "../util/resident_capacity.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,7 +21,7 @@ namespace batchlas::geqrf_native {
 // re-open the 48 KB hole. evidence: docs/perf/qr.md#the-two-partition-butterflies
 template <int N, typename R, typename Part>
 inline R geqrf_tiny_reduce_fmax(const Part& part, R value) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
         value = sycl::fmax(value, permute_group_by_xor(part, value, mask));
     }
@@ -29,7 +30,7 @@ inline R geqrf_tiny_reduce_fmax(const Part& part, R value) {
 
 template <int N, typename R, typename Part>
 inline R geqrf_tiny_reduce_sum(const Part& part, R value) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
         value += permute_group_by_xor(part, value, mask);
     }

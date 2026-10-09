@@ -179,10 +179,10 @@ Event tridiagonal_solver(Queue& ctx,
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
 
-            auto D = Span(smem_possible ? D_smem.begin() : D_global.data() + bid*(n+1), n+1);
-            auto L = Span(smem_possible ? L_smem.begin() : L_global.data() + bid*n, n);
-            auto U = Span(smem_possible ? U_smem.begin() : U_global.data() + bid*2*(n+1), 2 * (n + 1));
-            auto Vlocal = Span(smem_possible ? V_smem.begin() : V_reflectors.data() + bid*2*n, 2 * n);
+            auto D = Span(smem_possible ? &D_smem[0] : D_global.data() + bid*(n+1), n+1);
+            auto L = Span(smem_possible ? &L_smem[0] : L_global.data() + bid*n, n);
+            auto U = Span(smem_possible ? &U_smem[0] : U_global.data() + bid*2*(n+1), 2 * (n + 1));
+            auto Vlocal = Span(smem_possible ? &V_smem[0] : V_reflectors.data() + bid*2*n, 2 * n);
 
             auto batch_alphas = Span(alphas.data() + bid * n, n);
             auto batch_betas = Span(betas.data() + bid * n, n);

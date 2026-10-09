@@ -11,6 +11,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/util/mempool.hh>
 
@@ -230,7 +231,7 @@ Event potrf_cta_launch(Queue& ctx,
         h.parallel_for<PotrfCtaKernel<T, NB, TS, SC>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 

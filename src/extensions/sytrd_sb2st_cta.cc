@@ -15,6 +15,7 @@
 #include <batchlas/backend_config.h>
 
 #include "../math-helpers.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <array>
 #include <cstdint>
@@ -396,7 +397,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
         h.parallel_for<BtrdLowerSubgroupKernel<T, P>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(global)),
                               sycl::range<1>(static_cast<size_t>(wg_size))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 using Real = typename base_type<T>::type;
                 using Ops = btrd_givens_ops<T>;
 

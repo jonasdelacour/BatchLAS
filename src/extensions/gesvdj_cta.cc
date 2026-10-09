@@ -12,6 +12,7 @@
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "info_span.hh"
+#include "../sycl/kernel_attrs.hh"
 #include <algorithm>
 #include <complex>
 #include <limits>
@@ -242,7 +243,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
         cgh.parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
@@ -316,23 +317,23 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     for (int32_t h = 0; h < static_cast<int32_t>(kRPL); ++h) {
                         const int32_t col0 = h * static_cast<int32_t>(P);
                         Real x[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                             Real acc = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 acc += norm2_g(A_local[base_a + lane + rr * static_cast<int32_t>(P)
                                                        + (col0 + c) * LD]);
                             }
                             x[c] = acc;
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t step = 0; step < 5; ++step) {
                             const uint32_t mask = static_cast<uint32_t>(P) >> (step + 1);
                             if (mask == 0u) break;
                             const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
                             const int32_t half = static_cast<int32_t>(mask);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t j = 0; j < half; ++j) {
                                 const Real own = hi ? x[j + half] : x[j];
                                 const Real send = hi ? x[j] : x[j + half];
@@ -416,7 +417,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         T aq[kGramChunk][kRPL];
                         T g[kGramChunk];
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
                             const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + k]);
                             pk[k] = pq & 0xFF;
@@ -426,7 +427,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             const int32_t iq = ok ? qk[k] : 0;
                             // conj(A_p)*A_q over this lane's rows, then across lanes.
                             T acc = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 const int32_t row = lane + rr * static_cast<int32_t>(P);
                                 ap[k][rr] = A_local[base_a + row + ip * LD];
@@ -439,14 +440,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32.
                         // Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t step = 0; step < 4; ++step) {
                             const uint32_t mask = static_cast<uint32_t>(kGramChunk) >> step;
                             if (mask == 0u) break;
                             const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
                             const int32_t half = static_cast<int32_t>(mask) / 2;
                             if (half == 0) break;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t j = 0; j < half; ++j) {
                                 const T own = hi ? g[j + half] : g[j];
                                 const T send = hi ? g[j] : g[j + half];
@@ -537,7 +538,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
                         // ---- A <- A*U, V <- V*U, reusing ap/aq from the Gram.
                         // Deliberately no A <- U^H A phase: that is two-sided.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
                             const sycl::vec<Real, 2> cs =
                                 Rcs_local[base_r + ch * static_cast<int32_t>(kGramChunk) + k];
@@ -556,7 +557,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 u22 = dk * T(ck);
                             }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 const int32_t row = lane + rr * static_cast<int32_t>(P);
                                 A_local[base_a + row + pk[k] * LD] = ap[k][rr] * u11 + aq[k][rr] * u21;
@@ -693,7 +694,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             while (jcur < RR && !filled) {
                                 const int32_t j = jcur++;
                                 T v[kRPL];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                                     v[rr] = (row == j) ? T(1) : T(0);
@@ -705,21 +706,21 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                         const int32_t c2 = static_cast<int32_t>(Inv_local[base_p + d2]);
                                         T part_dot = T(0);
                                         T qv[kRPL];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                             const int32_t row = lane + rr * static_cast<int32_t>(P);
                                             qv[rr] = (row < RR) ? A_local[base_a + row + c2 * LD] : T(0);
                                             part_dot = part_dot + conj_if_complex_g(qv[rr]) * v[rr];
                                         }
                                         const T dot = part_sum_g(part, part_dot);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                             v[rr] = v[rr] - qv[rr] * dot;
                                         }
                                     }
                                 }
                                 Real part_n2 = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                                     if (row < RR) part_n2 += norm2_g(v[rr]);
@@ -727,7 +728,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 const Real nrm2 = part_sum_g(part, part_n2);
                                 if (nrm2 > accept_tol) {
                                     const Real inv_nr = Real(1) / sycl::sqrt(nrm2);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                         const int32_t row = lane + rr * static_cast<int32_t>(P);
                                         A_local[base_a + row + cdst * LD] = v[rr] * T(inv_nr);

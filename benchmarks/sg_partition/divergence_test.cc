@@ -1,7 +1,7 @@
 // Standalone chunk-divergence test for the sub-group partition layer.
 //
 //   clang++ -fsycl -fsycl-targets=nvidia_gpu_sm_89 -O3 -std=c++20 \
-//       -I src/extensions benchmarks/sg_partition/divergence_test.cc -o sgp_divergence_test
+//       -I src/extensions -I build/include benchmarks/sg_partition/divergence_test.cc -o sgp_divergence_test
 //   ONEAPI_DEVICE_SELECTOR=cuda:1 ./sgp_divergence_test
 //
 // Every chunk runs its own data-dependent trip count (some chunks return before
@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "sg_partition/sg_partition.hh"
+#include "../../src/sycl/kernel_attrs.hh"
 
 namespace {
 
@@ -201,7 +202,7 @@ int run_case(sycl::queue& q, bool divergent, sycl::range<Dims> local, const char
          sycl::local_accessor<T, 1> slot(sycl::range<1>(wg + 32), h);
          h.parallel_for<TestKernel<P, Masked, T, Dims>>(
              sycl::nd_range<Dims>(global, local),
-             [=](sycl::nd_item<Dims> it) [[sycl::reqd_sub_group_size(32)]] {
+             [=](sycl::nd_item<Dims> it) BATCHLAS_REQD_SG_SIZE(32) {
                  auto sg = it.get_sub_group();
                  const uint32_t sgl = static_cast<uint32_t>(sg.get_local_linear_id());
                  const uint32_t sgi = static_cast<uint32_t>(sg.get_group_linear_id());

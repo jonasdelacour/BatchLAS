@@ -12,6 +12,7 @@
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
 

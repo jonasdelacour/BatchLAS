@@ -14,6 +14,7 @@
 #include "../util/template-instantiations.hh"
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <complex>
 #include <numeric>
@@ -36,6 +37,17 @@ namespace batchlas {
 // - Order/storage match LAPACK's DORMQR/ZUNMQR and DORMQL/ZUNMQL contracts.
 
 namespace detail {
+
+// sycl::vec<std::complex> does not compile on AdaptiveCpp; complex never takes the
+// vector path (vec_ok is false), so it only needs a type that compiles.
+template <typename T, int N>
+struct PlainVec {
+    T v[N];
+    T& operator[](int i) { return v[i]; }
+    const T& operator[](int i) const { return v[i]; }
+};
+template <typename T, int N>
+using ColVec = std::conditional_t<internal::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
 
 template <typename U>
 inline U conj_val(const U& x) {
@@ -254,25 +266,25 @@ inline void ormqx_cta_impl(Queue& ctx,
                 // the whole array into local memory, and the reflector loop then pays a
                 // dependent L1/global round trip for each of its ~n^2 accesses.
                 T C_col[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                     C_col[r] = T(0);
                 }
                 if (vec_ok && active_col) {
-                    using VecT = sycl::vec<T, VW>;
+                    using VecT = detail::ColVec<T, VW>;
                     auto* col_ptr = reinterpret_cast<const VecT*>(&C_prob(0, j));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
                         if (r < n) {
                             const VecT v = col_ptr[r / VW];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t t = 0; t < VW; ++t) {
                                 C_col[r + t] = v[t];
                             }
                         }
                     }
                 } else if (active_col) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         if (r < n) {
                             C_col[r] = C_prob(r, j);
@@ -329,12 +341,12 @@ inline void ormqx_cta_impl(Queue& ctx,
 
                     if (active_col && tau_eff != T(0)) {
                         T dot = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             dot += detail::conj_val(V_local[base_v + r]) * C_col[r];
                         }
                         const T gamma = tau_eff * dot;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             C_col[r] -= V_local[base_v + r] * gamma;
                         }
@@ -345,13 +357,13 @@ inline void ormqx_cta_impl(Queue& ctx,
                 }
 
                 if (vec_ok && active_col) {
-                    using VecT = sycl::vec<T, VW>;
+                    using VecT = detail::ColVec<T, VW>;
                     auto* col_ptr = reinterpret_cast<VecT*>(&C_prob(0, j));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); r += VW) {
                         if (r < n) {
                             VecT v{};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t t = 0; t < VW; ++t) {
                                 v[t] = C_col[r + t];
                             }
@@ -359,7 +371,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                         }
                     }
                 } else if (active_col) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         if (r < n) {
                             C_prob(r, j) = C_col[r];

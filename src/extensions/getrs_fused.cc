@@ -12,7 +12,9 @@
 #include "../queue.hh"
 #include "../sycl/device_scalar.hh"
 #include "../util/resident_capacity.hh"
+#include "../sycl/kernel_attrs.hh"
 
+#include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -231,7 +233,7 @@ Event fused_launch_notrans(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
                 const auto sg = it.get_sub_group();
@@ -288,7 +290,7 @@ Event fused_launch_notrans(Queue& ctx,
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int kk = 0; kk < jb - 1; ++kk) {
-                                const D pv2 = sycl::group_broadcast(sg, v, kk);
+                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
                                 if (lane > kk && lane < jb)
                                     v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
                                                                static_cast<std::size_t>(kk) *
@@ -302,20 +304,20 @@ Event fused_launch_notrans(Queue& ctx,
                     // Parallel over rows, so the read of A[i, j+kk] is coalesced.
                     for (int i = j + jb + tid; i < n; i += wg) {
                         D acc[NR];
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                         for (int kk = 0; kk < jb; ++kk) {
                             const D a = Ab[static_cast<std::size_t>(i) +
                                            static_cast<std::size_t>(j + kk) *
                                            static_cast<std::size_t>(lda)];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs)
                                     fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
                                                          static_cast<std::size_t>(n) +
                                                          static_cast<std::size_t>(j + kk)]);
                         }
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c)
                             if (c < nrhs) {
                                 D* const yc = y + static_cast<std::size_t>(c) *
@@ -349,7 +351,7 @@ Event fused_launch_notrans(Queue& ctx,
                                     v = dev_div(v, blk[static_cast<std::size_t>(kk) +
                                                        static_cast<std::size_t>(kk) *
                                                        static_cast<std::size_t>(bld)]);
-                                const D pv2 = sycl::group_broadcast(sg, v, kk);
+                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
                                 if (lane < kk)
                                     v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
                                                                static_cast<std::size_t>(kk) *
@@ -362,20 +364,20 @@ Event fused_launch_notrans(Queue& ctx,
 
                     for (int i = tid; i < j0; i += wg) {
                         D acc[NR];
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                         for (int kk = 0; kk < jb; ++kk) {
                             const D a = Ab[static_cast<std::size_t>(i) +
                                            static_cast<std::size_t>(j0 + kk) *
                                            static_cast<std::size_t>(lda)];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs)
                                     fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
                                                          static_cast<std::size_t>(n) +
                                                          static_cast<std::size_t>(j0 + kk)]);
                         }
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c)
                             if (c < nrhs) {
                                 D* const yc = y + static_cast<std::size_t>(c) *
@@ -426,7 +428,7 @@ Event fused_launch_trans(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
                 const auto sg = it.get_sub_group();
@@ -472,18 +474,18 @@ Event fused_launch_trans(Queue& ctx,
                     // SUB-GROUP PER COLUMN, so its 32 lanes read 32 consecutive elements.
                     for (int t = sgid; t < jb; t += nsg) {
                         D acc[NR];
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                         for (int i = lane; i < j; i += 32) {
                             const D a = ld_a(i, j + t);
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs)
                                     fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
                                                          static_cast<std::size_t>(n) +
                                                          static_cast<std::size_t>(i)]);
                         }
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c)
                             if (c < nrhs) {
                                 const D s = sg_sum(sg, acc[c]);
@@ -507,7 +509,7 @@ Event fused_launch_trans(Queue& ctx,
                                     v = dev_div(v, blk[static_cast<std::size_t>(s) +
                                                        static_cast<std::size_t>(s) *
                                                        static_cast<std::size_t>(bld)]);
-                                const D vs = sycl::group_broadcast(sg, v, s);
+                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
                                 if (lane > s && lane < jb)
                                     v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
                                                                static_cast<std::size_t>(lane) *
@@ -533,18 +535,18 @@ Event fused_launch_trans(Queue& ctx,
 
                     for (int t = sgid; t < jb; t += nsg) {
                         D acc[NR];
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                         for (int i = jend + lane; i < n; i += 32) {
                             const D a = ld_a(i, j0 + t);
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs)
                                     fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
                                                          static_cast<std::size_t>(n) +
                                                          static_cast<std::size_t>(i)]);
                         }
-                        #pragma unroll
+                        BATCHLAS_UNROLL_FULL
                         for (int c = 0; c < NR; ++c)
                             if (c < nrhs) {
                                 const D s = sg_sum(sg, acc[c]);
@@ -564,7 +566,7 @@ Event fused_launch_trans(Queue& ctx,
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s > 0; --s) {
-                                const D vs = sycl::group_broadcast(sg, v, s);
+                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
                                 if (lane < s)
                                     v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
                                                                static_cast<std::size_t>(lane) *
@@ -628,7 +630,7 @@ Event potrs_fused_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
                 const auto sg = it.get_sub_group();
@@ -674,15 +676,15 @@ Event potrs_fused_launch(Queue& ctx,
                         // The PAST contribution, dot form: column j+t of U, rows above j.
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                             for (int i = lane; i < j; i += 32) {
                                 const D a = ld_h(i, j + t);
-                                #pragma unroll
+                                BATCHLAS_UNROLL_FULL
                                 for (int c = 0; c < NR; ++c)
                                     if (c < nrhs) fma_acc(acc[c], a, y[c * nz + i]);
                             }
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
                                     const D s = sg_sum(sg, acc[c]);
@@ -698,7 +700,7 @@ Event potrs_fused_launch(Queue& ctx,
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
                                 if (lane == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = sycl::group_broadcast(sg, v, s);
+                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
                                 if (lane > s && lane < jb)
                                     v = dev_sub(v, dev_mul(blk[lane + s * bz], vs));
                             }
@@ -711,15 +713,15 @@ Event potrs_fused_launch(Queue& ctx,
                         // The FUTURE contribution, axpy form: rows below the block.
                         for (int i = j + jb + tid; i < n; i += wg) {
                             D acc[NR];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j + kk);
-                                #pragma unroll
+                                BATCHLAS_UNROLL_FULL
                                 for (int c = 0; c < NR; ++c)
                                     if (c < nrhs) fma_acc(acc[c], a, y[c * nz + j + kk]);
                             }
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) y[c * nz + i] = dev_sub(y[c * nz + i], acc[c]);
                         }
@@ -742,15 +744,15 @@ Event potrs_fused_launch(Queue& ctx,
                         // The PAST contribution, dot form: column j0+t of L, rows below.
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                             for (int i = jend + lane; i < n; i += 32) {
                                 const D a = ld_h(i, j0 + t);
-                                #pragma unroll
+                                BATCHLAS_UNROLL_FULL
                                 for (int c = 0; c < NR; ++c)
                                     if (c < nrhs) fma_acc(acc[c], a, y[c * nz + i]);
                             }
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
                                     const D s = sg_sum(sg, acc[c]);
@@ -766,7 +768,7 @@ Event potrs_fused_launch(Queue& ctx,
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s >= 0; --s) {
                                 if (lane == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = sycl::group_broadcast(sg, v, s);
+                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
                                 if (lane < s) v = dev_sub(v, dev_mul(blk[s + lane * bz], vs));
                             }
                             if (lane < jb) yc[j0 + lane] = v;
@@ -778,15 +780,15 @@ Event potrs_fused_launch(Queue& ctx,
                         // The FUTURE contribution, axpy form: rows above the block.
                         for (int i = tid; i < j0; i += wg) {
                             D acc[NR];
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j0 + kk);
-                                #pragma unroll
+                                BATCHLAS_UNROLL_FULL
                                 for (int c = 0; c < NR; ++c)
                                     if (c < nrhs) fma_acc(acc[c], a, y[c * nz + j0 + kk]);
                             }
-                            #pragma unroll
+                            BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) y[c * nz + i] = dev_sub(y[c * nz + i], acc[c]);
                         }

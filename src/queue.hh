@@ -21,6 +21,7 @@
 // evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 #include "util/internal-api.hh"
 #include "util/kernel-trace.hh"
+#include "sycl/impl.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 
@@ -29,15 +30,6 @@
 #define BATCHLAS_QUEUE_EXPORTED_INLINE inline
 #else
 #define BATCHLAS_QUEUE_EXPORTED_INLINE [[gnu::used]] inline
-#endif
-
-// [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(T, B)]]. NVPTX only: on SPIR-V the
-// attributes break the icpx CPU AOT link. evidence: docs/design/runtime-internals.md#runtime-internals-queue-thread-ownership-and-the-last-event-holder
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks) \
-    intel::max_work_group_size(1, 1, max_threads), intel::min_work_groups_per_cu(min_blocks)
-#else
-#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks)
 #endif
 
 // The whole single-thread enforcement: owner thread id vs caller. Deliberately NOT a mutex:
@@ -343,9 +335,11 @@ struct QueueImpl : public sycl::queue{
         return event;
     }
     
+    // impl::rethrow_async_errors: wait_and_throw throws instead of the default std::terminate.
     QueueImpl(Device dev, bool in_order)
         : sycl::queue(shared_context(dev),
                       device_arrays.at((int)dev.type).at(dev.idx),
+                      impl::rethrow_async_errors,
                       make_queue_properties(in_order)),
           device_(dev),
           trace_tid_(allocate_trace_tid()) {}
@@ -353,6 +347,7 @@ struct QueueImpl : public sycl::queue{
     QueueImpl(const sycl::context& ctx, const sycl::device& dev, Device logical_dev, bool in_order)
         : sycl::queue(ctx,
                       dev,
+                      impl::rethrow_async_errors,
                       make_queue_properties(in_order)),
           device_(logical_dev),
           trace_tid_(allocate_trace_tid()) {}
@@ -360,6 +355,7 @@ struct QueueImpl : public sycl::queue{
     QueueImpl()
         : sycl::queue(shared_context(Device{0, DeviceType::CPU}),
                       device_arrays.at((int)DeviceType::CPU).at(0),
+                      impl::rethrow_async_errors,
                       make_queue_properties(false)),
           device_(Device{0, DeviceType::CPU}),
           trace_tid_(allocate_trace_tid()) {}
@@ -458,22 +454,9 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
     impl_->rebind_thread_owner();
 }
 
+// CUstream / hipStream_t, else nullptr (also acpp's out-of-order queues: no stream outside a CG).
 BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
-    switch (impl_->get_backend()) {
-#if SYCL_EXT_ONEAPI_BACKEND_CUDA
-        case sycl::backend::ext_oneapi_cuda:
-            // CUstream, i.e. cudaStream_t.
-            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_cuda>(*impl_));
-#endif
-#if SYCL_EXT_ONEAPI_BACKEND_HIP
-        case sycl::backend::ext_oneapi_hip:
-            // HIPstream, i.e. hipStream_t.
-            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_hip>(*impl_));
-#endif
-        default:
-            // Deliberately nullptr elsewhere: no other backend yields an unowned stream pointer.
-            return nullptr;
-    }
+    return impl::native_stream(*impl_);
 }
 
 BATCHLAS_QUEUE_EXPORTED_INLINE sycl::queue& sycl_queue(const Queue& ctx) { return *ctx.impl_; }

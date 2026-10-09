@@ -10,6 +10,7 @@
 
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -115,9 +116,9 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                 T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 T accum[ThreadTile][ThreadTile];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
                         accum[i][j] = T(0);
                     }
@@ -139,7 +140,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                             const TileVec4<T> vb =
                                 tile_vec4(Ab + (k0 + s_l) +
                                           static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 sa[(s_l + i) * AStride + s_row] = va.v[i];
                                 sb[(s_l + i) * BStride + s_row] = vb.v[i];
@@ -159,7 +160,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                         if constexpr (TransOperand) {
                             const int gm = m0 + s_row;
                             const int gn = n0 + s_row;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 const int gk = k0 + s_l + i;
                                 sa[(s_l + i) * AStride + s_row] =
@@ -173,7 +174,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                             }
                         } else {
                             const int gk = k0 + s_l;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 const int gm = m0 + s_row + i;
                                 const int gn = n0 + s_row + i;
@@ -190,7 +191,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
                         const TileVec4<T> a0 = tile_vec4(&sa[kk * AStride + ty * Band]);
                         const TileVec4<T> a1 = tile_vec4(&sa[kk * AStride + 64 + ty * Band]);
@@ -200,9 +201,9 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                                                   a1.v[0], a1.v[1], a1.v[2], a1.v[3]};
                         const T bf[ThreadTile] = {b0.v[0], b0.v[1], b0.v[2], b0.v[3],
                                                   b1.v[0], b1.v[1], b1.v[2], b1.v[3]};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < ThreadTile; ++j) {
                                 accum[i][j] += af[i] * bf[j];
                             }
@@ -226,10 +227,10 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                     *p = beta == T(0) ? alpha * value : alpha * value + beta * *p;
                 };
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int band = 0; band < 2; ++band) {
                     const int gm = m0 + band * 64 + ty * Band;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
                         const int gn = n0 + (j < Band ? tx * Band + j : 64 + tx * Band + j - Band);
                         if constexpr (AlignedFastPath) {
@@ -237,13 +238,13 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                                 T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
                                 TileVec4<T> out;
                                 if (beta == T(0)) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j];
                                     }
                                 } else {
                                     const TileVec4<T> prior = tile_vec4(const_cast<const T*>(p));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j] +
                                             beta * prior.v[i];
@@ -253,7 +254,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                                 continue;
                             }
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             store_element(gm + i, gn, accum[band * Band + i][j]);
                         }

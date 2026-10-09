@@ -138,8 +138,6 @@ PYTHONPATH=../../build/python python3 run_all.py     # execute and check all twe
 - CMake 3.17+ (3.21+ for `cmake --preset`; `CMakePresets.json` is schema version 3)
 - A C++20 compiler with SYCL support (a DPC++/Clang-family compiler; the CMake logic targets
   IntelLLVM/Clang-style SYCL compilers)
-- oneDPL headers, a hard dependency (several sources include `<oneapi/dpl/...>`). The build looks
-  under `/opt/intel/oneapi/dpl/latest/include`; set `ONEDPL_ROOT` otherwise.
 - Optional: CUDA Toolkit (NVIDIA), ROCm (AMD), LAPACKE and CBLAS (netlib host backend), Python 3 +
   pybind11 + NumPy + SciPy (Python bindings)
 
@@ -225,7 +223,6 @@ Common CMake options:
 | `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without a `[cuda:gpu]` in `sycl-ls`) or `OFF`. A cache entry from the old boolean option is migrated on the first re-configure (`OFF` becomes `AUTO`, `ON` stays `ON`); pass `-DBATCHLAS_ENABLE_CUDA=OFF` to force off |
 | `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
-| `ONEDPL_ROOT` | root of a oneDPL installation not on the default search path; configure fails without oneDPL |
 | `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
 | `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |
 | `BATCHLAS_ENABLE_TUNING` | enable tuning targets; for benchmark builds |

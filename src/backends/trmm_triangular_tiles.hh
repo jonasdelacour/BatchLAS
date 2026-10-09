@@ -10,6 +10,7 @@
 
 #include "../queue.hh"
 #include "../util/kernel-trace.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -138,9 +139,9 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                 };
 
                 T accum[ThreadRows][ThreadCols];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadRows; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadCols; ++j) {
                         accum[i][j] = T(0);
                     }
@@ -160,7 +161,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                             const int pp0 = (flat % (TileK / 4)) * 4;
                             const int ii = i - m0;
                             const int phys = (swizzle_a(ii >> 2, pp0) << 2) | (ii & 3);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
                                 const int p = p0 + pp0 + e;
                                 T value = T(0);
@@ -188,7 +189,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                         const int phys = swizzle_a(ii0 >> 2, pp) << 2;
                         // One 128-bit store of four adjacent rows: single stores would hit 8 banks.
                         TileVec4<T> packet;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int e = 0; e < 4; ++e) {
                             const int i = m0 + ii0 + e;
                             T value = T(0);
@@ -215,7 +216,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                         const int pp0 = (flat % (TileK / 4)) * 4;
                         const int j = n0 + col;
                         const int phys = (swizzle_b(col >> 2, pp0) << 2) | (col & 3);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int e = 0; e < 4; ++e) {
                             const int p = p0 + pp0 + e;
                             sb[(pp0 + e) * SB + phys] =
@@ -232,27 +233,27 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                         const T* rowb = &sb[p * SB];
                         T af[ThreadRows];
                         T bf[ThreadCols];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int b = 0; b < BandsR; ++b) {
                             const TileVec4<T> v =
                                 tile_load4(rowa + (swizzle_a(b * (BandSpanR / 4) + tr, p) << 2));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
                                 af[b * 4 + e] = v.v[e];
                             }
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int b = 0; b < BandsC; ++b) {
                             const TileVec4<T> v =
                                 tile_load4(rowb + (swizzle_b(b * (BandSpanC / 4) + tc, p) << 2));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
                                 bf[b * 4 + e] = v.v[e];
                             }
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < ThreadRows; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < ThreadCols; ++j) {
                                 accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
                             }
@@ -262,13 +263,13 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                 }
 
                 // TRMM overwrites C; there is no beta, so nothing here reads it.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < ThreadCols; ++j) {
                     const int col = n0 + (j / 4) * BandSpanC + tc * 4 + (j % 4);
                     if (col >= n) {
                         continue;
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < ThreadRows; ++i) {
                         const int row = m0 + (i / 4) * BandSpanR + tr * 4 + (i % 4);
                         if (row >= m) {

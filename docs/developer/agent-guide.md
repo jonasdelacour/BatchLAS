@@ -6,8 +6,8 @@ Terse working rules for agents and contributors: toolchain, build performance, t
 routing architecture, measurement rules, GPU kernel facts and repository conventions.
 
 **TL;DR.** Build dependencies: CMake >=3.17 (>=3.21 for `cmake --preset`), a C++20 compiler with
-SYCL 2020 support **and a backend for your GPU vendor**, netlib LAPACK/LAPACKE + CBLAS, oneDPL
-headers. Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised configuration is
+SYCL 2020 support **and a backend for your GPU vendor**, netlib LAPACK/LAPACKE + CBLAS.
+Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised configuration is
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
 Ubuntu 22.04; see "Tested platforms" in `.github/README.md`.
 
@@ -84,14 +84,6 @@ cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++
 
 A consumer of an installed BatchLAS must configure the *whole* consuming project with this same
 compiler ("Consuming BatchLAS from CMake" in `.github/README.md`).
-
-### 2c. oneDPL
-
-Several sources include `<oneapi/dpl/...>` unconditionally, so oneDPL headers are a hard
-dependency even for CUDA. A self-built `intel/llvm` does not bundle them. The build looks under
-`/opt/intel/oneapi/dpl/latest/include` (what `sudo apt install intel-oneapi-dpl` provides).
-oneDPL is header-only: a clone of https://github.com/oneapi-src/oneDPL works if its `include/`
-ends up at that path.
 
 ## 3. Verifying the Toolchain
 

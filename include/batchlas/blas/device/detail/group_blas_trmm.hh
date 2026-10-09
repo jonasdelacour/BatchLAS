@@ -115,7 +115,7 @@ inline constexpr void trmm(const Item& item,
                             continue;
                         }
                         const T a_lane = lane == row_offset ? detail::triangular_matrix_entry(a, row, k, transform) : T(0);
-                        const T a_value = sycl::select_from_group(sg, a_lane, static_cast<uint32_t>(row_offset));
+                        const T a_value = batchlas::portable::select_from_group(sg, a_lane, static_cast<uint32_t>(row_offset));
                         partials[static_cast<std::size_t>(row_offset)] += a_value * b_value;
                     }
                 }
@@ -129,7 +129,7 @@ inline constexpr void trmm(const Item& item,
                     for (int row_offset = 0; row_offset < rows_per_sg; ++row_offset) {
                         const int row = base_row + row_offset;
                         const T b_lane = row < row_extent && lane == row_offset ? operand.b(row, k) : T(0);
-                        const T b_value = sycl::select_from_group(sg, b_lane, static_cast<uint32_t>(row_offset));
+                        const T b_value = batchlas::portable::select_from_group(sg, b_lane, static_cast<uint32_t>(row_offset));
                         if (row >= row_extent || col >= col_extent) {
                             continue;
                         }

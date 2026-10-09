@@ -194,4 +194,12 @@ target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:--acpp-targets=${BATCHLAS_ACPP_TARGETS}>>")
 target_link_options(batchlas_sycl_no_cpu_options INTERFACE "$<BUILD_INTERFACE:--acpp-targets=${BATCHLAS_ACPP_TARGETS}>")
 
+# Device __mulsc3/__muldc3/__divsc3/__divdc3 (Annex G) in every TU; SSCP ships none, and a shared
+# definitions TU cannot link (see the header). Joined -include<path>: one option, never de-duplicated.
+set(BATCHLAS_ACPP_ANNEXG_HEADER "${PROJECT_SOURCE_DIR}/src/sycl/annexg_complex.hh")
+target_compile_options(batchlas_sycl_options INTERFACE
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-include${BATCHLAS_ACPP_ANNEXG_HEADER}>>")
+target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-include${BATCHLAS_ACPP_ANNEXG_HEADER}>>")
+
 message(STATUS "Using AdaptiveCpp for SYCL: ${CMAKE_CXX_COMPILER}")

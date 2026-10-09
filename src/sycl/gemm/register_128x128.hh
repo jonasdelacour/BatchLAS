@@ -23,6 +23,7 @@
 #include "../gemm_kernels.hh"
 
 #include "../../linalg-impl.hh"
+#include "../kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -56,6 +57,18 @@ inline Vec4<T> load4_l2_line(const T* p) {
             : "l"(p));
         return r;
     }
+#elif BATCHLAS_SYCL_IMPL_ACPP
+    // SSCP: the asm passes x86 Sema (no "=f"; `{` is a dialect brace, hence %{ %}).
+    if constexpr (std::is_same_v<T, float>) {
+        if (sycl_impl::on_ptx()) {
+            unsigned x = 0, y = 0, z = 0, w = 0;
+            __acpp_if_target_sscp(asm("ld.global.L2::128B.v4.b32 %{%0, %1, %2, %3%}, [%4];"
+                                      : "=r"(x), "=r"(y), "=r"(z), "=r"(w)
+                                      : "l"(p));)
+            return Vec4<T>{__builtin_bit_cast(T, x), __builtin_bit_cast(T, y),
+                           __builtin_bit_cast(T, z), __builtin_bit_cast(T, w)};
+        }
+    }
 #endif
     return vec4_ref(p);
 }
@@ -70,6 +83,14 @@ inline T load1_l2_line(const T* p) {
         T r;
         asm("ld.global.L2::128B.f32 %0, [%1];" : "=f"(r) : "l"(p));
         return r;
+    }
+#elif BATCHLAS_SYCL_IMPL_ACPP
+    if constexpr (std::is_same_v<T, float>) {
+        if (sycl_impl::on_ptx()) {
+            unsigned r = 0;
+            __acpp_if_target_sscp(asm("ld.global.L2::128B.b32 %0, [%1];" : "=r"(r) : "l"(p));)
+            return __builtin_bit_cast(T, r);
+        }
     }
 #endif
     return *p;
@@ -123,7 +144,7 @@ struct Gemm128x128Body {
     T alpha, beta;
     sycl::local_accessor<T, 1> tile_a, tile_b;
 
-    [[BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)]]
+    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
         if (bid >= batch) {
@@ -145,9 +166,9 @@ struct Gemm128x128Body {
         T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
 
         T accum[ThreadTile][ThreadTile];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int j = 0; j < ThreadTile; ++j) {
                 accum[i][j] = T(0);
             }
@@ -171,7 +192,7 @@ struct Gemm128x128Body {
                 // Zero outside the matrix, so the inner loop needs no bounds.
                 const int gk_a = k0 + a_k;
                 const int gn_b = n0 + b_n;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < 4; ++i) {
                     const int gm = m0 + a_m + i;
                     ra[i] = (gm < m && gk_a < k) ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
@@ -181,7 +202,7 @@ struct Gemm128x128Body {
         };
         auto sstore = [&](int buf) __attribute__((always_inline)) {
             vec4_ref(&sa[buf * TileK * AStride + a_k * AStride + a_m]) = ra;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int i = 0; i < 4; ++i) {
                 sb[buf * TileK * BStride + (b_k + i) * BStride + b_n] = rb[i];
             }
@@ -189,7 +210,7 @@ struct Gemm128x128Body {
         auto compute = [&](int buf) __attribute__((always_inline)) {
             const T* xa = sa + buf * TileK * AStride;
             const T* xb = sb + buf * TileK * BStride;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int kk = 0; kk < TileK; ++kk) {
                 const Vec4<T> a0 = vec4_ref(&xa[kk * AStride + mb]);
                 const Vec4<T> a1 = vec4_ref(&xa[kk * AStride + BandM + mb]);
@@ -197,9 +218,9 @@ struct Gemm128x128Body {
                 const Vec4<T> b1 = vec4_ref(&xb[kk * BStride + BandN + nb]);
                 const T af[ThreadTile] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
                 const T bf[ThreadTile] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadTile; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
                         accum[i][j] += af[i] * bf[j];
                     }
@@ -237,15 +258,15 @@ struct Gemm128x128Body {
             T* sc = sa;
             const int tid2 = static_cast<int>(item.get_local_id(2));
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int p = 0; p < Band; ++p) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int half = 0; half < 2; ++half) {
                     const int slot = (nb >> 2) + half * (BandN / 4);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int band = 0; band < 2; ++band) {
                         Vec4<T> v;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             v[i] = accum[band * Band + i][p + half * Band];
                         }
@@ -253,7 +274,7 @@ struct Gemm128x128Body {
                     }
                 }
                 item.barrier(sycl::access::fence_space::local_space);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < 4; ++q) {
                     const int slot = (tid2 >> 5) * 4 + q;
                     const int row = (tid2 & 31) * 4;
@@ -264,7 +285,7 @@ struct Gemm128x128Body {
                         out = alpha * v;
                     } else {
                         const Vec4<T> prior = vec4_ref(const_cast<const T*>(dst));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             out[i] = LinearEpilogue<T>::apply(alpha, beta, v[i], prior[i]);
                         }
@@ -278,23 +299,23 @@ struct Gemm128x128Body {
 
         // Within a band the four rows are consecutive in m, the contiguous
         // direction of a column-major C, so a band is one 128-bit access.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int band = 0; band < 2; ++band) {
             const int gm = m0 + band * BandM + mb;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int j = 0; j < ThreadTile; ++j) {
                 const int gn = n0 + (j < Band ? nb + j : BandN + nb + j - Band);
                 if constexpr (AlignedFastPath) {
                     T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
                     Vec4<T> out;
                     if (beta == T(0)) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             out[i] = alpha * accum[band * Band + i][j];
                         }
                     } else {
                         const Vec4<T> prior = vec4_ref(const_cast<const T*>(p));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             out[i] = LinearEpilogue<T>::apply(alpha, beta, accum[band * Band + i][j], prior[i]);
                         }
@@ -304,7 +325,7 @@ struct Gemm128x128Body {
                     if (gn >= n) {
                         continue;
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int row = gm + i;
                         if (row >= m) {

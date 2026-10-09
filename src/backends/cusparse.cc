@@ -230,7 +230,6 @@ namespace batchlas {
                Transpose transB,
                Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
 
         SpmmCsrBatchPlan plan;
         if constexpr (MFormat == MatrixFormat::CSR) {
@@ -244,49 +243,60 @@ namespace batchlas {
             ctx, spmm_planned_buffer_size<B, T, MFormat>(
                      handle, A, B_mat, C, alpha, beta, transA, transB, plan));
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
-
-        if constexpr (MFormat == MatrixFormat::CSR) {
-            if (!plan.matches_capacity) {
-                const int bs = A.batch_size();
-                if (plan.uniform) {
-                    LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
-                    LocalDnDescr<T> b(B_mat, 0, bs);
-                    LocalDnDescr<T> c(C, 0, bs);
-                    cusparseSpMM(handle, cusparse_op<T>(transA), cusparse_op<T>(transB),
-                                 &alpha, a, b, &beta, c,
-                                 BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                 CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
-                } else {
-                    // Inexpressible as one strided descriptor: a call per item.
-                    for (int i = 0; i < bs; ++i) {
-                        LocalCsrDescr<T> a(A, i, 1,
-                                           plan.item_nnz[static_cast<std::size_t>(i)]);
-                        LocalDnDescr<T> b(B_mat, i, 1);
-                        LocalDnDescr<T> c(C, i, 1);
-                        cusparseSpMM(handle, cusparse_op<T>(transA),
-                                     cusparse_op<T>(transB),
-                                     &alpha, a, b, &beta, c,
-                                     BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
-                    }
-                }
-                return ctx.create_event_after_external_work();
-            }
+        // Create the cached descriptors on the caller's views: the lambda's copies share them.
+        if (MFormat != MatrixFormat::CSR || plan.matches_capacity) {
+            A.init();
+            B_mat.init();
+            C.init();
         }
 
-        cusparseSpMM(
-            handle,
-            cusparse_op<T>(transA),
-            cusparse_op<T>(transB),
-            &alpha,
-            *A,
-            *B_mat,
-            &beta,
-            *C,
-            BackendScalar<T,BackendLibrary::CUSPARSE>::type,
-            CUSPARSE_SPMM_ALG_DEFAULT,
-            buffer.data()
-        );
+        impl::run_native<impl::Native::Cuda>(*ctx, [=, plan = std::move(plan)](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            if constexpr (MFormat == MatrixFormat::CSR) {
+                if (!plan.matches_capacity) {
+                    const int bs = A.batch_size();
+                    if (plan.uniform) {
+                        LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
+                        LocalDnDescr<T> b(B_mat, 0, bs);
+                        LocalDnDescr<T> c(C, 0, bs);
+                        cusparseSpMM(handle, cusparse_op<T>(transA), cusparse_op<T>(transB),
+                                     &alpha_h, a, b, &beta_h, c,
+                                     BackendScalar<T, BackendLibrary::CUSPARSE>::type,
+                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
+                    } else {
+                        // Inexpressible as one strided descriptor: a call per item.
+                        for (int i = 0; i < bs; ++i) {
+                            LocalCsrDescr<T> a(A, i, 1,
+                                               plan.item_nnz[static_cast<std::size_t>(i)]);
+                            LocalDnDescr<T> b(B_mat, i, 1);
+                            LocalDnDescr<T> c(C, i, 1);
+                            cusparseSpMM(handle, cusparse_op<T>(transA),
+                                         cusparse_op<T>(transB),
+                                         &alpha_h, a, b, &beta_h, c,
+                                         BackendScalar<T, BackendLibrary::CUSPARSE>::type,
+                                         CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
+                        }
+                    }
+                    return;
+                }
+            }
+
+            cusparseSpMM(
+                handle,
+                cusparse_op<T>(transA),
+                cusparse_op<T>(transB),
+                &alpha_h,
+                *A,
+                *B_mat,
+                &beta_h,
+                *C,
+                BackendScalar<T,BackendLibrary::CUSPARSE>::type,
+                CUSPARSE_SPMM_ALG_DEFAULT,
+                buffer.data()
+            );
+        });
         return ctx.create_event_after_external_work();
     }
 

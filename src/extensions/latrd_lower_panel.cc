@@ -363,7 +363,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     if (lid == 0 && i + 1 < n) {
                         alpha = Ab(i + 1, i);
                     }
-                    alpha = sycl::group_broadcast(g, alpha);
+                    alpha = batchlas::portable::group_broadcast(g, alpha);
 
                     T tau_i = T(0);
                     T beta = alpha;
@@ -401,8 +401,8 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         Ab(i + 1, i) = T(1);
                     }
 
-                    tau_i = sycl::group_broadcast(g, tau_i);
-                    scale = sycl::group_broadcast(g, scale);
+                    tau_i = batchlas::portable::group_broadcast(g, tau_i);
+                    scale = batchlas::portable::group_broadcast(g, scale);
 
                     if (tau_i != T(0)) {
                         for (int r = x0 + lid; r < n; r += wg) {

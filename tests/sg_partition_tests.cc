@@ -29,6 +29,8 @@
 #include <batchlas/util/group-invoke.hh>
 
 #include "../src/extensions/sg_partition/sg_partition.hh"
+#include "../src/sycl/impl.hh"
+#include "../src/sycl/kernel_attrs.hh"
 
 #include <algorithm>
 #include <complex>
@@ -217,11 +219,11 @@ template <size_t SG, typename F>
 bool launch(F f) {
     if (!supports_sg(SG)) return false;
     constexpr size_t wg = SG * kSgPerWg;
-    queue()
+    sycl::event done = queue()
         .submit([&](sycl::handler& h) {
             sycl::local_accessor<uint64_t, 1> lm(sycl::range<1>(wg * kLocalWords), h);
             h.parallel_for(sycl::nd_range<1>(kItems<SG>, wg),
-                           [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(SG)]] {
+                           [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(SG) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
                                if constexpr (SG != 32) {
                                    keep_captured(f, lm);
@@ -232,8 +234,8 @@ bool launch(F f) {
                                    f(it, lm.template get_multi_ptr<sycl::access::decorated::no>().get());
                                }
                            });
-        })
-        .wait_and_throw();
+        });
+    batchlas::impl::wait_and_throw(done, queue());
     return true;
 }
 

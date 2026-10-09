@@ -14,6 +14,7 @@
 
 #include "sytrd_cta_device.hh"
 #include "steqr_cta_device.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <complex>
 #include <cstdint>
@@ -152,7 +153,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         cgh.parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
@@ -267,7 +268,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // subscript into Qc must stay a compile-time constant.
                     // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
                     Real Qc[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         Qc[r] = Real(0);
                     }
@@ -289,18 +290,18 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         if (lane < k) {
                             // Existing column: apply H(k).
                             Real dot = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 dot += V_local[base_v + r] * Qc[r];
                             }
                             const Real gamma = tau_k * dot;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 Qc[r] -= V_local[base_v + r] * gamma;
                             }
                         } else if (lane == k) {
                             // New column: H(k) e_k = e_k - tau_k v_k.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 Qc[r] = (r < k) ? (-tau_k * V_local[base_v + r])
                                                 : ((r == k) ? (Real(1) - tau_k) : Real(0));
@@ -315,12 +316,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // the pad columns must hold defined values because the sweeps
                     // run unguarded on all P lanes.
                     if (lane >= nn) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             Qc[r] = Real(0);
                         }
                     } else if (lane == nn - 1) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             Qc[r] = (r == nn - 1) ? Real(1) : Real(0);
                         }
@@ -328,7 +329,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                     // Hand the tile over: from here it is the accumulator.
                     group_barrier(part);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         A_local[base_a + r + lane * LDA] = Qc[r];
                     }
@@ -376,7 +377,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // into C_col must stay compile-time constants, or the array spills
                     // to local memory.
                     T C_col[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         C_col[r] = T(0);
                     }
@@ -387,7 +388,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     group_barrier(part);
 
                     if (lane < nn) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             if (r < nn) {
                                 const Real z = Q_local[base_q + r + lane * LDQ];
@@ -415,12 +416,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                         if (lane < nn && tau_ii != T(0)) {
                             T dot = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 dot += conj_if_complex(V_local[base_v + r]) * C_col[r];
                             }
                             const T gamma = tau_ii * dot;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 C_col[r] -= V_local[base_v + r] * gamma;
                             }

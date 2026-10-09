@@ -23,9 +23,15 @@
 #include <cstring>
 #include <type_traits>
 
+#include <batchlas/backend_config.h>
+
 #include "backend_generic.hh"
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+// acpp SSCP picks the target at JIT time (SscpBackend); FORCE_GENERIC is the break (divergence
+// tests hang). evidence: docs/design/sycl-implementations.md#sycl-impl-device-target-dispatch
+#if BATCHLAS_SYCL_IMPL_ACPP && !defined(BATCHLAS_SGP_FORCE_GENERIC)
+#include "backend_sscp.hh"
+#elif defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
 #include "backend_nvptx.hh"
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__AMDGCN__)
 #include "backend_amdgcn.hh"
@@ -37,7 +43,10 @@ namespace batchlas {
 
 namespace sgp {
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+#if BATCHLAS_SYCL_IMPL_ACPP && !defined(BATCHLAS_SGP_FORCE_GENERIC)
+template <uint32_t P, bool Masked> using Backend = SscpBackend<P, Masked>;
+inline constexpr bool kMaskedByDefault = true;
+#elif defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
 template <uint32_t P, bool Masked> using Backend = NvptxBackend<P, Masked>;
 inline constexpr bool kMaskedByDefault = true;
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__AMDGCN__)

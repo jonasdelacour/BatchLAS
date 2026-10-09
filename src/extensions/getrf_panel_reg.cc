@@ -10,6 +10,7 @@
 
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/error.hh>
 
@@ -131,7 +132,7 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 gn::getf2_panel_reg_device<D, NB>(
                     it, ap + static_cast<std::ptrdiff_t>(b) * strp, ld,

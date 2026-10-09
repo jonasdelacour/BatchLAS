@@ -14,6 +14,7 @@
 #include "stedc_merge_kernels.hh"
 #include "info_span.hh"
 #include "info_span.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <cassert>
 #include <algorithm>
@@ -78,11 +79,7 @@ inline int32_t choose_wg_size(const sycl::device& dev,
 template <typename KernelName>
 inline int32_t kernel_max_work_group_size(Queue& ctx, const sycl::device& dev) {
     try {
-        auto bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(
-            ctx->get_context(), {dev}, {sycl::get_kernel_id<KernelName>()});
-        const auto kern = bundle.template get_kernel<KernelName>();
-        return static_cast<int32_t>(
-            kern.template get_info<sycl::info::kernel_device_specific::work_group_size>(dev));
+        return static_cast<int32_t>(impl::kernel_max_wg_size<KernelName>(ctx->get_context(), dev));
     } catch (const sycl::exception&) {
         return 0;
     }
@@ -970,7 +967,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
         h.parallel_for<StedcFusedCtaMerge<B, T, P>>(
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
-            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(sg_size)]] {
+            [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
                 const int32_t tid = static_cast<int32_t>(item.get_local_linear_id());
                 const int32_t bdim = static_cast<int32_t>(item.get_local_range(0));

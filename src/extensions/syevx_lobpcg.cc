@@ -743,7 +743,7 @@ inline constexpr R jacobi_definiteness_floor() {
             const bool check_convergence =
                 (it % convergence_check_every == 0) || last_iteration;
             if (instrumentation_host_readback || check_convergence) {
-                residual_evt.wait_and_throw();
+                impl::wait_and_throw(residual_evt, *ctx);
             }
             trace("syevx: residual kernel done");
 
@@ -1053,7 +1053,7 @@ inline constexpr R jacobi_definiteness_floor() {
                             partials[tid] = acc;
                             sycl::group_barrier(cta);
                             const float_type total =
-                                sycl::joint_reduce(cta, partials.begin(), partials.end(), sycl::plus<float_type>());
+                                sycl::joint_reduce(cta, &partials[0], &partials[0] + partials.size(), sycl::plus<float_type>());
                             const float_type sentinel = sycl::sqrt(total) + float_type(1);
                             for (size_t j = tid; j < nlock; j += local_size) {
                                 if (col_conv[bid * nlock + j] == 0) continue;

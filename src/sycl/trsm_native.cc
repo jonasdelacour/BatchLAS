@@ -11,6 +11,7 @@
 #include "../linalg-impl.hh"
 #include "../util/resident_capacity.hh"
 #include "device_scalar.hh"
+#include "kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -223,7 +224,7 @@ Event trsm_native_v1(Queue& ctx,
                 constexpr int ROUNDS = (N + STEP - 1) / STEP;
 
                 D x[N];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int k = 0; k < ROUNDS; ++k) {
                     if constexpr (kStageLeft) {
                         // Barrier BEFORE overwriting the tile: last round's reads
@@ -243,12 +244,12 @@ Event trsm_native_v1(Queue& ctx,
                         sycl::group_barrier(it.get_group());
                     }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < STEP; ++j) {
                         const int s = k * STEP + j;
                         if (s >= N) continue;    // folds away when STEP divides N
                         D acc = D{};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int t = 0; t < N; ++t) {
                             if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
                         }
@@ -273,12 +274,12 @@ Event trsm_native_v1(Queue& ctx,
                 }
 
                 if constexpr (kStageLeft) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
                         sycl::group_barrier(it.get_group());
                         // The guard is on the STEP, not on `live`: a non-live
                         // lane's column is one the store below refuses to write.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int j = 0; j < TILE_ROWS; ++j) {
                             const int s = k * TILE_ROWS + j;
                             if (s < N) sTile[lane * (TILE_ROWS + 1) + j] = x[s];
@@ -295,7 +296,7 @@ Event trsm_native_v1(Queue& ctx,
                         }
                     }
                 } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int s = 0; s < N; ++s) {
                         if (live && s < n) {
                             Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];

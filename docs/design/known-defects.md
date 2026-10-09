@@ -31,6 +31,7 @@ closed and kept only for numbering.
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
+| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 
@@ -264,6 +265,26 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **R3 waiver:** cuSPARSE silently mishandles operands that are off their natural alignment.
   Alignment is a property of the pointers, not of the selection key, so `can_run` does not model
   it. `spmm_tests` skips misaligned cases unless the route is pinned to `native`.
+
+## 18. `gesvd_cta` left vectors lose orthogonality as eps times kappa squared
+
+- **Symptom:** float, real general 16x16, `BATCHLAS_GESVD_ROUTE=cta`, 160 matrices drawn by
+  `Matrix::Random`: \f$\max|U^T U - I|\f$ is 0.003 to 0.77 times \f$\varepsilon\kappa^2\f$. It is
+  1.1e-3 at \f$\kappa = 174\f$, 0.20 at \f$2.9 \cdot 10^3\f$ and 0.996 at \f$10^4\f$. V stays at
+  1.5e-6. `jacobi` and `blocked` stay at or below 6e-6 on the same matrices.
+- **Cause:** CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag`,
+  `src/extensions/gesvd_blocked.cc:68-71`). V comes from the eigenvectors of \f$B^T B\f$, and
+  `build_bidiag_vectors` forms \f$u_i = B v_i / \sigma_i\f$ (`:596`), which scales the error of
+  \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
+  [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
+- **Reached by:** a `cta` pin only. Every real general row of `tuned/gesvd.*.txt` ranks `jacobi`
+  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits.
+- **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations`, float/CUDA, listed in
+  `tests/known-failures.txt`. Since the Philox generator, its `AN` matrix has \f$\kappa = 497\f$;
+  8 of 80 seeds fail. The double instantiation still covers the four job combinations.
+- **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
+  for real general input.
+- **Status:** open, pinned `cta` only.
 
 ## Known defects: the CTA SYTRD Lower path
 

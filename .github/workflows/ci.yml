@@ -682,9 +682,8 @@ jobs:
 # away the host-link and ABI errors the job existed to catch.
 #
 # So the hosted job would be: several GB of oneAPI apt (the compiler alone
-# unpacks to 5.5 GB, against a 14 GB hosted disk budget, before oneDPL - which
-# is a hard dependency, not optional), then 95 library TUs through a real SPIR-V
-# device pass, then ~15 per-.so device links that are single-threaded and that
+# unpacks to 5.5 GB, against a 14 GB hosted disk budget), then 95 library TUs
+# through a real SPIR-V device pass, then ~15 per-.so device links that are single-threaded and that
 # -j cannot shorten, on the runner with the fewest cores, with no warm ccache
 # unless a multi-GB cache entry is restored onto that same disk. That build takes
 # tens of minutes on 20 cores WITH a warm cache.

@@ -207,9 +207,20 @@ inline constexpr bool supports_aligned_packet_loads(const T* ptr, int ld, int st
     }
 }
 
+// Non-packet types (complex) only instantiate dead fast paths; sycl::vec<std::complex> is not a
+// valid type outside DPC++, so they get a plain array.
 template <typename T, int Width>
-inline constexpr sycl::vec<T, Width> packet_load_aligned(const T* ptr, int offset) {
-    return *reinterpret_cast<const sycl::vec<T, Width>*>(ptr + offset);
+struct alignas(Width * sizeof(T)) PacketArray {
+    T v[Width];
+    constexpr const T& operator[](int i) const { return v[i]; }
+};
+
+template <typename T, int Width>
+using Packet = std::conditional_t<supports_packet_v<T, Width>, sycl::vec<T, Width>, PacketArray<T, Width>>;
+
+template <typename T, int Width>
+inline constexpr Packet<T, Width> packet_load_aligned(const T* ptr, int offset) {
+    return *reinterpret_cast<const Packet<T, Width>*>(ptr + offset);
 }
 
 inline constexpr int register_matrix_lhs_stage(int tile_idx) {
@@ -925,14 +936,14 @@ inline constexpr void accumulate_register_matrix_stage(const Item& item,
         static_for<kRegisterMatrixThreadTileRows>([&](auto row_idx) {
             constexpr int i = row_idx;
             const T lhs_lane = sg_col == 0 ? lhs_stage_ptr[(lhs_row_base + i) * kRegisterMatrixTileAStride + kk] : T(0);
-            fragments.template lhs_value<i>() = sycl::select_from_group(sg, lhs_lane, static_cast<uint32_t>(lhs_source_lane));
+            fragments.template lhs_value<i>() = batchlas::portable::select_from_group(sg, lhs_lane, static_cast<uint32_t>(lhs_source_lane));
         });
 
         static_for<kRegisterMatrixThreadTileCols>([&](auto col_idx) {
             constexpr int j = col_idx;
             const T rhs_lane = sg_row == 0 ? rhs_stage_ptr[kk * kRegisterMatrixTileBStride + rhs_col_base + j] : T(0);
             fragments.template rhs_value<j>() =
-                sycl::select_from_group(sg, rhs_lane, static_cast<uint32_t>(rhs_source_lane_base));
+                batchlas::portable::select_from_group(sg, rhs_lane, static_cast<uint32_t>(rhs_source_lane_base));
         });
 
         static_for<kRegisterMatrixThreadTileRows>([&](auto row_idx) {
@@ -1169,14 +1180,14 @@ inline constexpr void accumulate_complex_rank2k_tiled_pass_impl(const Item& item
                 constexpr int i = row_idx;
                 const T lhs_lane = sg_col == 0 ? lhs_tile[(lhs_row_base + i) * TileAStride + kk] : T(0);
                 lhs_frag[static_cast<std::size_t>(i)] =
-                    sycl::select_from_group(sg, lhs_lane, static_cast<uint32_t>(lhs_source_lane));
+                    batchlas::portable::select_from_group(sg, lhs_lane, static_cast<uint32_t>(lhs_source_lane));
             });
 
             static_for<kComplexRank2kThreadTileCols>([&](auto col_idx) {
                 constexpr int j = col_idx;
                 const T rhs_lane = sg_row == 0 ? rhs_tile[kk * kComplexRank2kTileBStride + rhs_col_base + j] : T(0);
                 rhs_frag[static_cast<std::size_t>(j)] =
-                    sycl::select_from_group(sg, rhs_lane, static_cast<uint32_t>(rhs_source_lane_base));
+                    batchlas::portable::select_from_group(sg, rhs_lane, static_cast<uint32_t>(rhs_source_lane_base));
             });
 
             static_for<kComplexRank2kThreadTileRows>([&](auto row_idx) {

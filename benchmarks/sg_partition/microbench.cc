@@ -2,7 +2,7 @@
 //
 // Built by hand (not part of the CMake tree):
 //   clang++ -fsycl -fsycl-targets=nvidia_gpu_sm_89 -O3 -std=c++20 \
-//       -I src/extensions benchmarks/sg_partition/microbench.cc -o sgp_microbench
+//       -I src/extensions -I build/include benchmarks/sg_partition/microbench.cc -o sgp_microbench
 //   ONEAPI_DEVICE_SELECTOR=cuda:1 ./sgp_microbench [log2_lanes=24] [iters=64] [reps=30]
 //
 // Variants, all doing the same per-chunk work:
@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "sg_partition/sg_partition.hh"
+#include "../../src/sycl/kernel_attrs.hh"
 
 namespace syclex = sycl::ext::oneapi::experimental;
 
@@ -49,7 +50,7 @@ struct Kernel {
     const int* trips;
     int iters;
 
-    [[sycl::reqd_sub_group_size(32)]] void operator()(sycl::nd_item<1> it) const {
+    BATCHLAS_REQD_SG_SIZE(32) void operator()(sycl::nd_item<1> it) const {
         auto sg = it.get_sub_group();
         const size_t gid = it.get_global_id(0);
         const uint32_t sgl = static_cast<uint32_t>(sg.get_local_linear_id());
@@ -132,7 +133,7 @@ struct Kernel {
                 v = batchlas::reduce_over_group(part_l, v, sycl::plus<T>()) * inv + T(1);
             } else if constexpr (O == kPerm || O == kReduce || O == kReduceDiv) {
                 T r = v;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (uint32_t m = 1; m < P; m <<= 1) r += xr(r, m);
                 v = r * inv + T(1);
             } else if constexpr (O == kBcast || O == kSelectExit) {
@@ -154,7 +155,7 @@ template <int V, uint32_t P>
 struct IntKernel {
     uint32_t* data;
     int iters;
-    [[sycl::reqd_sub_group_size(32)]] void operator()(sycl::nd_item<1> it) const {
+    BATCHLAS_REQD_SG_SIZE(32) void operator()(sycl::nd_item<1> it) const {
         auto sg = it.get_sub_group();
         const size_t gid = it.get_global_id(0);
         const uint32_t base = static_cast<uint32_t>(sg.get_local_linear_id()) & ~(P - 1u);

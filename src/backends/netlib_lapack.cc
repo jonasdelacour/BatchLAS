@@ -179,13 +179,11 @@ namespace batchlas{
         }
         ctx.wait();
         f();
-#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
         try {
-            sycl::event e = ctx->ext_oneapi_submit_barrier();
+            sycl::event e = impl::submit_barrier(*ctx);
             return Event(EventImpl(std::move(e)));
         } catch (const sycl::exception&) {
         }
-#endif
         EventImpl ev = ctx->submit([&](sycl::handler& h) {
             h.single_task([]() {});
         });

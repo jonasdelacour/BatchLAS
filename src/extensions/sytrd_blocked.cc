@@ -343,7 +343,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     if (lane == alpha_row) {
                         alpha = Al(alpha_row, k);
                     }
-                    alpha = sycl::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
+                    alpha = batchlas::portable::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
 
                     T tau_k = T(0);
                     T beta = alpha;
@@ -381,8 +381,8 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                         Al(alpha_row, k) = T(1);
                     }
 
-                    tau_k = sycl::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
-                    scale = sycl::group_broadcast(g, scale, sycl::id<1>(alpha_row));
+                    tau_k = batchlas::portable::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
+                    scale = batchlas::portable::group_broadcast(g, scale, sycl::id<1>(alpha_row));
 
                     if (tau_k != T(0)) {
                         if (lane >= x0 && lane < n) {

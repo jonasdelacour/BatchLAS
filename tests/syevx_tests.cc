@@ -1302,18 +1302,17 @@ TEST(SyevxJacobiIterations, DegradesGracefullyOnRandomSymmetric) {
         << jac.iterations << " vs " << plain.iterations;
 }
 
-// A constant diagonal makes (diag(A) - lambda I)^{-1} a per-column scalar, and
-// LOBPCG's Rayleigh-Ritz is invariant to per-column scaling of the search block.
-// The shifted form must therefore be an exact no-op here -- which is the sharpest
-// available check that the shift is indexed to the right Ritz value per column.
+// A constant diagonal makes (diag(A) - lambda I)^{-1} a per-column scalar, and LOBPCG's
+// Rayleigh-Ritz is invariant to per-column scaling, so the shifted form is a no-op up to
+// rounding: up to 3 iterations over 200 start seeds checked every iteration, so at most one
+// interval at the pinned 4. A row-indexed shift ran to the 200 cap; a swapped Ritz index is
+// still a per-column scalar and cannot show here.
 TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
     // evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
     // Soft locking substitutes filler vectors for converged
-    // columns, which perturbs the trajectory and breaks the exact equality this
-    // test is built on. The invariant is real but only holds without locking, and
-    // loosening the comparison would throw away precisely the sharpness that makes
-    // this test worth having -- so skip instead.
+    // columns, which perturbs the trajectory beyond the rounding-level drift this
+    // test allows. The invariant only holds without locking, so skip.
     if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
         if (!(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F')) {
             GTEST_SKIP() << "soft locking perturbs the iteration trajectory";
@@ -1326,6 +1325,8 @@ TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
     ctx->wait();
 
     const float tol = 1e-4f;
+    constexpr int check_every = 4;
+    const ScopedEnvVar interval("BATCHLAS_SYEVX_CHECK_EVERY", "4");
     for (bool find_largest : {false, true}) {
         const auto plain = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig,
                                                         find_largest, SyevxPreconditioner::None,
@@ -1334,7 +1335,7 @@ TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
                                                           find_largest,
                                                           SyevxPreconditioner::JacobiShifted,
                                                           nullptr, tol);
-        EXPECT_EQ(shifted.iterations, plain.iterations)
+        EXPECT_LE(std::abs(shifted.iterations - plain.iterations), check_every)
             << "constant-diagonal shifted Jacobi changed the iteration count (find_largest="
             << find_largest << "): " << shifted.iterations << " vs " << plain.iterations;
     }

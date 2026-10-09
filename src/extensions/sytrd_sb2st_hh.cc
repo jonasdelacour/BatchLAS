@@ -18,6 +18,7 @@
 #include "../util/template-instantiations.hh"
 
 #include "sytrd_sb2st_hh.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -182,7 +183,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
         h.parallel_for<Sb2stHhChaseKernel<B, T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kWg),
                               sycl::range<1>(kWg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t b = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
@@ -497,7 +498,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
         h.parallel_for<Sb2stHhBackWaveKernel<B, T, C, S>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kWg),
                               sycl::range<1>(kWg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const auto sg = it.get_sub_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
@@ -608,7 +609,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
         h.parallel_for<Sb2stHhBackTiledKernel<B, T, C>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kSg),
                               sycl::range<1>(kSg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
@@ -846,7 +847,7 @@ streaming:
         h.parallel_for<Sb2stHhBackKernel<B, T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * 32),
                               sycl::range<1>(32)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t lane = static_cast<int32_t>(it.get_local_linear_id());

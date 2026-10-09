@@ -6,6 +6,7 @@
 
 #include "../queue.hh"
 #include "device_scalar.hh"
+#include "kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -199,14 +200,14 @@ Event spmm_gather(Queue& ctx,
                 const int re = a_ro[ro + i + 1];
 
                 D acc[NC];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int t = 0; t < NC; ++t) acc[t] = D{};
 
                 if (!alpha_zero) {
                     for (int p = rs; p < re; ++p) {
                         const D av = spmm_ld<Pair>(a_val + vb + p);
                         const int j = a_ci[vb + p];  // a COLUMN of A: a row of B
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int t = 0; t < NC; ++t) {
                             const int c = c0 + t;
                             if (c < width) {
@@ -224,7 +225,7 @@ Event spmm_gather(Queue& ctx,
                     }
                 }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int t = 0; t < NC; ++t) {
                     const int c = c0 + t;
                     if (c < width) {
@@ -392,7 +393,7 @@ Event spmm_scatter(Queue& ctx,
 
                 for (int c0 = 0; c0 < width; c0 += NCS) {
                     D ab[NCS];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int t = 0; t < NCS; ++t) {
                         const int c = c0 + t;
                         ab[t] = D{};
@@ -415,7 +416,7 @@ Event spmm_scatter(Queue& ctx,
                         }
                         const int j = a_ci[vb + p];  // an OUTPUT ROW of C
                         if (static_cast<unsigned>(j) >= static_cast<unsigned>(rows_out)) continue;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int t = 0; t < NCS; ++t) {
                             const int c = c0 + t;
                             if (c < width) {

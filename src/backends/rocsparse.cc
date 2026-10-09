@@ -23,23 +23,30 @@ namespace batchlas {
                Transpose transB,
                Span<std::byte> workspace) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto buffer_size = spmm_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
-        rocsparse_spmm(handle,
-                       enum_convert<BackendLibrary::ROCSPARSE>(transA),
-                       enum_convert<BackendLibrary::ROCSPARSE>(transB),
-                       &alpha,
-                       *A,
-                       *B,
-                       &beta,
-                       *C,
-                       BackendScalar<T,BackendLibrary::ROCSPARSE>::type,
-                       rocsparse_spmm_alg_default,
-                       rocsparse_spmm_stage_compute,
-                       &buffer_size,
-                       buffer.data());
+        A.init();  // cached descriptors live on the caller's views; the lambda copies share them
+        B.init();
+        C.init();
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            rocsparse_spmm(handle,
+                           enum_convert<BackendLibrary::ROCSPARSE>(transA),
+                           enum_convert<BackendLibrary::ROCSPARSE>(transB),
+                           &alpha_h,
+                           *A,
+                           *B,
+                           &beta_h,
+                           *C,
+                           BackendScalar<T,BackendLibrary::ROCSPARSE>::type,
+                           rocsparse_spmm_alg_default,
+                           rocsparse_spmm_stage_compute,
+                           &buffer_size,
+                           buffer.data());
+        });
         return ctx.create_event_after_external_work();
     }
 

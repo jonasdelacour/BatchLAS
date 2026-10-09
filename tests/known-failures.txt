@@ -62,6 +62,15 @@ lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
 steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32
 steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
 
+# --- gesvd --------------------------------------------------------------------
+# Verified 2026-10-09 on the acpp-dual-build branch (threadripper02, GPU-only
+# and full-target trees; index 2 is the full-target position of float/CUDA).
+# docs/design/known-defects.md entry 18: the cta provider's U loses
+# orthogonality as eps*kappa^2 (normal equations). Red since the Philox
+# generator (a305bcf0) drew a kappa=497 matrix for the AN case; 8 of 80 seeds
+# fail. Not a tolerance problem: jacobi and blocked reach 6e-6 on the same input.
+gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
+
 # --- DELIBERATELY ABSENT ------------------------------------------------------
 # sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal
 #   was on an older recorded baseline and PASSES as of 2026-09-09. It is left out

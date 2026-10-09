@@ -41,20 +41,22 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         // rocSOLVER's info is a per-item device array with LAPACK semantics; it
         // used to be pool scratch nothing read (issue #73). A caller span, when
         // supplied, replaces the scratch -- so the workspace size is unchanged.
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf, rocsolver_dpotrf, rocsolver_cpotrf, rocsolver_zpotrf,
-                handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), info.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf_strided_batched, rocsolver_dpotrf_strided_batched,
-                rocsolver_cpotrf_strided_batched, rocsolver_zpotrf_strided_batched,
-                handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), A.stride(), info.data(), A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf, rocsolver_dpotrf, rocsolver_cpotrf, rocsolver_zpotrf,
+                    handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), info.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf_strided_batched, rocsolver_dpotrf_strided_batched,
+                    rocsolver_cpotrf_strided_batched, rocsolver_zpotrf_strided_batched,
+                    handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), A.stride(), info.data(), A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -69,22 +71,24 @@ namespace batchlas {
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf, rocsolver_dgeqrf,
-                                                         rocsolver_cgeqrf, rocsolver_zgeqrf,
-                                                         handle, A.rows(), A.cols(),
-                                                         A.data_ptr(), A.ld(), tau.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf_strided_batched,
-                                                         rocsolver_dgeqrf_strided_batched,
-                                                         rocsolver_cgeqrf_strided_batched,
-                                                         rocsolver_zgeqrf_strided_batched,
-                                                         handle, A.rows(), A.cols(),
-                                                         A.data_ptr(), A.ld(), A.stride(),
-                                                         tau.data(), std::min(A.rows(), A.cols()),
-                                                         A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf, rocsolver_dgeqrf,
+                                                             rocsolver_cgeqrf, rocsolver_zgeqrf,
+                                                             handle, A.rows(), A.cols(),
+                                                             A.data_ptr(), A.ld(), tau.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf_strided_batched,
+                                                             rocsolver_dgeqrf_strided_batched,
+                                                             rocsolver_cgeqrf_strided_batched,
+                                                             rocsolver_zgeqrf_strided_batched,
+                                                             handle, A.rows(), A.cols(),
+                                                             A.data_ptr(), A.ld(), A.stride(),
+                                                             tau.data(), std::min(A.rows(), A.cols()),
+                                                             A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -116,20 +120,22 @@ namespace batchlas {
                       Span<std::byte> workspace) {
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = C.rows();
         auto n = C.cols();
         auto k = std::min(A.rows(), A.cols());
         if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
-                                                         rocsolver_cunmqr, rocsolver_zunmqr,
-                                                         handle,
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(side),
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(trans),
-                                                         m, n, k,
-                                                         A.data_ptr(), A.ld(),
-                                                         tau.data(),
-                                                         C.data_ptr(), C.ld());
+            impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
+                                                             rocsolver_cunmqr, rocsolver_zunmqr,
+                                                             handle,
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(side),
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(trans),
+                                                             m, n, k,
+                                                             A.data_ptr(), A.ld(),
+                                                             tau.data(),
+                                                             C.data_ptr(), C.ld());
+            });
         } else {
             Queue sub_queue(ctx.device(), false);
             for (int i = 0; i < A.batch_size(); ++i) {
@@ -180,15 +186,17 @@ namespace batchlas {
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
         auto k = std::min(m, n);
         if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sorgqr, rocsolver_dorgqr,
-                                                         rocsolver_cungqr, rocsolver_zungqr,
-                                                         handle, m, n, k, A.data_ptr(), A.ld(),
-                                                         tau.data());
+            impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sorgqr, rocsolver_dorgqr,
+                                                             rocsolver_cungqr, rocsolver_zungqr,
+                                                             handle, m, n, k, A.data_ptr(), A.ld(),
+                                                             tau.data());
+            });
         } else {
             Queue sub_queue(ctx.device(), false);
             for (int i = 0; i < A.batch_size(); ++i) {
@@ -224,27 +232,29 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         // See potrf above (issue #73).
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ipiv = pivots.as_span<int>();
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf, rocsolver_dgetrf,
-                                                         rocsolver_cgetrf, rocsolver_zgetrf,
-                                                         handle, A.rows(), A.cols(),
-                                                         A.data_ptr(), A.ld(), ipiv.data(),
-                                                         info.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf_strided_batched,
-                                                         rocsolver_dgetrf_strided_batched,
-                                                         rocsolver_cgetrf_strided_batched,
-                                                         rocsolver_zgetrf_strided_batched,
-                                                         handle, A.rows(), A.cols(), A.data_ptr(),
-                                                         A.ld(), A.stride(), ipiv.data(),
-                                                         std::min(A.rows(), A.cols()), info.data(),
-                                                         A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf, rocsolver_dgetrf,
+                                                             rocsolver_cgetrf, rocsolver_zgetrf,
+                                                             handle, A.rows(), A.cols(),
+                                                             A.data_ptr(), A.ld(), ipiv.data(),
+                                                             info.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf_strided_batched,
+                                                             rocsolver_dgetrf_strided_batched,
+                                                             rocsolver_cgetrf_strided_batched,
+                                                             rocsolver_zgetrf_strided_batched,
+                                                             handle, A.rows(), A.cols(), A.data_ptr(),
+                                                             A.ld(), A.stride(), ipiv.data(),
+                                                             std::min(A.rows(), A.cols()), info.data(),
+                                                             A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -271,29 +281,31 @@ namespace batchlas {
                 Span<std::byte> workspace) {
         static_cast<void>(workspace);
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
         auto ipiv = pivots.as_span<int>();
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs, rocsolver_dgetrs,
-                                                         rocsolver_cgetrs, rocsolver_zgetrs,
-                                                         handle,
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(transA),
-                                                         A.rows(), B.cols(),
-                                                         A.data_ptr(), A.ld(), ipiv.data(),
-                                                         B.data_ptr(), B.ld());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs_strided_batched,
-                                                         rocsolver_dgetrs_strided_batched,
-                                                         rocsolver_cgetrs_strided_batched,
-                                                         rocsolver_zgetrs_strided_batched,
-                                                         handle,
-                                                         enum_convert<BackendLibrary::ROCSOLVER>(transA),
-                                                         A.rows(), B.cols(),
-                                                         A.data_ptr(), A.ld(), A.stride(),
-                                                         ipiv.data(), std::min(A.rows(), A.cols()),
-                                                         B.data_ptr(), B.ld(), B.stride(),
-                                                         A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs, rocsolver_dgetrs,
+                                                             rocsolver_cgetrs, rocsolver_zgetrs,
+                                                             handle,
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(transA),
+                                                             A.rows(), B.cols(),
+                                                             A.data_ptr(), A.ld(), ipiv.data(),
+                                                             B.data_ptr(), B.ld());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs_strided_batched,
+                                                             rocsolver_dgetrs_strided_batched,
+                                                             rocsolver_cgetrs_strided_batched,
+                                                             rocsolver_zgetrs_strided_batched,
+                                                             handle,
+                                                             enum_convert<BackendLibrary::ROCSOLVER>(transA),
+                                                             A.rows(), B.cols(),
+                                                             A.data_ptr(), A.ld(), A.stride(),
+                                                             ipiv.data(), std::min(A.rows(), A.cols()),
+                                                             B.data_ptr(), B.ld(), B.stride(),
+                                                             A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -325,7 +337,6 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         // See potrf above (issue #73).
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
@@ -333,20 +344,23 @@ namespace batchlas {
         if (A.data_ptr() != C.data_ptr()) {
             ctx->memcpy(C.data_ptr(), A.data_ptr(), sizeof(T) * static_cast<size_t>(A.stride()) * A.batch_size());
         }
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri, rocsolver_dgetri,
-                                                         rocsolver_cgetri, rocsolver_zgetri,
-                                                         handle, A.rows(), C.data_ptr(), C.ld(),
-                                                         ipiv.data(), info.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri_strided_batched,
-                                                         rocsolver_dgetri_strided_batched,
-                                                         rocsolver_cgetri_strided_batched,
-                                                         rocsolver_zgetri_strided_batched,
-                                                         handle, A.rows(), C.data_ptr(), C.ld(), C.stride(),
-                                                         ipiv.data(), std::min(A.rows(), A.cols()),
-                                                         info.data(), A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri, rocsolver_dgetri,
+                                                             rocsolver_cgetri, rocsolver_zgetri,
+                                                             handle, A.rows(), C.data_ptr(), C.ld(),
+                                                             ipiv.data(), info.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri_strided_batched,
+                                                             rocsolver_dgetri_strided_batched,
+                                                             rocsolver_cgetri_strided_batched,
+                                                             rocsolver_zgetri_strided_batched,
+                                                             handle, A.rows(), C.data_ptr(), C.ld(), C.stride(),
+                                                             ipiv.data(), std::min(A.rows(), A.cols()),
+                                                             info.data(), A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -373,7 +387,6 @@ namespace batchlas {
                       Span<std::byte> workspace,
                       Span<int32_t> info_out) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         BumpAllocator pool(workspace);
         // rocSOLVER's info is documented per-item LAPACK semantics (see the note
         // on potrf_vendor above, which already uses info_target). It was
@@ -382,17 +395,20 @@ namespace batchlas {
         // unconditional int term and its result does not change.
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
-                handle, jobtype, uplo,
-                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
-                info.data());
-        } else {
-            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
-                rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
-                handle, jobtype, uplo,
-                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            if (A.batch_size() == 1) {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
+                    handle, jobtype, uplo,
+                    A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
+                    info.data());
+            } else {
+                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
+                    rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
+                    handle, jobtype, uplo,
+                    A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 

@@ -223,7 +223,7 @@ namespace batchlas {
                             }
                             
                             sycl::group_barrier(cta);
-                            auto squared_norm = sycl::joint_reduce(cta, Anext_squared.begin(), Anext_squared.end(), sycl::plus<float_t>());
+                            auto squared_norm = sycl::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
                             auto norm = std::sqrt(squared_norm);
 
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){

@@ -27,11 +27,16 @@
 
 #include <batchlas/backend_config.h>
 
+#include <complex>
 #include <memory>
+#include <type_traits>
 
 using namespace batchlas;
 
 namespace {
+
+template <typename T> inline constexpr bool kIsComplex = false;
+template <typename R> inline constexpr bool kIsComplex<std::complex<R>> = true;
 
 // ---------------------------------------------------------------- Gram sizes
 // (m, k, batch). k <= m always; ortho asserts it.
@@ -93,7 +98,7 @@ inline void SquareSizesNetlib(minibench::Benchmark* b) { SquareSizes(b); }
 
 template <typename T>
 constexpr Transpose conj_trans_for() {
-    return sycl::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    return kIsComplex<T> ? Transpose::ConjTrans : Transpose::Trans;
 }
 
 // Wires a prepared kernel into the state with event timing, the way
@@ -138,7 +143,7 @@ void configure_gram(minibench::State& state) {
 
     if constexpr (UseSpecialised) {
         auto kernel = [q, A, C]() mutable {
-            if constexpr (sycl::detail::is_complex<T>::value) {
+            if constexpr (kIsComplex<T>) {
                 using Real = typename T::value_type;
                 (void)herk<B, T>(*q, A->view(), C->view(), Real(1), Real(0),
                            Uplo::Lower, Transpose::ConjTrans);

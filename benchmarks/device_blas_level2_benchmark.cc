@@ -44,6 +44,10 @@ namespace {
 template <typename Tag>
 class DeviceBlasLevel2Kernel;
 
+// The workspace launch of each launcher; one name per lambda.
+template <typename KernelName>
+class WithWorkspace;
+
 constexpr device::DeviceBlasPolicy kPolicy = static_cast<device::DeviceBlasPolicy>(DEVICE_BLAS_POLICY);
 constexpr Transpose kLevel2Trans = static_cast<Transpose>(DEVICE_BLAS_LEVEL2_TRANS);
 constexpr Uplo kTrmvUplo = Uplo::DEVICE_BLAS_LEVEL2_TRMV_UPLO;
@@ -106,7 +110,7 @@ void launch_batched_level2_kernel_with_workspace(Queue& queue,
         }
 
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
-        h.parallel_for<KernelName>(
+        h.parallel_for<WithWorkspace<KernelName>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
             [=](sycl::nd_item<1> item) {
                 kernel_fn(item, static_cast<int>(item.get_group(0)), batchlas::util::get_raw_ptr(workspace));

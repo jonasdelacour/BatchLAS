@@ -51,7 +51,6 @@ namespace batchlas {
                            Transpose transB,
                            ComputePrecision precision) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
             throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
@@ -59,44 +58,49 @@ namespace batchlas {
 
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
-        // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            if (m == 1 || n == 1) {
-                cublasZgemmStridedBatched(handle,
-                    enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
-                    m, n, k, reinterpret_cast<const cuDoubleComplex*>(&alpha),
-                    reinterpret_cast<const cuDoubleComplex*>(A.data_ptr()), A.ld(), A.stride(),
-                    reinterpret_cast<const cuDoubleComplex*>(B.data_ptr()), B.ld(), B.stride(),
-                    reinterpret_cast<const cuDoubleComplex*>(&beta),
-                    reinterpret_cast<cuDoubleComplex*>(C.data_ptr()), C.ld(), C.stride(),
-                    std::max(1, A.batch_size()));
-                return ctx.create_event_after_external_work();
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
+            if constexpr (std::is_same_v<T, std::complex<double>>) {
+                if (m == 1 || n == 1) {
+                    cublasZgemmStridedBatched(handle,
+                        enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
+                        m, n, k, reinterpret_cast<const cuDoubleComplex*>(&alpha_h),
+                        reinterpret_cast<const cuDoubleComplex*>(A.data_ptr()), A.ld(), A.stride(),
+                        reinterpret_cast<const cuDoubleComplex*>(B.data_ptr()), B.ld(), B.stride(),
+                        reinterpret_cast<const cuDoubleComplex*>(&beta_h),
+                        reinterpret_cast<cuDoubleComplex*>(C.data_ptr()), C.ld(), C.stride(),
+                        std::max(1, A.batch_size()));
+                    return;
+                }
             }
-        }
-        if (A.batch_size() <= 1) {
-            cublasGemmEx(handle,
-                enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
-                m, n, k,
-                &alpha,
-                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(),
-                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(),
-                &beta,
-                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(),
-                enum_convert<BackendLibrary::CUBLAS, T>(precision),
-                CUBLAS_GEMM_DFALT);
-        } else {
-            cublasGemmStridedBatchedEx(handle,
-                enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
-                m, n, k,
-                &alpha,
-                A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
-                B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
-                &beta,
-                C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
-                A.batch_size(),
-                enum_convert<BackendLibrary::CUBLAS, T>(precision),
-                CUBLAS_GEMM_DFALT);
-        }
+            if (A.batch_size() <= 1) {
+                cublasGemmEx(handle,
+                    enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
+                    m, n, k,
+                    &alpha_h,
+                    A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(),
+                    B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(),
+                    &beta_h,
+                    C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(),
+                    enum_convert<BackendLibrary::CUBLAS, T>(precision),
+                    CUBLAS_GEMM_DFALT);
+            } else {
+                cublasGemmStridedBatchedEx(handle,
+                    enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
+                    m, n, k,
+                    &alpha_h,
+                    A.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
+                    B.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
+                    &beta_h,
+                    C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
+                    A.batch_size(),
+                    enum_convert<BackendLibrary::CUBLAS, T>(precision),
+                    CUBLAS_GEMM_DFALT);
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -133,7 +137,6 @@ namespace batchlas {
                            Side side,
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [m, n, k] = shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
         static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
@@ -142,16 +145,21 @@ namespace batchlas {
         // only for float and double here -- a complex caller reaches the
         // Hermitian sibling hemm_vendor below instead -- so, exactly as hemm
         // does for the two real slots, they are never selected.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, nullptr, nullptr,
-                handle, side, uplo, m, n, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, nullptr, nullptr,
+                    handle, side, uplo, m, n, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, B, C);
+            for_each_batch_item(launch_single, A, B, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -182,7 +190,6 @@ namespace batchlas {
                            Side side,
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
 
@@ -231,16 +238,21 @@ namespace batchlas {
         // for the device falls back to. The two real slots have no callee
         // because BLAS has no real ?hemm; T is constrained to complex, so they
         // are never selected.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasChemm, cublasZhemm,
-                handle, side, uplo, m, n, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasChemm, cublasZhemm,
+                    handle, side, uplo, m, n, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, B, C);
+            for_each_batch_item(launch_single, A, B, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -344,7 +356,6 @@ namespace batchlas {
                       Uplo uplo,
                       Transpose transA) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
@@ -399,15 +410,20 @@ namespace batchlas {
         // product too large for the device falls back to. The two real slots
         // have no callee because BLAS has no real ?herk -- that is syrk; T is
         // constrained to complex, so they are never selected.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasCherk, cublasZherk,
-                handle, uplo, transA, n, k, &alpha,
-                A_i.data_ptr(), A_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasCherk, cublasZherk,
+                    handle, uplo, transA, n, k, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, C);
+            for_each_batch_item(launch_single, A, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -426,7 +442,6 @@ namespace batchlas {
                        Uplo uplo,
                        Transpose transA) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
@@ -456,24 +471,28 @@ namespace batchlas {
             return accumulate_hermitian<T, /*TwoSided=*/true>(ctx, C, product, beta, uplo);
         }
 
-        // cublas?her2k dispatches to cublasLt, which reads the host alpha with a
-        // 16-byte aligned vector load. std::complex<double> is only 8-byte
-        // aligned, so handing the vendor the address of the parameter itself
-        // faults whenever it happens to land 8 mod 16 -- shape-dependent, so
-        // most calls survive it. Reproducible against cuBLAS 13.2 with nothing
-        // of BatchLAS in the picture.
-        alignas(16) T alpha_aligned = alpha;
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto beta_h = beta;  // cuBLASLt vector-loads it; closures are 8-aligned
+            // cublas?her2k dispatches to cublasLt, which reads the host alpha with a
+            // 16-byte aligned vector load. std::complex<double> is only 8-byte
+            // aligned, so handing the vendor the address of the parameter itself
+            // faults whenever it happens to land 8 mod 16 -- shape-dependent, so
+            // most calls survive it. Reproducible against cuBLAS 13.2 with nothing
+            // of BatchLAS in the picture.
+            alignas(16) T alpha_aligned = alpha;
 
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasCher2k, cublasZher2k,
-                handle, uplo, transA, n, k, &alpha_aligned,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(nullptr, nullptr, cublasCher2k, cublasZher2k,
+                    handle, uplo, transA, n, k, &alpha_aligned,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, B, C);
+            for_each_batch_item(launch_single, A, B, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -487,22 +506,26 @@ namespace batchlas {
                            Uplo uplo,
                            Transpose transA) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because syrk is instantiated
         // only for float and double here; the complex rank-k update is herk,
         // which is a separate routine above.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, nullptr, nullptr,
-                handle, uplo, transA, n, k, &alpha,
-                A_i.data_ptr(), A_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, nullptr, nullptr,
+                    handle, uplo, transA, n, k, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, C);
+            for_each_batch_item(launch_single, A, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -530,23 +553,27 @@ namespace batchlas {
                             Uplo uplo,
                             Transpose transA) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because syr2k is instantiated
         // only for float and double here; the complex rank-2k update is her2k,
         // which is a separate routine above.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, nullptr, nullptr,
-                handle, uplo, transA, n, k, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, nullptr, nullptr,
+                    handle, uplo, transA, n, k, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, B, C);
+            for_each_batch_item(launch_single, A, B, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -575,22 +602,25 @@ namespace batchlas {
                            Transpose transA,
                            Diag diag) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
 
         const auto [m, n, k] = shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
         (void)k;
 
         // The per-batch cublas?trmm loop only: the expansion plus gemm is trmm's own
         // `expand` family (src/ops/trmm/trmm.cc). It needs no scratch.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrmm, cublasDtrmm, cublasCtrmm, cublasZtrmm,
-                handle, side, uplo, transA, diag, m, n, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrmm, cublasDtrmm, cublasCtrmm, cublasZtrmm,
+                    handle, side, uplo, transA, diag, m, n, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), C_i.data_ptr(), C_i.ld());
+            };
 
-        for_each_batch_item(launch_single, A, B, C);
+            for_each_batch_item(launch_single, A, B, C);
+        });
 
         return ctx.create_event_after_external_work();
     }
@@ -617,17 +647,21 @@ namespace batchlas {
         T beta,
         Transpose transA) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
         auto batch_size = A.batch_size();
-        if (batch_size <= 1) {
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemv, cublasDgemv, cublasCgemv, cublasZgemv,
-                handle, transA, m, n, &alpha, A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta, Y.data_ptr(), Y.inc());
-        } else {
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
-                handle, transA, m, n, &alpha, A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
-        }
+        impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            if (batch_size <= 1) {
+                call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemv, cublasDgemv, cublasCgemv, cublasZgemv,
+                    handle, transA, m, n, &alpha_h, A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta_h, Y.data_ptr(), Y.inc());
+            } else {
+                call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
+                    handle, transA, m, n, &alpha_h, A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta_h, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -641,7 +675,6 @@ namespace batchlas {
                    Diag diag,
                    T alpha) {
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(B, Transpose::NoTrans);
         auto batch_size = A.batch_size();
         trsm_validate_params(A, B, side, uplo, transA, diag);
@@ -757,13 +790,23 @@ namespace batchlas {
                                   }
                               });
         } else {
-            if (batch_size == 1) {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm,
-                    handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptr(), A.ld(), B.data_ptr(), B.ld());
-            } else {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched,
-                    handle, side, uplo, transA, diag, kB, n, &alpha, A.data_ptrs(ctx).data(), A.ld(), B.data_ptrs(ctx).data(), B.ld(), batch_size);
+            T** a_ptrs = nullptr;
+            T** b_ptrs = nullptr;
+            if (batch_size != 1) {
+                a_ptrs = A.data_ptrs(ctx).data();
+                b_ptrs = B.data_ptrs(ctx).data();
             }
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+                if (batch_size == 1) {
+                    call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm,
+                        handle, side, uplo, transA, diag, kB, n, &alpha_h, A.data_ptr(), A.ld(), B.data_ptr(), B.ld());
+                } else {
+                    call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched,
+                        handle, side, uplo, transA, diag, kB, n, &alpha_h, a_ptrs, A.ld(), b_ptrs, B.ld(), batch_size);
+                }
+            });
         }
         return ctx.create_event_after_external_work();
     }
@@ -774,7 +817,6 @@ namespace batchlas {
         Span<T> tau,
         Span<std::byte> work_space) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
         auto k = std::min(m, n);
@@ -791,11 +833,14 @@ namespace batchlas {
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
             auto d_info = pool.allocate<int>(ctx, 1);
-            cusolverDnXgeqrf(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
-                device_l_work, host_work_space.data(), host_l_work, d_info.data());
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                cusolverDnXgeqrf(handle, params, m, n,
+                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
+                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
+                    device_l_work, host_work_space.data(), host_l_work, d_info.data());
+            });
         } else {
             auto tau_data = tau.data();
             auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
@@ -804,8 +849,12 @@ namespace batchlas {
                 tau_ptrs[i] = tau_data + i * k;
             });
             auto info = pool.allocate<int>(ctx, batch_size);
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
-                handle, m, n, A.data_ptrs(ctx).data(), A.ld(), tau_ptrs.data(), info.data(), batch_size);
+            T** a_ptrs = A.data_ptrs(ctx).data();
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
+                    handle, m, n, a_ptrs, A.ld(), tau_ptrs.data(), info.data(), batch_size);
+            });
         }
         return ctx.create_event_after_external_work();
     }
@@ -843,7 +892,6 @@ namespace batchlas {
                 Span<T> tau,
                 Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = C.rows();
         auto n = C.cols();
         auto k = std::min(A.rows(), A.cols());
@@ -864,17 +912,20 @@ namespace batchlas {
                 &lwork);
             auto device_ws = pool.allocate<T>(ctx, lwork);
             auto info = pool.allocate<int>(ctx, 1);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
-                cusolverDnSormqr, cusolverDnDormqr,
-                cusolverDnCunmqr, cusolverDnZunmqr,
-                handle,
-                enum_convert<BackendLibrary::CUSOLVER>(side),
-                enum_convert<BackendLibrary::CUSOLVER>(trans),
-                m, n, k,
-                A.data_ptr(), A.ld(),
-                tau.data(),
-                C.data_ptr(), C.ld(),
-                device_ws.data(), lwork, info.data());
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUSOLVER, B>(
+                    cusolverDnSormqr, cusolverDnDormqr,
+                    cusolverDnCunmqr, cusolverDnZunmqr,
+                    handle,
+                    enum_convert<BackendLibrary::CUSOLVER>(side),
+                    enum_convert<BackendLibrary::CUSOLVER>(trans),
+                    m, n, k,
+                    A.data_ptr(), A.ld(),
+                    tau.data(),
+                    C.data_ptr(), C.ld(),
+                    device_ws.data(), lwork, info.data());
+            });
         } else {
             size_t single_ws = ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
             for (int i = 0; i < batch_size; ++i) {
@@ -924,7 +975,6 @@ namespace batchlas {
                 Span<T> tau,
                 Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
         auto k = std::min(m, n);
@@ -942,14 +992,17 @@ namespace batchlas {
                 &lwork);
             auto device_ws = pool.allocate<T>(ctx, lwork);
             auto info = pool.allocate<int>(ctx, 1);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
-                cusolverDnSorgqr, cusolverDnDorgqr,
-                cusolverDnCungqr, cusolverDnZungqr,
-                handle,
-                m, n, k,
-                A.data_ptr(), A.ld(),
-                tau.data(),
-                device_ws.data(), lwork, info.data());
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUSOLVER, B>(
+                    cusolverDnSorgqr, cusolverDnDorgqr,
+                    cusolverDnCungqr, cusolverDnZungqr,
+                    handle,
+                    m, n, k,
+                    A.data_ptr(), A.ld(),
+                    tau.data(),
+                    device_ws.data(), lwork, info.data());
+            });
         } else {
             Queue sub_queue(ctx.device(), false);
             size_t single_ws = orgqr_vendor_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k));
@@ -997,7 +1050,6 @@ namespace batchlas {
         Span<int64_t> pivots,
         Span<std::byte> work_space) {
             static LinalgHandle<Back> handle;
-            handle.setStream(ctx);
             auto n = A.rows();
             auto nrhs = B.cols();
             auto batch_size = A.batch_size();
@@ -1026,12 +1078,17 @@ namespace batchlas {
             // one-int figure, deliberately, because shrinking a workspace query is
             // the change this family has been bitten by before.
             static_cast<void>(pool);
-            int info;
             auto reinterpreted_pivots = pivots.as_span<int>();
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
-                handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
-                B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
+            T** a_ptrs = A.data_ptrs(ctx).data();
+            T** b_ptrs = B.data_ptrs(ctx).data();
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                int info;
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
+                    handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
+                    a_ptrs, A.ld(), reinterpreted_pivots.data(),
+                    b_ptrs, B.ld(), &info, batch_size);
+            });
             return ctx.create_event_after_external_work();
         }
     
@@ -1050,7 +1107,6 @@ namespace batchlas {
         Span<std::byte> work_space,
         Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
-            handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
@@ -1059,9 +1115,13 @@ namespace batchlas {
             // It used to be pool scratch that nothing ever read.
             auto info = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
-                handle, n,
-                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(), info.data(), batch_size);
+            T** a_ptrs = A.data_ptrs(ctx).data();
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
+                    handle, n,
+                    a_ptrs, A.ld(), reinterpreted_pivots.data(), info.data(), batch_size);
+            });
             return ctx.create_event_after_external_work();
         }
 
@@ -1079,7 +1139,6 @@ namespace batchlas {
         Span<std::byte> work_space,
         Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
-            handle.setStream(ctx);
             auto n = A.rows();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
@@ -1088,12 +1147,16 @@ namespace batchlas {
             // result was thrown away, leaving the caller a matrix of infinities.
             auto info_arr = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
-                handle, n,
-                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
-                C.data_ptrs(ctx).data(), C.ld(), info_arr.data(), batch_size);
+            T** a_ptrs = A.data_ptrs(ctx).data();  // fills and waits: never inside run_native
+            T** c_ptrs = C.data_ptrs(ctx).data();
+            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                handle.setStream(stream);
+                call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
+                    handle, n,
+                    a_ptrs, A.ld(), reinterpreted_pivots.data(),
+                    c_ptrs, C.ld(), info_arr.data(), batch_size);
+            });
             return ctx.create_event_after_external_work();
-            
         }
 
     template <Backend B, typename T>

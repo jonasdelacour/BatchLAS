@@ -12,6 +12,7 @@
 #include "../device_scalar.hh"
 #include "../gemm_kernels.hh"
 #include "register_64x64_k16_wide.hh"
+#include "../kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -55,12 +56,12 @@ template <int W, int VecN, typename D>
 inline void load_fragment(D* dst, const D* src) {
     if constexpr (W == VecN) {
         const Vec16<D> packet = vec_ref(src);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int w = 0; w < W; ++w) {
             dst[w] = packet.v[w];
         }
     } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int w = 0; w < W; ++w) {
             dst[w] = src[w];
         }
@@ -208,9 +209,9 @@ Event launch_wide_transposed(Queue& ctx,
                     tile_b.template get_multi_ptr<sycl::access::decorated::no>().get());
 
                 D accum[TTM][TTN];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < TTM; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < TTN; ++j) {
                         accum[i][j] = D{};
                     }
@@ -275,23 +276,23 @@ Event launch_wide_transposed(Queue& ctx,
 
                     // Out-of-range staging wrote a zero rather than being
                     // skipped, so the accumulation needs no bounds test.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
                         D af[TTM];
                         D bf[TTN];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NBM; ++band) {
                             load_fragment<WbM, VecN>(
                                 &af[band * WbM], &sa[kk * AStride + band * MSep + ty * WbM]);
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NBN; ++band) {
                             load_fragment<WbN, VecN>(
                                 &bf[band * WbN], &sb[kk * BStride + band * NSep + tx * WbN]);
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < TTM; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < TTN; ++j) {
                                 fma_acc(accum[i][j], af[i], bf[j]);
                             }
@@ -306,17 +307,17 @@ Event launch_wide_transposed(Queue& ctx,
                 // 16-byte store would never fire. O(TileM * TileN) per group
                 // against O(TileM * TileN * k) multiplies.
                 const bool beta_zero = dev_is_zero(beta_d);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int bm = 0; bm < NBM; ++bm) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int w = 0; w < WbM; ++w) {
                         const int row = m0 + bm * MSep + ty * WbM + w;
                         if (row >= m) {
                             continue;
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int bn = 0; bn < NBN; ++bn) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int v = 0; v < WbN; ++v) {
                                 const int col = n0 + bn * NSep + tx * WbN + v;
                                 if (col >= n) {
