@@ -1,4 +1,4 @@
-# op=spmm dtype=double device=sm_120 batchlas=209d9fb8 kernels=722b064a family_kernels=direct:8922cfaa,vendor:e5f40915 date=2026-10-08
+# op=spmm dtype=double device=sm_120 batchlas=f4f8ea54 kernels=722b064a family_kernels=direct:8922cfaa,vendor:e5f40915 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/spmm.double.sm_120 tiers=deep:705,coarse:0,preview:0,custom:0,transcribed:8
 # keys: transA:exact transB:exact m:log nrhs:log batch:log
 transA=N transB=N m=1 nrhs=1 batch=1 | direct 0.009289 | vendor 0.02303 # deep
@@ -409,7 +409,7 @@ transA=T transB=N m=146 nrhs=3 batch=1 | direct 0.01128 | vendor 0.01670 # deep
 transA=T transB=N m=146 nrhs=4 batch=1 | direct 0.02292 | vendor 0.03713 # deep
 transA=T transB=N m=152 nrhs=1 batch=1 | vendor 0.05896 | direct 0.06914 # deep
 transA=T transB=N m=152 nrhs=2 batch=1 | vendor 0.05307 | direct 0.05821 # deep
-transA=T transB=N m=152 nrhs=32 batch=1 | vendor 0.1404 | direct 0.1472 # deep
+transA=T transB=N m=152 nrhs=32 batch=1 | direct 0.1487 | vendor 0.1495 # deep
 transA=T transB=N m=152 nrhs=64 batch=8 | vendor 0.03752 | direct 0.04168 # deep
 transA=T transB=N m=156 nrhs=4 batch=1 | vendor 0.05121 | direct 0.06192 # deep
 transA=T transB=N m=166 nrhs=1 batch=1 | vendor 0.06956 | direct 0.07461 # deep
@@ -426,7 +426,7 @@ transA=T transB=N m=181 nrhs=32 batch=1 | direct 0.02480 | vendor 0.02490 # deep
 transA=T transB=N m=181 nrhs=64 batch=8 | direct 0.04183 | vendor 0.04079 # deep
 transA=T transB=N m=185 nrhs=4 batch=1 | direct 0.09026 | vendor 0.09122 # deep
 transA=T transB=N m=206 nrhs=4 batch=1 | direct 0.03699 | vendor 0.04626 # deep
-transA=T transB=N m=256 nrhs=1 batch=1 | direct 0.07133 | vendor 0.07010 # deep
+transA=T transB=N m=256 nrhs=1 batch=1 | direct 0.07011 | vendor 0.07011 # deep
 transA=T transB=N m=256 nrhs=1 batch=8 | direct 0.01464 | vendor 0.02076 # deep
 transA=T transB=N m=256 nrhs=1 batch=128 | direct 0.02751 | vendor 0.04462 # deep
 transA=T transB=N m=256 nrhs=1 batch=1024 | direct 0.02620 | vendor 4.175 # deep

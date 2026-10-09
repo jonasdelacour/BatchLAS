@@ -1,4 +1,4 @@
-# op=symm dtype=double device=sm_120 batchlas=209d9fb8 kernels=b4039ab2 family_kernels=expand:6cb49da1,vendor:1177645a date=2026-10-08
+# op=symm dtype=double device=sm_120 batchlas=f4f8ea54 kernels=b4039ab2 family_kernels=expand:6cb49da1,vendor:1177645a date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/symm.double.sm_120 tiers=deep:1875,coarse:0,preview:0,custom:0,transcribed:3623
 # keys: form:exact m:log n:log batch:log
 form=sq m=1 n=1 batch=1 | expand 2.269 | vendor 2.267 # deep
@@ -127,7 +127,7 @@ form=sq m=2 n=1 batch=128 | expand 2.266 | vendor 2.495 # deep
 form=sq m=2 n=1 batch=1024 | expand 0.01317 | vendor 1.886 # deep
 form=sq m=2 n=1 batch=8192 | expand 0.02042 | vendor 15.15 # deep
 form=sq m=2 n=1 batch=32768 | expand 0.05609 | vendor 60.19 # deep
-form=sq m=2 n=2 batch=1 | expand 2.272 | vendor 2.267 # deep
+form=sq m=2 n=2 batch=1 | vendor 0.007326 | expand 0.01896 # deep
 form=sq m=2 n=2 batch=2 | vendor 0.008968 | expand 0.01338 # deep
 form=sq m=2 n=2 batch=3 | vendor 0.01191 | expand 0.01444 # deep
 form=sq m=2 n=2 batch=4 | vendor 0.01354 | expand 0.01452 # deep

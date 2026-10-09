@@ -1,4 +1,4 @@
-# op=getrs dtype=float device=sm_120 batchlas=209d9fb8 kernels=55b49d4b family_kernels=cta:a6441760,blocked:759ea21a,vendor:e8b68cd8 date=2026-10-08
+# op=getrs dtype=float device=sm_120 batchlas=f4f8ea54 kernels=55b49d4b family_kernels=cta:a6441760,blocked:759ea21a,vendor:e8b68cd8 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/getrs.float.sm_120 tiers=deep:2440,coarse:0,preview:0,custom:0,transcribed:130
 # keys: n:log:2 nrhs:log batch:log
 n=1 nrhs=1 batch=1 | cta 0.008593 | blocked 0.01356 | vendor 0.02108 # deep
@@ -1671,7 +1671,7 @@ n=96 nrhs=256 batch=128 | blocked 0.2243 | vendor 2.662 # deep
 n=96 nrhs=256 batch=512 | blocked 0.3244 | vendor 3.069 # deep
 n=96 nrhs=256 batch=2048 | blocked 1.621 | vendor 10.30 # deep
 n=96 nrhs=256 batch=8192 | blocked 7.247 | vendor 64.10 # deep
-n=96 nrhs=512 batch=1 | blocked 2.499 | vendor 7.933 # deep
+n=96 nrhs=512 batch=1 | blocked 0.2204 | vendor 0.9761 # deep
 n=96 nrhs=512 batch=16 | blocked 0.2290 | vendor 2.002 # deep
 n=96 nrhs=512 batch=127 | blocked 0.2688 | vendor 5.197 # deep
 n=96 nrhs=512 batch=128 | blocked 0.2677 | vendor 5.203 # deep
@@ -1810,7 +1810,7 @@ n=128 nrhs=256 batch=16 | blocked 0.2565 | vendor 1.343 # deep
 n=128 nrhs=256 batch=127 | blocked 0.3080 | vendor 3.239 # deep
 n=128 nrhs=256 batch=128 | blocked 0.3069 | vendor 3.209 # deep
 n=128 nrhs=256 batch=512 | blocked 0.5220 | vendor 3.910 # deep
-n=128 nrhs=256 batch=2048 | blocked 7.044 | vendor 30.98 # deep
+n=128 nrhs=256 batch=2048 | blocked 2.705 | vendor 12.74 # deep
 n=128 nrhs=256 batch=8192 | blocked 11.01 | vendor 66.01 # deep
 n=128 nrhs=512 batch=1 | blocked 0.2923 | vendor 1.314 # deep
 n=128 nrhs=512 batch=16 | blocked 0.3008 | vendor 2.577 # deep
@@ -1854,23 +1854,23 @@ n=183 nrhs=63 batch=128 | blocked 0.2460 | vendor 1.401 # deep
 n=183 nrhs=128 batch=16 | blocked 0.2112 | vendor 0.9007 # deep
 n=192 nrhs=1 batch=1 | blocked 0.04763 | cta 0.1199 | vendor 0.1784 # deep
 n=192 nrhs=1 batch=16 | cta 0.1259 | vendor 0.2109 | blocked 0.2160 # deep
-n=192 nrhs=1 batch=127 | cta 2.474 | vendor 7.127 | blocked 11.65 # deep
+n=192 nrhs=1 batch=127 | cta 0.1252 | vendor 0.2511 | blocked 0.2622 # deep
 n=192 nrhs=1 batch=128 | cta 0.1263 | vendor 0.2514 | blocked 0.2635 # deep
-n=192 nrhs=1 batch=512 | cta 2.493 | blocked 2.831 | vendor 7.209 # deep
+n=192 nrhs=1 batch=512 | cta 0.1288 | vendor 0.3280 | blocked 0.5129 # deep
 n=192 nrhs=1 batch=2048 | cta 0.4321 | vendor 0.5569 | blocked 0.7742 # deep
 n=192 nrhs=1 batch=8192 | cta 1.407 | vendor 1.697 | blocked 1.918 # deep
 n=192 nrhs=2 batch=1 | blocked 0.05846 | cta 0.09701 | vendor 0.1792 # deep
 n=192 nrhs=2 batch=16 | cta 0.1002 | vendor 0.2415 | blocked 0.2517 # deep
-n=192 nrhs=2 batch=127 | cta 2.423 | vendor 7.183 | blocked 11.73 # deep
-n=192 nrhs=2 batch=128 | cta 2.421 | vendor 7.161 | blocked 11.71 # deep
-n=192 nrhs=2 batch=512 | cta 2.438 | vendor 7.204 | blocked 11.92 # deep
+n=192 nrhs=2 batch=127 | cta 0.1000 | vendor 0.3169 | blocked 0.3282 # deep
+n=192 nrhs=2 batch=128 | cta 0.1003 | vendor 0.3017 | blocked 0.3141 # deep
+n=192 nrhs=2 batch=512 | cta 0.1051 | vendor 0.3412 | blocked 0.5286 # deep
 n=192 nrhs=2 batch=2048 | cta 0.3644 | vendor 0.6094 | blocked 0.7953 # deep
 n=192 nrhs=2 batch=8192 | cta 1.275 | vendor 1.939 | blocked 2.118 # deep
 n=192 nrhs=3 batch=1 | blocked 0.05982 | cta 0.1211 | vendor 0.1800 # deep
-n=192 nrhs=3 batch=16 | cta 2.472 | vendor 7.118 | blocked 11.67 # deep
+n=192 nrhs=3 batch=16 | cta 0.1266 | vendor 0.2407 | blocked 0.2505 # deep
 n=192 nrhs=3 batch=127 | cta 0.1274 | vendor 0.3186 | blocked 0.3744 # deep
 n=192 nrhs=3 batch=128 | cta 0.1273 | vendor 0.3173 | blocked 0.3742 # deep
-n=192 nrhs=3 batch=512 | cta 2.486 | vendor 7.218 | blocked 12.10 # deep
+n=192 nrhs=3 batch=512 | cta 0.1300 | vendor 0.3508 | blocked 0.6889 # deep
 n=192 nrhs=3 batch=2048 | cta 0.4341 | vendor 0.6227 | blocked 0.9689 # deep
 n=192 nrhs=3 batch=8192 | cta 1.509 | vendor 1.989 | blocked 2.318 # deep
 n=192 nrhs=4 batch=1 | blocked 0.06090 | cta 0.1220 | vendor 0.1767 # deep
@@ -1885,9 +1885,9 @@ n=192 nrhs=5 batch=16 | cta 0.1475 | vendor 0.2496 | blocked 0.2585 # deep
 n=192 nrhs=5 batch=127 | cta 0.1484 | vendor 0.3373 | blocked 0.4860 # deep
 n=192 nrhs=5 batch=128 | cta 0.1479 | vendor 0.3372 | blocked 0.4827 # deep
 n=192 nrhs=5 batch=512 | cta 0.1532 | vendor 0.3676 | blocked 0.5907 # deep
-n=192 nrhs=5 batch=2048 | cta 2.753 | vendor 7.469 | blocked 12.27 # deep
+n=192 nrhs=5 batch=2048 | cta 0.4672 | vendor 0.6413 | blocked 0.8613 # deep
 n=192 nrhs=5 batch=8192 | cta 1.521 | vendor 2.075 | blocked 2.264 # deep
-n=192 nrhs=8 batch=1 | blocked 2.373 | cta 2.473 | vendor 7.015 # deep
+n=192 nrhs=8 batch=1 | blocked 0.07888 | cta 0.1459 | vendor 0.1596 # deep
 n=192 nrhs=8 batch=16 | cta 0.1499 | vendor 0.2383 | blocked 0.2513 # deep
 n=192 nrhs=8 batch=127 | cta 0.1503 | blocked 0.1989 | vendor 0.2799 # deep
 n=192 nrhs=8 batch=128 | cta 0.1505 | vendor 0.2760 | blocked 0.4415 # deep
@@ -1915,8 +1915,8 @@ n=192 nrhs=14 batch=127 | blocked 0.2290 | vendor 0.4187 # deep
 n=192 nrhs=15 batch=127 | blocked 0.2265 | vendor 0.4328 # deep
 n=192 nrhs=16 batch=1 | blocked 0.06775 | vendor 0.1726 # deep
 n=192 nrhs=16 batch=16 | blocked 0.1949 | vendor 0.2934 # deep
-n=192 nrhs=16 batch=127 | vendor 7.291 | blocked 11.60 # deep
-n=192 nrhs=16 batch=128 | vendor 7.288 | blocked 11.59 # deep
+n=192 nrhs=16 batch=127 | blocked 0.1954 | vendor 0.4443 # deep
+n=192 nrhs=16 batch=128 | blocked 0.1897 | vendor 0.4355 # deep
 n=192 nrhs=16 batch=512 | blocked 0.2422 | vendor 0.4892 # deep
 n=192 nrhs=16 batch=2048 | blocked 0.7629 | vendor 0.9719 # deep
 n=192 nrhs=16 batch=8192 | blocked 2.926 | vendor 3.887 # deep
@@ -1939,7 +1939,7 @@ n=192 nrhs=58 batch=128 | blocked 0.2550 | vendor 1.371 # deep
 n=192 nrhs=63 batch=1 | blocked 0.07902 | vendor 0.2851 # deep
 n=192 nrhs=63 batch=16 | blocked 0.2270 | vendor 0.6957 # deep
 n=192 nrhs=63 batch=127 | blocked 0.2557 | vendor 1.473 # deep
-n=192 nrhs=63 batch=128 | vendor 8.281 | blocked 11.64 # deep
+n=192 nrhs=63 batch=128 | blocked 0.2585 | vendor 1.478 # deep
 n=192 nrhs=63 batch=512 | blocked 0.4566 | vendor 1.731 # deep
 n=192 nrhs=63 batch=2048 | blocked 1.301 | vendor 3.315 # deep
 n=192 nrhs=63 batch=8192 | blocked 5.810 | vendor 27.76 # deep
@@ -1954,14 +1954,14 @@ n=192 nrhs=127 batch=1 | blocked 0.09229 | vendor 0.3833 # deep
 n=192 nrhs=127 batch=16 | blocked 0.2422 | vendor 1.179 # deep
 n=192 nrhs=127 batch=127 | blocked 0.3298 | vendor 2.826 # deep
 n=192 nrhs=127 batch=128 | blocked 0.3306 | vendor 2.839 # deep
-n=192 nrhs=127 batch=512 | blocked 2.871 | vendor 12.48 # deep
+n=192 nrhs=127 batch=512 | blocked 0.5832 | vendor 3.351 # deep
 n=192 nrhs=127 batch=2048 | blocked 2.270 | vendor 9.519 # deep
 n=192 nrhs=127 batch=8192 | blocked 9.934 | vendor 76.68 # deep
 n=192 nrhs=128 batch=1 | blocked 0.09339 | vendor 0.3611 # deep
-n=192 nrhs=128 batch=16 | vendor 8.107 | blocked 11.63 # deep
-n=192 nrhs=128 batch=127 | blocked 11.72 | vendor 11.93 # deep
+n=192 nrhs=128 batch=16 | blocked 0.2228 | vendor 1.165 # deep
+n=192 nrhs=128 batch=127 | blocked 0.3101 | vendor 2.815 # deep
 n=192 nrhs=128 batch=128 | blocked 0.3123 | vendor 2.840 # deep
-n=192 nrhs=128 batch=512 | blocked 2.872 | vendor 12.50 # deep
+n=192 nrhs=128 batch=512 | blocked 0.5701 | vendor 3.377 # deep
 n=192 nrhs=128 batch=2048 | blocked 2.145 | vendor 9.625 # deep
 n=192 nrhs=128 batch=8192 | blocked 9.948 | vendor 77.17 # deep
 n=192 nrhs=139 batch=16 | blocked 0.2447 | vendor 1.299 # deep
@@ -1998,10 +1998,10 @@ n=222 nrhs=63 batch=128 | blocked 0.2988 | vendor 1.713 # deep
 n=222 nrhs=128 batch=16 | blocked 0.2547 | vendor 1.058 # deep
 n=256 nrhs=1 batch=1 | blocked 0.05907 | cta 0.1736 | vendor 0.2350 # deep
 n=256 nrhs=1 batch=16 | cta 0.1830 | vendor 0.2775 | blocked 0.2798 # deep
-n=256 nrhs=1 batch=127 | cta 2.583 | vendor 7.215 | blocked 11.77 # deep
+n=256 nrhs=1 batch=127 | cta 0.1833 | vendor 0.3300 | blocked 0.3429 # deep
 n=256 nrhs=1 batch=128 | cta 0.1826 | vendor 0.3238 | blocked 0.3367 # deep
 n=256 nrhs=1 batch=512 | cta 0.3103 | vendor 0.4873 | blocked 0.7005 # deep
-n=256 nrhs=1 batch=2048 | cta 2.963 | vendor 7.769 | blocked 12.63 # deep
+n=256 nrhs=1 batch=2048 | cta 0.6615 | vendor 0.8811 | blocked 1.169 # deep
 n=256 nrhs=1 batch=32768 | cta - | vendor - | blocked - # transcribed
 n=256 nrhs=2 batch=1 | blocked 0.07540 | cta 0.1374 | vendor 0.2376 # deep
 n=256 nrhs=2 batch=16 | cta 0.1425 | vendor 0.3223 | blocked 0.3318 # deep

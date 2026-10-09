@@ -1,4 +1,4 @@
-# op=gesvd dtype=double device=sm_120 batchlas=a01c3c96 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-08
+# op=gesvd dtype=double device=sm_120 batchlas=f4f8ea54 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/gesvd.double.sm_120 tiers=deep:724,coarse:0,preview:0,custom:0,transcribed:1258
 # keys: herm:exact vec:exact m:log:1.5 n:log:1.5
 herm=L vec=all m=1 n=1 | cta 0.06151 | blocked 0.06394 | vendor 1.060 # deep
@@ -689,8 +689,8 @@ herm=N vec=all m=16 n=16 | jacobi 6.241 | cta 13.17 | blocked 68.10 | vendor 83.
 herm=N vec=all m=16 n=24 | jacobi 20.77 | cta 31.14 | blocked 70.88 | vendor 83.24 # deep
 herm=N vec=all m=16 n=32 | jacobi 23.22 | cta 36.93 | blocked 71.56 | vendor 86.87 # deep
 herm=N vec=all m=16 n=33 | blocked 71.41 | jacobi 164.2 # deep
-herm=N vec=all m=16 n=48 | blocked 71.80 | jacobi 194.1 # deep
-herm=N vec=all m=16 n=64 | blocked 73.96 | jacobi 244.3 # deep
+herm=N vec=all m=16 n=48 | blocked 71.39 | jacobi 194.0 # deep
+herm=N vec=all m=16 n=64 | blocked 77.17 | jacobi 243.7 # deep
 herm=N vec=all m=16 n=65 | blocked 37.82 # deep
 herm=N vec=all m=16 n=128 | blocked 44.65 # deep
 herm=N vec=all m=16 n=256 | blocked 36.91 # deep
@@ -727,7 +727,7 @@ herm=N vec=all m=32 n=24 | jacobi 28.45 | cta 79.06 | blocked 99.97 | vendor 139
 herm=N vec=all m=32 n=32 | jacobi 42.77 | cta 57.54 | blocked 152.0 | vendor 296.3 # deep
 herm=N vec=all m=32 n=33 | blocked 85.30 | jacobi 209.5 # deep
 herm=N vec=all m=32 n=48 | blocked 86.21 | jacobi 213.8 # deep
-herm=N vec=all m=32 n=64 | blocked 88.31 | jacobi 230.0 # deep
+herm=N vec=all m=32 n=64 | blocked 87.04 | jacobi 227.2 # deep
 herm=N vec=all m=32 n=65 | blocked 46.04 # deep
 herm=N vec=all m=32 n=128 | blocked 52.11 # deep
 herm=N vec=all m=32 n=256 | blocked 43.03 # deep
@@ -803,7 +803,7 @@ herm=N vec=all m=128 n=33 | blocked 25.65 # deep
 herm=N vec=all m=128 n=48 | blocked 41.40 # deep
 herm=N vec=all m=128 n=64 | blocked 66.73 # deep
 herm=N vec=all m=128 n=65 | blocked 32.90 # deep
-herm=N vec=all m=128 n=128 | blocked 103.5 # deep
+herm=N vec=all m=128 n=128 | blocked 105.6 # deep
 herm=N vec=all m=128 n=256 | blocked 69.80 # deep
 herm=N vec=all m=128 n=512 | blocked 67.97 # deep
 herm=N vec=all m=128 n=1024 | blocked 92.75 # deep
@@ -982,9 +982,9 @@ herm=N vec=none m=33 n=2 | blocked 0.3690 | jacobi 3.993 # deep
 herm=N vec=none m=33 n=4 | blocked 2.071 | jacobi 9.805 # deep
 herm=N vec=none m=33 n=8 | blocked 10.25 | jacobi 22.17 # deep
 herm=N vec=none m=33 n=11 | blocked 29.84 | jacobi 36.25 # deep
-herm=N vec=none m=33 n=16 | jacobi 53.12 | blocked 61.51 # deep
-herm=N vec=none m=33 n=24 | jacobi 86.83 | blocked 89.14 # deep
-herm=N vec=none m=33 n=32 | jacobi 65.14 | blocked 76.66 # deep
+herm=N vec=none m=33 n=16 | jacobi 53.04 | blocked 61.44 # deep
+herm=N vec=none m=33 n=24 | jacobi 86.59 | blocked 88.90 # deep
+herm=N vec=none m=33 n=32 | jacobi 65.20 | blocked 76.41 # deep
 herm=N vec=none m=33 n=33 | blocked 70.52 | jacobi 98.95 # deep
 herm=N vec=none m=33 n=48 | blocked 72.80 | jacobi 110.6 # deep
 herm=N vec=none m=33 n=64 | blocked 37.15 | jacobi 54.26 # deep
@@ -1021,8 +1021,8 @@ herm=N vec=none m=64 n=33 | blocked 36.73 | jacobi 43.98 # deep
 herm=N vec=none m=64 n=48 | blocked 63.72 | jacobi 72.20 # deep
 herm=N vec=none m=64 n=64 | blocked 107.5 | jacobi 113.0 # deep
 herm=N vec=none m=64 n=65 | blocked 54.91 # deep
-herm=N vec=none m=64 n=128 | blocked 58.10 # deep
-herm=N vec=none m=64 n=256 | blocked 34.28 # deep
+herm=N vec=none m=64 n=128 | blocked 57.81 # deep
+herm=N vec=none m=64 n=256 | blocked 34.48 # deep
 herm=N vec=none m=64 n=512 | blocked 20.78 # deep
 herm=N vec=none m=64 n=1024 | blocked 17.87 # deep
 herm=N vec=none m=65 n=1 | blocked 0.1413 # deep
@@ -1051,7 +1051,7 @@ herm=N vec=none m=128 n=33 | blocked 19.61 # deep
 herm=N vec=none m=128 n=48 | blocked 34.47 # deep
 herm=N vec=none m=128 n=64 | blocked 56.89 # deep
 herm=N vec=none m=128 n=65 | blocked 27.48 # deep
-herm=N vec=none m=128 n=128 | blocked 91.93 # deep
+herm=N vec=none m=128 n=128 | blocked 91.81 # deep
 herm=N vec=none m=128 n=256 | blocked 51.38 # deep
 herm=N vec=none m=128 n=512 | blocked 34.96 # deep
 herm=N vec=none m=128 n=1024 | blocked 31.40 # deep
@@ -1167,8 +1167,8 @@ herm=N vec=thin m=16 n=16 | jacobi - | blocked - | vendor - # transcribed
 herm=N vec=thin m=16 n=24 | jacobi 16.81 | blocked 70.41 # deep
 herm=N vec=thin m=16 n=32 | jacobi 16.94 | blocked 71.18 # deep
 herm=N vec=thin m=16 n=33 | blocked 70.15 | jacobi 128.5 # deep
-herm=N vec=thin m=16 n=48 | blocked 70.19 | jacobi 125.7 # deep
-herm=N vec=thin m=16 n=64 | blocked 70.88 | jacobi 117.5 # deep
+herm=N vec=thin m=16 n=48 | blocked 69.92 | jacobi 126.3 # deep
+herm=N vec=thin m=16 n=64 | blocked 69.62 | jacobi 116.5 # deep
 herm=N vec=thin m=16 n=65 | blocked 35.88 # deep
 herm=N vec=thin m=16 n=128 | blocked 37.76 # deep
 herm=N vec=thin m=16 n=256 | blocked 21.04 # deep
@@ -1176,7 +1176,7 @@ herm=N vec=thin m=16 n=512 | blocked 13.25 # deep
 herm=N vec=thin m=16 n=1024 | blocked 10.56 # deep
 herm=N vec=thin m=20 n=1 | blocked 0.8656 | jacobi 0.9523 # deep
 herm=N vec=thin m=24 n=1 | blocked 0.8715 | jacobi 0.9506 # deep
-herm=N vec=thin m=24 n=2 | jacobi 1.073 | blocked 1.222 # deep
+herm=N vec=thin m=24 n=2 | blocked 0.6096 | jacobi 1.077 # deep
 herm=N vec=thin m=24 n=4 | jacobi 2.350 | blocked 3.007 # deep
 herm=N vec=thin m=24 n=8 | jacobi 5.474 | blocked 12.34 # deep
 herm=N vec=thin m=24 n=16 | jacobi 13.78 | blocked 67.98 # deep
@@ -1200,7 +1200,7 @@ herm=N vec=thin m=32 n=24 | jacobi 24.79 | blocked 98.73 # deep
 herm=N vec=thin m=32 n=28 | jacobi 32.24 | blocked 128.1 # deep
 herm=N vec=thin m=32 n=33 | blocked 85.04 | jacobi 196.0 # deep
 herm=N vec=thin m=32 n=48 | blocked 85.70 | jacobi 187.7 # deep
-herm=N vec=thin m=32 n=64 | blocked 86.62 | jacobi 179.5 # deep
+herm=N vec=thin m=32 n=64 | blocked 85.95 | jacobi 179.8 # deep
 herm=N vec=thin m=32 n=65 | blocked 44.91 # deep
 herm=N vec=thin m=32 n=128 | blocked 47.15 # deep
 herm=N vec=thin m=32 n=256 | blocked 27.73 # deep

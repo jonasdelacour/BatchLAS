@@ -1,4 +1,4 @@
-# op=geqrf dtype=double device=sm_120 batchlas=a01c3c96 kernels=2de2c975 family_kernels=tiny:f518f860,cta:14780c9f,blocked:83ec0765,vendor:3dd02abf date=2026-10-08
+# op=geqrf dtype=double device=sm_120 batchlas=f4f8ea54 kernels=2de2c975 family_kernels=tiny:f518f860,cta:14780c9f,blocked:83ec0765,vendor:3dd02abf date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/geqrf.double.sm_120 tiers=deep:491,coarse:0,preview:0,custom:0,transcribed:132
 # keys: form:exact n:log:3 aspect:log
 form=sq n=1 aspect=1 | vendor 0.01545 | cta 0.01805 | tiny 0.02051 | blocked 0.03136 # deep
@@ -94,7 +94,7 @@ form=tall n=4 aspect=8 | vendor 0.1476 | cta 0.2577 | blocked 0.3239 # deep
 form=tall n=4 aspect=12 | vendor 0.1748 | blocked 0.6238 | cta 0.8906 # deep
 form=tall n=4 aspect=16 | vendor 0.1741 | blocked 0.6246 | cta 0.8910 # deep
 form=tall n=4 aspect=64 | vendor 0.3287 | blocked 1.195 | cta 1.195 # deep
-form=tall n=4 aspect=256 | vendor 1.283 | blocked 1.519 | cta 1.524 # deep
+form=tall n=4 aspect=256 | vendor 1.281 | blocked 1.515 | cta 1.518 # deep
 form=tall n=5 aspect=1 | vendor 0.05711 | cta 0.3411 | blocked 0.4252 # deep
 form=tall n=5 aspect=2 | vendor 0.06570 | cta 0.3421 | blocked 0.4248 # deep
 form=tall n=5 aspect=3 | vendor 0.07179 | cta 0.3425 | blocked 0.4198 # deep
@@ -126,7 +126,7 @@ form=tall n=8 aspect=7 | vendor 0.4733 | blocked 1.414 | cta 3.797 # deep
 form=tall n=8 aspect=8 | vendor 0.4661 | blocked 1.430 | cta 3.772 # deep
 form=tall n=8 aspect=12 | vendor 0.4870 | blocked 2.247 | cta 3.941 # deep
 form=tall n=8 aspect=16 | vendor 0.6253 | blocked 3.123 | cta 4.095 # deep
-form=tall n=8 aspect=64 | vendor 2.053 | cta 2.961 | blocked 2.962 # deep
+form=tall n=8 aspect=64 | vendor 1.931 | cta 2.959 | blocked 2.959 # deep
 form=tall n=8 aspect=256 | vendor 1.758 | blocked 1.828 # deep
 form=tall n=9 aspect=1 | vendor 0.1463 | cta 0.7448 | blocked 0.8372 # deep
 form=tall n=9 aspect=2 | vendor 0.2615 | cta 0.7460 | blocked 0.8380 # deep
@@ -187,7 +187,7 @@ form=tall n=16 aspect=5 | vendor 1.549 | blocked 5.889 | cta 8.770 # deep
 form=tall n=16 aspect=7 | vendor 2.144 | blocked 8.034 | cta 9.133 # deep
 form=tall n=16 aspect=8 | vendor 2.358 | blocked 8.117 | cta 9.223 # deep
 form=tall n=16 aspect=12 | vendor 2.336 | blocked 5.104 | cta 5.108 # deep
-form=tall n=16 aspect=16 | vendor 3.732 | blocked 5.536 | cta 5.543 # deep
+form=tall n=16 aspect=16 | vendor 3.818 | cta 5.609 | blocked 5.610 # deep
 form=tall n=16 aspect=32 | vendor 3.292 | blocked 4.524 # deep
 form=tall n=16 aspect=64 | blocked 3.357 | vendor 3.500 # deep
 form=tall n=17 aspect=1 | vendor 0.8254 | cta 1.949 | blocked 4.375 # deep
@@ -258,7 +258,7 @@ form=tall n=28 aspect=1 | vendor 3.637 | blocked 7.980 | cta 15.65 # deep
 form=tall n=28 aspect=2 | vendor 4.144 | blocked 9.345 | cta 16.04 # deep
 form=tall n=28 aspect=3 | vendor 3.070 | blocked 6.724 | cta 8.722 # deep
 form=tall n=28 aspect=4 | vendor 4.442 | blocked 8.064 | cta 9.344 # deep
-form=tall n=28 aspect=5 | vendor 5.966 | cta 9.787 | blocked 11.04 # deep
+form=tall n=28 aspect=5 | vendor 5.641 | cta 9.805 | blocked 11.04 # deep
 form=tall n=28 aspect=7 | vendor 2.960 | cta 5.748 | blocked 6.455 # deep
 form=tall n=28 aspect=8 | vendor 3.536 | blocked 6.741 # deep
 form=tall n=28 aspect=12 | vendor 2.720 | blocked 5.123 # deep

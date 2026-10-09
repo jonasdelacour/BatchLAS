@@ -1,4 +1,4 @@
-# op=spmm dtype=cdouble device=sm_120 batchlas=209d9fb8 kernels=722b064a family_kernels=direct:8922cfaa,vendor:e5f40915 date=2026-10-08
+# op=spmm dtype=cdouble device=sm_120 batchlas=f4f8ea54 kernels=722b064a family_kernels=direct:8922cfaa,vendor:e5f40915 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/spmm.cdouble.sm_120 tiers=deep:703,coarse:0,preview:0,custom:0,transcribed:8
 # keys: transA:exact transB:exact m:log nrhs:log batch:log
 transA=N transB=N m=1 nrhs=1 batch=1 | direct 0.007652 # deep
@@ -625,7 +625,7 @@ transA=T transB=T m=64 nrhs=11 batch=8 | vendor 0.02747 | direct 0.02944 # deep
 transA=T transB=T m=64 nrhs=16 batch=128 | direct 0.04497 | vendor 0.05780 # deep
 transA=T transB=T m=64 nrhs=64 batch=128 | direct 0.1252 | vendor 0.1504 # deep
 transA=T transB=T m=91 nrhs=2 batch=1 | vendor 0.04552 | direct 0.05125 # deep
-transA=T transB=T m=91 nrhs=11 batch=8 | vendor 0.1505 | direct 0.2326 # deep
+transA=T transB=T m=91 nrhs=11 batch=8 | vendor 0.1452 | direct 0.2246 # deep
 transA=T transB=T m=99 nrhs=2 batch=1 | vendor 0.1125 | direct 0.2203 # deep
 transA=T transB=T m=108 nrhs=2 batch=1 | direct 0.01477 | vendor 0.01735 # deep
 transA=T transB=T m=108 nrhs=11 batch=8 | vendor 0.08099 | direct 0.1394 # deep

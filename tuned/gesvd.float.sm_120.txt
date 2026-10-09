@@ -1,4 +1,4 @@
-# op=gesvd dtype=float device=sm_120 batchlas=a01c3c96 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-08
+# op=gesvd dtype=float device=sm_120 batchlas=f4f8ea54 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/gesvd.float.sm_120 tiers=deep:722,coarse:0,preview:0,custom:0,transcribed:1262
 # keys: herm:exact vec:exact m:log:1.5 n:log:1.5
 herm=L vec=all m=1 n=1 | cta 0.06103 | blocked 0.06344 | vendor 0.1610 # deep
@@ -984,9 +984,9 @@ herm=N vec=none m=33 n=1 | blocked 0.08519 | jacobi 0.7018 # deep
 herm=N vec=none m=33 n=2 | blocked 0.1577 | jacobi 0.7534 # deep
 herm=N vec=none m=33 n=4 | blocked 0.4213 | jacobi 1.295 # deep
 herm=N vec=none m=33 n=8 | blocked 1.417 | jacobi 2.529 # deep
-herm=N vec=none m=33 n=16 | blocked 5.591 | jacobi 5.827 # deep
+herm=N vec=none m=33 n=16 | blocked 5.340 | jacobi 5.723 # deep
 herm=N vec=none m=33 n=20 | jacobi 7.483 | blocked 7.916 # deep
-herm=N vec=none m=33 n=24 | jacobi 9.027 | blocked 9.877 # deep
+herm=N vec=none m=33 n=24 | jacobi 9.018 | blocked 9.713 # deep
 herm=N vec=none m=33 n=32 | jacobi 6.823 | blocked 7.749 # deep
 herm=N vec=none m=33 n=33 | jacobi 8.806 | blocked 9.226 # deep
 herm=N vec=none m=33 n=48 | jacobi 9.979 | blocked 9.964 # deep

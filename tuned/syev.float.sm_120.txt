@@ -1,4 +1,4 @@
-# op=syev dtype=float device=sm_120 batchlas=a01c3c96 kernels=e7487732 family_kernels=cta:d7d63b0d,cta_fused:58fd9894,jacobi:c4e7cd26,blocked:4ba23219,two_stage:7b23bec8,vendor:6d150e5a date=2026-10-08
+# op=syev dtype=float device=sm_120 batchlas=f4f8ea54 kernels=e7487732 family_kernels=cta:d7d63b0d,cta_fused:58fd9894,jacobi:c4e7cd26,blocked:4ba23219,two_stage:7b23bec8,vendor:6d150e5a date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/syev.float.sm_120 tiers=deep:320,coarse:0,preview:0,custom:0,transcribed:48
 # keys: jobz:exact n:log:3 batch:log
 jobz=N n=1 batch=128 | cta_fused 0.008213 | jacobi 0.008243 | vendor 0.01168 | blocked 0.01393 | two_stage 0.02195 | cta 0.02783 # deep
@@ -85,9 +85,9 @@ jobz=N n=32 batch=8192 | blocked 0.4460 | cta_fused 0.6746 | cta 0.6943 | two_st
 jobz=N n=32 batch=32768 | blocked 1.896 | cta_fused 2.708 | cta 2.928 | two_stage 5.778 | jacobi 9.084 | vendor 12.37 # deep
 jobz=N n=33 batch=128 | vendor 0.1727 | blocked 0.2214 | two_stage 0.2712 # deep
 jobz=N n=33 batch=512 | blocked 0.2422 | two_stage 0.2912 | vendor 0.3287 # deep
-jobz=N n=33 batch=2048 | blocked 0.3942 | two_stage 0.5225 | vendor 1.030 # deep
-jobz=N n=33 batch=8192 | blocked 1.379 | two_stage 2.195 | vendor 3.978 # deep
-jobz=N n=33 batch=32768 | blocked 5.692 | two_stage 6.911 | vendor 16.56 # deep
+jobz=N n=33 batch=2048 | blocked 0.3945 | two_stage 0.5017 | vendor 1.030 # deep
+jobz=N n=33 batch=8192 | blocked 1.305 | two_stage 1.547 | vendor 3.901 # deep
+jobz=N n=33 batch=32768 | blocked 5.447 | two_stage 6.481 | vendor 16.16 # deep
 jobz=N n=40 batch=128 | vendor 0.2126 | blocked 0.2627 | two_stage 0.3015 # deep
 jobz=N n=40 batch=512 | blocked 0.2868 | two_stage 0.3378 | vendor 0.3640 # deep
 jobz=N n=40 batch=2048 | blocked 0.4956 | two_stage 0.6807 | vendor 1.149 # deep
@@ -260,7 +260,7 @@ jobz=V n=32 batch=512 | cta 0.2121 | vendor 0.2474 | cta_fused 0.2566 | blocked 
 jobz=V n=32 batch=2048 | cta 0.2843 | cta_fused 0.4555 | blocked 0.4898 | vendor 0.8093 | two_stage 0.8526 | jacobi 1.392 # deep
 jobz=V n=32 batch=8192 | cta 1.038 | cta_fused 1.613 | blocked 1.632 | two_stage 2.443 | vendor 3.506 | jacobi 3.686 # deep
 jobz=V n=32 batch=32768 | cta 4.498 | cta_fused 5.872 | blocked 7.007 | two_stage 10.17 | vendor 13.71 | jacobi 14.40 # deep
-jobz=V n=33 batch=128 | vendor 0.3565 | blocked 0.4334 | two_stage 0.7207 # deep
+jobz=V n=33 batch=128 | vendor 0.3593 | blocked 0.4212 | two_stage 1.044 # deep
 jobz=V n=33 batch=512 | blocked 0.5051 | two_stage 0.4933 | vendor 0.7097 # deep
 jobz=V n=33 batch=2048 | blocked 0.8567 | two_stage 1.026 | vendor 2.188 # deep
 jobz=V n=33 batch=8192 | blocked 2.776 | two_stage 3.059 | vendor 8.257 # deep
@@ -302,7 +302,7 @@ jobz=V n=256 batch=128 | vendor 5.143 | blocked 6.597 | two_stage 13.17 # deep
 jobz=V n=256 batch=512 | blocked 13.74 | vendor 17.87 | two_stage 25.63 # deep
 jobz=V n=256 batch=2048 | blocked 50.60 | vendor 71.19 | two_stage 90.74 # deep
 jobz=V n=256 batch=8192 | blocked 209.0 | vendor 288.8 | two_stage 375.9 # deep
-jobz=V n=257 batch=128 | vendor 11.09 # deep
+jobz=V n=257 batch=128 | vendor 10.99 # deep
 jobz=V n=257 batch=512 | vendor 30.10 # deep
 jobz=V n=257 batch=2048 | vendor 174.1 # deep
 jobz=V n=287 batch=128 | vendor 12.82 # deep

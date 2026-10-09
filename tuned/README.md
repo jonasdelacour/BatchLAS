@@ -14,13 +14,15 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 
 ## What is here
 
-The inventory below is as of 2026-10-06; the generated selection-tables page is always current.
+The inventory below is as of 2026-10-09; the generated selection-tables page is always current.
 Every op ships a table for every dtype it instantiates (float, double, cfloat, cdouble; symm, syrk
 and syr2k are real-only) on sm_89 and sm_120, and spmm also on the CPU, so none of these devices
 borrows (R8); any other device borrows and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
 inventory. Three kinds of source:
 
-- **measured**: timed by the tuner (`source=tuner:<raw jsonl>`, raw in `benchmarks/results/tuning/`);
+- **deep**: a tiered `--tier deep` run's ledger (`source=ledger:<dir>`, raw in
+  `benchmarks/results/tuning/ledger/`), see "The sm_120 deep tables" below;
+- **measured**: timed by the old tuner (`source=tuner:<raw jsonl>`, raw in `benchmarks/results/tuning/`);
 - **converted**: timed forced-route sweeps (`source=benchmarks/results/routing/<sweep>.jsonl`);
 - **transcribed**: the old router's preference order, untimed (`source=transcribed:<sha>`, CSV in
   `transcribed/`). A transcription marked "relabelled" is the sm_89 CSV written for sm_120 with
@@ -28,30 +30,58 @@ inventory. Three kinds of source:
 
 | op | dtype | sm_89 | sm_120 | cpu |
 |---|---|---|---|---|
-| potrf | all | converted (`sm89_potrf_archive.jsonl`) | converted (`sm120_potrf_sweep{,_edges}.jsonl`) | — |
-| posv | all | transcribed `7e71a6e0` (`posv.sm_89.csv`) | converted (`sm120_posv_sweep.jsonl`) | — |
-| trsm | float, double | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | **measured** (`tuning/trsm.<dtype>.sm_120.jsonl`) | — |
-| trsm | cfloat, cdouble | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | transcribed, relabelled from `trsm.sm_89.csv` | — |
-| gemm | all | transcribed `424a45bc` (`gemm.sm_89.csv`) | transcribed, relabelled from `gemm.sm_89.csv` | — |
-| gemv | all | transcribed `424a45bc` (`gemv.sm_89.csv`) | transcribed `424a45bc` (`gemv.sm_120.csv`) | — |
-| geqrf | all | transcribed `424a45bc` (`geqrf.csv`, both devices) | transcribed (same CSV) | — |
-| orgqr | all | transcribed `424a45bc` (`orgqr.csv`, both devices) | transcribed (same CSV) | — |
-| ormqr | all | transcribed `424a45bc` (`ormqr.csv`, both devices) | transcribed (same CSV) | — |
-| getrf | all | transcribed `424a45bc` (`getrf.csv`, both devices) | transcribed (same CSV) | — |
-| getrs | all | transcribed `424a45bc` (`getrs.csv`, both devices) | transcribed (same CSV) | — |
-| getri | all | transcribed `424a45bc` (`getri.sm_89.csv`) | transcribed `424a45bc` (`getri.sm_120.csv`) | — |
-| gesv | all | transcribed `424a45bc` (`gesv.sm_89.csv`) | transcribed `424a45bc` (`gesv.sm_120.csv`) | — |
-| gesvd | all | transcribed `424a45bc` (`gesvd.csv`, both devices) | transcribed (same CSV) | — |
-| spmm | all | transcribed `424a45bc` (`spmm.sm_89.csv`) | transcribed `424a45bc` (`spmm.sm_120.csv`) | transcribed (`spmm.cpu.csv`) |
-| syev | all | transcribed `424a45bc` (`syev.sm_89.csv`) | transcribed `424a45bc` (`syev.sm_120.csv`) | — |
-| symm | float, double | transcribed `ff340fc6` (`symm.csv`, both devices) | transcribed (same CSV) | — |
-| syrk | float, double | transcribed `ff340fc6` (`syrk.csv`, both devices) | transcribed (same CSV) | — |
-| syr2k | float, double | transcribed `ff340fc6` (`syr2k.csv`, both devices) | transcribed (same CSV) | — |
-| trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | transcribed (same CSV) | — |
+| potrf | all | converted (`sm89_potrf_archive.jsonl`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| posv | all | transcribed `7e71a6e0` (`posv.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| trsm | all | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| gemm | all | transcribed `424a45bc` (`gemm.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| gemv | all | transcribed `424a45bc` (`gemv.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| geqrf | all | transcribed `424a45bc` (`geqrf.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| orgqr | all | transcribed `424a45bc` (`orgqr.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| ormqr | all | transcribed `424a45bc` (`ormqr.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| getrf | all | transcribed `424a45bc` (`getrf.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| getrs | all | transcribed `424a45bc` (`getrs.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| getri | all | transcribed `424a45bc` (`getri.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| gesv | all | transcribed `424a45bc` (`gesv.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| gesvd | all | transcribed `424a45bc` (`gesvd.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| spmm | all | transcribed `424a45bc` (`spmm.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | transcribed (`spmm.cpu.csv`) |
+| syev | all | transcribed `424a45bc` (`syev.sm_89.csv`) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| symm | float, double | transcribed `ff340fc6` (`symm.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| syrk | float, double | transcribed `ff340fc6` (`syrk.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| syr2k | float, double | transcribed `ff340fc6` (`syr2k.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
+| trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | **deep** (`ledger/<op>.<dtype>.sm_120`) | — |
 
 144 files: 70 per GPU device (16 ops x 4 dtypes, plus symm, syrk and syr2k x 2) and 4 cpu. Timed:
-10 on sm_120 (potrf x 4 and posv x 4 converted, trsm float and double measured) and the 4 sm_89
-potrf tables; the other 130 replay an old router.
+all 70 on sm_120 (deep ledger tables) and the 4 sm_89 potrf tables; the other 70 (sm_89 and cpu)
+replay an old router. A deep table keeps a transcribed row only where no measured row lies within
+the lattice spacing (`tiers=...,transcribed:<n>` in its header counts them).
+
+## The sm_120 deep tables
+
+All 70 sm_120 tables come from one `--tier deep` campaign over all 19 ops and every dtype each
+op instantiates, on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120, CUDA 13.2, DPC++
+`/opt/dpcpp-cuda`), 2026-10-08 06:23 to 2026-10-09 04:54 CEST, four restarts of
+`batchlas_tune all --tier deep --devices 0,1,2,3`. On 2026-10-09 two follow-up runs went into the
+same ledger: a re-measure of 250 cells the box's other user had damaged (`--remeasure-keys`,
+design page "Engine: re-measuring named cells"), and a fresh deep gemv run, because the defect-13
+fix edited `src/ops/gemv/gemv.cc`, which every gemv family hashes. The ledger is
+`benchmarks/results/tuning/ledger/` (LFS). Regenerate with
+
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out tuned --replace-timed
+
+Caveats:
+
+- **Dimension cap 2048.** No cell was planned with a matrix dimension above 2048 (`--max-dim`). The
+  first run measured some larger cells before the cap existed; they stay. Above the cap the
+  nearest measured row decides.
+- **Refinement coverage is uneven.** Every op's starting lattice is complete, but refinement was
+  cut short when the campaign was stopped. geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd and
+  complex getrs are only lightly refined, so their crossovers sit on lattice spacing, not on a
+  bisected edge.
+- **Accuracy is not timed.** A table ranks by time only. LOBPCG pins its projected syev solves to
+  the CTA solver at n <= 32 for that reason (`docs/perf/syevx.md`, "LOBPCG: the accuracy pin on
+  the projected syev").
+- **sm_120 only.** The sm_89 tables are untouched; a device with no table of its own still borrows
+  the nearest one.
 
 ## How they are produced
 
@@ -172,24 +202,17 @@ stays, and the next run re-races that candidate. A candidate that could not run 
 compared. `--check` re-derives the table from the ledger its `source=` names. The converter
 refuses to overwrite a converted or `tuner:` table with a ledger table unless `--replace-timed` is
 given (transcribed and ledger tables are replaced without it), so compare a scratch `--out` with
-`tuned/` before switching a table. No shipped
-table is ledger-sourced yet: the engine was validated on 2026-10-07 (design page, "Engine:
-end-to-end validation on sm_120") and the switch needs coarse or deep runs and a maintainer
-decision.
+`tuned/` before switching a table. Every sm_120 table is ledger-sourced since 2026-10-09 (above).
 
-The two tuner tables are `trsm.{float,double}.sm_120.txt`, from
-`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` (provenance in the README there). The
-tuner was stopped during cfloat, so cfloat and cdouble stay transcribed.
+The old tuner's trsm float/double sm_120 tables
+(`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`) and the converted potrf and posv
+sm_120 tables were replaced by the deep ledger tables with `--replace-timed`; their raw files stay.
 
 ## Staleness
 
 Every converted or transcribed table says `kernels=unknown` and is therefore reported stale. That
 is intended: they stay stale until phase 4, when `tools/tune` retunes each op on each device and
-stamps the kernel-source hash. The trsm tuner tables say `kernels=c923160f` and are reported stale
-against today's `1dbe529b`. Two changes to the hashed sources sit between the sweep and HEAD, and
-neither touches a kernel or a candidate: the removal of an unused `#include "gemm_kernels.hh"` from
-`src/sycl/trsm_native.cc`, and the phase-5 rip's edit of `src/ops/trsm/choice.hh` (the `aliases`
-array deleted, `Rules{aliases, last_resort}` -> `Rules{last_resort}`, two comments reworded). So
-the timings still describe the shipped kernels. The potrf sm_89 tables come from an archive across several kernel eras (only
+stamps the kernel-source hash. The sm_120 deep tables carry real `kernels=` and `family_kernels=`
+hashes from the tree they were generated in, so they read current until a hashed source changes. The potrf sm_89 tables come from an archive across several kernel eras (only
 `kernel_current` rows are kept) and have no `lpanel` timings at all; `Lpanel{16}` has never been
 timed on any device.

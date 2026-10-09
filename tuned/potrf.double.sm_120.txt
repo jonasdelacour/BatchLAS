@@ -1,4 +1,4 @@
-# op=potrf dtype=double device=sm_120 batchlas=209d9fb8 kernels=f4043f40 family_kernels=tiny:52231a99,cta:9fe8b14d,lpanel:52390096,blocked:41cabcc7,vendor:2ce29078 date=2026-10-08
+# op=potrf dtype=double device=sm_120 batchlas=f4f8ea54 kernels=f4043f40 family_kernels=tiny:52231a99,cta:9fe8b14d,lpanel:52390096,blocked:41cabcc7,vendor:2ce29078 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/potrf.double.sm_120 tiers=deep:373,coarse:0,preview:0,custom:0,transcribed:0
 # keys: uplo:exact n:log:3 batch:log
 uplo=L n=1 batch=128 | lpanel:panel=8 0.008047 | cta 0.01002 | tiny 0.01243 | blocked 0.01364 | vendor 0.01475 # deep
@@ -91,7 +91,7 @@ uplo=L n=36 batch=128 | vendor 0.06262 | lpanel:panel=8 0.07051 | cta 0.08843 | 
 uplo=L n=36 batch=512 | vendor 0.08060 | cta 0.09231 | lpanel:panel=8 0.09940 | blocked 0.1240 # deep
 uplo=L n=36 batch=2048 | cta 0.2207 | vendor 0.2161 | lpanel:panel=8 0.2538 | blocked 0.2638 # deep
 uplo=L n=36 batch=8192 | cta 0.7543 | vendor 0.7552 | lpanel:panel=8 0.8833 | blocked 0.8852 # deep
-uplo=L n=36 batch=32768 | cta 7.768 | blocked 7.995 | lpanel:panel=8 8.098 | vendor 9.743 # deep
+uplo=L n=36 batch=32768 | vendor 2.911 | cta 3.168 | blocked 3.408 | lpanel:panel=8 3.455 # deep
 uplo=L n=38 batch=2048 | vendor 0.2201 | cta 0.2501 | lpanel:panel=8 0.2609 | blocked 0.2703 # deep
 uplo=L n=38 batch=8192 | vendor 0.7763 | cta 0.8178 | lpanel:panel=8 0.9140 | blocked 0.9179 # deep
 uplo=L n=40 batch=128 | vendor 0.06478 | lpanel:panel=8 0.07550 | cta 0.09576 | blocked 0.1221 # deep
@@ -102,7 +102,7 @@ uplo=L n=40 batch=32768 | cta 7.898 | blocked 8.191 | lpanel:panel=8 8.300 | ven
 uplo=L n=42 batch=32768 | vendor 3.153 | cta 4.121 | lpanel:panel=8 4.123 | blocked 4.255 # deep
 uplo=L n=44 batch=128 | vendor 0.06755 | lpanel:panel=8 0.09110 | cta 0.1138 | blocked 0.1362 # deep
 uplo=L n=44 batch=32768 | vendor 3.204 | lpanel:panel=8 4.214 | cta 4.216 | blocked 4.300 # deep
-uplo=L n=48 batch=128 | cta 2.357 | lpanel:panel=8 2.357 | blocked 2.394 | vendor 4.590 # deep
+uplo=L n=48 batch=128 | vendor 0.07086 | lpanel:panel=8 0.09743 | cta 0.09777 | blocked 0.1409 # deep
 uplo=L n=48 batch=512 | vendor 0.08927 | cta 0.1046 | lpanel:panel=8 0.1281 | blocked 0.1486 # deep
 uplo=L n=48 batch=2048 | vendor 0.2438 | cta 0.3225 | lpanel:panel=8 0.3249 | blocked 0.3373 # deep
 uplo=L n=48 batch=8192 | vendor 0.8746 | lpanel:panel=8 1.136 | cta 1.147 | blocked 1.169 # deep

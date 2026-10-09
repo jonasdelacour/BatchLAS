@@ -1,4 +1,4 @@
-# op=syev dtype=cfloat device=sm_120 batchlas=a01c3c96 kernels=e7487732 family_kernels=cta:d7d63b0d,cta_fused:58fd9894,jacobi:c4e7cd26,blocked:4ba23219,two_stage:7b23bec8,vendor:6d150e5a date=2026-10-08
+# op=syev dtype=cfloat device=sm_120 batchlas=f4f8ea54 kernels=e7487732 family_kernels=cta:d7d63b0d,cta_fused:58fd9894,jacobi:c4e7cd26,blocked:4ba23219,two_stage:7b23bec8,vendor:6d150e5a date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/syev.cfloat.sm_120 tiers=deep:290,coarse:0,preview:0,custom:0,transcribed:70
 # keys: jobz:exact n:log:3 batch:log
 jobz=N n=1 batch=128 | cta_fused 0.008273 | jacobi 0.008438 | vendor 0.01244 | blocked 0.01762 | two_stage 0.02258 | cta 0.03198 # deep
@@ -86,8 +86,8 @@ jobz=N n=32 batch=32768 | blocked 3.787 | cta 4.985 | cta_fused 5.267 | two_stag
 jobz=N n=33 batch=128 | vendor 0.2386 | two_stage 0.3140 | blocked 0.3351 # deep
 jobz=N n=33 batch=512 | blocked 0.3899 | two_stage 0.4276 | vendor 0.4328 # deep
 jobz=N n=33 batch=2048 | blocked 0.8261 | vendor 1.073 | two_stage 1.145 # deep
-jobz=N n=33 batch=8192 | blocked 2.388 | two_stage 3.551 | vendor 4.351 # deep
-jobz=N n=33 batch=32768 | blocked 9.740 | two_stage 13.41 | vendor 18.12 # deep
+jobz=N n=33 batch=8192 | blocked 2.262 | two_stage 3.229 | vendor 4.058 # deep
+jobz=N n=33 batch=32768 | blocked 9.607 | two_stage 12.92 | vendor 17.78 # deep
 jobz=N n=36 batch=512 | blocked 0.4043 | vendor 0.4044 | two_stage 0.5159 # deep
 jobz=N n=40 batch=128 | vendor 0.2208 | blocked 0.3969 | two_stage 0.4095 # deep
 jobz=N n=40 batch=512 | vendor 0.3741 | blocked 0.4633 | two_stage 0.5921 # deep

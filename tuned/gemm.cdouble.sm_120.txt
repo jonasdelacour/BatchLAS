@@ -1,4 +1,4 @@
-# op=gemm dtype=cdouble device=sm_120 batchlas=209d9fb8 kernels=b8d9ff55 family_kernels=direct:bf2622f1,tiled:bd6cd580,wide:f755f7ac,vendor:bf2622f1 date=2026-10-08
+# op=gemm dtype=cdouble device=sm_120 batchlas=f4f8ea54 kernels=b8d9ff55 family_kernels=direct:bf2622f1,tiled:bd6cd580,wide:f755f7ac,vendor:bf2622f1 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/gemm.cdouble.sm_120 tiers=deep:6929,coarse:0,preview:0,custom:0,transcribed:2480
 # keys: ta:exact tb:exact layout:exact m:log n:log k:log batch:log
 ta=C tb=N layout=packed m=8 n=8 k=8 batch=128 | direct 0.01156 | tiled 0.01417 | vendor 0.02771 | wide:m=64:n=64:k=16 0.06702 | wide:m=32:n=128:k=16 0.06735 # deep
@@ -738,7 +738,7 @@ ta=C tb=N layout=strided m=64 n=32 k=16 batch=32768 | vendor 7.065 | wide:m=64:n
 ta=C tb=N layout=strided m=64 n=32 k=32 batch=128 | vendor 0.08979 | wide:m=64:n=64:k=16 0.1332 | tiled 0.1461 | direct 0.1571 | wide:m=32:n=128:k=16 0.2491 # deep
 ta=C tb=N layout=strided m=64 n=32 k=32 batch=2048 | vendor 0.8247 | wide:m=64:n=64:k=16 1.317 | tiled 1.963 | wide:m=32:n=128:k=16 2.551 | direct 2.326 # deep
 ta=C tb=N layout=strided m=64 n=32 k=32 batch=32768 | vendor 12.74 | wide:m=64:n=64:k=16 20.58 | tiled 30.91 | wide:m=32:n=128:k=16 40.14 | direct 36.68 # deep
-ta=C tb=N layout=strided m=64 n=32 k=64 batch=128 | vendor 2.401 | wide:m=64:n=64:k=16 2.502 | tiled 2.524 | direct 2.550 | wide:m=32:n=128:k=16 2.731 # deep
+ta=C tb=N layout=strided m=64 n=32 k=64 batch=128 | vendor 0.1454 | wide:m=64:n=64:k=16 0.2460 | tiled 0.2687 | direct 0.2933 | wide:m=32:n=128:k=16 0.4758 # deep
 ta=C tb=N layout=strided m=64 n=32 k=64 batch=2048 | vendor 1.543 | wide:m=64:n=64:k=16 2.578 | tiled 3.816 | wide:m=32:n=128:k=16 5.069 | direct 4.475 # deep
 ta=C tb=N layout=strided m=64 n=32 k=96 batch=128 | vendor 0.2099 | wide:m=64:n=64:k=16 0.3629 | tiled 0.3950 | direct 0.4338 | wide:m=32:n=128:k=16 0.7075 # deep
 ta=C tb=N layout=strided m=64 n=32 k=96 batch=2048 | vendor 2.246 | wide:m=64:n=64:k=16 3.827 | tiled 5.657 | wide:m=32:n=128:k=16 7.535 | direct 6.710 # deep
@@ -823,7 +823,7 @@ ta=C tb=N layout=strided m=64 n=256 k=16 batch=128 | wide:m=64:n=64:k=16 0.2059 
 ta=C tb=N layout=strided m=64 n=256 k=16 batch=2048 | wide:m=64:n=64:k=16 2.899 | wide:m=32:n=128:k=16 2.901 | vendor 3.502 | tiled 8.159 | direct 9.586 # deep
 ta=C tb=N layout=strided m=64 n=256 k=32 batch=128 | wide:m=64:n=64:k=16 0.3744 | wide:m=32:n=128:k=16 0.3754 | vendor 0.4020 | tiled 0.9737 | direct 1.152 # deep
 ta=C tb=N layout=strided m=64 n=256 k=32 batch=2048 | wide:m=64:n=64:k=16 5.446 | wide:m=32:n=128:k=16 5.445 | vendor 6.358 | tiled 15.52 | direct 18.14 # deep
-ta=C tb=N layout=strided m=64 n=256 k=64 batch=128 | wide:m=64:n=64:k=16 2.990 | wide:m=32:n=128:k=16 2.992 | vendor 3.023 | tiled 4.155 | direct 6.866 # deep
+ta=C tb=N layout=strided m=64 n=256 k=64 batch=128 | wide:m=64:n=64:k=16 0.7215 | wide:m=32:n=128:k=16 0.7254 | vendor 0.7597 | tiled 1.906 | direct 2.269 # deep
 ta=C tb=N layout=strided m=64 n=256 k=64 batch=2048 | wide:m=64:n=64:k=16 10.34 | wide:m=32:n=128:k=16 10.33 | vendor 11.86 | tiled 29.80 | direct 78.46 # deep
 ta=C tb=N layout=strided m=64 n=256 k=96 batch=128 | wide:m=64:n=64:k=16 1.070 | wide:m=32:n=128:k=16 1.078 | vendor 1.117 | tiled 2.834 | direct 3.378 # deep
 ta=C tb=N layout=strided m=64 n=256 k=96 batch=2048 | wide:m=64:n=64:k=16 15.40 | wide:m=32:n=128:k=16 15.39 | vendor 17.57 | tiled 44.72 | direct 53.38 # deep
@@ -949,7 +949,7 @@ ta=C tb=N layout=strided m=128 n=54 k=64 batch=2048 | wide:m=64:n=64:k=16 5.154 
 ta=C tb=N layout=strided m=128 n=54 k=96 batch=2048 | wide:m=64:n=64:k=16 7.698 | vendor 8.839 | wide:m=32:n=128:k=16 15.11 | tiled 22.40 | direct 23.40 # deep
 ta=C tb=N layout=strided m=128 n=54 k=128 batch=2048 | wide:m=64:n=64:k=16 10.18 | vendor 11.54 | wide:m=32:n=128:k=16 19.90 | tiled 29.43 | direct 30.73 # deep
 ta=C tb=N layout=strided m=128 n=59 k=8 batch=128 | vendor 0.1245 | wide:m=64:n=64:k=16 0.1403 | tiled 0.1501 | direct 0.1714 | wide:m=32:n=128:k=16 0.1938 # deep
-ta=C tb=N layout=strided m=128 n=64 k=8 batch=128 | direct 2.430 | tiled 2.408 | wide:m=64:n=64:k=16 2.398 | wide:m=32:n=128:k=16 2.451 | vendor 2.381 # deep
+ta=C tb=N layout=strided m=128 n=64 k=8 batch=128 | vendor 0.1252 | wide:m=64:n=64:k=16 0.1406 | tiled 0.1499 | direct 0.1717 | wide:m=32:n=128:k=16 0.1941 # deep
 ta=C tb=N layout=strided m=128 n=64 k=8 batch=2048 | wide:m=64:n=64:k=16 1.453 | vendor 1.749 | tiled 2.253 | wide:m=32:n=128:k=16 2.672 | direct 2.622 # deep
 ta=C tb=N layout=strided m=128 n=64 k=9 batch=128 | vendor 0.1255 | wide:m=64:n=64:k=16 0.1408 | tiled 0.1648 | direct 0.1890 | wide:m=32:n=128:k=16 0.1947 # deep
 ta=C tb=N layout=strided m=128 n=64 k=11 batch=128 | vendor 0.1323 | wide:m=64:n=64:k=16 0.1439 | tiled 0.1962 | wide:m=32:n=128:k=16 0.1976 | direct 0.2249 # deep
@@ -1224,7 +1224,7 @@ ta=C tb=N layout=strided m=512 n=32 k=16 batch=128 | vendor 0.2246 | wide:m=64:n
 ta=C tb=N layout=strided m=512 n=32 k=16 batch=2048 | vendor 3.503 | wide:m=64:n=64:k=16 5.371 | tiled 8.161 | wide:m=32:n=128:k=16 10.27 | direct 9.586 # deep
 ta=C tb=N layout=strided m=512 n=32 k=32 batch=128 | vendor 0.4064 | wide:m=64:n=64:k=16 0.7199 | tiled 0.9871 | direct 1.168 | wide:m=32:n=128:k=16 1.286 # deep
 ta=C tb=N layout=strided m=512 n=32 k=32 batch=2048 | vendor 6.352 | wide:m=64:n=64:k=16 10.42 | tiled 15.52 | wide:m=32:n=128:k=16 20.19 | direct 39.66 # deep
-ta=C tb=N layout=strided m=512 n=32 k=64 batch=128 | vendor 3.034 | wide:m=64:n=64:k=16 3.664 | tiled 4.163 | direct 6.879 | wide:m=32:n=128:k=16 7.149 # deep
+ta=C tb=N layout=strided m=512 n=32 k=64 batch=128 | vendor 0.7656 | wide:m=64:n=64:k=16 1.397 | tiled 1.899 | direct 2.264 | wide:m=32:n=128:k=16 2.515 # deep
 ta=C tb=N layout=strided m=512 n=32 k=64 batch=2048 | vendor 11.85 | wide:m=64:n=64:k=16 20.10 | tiled 29.81 | wide:m=32:n=128:k=16 39.51 | direct 78.59 # deep
 ta=C tb=N layout=strided m=512 n=32 k=96 batch=128 | vendor 1.121 | wide:m=64:n=64:k=16 2.074 | tiled 2.809 | direct 3.357 | wide:m=32:n=128:k=16 3.749 # deep
 ta=C tb=N layout=strided m=512 n=32 k=96 batch=2048 | vendor 17.43 | wide:m=64:n=64:k=16 29.96 | tiled 44.31 | wide:m=32:n=128:k=16 59.06 | direct 53.58 # deep
@@ -2411,7 +2411,7 @@ ta=N tb=C layout=strided m=64 n=32 k=11 batch=128 | vendor 0.04871 | tiled 0.058
 ta=N tb=C layout=strided m=64 n=32 k=13 batch=128 | vendor 0.04781 | tiled 0.06594 | wide:m=64:n=64:k=16 0.06937 | direct 0.06953 | wide:m=128:n=32:k=16 0.06967 # deep
 ta=N tb=C layout=strided m=64 n=32 k=14 batch=128 | vendor 0.04844 | wide:m=64:n=64:k=16 0.07014 | wide:m=128:n=32:k=16 0.07033 | tiled 0.07060 | direct 0.07456 # deep
 ta=N tb=C layout=strided m=64 n=32 k=15 batch=128 | vendor 0.04795 | wide:m=64:n=64:k=16 0.06995 | wide:m=128:n=32:k=16 0.07024 | tiled 0.07408 | direct 0.07865 # deep
-ta=N tb=C layout=strided m=64 n=32 k=16 batch=128 | direct 2.345 | tiled 2.340 | wide:m=64:n=64:k=16 2.334 | wide:m=128:n=32:k=16 2.335 | vendor 2.309 # deep
+ta=N tb=C layout=strided m=64 n=32 k=16 batch=128 | vendor 0.04859 | wide:m=128:n=32:k=16 0.07039 | wide:m=64:n=64:k=16 0.07044 | tiled 0.07883 | direct 0.08372 # deep
 ta=N tb=C layout=strided m=64 n=32 k=16 batch=2048 | vendor 0.4632 | wide:m=128:n=32:k=16 0.6890 | wide:m=64:n=64:k=16 0.6900 | tiled 1.046 | direct 1.218 # deep
 ta=N tb=C layout=strided m=64 n=32 k=16 batch=32768 | vendor 7.225 | wide:m=128:n=32:k=16 10.67 | wide:m=64:n=64:k=16 10.70 | tiled 16.34 | direct 18.95 # deep
 ta=N tb=C layout=strided m=64 n=32 k=17 batch=128 | vendor 0.07982 | tiled 0.08286 | direct 0.08757 | wide:m=64:n=64:k=16 0.1274 | wide:m=128:n=32:k=16 0.1275 # deep
@@ -2420,11 +2420,11 @@ ta=N tb=C layout=strided m=64 n=32 k=23 batch=128 | vendor 0.08046 | tiled 0.106
 ta=N tb=C layout=strided m=64 n=32 k=32 batch=128 | vendor 0.08133 | wide:m=64:n=64:k=16 0.1285 | wide:m=128:n=32:k=16 0.1293 | tiled 0.1419 | direct 0.1534 # deep
 ta=N tb=C layout=strided m=64 n=32 k=32 batch=2048 | vendor 0.8289 | wide:m=64:n=64:k=16 1.319 | wide:m=128:n=32:k=16 1.320 | tiled 1.962 | direct 2.312 # deep
 ta=N tb=C layout=strided m=64 n=32 k=32 batch=32768 | vendor 12.84 | wide:m=128:n=32:k=16 20.50 | wide:m=64:n=64:k=16 20.55 | tiled 30.93 | direct 36.60 # deep
-ta=N tb=C layout=strided m=64 n=32 k=64 batch=128 | vendor 2.401 | wide:m=64:n=64:k=16 2.501 | wide:m=128:n=32:k=16 2.502 | tiled 2.524 | direct 2.549 # deep
+ta=N tb=C layout=strided m=64 n=32 k=64 batch=128 | vendor 0.1449 | wide:m=64:n=64:k=16 0.2435 | wide:m=128:n=32:k=16 0.2455 | tiled 0.2660 | direct 0.2910 # deep
 ta=N tb=C layout=strided m=64 n=32 k=64 batch=2048 | vendor 1.545 | wide:m=64:n=64:k=16 2.580 | wide:m=128:n=32:k=16 2.581 | tiled 3.823 | direct 4.517 # deep
 ta=N tb=C layout=strided m=64 n=32 k=96 batch=128 | vendor 0.2101 | wide:m=64:n=64:k=16 0.3620 | wide:m=128:n=32:k=16 0.3634 | tiled 0.3952 | direct 0.4313 # deep
 ta=N tb=C layout=strided m=64 n=32 k=96 batch=2048 | vendor 2.246 | wide:m=128:n=32:k=16 3.824 | wide:m=64:n=64:k=16 3.829 | tiled 5.665 | direct 6.686 # deep
-ta=N tb=C layout=strided m=64 n=32 k=128 batch=128 | vendor 2.528 | wide:m=64:n=64:k=16 2.731 | wide:m=128:n=32:k=16 2.734 | tiled 2.775 | direct 2.826 # deep
+ta=N tb=C layout=strided m=64 n=32 k=128 batch=128 | vendor 0.2735 | wide:m=64:n=64:k=16 0.4765 | wide:m=128:n=32:k=16 0.4802 | tiled 0.5216 | direct 0.5701 # deep
 ta=N tb=C layout=strided m=64 n=32 k=128 batch=2048 | vendor 2.927 | wide:m=128:n=32:k=16 5.056 | wide:m=64:n=64:k=16 5.057 | tiled 7.436 | direct 20.58 # deep
 ta=N tb=C layout=strided m=64 n=32 k=256 batch=128 | vendor 0.5304 | wide:m=64:n=64:k=16 0.9432 | wide:m=128:n=32:k=16 0.9489 | tiled 1.029 | direct 1.129 # deep
 ta=N tb=C layout=strided m=64 n=32 k=256 batch=2048 | vendor 5.784 | wide:m=128:n=32:k=16 10.09 | wide:m=64:n=64:k=16 10.10 | tiled 14.90 | direct 17.65 # deep
@@ -2478,7 +2478,7 @@ ta=N tb=C layout=strided m=64 n=64 k=32 batch=2048 | wide:m=64:n=64:k=16 1.377 |
 ta=N tb=C layout=strided m=64 n=64 k=45 batch=128 | vendor 0.1664 | wide:m=64:n=64:k=16 0.1903 | tiled 0.3479 | wide:m=128:n=32:k=16 0.3615 | direct 0.4100 # deep
 ta=N tb=C layout=strided m=64 n=64 k=54 batch=128 | vendor 0.2116 | wide:m=64:n=64:k=16 0.2453 | tiled 0.4088 | wide:m=128:n=32:k=16 0.4702 | direct 0.4833 # deep
 ta=N tb=C layout=strided m=64 n=64 k=59 batch=128 | vendor 0.2140 | wide:m=64:n=64:k=16 0.2481 | tiled 0.4482 | wide:m=128:n=32:k=16 0.4766 | direct 0.5322 # deep
-ta=N tb=C layout=strided m=64 n=64 k=64 batch=128 | wide:m=64:n=64:k=16 2.506 | vendor 2.469 | wide:m=128:n=32:k=16 2.730 | tiled 2.740 | direct 2.829 # deep
+ta=N tb=C layout=strided m=64 n=64 k=64 batch=128 | vendor 0.2135 | wide:m=64:n=64:k=16 0.2475 | wide:m=128:n=32:k=16 0.4730 | tiled 0.4825 | direct 0.5715 # deep
 ta=N tb=C layout=strided m=64 n=64 k=64 batch=2048 | wide:m=64:n=64:k=16 2.612 | vendor 3.027 | wide:m=128:n=32:k=16 5.057 | tiled 7.496 | direct 8.987 # deep
 ta=N tb=C layout=strided m=64 n=64 k=67 batch=128 | vendor 0.2625 | wide:m=64:n=64:k=16 0.3069 | tiled 0.5089 | wide:m=128:n=32:k=16 0.5910 | direct 0.6028 # deep
 ta=N tb=C layout=strided m=64 n=64 k=71 batch=128 | vendor 0.2627 | wide:m=64:n=64:k=16 0.3075 | tiled 0.5379 | wide:m=128:n=32:k=16 0.5918 | direct 0.6375 # deep
@@ -4851,7 +4851,7 @@ ta=N tb=N layout=strided m=64 n=32 k=54 batch=128 | wide:m=16:n=16:k=16 0.1003 |
 ta=N tb=N layout=strided m=64 n=32 k=54 batch=2048 | wide:m=32:n=32:k=16 1.345 | wide:m=16:n=16:k=16 1.317 | vendor 1.528 | wide:m=64:n=64:k=16 2.553 | tiled 3.212 | direct 3.812 # deep
 ta=N tb=N layout=strided m=64 n=32 k=59 batch=128 | wide:m=16:n=16:k=16 0.1013 | wide:m=32:n=32:k=16 0.1432 | vendor 0.1452 | wide:m=64:n=64:k=16 0.2413 | tiled 0.2486 | direct 0.2704 # deep
 ta=N tb=N layout=strided m=64 n=32 k=59 batch=2048 | wide:m=16:n=16:k=16 1.315 | wide:m=32:n=32:k=16 1.357 | vendor 1.530 | wide:m=64:n=64:k=16 2.551 | tiled 3.500 | direct 4.169 # deep
-ta=N tb=N layout=strided m=64 n=32 k=64 batch=128 | wide:m=32:n=32:k=16 2.399 | wide:m=16:n=16:k=16 2.358 | vendor 2.399 | wide:m=64:n=64:k=16 2.496 | tiled 2.522 | direct 2.548 # deep
+ta=N tb=N layout=strided m=64 n=32 k=64 batch=128 | wide:m=16:n=16:k=16 0.1020 | wide:m=32:n=32:k=16 0.1439 | vendor 0.1468 | wide:m=64:n=64:k=16 0.2413 | tiled 0.2696 | direct 0.2948 # deep
 ta=N tb=N layout=strided m=64 n=32 k=64 batch=2048 | wide:m=16:n=16:k=16 1.323 | wide:m=32:n=32:k=16 1.366 | wide:m=64:n=64:k=16 2.560 | vendor 3.775 | tiled 8.396 | direct 11.48 # deep
 ta=N tb=N layout=strided m=64 n=32 k=67 batch=128 | wide:m=16:n=16:k=16 0.1246 | wide:m=32:n=32:k=16 0.1735 | vendor 0.1755 | tiled 0.2773 | wide:m=64:n=64:k=16 0.2946 | direct 0.3027 # deep
 ta=N tb=N layout=strided m=64 n=32 k=67 batch=2048 | wide:m=32:n=32:k=16 1.671 | wide:m=16:n=16:k=16 1.634 | vendor 1.890 | wide:m=64:n=64:k=16 3.185 | tiled 3.971 | direct 4.713 # deep
@@ -5382,7 +5382,7 @@ ta=N tb=N layout=strided m=128 n=54 k=8 batch=2048 | wide:m=64:n=64:k=16 1.420 |
 ta=N tb=N layout=strided m=128 n=54 k=96 batch=2048 | wide:m=64:n=64:k=16 7.651 | wide:m=32:n=32:k=16 7.678 | wide:m=16:n=16:k=16 7.613 | vendor 8.829 | tiled 22.27 | direct 23.31 # deep
 ta=N tb=N layout=strided m=128 n=54 k=128 batch=2048 | wide:m=64:n=64:k=16 10.17 | wide:m=32:n=32:k=16 10.19 | wide:m=16:n=16:k=16 10.11 | vendor 11.69 | tiled 29.62 | direct 31.03 # deep
 ta=N tb=N layout=strided m=128 n=59 k=8 batch=128 | wide:m=16:n=16:k=16 0.1062 | wide:m=32:n=32:k=16 0.1101 | vendor 0.1255 | wide:m=64:n=64:k=16 0.1378 | tiled 0.1494 | direct 0.1717 # deep
-ta=N tb=N layout=strided m=128 n=64 k=8 batch=128 | direct 2.429 | tiled 2.407 | wide:m=64:n=64:k=16 2.395 | wide:m=32:n=32:k=16 2.368 | wide:m=16:n=16:k=16 2.364 | vendor 2.379 # deep
+ta=N tb=N layout=strided m=128 n=64 k=8 batch=128 | wide:m=16:n=16:k=16 0.1067 | wide:m=32:n=32:k=16 0.1101 | vendor 0.1252 | wide:m=64:n=64:k=16 0.1379 | tiled 0.1491 | direct 0.1715 # deep
 ta=N tb=N layout=strided m=128 n=64 k=8 batch=2048 | wide:m=64:n=64:k=16 1.445 | wide:m=32:n=32:k=16 1.449 | wide:m=16:n=16:k=16 1.437 | vendor 1.777 | tiled 2.253 | direct 2.617 # deep
 ta=N tb=N layout=strided m=128 n=64 k=9 batch=128 | wide:m=16:n=16:k=16 0.1063 | wide:m=32:n=32:k=16 0.1097 | vendor 0.1243 | wide:m=64:n=64:k=16 0.1374 | tiled 0.1629 | direct 0.1874 # deep
 ta=N tb=N layout=strided m=128 n=64 k=11 batch=128 | wide:m=16:n=16:k=16 0.1076 | wide:m=32:n=32:k=16 0.1113 | vendor 0.1269 | wide:m=64:n=64:k=16 0.1393 | tiled 0.1932 | direct 0.2243 # deep
@@ -7228,7 +7228,7 @@ ta=N tb=T layout=packed m=128 n=2048 k=128 batch=128 | vendor 23.18 | tiled 59.0
 ta=N tb=T layout=packed m=128 n=2048 k=128 batch=32768 | vendor - | tiled - | direct - # transcribed
 ta=N tb=T layout=packed m=192 n=192 k=192 batch=128 | vendor 4.932 | tiled 12.52 | direct 14.92 # deep
 ta=N tb=T layout=packed m=192 n=192 k=192 batch=32768 | vendor - | tiled - | direct - # transcribed
-ta=N tb=T layout=packed m=256 n=128 k=8 batch=128 | vendor 2.731 | tiled 2.837 | direct 2.926 # deep
+ta=N tb=T layout=packed m=256 n=128 k=8 batch=128 | vendor 0.4407 | tiled 0.5732 | direct 0.6597 # deep
 ta=N tb=T layout=packed m=256 n=128 k=8 batch=2048 | vendor 7.021 | tiled 8.837 | direct 10.28 # deep
 ta=N tb=T layout=packed m=256 n=128 k=16 batch=128 | vendor 0.4493 | tiled 1.045 | direct 1.219 # deep
 ta=N tb=T layout=packed m=256 n=128 k=16 batch=2048 | vendor 7.017 | tiled 16.03 | direct 18.91 # deep
@@ -7658,14 +7658,14 @@ ta=N tb=T layout=strided m=54 n=32 k=16 batch=128 | vendor 0.04792 | direct 0.07
 ta=N tb=T layout=strided m=54 n=64 k=8 batch=128 | vendor 0.06730 | tiled 0.07840 | direct 0.08195 # deep
 ta=N tb=T layout=strided m=59 n=32 k=16 batch=128 | vendor 0.04797 | tiled 0.07858 | direct 0.08038 # deep
 ta=N tb=T layout=strided m=64 n=32 k=8 batch=128 | tiled 0.04691 | vendor 0.04807 | direct 0.04879 # deep
-ta=N tb=T layout=strided m=64 n=32 k=8 batch=2048 | vendor 2.732 | tiled 2.837 | direct 2.925 # deep
+ta=N tb=T layout=strided m=64 n=32 k=8 batch=2048 | vendor 0.4603 | tiled 0.5755 | direct 0.6637 # deep
 ta=N tb=T layout=strided m=64 n=32 k=8 batch=32768 | vendor 7.218 | tiled 8.977 | direct 10.43 # deep
 ta=N tb=T layout=strided m=64 n=32 k=9 batch=128 | vendor 0.04749 | tiled 0.05066 | direct 0.05284 # deep
 ta=N tb=T layout=strided m=64 n=32 k=11 batch=128 | vendor 0.04752 | tiled 0.05802 | direct 0.06080 # deep
 ta=N tb=T layout=strided m=64 n=32 k=13 batch=128 | vendor 0.04786 | tiled 0.06634 | direct 0.07024 # deep
 ta=N tb=T layout=strided m=64 n=32 k=14 batch=128 | vendor 0.04814 | tiled 0.07080 | direct 0.07501 # deep
 ta=N tb=T layout=strided m=64 n=32 k=15 batch=128 | vendor 0.04795 | tiled 0.07394 | direct 0.07843 # deep
-ta=N tb=T layout=strided m=64 n=32 k=16 batch=128 | direct 2.347 | tiled 2.340 | vendor 2.309 # deep
+ta=N tb=T layout=strided m=64 n=32 k=16 batch=128 | vendor 0.04801 | tiled 0.07825 | direct 0.08298 # deep
 ta=N tb=T layout=strided m=64 n=32 k=16 batch=2048 | vendor 0.4649 | tiled 1.040 | direct 1.220 # deep
 ta=N tb=T layout=strided m=64 n=32 k=16 batch=32768 | vendor 16.31 | tiled 35.00 | direct 42.72 # deep
 ta=N tb=T layout=strided m=64 n=32 k=17 batch=128 | vendor 0.07916 | tiled 0.08180 | direct 0.08726 # deep
@@ -7674,12 +7674,12 @@ ta=N tb=T layout=strided m=64 n=32 k=23 batch=128 | vendor 0.07938 | tiled 0.105
 ta=N tb=T layout=strided m=64 n=32 k=32 batch=128 | vendor 0.08070 | tiled 0.1415 | direct 0.1534 # deep
 ta=N tb=T layout=strided m=64 n=32 k=32 batch=2048 | vendor 0.8423 | tiled 1.954 | direct 2.312 # deep
 ta=N tb=T layout=strided m=64 n=32 k=32 batch=32768 | vendor 12.96 | tiled 30.78 | direct 36.62 # deep
-ta=N tb=T layout=strided m=64 n=32 k=64 batch=128 | vendor 2.396 | tiled 2.523 | direct 2.548 # deep
+ta=N tb=T layout=strided m=64 n=32 k=64 batch=128 | vendor 0.1443 | tiled 0.2650 | direct 0.2913 # deep
 ta=N tb=T layout=strided m=64 n=32 k=64 batch=2048 | vendor 1.581 | tiled 3.808 | direct 4.522 # deep
 ta=N tb=T layout=strided m=64 n=32 k=96 batch=128 | vendor 0.2142 | tiled 0.3949 | direct 0.4343 # deep
 ta=N tb=T layout=strided m=64 n=32 k=96 batch=2048 | vendor 2.244 | tiled 5.618 | direct 6.684 # deep
-ta=N tb=T layout=strided m=64 n=32 k=128 batch=128 | vendor 2.528 | tiled 2.772 | direct 2.826 # deep
-ta=N tb=T layout=strided m=64 n=32 k=128 batch=2048 | vendor 7.500 | tiled 16.76 | direct 20.58 # deep
+ta=N tb=T layout=strided m=64 n=32 k=128 batch=128 | vendor 0.2747 | tiled 0.5212 | direct 0.5711 # deep
+ta=N tb=T layout=strided m=64 n=32 k=128 batch=2048 | vendor 2.968 | tiled 7.479 | direct 8.912 # deep
 ta=N tb=T layout=strided m=64 n=32 k=256 batch=128 | vendor 0.5302 | tiled 1.023 | direct 1.129 # deep
 ta=N tb=T layout=strided m=64 n=32 k=256 batch=2048 | vendor 5.767 | tiled 14.79 | direct 17.65 # deep
 ta=N tb=T layout=strided m=64 n=32 k=1024 batch=128 | vendor 2.082 | tiled 4.059 | direct 4.533 # deep
@@ -7698,7 +7698,7 @@ ta=N tb=T layout=strided m=64 n=64 k=16 batch=128 | vendor 0.06778 | tiled 0.136
 ta=N tb=T layout=strided m=64 n=64 k=16 batch=2048 | vendor 0.9161 | tiled 2.044 | direct 2.410 # deep
 ta=N tb=T layout=strided m=64 n=64 k=32 batch=128 | vendor 0.1173 | tiled 0.2515 | direct 0.2976 # deep
 ta=N tb=T layout=strided m=64 n=64 k=32 batch=2048 | vendor 1.631 | tiled 3.869 | direct 4.589 # deep
-ta=N tb=T layout=strided m=64 n=64 k=64 batch=128 | vendor 2.469 | tiled 2.736 | direct 2.830 # deep
+ta=N tb=T layout=strided m=64 n=64 k=64 batch=128 | vendor 0.2123 | tiled 0.4800 | direct 0.5722 # deep
 ta=N tb=T layout=strided m=64 n=64 k=64 batch=2048 | vendor 3.070 | tiled 7.543 | direct 9.001 # deep
 ta=N tb=T layout=strided m=64 n=64 k=96 batch=128 | vendor 0.3078 | tiled 0.7060 | direct 0.8441 # deep
 ta=N tb=T layout=strided m=64 n=64 k=96 batch=2048 | vendor 4.477 | tiled 11.19 | direct 13.38 # deep
@@ -7723,7 +7723,7 @@ ta=N tb=T layout=strided m=64 n=256 k=16 batch=2048 | vendor 3.586 | tiled 8.114
 ta=N tb=T layout=strided m=64 n=256 k=32 batch=128 | vendor 0.4055 | tiled 0.9828 | direct 1.165 # deep
 ta=N tb=T layout=strided m=64 n=256 k=32 batch=2048 | vendor 6.405 | tiled 15.43 | direct 18.36 # deep
 ta=N tb=T layout=strided m=64 n=256 k=64 batch=128 | vendor 0.7527 | tiled 1.879 | direct 2.242 # deep
-ta=N tb=T layout=strided m=64 n=256 k=64 batch=2048 | vendor 25.77 | tiled 65.30 | direct 78.30 # deep
+ta=N tb=T layout=strided m=64 n=256 k=64 batch=2048 | vendor 11.94 | tiled 29.71 | direct 35.50 # deep
 ta=N tb=T layout=strided m=64 n=256 k=96 batch=128 | vendor 1.121 | tiled 2.821 | direct 3.375 # deep
 ta=N tb=T layout=strided m=64 n=256 k=96 batch=2048 | vendor 17.61 | tiled 44.47 | direct 53.23 # deep
 ta=N tb=T layout=strided m=64 n=256 k=128 batch=128 | vendor 1.476 | tiled 3.736 | direct 4.484 # deep
@@ -7791,7 +7791,7 @@ ta=N tb=T layout=strided m=128 n=32 k=256 batch=2048 | vendor 11.41 | tiled 29.1
 ta=N tb=T layout=strided m=128 n=32 k=1024 batch=128 | vendor 3.114 | tiled 7.418 | direct 8.942 # deep
 ta=N tb=T layout=strided m=128 n=32 k=1024 batch=32768 | vendor - | tiled - | direct - # transcribed
 ta=N tb=T layout=strided m=128 n=64 k=8 batch=128 | vendor 0.1257 | tiled 0.1496 | direct 0.1716 # deep
-ta=N tb=T layout=strided m=128 n=64 k=8 batch=2048 | vendor 4.052 | tiled 6.871 | direct 7.239 # deep
+ta=N tb=T layout=strided m=128 n=64 k=8 batch=2048 | vendor 1.798 | tiled 2.248 | direct 2.611 # deep
 ta=N tb=T layout=strided m=128 n=64 k=16 batch=128 | vendor 0.1252 | tiled 0.2622 | direct 0.3063 # deep
 ta=N tb=T layout=strided m=128 n=64 k=16 batch=2048 | vendor 1.809 | tiled 4.081 | direct 4.804 # deep
 ta=N tb=T layout=strided m=128 n=64 k=32 batch=128 | vendor 0.2245 | tiled 0.4944 | direct 0.5859 # deep
@@ -8345,7 +8345,7 @@ ta=T tb=N layout=packed m=128 n=2048 k=128 batch=128 | vendor 23.11 | tiled 59.0
 ta=T tb=N layout=packed m=128 n=2048 k=128 batch=32768 | vendor - | tiled - | direct - # transcribed
 ta=T tb=N layout=packed m=192 n=192 k=192 batch=128 | vendor 4.938 | tiled 12.54 | direct 14.95 # deep
 ta=T tb=N layout=packed m=192 n=192 k=192 batch=32768 | vendor - | tiled - | direct - # transcribed
-ta=T tb=N layout=packed m=256 n=128 k=8 batch=128 | vendor 2.723 | tiled 2.840 | direct 2.928 # deep
+ta=T tb=N layout=packed m=256 n=128 k=8 batch=128 | vendor 0.4438 | tiled 0.5774 | direct 0.6655 # deep
 ta=T tb=N layout=packed m=256 n=128 k=8 batch=2048 | vendor 6.853 | tiled 8.836 | direct 10.27 # deep
 ta=T tb=N layout=packed m=256 n=128 k=16 batch=128 | vendor 0.4487 | tiled 1.043 | direct 1.221 # deep
 ta=T tb=N layout=packed m=256 n=128 k=16 batch=2048 | vendor 6.976 | tiled 16.26 | direct 19.17 # deep
@@ -8791,7 +8791,7 @@ ta=T tb=N layout=strided m=64 n=32 k=32 batch=32768 | vendor 12.82 | tiled 30.75
 ta=T tb=N layout=strided m=64 n=32 k=45 batch=128 | vendor 0.1121 | tiled 0.1901 | direct 0.2068 # deep
 ta=T tb=N layout=strided m=64 n=32 k=54 batch=128 | vendor 0.1445 | tiled 0.2277 | direct 0.2496 # deep
 ta=T tb=N layout=strided m=64 n=32 k=59 batch=128 | vendor 0.1445 | tiled 0.2478 | direct 0.2693 # deep
-ta=T tb=N layout=strided m=64 n=32 k=64 batch=128 | tiled 4.711 | vendor 4.589 | direct 4.739 # deep
+ta=T tb=N layout=strided m=64 n=32 k=64 batch=128 | vendor 0.1446 | tiled 0.2662 | direct 0.2915 # deep
 ta=T tb=N layout=strided m=64 n=32 k=64 batch=2048 | vendor 1.532 | tiled 3.757 | direct 4.478 # deep
 ta=T tb=N layout=strided m=64 n=32 k=67 batch=128 | vendor 0.1762 | tiled 0.2789 | direct 0.3048 # deep
 ta=T tb=N layout=strided m=64 n=32 k=71 batch=128 | vendor 0.1767 | tiled 0.2960 | direct 0.3219 # deep
@@ -8799,7 +8799,7 @@ ta=T tb=N layout=strided m=64 n=32 k=78 batch=128 | vendor 0.1781 | tiled 0.3233
 ta=T tb=N layout=strided m=64 n=32 k=96 batch=128 | vendor 0.2092 | tiled 0.3933 | direct 0.4327 # deep
 ta=T tb=N layout=strided m=64 n=32 k=96 batch=2048 | vendor 2.246 | tiled 5.612 | direct 6.713 # deep
 ta=T tb=N layout=strided m=64 n=32 k=128 batch=128 | vendor 0.2746 | tiled 0.5209 | direct 0.5735 # deep
-ta=T tb=N layout=strided m=64 n=32 k=128 batch=2048 | vendor 7.497 | tiled 16.75 | direct 20.59 # deep
+ta=T tb=N layout=strided m=64 n=32 k=128 batch=2048 | vendor 2.928 | tiled 7.399 | direct 8.846 # deep
 ta=T tb=N layout=strided m=64 n=32 k=256 batch=128 | vendor 0.5295 | tiled 1.022 | direct 1.132 # deep
 ta=T tb=N layout=strided m=64 n=32 k=256 batch=2048 | vendor 5.768 | tiled 14.79 | direct 17.69 # deep
 ta=T tb=N layout=strided m=64 n=32 k=1024 batch=128 | vendor 2.060 | tiled 4.009 | direct 4.494 # deep
@@ -8846,7 +8846,7 @@ ta=T tb=N layout=strided m=64 n=256 k=16 batch=2048 | vendor 3.491 | tiled 8.107
 ta=T tb=N layout=strided m=64 n=256 k=32 batch=128 | vendor 0.4002 | tiled 0.9690 | direct 1.153 # deep
 ta=T tb=N layout=strided m=64 n=256 k=32 batch=2048 | vendor 6.281 | tiled 15.21 | direct 18.13 # deep
 ta=T tb=N layout=strided m=64 n=256 k=64 batch=128 | vendor 0.7514 | tiled 1.882 | direct 2.248 # deep
-ta=T tb=N layout=strided m=64 n=256 k=64 batch=2048 | vendor 25.71 | tiled 65.21 | direct 78.22 # deep
+ta=T tb=N layout=strided m=64 n=256 k=64 batch=2048 | vendor 11.97 | tiled 29.99 | direct 35.91 # deep
 ta=T tb=N layout=strided m=64 n=256 k=96 batch=128 | vendor 1.120 | tiled 2.814 | direct 3.381 # deep
 ta=T tb=N layout=strided m=64 n=256 k=96 batch=2048 | vendor 17.57 | tiled 44.49 | direct 53.41 # deep
 ta=T tb=N layout=strided m=64 n=256 k=128 batch=128 | vendor 1.471 | tiled 3.740 | direct 4.480 # deep
@@ -8927,7 +8927,7 @@ ta=T tb=N layout=strided m=128 n=32 k=1024 batch=32768 | vendor - | tiled - | di
 ta=T tb=N layout=strided m=128 n=45 k=8 batch=128 | vendor 0.1043 | tiled 0.1161 | direct 0.1300 # deep
 ta=T tb=N layout=strided m=128 n=54 k=8 batch=128 | vendor 0.1239 | tiled 0.1493 | direct 0.1526 # deep
 ta=T tb=N layout=strided m=128 n=59 k=8 batch=128 | vendor 0.1234 | tiled 0.1480 | direct 0.1705 # deep
-ta=T tb=N layout=strided m=128 n=64 k=8 batch=128 | direct 2.430 | tiled 2.407 | vendor 2.381 # deep
+ta=T tb=N layout=strided m=128 n=64 k=8 batch=128 | vendor 0.1238 | tiled 0.1485 | direct 0.1706 # deep
 ta=T tb=N layout=strided m=128 n=64 k=8 batch=2048 | vendor 1.760 | tiled 2.254 | direct 2.632 # deep
 ta=T tb=N layout=strided m=128 n=64 k=9 batch=128 | vendor 0.1254 | tiled 0.1651 | direct 0.1892 # deep
 ta=T tb=N layout=strided m=128 n=64 k=11 batch=128 | vendor 0.1253 | tiled 0.1928 | direct 0.2231 # deep
@@ -9106,8 +9106,8 @@ ta=T tb=N layout=strided m=512 n=32 k=8 batch=2048 | vendor 3.476 | tiled 4.491 
 ta=T tb=N layout=strided m=512 n=32 k=16 batch=128 | vendor 0.2244 | tiled 0.5202 | direct 0.6122 # deep
 ta=T tb=N layout=strided m=512 n=32 k=16 batch=2048 | vendor 3.490 | tiled 8.110 | direct 9.593 # deep
 ta=T tb=N layout=strided m=512 n=32 k=32 batch=128 | vendor 0.4048 | tiled 0.9821 | direct 1.168 # deep
-ta=T tb=N layout=strided m=512 n=32 k=32 batch=2048 | vendor 15.51 | tiled 34.30 | direct 39.66 # deep
-ta=T tb=N layout=strided m=512 n=32 k=64 batch=128 | vendor 3.031 | tiled 4.150 | direct 6.879 # deep
+ta=T tb=N layout=strided m=512 n=32 k=32 batch=2048 | vendor 6.344 | tiled 15.42 | direct 18.38 # deep
+ta=T tb=N layout=strided m=512 n=32 k=64 batch=128 | vendor 0.7669 | tiled 1.906 | direct 2.282 # deep
 ta=T tb=N layout=strided m=512 n=32 k=64 batch=2048 | vendor 25.79 | tiled 65.60 | direct 78.88 # deep
 ta=T tb=N layout=strided m=512 n=32 k=96 batch=128 | vendor 1.115 | tiled 2.787 | direct 3.349 # deep
 ta=T tb=N layout=strided m=512 n=32 k=96 batch=2048 | vendor 17.64 | tiled 44.62 | direct 53.58 # deep

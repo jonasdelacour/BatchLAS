@@ -1,4 +1,4 @@
-# op=syrk dtype=double device=sm_120 batchlas=209d9fb8 kernels=d63acf6f family_kernels=gram:200c87a9,vendor:c6357b92 date=2026-10-08
+# op=syrk dtype=double device=sm_120 batchlas=f4f8ea54 kernels=d63acf6f family_kernels=gram:200c87a9,vendor:c6357b92 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/syrk.double.sm_120 tiers=deep:5717,coarse:0,preview:0,custom:0,transcribed:8914
 # keys: form:exact trans:exact n:log:2 k:log batch:log
 form=sq trans=C n=1 k=1 batch=1 | vendor 0.01487 | gram 0.02354 # deep
@@ -6566,20 +6566,20 @@ form=tall trans=N n=1153 k=64 batch=26 | vendor 2.753 # deep
 form=tall trans=N n=1153 k=64 batch=27 | vendor 2.858 # deep
 form=tall trans=N n=1153 k=64 batch=128 | vendor 13.53 # deep
 form=tall trans=N n=1153 k=64 batch=32768 | vendor - # transcribed
-form=tall trans=N n=1153 k=512 batch=1 | vendor 2.066 # deep
-form=tall trans=N n=1153 k=512 batch=2 | vendor 4.123 # deep
-form=tall trans=N n=1153 k=512 batch=3 | vendor 6.251 # deep
-form=tall trans=N n=1153 k=512 batch=4 | vendor 8.238 # deep
-form=tall trans=N n=1153 k=512 batch=5 | vendor 10.31 # deep
-form=tall trans=N n=1153 k=512 batch=6 | vendor 12.50 # deep
-form=tall trans=N n=1153 k=512 batch=7 | vendor 14.59 # deep
-form=tall trans=N n=1153 k=512 batch=8 | vendor 16.67 # deep
-form=tall trans=N n=1153 k=512 batch=10 | vendor 20.84 # deep
-form=tall trans=N n=1153 k=512 batch=11 | vendor 22.85 # deep
-form=tall trans=N n=1153 k=512 batch=15 | vendor 31.12 # deep
-form=tall trans=N n=1153 k=512 batch=16 | vendor 33.22 # deep
-form=tall trans=N n=1153 k=512 batch=26 | vendor 53.98 # deep
-form=tall trans=N n=1153 k=512 batch=27 | vendor 55.99 # deep
+form=tall trans=N n=1153 k=512 batch=1 | vendor 2.082 # deep
+form=tall trans=N n=1153 k=512 batch=2 | vendor 4.173 # deep
+form=tall trans=N n=1153 k=512 batch=3 | vendor 6.256 # deep
+form=tall trans=N n=1153 k=512 batch=4 | vendor 8.303 # deep
+form=tall trans=N n=1153 k=512 batch=5 | vendor 10.40 # deep
+form=tall trans=N n=1153 k=512 batch=6 | vendor 12.48 # deep
+form=tall trans=N n=1153 k=512 batch=7 | vendor 14.57 # deep
+form=tall trans=N n=1153 k=512 batch=8 | vendor 16.64 # deep
+form=tall trans=N n=1153 k=512 batch=10 | vendor 20.79 # deep
+form=tall trans=N n=1153 k=512 batch=11 | vendor 22.84 # deep
+form=tall trans=N n=1153 k=512 batch=15 | vendor 30.90 # deep
+form=tall trans=N n=1153 k=512 batch=16 | vendor 33.21 # deep
+form=tall trans=N n=1153 k=512 batch=26 | vendor 54.18 # deep
+form=tall trans=N n=1153 k=512 batch=27 | vendor 55.61 # deep
 form=tall trans=N n=1153 k=512 batch=128 | vendor 265.4 # deep
 form=tall trans=N n=1153 k=512 batch=32768 | vendor - # transcribed
 form=tall trans=N n=1153 k=4096 batch=32768 | vendor - # transcribed
@@ -9052,19 +9052,19 @@ form=tall trans=T n=1153 k=64 batch=27 | vendor 2.861 # deep
 form=tall trans=T n=1153 k=64 batch=128 | vendor 13.52 # deep
 form=tall trans=T n=1153 k=64 batch=32768 | vendor - # transcribed
 form=tall trans=T n=1153 k=512 batch=1 | vendor 2.082 # deep
-form=tall trans=T n=1153 k=512 batch=2 | vendor 4.157 # deep
-form=tall trans=T n=1153 k=512 batch=3 | vendor 6.228 # deep
-form=tall trans=T n=1153 k=512 batch=4 | vendor 8.306 # deep
-form=tall trans=T n=1153 k=512 batch=5 | vendor 10.38 # deep
-form=tall trans=T n=1153 k=512 batch=6 | vendor 12.46 # deep
-form=tall trans=T n=1153 k=512 batch=7 | vendor 14.53 # deep
-form=tall trans=T n=1153 k=512 batch=8 | vendor 16.60 # deep
-form=tall trans=T n=1153 k=512 batch=10 | vendor 20.75 # deep
-form=tall trans=T n=1153 k=512 batch=11 | vendor 22.91 # deep
-form=tall trans=T n=1153 k=512 batch=15 | vendor 30.88 # deep
-form=tall trans=T n=1153 k=512 batch=16 | vendor 33.32 # deep
-form=tall trans=T n=1153 k=512 batch=26 | vendor 54.13 # deep
-form=tall trans=T n=1153 k=512 batch=27 | vendor 55.57 # deep
+form=tall trans=T n=1153 k=512 batch=2 | vendor 4.159 # deep
+form=tall trans=T n=1153 k=512 batch=3 | vendor 6.239 # deep
+form=tall trans=T n=1153 k=512 batch=4 | vendor 8.339 # deep
+form=tall trans=T n=1153 k=512 batch=5 | vendor 10.43 # deep
+form=tall trans=T n=1153 k=512 batch=6 | vendor 12.37 # deep
+form=tall trans=T n=1153 k=512 batch=7 | vendor 14.43 # deep
+form=tall trans=T n=1153 k=512 batch=8 | vendor 16.49 # deep
+form=tall trans=T n=1153 k=512 batch=10 | vendor 20.61 # deep
+form=tall trans=T n=1153 k=512 batch=11 | vendor 22.88 # deep
+form=tall trans=T n=1153 k=512 batch=15 | vendor 31.26 # deep
+form=tall trans=T n=1153 k=512 batch=16 | vendor 32.95 # deep
+form=tall trans=T n=1153 k=512 batch=26 | vendor 53.96 # deep
+form=tall trans=T n=1153 k=512 batch=27 | vendor 56.05 # deep
 form=tall trans=T n=1153 k=512 batch=128 | vendor 263.4 # deep
 form=tall trans=T n=1153 k=512 batch=32768 | vendor - # transcribed
 form=tall trans=T n=1153 k=4096 batch=32768 | vendor - # transcribed
@@ -9635,11 +9635,11 @@ form=wide trans=N n=2 k=64 batch=1024 | gram 0.09538 | vendor 20.17 # deep
 form=wide trans=N n=2 k=64 batch=32768 | gram 2.513 | vendor 645.1 # deep
 form=wide trans=N n=2 k=512 batch=1 | vendor 0.1379 | gram 0.2661 # deep
 form=wide trans=N n=2 k=512 batch=2 | gram 0.2699 | vendor 0.2735 # deep
-form=wide trans=N n=2 k=512 batch=3 | gram 2.548 | vendor 2.670 # deep
-form=wide trans=N n=2 k=512 batch=4 | gram 2.549 | vendor 2.801 # deep
+form=wide trans=N n=2 k=512 batch=3 | gram 0.2697 | vendor 0.4052 # deep
+form=wide trans=N n=2 k=512 batch=4 | gram 0.2668 | vendor 0.5307 # deep
 form=wide trans=N n=2 k=512 batch=5 | gram 0.2690 | vendor 0.6683 # deep
 form=wide trans=N n=2 k=512 batch=6 | gram 0.2694 | vendor 0.7999 # deep
-form=wide trans=N n=2 k=512 batch=7 | gram 2.548 | vendor 3.196 # deep
+form=wide trans=N n=2 k=512 batch=7 | gram 0.2686 | vendor 0.9330 # deep
 form=wide trans=N n=2 k=512 batch=8 | gram 0.2707 | vendor 1.068 # deep
 form=wide trans=N n=2 k=512 batch=10 | gram 0.2700 | vendor 1.335 # deep
 form=wide trans=N n=2 k=512 batch=11 | gram 0.2701 | vendor 1.469 # deep
@@ -10576,8 +10576,8 @@ form=wide trans=N n=385 k=4096 batch=1 | vendor 2.049 # deep
 form=wide trans=N n=385 k=4096 batch=2 | vendor 4.134 # deep
 form=wide trans=N n=385 k=4096 batch=3 | vendor 6.199 # deep
 form=wide trans=N n=385 k=4096 batch=4 | vendor 8.263 # deep
-form=wide trans=N n=385 k=4096 batch=5 | vendor 10.34 # deep
-form=wide trans=N n=385 k=4096 batch=6 | vendor 12.40 # deep
+form=wide trans=N n=385 k=4096 batch=5 | vendor 10.20 # deep
+form=wide trans=N n=385 k=4096 batch=6 | vendor 12.39 # deep
 form=wide trans=N n=385 k=4096 batch=7 | vendor 14.30 # deep
 form=wide trans=N n=385 k=4096 batch=8 | vendor 16.31 # deep
 form=wide trans=N n=385 k=4096 batch=10 | vendor 20.39 # deep
@@ -10743,15 +10743,15 @@ form=wide trans=N n=513 k=64 batch=1024 | vendor - # transcribed
 form=wide trans=N n=513 k=64 batch=32768 | vendor - # transcribed
 form=wide trans=N n=513 k=512 batch=32768 | vendor - # transcribed
 form=wide trans=N n=513 k=4096 batch=1 | vendor 4.071 # deep
-form=wide trans=N n=513 k=4096 batch=2 | vendor 8.245 # deep
+form=wide trans=N n=513 k=4096 batch=2 | vendor 8.212 # deep
 form=wide trans=N n=513 k=4096 batch=3 | vendor 12.20 # deep
 form=wide trans=N n=513 k=4096 batch=4 | vendor 16.27 # deep
-form=wide trans=N n=513 k=4096 batch=5 | vendor 20.60 # deep
+form=wide trans=N n=513 k=4096 batch=5 | vendor 20.61 # deep
 form=wide trans=N n=513 k=4096 batch=6 | vendor 24.39 # deep
 form=wide trans=N n=513 k=4096 batch=7 | vendor 28.46 # deep
-form=wide trans=N n=513 k=4096 batch=8 | vendor 32.96 # deep
+form=wide trans=N n=513 k=4096 batch=8 | vendor 32.91 # deep
 form=wide trans=N n=513 k=4096 batch=10 | vendor 40.66 # deep
-form=wide trans=N n=513 k=4096 batch=11 | vendor 45.32 # deep
+form=wide trans=N n=513 k=4096 batch=11 | vendor 45.25 # deep
 form=wide trans=N n=513 k=4096 batch=15 | vendor 61.65 # deep
 form=wide trans=N n=513 k=4096 batch=16 | vendor 65.76 # deep
 form=wide trans=N n=513 k=4096 batch=26 | vendor 106.9 # deep
@@ -12203,7 +12203,7 @@ form=wide trans=T n=2 k=64 batch=27 | gram 0.03986 | vendor 0.5391 # deep
 form=wide trans=T n=2 k=64 batch=128 | gram 0.04031 | vendor 2.549 # deep
 form=wide trans=T n=2 k=64 batch=1024 | gram 0.09664 | vendor 20.44 # deep
 form=wide trans=T n=2 k=64 batch=32768 | gram 2.544 | vendor 653.6 # deep
-form=wide trans=T n=2 k=512 batch=1 | vendor 2.404 | gram 2.532 # deep
+form=wide trans=T n=2 k=512 batch=1 | vendor 0.1393 | gram 0.2628 # deep
 form=wide trans=T n=2 k=512 batch=2 | gram 0.2627 | vendor 0.2719 # deep
 form=wide trans=T n=2 k=512 batch=3 | gram 0.2641 | vendor 0.4054 # deep
 form=wide trans=T n=2 k=512 batch=4 | gram 0.2642 | vendor 0.5386 # deep
@@ -13156,7 +13156,7 @@ form=wide trans=T n=385 k=4096 batch=15 | vendor 30.93 # deep
 form=wide trans=T n=385 k=4096 batch=16 | vendor 32.98 # deep
 form=wide trans=T n=385 k=4096 batch=26 | vendor 53.66 # deep
 form=wide trans=T n=385 k=4096 batch=27 | vendor 55.06 # deep
-form=wide trans=T n=385 k=4096 batch=128 | vendor 264.3 # deep
+form=wide trans=T n=385 k=4096 batch=128 | vendor 261.1 # deep
 form=wide trans=T n=385 k=4096 batch=32768 | vendor - # transcribed
 form=wide trans=T n=512 k=1 batch=1 | vendor - # transcribed
 form=wide trans=T n=512 k=1 batch=2 | vendor - # transcribed
@@ -13320,7 +13320,7 @@ form=wide trans=T n=513 k=4096 batch=5 | vendor 20.52 # deep
 form=wide trans=T n=513 k=4096 batch=6 | vendor 24.66 # deep
 form=wide trans=T n=513 k=4096 batch=7 | vendor 28.77 # deep
 form=wide trans=T n=513 k=4096 batch=8 | vendor 32.83 # deep
-form=wide trans=T n=513 k=4096 batch=10 | vendor 41.10 # deep
+form=wide trans=T n=513 k=4096 batch=10 | vendor 41.22 # deep
 form=wide trans=T n=513 k=4096 batch=11 | vendor 45.14 # deep
 form=wide trans=T n=513 k=4096 batch=15 | vendor 61.78 # deep
 form=wide trans=T n=513 k=4096 batch=16 | vendor 65.90 # deep

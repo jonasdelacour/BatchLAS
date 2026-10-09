@@ -1,4 +1,4 @@
-# op=gesv dtype=double device=sm_120 batchlas=a01c3c96 kernels=0326f361 family_kernels=tiny:f2fd992b,blocked:5954a1e2 date=2026-10-08
+# op=gesv dtype=double device=sm_120 batchlas=f4f8ea54 kernels=0326f361 family_kernels=tiny:f2fd992b,blocked:5954a1e2 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/gesv.double.sm_120 tiers=deep:221,coarse:0,preview:0,custom:0,transcribed:0
 # keys: n:log:3 nrhs:log
 n=1 nrhs=1 | tiny 0.01181 | blocked 0.04154 # deep
@@ -73,7 +73,7 @@ n=17 nrhs=5 | blocked 0.8399 # deep
 n=17 nrhs=8 | blocked 0.7075 # deep
 n=17 nrhs=16 | blocked 1.101 # deep
 n=17 nrhs=64 | blocked 4.489 # deep
-n=17 nrhs=256 | blocked 8.125 # deep
+n=17 nrhs=256 | blocked 8.107 # deep
 n=18 nrhs=1 | blocked 0.5219 | tiny 0.7150 # deep
 n=20 nrhs=1 | tiny 0.8188 | blocked 1.126 # deep
 n=20 nrhs=2 | tiny 0.8999 | blocked 1.116 # deep

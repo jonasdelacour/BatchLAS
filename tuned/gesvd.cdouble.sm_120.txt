@@ -1,4 +1,4 @@
-# op=gesvd dtype=cdouble device=sm_120 batchlas=a01c3c96 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-08
+# op=gesvd dtype=cdouble device=sm_120 batchlas=f4f8ea54 kernels=72a88a8d family_kernels=jacobi:cdad1283,cta:07d1cb02,blocked:dd2a7dc8,vendor:c05cadf7 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/gesvd.cdouble.sm_120 tiers=deep:239,coarse:0,preview:0,custom:0,transcribed:1646
 # keys: herm:exact vec:exact m:log:1.5 n:log:1.5
 herm=L vec=all m=1 n=1 | blocked 0.06467 | cta 0.06837 | vendor 1.858 # deep
@@ -679,7 +679,7 @@ herm=N vec=all m=16 n=1024 | vendor - # transcribed
 herm=N vec=all m=24 n=1 | vendor 3.747 | jacobi 29.65 # deep
 herm=N vec=all m=24 n=2 | jacobi 30.13 | vendor 36.43 # deep
 herm=N vec=all m=24 n=4 | jacobi 39.95 | vendor 107.5 # deep
-herm=N vec=all m=24 n=8 | jacobi 72.74 | vendor 168.2 # deep
+herm=N vec=all m=24 n=8 | jacobi 73.16 | vendor 169.7 # deep
 herm=N vec=all m=24 n=16 | jacobi 190.0 | vendor 299.5 # deep
 herm=N vec=all m=24 n=24 | jacobi 390.0 | vendor 548.9 # deep
 herm=N vec=all m=24 n=32 | jacobi 502.6 | vendor 592.0 # deep
@@ -916,13 +916,13 @@ herm=N vec=none m=32 n=128 | vendor - # transcribed
 herm=N vec=none m=32 n=256 | vendor - # transcribed
 herm=N vec=none m=32 n=512 | vendor - # transcribed
 herm=N vec=none m=32 n=1024 | vendor - # transcribed
-herm=N vec=none m=33 n=1 | jacobi 16.99 # deep
-herm=N vec=none m=33 n=2 | jacobi 22.96 # deep
-herm=N vec=none m=33 n=4 | jacobi 70.64 # deep
-herm=N vec=none m=33 n=8 | jacobi 223.5 # deep
-herm=N vec=none m=33 n=16 | jacobi 643.7 # deep
-herm=N vec=none m=33 n=24 | jacobi 1179 # deep
-herm=N vec=none m=33 n=32 | jacobi 1012 # deep
+herm=N vec=none m=33 n=1 | jacobi 16.91 # deep
+herm=N vec=none m=33 n=2 | jacobi 22.92 # deep
+herm=N vec=none m=33 n=4 | jacobi 71.36 # deep
+herm=N vec=none m=33 n=8 | jacobi 221.6 # deep
+herm=N vec=none m=33 n=16 | jacobi 643.5 # deep
+herm=N vec=none m=33 n=24 | jacobi 1165 # deep
+herm=N vec=none m=33 n=32 | jacobi 1017 # deep
 herm=N vec=none m=33 n=33 | jacobi 1125 # deep
 herm=N vec=none m=33 n=48 | jacobi 1322 # deep
 herm=N vec=none m=33 n=64 | jacobi 631.4 # deep
@@ -1087,10 +1087,10 @@ herm=N vec=thin m=16 n=128 | vendor - # transcribed
 herm=N vec=thin m=16 n=256 | vendor - # transcribed
 herm=N vec=thin m=16 n=512 | vendor - # transcribed
 herm=N vec=thin m=16 n=1024 | vendor - # transcribed
-herm=N vec=thin m=24 n=1 | jacobi 3.525 # deep
-herm=N vec=thin m=24 n=2 | jacobi 4.129 # deep
-herm=N vec=thin m=24 n=4 | jacobi 13.67 # deep
-herm=N vec=thin m=24 n=8 | jacobi 50.45 # deep
+herm=N vec=thin m=24 n=1 | jacobi 3.560 # deep
+herm=N vec=thin m=24 n=2 | jacobi 4.091 # deep
+herm=N vec=thin m=24 n=4 | jacobi 13.62 # deep
+herm=N vec=thin m=24 n=8 | jacobi 50.65 # deep
 herm=N vec=thin m=24 n=16 | jacobi 175.4 # deep
 herm=N vec=thin m=24 n=32 | jacobi 457.5 # deep
 herm=N vec=thin m=24 n=48 | vendor - # transcribed

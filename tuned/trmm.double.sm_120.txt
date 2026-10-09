@@ -1,4 +1,4 @@
-# op=trmm dtype=double device=sm_120 batchlas=209d9fb8 kernels=b29f30c5 family_kernels=triangular:60885e65,expand:32783b01,vendor:9e6f5b2c date=2026-10-08
+# op=trmm dtype=double device=sm_120 batchlas=f4f8ea54 kernels=b29f30c5 family_kernels=triangular:60885e65,expand:32783b01,vendor:9e6f5b2c date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/trmm.double.sm_120 tiers=deep:620,coarse:0,preview:0,custom:0,transcribed:46
 # keys: side:exact order:log:2 q:log batch:log
 side=L order=1 q=1 batch=1 | vendor 0.007181 | expand 0.01362 | triangular 0.02393 # deep
@@ -608,7 +608,7 @@ side=R order=939 q=362 batch=1 | expand 0.5069 | vendor 0.5868 # deep
 side=R order=1024 q=1 batch=1 | expand 0.01786 | vendor 0.2661 # deep
 side=R order=1024 q=1 batch=128 | expand 3.641 | vendor 33.08 # deep
 side=R order=1024 q=1 batch=32768 | expand - | vendor - # transcribed
-side=R order=1024 q=16 batch=1 | expand 0.2712 | vendor 0.2666 # deep
+side=R order=1024 q=16 batch=1 | expand 0.2687 | vendor 0.2630 # deep
 side=R order=1024 q=16 batch=128 | expand 3.788 | vendor 33.10 # deep
 side=R order=1024 q=16 batch=32768 | expand - | vendor - # transcribed
 side=R order=1024 q=128 batch=1 | expand 0.2712 | vendor 0.2667 # deep

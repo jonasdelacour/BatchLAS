@@ -1,4 +1,4 @@
-# op=geqrf dtype=float device=sm_120 batchlas=209d9fb8 kernels=2de2c975 family_kernels=tiny:f518f860,cta:14780c9f,blocked:83ec0765,vendor:3dd02abf date=2026-10-08
+# op=geqrf dtype=float device=sm_120 batchlas=f4f8ea54 kernels=2de2c975 family_kernels=tiny:f518f860,cta:14780c9f,blocked:83ec0765,vendor:3dd02abf date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/geqrf.float.sm_120 tiers=deep:673,coarse:0,preview:0,custom:0,transcribed:11
 # keys: form:exact n:log:3 aspect:log
 form=sq n=1 aspect=1 | tiny 0.008573 | cta 0.01126 | blocked 0.01182 | vendor 0.01572 # deep
@@ -227,7 +227,7 @@ form=tall n=16 aspect=12 | cta 1.317 | blocked 1.318 | vendor 1.525 # deep
 form=tall n=16 aspect=16 | cta 1.543 | blocked 1.543 | vendor 2.312 # deep
 form=tall n=16 aspect=32 | cta 1.360 | blocked 1.363 | vendor 3.279 # deep
 form=tall n=16 aspect=64 | blocked 2.280 | vendor 3.257 # deep
-form=tall n=16 aspect=256 | blocked 4.109 | vendor 6.699 # deep
+form=tall n=16 aspect=256 | blocked 3.885 | vendor 6.692 # deep
 form=tall n=17 aspect=1 | cta 0.3045 | blocked 0.3052 | vendor 0.3089 # deep
 form=tall n=17 aspect=2 | vendor 0.5075 | cta 0.8806 | blocked 0.8819 # deep
 form=tall n=17 aspect=3 | vendor 0.6111 | cta 0.9127 | blocked 0.9152 # deep

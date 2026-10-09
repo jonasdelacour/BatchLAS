@@ -1,4 +1,4 @@
-# op=ormqr dtype=float device=sm_120 batchlas=a01c3c96 kernels=14d6bd3d family_kernels=blocked:3c554ab8,vendor:3460432e date=2026-10-08
+# op=ormqr dtype=float device=sm_120 batchlas=f4f8ea54 kernels=14d6bd3d family_kernels=blocked:3c554ab8,vendor:3460432e date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/ormqr.float.sm_120 tiers=deep:426,coarse:0,preview:0,custom:0,transcribed:0
 # keys: side:exact trans:exact m:log k:log q:log batch:log
 side=L trans=C m=1 k=1 q=1 batch=128 | blocked 0.02559 | vendor 0.5344 # deep
@@ -243,7 +243,7 @@ side=R trans=C m=8 k=8 q=1024 batch=2048 | blocked 0.3680 | vendor 33.67 # deep
 side=R trans=C m=8 k=8 q=1024 batch=32768 | blocked 6.460 | vendor 556.7 # deep
 side=R trans=C m=64 k=1 q=1 batch=128 | blocked 0.02703 | vendor 0.7293 # deep
 side=R trans=C m=64 k=1 q=1 batch=2048 | blocked 0.1064 | vendor 12.68 # deep
-side=R trans=C m=64 k=1 q=1 batch=32768 | blocked 1.395 | vendor 191.3 # deep
+side=R trans=C m=64 k=1 q=1 batch=32768 | blocked 1.466 | vendor 183.5 # deep
 side=R trans=C m=64 k=1 q=32 batch=128 | blocked 0.03187 | vendor 0.8343 # deep
 side=R trans=C m=64 k=1 q=32 batch=2048 | blocked 0.05328 | vendor 12.42 # deep
 side=R trans=C m=64 k=1 q=32 batch=32768 | blocked 0.6138 | vendor 197.2 # deep
@@ -313,8 +313,8 @@ side=R trans=N m=8 k=8 q=1024 batch=128 | blocked 0.04332 | vendor 2.170 # deep
 side=R trans=N m=8 k=8 q=1024 batch=2048 | blocked 0.3655 | vendor 34.68 # deep
 side=R trans=N m=8 k=8 q=1024 batch=32768 | blocked 5.788 | vendor 558.7 # deep
 side=R trans=N m=64 k=1 q=1 batch=128 | blocked 0.03050 | vendor 0.8133 # deep
-side=R trans=N m=64 k=1 q=1 batch=2048 | blocked 0.1057 | vendor 12.50 # deep
-side=R trans=N m=64 k=1 q=1 batch=32768 | blocked 1.397 | vendor 192.7 # deep
+side=R trans=N m=64 k=1 q=1 batch=2048 | blocked 0.1049 | vendor 11.00 # deep
+side=R trans=N m=64 k=1 q=1 batch=32768 | blocked 1.478 | vendor 192.5 # deep
 side=R trans=N m=64 k=1 q=32 batch=128 | blocked 0.03117 | vendor 0.7485 # deep
 side=R trans=N m=64 k=1 q=32 batch=2048 | blocked 0.04938 | vendor 13.11 # deep
 side=R trans=N m=64 k=1 q=32 batch=32768 | blocked 0.6423 | vendor 189.3 # deep
@@ -384,8 +384,8 @@ side=R trans=T m=8 k=8 q=1024 batch=128 | blocked 0.04149 | vendor 2.016 # deep
 side=R trans=T m=8 k=8 q=1024 batch=2048 | blocked 0.3657 | vendor 33.80 # deep
 side=R trans=T m=8 k=8 q=1024 batch=32768 | blocked 6.574 | vendor 555.8 # deep
 side=R trans=T m=64 k=1 q=1 batch=128 | blocked 0.02689 | vendor 0.6748 # deep
-side=R trans=T m=64 k=1 q=1 batch=2048 | blocked 0.1100 | vendor 12.52 # deep
-side=R trans=T m=64 k=1 q=1 batch=32768 | blocked 1.404 | vendor 189.3 # deep
+side=R trans=T m=64 k=1 q=1 batch=2048 | blocked 0.1040 | vendor 11.67 # deep
+side=R trans=T m=64 k=1 q=1 batch=32768 | blocked 1.477 | vendor 184.0 # deep
 side=R trans=T m=64 k=1 q=32 batch=128 | blocked 0.03082 | vendor 0.7803 # deep
 side=R trans=T m=64 k=1 q=32 batch=2048 | blocked 0.05223 | vendor 12.13 # deep
 side=R trans=T m=64 k=1 q=32 batch=32768 | blocked 0.6190 | vendor 193.5 # deep

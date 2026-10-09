@@ -1,4 +1,4 @@
-# op=trsm dtype=cfloat device=sm_120 batchlas=209d9fb8 kernels=6446e809 family_kernels=cta:807e9782,sg_left:40218df2,blocked:807e9782,vendor:807e9782 date=2026-10-08
+# op=trsm dtype=cfloat device=sm_120 batchlas=f4f8ea54 kernels=6446e809 family_kernels=cta:807e9782,sg_left:40218df2,blocked:807e9782,vendor:807e9782 date=2026-10-09
 # source=ledger:benchmarks/results/tuning/ledger/trsm.cfloat.sm_120 tiers=deep:6063,coarse:0,preview:0,custom:0,transcribed:508
 # keys: side:exact trans:exact order:log:2 q:log batch:log
 side=L trans=N order=1 q=1 batch=128 | sg_left 0.007176 | vendor 0.006976 | cta 0.008638 | blocked 0.008653 # deep
@@ -1768,7 +1768,7 @@ side=L trans=N order=256 q=64 batch=128 | blocked 0.2928 | vendor 16.06 # deep
 side=L trans=N order=256 q=64 batch=512 | blocked 0.6424 | vendor 16.16 # deep
 side=L trans=N order=256 q=64 batch=2048 | blocked 2.636 | vendor 64.95 # deep
 side=L trans=N order=256 q=128 batch=128 | blocked 0.3720 | vendor 16.09 # deep
-side=L trans=N order=256 q=128 batch=512 | blocked 2.419 | vendor 43.80 # deep
+side=L trans=N order=256 q=128 batch=512 | blocked 1.030 | vendor 17.78 # deep
 side=L trans=N order=256 q=128 batch=2048 | blocked 5.013 | vendor 139.4 # deep
 side=L trans=N order=256 q=128 batch=32768 | blocked - | vendor - # transcribed
 side=L trans=N order=256 q=256 batch=128 | blocked 0.6089 | vendor 16.63 # deep
@@ -4088,7 +4088,7 @@ side=R trans=N order=4 q=16 batch=128 | cta 0.009455 | blocked 0.009439 | vendor
 side=R trans=N order=4 q=16 batch=512 | cta 0.009209 | blocked 0.009485 | vendor 0.009930 # deep
 side=R trans=N order=4 q=16 batch=2048 | cta 0.01002 | vendor 0.009940 | blocked 0.01026 # deep
 side=R trans=N order=4 q=16 batch=8192 | vendor 0.01113 | cta 0.01464 | blocked 0.01479 # deep
-side=R trans=N order=4 q=16 batch=32768 | cta 2.311 | blocked 2.311 | vendor 2.296 # deep
+side=R trans=N order=4 q=16 batch=32768 | vendor 0.01966 | blocked 0.03197 | cta 0.03237 # deep
 side=R trans=N order=4 q=17 batch=32768 | vendor 0.02248 | cta 0.03189 | blocked 0.03223 # deep
 side=R trans=N order=4 q=19 batch=32768 | vendor 0.02321 | cta 0.03184 | blocked 0.03211 # deep
 side=R trans=N order=4 q=23 batch=32768 | vendor 0.02596 | cta 0.03262 | blocked 0.03296 # deep
@@ -4272,7 +4272,7 @@ side=R trans=N order=12 q=2 batch=128 | cta 0.01157 | blocked 0.01172 | vendor 0
 side=R trans=N order=12 q=2 batch=512 | cta 0.01148 | blocked 0.01168 | vendor 0.03837 # deep
 side=R trans=N order=12 q=2 batch=2048 | cta 0.01357 | blocked 0.01357 | vendor 0.03855 # deep
 side=R trans=N order=12 q=2 batch=8192 | cta 0.02636 | blocked 0.02639 | vendor 0.03947 # deep
-side=R trans=N order=12 q=2 batch=32768 | cta 2.356 | blocked 2.355 | vendor 2.329 # deep
+side=R trans=N order=12 q=2 batch=32768 | vendor 0.04055 | cta 0.07241 | blocked 0.07243 # deep
 side=R trans=N order=12 q=3 batch=32768 | vendor 0.04181 | cta 0.07469 | blocked 0.07493 # deep
 side=R trans=N order=12 q=4 batch=128 | cta 0.01224 | blocked 0.01224 | vendor 0.02873 # deep
 side=R trans=N order=12 q=4 batch=512 | cta 0.01235 | blocked 0.01239 | vendor 0.02901 # deep
@@ -4381,7 +4381,7 @@ side=R trans=N order=16 q=4 batch=32768 | cta 0.08194 | blocked 0.08262 | vendor
 side=R trans=N order=16 q=6 batch=8192 | cta 0.02909 | blocked 0.02922 | vendor 0.04991 # deep
 side=R trans=N order=16 q=6 batch=32768 | cta 0.08418 | blocked 0.08470 | vendor 0.1018 # deep
 side=R trans=N order=16 q=7 batch=32768 | cta 0.08901 | blocked 0.08926 | vendor 0.09059 # deep
-side=R trans=N order=16 q=8 batch=128 | cta 2.287 | blocked 2.287 | vendor 2.312 # deep
+side=R trans=N order=16 q=8 batch=128 | cta 0.01295 | blocked 0.01302 | vendor 0.03060 # deep
 side=R trans=N order=16 q=8 batch=512 | cta 0.01339 | blocked 0.01342 | vendor 0.03148 # deep
 side=R trans=N order=16 q=8 batch=2048 | cta 0.01438 | blocked 0.01463 | vendor 0.03160 # deep
 side=R trans=N order=16 q=8 batch=8192 | cta 0.02909 | blocked 0.02910 | vendor 0.03168 # deep
@@ -5690,7 +5690,7 @@ side=R trans=T order=12 q=1 batch=32768 | vendor 0.06520 | blocked 0.06981 | cta
 side=R trans=T order=12 q=2 batch=128 | cta 0.01185 | blocked 0.01187 | vendor 0.02839 # deep
 side=R trans=T order=12 q=2 batch=512 | cta 0.01215 | blocked 0.01216 | vendor 0.04082 # deep
 side=R trans=T order=12 q=2 batch=2048 | cta 0.01375 | blocked 0.01378 | vendor 0.04081 # deep
-side=R trans=T order=12 q=2 batch=8192 | cta 2.312 | blocked 2.312 | vendor 2.328 # deep
+side=R trans=T order=12 q=2 batch=8192 | cta 0.02635 | blocked 0.02645 | vendor 0.04101 # deep
 side=R trans=T order=12 q=2 batch=32768 | vendor 0.04465 | cta 0.07368 | blocked 0.07432 # deep
 side=R trans=T order=12 q=4 batch=128 | cta 0.01217 | blocked 0.01227 | vendor 0.02975 # deep
 side=R trans=T order=12 q=4 batch=512 | cta 0.01160 | blocked 0.01159 | vendor 0.02981 # deep
