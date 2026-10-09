@@ -3,8 +3,9 @@
 > **Status:** current · self-hosted runner: RTX 4090 (sm_89), CUDA 13.2, Ubuntu 22.04
 
 Static checks run on GitHub-hosted runners. The GPU jobs run on one self-hosted workstation, and
-they are the only jobs that configure, compile, install or execute anything. CI gates one
-configuration (CUDA DPC++ on `sm_89`) and no other row of the README "Tested platforms" table.
+they are the only jobs that install or execute anything. One hosted job, `acpp-compile`, compiles
+every target with AdaptiveCpp. CI gates one configuration (CUDA DPC++ on `sm_89`) and no other row
+of the README "Tested platforms" table.
 `.github/workflows/ci.yml` is the authority on what runs.
 
 ## What CI covers and what it does not
@@ -18,6 +19,7 @@ configuration (CUDA DPC++ on `sm_89`) and no other row of the README "Tested pla
 | Every `evidence:` pointer resolves; cited slugs are unique across `docs/` | hosted | `check_evidence_anchors.py` |
 | No Markdown outside `docs/`; no raw content under an LFS path | hosted | `check_markdown_locations.py`, `check_lfs_pointers.py` |
 | Docs site builds with zero Doxygen warnings; published on push to `main` | hosted | `docs` and `docs-deploy`; see [The docs jobs](#the-docs-jobs) |
+| Configure and compile every target with AdaptiveCpp 25.10, generic target, CUDA off | hosted | `acpp-compile`: catches DPC++-only spellings; no CUDA-backend code, nothing runs. See [The acpp-compile job](#the-acpp-compile-job) |
 | Configure with real CUDA DPC++ | GPU, per PR | `-DBATCHLAS_ENABLE_CUDA=ON`, then grep for `Using SYCL targets: … nvidia_gpu_sm_89` |
 | Compile every component library and test binary | GPU, per PR | `cmake --build --preset dev-tests`: 95 library TUs, 61 test executables |
 | Run the suite on a GPU | GPU, per PR | `ctest --preset dev-tests -LE slow`: 65 of 70 tests. The only place wrong numbers, launch failures and device aborts are caught |
@@ -25,7 +27,7 @@ configuration (CUDA DPC++ on `sm_89`) and no other row of the README "Tested pla
 | Four slow suites; packaging end to end | GPU, nightly | Full 70-test `ctest`, with `consumer_package_tests` under `--require` |
 | Vendor-free build configures, compiles, links | GPU, nightly | Report-only (`continue-on-error`); not green, no ledger |
 
-Not covered: AMD/ROCm; CPU-only and `icpx` builds (see
+Not covered: AMD/ROCm; CPU-only DPC++ and `icpx` builds (see
 [Why there is no hosted compile job](#why-there-is-no-hosted-compile-job)); macOS and Windows;
 Python bindings and benchmarks (both off in `dev-tests`, so a benchmark that stops compiling
 passes); performance (nothing is timed); other NVIDIA architectures, CUDA versions and DPC++
@@ -42,6 +44,7 @@ every pull request queues behind it.
 | Static checks (`cmake-lint`, `exported-package`, `public-headers`, `comment-density`, `lfs-pointers`) | `ubuntu-latest` | every trigger | Scripts under `.github/ci/`; all run locally with `.github/ci/run_local_checks.sh` |
 | `gpu-build-test` | `[self-hosted, linux, x64, cuda]` | push to `main`, non-fork PRs | Configure, assert the CUDA target, build, `ctest -LE slow`, `compare_failures.py`, install and check the export. Timeout 180 min |
 | `gpu-nightly-full` | same | 03:17 UTC, `workflow_dispatch` with `run_nightly` | Full 70-test `ctest`, then a vendor-free configure, build and ctest that reports without gating. Timeout 360 min |
+| `acpp-compile` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 (cached), then configures BatchLAS with it and compiles library, tests and benchmarks. Timeout 90 min |
 | `docs` | `ubuntu-latest` | every trigger | Builds the site (below) |
 | `docs-deploy` | `ubuntu-latest` | push to `main`, after `docs` | Publishes the Pages artifact |
 
@@ -58,6 +61,59 @@ every pull request queues behind it.
 > **Note:** a repository admin must enable GitHub Pages once (Settings → Pages → Source: "GitHub
 > Actions"). Until then `docs-deploy` fails and `docs` stays green. To bump Doxygen, see
 > [Building the site](developer/documentation.md#building-the-site).
+
+### The acpp-compile job
+
+Phase P6 of [Two SYCL implementations](design/sycl-implementations.md). `--acpp-targets=generic`
+compiles device code to target-independent IR and JIT-compiles it at first launch, so a hosted
+runner with no GPU and no CUDA toolkit compiles every TU. There is no device link.
+
+| Step | What |
+| --- | --- |
+| Toolchain | `clang-20 llvm-20-dev libclang-20-dev libomp-20-dev` from the Ubuntu 24.04 archive (20.1.2, the package the threadripper02 install uses), netlib `liblapacke-dev liblapack-dev libblas-dev`, `ccache` |
+| AdaptiveCpp | `.github/ci/build_adaptivecpp.sh`: tag `v25.10.0`, which must resolve to `9f842c70`; generic compiler and OpenMP runtime only, every GPU backend off. `actions/cache` keyed on tag, commit, `llvm-20-dev` version and the script's hash. 14 MB install |
+| BatchLAS | `.github/ci/acpp_compile.sh`: the `acpp-tests` preset with `CMAKE_CXX_COMPILER=<install>/bin/acpp`, `Release`, `-Werror=unknown-attributes`, `BATCHLAS_ENABLE_CUDA=OFF`, benchmarks on. Fails unless configure printed `Using AdaptiveCpp targets: generic`, `Using AdaptiveCpp for SYCL:` and `Found LAPACKE:`. Builds `all` |
+| Completeness | `.github/ci/check_built_tests.py`: every registered ctest executable must exist (99 of 102 tests here; the other three run `cmake -P`, `python3` or a shell script) |
+| ccache | `~/.ccache-acpp` in `actions/cache`, per commit, restored from the newest earlier entry |
+
+Measured on threadripper02 with the same scripts and a clean environment:
+
+| | Result |
+| --- | --- |
+| AdaptiveCpp build | 58 s wall at `-j4` |
+| BatchLAS, cold | 269 TUs, 2,614 CPU-seconds, 133 s wall at `-j32`; max RSS 1.5 GB per TU |
+| BatchLAS, warm ccache in a second tree | 269 of 269 hits, 6 s wall; cache 45 MB |
+
+Deliberate breaks, each in the scratch copy the job compiles:
+
+| Break | Result |
+| --- | --- |
+| `q.get_backend()` in `src/ops/gemm/gemm.cc` | red: `no member named 'get_backend' in 'hipsycl::sycl::queue'` |
+| `sycl::backend::ext_oneapi_cuda` in `tests/util_span_tests.cc` | red: `no member named 'ext_oneapi_cuda'` |
+| `q.ext_oneapi_submit_barrier()` in `benchmarks/gemm_benchmark.cc` | red |
+| raw `[[intel::max_work_group_size]]` or `[[sycl::reqd_sub_group_size(32)]]` in `src/ops/getrf/getrf.cc` | red only through `-Werror=unknown-attributes` (`acpp_compile.sh`); acpp alone warns |
+| `q.get_backend()` in `src/backends/cublas.cc` | **green**: not compiled with CUDA off |
+
+**Not covered (CUDA off).** `src/backends/cublas.cc`, `cusolver.cc`, `cusparse.cc`, `tools/tune` and
+`tune_race_gpu_tests` are not built, and every `#if BATCHLAS_HAS_CUDA_BACKEND` block in the other
+TUs is skipped. That includes the acpp branch of `impl::run_native`, which only vendor TUs
+instantiate. Closing it needs a CUDA toolkit with cuBLAS, cuSOLVER and cuSPARSE on the runner
+(`enable_language(CUDA)` needs `nvcc` too), and an acpp configure path that accepts
+`BATCHLAS_ENABLE_CUDA=ON` without a device: generic code has no architecture to detect.
+
+A CPU-only build (either implementation) did not compile before this job existed. Fixed with it:
+`tests/{gesvdj_cta,bdsqr,bdsdc}_tests.cc` compile to zero tests without `BATCHLAS_HAS_CUDA_BACKEND`,
+`stein_tests.cc` and `stebz_tests.cc` without a GPU backend; `sytrd_sy2sb_tests.cc` lost a default
+template argument naming `test_utils::gpu_backend`; the CUDA gemm seam in `trsm_tests.cc`,
+`factor_bench` and `iluk_convergence_stats` are guarded; `tools/tune` and `tune_race_gpu_tests`
+are built only with a GPU backend (`BATCHLAS_BUILD_TUNE_TOOL`).
+
+Run it locally:
+
+```bash
+.github/ci/build_adaptivecpp.sh "$HOME/acpp-ci"          # or reuse an existing 25.10 install
+JOBS=32 .github/ci/acpp_compile.sh "$HOME/acpp-ci" build/acpp-ci
+```
 
 ### Required properties of the GPU jobs
 
@@ -277,6 +333,9 @@ Two scopes are wrong for a pre-push gate: `ctest -LE slow` excludes the four `sl
 none of the four baseline failures. It is an edit-loop tool only.
 
 ## Why there is no hosted compile job
+
+This section is about DPC++. The AdaptiveCpp build has one:
+[The acpp-compile job](#the-acpp-compile-job).
 
 `BATCHLAS_CPU_TARGET=none` does not disable the device pass; it only skips appending
 `native_cpu` / `spir64_x86_64` to the SYCL target list. `-fsycl` is unconditional, so on a GPU-less

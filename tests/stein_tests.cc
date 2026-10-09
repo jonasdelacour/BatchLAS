@@ -13,6 +13,9 @@
 
 using namespace batchlas;
 
+// Runs on test_utils::gpu_backend, which exists only with a GPU backend.
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+
 namespace {
 
 template <typename Real>
@@ -456,6 +459,8 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
             << "batch 0 vector " << j << " damaged by batch 1's zero count";
     }
 }
+
+#endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

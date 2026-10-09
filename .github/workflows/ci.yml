@@ -23,8 +23,10 @@
 #     nobody, here or on the workstation - they are text until somebody with the
 #     hardware builds them.
 #   * No macOS, no Windows, no 32-bit, no non-x86 host.
-#   * No hosted compile job. See the HOSTED COMPILE JOB block at the end of this
-#     file for why, and for what would have to change.
+#   * No hosted DPC++ compile job. See the HOSTED COMPILE JOB block at the end of
+#     this file for why, and for what would have to change. The hosted
+#     acpp-compile job compiles every target with AdaptiveCpp's generic target,
+#     CUDA off: it catches DPC++-only spellings, not CUDA-backend code.
 #   * A green ctest can still be vacuous. GTEST_SKIP inside the shared fixture
 #     exits 0, so a run in which every case skipped looks identical, at the
 #     ctest level, to a run with full coverage. That is why the GPU job exports
@@ -309,7 +311,89 @@ jobs:
         run: python3 .github/ci/check_tuned_tables.py
 
   # ---------------------------------------------------------------------------
-  # THE PRIMARY GATE. Everything above this line is text scanning.
+  # ADAPTIVECPP COMPILE GATE. Hosted, no GPU (docs/design/sycl-implementations.md P6).
+  # ---------------------------------------------------------------------------
+  acpp-compile:
+    name: AdaptiveCpp 25.10 compile, generic target, CUDA off (hosted)
+    runs-on: ubuntu-24.04
+    # Why this one exists when the DPC++ hosted job below does not: --acpp-targets=generic
+    # emits target-independent IR and the kernels are JIT-compiled at first launch, so there
+    # is no device link and no GPU or CUDA toolkit is needed to compile every TU. Any
+    # DPC++-only spelling that leaks past src/sycl/impl.hh (queue::get_backend(),
+    # backend::ext_oneapi_cuda, ext_oneapi_submit_barrier, kernel_bundle queries, ...) is a
+    # compile error here; a raw DPC++ kernel attribute is one through -Werror=unknown-attributes
+    # (acpp_compile.sh). Deliberate breaks in a library, a test and a benchmark TU each turned
+    # this red; one inside src/backends/cublas.cc did not, because CUDA is off and code under
+    # BATCHLAS_HAS_CUDA_BACKEND is not compiled (docs/ci.md#the-acpp-compile-job).
+    #
+    # Measured locally with the same scripts: AdaptiveCpp build 58 s at -j4; BatchLAS
+    # library + tests + benchmarks 269 TUs, 2,614 CPU-seconds cold, max RSS 1.5 GB per TU.
+    timeout-minutes: 90
+    env:
+      ACPP_TAG: v25.10.0
+      ACPP_SHA: 9f842c701a599107cc6d117d3539f971036363a1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 20, OpenMP, netlib LAPACKE/CBLAS and ccache
+        # LLVM 20 from the Ubuntu archive (noble-updates): 20 is AdaptiveCpp 25.10's ceiling,
+        # and it is the exact package the threadripper02 install was built against. zstd and
+        # curl are named because LLVMConfig.cmake imports them.
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            clang-20 llvm-20-dev libclang-20-dev libomp-20-dev \
+            libzstd-dev zlib1g-dev libcurl4-openssl-dev \
+            liblapacke-dev liblapack-dev libblas-dev ccache
+          echo "LLVM_PKG=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_ENV"
+          echo "ACPP_PREFIX=$HOME/acpp-$ACPP_TAG" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$HOME/.ccache-acpp" >> "$GITHUB_ENV"
+
+      - name: Restore the AdaptiveCpp install
+        id: acpp-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/acpp-${{ env.ACPP_TAG }}
+          # The plugin links libLLVM, so the LLVM package version is part of the key.
+          key: acpp-${{ env.ACPP_TAG }}-${{ env.ACPP_SHA }}-llvm-${{ env.LLVM_PKG }}-${{ runner.os }}-${{ hashFiles('.github/ci/build_adaptivecpp.sh') }}
+
+      - name: Build AdaptiveCpp ${{ env.ACPP_TAG }} (cache miss only)
+        # No binary release exists. Generic compiler and OpenMP host runtime only; the tag must
+        # resolve to ACPP_SHA.
+        if: steps.acpp-cache.outputs.cache-hit != 'true'
+        run: .github/ci/build_adaptivecpp.sh "$ACPP_PREFIX" "$RUNNER_TEMP/acpp-build"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache-acpp
+          key: acpp-ccache-${{ env.ACPP_TAG }}-llvm-${{ env.LLVM_PKG }}-${{ github.sha }}
+          restore-keys: acpp-ccache-${{ env.ACPP_TAG }}-llvm-${{ env.LLVM_PKG }}-
+
+      - name: Configure and compile every target with acpp (no test run)
+        # acpp_compile.sh asserts the generic flow, the acpp module and the host backend from
+        # the configure output, builds `all` (library, tests, benchmarks) and then checks that
+        # every registered test executable exists.
+        run: |
+          set -eu
+          "$ACPP_PREFIX/bin/acpp" --acpp-version | head -n 6
+          ccache -z
+          .github/ci/acpp_compile.sh "$ACPP_PREFIX" build/acpp-ci -DBATCHLAS_CCACHE_MAXSIZE=1G
+          ccache -s
+
+      - name: Upload the configure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acpp-compile-configure
+          if-no-files-found: warn
+          retention-days: 14
+          path: build/acpp-ci/acpp-configure.log
+
+  # ---------------------------------------------------------------------------
+  # THE PRIMARY GATE. Everything above this line is text scanning, plus the
+  # acpp-compile job's compile-only build.
   # ---------------------------------------------------------------------------
   gpu-build-test:
     name: GPU build, ctest and install (self-hosted, sm_89)
@@ -662,10 +746,13 @@ jobs:
             build/vendor-free/Testing/Temporary/LastTest.log
 
 # ---------------------------------------------------------------------------
-# THE HOSTED COMPILE JOB THAT IS NOT HERE
+# THE HOSTED DPC++ COMPILE JOB THAT IS NOT HERE
 # ---------------------------------------------------------------------------
-# There is no hosted-runner compile job, and the omission is a decision rather
-# than an oversight. It was specified, investigated and rejected on measurement.
+# There is no hosted-runner DPC++ compile job, and the omission is a decision
+# rather than an oversight. It was specified, investigated and rejected on
+# measurement. (acpp-compile above is the AdaptiveCpp counterpart; none of the
+# reasons below apply to it: no device link, and a 14 MB toolchain built in
+# about a minute. It does not claim CUDA-backend coverage either.)
 #
 # The premise was that BATCHLAS_CPU_TARGET=none would give a cheap host-only
 # compile on a 2-core hosted runner - every host TU compiled and every .so

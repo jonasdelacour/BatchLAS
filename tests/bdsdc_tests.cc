@@ -40,6 +40,9 @@
 
 using namespace batchlas;
 
+// Every typed config below is Backend::CUDA: without it the suite is empty and does not compile.
+#if BATCHLAS_HAS_CUDA_BACKEND
+
 namespace {
 
 template <typename T, Backend B>
@@ -339,3 +342,4 @@ TYPED_TEST(BdsdcTest, AllZeros) {
 }
 
 } // namespace
+#endif  // BATCHLAS_HAS_CUDA_BACKEND

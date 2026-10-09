@@ -145,6 +145,12 @@ else()
     message(STATUS "Skipping CPU SYCL-dependent tests (no CPU target in fsycl-targets): ${CPU_SYCL_DEPENDENT_TESTS}")
 endif()
 
+# The tuner's specs time a GPU vendor arm (tools/tune/cell_runner.hh); without a GPU backend
+# they reference instantiations that do not exist, so neither the tuner nor this test is built.
+if(NOT BATCHLAS_BUILD_TUNE_TOOL)
+    list(REMOVE_ITEM TEST_TARGETS tune_race_gpu_tests)
+endif()
+
 if(BATCHLAS_TEST_TARGET_SET STREQUAL "smoke")
     set(TEST_TARGETS ${BATCHLAS_SMOKE_TEST_TARGETS})
     message(STATUS "Configuring smoke-test subset: ${TEST_TARGETS}")
@@ -551,6 +557,34 @@ if(Python3_Interpreter_FOUND)
                 ${_device_calls_args})
     set_tests_properties(device_calls_tests PROPERTIES
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+endif()
+
+# acpp_jit_tests: the AdaptiveCpp counterpart. acpp JIT-compiles kernels at first launch, so
+# scripts/check_acpp_jit.py runs these CUDA cases against a fresh ACPP_APPDB_DIR, then scans the
+# PTX the runtime cached: no out-of-line call, every required family reached, no stack array in a
+# register-resident family beyond its allowlist. Skips (77) when no PTX appears (no CUDA device).
+# evidence: docs/design/sycl-implementations.md#sycl-impl-jit-ptx-check
+set(_acpp_jit_bins gemm_candidates_tests gesv_tests potrf_tests trsm_tests syev_cta_fused_tests getrf_tests)
+set(_acpp_jit_ok ${BATCHLAS_SYCL_IMPL_ACPP})
+foreach(_bin IN LISTS _acpp_jit_bins)
+    if(NOT TARGET ${_bin})
+        set(_acpp_jit_ok OFF)
+    endif()
+endforeach()
+if(Python3_Interpreter_FOUND AND BATCHLAS_HAS_CUDA_BACKEND AND _acpp_jit_ok)
+    set(_cuda "BATCHLAS_TEST_BACKEND=CUDA")
+    add_test(NAME acpp_jit_tests
+        COMMAND ${BATCHLAS_TEST_GPU_LAUNCHER} "${Python3_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/scripts/check_acpp_jit.py" --build-dir "${PROJECT_BINARY_DIR}"
+                --run "${_cuda} BATCHLAS_TEST_FLOAT_TYPE=float '$<TARGET_FILE:gemm_candidates_tests>' --gtest_filter=GemmCandidates/*.PinnedChoiceLaunchesItsOwnKernel"
+                --run "${_cuda} BATCHLAS_TEST_FLOAT_TYPE=double '$<TARGET_FILE:gesv_tests>' --gtest_filter=GesvTest/*"
+                --run "${_cuda} BATCHLAS_TEST_FLOAT_TYPE=complex '$<TARGET_FILE:potrf_tests>' --gtest_filter=PotrfCtaTest/*:PotrfLpanelTest/*"
+                --run "'$<TARGET_FILE:trsm_tests>' --gtest_filter=TrsmNativeSgLeft.*"
+                --run "${_cuda} BATCHLAS_TEST_FLOAT_TYPE=complex '$<TARGET_FILE:syev_cta_fused_tests>' --gtest_filter=SyevCtaFusedTest/*"
+                --run "${_cuda} '$<TARGET_FILE:getrf_tests>' --gtest_filter=LuTest/*.RegPanel*")
+    set_tests_properties(acpp_jit_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 900)
+    batchlas_test_needs_gpu(acpp_jit_tests)
 endif()
 
 # ---------------------------------------------------------------------------

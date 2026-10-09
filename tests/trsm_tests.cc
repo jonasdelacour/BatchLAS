@@ -480,7 +480,14 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
     (void)batchlas::sycl_trsm::trsm_native_blocked<T>(
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
         [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
-           ComputePrecision p) { return gemm<Backend::CUDA, T>(c, ga, gb, gc, al, be, ta, tb, p); });
+           ComputePrecision p) -> Event {
+#if BATCHLAS_HAS_CUDA_BACKEND
+            return gemm<Backend::CUDA, T>(c, ga, gb, gc, al, be, ta, tb, p);
+#else
+            (void)c, (void)ga, (void)gb, (void)gc, (void)al, (void)be, (void)ta, (void)tb, (void)p;
+            throw std::logic_error("RunTrsmBlocked: no CUDA backend in this build");
+#endif
+        });
     ctx->wait();
 
     using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;

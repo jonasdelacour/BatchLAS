@@ -50,7 +50,7 @@ void expect_lower_banded_matches_ab(const MatrixView<Real, MatrixFormat::Dense>&
     }
 }
 
-template <typename Real, Backend B = test_utils::gpu_backend>
+template <typename Real, Backend B>
 void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
                                        const MatrixView<Real, MatrixFormat::Dense>& A_sy2sb,
                                        const VectorView<Real>& tau,

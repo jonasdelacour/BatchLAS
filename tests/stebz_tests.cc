@@ -13,6 +13,9 @@
 
 using namespace batchlas;
 
+// Runs on test_utils::gpu_backend, which exists only with a GPU backend.
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+
 namespace {
 
 // Symmetric tridiagonal Toeplitz: d_i = a, e_i = b. Eigenvalues are known in
@@ -269,6 +272,8 @@ TYPED_TEST(StebzTest, HandlesRepeatedAndZeroOffDiagonals) {
             << "index " << i << ": got " << w[i] << " want " << ref[i];
     }
 }
+
+#endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

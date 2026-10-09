@@ -223,6 +223,7 @@ std::vector<EigenpairMetrics> summarize_run(const RunBuffers& run,
     return metrics;
 }
 
+#if BATCHLAS_HAS_GPU_BACKEND  // kGpuBackend; main() refuses to run without it
 void run_case(Queue& queue,
               const MatrixView<float, MatrixFormat::CSR>& csr_view,
               int neigs,
@@ -287,6 +288,7 @@ void run_case(Queue& queue,
                    params);
     queue.wait_and_throw();
 }
+#endif
 
 std::string bucket_label(float density, float diagonal_boost) {
     std::ostringstream os;
