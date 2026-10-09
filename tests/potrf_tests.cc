@@ -477,6 +477,9 @@ TYPED_TEST(PotrfCtaTest, InfoIndexIsExact) {
     using R = typename TestFixture::R;
 
     const int n = std::min(69, this->ceiling());
+    if (test_utils::kSlmCappedAt48KiB && n < 34) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA ceiling is " << n << ", the sweep needs 34";
+    }
     ASSERT_GE(n, 34) << "the sweep needs room for several panels";
 
     // BOTH TRIANGLES: the route table declines an uplo gate on the CTA arm.

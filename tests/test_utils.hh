@@ -13,6 +13,15 @@
 
 namespace test_utils {
 
+// acpp without BATCHLAS_ACPP_SLM_OPTIN launches at most 48 KiB of local memory per work-group
+// (no CUDA opt-in), so every capacity read from the device budget is smaller than the 99 KiB
+// that tests, hole rows and shipped tables were written against. Tests whose premise needs the
+// opt-in skip on it, naming this; DPC++ and the opt-in variant keep every assertion.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
+inline constexpr bool kSlmCappedAt48KiB = BATCHLAS_SYCL_IMPL_ACPP && !BATCHLAS_ACPP_SLM_OPTIN;
+inline constexpr const char* kSlmCappedReason =
+    "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
+
 // Convert std::tuple<Ts...> to GoogleTest type list
 template <class Tuple> struct tuple_to_types;
 template <class... Ts>

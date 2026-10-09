@@ -1,4 +1,5 @@
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/mempool.hh>
@@ -29,12 +30,12 @@ auto sec_eval(const sycl::group<1>& cta, const VectorView<T>& v, const VectorVie
 
     for (int k = tid; k < n; k += bdim) { psi_buffer[k] = v(k, bid) / (d(k, bid) - x); }
     sycl::group_barrier(cta);
-    auto psi1 = sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
-    auto psi2 = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
+    auto psi1 = batchlas::portable::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
+    auto psi2 = (i + 1) < n ? batchlas::portable::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
     for (int k = tid; k < n; k += bdim) { psi_buffer[k] = v(k, bid) / ( (d(k, bid) - x) * (d(k, bid) - x)); }
     sycl::group_barrier(cta);
-    auto psi1_prime = sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
-    auto psi2_prime = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
+    auto psi1_prime = batchlas::portable::joint_reduce(cta, util::get_raw_ptr(psi_buffer), util::get_raw_ptr(psi_buffer) + i + 1, sycl::plus<T>());
+    auto psi2_prime = (i + 1) < n ? batchlas::portable::joint_reduce(cta, util::get_raw_ptr(psi_buffer) + i + 1, util::get_raw_ptr(psi_buffer) + n, sycl::plus<T>()) : T(0);
     return std::array<T, 4>{psi1, psi1_prime, psi2, psi2_prime};
 }
 
@@ -661,7 +662,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
             for (int k = tid; k < n; k += bdim) { vsign[k] = (v(k, bid) >= T(0)) ? T(1) : T(-1); }
             for (int k = tid; k < n; k += bdim) { auto v_temp = v(k, bid); v(k, bid) *= v_temp; }
 
-            auto v_norm2 = sycl::joint_reduce(cta, v.batch_item(bid).data_ptr(), v.batch_item(bid).data_ptr() + n, sycl::plus<T>());
+            auto v_norm2 = batchlas::portable::joint_reduce(cta, v.batch_item(bid).data_ptr(), v.batch_item(bid).data_ptr() + n, sycl::plus<T>());
 
             for (int i = 0; i < n; i++) {
                 auto di = d(i, bid);
@@ -736,7 +737,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     shared_mem[k] = sycl::log(diff);
                 }
                 sycl::group_barrier(cta);
-                auto log_den2 = i > 0 ? sycl::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + i, sycl::plus<T>()) : T(0);
+                auto log_den2 = i > 0 ? batchlas::portable::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + i, sycl::plus<T>()) : T(0);
 
                 for (int k = tid; k < n - i - 1; k += bdim) {
                     auto diff = sycl::fabs(d(k + i + 1, bid) - d(i, bid));
@@ -744,7 +745,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     shared_mem[k] = sycl::log(diff);
                 }
                 sycl::group_barrier(cta);
-                auto log_den1 = (i + 1) < n ? sycl::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + (n - i - 1), sycl::plus<T>()) : T(0);
+                auto log_den1 = (i + 1) < n ? batchlas::portable::joint_reduce(cta, util::get_raw_ptr(shared_mem), util::get_raw_ptr(shared_mem) + (n - i - 1), sycl::plus<T>()) : T(0);
 
                 if (tid == 0) log_denominators[i] = log_den1 + log_den2;
             }

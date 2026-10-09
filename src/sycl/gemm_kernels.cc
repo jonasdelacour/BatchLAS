@@ -11,6 +11,7 @@
 #include "gemm/register_wide_transposed.hh"
 #include "gemm/small_batched.hh"
 #include "gemm/tiled_general.hh"
+#include "local_mem.hh"
 
 #include "../linalg-impl.hh"
 #include "../ops/gemm/choice.hh"
@@ -234,6 +235,10 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
         static_assert(F == kNN && c.threads() == 256, "the 128x128 kernel is NN only, 256 threads");
+        using Staged = Gemm128x128Body<float, true, true>;
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
+                                           (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
+                      "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
         // The leg is derived: the unpredicated path whenever the layout allows it.
         if (can_use_128x128_fast_path<float>(A, B, C))
             return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
@@ -241,8 +246,10 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     } else {
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
         constexpr RegTile P{c.m, c.n, c.k, c.tr, c.tc, 4, 4, c.u, c.stages, OA, OB, aligned_leg};
-        static_assert(RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>::ThreadsPerGroup == c.threads(),
-                      "choice.hh's thread count must match the tile");
+        using Pol = RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>;
+        static_assert(Pol::ThreadsPerGroup == c.threads(), "choice.hh's thread count must match the tile");
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * P.Stages * (Pol::StageASize + Pol::StageBSize),
+                      "choice.hh's slm_bytes must match the tile's local accessors");
         return launch_reg<float, P>(ctx, A, B, C, alpha, beta, kernel_trace_name(reg_variant(I, F, false)),
                                     aligned_leg ? aligned_trace_name(reg_variant(I, F, true)) : nullptr);
     }
@@ -319,6 +326,13 @@ Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float
     static_for<static_cast<int>(og::reg_configs.size())>([&](auto I) {
         constexpr og::RegCfg c = og::reg_configs[I];
         if (out || c.m != tm || c.n != tn || c.k != tk || c.u != u) return;
+        // Only tiles above 48 KiB less the reserve can miss a budget: the others skip the query.
+        if constexpr (c.slm_bytes() > std::int64_t(resident::device_slm_budget(48 * 1024))) {
+            const auto budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device()));
+            if (c.slm_bytes() > static_cast<std::int64_t>(budget))
+                refuse("reg needs " + std::to_string(c.slm_bytes()) + " B of local memory; the device budgets " +
+                       std::to_string(budget));
+        }
         if constexpr (c.forms.nn)
             if (!ta && !tb) out = launch_reg_cfg<I, kNN>(ctx, A, B, C, alpha, beta);
         if constexpr (c.forms.nt)

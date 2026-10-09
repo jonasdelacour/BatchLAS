@@ -13,6 +13,7 @@
 #include "../util/template-instantiations.hh"
 #include "info_span.hh"
 #include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 #include <algorithm>
 #include <complex>
 #include <limits>
@@ -165,8 +166,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
         static_assert(kChunks * kGramChunk == kRotSlots, "round must split evenly into Gram chunks");
         constexpr bool kNeedPhase = internal::is_complex<T>::value;
 
-        // Clamp probs_per_wg DIRECTLY, not the multiplier as syev_jacobi_cta
-        // does: that under-counts by 32/P, a launch failure with two tiles.
+        // Clamp probs_per_wg DIRECTLY, not a multiplier: a clamp in problems
+        // under-counts it by 32/P, a launch failure with two tiles.
         // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
         const int32_t probs_per_warp = sg_size / static_cast<int32_t>(P);
         constexpr size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
@@ -177,7 +178,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
             + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
             + C * sizeof(int16_t);
 
-        const size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
+        const size_t local_mem_bytes = impl::local_mem_bytes(dev);
         const size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
         const int32_t max_probs = std::max<int32_t>(
             int32_t(1), static_cast<int32_t>(avail / std::max<size_t>(size_t(1), bytes_per_prob)));
@@ -194,6 +195,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         const int32_t probs_per_wg = pw;
         const int32_t wg_size = pw * static_cast<int32_t>(P);
+        if (static_cast<size_t>(pw) * bytes_per_prob + kPairTabBytes > local_mem_bytes) {
+            throw batchlas::unsupported("gesvdj_cta: one work-group needs " +
+                                        std::to_string(static_cast<size_t>(pw) * bytes_per_prob + kPairTabBytes) +
+                                        " B of local memory; the device launches " + std::to_string(local_mem_bytes));
+        }
         const int32_t nb = static_cast<int32_t>(batch_size);
         const int32_t num_wg = (nb + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
@@ -795,15 +801,14 @@ BATCHLAS_UNROLL_FULL
     });
 }
 
-// Largest max(m, n) this kernel accepts, per scalar type. Local memory sets it,
-// and occupancy rather than the hard cap binds: complex<double> with a V tile
-// does not launch at C=64, and values-only (no V tile) halves the budget, so the
-// cap is job-dependent. The values live in gesvd_native.hh so gesvd's can_run
-// states the same ceiling.
+// Largest max(m, n) this kernel accepts on ctx's device: the device's local memory budget
+// sets it, and it is job-dependent (values-only drops the V tile). gesvd_native.hh holds the
+// formula so gesvd's can_run states the same ceiling.
 // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
 template <typename T>
-constexpr int32_t gesvdj_cta_max_dim(bool want_vectors) {
-    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors));
+int32_t gesvdj_cta_max_dim(Queue& ctx, bool want_vectors) {
+    const std::size_t budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device()));
+    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors, budget));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {
@@ -873,7 +878,7 @@ Event gesvdj_cta(Queue& ctx,
         jobu = canonical_jobu(jobu, m, k);
         jobvh = canonical_jobvh(jobvh, n, k);
     }
-    if (std::max(m, n) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(m, n) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta: max(m, n) exceeds the supported cap for this scalar type "
             "(see gesvdj_cta_max_dim)");
@@ -955,10 +960,9 @@ size_t gesvdj_cta_buffer_size(Queue& ctx,
                               SvdVectors jobu,
                               SvdVectors jobvh,
                               GesvdjParams<T> params) {
-    (void)ctx;
     (void)params;
     validate_gesvdj_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta_buffer_size");
-    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta_buffer_size: max(m, n) exceeds the supported cap for this scalar type");
     }

@@ -265,11 +265,11 @@ template <typename Group, typename T>
 inline constexpr T reduce_sum_group(const Group& group, const T& value) {
     if constexpr (ComplexScalar<T>) {
         using Real = typename T::value_type;
-        const Real re = sycl::reduce_over_group(group, value.real(), sycl::plus<Real>());
-        const Real im = sycl::reduce_over_group(group, value.imag(), sycl::plus<Real>());
+        const Real re = batchlas::portable::reduce_over_group(group, value.real(), sycl::plus<Real>());
+        const Real im = batchlas::portable::reduce_over_group(group, value.imag(), sycl::plus<Real>());
         return T(re, im);
     } else {
-        return sycl::reduce_over_group(group, value, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(group, value, sycl::plus<T>());
     }
 }
 

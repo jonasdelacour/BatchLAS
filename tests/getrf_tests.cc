@@ -1006,6 +1006,9 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
 TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
     using T = typename TestFixture::T;
     const int cap = this->cta_max_n();
+    if (test_utils::kSlmCappedAt48KiB && cap < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << cap << "";
+    }
     ASSERT_GE(cap, 32) << "the CTA tier advertises a capacity of " << cap
                        << ", so this test cannot reach it";
 
@@ -2459,6 +2462,9 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     // Derived from the tier's own ceiling, not hardcoded: the occupancy rule moves it,
     // and a pin that cannot be exercised is a red test rather than a lost guard.
     const int n = std::min(64, this->cta_max_n()), batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32) << "the CTA pin cannot be exercised at a useful order on this device";
 
     for (const char* pin : {"cta", "blocked"}) {
@@ -2650,6 +2656,9 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = std::min(64, this->cta_max_n()), batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32);
 
     // NULL data, exactly as a measuring pass presents it.
@@ -2912,6 +2921,9 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = std::min(40, this->cta_max_n()), nrhs = 3, batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32);
 
     auto solve_and_check = [&](Lu<T>& p, const char* who) {

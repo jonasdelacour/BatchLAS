@@ -208,7 +208,10 @@ python3 .github/ci/compare_failures.py \
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
-- `--known` defaults to `tests/known-failures.txt`.
+- `--known` defaults to `tests/known-failures.txt`. An AdaptiveCpp tree has its own self-contained
+  ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
+  (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
+  `BATCHLAS_BUILD_DIR` is set.
 - Use `--require` and `--expected-tests` on a full run only. After `ctest -LE slow`,
   `consumer_package_tests` does not run and the count is 65, so the per-PR job passes neither.
 

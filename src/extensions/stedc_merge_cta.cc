@@ -1,4 +1,5 @@
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
@@ -176,7 +177,7 @@ struct WorkgroupAdapter {
 
     template <typename T>
     inline T reduce_product(T value) const {
-        return sycl::reduce_over_group(wg, value, sycl::multiplies<T>());
+        return batchlas::portable::reduce_over_group(wg, value, sycl::multiplies<T>());
     }
 
     inline void sync() const {
@@ -185,7 +186,7 @@ struct WorkgroupAdapter {
 
     template <typename T>
     inline T reduce_sum(T value) const {
-        return sycl::reduce_over_group(wg, value, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(wg, value, sycl::plus<T>());
     }
 
     template <typename T>

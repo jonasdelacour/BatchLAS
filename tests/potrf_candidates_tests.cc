@@ -681,6 +681,7 @@ TYPED_TEST(PotrfCandidates, ClassWordsAndSpellingsSelectTheirChoice) {
 // candidate in list order; with none runnable it warns and runs the automatic choice.
 TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const std::string dtype(select::dtype_name<T>());
@@ -791,6 +792,7 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
 // can_run reads no batch beyond >= 1, so batch 1 stands in for the row's batch.
 TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const select::Device& d = select::device_of<B>(*this->ctx);
@@ -829,6 +831,7 @@ TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
 // uplo in key_of turns exactly these red; ScopedPin-based tests bypass the key entirely.
 TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const std::string dev = select::device_of<B>(*this->ctx).key;

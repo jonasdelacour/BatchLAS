@@ -20,6 +20,7 @@
 #include "gemm_heterogeneous.hh"
 #include "syrk_gram_tiles.hh"
 #include "../ops/syrk/choice.hh"
+#include "../util/resident_capacity.hh"
 #include "triangular_expand.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -368,7 +369,9 @@ namespace batchlas {
         // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
         if constexpr (Back == Backend::CUDA) {
             if (detail::is_gpu_queue(ctx) && ops::syrk::herk_gram_pinned() &&
-                detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true)) {
+                detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true) &&
+                ops::syrk::gram_slm_bytes<T>(n) <= static_cast<std::int64_t>(resident::device_slm_budget(
+                    ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)))) {
                 return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
             }
         }

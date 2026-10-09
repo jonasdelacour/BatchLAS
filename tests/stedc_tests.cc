@@ -4,11 +4,14 @@
 #include "test_utils.hh"
 #include "../src/queue.hh"
 #include "../src/extensions/stedc_levels_plan.hh"
+#include <batchlas/util/group-collectives.hh>
 
 // Named rather than inherited transitively: the `info` cases below use M_PI,
 // std::cos and std::is_same_v, and nothing else in this file did.
 #include <cmath>
 #include <cstdint>
+#include <iostream>
+#include <memory>
 #include <type_traits>
 
 using namespace batchlas;
@@ -67,6 +70,70 @@ TEST(StedcLevelPlan, PowerOfTwoIsUnchanged) {
         EXPECT_EQ(plan.leaf, 32) << "n=" << n;
         EXPECT_EQ(plan.padded_n, n) << "n=" << n << " should need no padding";
     }
+}
+
+namespace {
+
+// One scan per work-group of 128 (the deflation kernel's width), in place and out of place.
+// Returns the number of wrong elements; the first few are reported.
+int check_joint_exclusive_scan(Queue& ctx, int n, const char* where) {
+    constexpr int kWg = 128;
+    constexpr int kBatch = 64;
+    constexpr int32_t kInit = 3;
+    UnifiedVector<int32_t> in(static_cast<size_t>(n) * kBatch), inplace(in.size()), sep(in.size());
+    for (size_t i = 0; i < in.size(); ++i) in[i] = static_cast<int32_t>((i * 7919u + 13u) % 11u) - 4;
+    for (size_t i = 0; i < in.size(); ++i) inplace[i] = in[i];
+    const int32_t* pin = in.data();
+    int32_t* pip = inplace.data();
+    int32_t* psep = sep.data();
+    ctx->parallel_for(sycl::nd_range<1>(kBatch * kWg, kWg), [=](sycl::nd_item<1> it) {
+        const auto g = it.get_group();
+        const size_t off = g.get_group_linear_id() * static_cast<size_t>(n);
+        batchlas::portable::joint_exclusive_scan(g, pip + off, pip + off + n, pip + off, kInit, sycl::plus<int32_t>());
+        batchlas::portable::joint_exclusive_scan(g, pin + off, pin + off + n, psep + off, kInit, sycl::plus<int32_t>());
+    });
+    ctx.wait_and_throw();
+    int bad = 0;
+    for (int b = 0; b < kBatch; ++b) {
+        int32_t acc = kInit;
+        for (int i = 0; i < n; ++i) {
+            const size_t k = static_cast<size_t>(b) * n + i;
+            if (bad < 4) {
+                EXPECT_EQ(inplace[k], acc) << where << " in place, n=" << n << " group " << b << " index " << i;
+                EXPECT_EQ(sep[k], acc) << where << " out of place, n=" << n << " group " << b << " index " << i;
+            }
+            bad += (inplace[k] != acc) + (sep[k] != acc);
+            acc += in[k];
+        }
+    }
+    return bad;
+}
+
+void check_joint_exclusive_scan_on(Queue& ctx, const char* where) {
+    for (int n : {1, 2, 3, 127, 128, 129, 130, 131, 255, 256, 257, 258, 640, 1025}) {
+        check_joint_exclusive_scan(ctx, n, where);
+    }
+}
+
+} // namespace
+
+// The deflation kernel scans keep/exclude flags IN PLACE over n > its work-group width. AdaptiveCpp
+// 25.10's own joint_exclusive_scan writes result[i + 1] in the chunk that reads first[i], so every
+// later chunk's first input is overwritten before it is read (stedc lost eigenvalues for merges of
+// size > 129), and with two elements it drops `init`. batchlas::portable's version must do neither.
+TEST(StedcDeflationScan, PortableJointExclusiveScanInPlaceAcrossChunks) {
+    Queue gpu(Device::default_device());
+    check_joint_exclusive_scan_on(gpu, "default device");
+#if BATCHLAS_HAS_CPU_TARGET
+    std::unique_ptr<Queue> cpu;
+    try {
+        cpu = std::make_unique<Queue>(Device("cpu"));
+    } catch (const std::exception& e) {
+        std::cout << "[ INFO ] cpu leg not run: " << e.what() << std::endl;
+        return;
+    }
+    check_joint_exclusive_scan_on(*cpu, "cpu device");
+#endif
 }
 
 template <typename T, Backend B>

@@ -58,7 +58,9 @@ lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
 # Verified 2026-09-09 (also on the WP0 and WP1 trees).
 # Extreme-magnitude convergence: the n=32 stress case does not converge on
 # inputs spanning the far ends of the exponent range. Both instantiations are
-# the NETLIB (Backend 6) ones -- index 0 float, index 1 double.
+# the NETLIB (Backend 6) ones -- index 0 float, index 1 double. Located
+# 2026-10-09: steqr_wg (taken when the device has no sub-group size 32) fails
+# the mixed-scale case-3 input on every device, DPC++ CUDA included.
 steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32
 steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
 

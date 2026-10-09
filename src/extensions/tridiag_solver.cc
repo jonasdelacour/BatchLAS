@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include "../math-helpers.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -46,7 +47,7 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     for (int i = tix; i < n; i += bdim){
         local_max = std::max(local_max, std::abs(D[i]) + 2*std::abs(L[i]));
     }
-    T max_norm = sycl::reduce_over_group(cta, local_max, sycl::maximum<T>());
+    T max_norm = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<T>());
     (void)max_norm;
     T numerical_zero = 10*std::numeric_limits<T>::epsilon();
     T d_n, l_n, l_nm1;

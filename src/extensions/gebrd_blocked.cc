@@ -2,6 +2,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
+#include <batchlas/util/group-collectives.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -183,7 +184,7 @@ Event gebrd_blocked_real(Queue& ctx,
                         const T ari = A(r, gi, b);
                         sigma_partial += ari * ari;
                     }
-                    const Real sigma = sycl::reduce_over_group(g, sigma_partial, sycl::plus<Real>());
+                    const Real sigma = batchlas::portable::reduce_over_group(g, sigma_partial, sycl::plus<Real>());
 
                     T alpha = T(0);
                     if (lid == 0) {
@@ -231,8 +232,8 @@ Event gebrd_blocked_real(Queue& ctx,
                             sum_a_partial += A(r, gk, b) * argi;
                             sum_x_partial += X(r, k, b) * argi;
                         }
-                        const T sum_a = sycl::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
-                        const T sum_x = sycl::reduce_over_group(g, sum_x_partial, sycl::plus<T>());
+                        const T sum_a = batchlas::portable::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
+                        const T sum_x = batchlas::portable::reduce_over_group(g, sum_x_partial, sycl::plus<T>());
                         if (lid == 0) {
                             work_local[k] = sum_a;
                             work_local[nb + k] = sum_x;
@@ -270,7 +271,7 @@ Event gebrd_blocked_real(Queue& ctx,
                         const T aic = A(gi, c, b);
                         sigma_r_partial += aic * aic;
                     }
-                    const Real sigma_r = sycl::reduce_over_group(g, sigma_r_partial, sycl::plus<Real>());
+                    const Real sigma_r = batchlas::portable::reduce_over_group(g, sigma_r_partial, sycl::plus<Real>());
 
                     T alpha_r = T(0);
                     if (lid == 0) {
@@ -307,7 +308,7 @@ Event gebrd_blocked_real(Queue& ctx,
                         for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
                             sum_y_partial += Y(c, k, b) * A(gi, c, b);
                         }
-                        const T sum_y = sycl::reduce_over_group(g, sum_y_partial, sycl::plus<T>());
+                        const T sum_y = batchlas::portable::reduce_over_group(g, sum_y_partial, sycl::plus<T>());
                         if (lid == 0) {
                             work_local[k] = sum_y;
                         }
@@ -317,7 +318,7 @@ Event gebrd_blocked_real(Queue& ctx,
                         for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
                             sum_a_partial += A(j0 + k, c, b) * A(gi, c, b);
                         }
-                        const T sum_a = sycl::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
+                        const T sum_a = batchlas::portable::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
                         if (lid == 0) {
                             work_local[nb + k] = sum_a;
                         }

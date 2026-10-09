@@ -16,6 +16,7 @@
 #include "test_utils.hh"
 
 #include "../src/extensions/gesvd_native.hh"
+#include "../src/util/resident_capacity.hh"
 #include "../src/ops/gesvd/choice.hh"
 
 #include <algorithm>
@@ -229,6 +230,9 @@ std::optional<Uplo> uplo_of(char h) {
     return std::nullopt;
 }
 
+// The device's resident::device_slm_budget (set by the fixture): gesvdj_cta's cap reads it.
+std::size_t g_slm_budget = 0;
+
 template <typename Config>
 class GesvdCandidates : public test_utils::BatchLASTest<Config> {
 protected:
@@ -244,6 +248,7 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
+        g_slm_budget = resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
     }
 
     // ---- the limit oracle: the drivers' own ceilings and checks, not gesvd.cc's can_run ----
@@ -255,7 +260,7 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         const int md = std::max(s.m, s.n);
         if (std::holds_alternative<gs::Jacobi>(c))
-            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s));
+            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
         if (std::holds_alternative<gs::Cta>(c))
             return md <= sycl_gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
         if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' ? kReal : (s.m == s.n && s.herm == 'L');
@@ -696,8 +701,13 @@ TYPED_TEST(GesvdCandidates, PinPrecedence) {
 TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    constexpr bool kCd = std::is_same_v<T, std::complex<double>>;
     const char* none = TestFixture::kVendor ? "vendor" : "<none>";
+    // Complex general above 32 has jacobi only, within its local memory cap (at 99 KiB: all but
+    // complex<double> with vectors; at acpp's 48 KiB also complex<float> with vectors).
+    auto jacobi_or_none = [&](const Spec& s) {
+        const bool fits = std::max(s.m, s.n) <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(s), g_slm_budget);
+        return fits ? "jacobi" : none;
+    };
     struct Row { Spec s; const char* expect; };
     std::vector<Row> rows;
     for (const auto& jobs : kJobs) rows.push_back({{32, 32, 2, 'N', jobs[0], jobs[1]}, "jacobi"});
@@ -705,9 +715,9 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
     rows.push_back({{30, 30, 2, 'U'}, "cta"});
     rows.push_back({{33, 33, 2, 'L'}, "blocked"});
     rows.push_back({{32, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, "jacobi"});
-    rows.push_back({{40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, TestFixture::kReal ? "blocked" : (kCd ? none : "jacobi")});
-    rows.push_back({{64, 64, 2, 'N'}, TestFixture::kReal ? "blocked" : (kCd ? none : "jacobi")});
-    rows.push_back({{48, 48, 2, 'N', SvdVectors::None, SvdVectors::None}, TestFixture::kReal ? "blocked" : "jacobi"});
+    for (const Spec s : {Spec{40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, Spec{64, 64, 2, 'N'},
+                         Spec{48, 48, 2, 'N', SvdVectors::None, SvdVectors::None}})
+        rows.push_back({s, TestFixture::kReal ? "blocked" : jacobi_or_none(s)});
     rows.push_back({{70, 50, 2, 'N'}, TestFixture::kReal ? "blocked" : none});
     for (const Row& r : rows) {
         auto p = make_svd<T>(r.s);
@@ -730,8 +740,10 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
         if (std::string(r.expect) != "vendor") expect_solved(p, "auto " + label(r.s));
     }
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
-    auto big = make_svd<T>(Spec{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None});
-    EXPECT_TRUE(this->pin_accepted(C{gs::Jacobi{}}, big));
+    const Spec big_s{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None};
+    auto big = make_svd<T>(big_s);
+    EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), std::string(jacobi_or_none(big_s)) == "jacobi");
+    if (!test_utils::kSlmCappedAt48KiB) EXPECT_STREQ(jacobi_or_none(big_s), "jacobi");
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with herm,

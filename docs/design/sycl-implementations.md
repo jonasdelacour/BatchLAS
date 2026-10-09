@@ -74,17 +74,17 @@ The DPC++ PTX-call gate (`device_calls_tests`) stays green, and the DPC++ route 
 
 | # | Symptom on acpp (probe) | Cause | Plan |
 | --- | --- | --- | --- |
-| R1 | 17 binaries: `ptxas fatal: Unresolved extern function '__mulsc3'/'__muldc3'` | `std::complex` `*` lowers to Annex G libcalls; SSCP ships no device definition | Ship device definitions of `__mulsc3`/`__muldc3`/`__divsc3`/`__divdc3` for the acpp build, so both builds keep identical Annex G semantics. `-fcx-limited-range` cleared all 17, but changes NaN/Inf results and would make the A/B unequal. Keep it only as a measured variant. |
-| R2 | gemm, trmm/symm/syrk candidates, herk: launch fails, CUDA error 1 | acpp reports `local_mem_size` = 48 KiB and never calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` | Every `can_run` that admits more than 48 KiB must read the device SLM budget (`select::describe`'s `slm_budget`), not a constant. Then the acpp build routes around large-SLM families instead of crashing. Separately, ask upstream for the opt-in (patch the CUDA backend's launch). |
-| R3 | One bad launch kills the whole gtest binary | acpp's default async handler calls `std::terminate` | Install an async handler on `QueueImpl` that rethrows on `wait_and_throw` (both builds). |
+| R1 | 17 binaries: `ptxas fatal: Unresolved extern function '__mulsc3'/'__muldc3'` | `std::complex` `*` lowers to Annex G libcalls; SSCP ships no device definition | Ship device definitions of `__mulsc3`/`__muldc3`/`__divsc3`/`__divdc3` for the acpp build, so both builds keep identical Annex G semantics. `-fcx-limited-range` cleared all 17, but changes NaN/Inf results and would make the A/B unequal. Keep it only as a measured variant. Done: `src/sycl/annexg_complex.hh`, force-included; an acpp install ships it as `include/batchlas/acpp/annexg_complex.hh` and appends `-include` for it to `BatchLAS_SYCL_COMPILE_OPTIONS`. |
+| R2 | gemm, trmm/symm/syrk candidates, herk: launch fails, CUDA error 1 | acpp reports `local_mem_size` = 48 KiB and never calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` | Every `can_run` that admits more than 48 KiB must read the device SLM budget (`select::describe`'s `slm_budget`), not a constant. Then the acpp build routes around large-SLM families instead of crashing. Separately, ask upstream for the opt-in (patch the CUDA backend's launch). Done: §5.4. |
+| R3 | One bad launch kills the whole gtest binary | acpp's default async handler calls `std::terminate` | Install an async handler on `QueueImpl` that rethrows on `wait_and_throw` (both builds). Done, and on acpp reworked so that no destructor throws: §5.5. |
 | R4 | `cuda_compute_capability()` is 0, so the table key `sm_120` becomes `gpu` (borrowed correctly by luck) | acpp's `info::device::version` is `"sm_120"`, not `"12.0"` | Parse both forms, or ask CUDA directly (`cuDeviceGetAttribute` on the native device ordinal). |
 | R5 | Hangs: `SgPartitionDivergence/0.MaskedSG32`, bdsdc, syev_cta, syev_blocked, syev_two_stage, gesvd, sytrd_blocked | Generic SSCP is single-pass, so `__SYCL_DEVICE_ONLY__ && __NVPTX__` is never true and `sg_partition` drops to the unmasked `GenericBackend`, which deadlocks under divergence | §5.3: an SSCP backend for `sg_partition`. |
 | R6 | Out-of-order queues segfault (ormqr/orgqr candidates, symm) | probe shim took the stream from the in-order executor | §5.2: vendor calls go through `AdaptiveCpp_enqueue_custom_operation`. |
 | R7 | `Queue::native_handle()` returns null | guarded by `SYCL_EXT_ONEAPI_BACKEND_CUDA` | §5.2 |
 | R8 | `select_tests` hangs in a death test | `fork()` after the acpp runtime started its threads | Use `GTEST_FLAG(death_test_style)="threadsafe"`, or skip death tests on acpp. |
-| R9 | Wrong answers: cdouble potrf/getrf CTA, orgqr orthogonality 5.8e-6 vs 3.8e-6, norm, cond, lanczos, syr2k_candidates, geqrf | not attributed: some fail on DPC++ on this box too, and there was no same-box DPC++ baseline | Attribute only after R1-R8, against a same-box DPC++ run, comparing failing names. |
+| R9 | Wrong answers: cdouble potrf/getrf CTA, orgqr orthogonality 5.8e-6 vs 3.8e-6, norm, cond, lanczos, syr2k_candidates, geqrf | not attributed: some fail on DPC++ on this box too, and there was no same-box DPC++ baseline | Attributed (P3): acpp group-algorithm bugs (§5.6), the 48 KiB budget (§5.4), and two BatchLAS bugs on both builds (§5.6). Residue in `tests/known-failures-acpp.txt`. |
 | R10 | Silent: `BATCHLAS_LAUNCH_BOUNDS` empty; the `register_128x128` PTX prefetch path is compiled out; `reqd_sub_group_size` ignored | single-pass SSCP has no NVPTX device pass | §5.3 for the prefetch. No min-blocks-per-SM equivalent exists: the JIT emits `maxntid` from the launch size but no `minnctapersm`. Accept it, measure the loss (§7), and record it as an implementation difference, not a bug. |
-| R11 | Floating point: acpp rounds `sqrt` and division correctly and uses `-ffp-contract=fast`; DPC++ here is `-ffp-model=precise` | different defaults | Match explicitly in both trees and record the flags in benchviz provenance. Any accuracy delta must survive matched flags. |
+| R11 | Floating point: only contraction differed. Both use `sqrt.approx.f32`/`rsqrt.approx.f32` (bit-identical on 4M floats) and `div.rn`, no FTZ; the acpp driver adds `-ffp-contract=fast` at -O2+, DPC++ (clang) uses `on` | different driver defaults | Done: `-ffp-contract=on` in `BatchLASSyclAcpp.cmake`. Upstream: acpp's `nvvm-reflect-prec-sqrt` flag (`LLVMToPtx.cpp:86,163`) is ignored by LLVM 20's NVVMReflect, so precise sqrt is unreachable; harmless here because it matches DPC++'s default. |
 
 ## 5. Design
 
@@ -160,11 +160,127 @@ kernel level. Nothing outside it names an implementation. It provides:
   `src/sycl/kernel_attrs.hh`, so that the 26 files using `reqd_sub_group_size` spell a macro.
   The acpp build defines it empty and asserts sub-group size 32 at queue creation.
 
+### 5.4 Local memory: the launch budget {#sycl-impl-slm-budget}
+
+| | DPC++ (CUDA) | acpp 25.10 (CUDA) | acpp + `BATCHLAS_ACPP_SLM_OPTIN` |
+| --- | --- | --- | --- |
+| `info::device::local_mem_size` | 101,376 B (the opt-in maximum) | 49,152 B | 49,152 B |
+| Launches above 48 KiB | opted in by the runtime | fail, `CU:1` | opted in by the interposer |
+| Budget (`impl::local_mem_bytes` less the 4 KiB reserve) | 97,280 B | 45,056 B | 97,280 B |
+
+- **One seam.** `impl::local_mem_bytes` (`src/sycl/local_mem.hh`) is the only reader of
+  `local_mem_size`; `DeviceProperty::LOCAL_MEM_SIZE` and `select::Device::slm_budget` go through it.
+  On DPC++ it is exactly `get_info<local_mem_size>()`.
+- **Every `can_run` that can exceed 48 KiB reads the budget.** Before this, four did not:
+
+  | Family | Largest launch | Term |
+  | --- | --- | --- |
+  | gemm `reg:m=128:n=64:k=32` (u=4, u=2) | 49,920 B | `RegCfg::slm_bytes()` in `can_run`; `gemm_reg` refuses too |
+  | herk on the gram tile (`BATCHLAS_SYRK_ROUTE=gram`) | 65,536 B (cdouble, n = 128) | `gram_slm_bytes` before the opt-in is honoured |
+  | gesvd `jacobi` / `gesvdj_cta`, C = 64 | 71,752 B (double), 71,488 B (cfloat) | `gesvd_jacobi_max_dim(vectors, budget)` |
+  | `syev_cta_fused` with an explicit multiplier | 54,272 B (cdouble, n = 16, x4) | multiplier clamp, below |
+
+  At 97,280 B every term admits what it admitted before, so DPC++ routes do not move.
+- **The CTA multiplier clamp was wrong on both implementations.** `syev_cta_fused`,
+  `syev_jacobi_cta`, `sytrd_cta`, `ormqr_cta` and `gebrd_cta` clamped the work-group multiplier
+  by a problem count, but one multiplier step is lcm(P, 32) lanes, 32/P problems. For P < 32 the
+  clamp admitted up to 32/P times the bytes. On DPC++ at 9f551ab0, `syev_cta_fused_benchmark`
+  double n = 16 multiplier 21 and cdouble n = 16 multiplier 8 abort with "Excessive allocation of
+  local memory". Now `resident::cta_fit_wg_multiplier` counts whole steps, and the kernels throw
+  `unsupported` when one step does not fit. The result is unchanged wherever the old clamp fitted.
+- **Tests.** Capacities derive from the device budget. A test whose premise is the 99 KiB opt-in
+  skips on `test_utils::kSlmCappedAt48KiB` (acpp without the option) and asserts unchanged
+  everywhere else. That covers CTA orders >= 32/34 for cdouble potrf/getrf, the geqrf 48 KiB launch
+  hole, and the shipped sm_120 potrf rows.
+- **The opt-in variant.** `-DBATCHLAS_ACPP_SLM_OPTIN=ON` (acpp only) builds
+  `libbatchlas_acpp_slm_optin.so`, DT_NEEDED by every component. It defines `cuLaunchKernel`,
+  calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` once per function above 48 KiB, and
+  reports `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`. It is a recorded A/B variant,
+  not the default.
+- **Upstream (v25.10.0).** `src/runtime/cuda/cuda_queue.cpp:187-201` launches without the
+  attribute. `src/runtime/cuda/cuda_hardware_manager.cpp:418-419` reports `sharedMemPerBlock`, not
+  `sharedMemPerBlockOptin`. The host device reports `SIZE_MAX`
+  (`src/runtime/omp/omp_hardware_manager.cpp:280-281`), so `describe` clamps the budget to
+  `int64_t`.
+
+### 5.5 Asynchronous errors and launch failures {#sycl-impl-asynchronous-errors}
+
+| | DPC++ | acpp 25.10 |
+| --- | --- | --- |
+| Failed launch (grid over 65,535 in y/z, unservable local memory) | `sycl::exception` from the submit | registered in ONE process-wide error list; the submit returns |
+| `queue::wait()` after a device fault | reports nothing to the handler | registers the fault in the same list |
+| `~queue()` | no handler call | `throw_asynchronous()` over the whole list, through that queue's handler |
+| Empty `nd_range` | no-op | launched as a 0-block grid, `CU:1` |
+
+A rethrowing handler (P2) therefore turned any unconsumed launch error into `std::terminate` from
+the next `sycl::queue` destructor, any copy included: 11 test binaries aborted this way.
+
+- **Handler (acpp).** `impl::on_async_errors` parks errors in a leaked process-wide sink;
+  `impl::throw_async_errors(q)` collects and rethrows the first, dropping the rest as DPC++'s
+  rethrowing handler does. No handler throws, so no destructor terminates. DPC++ keeps the
+  rethrowing handler.
+- **Where acpp errors surface.** `QueueImpl::submit_and_record` and `submit_untraced` call
+  `impl::throw_launch_errors` after the submit (acpp launches inside `submit`), so a failed launch
+  throws from the launching call as on DPC++. `Queue::wait()`, `Queue::wait_and_throw()` and
+  `impl::wait_and_throw(event, q)` throw what a wait registered. Destructors only park.
+- **Grid limit (acpp).** `impl::check_group_count` refuses an `nd_range` over the CUDA grid limit
+  before the launch, with DPC++'s `errc::nd_range` message ("Number of work-groups exceed limit
+  ..."). It runs in `QueueImpl::parallel_for(nd_range)` and in the five tile launchers that submit
+  through a command group (`syrk_gram_tiles`, `syrk_triangular_tiles`, `syr2k_triangular_tiles`,
+  `trmm_triangular_tiles`, `expand_mirrored`). On DPC++ it is empty.
+- **Empty batches.** `syev_cta`, `syev_cta_fused` and `syev_jacobi_cta` return after argument
+  checks when batch = 0 (both builds; the result is identical on DPC++).
+- **Vendor calls in the trace.** `impl::run_native` submits through `QueueImpl::submit_untraced`:
+  the custom operation updates the last event but is not a kernel-trace record, matching DPC++,
+  where vendor work never appears in `BATCHLAS_KERNEL_TRACE`.
+- **Tests.** `util_device_queue_tests` `QueueAsyncErrors.*`: an over-limit grid, 1 MiB of local
+  memory, and an error collected by a queue copy's destructor. Each throws a `sycl::exception` at
+  the launch or the next wait, and the queue then runs a kernel. Three deliberate breaks each turn
+  exactly one case red: no post-submit check, no drain in `Queue::wait`, a rethrowing handler
+  (that one aborts).
+- **Upstream (v25.10.0).**
+  - `include/hipSYCL/sycl/queue.hpp:288-290`: `~queue` calls `throw_asynchronous()`.
+  - `include/hipSYCL/glue/error.hpp:145`: the list it drains is the global `rt::application::errors()`.
+  - `queue.hpp:371-374`: `wait()` registers a stream error instead of throwing it.
+  - `include/hipSYCL/sycl/handler.hpp:379`: the `nd_range` `parallel_for` has no empty-range
+    guard. The `range` overloads at `:300, :320, :341, :362` have one.
+  - `include/hipSYCL/sycl/event.hpp:36-40`: the constructor drops its `handler` argument, so
+    `event::wait_and_throw()` (`:90-93`) calls an empty `std::function` (`std::bad_function_call`)
+    when an error is pending.
+
+### 5.6 Group algorithms: the portable wrappers {#sycl-impl-group-algorithms}
+
+`include/batchlas/util/group-collectives.hh` (`batchlas::portable::`). Under DPC++ every name is a
+using-declaration of the `sycl::` function, so the converted call sites compile to md5-identical
+objects. Under acpp they replace four broken `sycl::` group algorithms:
+
+| acpp 25.10 defect (SSCP) | Effect in BatchLAS | `portable::` replacement |
+| --- | --- | --- |
+| Work-group `reduce_over_group` of a float/double rounds the result to ~16/~42 mantissa bits: the final broadcast bit-casts it to an integer and stores that into the FLOAT scratch (`sscp/builtins/detail/reduction.hpp:101-103`, `detail/broadcast.hpp:29`). Sub-group and integer reduces are exact. | norm, geqrf/orgqr (~300 eps at m >= 32), ortho, symv, sytrd_blocked, steqr, syevx; bdsdc's `best == best_all` never matched, zeroing a vector | sub-group reduce, then a typed 32-slot local scratch across sub-groups (`detail::wg_reduce_floating`); `sycl::vec` component-wise |
+| `joint_reduce(maximum)` pads idle items with `numeric_limits<T>::min()`, the smallest positive value (`sscp/group_functions.hpp:347`) | wrong maximum of an all-negative range | starts from `sycl::known_identity_v` |
+| In-place `joint_exclusive_scan` writes `result[i + 1]` in the chunk that reads `first[i]` (`group_functions.hpp:968-992`); with one element it drops `init` (`:745-748`) | stedc deflation lost an eigenvalue for every merge larger than 129; through bdsdc, gesvd blocked | chunked scan carrying the running total; reads and writes index i in one chunk |
+| Host `joint_reduce` without `init` on a `const T*` does not compile (`libkernel/host/group_functions.hpp:290`) | — | overload without `init`, keeping SYCL's item-to-element mapping (stedc fills its scratch per item with no barrier before the call) |
+
+Every floating `reduce_over_group`/`joint_reduce`/`joint_exclusive_scan` in `src/` goes through
+`portable::`. Guards: `DeviceBlasTest.PortableGroupReductionsAreExact` and
+`StedcDeflationScan.PortableJointExclusiveScanInPlaceAcrossChunks` (GPU and CPU device; each
+deliberate break, i.e. acpp's own call, turns exactly that test red).
+
+Two BatchLAS bugs found on the way, fixed for both builds:
+
+- **`Queue::get_event()` missed USM copies.** `QueueImpl` recorded `submit`/`parallel_for` only, so
+  after a trailing `memcpy`/`memset`/`fill` a caller's wait returned early (syev_blocked NETLIB
+  segfaulted on DPC++ and acpp). The four operations are now recorded
+  (`QueueTest.GetEventCoversUsmMemcpyMemsetAndFill`).
+- **cuSOLVER `potrf` workspace.** `Lwork` is a count of elements; it was allocated as bytes, a
+  workspace `sizeof(T)` times too small (`CUSOLVER error: 7`, cfloat n = 164, cdouble n = 78).
+
 ## 6. Correctness A/B
 
-- Each implementation has its own failure ledger: `tests/known-failures.txt` (DPC++, unchanged)
-  and `tests/known-failures-acpp.txt`. CI and `scripts/ctest_gpus.sh` select the ledger from
-  `BATCHLAS_SYCL_IMPL`. Compare failing **names**, as for DPC++.
+- Each implementation has its own self-contained failure ledger: `tests/known-failures.txt`
+  (DPC++) and `tests/known-failures-acpp.txt`; defects shared by both are listed in both.
+  `.github/ci/compare_failures.py` picks the ledger with `--sycl-impl` or `--build-dir <tree>`
+  (the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). Compare failing **names**, as for DPC++.
 - **Gate for "acpp supported":** the acpp tree's failing set is a subset of the DPC++ failing set
   on the same box, plus entries in the acpp ledger, each with a cause from §4.
 - **Cross-implementation accuracy:** the accuracy harnesses (`steqr_accuracy`,

@@ -202,4 +202,11 @@ target_compile_options(batchlas_sycl_options INTERFACE
 target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-include${BATCHLAS_ACPP_ANNEXG_HEADER}>>")
 
+# The acpp driver adds -ffp-contract=fast at -O2 and above (fusing across statements); DPC++ fuses
+# only within one expression. Spelling it out keeps both rounding the same way (design page, R11).
+target_compile_options(batchlas_sycl_options INTERFACE
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>>")
+target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>>")
+
 message(STATUS "Using AdaptiveCpp for SYCL: ${CMAKE_CXX_COMPILER}")

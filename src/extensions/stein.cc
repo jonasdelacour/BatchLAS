@@ -7,6 +7,7 @@
 // evidence: docs/design/syevx.md#syevx-for-batches-of-medium-matrices
 
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -171,7 +172,7 @@ Event stein(Queue& ctx,
                     const T right = (i < n - 1) ? sycl::fabs(e(i, bid)) : T(0);
                     norm_partial = sycl::max(norm_partial, sycl::fabs(d(i, bid)) + left + right);
                 }
-                const T tnorm_g = sycl::reduce_over_group(cta, norm_partial, sycl::maximum<T>());
+                const T tnorm_g = batchlas::portable::reduce_over_group(cta, norm_partial, sycl::maximum<T>());
                 if (tid == 0) norm_local[0] = tnorm_g;
                 sycl::group_barrier(cta);
                 const T tnorm = sycl::max(norm_local[0], std::numeric_limits<T>::min());
@@ -284,7 +285,7 @@ Event stein(Queue& ctx,
                     norm_partial = sycl::max(norm_partial, sycl::fabs(d(i, bid)) + left + right);
                 }
                 const T tnorm = sycl::max(
-                    sycl::reduce_over_group(cta, norm_partial, sycl::maximum<T>()),
+                    batchlas::portable::reduce_over_group(cta, norm_partial, sycl::maximum<T>()),
                     std::numeric_limits<T>::min());
                 const T gap_tol = ortho_threshold * tnorm;
 
@@ -306,7 +307,7 @@ Event stein(Queue& ctx,
                         for (int64_t r = tid; r < n; r += local_size) {
                             dot_partial += Zv(r, i, bid) * Zv(r, j, bid);
                         }
-                        const T dot = sycl::reduce_over_group(cta, dot_partial, sycl::plus<T>());
+                        const T dot = batchlas::portable::reduce_over_group(cta, dot_partial, sycl::plus<T>());
                         for (int64_t r = tid; r < n; r += local_size) {
                             Zv(r, j, bid) -= dot * Zv(r, i, bid);
                         }
@@ -319,7 +320,7 @@ Event stein(Queue& ctx,
                             const T v = Zv(r, j, bid);
                             nrm_partial += v * v;
                         }
-                        const T nrm2 = sycl::reduce_over_group(cta, nrm_partial, sycl::plus<T>());
+                        const T nrm2 = batchlas::portable::reduce_over_group(cta, nrm_partial, sycl::plus<T>());
                         if (tid == 0) scratch[0] = sycl::sqrt(nrm2);
                         sycl::group_barrier(cta);
                         const T nrm = scratch[0];

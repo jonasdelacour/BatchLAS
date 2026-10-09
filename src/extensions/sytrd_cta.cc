@@ -10,6 +10,7 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/local_mem.hh"
 #include "../sort.hh"
 #include <complex>
 #include <numeric>
@@ -69,14 +70,13 @@ namespace batchlas {
             //   A_local: P*P, V_local: P, W_local: P
             // and probs_per_wg = wg_size / P.
             {
-                const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
+                const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
                 const std::size_t elems_per_prob = static_cast<std::size_t>(P) * static_cast<std::size_t>(P)
                                                  + static_cast<std::size_t>(2) * static_cast<std::size_t>(P);
                 const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
-                const int32_t max_probs = (bytes_per_prob == 0)
-                                              ? int32_t(1)
-                                              : std::max<int32_t>(int32_t(1), static_cast<int32_t>(local_mem_bytes / bytes_per_prob));
-                wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
+                wg_size_multiplier = impl::cta_wg_multiplier("sytrd_cta", wg_size_multiplier,
+                                                             base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
+                                                             local_mem_bytes);
                 wg_size = base_wg_size * wg_size_multiplier;
             }
 

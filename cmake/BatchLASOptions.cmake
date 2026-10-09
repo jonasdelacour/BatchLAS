@@ -38,11 +38,20 @@ elseif(_batchlas_sycl_impl STREQUAL "ACPP" AND NOT _batchlas_cxx_is_acpp)
 elseif(_batchlas_sycl_impl STREQUAL "DPCPP" AND _batchlas_cxx_is_acpp)
     message(FATAL_ERROR "BATCHLAS_SYCL_IMPL=DPCPP but ${CMAKE_CXX_COMPILER} is the AdaptiveCpp driver")
 endif()
-set(BATCHLAS_SYCL_IMPL_RESOLVED "${_batchlas_sycl_impl}")
+# Cached so tools can read it off the tree: compare_failures.py --build-dir picks the ledger by it.
+set(BATCHLAS_SYCL_IMPL_RESOLVED "${_batchlas_sycl_impl}" CACHE INTERNAL "Resolved BATCHLAS_SYCL_IMPL")
 set(BATCHLAS_SYCL_IMPL_DPCPP OFF)
 set(BATCHLAS_SYCL_IMPL_ACPP OFF)
 set(BATCHLAS_SYCL_IMPL_${_batchlas_sycl_impl} ON)
 message(STATUS "SYCL implementation: ${BATCHLAS_SYCL_IMPL_RESOLVED} (BATCHLAS_SYCL_IMPL=${BATCHLAS_SYCL_IMPL})")
+
+# acpp + CUDA launches at most 48 KiB of local memory per work-group. ON builds a cuLaunchKernel
+# interposer that opts kernels in (src/sycl/acpp_slm_optin.cc) and budgets the opt-in maximum:
+# a recorded A/B variant, not the default. evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
+option(BATCHLAS_ACPP_SLM_OPTIN "AdaptiveCpp + CUDA: opt launches into >48 KiB local memory (interposer)" OFF)
+if(BATCHLAS_ACPP_SLM_OPTIN AND NOT BATCHLAS_SYCL_IMPL_ACPP)
+    message(FATAL_ERROR "BATCHLAS_ACPP_SLM_OPTIN needs BATCHLAS_SYCL_IMPL=ACPP (DPC++ opts in by itself)")
+endif()
 
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on

@@ -31,6 +31,8 @@
 #include "test_utils.hh"
 
 #include "../src/ops/gesvd/choice.hh"
+#include "../src/extensions/gesvd_native.hh"
+#include "../src/util/resident_capacity.hh"
 
 using namespace batchlas;
 
@@ -122,10 +124,16 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    // Mirrors sycl_gesvd::gesvd_jacobi_max_dim: complex<double> with vectors does not fit
-    // local memory at the C=64 rung on this device.
-    static constexpr int max_dim_with_vectors() {
-        return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
+    // sycl_gesvd::gesvd_jacobi_max_dim at this device's budget: at the 99 KiB opt-in only
+    // complex<double> with vectors misses the C=64 rung (gesvdj_cta_tests pins both budgets).
+    int max_dim_with_vectors() const {
+        const std::size_t budget =
+            resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+        const int cap = static_cast<int>(sycl_gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
+        if (!test_utils::kSlmCappedAt48KiB) {
+            EXPECT_EQ(cap, (std::is_same_v<Scalar, std::complex<double>> ? 32 : 64)) << "budget " << budget;
+        }
+        return cap;
     }
 };
 
@@ -1558,8 +1566,8 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
         GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
     } else {
-        if (TestFixture::max_dim_with_vectors() < 64) {
-            GTEST_SKIP() << "complex<double> with vectors is capped at 32 (local memory)";
+        if (this->max_dim_with_vectors() < 64) {
+            GTEST_SKIP() << "gesvdj_cta with vectors is capped below 64 here (local memory)";
         }
 
         struct Shape { int m; int n; };

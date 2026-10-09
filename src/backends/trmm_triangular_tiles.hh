@@ -95,6 +95,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                                 static_cast<size_t>(tiles_m * tiles_n),
                                 static_cast<size_t>(Threads));
 
+    impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> tile_a(sycl::range<1>(TileK * SA), h);
         sycl::local_accessor<T, 1> tile_b(sycl::range<1>(TileK * SB), h);

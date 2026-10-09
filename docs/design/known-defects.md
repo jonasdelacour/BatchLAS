@@ -26,7 +26,7 @@ closed and kept only for numbering.
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | open, worked around in `geqrf_blocked` |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
-| 13 | `src/backends/cublas.cc`, cuBLASLt | gemm worked around; gemv open |
+| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); gemm workaround redundant |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
@@ -202,14 +202,26 @@ wrote both triangles and was reachable only through those pins.
   `n == 1`, and `cublasZgemvStridedBatched`, segfaults inside `cublasLtZZZMatmul`. This happens only
   in a BatchLAS process. A standalone program with the same libraries does not crash. Seen on
   threadripper02 (cuBLAS 13.4.1, HPC SDK 26.5, 2026-10-04).
-- **Root cause:** unknown.
+- **Root cause:** the host `alpha`/`beta` handed to cuBLAS were 8-byte aligned (a
+  `std::complex<double>` parameter or closure member), and cuBLASLt loads them with a 16-byte
+  vector load. Fixed in 9f551ab0: every cuBLAS call copies them into `alignas(16)` locals inside
+  `impl::run_native` (`src/backends/cublas.cc`).
 - **Reached by:** `trsm` with `blocked` and one right-hand side. The parent build crashes on
   `trsm cdouble L/R order 64-384 q 1 batch 128` under Auto, and also in `getrf_tests`
   (`LuTest/7`) and `ortho_tests` (`OrthoMatrixTest/7`).
-- **Workaround (gemm):** `gemm_vendor_impl` in `src/backends/cublas.cc` calls
+- **Workaround (gemm), now redundant:** `gemm_vendor_impl` in `src/backends/cublas.cc` still calls
   `cublasZgemmStridedBatched` when `m` or `n` is 1. Guard:
-  `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`.
-- **Status:** gemm worked around. gemv open: `gemv_vendor` still crashes `ortho_tests`.
+  `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. With the branch disabled (DPC++,
+  threadripper02, sm_120, 2026-10-09), under `BATCHLAS_GEMM_ROUTE=vendor`:
+  - `TrsmNativeBlocked.*` (13), `getrf_tests LuTest/7.*` (46), `ortho_tests` (16) and
+    `gemm_tests */7.*` (28) pass;
+  - coverage shows complex<double> vendor gemm reached at m or n = 1;
+  - a direct call at m, n in {1, 64}, k in {64, 384}, batch 1 (`cublasGemmEx`) and 128
+    (`cublasGemmStridedBatchedEx`) matches a host reference to 2.3e-15.
+
+  The branch can be removed; it is kept until that change lands with its own route diff.
+- **Status:** fixed (gemm and gemv). The cuSPARSE spmm term attributed here
+  (`src/ops/spmm/spmm.cc:68`) was not re-measured.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 

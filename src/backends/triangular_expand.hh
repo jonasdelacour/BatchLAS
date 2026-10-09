@@ -156,6 +156,7 @@ Event expand_mirrored(Queue& ctx,
                                 static_cast<std::size_t>(tiles) * kMirrorTile);
     const sycl::range<3> local(1, kMirrorGroupCols, kMirrorTile);
 
+    impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& cgh) {
         // Padded by one column so the transposed read strides across all banks.
         auto tile = sycl::local_accessor<T, 1>(

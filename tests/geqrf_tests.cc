@@ -420,6 +420,9 @@ TYPED_TEST_SUITE(GeqrfTest, GeqrfTestTypes);
 // resident-leaf launch above it. evidence: docs/perf/qr.md#the-48-kib-launch-hole
 TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": no launch reaches the hole, so no tile above 48 KiB is admissible";
+    }
 
     // Byte sizes as element counts for THIS scalar type, as an m x n panel with
     // m >= n (can_run gate 2).
@@ -554,7 +557,8 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
 
     // Resident: a short matrix whose leading m x nb panel certainly fits.
     {
-        const int m = 96, n = std::min(64, 2 * w);
+        // 96 x nb complex<double> is 49,152 B: square instead where 48 KiB is the most a launch gets.
+        const int n = std::min(64, 2 * w), m = test_utils::kSlmCappedAt48KiB ? n : 96;
         ASSERT_EQ(this->leaf(m, n), 1u) << "the short shape did not take the resident leaf";
         auto p = make_problem<T>(m, n, 3, 777u);
         auto V = view_of(p);

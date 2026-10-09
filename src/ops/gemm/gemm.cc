@@ -111,7 +111,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
             const auto* cfg = std::find_if(reg_configs.begin(), reg_configs.end(), [&](const RegCfg& g) {
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
-            return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads();
+            return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+                   d.slm_budget >= cfg->slm_bytes();
         },
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),

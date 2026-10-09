@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../select/vendor.hh"
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
@@ -132,11 +133,11 @@ template <typename T>
 inline T reduce_sum_group(const sycl::group<1>& g, T x) {
     if constexpr (internal::is_complex<T>::value) {
         using R = typename T::value_type;
-        const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
+        const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
+        const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
         return T(re, im);
     } else {
-        return sycl::reduce_over_group(g, x, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
     }
 }
 
@@ -144,7 +145,7 @@ template <typename T>
 inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
                                                         typename base_type<T>::type x) {
     using R = typename base_type<T>::type;
-    return sycl::reduce_over_group(g, x, sycl::plus<R>());
+    return batchlas::portable::reduce_over_group(g, x, sycl::plus<R>());
 }
 
 // ---------------------------------------------------------------------------

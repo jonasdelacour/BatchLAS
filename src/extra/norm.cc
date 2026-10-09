@@ -1,5 +1,6 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <cstddef>
 #include <stdexcept>
 #include <type_traits>
@@ -121,7 +122,7 @@ namespace batchlas
                         auto row = j % rows;
                         temp += internal::norm_squared(data_span[col * ld + row]);
                     }
-                    result = sycl::sqrt(sycl::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
+                    result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
                     // Initialize local memory with zeros for column sums
                     if (local_idx < cols) {
@@ -141,7 +142,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
-                    result = sycl::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
+                    result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
                     // Initialize local memory with zeros for row sums
                     if (local_idx < rows) {
@@ -161,7 +162,7 @@ namespace batchlas
                     sycl::group_barrier(cta);
 
                     // Find the maximum row sum (the Inf norm)
-                    result = sycl::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
+                    result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Max) {
                     // Find the maximum absolute value in the matrix
                     for (int j = local_idx; j < rows * cols; j += local_size) {
@@ -169,7 +170,7 @@ namespace batchlas
                         auto row = j % cols;
                         temp = std::max(internal::abs(data_span[col * ld + row]), temp);
                     }
-                    result = sycl::reduce_over_group(cta, temp, sycl::maximum<float_t<T>>());
+                    result = batchlas::portable::reduce_over_group(cta, temp, sycl::maximum<float_t<T>>());
                 }
 
                 norms[batch_idx] = result;

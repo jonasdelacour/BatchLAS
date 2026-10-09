@@ -9,6 +9,7 @@
 // beyond the initial reduction for the Gershgorin bounds.
 
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -134,9 +135,9 @@ Event stebz(Queue& ctx,
                     e2_max_partial = sycl::max(e2_max_partial, right * right);
                 }
 
-                const T lo_all = sycl::reduce_over_group(cta, lo_partial, sycl::minimum<T>());
-                const T hi_all = sycl::reduce_over_group(cta, hi_partial, sycl::maximum<T>());
-                const T e2_max = sycl::reduce_over_group(cta, e2_max_partial, sycl::maximum<T>());
+                const T lo_all = batchlas::portable::reduce_over_group(cta, lo_partial, sycl::minimum<T>());
+                const T hi_all = batchlas::portable::reduce_over_group(cta, hi_partial, sycl::maximum<T>());
+                const T e2_max = batchlas::portable::reduce_over_group(cta, e2_max_partial, sycl::maximum<T>());
 
                 if (tid == 0) {
                     const T eps = std::numeric_limits<T>::epsilon();

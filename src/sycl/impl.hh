@@ -5,11 +5,14 @@
 #include <batchlas/backend_config.h>
 #include <sycl/sycl.hpp>
 
+#include "../util/internal-api.hh"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -95,7 +98,8 @@ auto query_stream(Q& q) {
 // Runs f(native stream) ordered in q. DPC++: inline on get_native's stream, exactly as the call
 // sites did. acpp: inside a custom operation, valid for in-order and out-of-order queues, and
 // finished (host side) when this returns. f is copied, so it captures by value; it must not
-// submit to q.
+// submit to q. Q is QueueImpl: submit_untraced keeps vendor work out of the kernel trace, as on
+// DPC++, while still recording the queue's last event.
 template <Native N, class Q, class F>
 void run_native(Q& q, F f) {
 #if BATCHLAS_SYCL_IMPL_ACPP
@@ -107,7 +111,7 @@ void run_native(Q& q, F f) {
     // Out-of-order: after all prior work, as a host call between submissions would be.
     std::vector<sycl::event> deps;
     if (!q.is_in_order()) deps = q.get_wait_list();
-    sycl::event e = q.submit([&](sycl::handler& h) {
+    sycl::event e = q.submit_untraced([&](sycl::handler& h) {
         h.depends_on(deps);
         h.AdaptiveCpp_enqueue_custom_operation([f, state](sycl::interop_handle& ih) {
             try {
@@ -181,17 +185,82 @@ std::size_t kernel_max_wg_size_all_devices(const sycl::context& ctx, const sycl:
 #endif
 }
 
-// Rethrows the first asynchronous error at queue::wait_and_throw / throw_asynchronous. Both
-// implementations' defaults call std::terminate.
-inline void rethrow_async_errors(sycl::exception_list errors) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+// acpp keeps asynchronous errors in ONE process-wide list (launch failures included), and every
+// ~queue reports it through that queue's handler: a throwing handler is std::terminate there.
+// So the handler parks them here and throw_async_errors() throws the first at a call site that
+// may throw. Leaked: a ~queue may run during static destruction.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-asynchronous-errors
+struct AsyncErrorSink {
+    std::mutex m;
+    std::vector<std::exception_ptr> errors;
+};
+inline BATCHLAS_INTERNAL_API AsyncErrorSink& async_error_sink() {
+    static auto* sink = new AsyncErrorSink;
+    return *sink;
+}
+
+inline void on_async_errors(sycl::exception_list errors) {
+    AsyncErrorSink& s = async_error_sink();
+    std::lock_guard<std::mutex> lock(s.m);
+    for (const std::exception_ptr& e : errors) s.errors.push_back(e);
+}
+
+// Collects the pending errors and rethrows the first; the rest are dropped, as DPC++'s
+// rethrowing handler drops them.
+inline void throw_async_errors(sycl::queue& q) {
+    q.throw_asynchronous();
+    std::exception_ptr first;
+    {
+        AsyncErrorSink& s = async_error_sink();
+        std::lock_guard<std::mutex> lock(s.m);
+        if (s.errors.empty()) return;
+        first = s.errors.front();
+        s.errors.clear();
+    }
+    std::rethrow_exception(first);
+}
+#else
+// Rethrows the first asynchronous error at queue::wait_and_throw / throw_asynchronous; the
+// default calls std::terminate.
+inline void on_async_errors(sycl::exception_list errors) {
     for (const std::exception_ptr& e : errors) std::rethrow_exception(e);
+}
+#endif
+
+// After every submission: acpp registers a failed launch (CU:1 for an over-limit grid or an
+// unservable SLM request) asynchronously; DPC++ throws it from the submit itself.
+inline void throw_launch_errors([[maybe_unused]] sycl::queue& q) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+    throw_async_errors(q);
+#endif
+}
+
+// Before an nd_range launch: the CUDA grid limit (x 2^31-1, y and z 65535; SYCL dimension d is
+// CUDA axis D-1-d). DPC++ checks it itself and throws errc::nd_range with this message; acpp
+// launches and gets CU:1.
+template <int D>
+inline void check_group_count([[maybe_unused]] const sycl::queue& q, [[maybe_unused]] const sycl::nd_range<D>& r) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+    if (!is_cuda(backend_of(q))) return;
+    for (int d = 0; d < D; ++d) {
+        const std::size_t local = r.get_local_range()[d];
+        const std::size_t groups = local == 0 ? 0 : r.get_global_range()[d] / local;
+        const std::size_t limit = d == D - 1 ? std::size_t{2147483647} : std::size_t{65535};
+        if (groups > limit) {
+            throw sycl::exception(sycl::make_error_code(sycl::errc::nd_range),
+                                  "Number of work-groups exceed limit for dimension " + std::to_string(d) + " : " +
+                                      std::to_string(groups) + " > " + std::to_string(limit));
+        }
+    }
+#endif
 }
 
 // event::wait_and_throw. acpp's event drops its handler and calls an empty std::function.
 inline void wait_and_throw(sycl::event& e, sycl::queue& q) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     e.wait();
-    q.throw_asynchronous();
+    throw_async_errors(q);
 #else
     (void)q;
     e.wait_and_throw();

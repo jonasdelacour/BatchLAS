@@ -4,6 +4,7 @@
 // playground/sb2st_hh_sequential.py.
 
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/mempool.hh>
@@ -19,6 +20,7 @@
 
 #include "sytrd_sb2st_hh.hh"
 #include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -70,11 +72,11 @@ template <typename Group, typename T>
 inline T group_sum(Group g, T v) {
     using R = typename base_type<T>::type;
     if constexpr (internal::is_complex<T>::value) {
-        const R re = sycl::reduce_over_group(g, static_cast<R>(v.real()), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, static_cast<R>(v.imag()), sycl::plus<R>());
+        const R re = batchlas::portable::reduce_over_group(g, static_cast<R>(v.real()), sycl::plus<R>());
+        const R im = batchlas::portable::reduce_over_group(g, static_cast<R>(v.imag()), sycl::plus<R>());
         return T(re, im);
     } else {
-        return sycl::reduce_over_group(g, v, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(g, v, sycl::plus<T>());
     }
 }
 
@@ -359,7 +361,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     for (int32_t k = lid + 1; k < m; k += kWg) {
                         partial += abs2(bget(r0 + k, col));
                     }
-                    const Real ss = sycl::reduce_over_group(wg, partial, sycl::plus<Real>());
+                    const Real ss = batchlas::portable::reduce_over_group(wg, partial, sycl::plus<Real>());
                     const Real xnorm = sycl::sqrt(ss);
                     const T alpha = bget(r0, col);
                     const auto res = internal::larfg<T>(alpha, xnorm, m);
@@ -739,7 +741,7 @@ Event unmqr_hb2st(Queue& ctx,
     const bool want_wave =
         !sb2st_wave_disabled(batchlas::settings().selection.sb2st_back_wave.get());
     if (want_wave) {
-        const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
+        const size_t lmem = impl::local_mem_bytes(ctx->get_device());
         const size_t per_col = static_cast<size_t>(n) * sizeof(T);
         const int32_t num_waves = static_cast<int32_t>(waves.size()) - 1;
 
@@ -804,7 +806,7 @@ Event unmqr_hb2st(Queue& ctx,
         // evidence: docs/perf/sytrd.md#sytrd-sb2st-back-transform-tile-width
         constexpr size_t kTargetLocalBytes = 8192;
         constexpr int kMaxTile = 4;
-        const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
+        const size_t lmem = impl::local_mem_bytes(ctx->get_device());
         const size_t per_col = static_cast<size_t>(n) * sizeof(T);
         int want = 1;
         while (want < kMaxTile && per_col * static_cast<size_t>(want * 2) <= kTargetLocalBytes) {

@@ -4,11 +4,13 @@
 
 #include <batchlas/settings.hh>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -219,8 +221,10 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) 
     d.is_gpu = is_gpu;
     d.has_sg32 = dev.supports_sub_group_size(32);
     d.has_vendor = has_vendor;
-    d.slm_budget = static_cast<std::int64_t>(resident::device_slm_budget(
-        static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))));
+    // acpp's host device reports SIZE_MAX ("unbounded"); a plain cast would make it negative.
+    d.slm_budget = static_cast<std::int64_t>(std::min<std::size_t>(
+        resident::device_slm_budget(static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))),
+        static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())));
     d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     std::lock_guard<std::mutex> lock(state_mutex());
     return memo->emplace(k, std::move(d)).first->second;

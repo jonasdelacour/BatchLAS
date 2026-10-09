@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -442,8 +443,8 @@ inline constexpr R jacobi_definiteness_floor() {
                             local_max = sycl::max(local_max, sycl::fabs(dr));
                             local_min = sycl::min(local_min, dr);
                         }
-                        const float_type dmax = sycl::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
-                        const float_type dmin = sycl::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
+                        const float_type dmax = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
+                        const float_type dmin = batchlas::portable::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
                         if (tid == 0) {
                             // Decided once per batch item, not per entry: a mixed-sign
                             // diagonal makes the whole operator indefinite, which no
@@ -860,7 +861,7 @@ inline constexpr R jacobi_definiteness_floor() {
                                 float_type acc = 0;
                                 for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
                                     acc += internal::norm_squared(col[i]);
-                                const float_type s = sycl::reduce_over_group(cta, acc, sycl::plus<float_type>());
+                                const float_type s = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
                                 if (tid == 0) colnorm[j] = sycl::sqrt(s);
                             }
                             sycl::group_barrier(cta);
@@ -1053,7 +1054,7 @@ inline constexpr R jacobi_definiteness_floor() {
                             partials[tid] = acc;
                             sycl::group_barrier(cta);
                             const float_type total =
-                                sycl::joint_reduce(cta, &partials[0], &partials[0] + partials.size(), sycl::plus<float_type>());
+                                batchlas::portable::joint_reduce(cta, &partials[0], &partials[0] + partials.size(), sycl::plus<float_type>());
                             const float_type sentinel = sycl::sqrt(total) + float_type(1);
                             for (size_t j = tid; j < nlock; j += local_size) {
                                 if (col_conv[bid * nlock + j] == 0) continue;

@@ -15,7 +15,10 @@
 #include "../src/select/vendor.hh"
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
+#include "../src/util/resident_capacity.hh"
+#include <algorithm>
 #include <complex>
+#include <cstdint>
 #include <utility>
 #include "test_utils.hh"
 
@@ -61,6 +64,24 @@ void ExpectPinRefused(Queue& ctx, const char* word, int m, int n, int k, Transpo
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
                 ASSERT_EQ(std::memcmp(&C(i, j, b), &C0(i, j, b), sizeof(T)), 0) << "a refused pin wrote C";
+}
+
+// can_run's local memory term for a reg tile: within the device budget it must run; above it
+// (only acpp without the opt-in, 48 KiB) the pin must be refused rather than fail to launch.
+bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, int u) {
+    const auto* cfg = std::find_if(ops::gemm::reg_configs.begin(), ops::gemm::reg_configs.end(),
+                                   [&](const ops::gemm::RegCfg& c) { return c.m == m && c.n == n && c.k == k && c.u == u; });
+    if (cfg == ops::gemm::reg_configs.end()) {
+        ADD_FAILURE() << word << " is not a reg_configs row";
+        return false;
+    }
+    const auto budget = static_cast<std::int64_t>(
+        resident::device_slm_budget(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    if (cfg->slm_bytes() <= budget || !NativePinsRun(ctx)) return true;
+    EXPECT_TRUE(test_utils::kSlmCappedAt48KiB)
+        << word << " needs " << cfg->slm_bytes() << " B of local memory; this device budgets " << budget;
+    ExpectPinRefused<float>(ctx, word, 256, 256, 256, Transpose::NoTrans, Transpose::NoTrans);
+    return false;
 }
 
 template <typename T>
@@ -904,6 +925,9 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeKernel) {
         GTEST_SKIP() << "128x64x32 large SYCL register kernel is only selected for float in this slice";
     }
 
+    if (!RegTileFitsOrIsRefused(*(this->ctx), "reg:m=128:n=64:k=32:u=4", 128, 64, 32, 4)) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead";
+    }
     RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=64:k=32:u=4",
                                                             256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,
@@ -918,6 +942,9 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeU2Kernel) {
         GTEST_SKIP() << "128x64x32 large-u2 SYCL register kernel is only selected for float in this slice";
     }
 
+    if (!RegTileFitsOrIsRefused(*(this->ctx), "reg:m=128:n=64:k=32:u=2", 128, 64, 32, 2)) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead";
+    }
     RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=64:k=32:u=2",
                                                             256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,

@@ -18,6 +18,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "../src/extensions/gesvd_native.hh"
+#include "../src/util/resident_capacity.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -84,11 +86,16 @@ protected:
     static Real recon_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
     static Real ortho_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
 
-    // Mirrors gesvdj_cta_max_dim. complex<double> with vectors needs 138,816 B
-    // of local memory at the C=64 rung against this device's 101,376 B, so it
-    // is capped at 32 and these cases skip rather than fail.
-    static constexpr int max_dim_with_vectors() {
-        return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
+    // gesvdj_cta's cap with vectors at THIS device's local memory budget. At the 99 KiB opt-in
+    // only complex<double> (138,816 B at C=64) is capped at 32 (JacobiCapAtBothBudgets pins it).
+    int max_dim_with_vectors() const {
+        const std::size_t budget =
+            resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+        const int cap = static_cast<int>(sycl_gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
+        if (!test_utils::kSlmCappedAt48KiB) {
+            EXPECT_EQ(cap, (std::is_same_v<Scalar, std::complex<double>> ? 32 : 64)) << "budget " << budget;
+        }
+        return cap;
     }
 
     // ||A - U diag(s) Vh||_F / ||A||_F, computed on the host in double.
@@ -323,8 +330,8 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
 // ---------------------------------------------------------------------------
 
 TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
-    if (TestFixture::max_dim_with_vectors() < 64) {
-        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    if (this->max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory; RefusesAboveItsCap)";
     }
     for (int n : {33, 40, 48, 63, 64}) {
         this->check(n, n, 2, this->random_matrix(n, n, 2, 4321u + n));
@@ -332,16 +339,16 @@ TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
 }
 
 TYPED_TEST(GesvdjCtaTest, TallRectangularAboveThirtyTwo) {
-    if (TestFixture::max_dim_with_vectors() < 64) {
-        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    if (this->max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory; RefusesAboveItsCap)";
     }
     this->check(64, 24, 2, this->random_matrix(64, 24, 2, 981u));
     this->check(48, 33, 2, this->random_matrix(48, 33, 2, 982u));
 }
 
 TYPED_TEST(GesvdjCtaTest, WideRectangularAboveThirtyTwo) {
-    if (TestFixture::max_dim_with_vectors() < 64) {
-        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    if (this->max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory; RefusesAboveItsCap)";
     }
     // m < n takes the transposed load (A^H) and the transposed writeback, where
     // the thin/rank bound lands on the lane index rather than the inner loop.
@@ -350,16 +357,16 @@ TYPED_TEST(GesvdjCtaTest, WideRectangularAboveThirtyTwo) {
 }
 
 TYPED_TEST(GesvdjCtaTest, ThinAboveThirtyTwo) {
-    if (TestFixture::max_dim_with_vectors() < 64) {
-        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    if (this->max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory; RefusesAboveItsCap)";
     }
     this->check_thin(64, 24, 2, this->random_matrix(64, 24, 2, 985u));
     this->check_thin(24, 64, 2, this->random_matrix(24, 64, 2, 986u));
 }
 
 TYPED_TEST(GesvdjCtaTest, RankDeficientAboveThirtyTwo) {
-    if (TestFixture::max_dim_with_vectors() < 64) {
-        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory)";
+    if (this->max_dim_with_vectors() < 64) {
+        GTEST_SKIP() << "scalar type is capped below 64 with vectors (local memory; RefusesAboveItsCap)";
     }
     // Forces the in-kernel Gram-Schmidt completion at C=64, where the trial
     // vector is distributed over two row-slots per lane and each lane must sum
@@ -375,6 +382,52 @@ TYPED_TEST(GesvdjCtaTest, RankDeficientAboveThirtyTwo) {
         }
     }
     this->check(n, n, batch, std::move(host));
+}
+
+// The cap is gesvd_native.hh's formula of the device budget. Pinned at both budgets a device here
+// reports (97,280 B: DPC++ or acpp with the opt-in; 45,056 B: acpp without), from the bytes each
+// rung's smallest work-group asks the driver for (71,752 B double C=64, 71,488 B cfloat C=64).
+TEST(GesvdjCtaCap, JacobiCapAtBothBudgets) {
+    using sycl_gesvd::gesvd_jacobi_max_dim;
+    using cf = std::complex<float>;
+    using cd = std::complex<double>;
+    for (bool v : {true, false}) {
+        EXPECT_EQ(gesvd_jacobi_max_dim<float>(v, 97280), 64);
+        EXPECT_EQ(gesvd_jacobi_max_dim<double>(v, 97280), 64);
+        EXPECT_EQ(gesvd_jacobi_max_dim<cf>(v, 97280), 64);
+        EXPECT_EQ(gesvd_jacobi_max_dim<float>(v, 45056), 64);
+        EXPECT_EQ(gesvd_jacobi_max_dim<cd>(v, 45056), 32);
+    }
+    EXPECT_EQ(gesvd_jacobi_max_dim<cd>(true, 97280), 32);
+    EXPECT_EQ(gesvd_jacobi_max_dim<cd>(false, 97280), 64);
+    EXPECT_EQ(gesvd_jacobi_max_dim<double>(true, 45056), 32);
+    EXPECT_EQ(gesvd_jacobi_max_dim<double>(false, 45056), 64);
+    EXPECT_EQ(gesvd_jacobi_max_dim<cf>(true, 45056), 32);
+    EXPECT_EQ(gesvd_jacobi_max_dim<cf>(false, 45056), 64);
+    EXPECT_LE(sycl_gesvd::gesvdj_slm_bytes<double>(64, true), 71752u);
+    EXPECT_GT(sycl_gesvd::gesvdj_slm_bytes<double>(64, true) + 64, 71752u);
+    EXPECT_LE(sycl_gesvd::gesvdj_slm_bytes<cf>(64, true), 71488u);
+    EXPECT_GT(sycl_gesvd::gesvdj_slm_bytes<cf>(64, true) + 64, 71488u);
+}
+
+// One past the device cap is refused with invalid_argument (not a failed launch, R2), and the
+// cap itself launches: the advertised ceiling, run (agent guide §8 rule 9).
+TYPED_TEST(GesvdjCtaTest, RefusesAboveItsCap) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    const int cap = this->max_dim_with_vectors();
+    ASSERT_GE(cap, 32);
+    this->check(cap, cap, 2, this->random_matrix(cap, cap, 2, 991u));
+    if (cap >= 64) GTEST_SKIP() << "nothing above 64 is compiled; the cap launched";
+    const int n = cap + 1;
+    Matrix<Scalar> A(n, n, 1), U(n, n, 1), Vh(n, n, 1);
+    UnifiedVector<Real> s(static_cast<size_t>(n));
+    auto call = [&] {
+        (void)gesvdj_cta<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+                                    SvdVectors::All);
+    };
+    EXPECT_THROW(call(), std::invalid_argument);
 }
 
 TYPED_TEST(GesvdjCtaTest, TallRectangular) {

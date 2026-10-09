@@ -33,7 +33,7 @@ namespace batchlas {
         if (A.batch_size() == 1) {
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
                 handle, uplo, A.rows(), A.data_ptr(), A.ld(), &size);
-            size = BumpAllocator::allocation_size<std::byte>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
+            size = BumpAllocator::allocation_size<T>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
         } else {
             size =  BumpAllocator::allocation_size<int>(ctx, A.batch_size());
         }
@@ -57,12 +57,14 @@ namespace batchlas {
         auto Lwork = backend::potrf_vendor_buffer_size<B, T>(ctx, descrA, uplo)
                      - BumpAllocator::allocation_size<int>(ctx, 1);
         if (descrA.batch_size() == 1) {
-            auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
+            // cuSOLVER sizes the workspace in elements of T (Lwork), not bytes.
+            const int lwork = static_cast<int>(Lwork / sizeof(T));
+            auto potrf_span = pool.allocate<T>(ctx, lwork);
             auto info = detail::info_target(ctx, pool, info_out, 1);
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
-                    handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
+                    handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), potrf_span.data(), lwork, info.data());
             });
         } else {
             auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());

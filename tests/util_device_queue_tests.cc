@@ -3,7 +3,13 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 
+#include <batchlas/sycl_interop.hh>
+#include "../src/queue.hh"
+
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -298,4 +304,145 @@ TEST(DeviceTest, Sm120FamilyWindow) {
     EXPECT_TRUE(is_sm120_family(121));
     EXPECT_TRUE(is_sm120_family(129));
     EXPECT_FALSE(is_sm120_family(130));
+}
+
+// A launch the CUDA driver rejects (grid z = 65536 > 65535) must be a catchable sycl::exception
+// at the submission on both SYCL implementations, never a std::terminate from a later ~queue
+// (acpp reports every pending error from every queue destructor), and the queue must keep working.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-asynchronous-errors
+namespace {
+class OverLimitGridKernel;
+class OverLimitGridRawKernel;
+class OversizedLocalMemoryKernel;
+class AfterFailureKernel;
+
+const sycl::nd_range<3> kOverLimitGrid(sycl::range<3>(65536, 1, 1), sycl::range<3>(1, 1, 1));
+
+std::optional<Queue> cuda_gpu_queue() {
+    for (const Device& d : Device::get_devices(DeviceType::GPU)) {
+        Queue q(d);
+        if (batchlas::impl::is_cuda(batchlas::impl::backend_of(batchlas::sycl_queue(q)))) return q;
+    }
+    return std::nullopt;
+}
+
+// The queue survived: a kernel after the failure runs and its write lands.
+void expect_queue_still_runs(Queue& q, int* out) {
+    q->parallel_for<AfterFailureKernel>(sycl::nd_range<1>(32, 32), [=](sycl::nd_item<1> it) {
+        if (it.get_global_id(0) == 0) *out = 7;
+    });
+    EXPECT_NO_THROW(q.wait());
+    EXPECT_EQ(*out, 7);
+}
+}  // namespace
+
+TEST(QueueAsyncErrors, OverLimitGridThrowsFromTheLaunch) {
+    auto q = cuda_gpu_queue();
+    if (!q) GTEST_SKIP() << "no CUDA GPU: the grid limit is the CUDA driver's";
+    int* out = sycl::malloc_shared<int>(1, batchlas::sycl_queue(*q));
+    *out = 0;
+    EXPECT_THROW((*q)->parallel_for<OverLimitGridKernel>(kOverLimitGrid, [=](sycl::nd_item<3>) { *out = 1; }),
+                 sycl::exception);
+    { sycl::queue copy = batchlas::sycl_queue(*q); }  // acpp: ~queue reports what is pending
+    EXPECT_NO_THROW(q->wait());
+    EXPECT_EQ(*out, 0) << "the rejected kernel ran";
+    expect_queue_still_runs(*q, out);
+    sycl::free(out, batchlas::sycl_queue(*q));
+}
+
+// 1 MiB of local memory fits no GPU and passes the grid check: on acpp only the launch itself
+// fails, so this is the error the post-submission check must turn into an exception.
+TEST(QueueAsyncErrors, OversizedLocalMemoryThrowsFromTheLaunch) {
+    auto q = cuda_gpu_queue();
+    if (!q) GTEST_SKIP() << "no CUDA GPU";
+    int* out = sycl::malloc_shared<int>(1, batchlas::sycl_queue(*q));
+    *out = 0;
+    EXPECT_THROW((*q)->submit([&](sycl::handler& h) {
+        sycl::local_accessor<int, 1> slm(sycl::range<1>(std::size_t{1} << 18), h);
+        h.parallel_for<OversizedLocalMemoryKernel>(sycl::nd_range<1>(32, 32), [=](sycl::nd_item<1> it) {
+            slm[it.get_local_id(0)] = 1;
+            sycl::group_barrier(it.get_group());
+            if (it.get_global_id(0) == 0) *out = slm[31];
+        });
+    }), sycl::exception);
+    { sycl::queue copy = batchlas::sycl_queue(*q); }
+    EXPECT_NO_THROW(q->wait());
+    EXPECT_EQ(*out, 0) << "the rejected kernel ran";
+    expect_queue_still_runs(*q, out);
+    sycl::free(out, batchlas::sycl_queue(*q));
+}
+
+// Submitted around BatchLAS's own check: the error a copied queue's destructor collects is
+// thrown by the next Queue::wait, and that destructor does not terminate the process.
+TEST(QueueAsyncErrors, ErrorCollectedByAQueueCopySurfacesAtTheNextWait) {
+    auto q = cuda_gpu_queue();
+    if (!q) GTEST_SKIP() << "no CUDA GPU: the grid limit is the CUDA driver's";
+    int* out = sycl::malloc_shared<int>(1, batchlas::sycl_queue(*q));
+    *out = 0;
+    bool thrown = false;
+    try {
+        sycl::queue& raw = batchlas::sycl_queue(*q);
+        raw.parallel_for<OverLimitGridRawKernel>(kOverLimitGrid, [=](sycl::nd_item<3>) { *out = 1; });
+        { sycl::queue copy = raw; }
+        q->wait();
+    } catch (const sycl::exception&) {
+        thrown = true;
+    }
+    EXPECT_TRUE(thrown) << "the rejected launch was reported nowhere";
+    EXPECT_EQ(*out, 0) << "the rejected kernel ran";
+    expect_queue_still_runs(*q, out);
+    sycl::free(out, batchlas::sycl_queue(*q));
+}
+// get_event() on an in-order queue returns the last RECORDED event. A USM memcpy/memset/fill the
+// queue did not record ran on after a caller waited on that event: syev_blocked's final copy
+// segfaulted its NETLIB test on both DPC++ and AdaptiveCpp. 256 MiB keeps each op running well
+// past the wait; a recorded kernel goes first so get_event() takes the last-event path.
+TEST(QueueTest, GetEventCoversUsmMemcpyMemsetAndFill) {
+    constexpr size_t n = size_t(1) << 26;
+    int devices_run = 0;
+    for (const char* dev : {"cpu", "gpu"}) {
+        std::optional<Queue> q;
+        try {
+            q.emplace(Device(dev), true);
+        } catch (const std::exception&) {
+            continue;
+        }
+        ++devices_run;
+        sycl::queue& sq = batchlas::sycl_queue(*q);
+        float* src = sycl::malloc_device<float>(n, sq);
+        float* dst = sycl::malloc_host<float>(n, sq);
+        int* marker = sycl::malloc_host<int>(1, sq);
+        sq.fill(src, 1.5f, n).wait();
+        const auto recorded_kernel = [&] {
+            (*q)->parallel_for(sycl::range<1>(1), [=](sycl::id<1>) { *marker = 7; });
+        };
+        const auto check = [&](float want, const char* op) {
+            q->get_event().wait();
+            EXPECT_EQ(dst[0], want) << op << " on " << dev;
+            EXPECT_EQ(dst[n - 1], want) << op << " on " << dev << ": still running after the wait";
+            q->wait();
+        };
+
+        std::fill(dst, dst + n, 0.0f);
+        recorded_kernel();
+        (*q)->memcpy(dst, src, n * sizeof(float));
+        check(1.5f, "memcpy");
+
+        std::fill(dst, dst + n, 0.0f);
+        recorded_kernel();
+        (*q)->fill(dst, 2.5f, n);
+        check(2.5f, "fill");
+
+        std::fill(dst, dst + n, 0.0f);
+        recorded_kernel();
+        (*q)->memset(dst, 0xff, n * sizeof(float));
+        q->get_event().wait();
+        EXPECT_TRUE(std::isnan(dst[n - 1])) << "memset on " << dev << ": still running after the wait";
+        q->wait();
+
+        sycl::free(src, sq);
+        sycl::free(dst, sq);
+        sycl::free(marker, sq);
+    }
+    if (devices_run == 0) GTEST_SKIP() << "no cpu or gpu device";
 }

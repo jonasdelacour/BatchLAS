@@ -453,6 +453,18 @@ if(TARGET batchlas_backends_cuda_obj)
     target_link_libraries(${_batchlas_backends_cuda_lib} PRIVATE ${BATCHLAS_CUDA_LINK_LIBRARIES})
 endif()
 
+if(BATCHLAS_ACPP_SLM_OPTIN)
+    # Every component DT_NEEDs it (via batchlas_dep_options), so it precedes libcuda.so.1 in
+    # the global lookup scope that acpp's dlopen'ed CUDA backend resolves cuLaunchKernel in.
+    find_package(CUDAToolkit REQUIRED)
+    add_library(batchlas_acpp_slm_optin SHARED sycl/acpp_slm_optin.cc)
+    target_link_libraries(batchlas_acpp_slm_optin PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
+    set_target_properties(batchlas_acpp_slm_optin PROPERTIES
+        VERSION "${PROJECT_VERSION}" SOVERSION "${PROJECT_VERSION_MAJOR}")
+    target_link_libraries(batchlas_dep_options INTERFACE batchlas_acpp_slm_optin)
+    install(TARGETS batchlas_acpp_slm_optin LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+endif()
+
 if(BATCHLAS_HAS_ROCM_BACKEND)
     # PRIVATE for the same reason as the netlib and CUDA links above: these are
     # absolute paths under ${ROCM_PATH} and must not ride out on the export.

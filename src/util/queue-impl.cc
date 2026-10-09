@@ -1,4 +1,5 @@
 #include "../queue.hh"
+#include "../sycl/local_mem.hh"
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -140,8 +141,18 @@ Queue& Queue::operator=(Queue&& other) {
     return *this;
 }
 
+#if BATCHLAS_SYCL_IMPL_ACPP
+// acpp's wait() only registers a failure; report it here, where DPC++ has already thrown it.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-asynchronous-errors
+void Queue::wait() const {
+    impl_->wait();
+    impl::throw_async_errors(*impl_);
+}
+void Queue::wait_and_throw() const { wait(); }
+#else
 void Queue::wait() const {impl_->wait();}
 void Queue::wait_and_throw() const {impl_->wait_and_throw();}
+#endif
 
 batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
     auto loan = impl_->arena_.acquire(*impl_, bytes);
@@ -308,7 +319,7 @@ size_t Device::get_property(DeviceProperty property) const {
         case 2: return d.get_info<sycl::info::device::max_compute_units>();
         case 3: return d.get_info<sycl::info::device::max_mem_alloc_size>();
         case 4: return d.get_info<sycl::info::device::global_mem_size>();
-        case 5: return d.get_info<sycl::info::device::local_mem_size>();
+        case 5: return impl::local_mem_bytes(d);
         case 6: return d.get_info<sycl::info::device::max_num_sub_groups>();
         case 7: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
         case 8: return d.get_info<sycl::info::device::mem_base_addr_align>();

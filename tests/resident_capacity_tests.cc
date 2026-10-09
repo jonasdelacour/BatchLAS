@@ -104,6 +104,18 @@ TEST(ResidentCapacity, DeviceBudgetSubtractsTheRuntimeReserve) {
     EXPECT_EQ(resident::device_slm_budget(1024), 0u);      // and no underflow
 }
 
+// The sub-group CTA kernels' multiplier clamp counts whole steps of 32/P problems. syev_cta_fused
+// complex<double> P = 16 holds 6,784 B a problem, 13,568 B a step.
+TEST(ResidentCapacity, CtaMultiplierClampCountsWholeSteps) {
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(8, 2, 6784, 101376), 7);  // the problem count said 14
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(8, 2, 6784, 49152), 3);
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(2, 2, 6784, 101376), 2);  // a fitting request is kept
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(7, 2, 6784, 7 * 13568), 7);  // exactly full
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(8, 2, 6784, 7 * 13568 - 1), 6);
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(4, 1, 71752, 49152), 0);  // not one step: callers throw
+    EXPECT_EQ(resident::cta_fit_wg_multiplier(4, 1, 0, 0), 4);  // nothing staged
+}
+
 // 2. G-PACKING
 
 TEST(ResidentCapacity, PackingIsBoundedByAllThreeLimits) {

@@ -15,6 +15,7 @@
 #include "sytrd_cta_device.hh"
 #include "steqr_cta_device.hh"
 #include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 
 #include <complex>
 #include <cstdint>
@@ -116,14 +117,11 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // Clamp by local memory (real path: one tile + two length-P vectors, as sytrd_cta).
         {
-            const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
             const std::size_t bytes_per_prob = (kATileElems + 2 * static_cast<std::size_t>(P)) * sizeof(T)
                                              + (kSeparateQTile ? kQTileElems * sizeof(Real) : 0);
-            const int32_t max_probs = (bytes_per_prob == 0)
-                                          ? int32_t(1)
-                                          : std::max<int32_t>(int32_t(1),
-                                                              static_cast<int32_t>(local_mem_bytes / bytes_per_prob));
-            wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
+            wg_size_multiplier = impl::cta_wg_multiplier("syev_cta_fused", wg_size_multiplier,
+                                                         base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
+                                                         impl::local_mem_bytes(dev));
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
@@ -485,6 +483,8 @@ Event syev_cta_fused(Queue& ctx,
             throw batchlas::unsupported("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
+    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
+    if (batch64 == 0) return ctx.get_event();
 
     // Match syev_cta's robustness bump so the two solve the tridiagonal problem
     // with identical settings unless the caller tuned them.

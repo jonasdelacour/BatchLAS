@@ -16,6 +16,7 @@
 
 #include "../math-helpers.hh"
 #include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 
 #include <array>
 #include <cstdint>
@@ -348,7 +349,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
 
     // --- Optional: stage the band matrix AB in local memory (tight-packed ldab = kd+1).
     // This is gated by device local memory size and the per-work-group footprint.
-    const size_t lmem_bytes = q->get_device().get_info<sycl::info::device::local_mem_size>();
+    const size_t lmem_bytes = impl::local_mem_bytes(q->get_device());
     constexpr int32_t wg_size = 32;
     constexpr int32_t probs_per_wg = wg_size / P;
 

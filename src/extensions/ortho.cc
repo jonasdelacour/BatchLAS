@@ -4,6 +4,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../queue.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
@@ -223,7 +224,7 @@ namespace batchlas {
                             }
                             
                             sycl::group_barrier(cta);
-                            auto squared_norm = sycl::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
+                            auto squared_norm = batchlas::portable::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
                             auto norm = std::sqrt(squared_norm);
 
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
@@ -246,9 +247,9 @@ namespace batchlas {
                     auto ATA_acc = ATA_ptr + bid * ATA_stride;
                     T g_norm = 0.0;
                     if constexpr (internal::is_complex<T>::value){
-                        g_norm = sycl::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid].real()), sycl::maximum<typename T::value_type>());
+                        g_norm = batchlas::portable::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid].real()), sycl::maximum<typename T::value_type>());
                     } else {
-                        g_norm = sycl::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid]), sycl::maximum<T>());
+                        g_norm = batchlas::portable::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid]), sycl::maximum<T>());
                     }
                     auto eps = std::numeric_limits<T>::epsilon();
                     auto shift = T(11.0) * T(T(m * k) * T(eps) + T(k + 1) * T(k) * T(eps)) * g_norm;

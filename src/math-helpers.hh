@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
+#include <batchlas/util/group-collectives.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/device.hh>
@@ -124,7 +125,7 @@ namespace batchlas {
                 }
             }
 
-            sycl::vec<R, 3> total = sycl::reduce_over_group(cta, part, sycl::plus<sycl::vec<R, 3>>());
+            sycl::vec<R, 3> total = batchlas::portable::reduce_over_group(cta, part, sycl::plus<sycl::vec<R, 3>>());
 
             // ---- Final combination (verbatim logic from dnrm2) ----
             const R zero = R(0);

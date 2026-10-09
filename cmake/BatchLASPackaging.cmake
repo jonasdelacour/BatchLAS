@@ -106,6 +106,14 @@ function(batchlas_install_package)
             DESTINATION "${CMAKE_INSTALL_DATADIR}/batchlas")
     endif()
 
+    # acpp: the device Annex G definitions every BatchLAS TU is built with (-include). A consumer
+    # whose kernels multiply std::complex (the device BLAS headers do) needs them too, so
+    # BatchLASConfig.cmake appends the same -include to BatchLAS_SYCL_COMPILE_OPTIONS.
+    if(BATCHLAS_SYCL_IMPL_ACPP)
+        install(FILES "${PROJECT_SOURCE_DIR}/src/sycl/annexg_complex.hh"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas/acpp")
+    endif()
+
     configure_package_config_file(
         "${PROJECT_SOURCE_DIR}/cmake/BatchLASConfig.cmake.in"
         "${PROJECT_BINARY_DIR}/BatchLASConfig.cmake"

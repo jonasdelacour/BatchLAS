@@ -76,6 +76,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
     const sycl::range<2> local(1, static_cast<size_t>(Threads));
     const sycl::range<2> global(static_cast<size_t>(batch), static_cast<size_t>(Threads));
 
+    impl::check_group_count(*ctx, sycl::nd_range<2>(global, local));
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> tile(sycl::range<1>(KC * SPad), h);
 

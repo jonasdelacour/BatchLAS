@@ -1,0 +1,47 @@
+# Known test failures of an AdaptiveCpp build (BATCHLAS_SYCL_IMPL=ACPP). A debt ledger,
+# not an allowlist: read the header of tests/known-failures.txt, which governs this file too.
+#
+# SELF-CONTAINED. .github/ci/compare_failures.py reads THIS file instead of
+# tests/known-failures.txt when the tree is an acpp build (--sycl-impl ACPP, or
+# --build-dir <tree> with BATCHLAS_SYCL_IMPL_RESOLVED=ACPP in its cache). A defect
+# shared by both implementations is therefore listed in both files; fix it and
+# delete it from both. An entry here that passes fails the acpp gate (NEWLY PASSING).
+#
+# Same FORMAT as tests/known-failures.txt:
+#   <ctest-test>[::<Suite>.<Case>][;type_param=<exact gtest XML type_param>]
+#
+# PRESET: verified 2026-10-09 on threadripper02 (RTX PRO 6000, sm_120), tree
+# build-acpp-tests: acpp v25.10.0, --acpp-targets=generic, RelWithDebInfo, CPU
+# target on (so the NETLIB instantiations run SYCL kernels on acpp's OpenMP host
+# device), BATCHLAS_ACPP_SLM_OPTIN=OFF. Design page:
+# docs/design/sycl-implementations.md (§4 rows R1-R15, §5.4-§5.6).
+#
+# DELIBERATELY ABSENT (as from tests/known-failures.txt; each fails identically on the
+# DPC++ tree of the same box). Box environment: tune_tests (LFS pointers in a fresh
+# worktree; source hash), consumer_package_tests (cuBLAS/cuSOLVER not on the consumer's
+# link path). Not environment, unowned: cond_tests::CondTest/2 (float CUDA log-cond 7.49
+# vs 8), red on DPC++ at 6b0907ea too and in neither ledger.
+
+# --- shared with DPC++ (tests/known-failures.txt) -----------------------------
+# docs/design/known-defects.md entry 3: lanczos reads column 0 of a two-column multiply.
+lanczos_tests::LanczosTestBase.LanczosTest
+lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+
+# steqr_wg does not converge on the mixed-scale case-3 input (on every device, DPC++
+# CUDA included). acpp's host device has sub-group size 1, so these NETLIB instances
+# always take steqr_wg; on DPC++ the same binary dies earlier ("no image").
+steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32;type_param=SteqrConfig<float,(batchlas::Backend)6>
+steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32;type_param=SteqrConfig<double,(batchlas::Backend)6>
+
+# docs/design/known-defects.md entry 18: the cta provider's U loses orthogonality as
+# eps*kappa^2. acpp gives 0.99827855825424194, bit-identical to DPC++.
+gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
+
+# --- acpp only -----------------------------------------------------------------
+# A tolerance knife-edge, not an acpp bug: cdouble m=n=96, |tau_native - tau_vendor| =
+# 1.45e-14 against a 64-eps bound of 1.42e-14 (the factor itself agrees to 1.3e-15).
+# Over 12 seeds acpp and DPC++ spread the same (2.7e-15 to 1.98e-14), and DPC++ fails
+# at seed offset +2; the default seed only crosses on acpp. Fix: the test's tau bound.
+# Both entries: geqrf_tests_1 is the route-pinned rerun of the same binary.
+geqrf_tests::GeqrfTest/7.NativeFactorMatchesTheVendorElementwise;type_param=(anonymous namespace)::GeqrfConfig<std::complex<double>,(batchlas::Backend)1>
+geqrf_tests_1::GeqrfTest/7.NativeFactorMatchesTheVendorElementwise;type_param=(anonymous namespace)::GeqrfConfig<std::complex<double>,(batchlas::Backend)1>

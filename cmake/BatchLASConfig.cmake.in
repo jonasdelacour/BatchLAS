@@ -34,6 +34,13 @@ set(BatchLAS_SYCL_IMPL "@BATCHLAS_SYCL_IMPL_RESOLVED@")
 # What a consumer's own SYCL translation units need; never applied automatically.
 set(BatchLAS_SYCL_COMPILE_OPTIONS "@BATCHLAS_SYCL_CONSUMER_OPTIONS@")
 set(BatchLAS_SYCL_LINK_OPTIONS "@BATCHLAS_SYCL_CONSUMER_OPTIONS@")
+# AdaptiveCpp: device definitions of __mulsc3/__muldc3/__divsc3/__divdc3, which its SSCP device
+# library lacks; force-included into every BatchLAS TU and needed by any consumer kernel that
+# multiplies or divides std::complex.
+if(BatchLAS_SYCL_IMPL STREQUAL "ACPP")
+    list(APPEND BatchLAS_SYCL_COMPILE_OPTIONS
+        "-include${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/batchlas/acpp/annexg_complex.hh")
+endif()
 
 option(BATCHLAS_REQUIRE_MATCHING_COMPILER
     "Make a CMAKE_CXX_COMPILER that differs from the one BatchLAS was built with a hard error instead of a warning"

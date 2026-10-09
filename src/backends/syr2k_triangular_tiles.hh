@@ -80,6 +80,7 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
                                 static_cast<size_t>(tile_count * LocalRows),
                                 static_cast<size_t>(LocalCols));
 
+    impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> tiles(sycl::range<1>(4 * TileK * Stride), h);
 

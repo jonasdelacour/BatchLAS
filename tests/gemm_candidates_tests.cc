@@ -18,11 +18,13 @@
 
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
+#include "../src/util/resident_capacity.hh"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -78,7 +80,16 @@ const char* tw(Transpose t) { return t == kN ? "N" : (t == kT ? "T" : "C"); }
 
 // ---- the oracle: the compiled kernels as the pre-P3.4 KernelVariant enum named them ----
 
-struct RegRow { int m, n, k, u; std::vector<std::string> forms; std::map<std::string, std::string> trace; };
+// slm: the launch's local memory in bytes as the CUDA driver saw it (cuLaunchKernel interposer log),
+// set where it exceeds 45,056 B (48 KiB less the reserve), the smallest budget a device here reports.
+struct RegRow {
+    int m, n, k, u;
+    std::vector<std::string> forms;
+    std::map<std::string, std::string> trace;
+    std::int64_t slm = 0;
+};
+// The device's resident::device_slm_budget, set by the fixture: a reg tile above it is refused.
+std::int64_t g_slm_budget = std::numeric_limits<std::int64_t>::max();
 const std::vector<RegRow>& reg_rows() {
     static const std::vector<RegRow> rows{
         {32, 32, 8, 1, {"NN"}, {{"NN", "gemm_sycl_register_32x32"}}},
@@ -101,10 +112,12 @@ const std::vector<RegRow>& reg_rows() {
          {{"NN", "gemm_sycl_register_32x128_k16"}, {"TN", "gemm_sycl_register_32x128_k16_tn"},
           {"TT", "gemm_sycl_register_32x128_k16_tt"}}},
         {128, 64, 32, 4, {"NN"},
-         {{"NN", "gemm_sycl_register_128x64_k32_large"}, {"NN+aligned", "gemm_sycl_register_128x64_k32_large_aligned"}}},
+         {{"NN", "gemm_sycl_register_128x64_k32_large"}, {"NN+aligned", "gemm_sycl_register_128x64_k32_large_aligned"}},
+         49920},
         {128, 64, 32, 2, {"NN"},
          {{"NN", "gemm_sycl_register_128x64_k32_large_u2"},
-          {"NN+aligned", "gemm_sycl_register_128x64_k32_large_u2_aligned"}}},
+          {"NN+aligned", "gemm_sycl_register_128x64_k32_large_u2_aligned"}},
+         49920},
         {128, 128, 8, 1, {"NN"},
          {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"}}},
     };
@@ -160,7 +173,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
         [&](const og::Reg& r) {
             const RegRow* row = reg_row(r);
             const std::string f = reg_form(ta, tb);
-            return std::is_same_v<T, float> && row &&
+            return std::is_same_v<T, float> && row && row->slm <= g_slm_budget &&
                    std::find(row->forms.begin(), row->forms.end(), f) != row->forms.end();
         },
         [&](const og::Wide& w) {
@@ -450,6 +463,9 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels here";
+        g_slm_budget = static_cast<std::int64_t>(
+            resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+        if (g_slm_budget < 49920) EXPECT_TRUE(test_utils::kSlmCappedAt48KiB) << "budget " << g_slm_budget;
     }
 
     static bool expect_runs(const C& c, const Spec& s) {
@@ -540,6 +556,19 @@ const int kShapes[][3] = {{128, 128, 64}, {100, 70, 37}, {48, 48, 48}, {33, 17, 
 
 // §8.1: each candidate on every (ta, tb), both layouts, every shape. Accepted shapes run and
 // are right; refused ones throw from the pin. The oracle is the old KernelVariant list.
+// can_run's local memory term against the oracle's driver-observed bytes: every row above the
+// smallest budget (45,056 B) agrees with RegCfg::slm_bytes, and no other row comes near it.
+TEST(GemmRegSlm, SlmBytesMatchWhatTheDriverWasAskedFor) {
+    for (const og::RegCfg& c : og::reg_configs) {
+        const auto row = std::find_if(reg_rows().begin(), reg_rows().end(), [&](const RegRow& r) {
+            return r.m == c.m && r.n == c.n && r.k == c.k && r.u == c.u;
+        });
+        ASSERT_NE(row, reg_rows().end()) << c.m << "x" << c.n << "x" << c.k;
+        if (row->slm > 0) EXPECT_EQ(c.slm_bytes(), row->slm) << c.m << "x" << c.n << "x" << c.k << " u" << c.u;
+        else EXPECT_LE(c.slm_bytes(), 45056) << c.m << "x" << c.n << "x" << c.k << " u" << c.u;
+    }
+}
+
 TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
     using T = typename TestFixture::T;
     int ran = 0, refused = 0;
@@ -952,7 +981,24 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
             {"reg:m=128:n=64:k=32:u=4", nn, "reg:m=128:n=64:k=32:u=4"},
             {"reg:m=128:n=64:k=32:u=2", nn, "reg:m=128:n=64:k=32:u=2"},
             {"reg:m=128:n=128:k=8:u=1", nn, "reg:m=128:n=128:k=8:u=1"}};
-        want.insert(want.end(), reg.begin(), reg.end());
+        for (const Want& w : reg) {
+            const auto c = select::parse<og::GemmChoice>(w.spelling);
+            ASSERT_TRUE(c && std::holds_alternative<og::Reg>(*c)) << w.spelling;
+            const RegRow* row = reg_row(std::get<og::Reg>(*c));
+            if (row && row->slm > g_slm_budget) {
+                // Spelled correctly, refused by the budget: the pin parses and then throws can_run's refusal.
+                auto p = make_problem<T>(w.s);
+                const Pin pin("gemm", std::string_view(w.word));
+                try {
+                    this->run(p);
+                    ADD_FAILURE() << w.word << " ran above the local memory budget " << g_slm_budget;
+                } catch (const std::invalid_argument& e) {
+                    EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
+                }
+                continue;
+            }
+            want.push_back(w);
+        }
     }
     for (const auto& w : want)
         for (bool via_env : {false, true}) {

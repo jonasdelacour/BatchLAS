@@ -366,6 +366,40 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 	}
 }
 
+// A requested multiplier is clamped to local memory in whole steps of lcm(P, 32) lanes = 32/P
+// problems. The old clamp counted problems, so at P = 16 it admitted twice the bytes and the
+// launch failed (DPC++: cdouble n=16 multiplier 8 asks 108,544 B of 101,376; acpp's 48 KiB:
+// cfloat 8, cdouble 4). Complex only: a real type's clamped multiplier is a work-group too wide
+// for its registers, a separate cap.
+TYPED_TEST(SyevCtaFusedTest, WgMultiplierIsClampedToLocalMemoryInWholeSteps) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+	if constexpr (!test_utils::is_complex<Scalar>::value) {
+		GTEST_SKIP() << "real types: the clamped work-group exceeds the register file first";
+	} else {
+		const int n = 16;
+		const int batch = 203;  // ragged final work-group at every clamped width
+		const Real tol = test_utils::tolerance<Scalar>() * Real(5);
+		auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242);
+		for (size_t mult : {8u, 16u, 32u}) {
+			SCOPED_TRACE(::testing::Message() << "wg_multiplier=" << mult);
+			auto A = A0;
+			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
+			auto run = [&] {
+				syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+				                          Span<std::byte>(), SteqrParams<Scalar>{}, mult)
+					.wait();
+			};
+			ASSERT_NO_THROW(run());
+			for (int b : {0, batch / 2, batch - 1}) {
+				check_orthonormal_columns(A.view(), n, b, tol);
+				check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
+			}
+		}
+	}
+}
+
 // A full-size batch whose items grade in alternating directions, so the steqr
 // solve inside the kernel mixes QL and QR blocks within every warp, and 4099
 // leaves a ragged final work-group. Every item is checked: the eigenvector

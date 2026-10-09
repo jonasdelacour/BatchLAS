@@ -16,6 +16,7 @@
 // evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -286,8 +287,8 @@ Event syevx_filtered(Queue& ctx,
                         l = rb[0];
                         u = rb[1];
                     }
-                    l = sycl::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = sycl::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
+                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
+                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
                     if (lid == 0) {
                         part[2 * gid + 0] = l;
                         part[2 * gid + 1] = u;
@@ -312,8 +313,8 @@ Event syevx_filtered(Queue& ctx,
                         l = sycl::min(l, part[2 * idx + 0]);
                         u = sycl::max(u, part[2 * idx + 1]);
                     }
-                    l = sycl::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = sycl::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
+                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
+                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
                     if (lid == 0) {
                         // Degenerate spectrum: widen so e > 0 below.
                         if (!(u > l)) { u = l + Real(1); }
@@ -409,7 +410,7 @@ Event syevx_filtered(Queue& ctx,
                             const Real scale = sycl::fmax(sycl::fabs(lam), Real(1));
                             if (!(nrm <= tolv * scale)) local_ok = 0;
                         }
-                        const int all_ok = sycl::reduce_over_group(
+                        const int all_ok = batchlas::portable::reduce_over_group(
                             item.get_group(), local_ok, sycl::minimum<int>());
                         if (lid == 0) flag[b] = all_ok;
                     });

@@ -98,6 +98,13 @@ if [ "$#" -gt 1 ]; then
     if [ "${4:-}" = "full" ]; then
         _require="--require consumer_package_tests"
     fi
+    # An AdaptiveCpp tree is gated against tests/known-failures-acpp.txt.
+    if [ -n "${BATCHLAS_BUILD_DIR:-}" ]; then
+        _impl=$(sed -n 's/^BATCHLAS_SYCL_IMPL_RESOLVED:INTERNAL=//p' "$BATCHLAS_BUILD_DIR/CMakeCache.txt" 2>/dev/null)
+        if [ -n "$_impl" ]; then
+            _require="$_require --sycl-impl $_impl"
+        fi
+    fi
     if [ "$#" -gt 2 ] && [ -n "$3" ]; then
         # shellcheck disable=SC2086  # _require is a deliberate word split
         run python3 "$here/compare_failures.py" --junit "$2" --gtest-dir "$3" $_require
