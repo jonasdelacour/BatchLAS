@@ -25,4 +25,4 @@ umbrella, so cutting one edge gains nothing.
 
 Code sites: `include/batchlas/blas/linalg.hh` (above `functions.hh`) and `include/batchlas/sycl_interop.hh`
 (above its `<sycl/sycl.hpp>` include). Consumers must configure with the same SYCL compiler; see
-`.github/README.md`, "Consuming BatchLAS from CMake".
+`docs/cpp-api.md`, "Building against BatchLAS".

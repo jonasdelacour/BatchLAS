@@ -68,7 +68,7 @@ over square, tall, wide, rank-deficient, zero and graded inputs.
 
 ### gesvd README headline: Jacobi vs gesvdjBatched per matrix {#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix}
 
-Float, `All/All`, saturated batch, 2026-08-07 (the figure quoted in `README.md`):
+Float, `All/All`, saturated batch, 2026-08-07 (the figure quoted on the documentation front page):
 
 | n | batch | `gesvdj_cta` µs/matrix | `gesvdjBatched` µs/matrix | ratio |
 |---|---|---|---|---|
