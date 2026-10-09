@@ -272,6 +272,7 @@ function(batchlas_add_test_target test_name)
             BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
     elseif(test_name STREQUAL "verify_tests")
         # Host-only: header-only batchlas::verify; MatrixView's constructor lives in the library.
+        target_sources(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/verify_residuals_tests.cc")
         batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
     elseif(test_name STREQUAL "tune_race_gpu_tests")
         # The tuner's GPU side: the race and the worker against real kernels (potrf, posv, trsm specs).
