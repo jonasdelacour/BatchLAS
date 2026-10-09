@@ -144,10 +144,10 @@ void expect_symm(const Prob<T>& p, const std::string& what) {
     // A mirrored from its referenced triangle by the library; operands and C0 from the pristine copy.
     using namespace batchlas::verify;
     auto at0 = [&](const Region& g) {
-        return MVof<T>(const_cast<T*>(p.mem0.data()) + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
     };
-    const MVof<T> A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
-    const MVof<T> C1(const_cast<T*>(p.mem.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const auto A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
+    const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     const Shape sym = s.uplo == Uplo::Lower ? Shape::symmetric_lower : Shape::symmetric_upper;
     for (int it : items) {
         const int one[] = {it};

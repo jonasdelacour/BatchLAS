@@ -147,10 +147,10 @@ double residual(const Prob<T>& p, int it) {
     using namespace batchlas::verify;
     const Spec& s = p.s;
     auto at0 = [&](const Region& g) {
-        return MVof<T>(const_cast<T*>(p.mem0.data()) + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
     };
-    const MVof<T> A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
-    const MVof<T> C(const_cast<T*>(p.mem.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const auto A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
+    const auto C = batchlas::verify::view(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     const bool unit = s.diag == Diag::Unit;
     const Shape tri = s.uplo == Uplo::Lower ? (unit ? Shape::unit_lower : Shape::lower) : (unit ? Shape::unit_upper : Shape::upper);
     const int one[] = {it};

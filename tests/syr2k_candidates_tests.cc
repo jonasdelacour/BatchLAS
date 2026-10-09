@@ -135,31 +135,19 @@ Prob<T> make_prob(const Spec& s) {
 template <typename T>
 void expect_syr2k(const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
-    const bool nt = s.trans == Transpose::NoTrans;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 6) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    // alpha (opA opB^T + opB opA^T) is one product of the n x 2k panels [opA opB] and [opB opA]; the
-    // library judges it componentwise with inner dimension 2k, from the pristine copy.
+    // rank2k_backward_error: componentwise over the triangle, inner dimension 2k, from the pristine copy.
     const int nr = s.n, k2 = 2 * s.k;
     for (int it : items) {
-        std::vector<T> left(std::size_t(nr) * k2), right(std::size_t(nr) * k2);
-        for (int l = 0; l < s.k; ++l)
-            for (int i = 0; i < nr; ++i) {
-                const T a0 = p.mem0[nt ? p.idx(p.a, it, i, l) : p.idx(p.a, it, l, i)];
-                const T b0 = p.mem0[nt ? p.idx(p.b, it, i, l) : p.idx(p.b, it, l, i)];
-                left[std::size_t(l) * nr + i] = a0, left[std::size_t(s.k + l) * nr + i] = b0;
-                right[std::size_t(l) * nr + i] = b0, right[std::size_t(s.k + l) * nr + i] = a0;
-            }
-        using View = MatrixView<T, MatrixFormat::Dense>;
-        const View L(left.data(), nr, k2, nr, nr * k2, 1), R(right.data(), nr, k2, nr, nr * k2, 1);
-        const View C0(const_cast<T*>(p.mem0.data()) + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
-        const View C1(const_cast<T*>(p.mem.data()) + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
-        const double err = batchlas::verify::gemm_backward_error(
-            L, batchlas::verify::Shape::general, Transpose::NoTrans, R, batchlas::verify::Shape::general, Transpose::Trans, C0, C1,
-            s.uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
-            batchlas::verify::up(p.alpha), batchlas::verify::up(p.beta));
+        const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off + std::size_t(it) * p.a.stride, p.a.rows, p.a.cols, p.a.ld, p.a.stride, 1);
+        const auto B0 = batchlas::verify::view(p.mem0.data() + p.b.off + std::size_t(it) * p.b.stride, p.b.rows, p.b.cols, p.b.ld, p.b.stride, 1);
+        const auto C0 = batchlas::verify::view(p.mem0.data() + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
+        const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
+        const double err = batchlas::verify::rank2k_backward_error(A0, B0, s.trans, C0, C1, s.uplo, batchlas::verify::up(p.alpha),
+                                                                   batchlas::verify::up(p.beta), false);
         ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k2, err))
             << what << " item " << it << " backward error " << err << " exceeds "
             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k2);

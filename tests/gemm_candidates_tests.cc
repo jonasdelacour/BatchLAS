@@ -313,10 +313,10 @@ template <typename T>
 ::testing::AssertionResult item_ok(const Problem<T>& p, int it) {
     const Spec& s = p.s;
     auto view0 = [&](const Region& g) {
-        return MVof<T>(const_cast<T*>(p.mem0.data()) + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
     };
     auto view1 = [&](const Region& g) {
-        return MVof<T>(const_cast<T*>(p.mem.data()) + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
+        return batchlas::verify::view(p.mem.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
     };
     const int one[] = {it};
     const double err = batchlas::verify::gemm_backward_error(

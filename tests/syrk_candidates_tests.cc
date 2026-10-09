@@ -132,9 +132,9 @@ template <typename T>
 double rel_error(const Prob<T>& p, int it) {
     using namespace batchlas::verify;
     const Spec& s = p.s;
-    const MVof<T> A0(const_cast<T*>(p.mem0.data()) + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
-    const MVof<T> C0(const_cast<T*>(p.mem0.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
-    const MVof<T> C1(const_cast<T*>(p.mem.data()) + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+    const auto C0 = batchlas::verify::view(p.mem0.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     const bool nt = s.trans == Transpose::NoTrans;
     const int one[] = {it};
     return gemm_backward_error(A0, Shape::general, nt ? Transpose::NoTrans : Transpose::Trans, A0, Shape::general,
@@ -146,7 +146,7 @@ double rel_error(const Prob<T>& p, int it) {
 // bit (A, the pads, C's other triangle), and for a repeating batch every item's C bit-identical
 // to its representative's.
 template <typename T>
-::testing::AssertionResult correct(const Prob<T>& p) {
+::testing::AssertionResult correct(const Prob<T>& p, bool record = true) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
@@ -154,7 +154,9 @@ template <typename T>
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double e = rel_error(p, it);
-        if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e))
+        // record = false: results expected to be wrong must not enter the calibration.
+        if (!(record ? batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e)
+                     : batchlas::verify::within<T>(batchlas::verify::Check::blas, s.k, e)))
             return ::testing::AssertionFailure() << "item " << it << " backward error " << e << " exceeds "
                                                  << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     }
@@ -479,7 +481,7 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
                 auto d = make_prob<T>(s);
                 std::string why;
                 const bool launched = this->direct(c, d, &why);
-                const bool right = launched && correct(d);
+                const bool right = launched && correct(d, false);
                 EXPECT_EQ(accepted, right) << name(c, s) << (launched ? "" : " (direct: " + why + ")");
             }
     }

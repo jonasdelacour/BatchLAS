@@ -192,9 +192,9 @@ template <typename T>
 double residual(const Solve<T>& p, int it) {
     const Spec& s = p.s;
     using View = MatrixView<T, MatrixFormat::Dense>;
-    const View A0(const_cast<T*>(p.mem0.data()) + p.a.off, s.n, s.n, p.a.ld, p.a.stride, s.batch);
-    const View B0(const_cast<T*>(p.mem0.data()) + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
-    const View X(const_cast<T*>(p.mem.data()) + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off, s.n, s.n, p.a.ld, p.a.stride, s.batch);
+    const auto B0 = batchlas::verify::view(p.mem0.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    const auto X = batchlas::verify::view(p.mem.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
     const int one[] = {it};
     return batchlas::verify::trsm_residual(A0, s.side, s.uplo, s.trans, s.diag, X, B0, batchlas::verify::up(p.alpha), one);
 }

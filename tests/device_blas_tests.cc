@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
+#include "test_utils.hh"
 
 #include <algorithm>
 #include <array>
@@ -206,8 +207,12 @@ void run_nd_item_kernel_3d_with_workspace(Queue& ctx,
 }
 
 // The kernels under test overwrite C, so a check keeps C's initial values and judges the result
-// against the definition through batchlas::verify: componentwise, k eps units, from the inputs
-// as the host sees them (not through the device::detail accessors the kernels themselves use).
+// against the definition through batchlas::verify: componentwise, from the inputs as the host sees
+// them (not through the device::detail accessors the kernels themselves use).
+//
+// These tests used absolute tolerances on small exact-integer data, 100-900x tighter than the
+// componentwise Check::blas bound. tighten() keeps that power: a Slack (factor <= 1) sized so that
+// err * scale <= old_tol, scale bounding the denominator of the componentwise error.
 template <typename T>
 using DenseView = MatrixView<T, MatrixFormat::Dense>;
 
@@ -220,43 +225,80 @@ std::vector<T> snapshot(const DenseView<T>& m) {
 }
 
 template <typename T>
-DenseView<T> packed_view(std::vector<T>& v, int rows, int cols) {
-    return {v.data(), rows, cols, rows, rows * cols, 1};
+batchlas::verify::Slack tighten(double old_tol, double scale, int k) {
+    const double b = batchlas::verify::bound<T>(batchlas::verify::Check::blas, k);
+    return {std::min(1.0, old_tol / (std::max(scale, 1e-300) * b)), "exact small-integer data: the old absolute tolerance, kept"};
+}
+
+template <class V>
+double maxabs(const V& m) {
+    return batchlas::verify::max_abs(m, 0);
+}
+
+// max over C of |alpha| (|op(A)||op(B)|)_ij + |beta||C0_ij|: the largest denominator of the componentwise error.
+template <class VA, class VB, class VC0, class D>
+double max_denominator(const VA& A, batchlas::verify::Shape sa, Transpose ta, const VB& B, batchlas::verify::Shape sb, Transpose tb,
+                       const VC0& C0, D alpha, D beta) {
+    namespace vd = batchlas::verify::detail;
+    const auto opA = vd::apply_op(vd::shaped_dense(vd::item_of(A, 0), sa), ta);
+    const auto opB = vd::apply_op(vd::shaped_dense(vd::item_of(B, 0), sb), tb);
+    const auto c0 = vd::item_of(C0, 0);
+    double worst = 0;
+    for (int j = 0; j < opB.cols; ++j)
+        for (int i = 0; i < opA.rows; ++i) {
+            double acc = 0;
+            for (int l = 0; l < opA.cols; ++l) acc += std::abs(opA(i, l)) * std::abs(opB(l, j));
+            worst = std::max(worst, std::abs(alpha) * acc + std::abs(beta) * std::abs(vd::get(c0, i, j)));
+        }
+    return worst;
+}
+
+// Everything below judges C (rows x cols) against C0 (the snapshot) with the given product error.
+template <typename T>
+void expect_c_close(double err, int k, double old_tol, double scale, const char* what) {
+    SCOPED_TRACE(what);
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::blas, k, err, tighten<T>(old_tol, scale, k));
 }
 
 template <typename T>
-void expect_gemm_close(const DenseView<T>& a, Transpose ta, const DenseView<T>& b, Transpose tb, std::vector<T> c0,
-                       const DenseView<T>& c, T alpha, T beta) {
+void expect_gemm_close(const DenseView<T>& a, Transpose ta, const DenseView<T>& b, Transpose tb, const std::vector<T>& c0,
+                       const DenseView<T>& c, T alpha, T beta, double old_tol) {
     using namespace batchlas::verify;
-    const DenseView<T> c_before = packed_view(c0, c.rows(), c.cols());
+    const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
     const int k = ta == Transpose::NoTrans ? a.cols() : a.rows();
     const double err = gemm_backward_error(a, Shape::general, ta, b, Shape::general, tb, c_before, c, Shape::general, up(alpha), up(beta));
-    EXPECT_TRUE(pass<T>(Check::blas, k, err)) << "gemm backward error " << err << " exceeds " << bound<T>(Check::blas, k);
+    expect_c_close<T>(err, k, old_tol, max_denominator(a, Shape::general, ta, b, Shape::general, tb, c_before, up(alpha), up(beta)), "gemm");
 }
 
 template <typename T>
-void expect_symm_close(const DenseView<T>& a, Side side, Uplo uplo, const DenseView<T>& b, std::vector<T> c0,
-                       const DenseView<T>& c, T alpha, T beta) {
+void expect_symm_close(const DenseView<T>& a, Side side, Uplo uplo, const DenseView<T>& b, const std::vector<T>& c0,
+                       const DenseView<T>& c, T alpha, T beta, double old_tol) {
     using namespace batchlas::verify;
-    const DenseView<T> c_before = packed_view(c0, c.rows(), c.cols());
+    const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
     const Shape sym = uplo == Uplo::Lower ? Shape::symmetric_lower : Shape::symmetric_upper;
     const double err = side == Side::Left
         ? gemm_backward_error(a, sym, Transpose::NoTrans, b, Shape::general, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta))
         : gemm_backward_error(b, Shape::general, Transpose::NoTrans, a, sym, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta));
-    EXPECT_TRUE(pass<T>(Check::blas, a.rows(), err)) << "symm backward error " << err << " exceeds " << bound<T>(Check::blas, a.rows());
+    const double den = side == Side::Left
+        ? max_denominator(a, sym, Transpose::NoTrans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
+        : max_denominator(b, Shape::general, Transpose::NoTrans, a, sym, Transpose::NoTrans, c_before, up(alpha), up(beta));
+    expect_c_close<T>(err, a.rows(), old_tol, den, "symm");
 }
 
 template <typename T>
 void expect_trmm_close(const DenseView<T>& a, Side side, Uplo uplo, Transpose trans, Diag diag, const DenseView<T>& b,
-                       std::vector<T> c0, const DenseView<T>& c, T alpha, T beta) {
+                       const std::vector<T>& c0, const DenseView<T>& c, T alpha, T beta, double old_tol) {
     using namespace batchlas::verify;
-    const DenseView<T> c_before = packed_view(c0, c.rows(), c.cols());
+    const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
     const bool unit = diag == Diag::Unit;
     const Shape tri = uplo == Uplo::Lower ? (unit ? Shape::unit_lower : Shape::lower) : (unit ? Shape::unit_upper : Shape::upper);
     const double err = side == Side::Left
         ? gemm_backward_error(a, tri, trans, b, Shape::general, Transpose::NoTrans, c_before, c, Shape::general, up(alpha), up(beta))
         : gemm_backward_error(b, Shape::general, Transpose::NoTrans, a, tri, trans, c_before, c, Shape::general, up(alpha), up(beta));
-    EXPECT_TRUE(pass<T>(Check::blas, a.rows(), err)) << "trmm backward error " << err << " exceeds " << bound<T>(Check::blas, a.rows());
+    const double den = side == Side::Left
+        ? max_denominator(a, tri, trans, b, Shape::general, Transpose::NoTrans, c_before, up(alpha), up(beta))
+        : max_denominator(b, Shape::general, Transpose::NoTrans, a, tri, trans, c_before, up(alpha), up(beta));
+    expect_c_close<T>(err, a.rows(), old_tol, den, "trmm");
 }
 
 // Only C's stored triangle is written; the other triangle must be exactly what it was.
@@ -269,37 +311,48 @@ void expect_triangle_untouched(Uplo uplo, const std::vector<T>& c0, const DenseV
 }
 
 template <typename T>
-void expect_syrk_close(const DenseView<T>& a, Uplo uplo, Transpose trans, std::vector<T> c0, const DenseView<T>& c, T alpha, T beta) {
+void expect_syrk_close(const DenseView<T>& a, Uplo uplo, Transpose trans, const std::vector<T>& c0, const DenseView<T>& c, T alpha, T beta,
+                       double old_tol) {
     using namespace batchlas::verify;
-    const DenseView<T> c_before = packed_view(c0, c.rows(), c.cols());
+    const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
     const bool nt = trans == Transpose::NoTrans;
     const int k = nt ? a.cols() : a.rows();
     const double err = gemm_backward_error(a, Shape::general, trans, a, Shape::general, nt ? Transpose::Trans : Transpose::NoTrans, c_before, c,
                                            uplo == Uplo::Lower ? Shape::lower : Shape::upper, up(alpha), up(beta));
-    EXPECT_TRUE(pass<T>(Check::blas, k, err)) << "syrk backward error " << err << " exceeds " << bound<T>(Check::blas, k);
+    expect_c_close<T>(err, k, old_tol, max_denominator(a, Shape::general, trans, a, Shape::general, nt ? Transpose::Trans : Transpose::NoTrans, c_before, up(alpha), up(beta)), "syrk");
     expect_triangle_untouched(uplo, c0, c);
 }
 
-// alpha (opA opB^T + opB opA^T) is one product of the n x 2k panels [opA opB] and [opB opA].
+// syr2k and her2k through rank2k_backward_error (inner dimension 2k).
 template <typename T>
-void expect_syr2k_close(const DenseView<T>& a, const DenseView<T>& b, Uplo uplo, Transpose trans, std::vector<T> c0,
-                        const DenseView<T>& c, T alpha, T beta) {
+void expect_rank2k_close(const DenseView<T>& a, const DenseView<T>& b, Uplo uplo, Transpose trans, const std::vector<T>& c0,
+                         const DenseView<T>& c, T alpha, T beta, bool hermitian, double old_tol) {
     using namespace batchlas::verify;
-    const bool nt = trans == Transpose::NoTrans;
-    const int n = nt ? a.rows() : a.cols(), k = nt ? a.cols() : a.rows(), k2 = 2 * k;
-    std::vector<T> left(static_cast<std::size_t>(n) * k2), right(static_cast<std::size_t>(n) * k2);
-    for (int l = 0; l < k; ++l)
-        for (int i = 0; i < n; ++i) {
-            const T x = nt ? a(i, l) : a(l, i), y = nt ? b(i, l) : b(l, i);
-            left[static_cast<std::size_t>(l) * n + i] = x, left[static_cast<std::size_t>(k + l) * n + i] = y;
-            right[static_cast<std::size_t>(l) * n + i] = y, right[static_cast<std::size_t>(k + l) * n + i] = x;
-        }
-    const DenseView<T> L = packed_view(left, n, k2), R = packed_view(right, n, k2);
-    const DenseView<T> c_before = packed_view(c0, c.rows(), c.cols());
-    const double err = gemm_backward_error(L, Shape::general, Transpose::NoTrans, R, Shape::general, Transpose::Trans, c_before, c,
-                                           uplo == Uplo::Lower ? Shape::lower : Shape::upper, up(alpha), up(beta));
-    EXPECT_TRUE(pass<T>(Check::blas, k2, err)) << "syr2k backward error " << err << " exceeds " << bound<T>(Check::blas, k2);
+    const auto c_before = view(c0.data(), c.rows(), c.cols(), c.rows());
+    const int k = trans == Transpose::NoTrans ? a.cols() : a.rows();
+    const double err = rank2k_backward_error(a, b, trans, c_before, c, uplo, up(alpha), up(beta), hermitian);
+    expect_c_close<T>(err, 2 * k, old_tol, 2 * std::abs(alpha) * k * maxabs(a) * maxabs(b) + std::abs(beta) * maxabs(c_before), "rank2k");
     expect_triangle_untouched(uplo, c0, c);
+}
+
+// A := A0 + alpha x op(y): one gemm with inner dimension 1 (x as a 1 x m matrix read Trans/ConjTrans, y as n x 1 or 1 x n).
+template <typename T>
+void expect_ger_close(const VectorView<T>& x, const VectorView<T>& y, const std::vector<T>& a0, const DenseView<T>& a, T alpha,
+                      bool conjugate_x, bool conjugate_y, double old_tol) {
+    using namespace batchlas::verify;
+    const int m = a.rows(), n = a.cols();
+    const auto x1m = view(x.data_ptr(), 1, m, 1);
+    const auto yn1 = view(y.data_ptr(), n, 1, n);
+    const auto y1n = view(y.data_ptr(), 1, n, 1);
+    const auto a_before = view(a0.data(), m, n, m);
+    const Transpose tx = conjugate_x ? Transpose::ConjTrans : Transpose::Trans;
+    double mx = 0, my = 0;
+    for (int i = 0; i < m; ++i) mx = std::max(mx, double(std::abs(x(i))));
+    for (int j = 0; j < n; ++j) my = std::max(my, double(std::abs(y(j))));
+    const double err = conjugate_y
+        ? gemm_backward_error(x1m, Shape::general, tx, yn1, Shape::general, Transpose::ConjTrans, a_before, a, Shape::general, up(alpha), up(T(1)))
+        : gemm_backward_error(x1m, Shape::general, tx, y1n, Shape::general, Transpose::NoTrans, a_before, a, Shape::general, up(alpha), up(T(1)));
+    expect_c_close<T>(err, 1, old_tol, std::abs(alpha) * mx * my + maxabs(a_before), "ger");
 }
 
 template <typename T>
@@ -346,72 +399,7 @@ void run_trmm_nd_item_case(Queue& ctx, size_t local_size) {
             item, a_view, b_view, c_view, 0.9f, -0.2f, workspace);
     });
 
-    expect_trmm_close(a.view(), SideValue, UploValue, TransValue, DiagValue, b.view(), c0, c.view(), 0.9f, -0.2f);
-}
-
-template <typename T>
-std::vector<T> reference_rank1_update(const VectorView<T>& x,
-                                      const VectorView<T>& y,
-                                      const MatrixView<T, MatrixFormat::Dense>& a_initial,
-                                      T alpha,
-                                      bool conjugate_x = false,
-                                      bool conjugate_y = false) {
-    std::vector<T> out(static_cast<std::size_t>(a_initial.rows() * a_initial.cols()), T{});
-
-    for (int j = 0; j < a_initial.cols(); ++j) {
-        for (int i = 0; i < a_initial.rows(); ++i) {
-            const T lhs = batchlas::device::detail::maybe_conjugate(x(i), conjugate_x);
-            const T rhs = batchlas::device::detail::maybe_conjugate(y(j), conjugate_y);
-            out[static_cast<std::size_t>(j * a_initial.rows() + i)] = a_initial(i, j) + alpha * lhs * rhs;
-        }
-    }
-
-    return out;
-}
-
-template <typename T>
-std::vector<T> reference_rank2k(const MatrixView<T, MatrixFormat::Dense>& a_view,
-                                const MatrixView<T, MatrixFormat::Dense>& b_view,
-                                const MatrixView<T, MatrixFormat::Dense>& c_initial,
-                                T alpha,
-                                T beta,
-                                Uplo uplo,
-                                Transpose trans,
-                                bool hermitian) {
-    auto a_kernel = a_view.kernel_view();
-    auto b_kernel = b_view.kernel_view();
-    std::vector<T> out(static_cast<std::size_t>(c_initial.rows() * c_initial.cols()), T{});
-    const int extent = batchlas::device::detail::output_size(a_kernel, trans);
-    const int contract_extent = batchlas::device::detail::input_size(a_kernel, trans);
-    const Transpose rhs_transform = (trans == Transpose::NoTrans)
-        ? (hermitian ? Transpose::ConjTrans : Transpose::Trans)
-        : Transpose::NoTrans;
-    const T alpha2 = hermitian ? batchlas::device::detail::conj(alpha) : alpha;
-
-    for (int j = 0; j < c_initial.cols(); ++j) {
-        for (int i = 0; i < c_initial.rows(); ++i) {
-            T value = c_initial(i, j);
-            if (i < extent && j < extent && batchlas::device::detail::triangular_storage_contains(uplo, i, j)) {
-                T sum{};
-                for (int k = 0; k < contract_extent; ++k) {
-                    const T lhs1 = batchlas::device::detail::matrix_entry(a_kernel, i, k, trans);
-                    const T rhs1 = batchlas::device::detail::matrix_entry(b_kernel, k, j, rhs_transform);
-                    const T lhs2 = batchlas::device::detail::matrix_entry(b_kernel, i, k, trans);
-                    const T rhs2 = batchlas::device::detail::matrix_entry(a_kernel, k, j, rhs_transform);
-                    sum += alpha * lhs1 * rhs1 + alpha2 * lhs2 * rhs2;
-                }
-                value = beta * c_initial(i, j) + sum;
-                if constexpr (ComplexScalar<T>) {
-                    if (hermitian && i == j) {
-                        value = T(value.real(), typename T::value_type(0));
-                    }
-                }
-            }
-            out[static_cast<std::size_t>(j * c_initial.rows() + i)] = value;
-        }
-    }
-
-    return out;
+    expect_trmm_close(a.view(), SideValue, UploValue, TransValue, DiagValue, b.view(), c0, c.view(), 0.9f, -0.2f, 0.0001);
 }
 
 template <typename T>
@@ -1316,7 +1304,7 @@ TEST(DeviceBlasTest, GerGroupMatchesReference) {
 
     const auto x_view = VectorView<float>(x);
     const auto y_view = VectorView<float>(y);
-    const auto expected = reference_rank1_update(x_view, y_view, a.view(), 1.25f);
+    const auto a0 = snapshot(a.view());
     auto a_view = a.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
@@ -1324,7 +1312,7 @@ TEST(DeviceBlasTest, GerGroupMatchesReference) {
         batchlas::device::ger(group, x_view, y_view, a_view, 1.25f);
     });
 
-    expect_matrix_matches_vector(a.view(), expected);
+    expect_ger_close(x_view, y_view, a0, a.view(), 1.25f, false, false, 1e-4);
 }
 
 TEST(DeviceBlasTest, GercGroupMatchesReference) {
@@ -1351,7 +1339,7 @@ TEST(DeviceBlasTest, GercGroupMatchesReference) {
 
     const auto x_view = VectorView<Complex>(x);
     const auto y_view = VectorView<Complex>(y);
-    const auto expected = reference_rank1_update(x_view, y_view, a.view(), Complex(0.75f, -0.5f), false, true);
+    const auto a0 = snapshot(a.view());
     auto a_view = a.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
@@ -1359,7 +1347,7 @@ TEST(DeviceBlasTest, GercGroupMatchesReference) {
         batchlas::device::gerc(group, x_view, y_view, a_view, Complex(0.75f, -0.5f));
     });
 
-    expect_matrix_matches_vector(a.view(), expected);
+    expect_ger_close(x_view, y_view, a0, a.view(), Complex(0.75f, -0.5f), false, true, 1e-4);
 }
 
 TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
@@ -1388,7 +1376,7 @@ TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
 
     const auto x_view = VectorView<float>(x);
     const auto y_view = VectorView<float>(y);
-    const auto expected = reference_rank1_update(x_view, y_view, a_auto.view(), 0.75f);
+    const auto a0 = snapshot(a_auto.view());
     auto a_auto_view = a_auto.view().kernel_view();
     auto a_generic_view = a_generic.view().kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
@@ -1400,7 +1388,7 @@ TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
         batchlas::device::ger<batchlas::device::DeviceBlasPolicy::Generic>(item.get_group(), x_view, y_view, a_generic_view, 0.75f);
     });
 
-    expect_matrix_matches_vector(a_auto.view(), expected, 1e-4);
+    expect_ger_close(x_view, y_view, a0, a_auto.view(), 0.75f, false, false, 1e-4);
     for (int j = 0; j < a_auto.cols(); ++j) {
         for (int i = 0; i < a_auto.rows(); ++i) {
             EXPECT_NEAR(a_auto.view().template at<MatrixFormat::Dense>(i, j),
@@ -1446,7 +1434,7 @@ TEST(DeviceBlasTest, Syr2kGroupMatchesReference) {
         batchlas::device::syr2k<Uplo::Lower, Transpose::NoTrans>(group, a_view, b_view, c_view, -0.75f, 0.5f, workspace);
     });
 
-    expect_syr2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f, false, 0.0001);
 }
 
 TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
@@ -1479,7 +1467,7 @@ TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
         batchlas::device::syrk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, -0.75f, 0.5f, workspace);
     });
 
-    expect_syrk_close(a.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f);
+    expect_syrk_close(a.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f, 0.0001);
 }
 
 TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
@@ -1515,7 +1503,7 @@ TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1529,7 +1517,7 @@ TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
             group, a_view, b_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), true, 1e-4);
 }
 
 TEST(DeviceBlasTest, HerkGroupMatchesReference) {
@@ -1661,7 +1649,7 @@ TEST(DeviceBlasTest, SyrkNdItem3DTiledTransposeMatchesReference) {
             item, a_view, c_view, -0.6f, 0.8f, workspace);
     });
 
-    expect_syrk_close(a.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f);
+    expect_syrk_close(a.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f, 0.0005);
 }
 
 TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
@@ -1702,7 +1690,7 @@ TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
             item, a_view, b_view, c_view, -0.6f, 0.8f, workspace);
     });
 
-    expect_syr2k_close(a.view(), b.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f, false, 0.0005);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
@@ -1733,7 +1721,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1746,7 +1734,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
@@ -1817,7 +1805,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), Uplo::Lower, Transpose::ConjTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1830,7 +1818,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::ConjTrans, c0, c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
@@ -1861,7 +1849,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1875,7 +1863,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
@@ -1906,7 +1894,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), Uplo::Lower, Transpose::ConjTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1920,7 +1908,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::ConjTrans, c0, c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
@@ -1952,7 +1940,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
         }
     }
 
-    const auto expected = reference_rank2k(a.view(), b.view(), c.view(), Complex(-0.4, 0.3), Complex(0.9, 0.0), Uplo::Lower, Transpose::NoTrans, true);
+    const auto c0 = snapshot(c.view());
     auto a_view = a.view().kernel_view();
     auto b_view = b.view().kernel_view();
     auto c_view = c.view().kernel_view();
@@ -1966,7 +1954,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4, 0.3), Complex(0.9, 0.0), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-10);
+    expect_rank2k_close(a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4, 0.3), Complex(0.9, 0.0), true, 1e-10);
 }
 
 TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
@@ -2391,7 +2379,7 @@ TEST(DeviceBlasTest, SymmGroupMatchesReference) {
         batchlas::device::symm<Side::Left, Uplo::Lower>(group, a_view, b_view, c_view, 1.5f, -0.25f, workspace);
     });
 
-    expect_symm_close(a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.5f, -0.25f);
+    expect_symm_close(a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.5f, -0.25f, 0.0005);
 }
 
 TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
@@ -2441,8 +2429,8 @@ TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
             item, a_view, b_view, c_generic_view, 0.8f, 0.3f, workspace);
     });
 
-    expect_symm_close(a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_auto.view(), 0.8f, 0.3f);
-    expect_symm_close(a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_generic.view(), 0.8f, 0.3f);
+    expect_symm_close(a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_auto.view(), 0.8f, 0.3f, 0.0001);
+    expect_symm_close(a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_generic.view(), 0.8f, 0.3f, 0.0001);
 }
 
 TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
@@ -2531,8 +2519,8 @@ TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
                          std::integral_constant<Transpose, Transpose::Trans>{});
             }
 
-            expect_gemm_close(a.view(), trans_a, b.view(), trans_b, c0, c_auto.view(), 1.25f, -0.35f);
-            expect_gemm_close(a.view(), trans_a, b.view(), trans_b, c0, c_generic.view(), 1.25f, -0.35f);
+            expect_gemm_close(a.view(), trans_a, b.view(), trans_b, c0, c_auto.view(), 1.25f, -0.35f, 0.0001);
+            expect_gemm_close(a.view(), trans_a, b.view(), trans_b, c0, c_generic.view(), 1.25f, -0.35f, 0.0001);
         }
     }
 }
@@ -2611,7 +2599,7 @@ TEST(DeviceBlasTest, TrmmNdItem3DTiledMatchesReference) {
                                   workspace);
     });
 
-    expect_trmm_close(a.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, b.view(), c0, c.view(), 0.9f, -0.2f);
+    expect_trmm_close(a.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, b.view(), c0, c.view(), 0.9f, -0.2f, 0.0005);
 }
 
 TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
@@ -2652,7 +2640,7 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, 0.95f, -0.2f, workspace);
     });
 
-    expect_gemm_close(a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 0.95f, -0.2f);
+    expect_gemm_close(a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 0.95f, -0.2f, 0.0005);
 }
 
 TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
@@ -2693,7 +2681,7 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
             item, a_view, b_view, c_view, 1.1f, -0.25f, workspace);
     });
 
-    expect_gemm_close(a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 1.1f, -0.25f);
+    expect_gemm_close(a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 1.1f, -0.25f, 0.001);
 }
 
 TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
@@ -2738,5 +2726,5 @@ TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, 1.1f, -0.15f, workspace);
     });
 
-    expect_symm_close(a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.1f, -0.15f);
+    expect_symm_close(a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.1f, -0.15f, 0.0005);
 }
