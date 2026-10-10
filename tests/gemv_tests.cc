@@ -28,6 +28,14 @@ struct TestConfig {
 
 using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
+// These tests used a relative tolerance of test_utils::tolerance<T>() (1e-5 float, 2e-5 cfloat, 1e-10 double),
+// which the relative bound exceeds at long reductions in float. The Slack keeps it.
+template <typename T>
+batchlas::verify::Slack old_relative_tolerance(int k) {
+    return {std::min(1.0, static_cast<double>(test_utils::tolerance<T>()) / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+            "the old relative tolerance, kept"};
+}
+
 template <typename Config>
 class GemvMatrixViewTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -199,8 +207,9 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     this->ctx->wait();
 
-    EXPECT_VERIFY(ScalarType, batchlas::verify::Check::blas, this->cols,
-                  this->gemv_error(A_view, x_vec, y0_vec, y_vec, alpha, beta, Transpose::NoTrans));
+    EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, this->cols,
+                        this->gemv_error(A_view, x_vec, y0_vec, y_vec, alpha, beta, Transpose::NoTrans),
+                        old_relative_tolerance<ScalarType>(this->cols));
 }
 
 
@@ -344,9 +353,10 @@ protected:
 
         const MatrixView<ScalarType, MatrixFormat::Dense> A_ref_view(A_ref.data(), c.m, c.n, ld, a_stride, c.batch);
         VectorView<ScalarType> y0_vec(y_initial.data(), out, c.batch, c.yinc, y_stride);
-        EXPECT_VERIFY(ScalarType, batchlas::verify::Check::blas, red,
-                      batchlas::verify::gemv_backward_error(A_ref_view, c.transA, x_vec, y0_vec, y_vec, batchlas::verify::up(c.alpha),
-                                                            batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)));
+        EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, red,
+                            batchlas::verify::gemv_backward_error(A_ref_view, c.transA, x_vec, y0_vec, y_vec, batchlas::verify::up(c.alpha),
+                                                                  batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)),
+                            old_relative_tolerance<ScalarType>(red));
 
         for (int b = 0; b < c.batch; ++b) {
             // The gaps between y's live elements must be untouched: a kernel

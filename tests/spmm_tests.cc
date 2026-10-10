@@ -413,6 +413,17 @@ protected:
         }
         const MatrixView<S, MatrixFormat::CSR> A_ref(a_ref.data(), a_ro.data(), a_ci.data(), c.m, c.kA, NonZeros{max_nnz},
                                                      matrix_stride, offset_stride, c.batch);
+        // The reduction length of one output entry is the number of nonzeros that land in it: a row of A
+        // under NoTrans, a column under (Conj)Trans.
+        int terms = 0;
+        for (const SpmmPattern& it : items) {
+            if (a_nt) {
+                for (int i = 0; i < c.m; ++i) terms = std::max(terms, it.ro[static_cast<size_t>(i) + 1] - it.ro[static_cast<size_t>(i)]);
+            } else {
+                std::vector<int> per_col(static_cast<size_t>(c.kA), 0);
+                for (int col : it.ci) terms = std::max(terms, ++per_col[static_cast<size_t>(col)]);
+            }
+        }
         // The uninitialised B column (and its discarded output) is left out: the claim is about the others.
         const int dead = c.b_nan_col;
         const int segments[2][2] = {{0, dead < 0 ? c.nrhs : dead}, {dead < 0 ? c.nrhs : dead + 1, c.nrhs}};
@@ -423,7 +434,7 @@ protected:
                                    : batchlas::verify::view(b_data.data(), b_rows, b_cols, ldb, str_b, c.batch);
             const auto Cseg = batchlas::verify::view(c_data.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
             const auto C0seg = batchlas::verify::view(c_initial.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
-            EXPECT_VERIFY(S, batchlas::verify::Check::blas, red_rows,
+            EXPECT_VERIFY(S, batchlas::verify::Check::blas, terms,
                           batchlas::verify::spmm_backward_error(A_ref, c.transA, Bseg, c.transB, C0seg, Cseg, batchlas::verify::up(c.alpha),
                                                                 batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)))
                 << "columns " << first << ".." << first + count - 1;

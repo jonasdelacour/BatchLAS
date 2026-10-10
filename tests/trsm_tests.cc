@@ -43,7 +43,7 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
     }
     
-    bool verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
+    ::testing::AssertionResult verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
                           int batch_idx,
@@ -76,9 +76,9 @@ protected:
                               << " (orig=" << B_original.at(row, col, batch_idx) << ")" << std::endl;
                 }
             }
-            return false;
+            return ::testing::AssertionFailure() << "trsm left B unchanged";
         }
-        
+
         // op(A) X = alpha B0, normwise (Check::solve, n = the order of A); B holds X.
         const int item = batch_idx;
         const double res = batchlas::verify::trsm_residual(A, Side::Left, uplo, trans, Diag::NonUnit, B, B_original,
@@ -937,17 +937,13 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
         (void)backend::trsm_vendor<Backend::CUDA, T>(*ctx, A.view(), B.view(), Side::Left, Uplo::Lower,
                                                      Transpose::NoTrans, Diag::NonUnit, T(1));
         ctx->wait();
-        for (int b : {0, bs - 1}) {
-            const T* x = B.view().data_ptr() + static_cast<std::size_t>(n) * b;
-            double num = 0, den = 0;
-            for (int i = 0; i < n; ++i) {
-                std::complex<double> s = 0;
-                for (int k = 0; k <= i; ++k)
-                    s += std::complex<double>(a0[i + static_cast<std::size_t>(k) * n]) * std::complex<double>(x[k]);
-                num += std::norm(s - std::complex<double>(b0[i]));
-                den += std::norm(std::complex<double>(b0[i]));
-            }
-            EXPECT_LT(std::sqrt(num / den), 1e-5) << "item " << b;
-        }
+        // Only items 0 and bs - 1 hold a system; B0 repeats b0 so that both read the same right-hand side.
+        std::vector<T> b0_all(static_cast<std::size_t>(n) * bs);
+        for (int b = 0; b < bs; ++b) std::copy(b0.begin(), b0.end(), b0_all.begin() + static_cast<std::size_t>(n) * b);
+        const MatrixView<T, MatrixFormat::Dense> B0(b0_all.data(), n, 1, n, n, bs);
+        const std::vector<int> items{0, bs - 1};
+        EXPECT_VERIFY(T, batchlas::verify::Check::solve, n,
+                      batchlas::verify::trsm_residual(A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, B.view(), B0,
+                                                      batchlas::verify::up(T(1)), items));
     }
 }
