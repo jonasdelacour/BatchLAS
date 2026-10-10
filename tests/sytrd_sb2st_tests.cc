@@ -15,29 +15,19 @@
 #include <string>
 #include <cstring>
 #include <batchlas/verify/reference.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/scalar.hh>
+#include <batchlas/verify/tolerance.hh>
 #include <limits>
+#include <span>
 #include <type_traits>
+#include <vector>
 
 #include "test_utils.hh"
 
 using namespace batchlas;
 
 namespace {
-
-template <typename Real>
-Real tol_for() {
-    if constexpr (std::is_same_v<Real, float>) return Real(10) * Real(test_utils::tolerance<float>());
-    return Real(10) * Real(test_utils::tolerance<double>());
-}
-
-template <typename U>
-inline U conj_if_needed(const U& x) {
-    if constexpr (std::is_same_v<U, std::complex<float>> || std::is_same_v<U, std::complex<double>>) {
-        return std::conj(x);
-    } else {
-        return x;
-    }
-}
 
 template <typename T>
 static void dense_from_lower_band_work(const std::vector<T>& ABw,
@@ -65,7 +55,7 @@ static void dense_from_lower_band_work(const std::vector<T>& ABw,
                 const T aij = AB_b[r + static_cast<size_t>(j) * static_cast<size_t>(ldab)];
                 A_b[i + static_cast<size_t>(j) * static_cast<size_t>(lda)] = aij;
                 if (i != j) {
-                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = conj_if_needed(aij);
+                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = batchlas::verify::conj(aij);
                 }
             }
         }
@@ -96,8 +86,7 @@ template <typename T>
 ::testing::AssertionResult expect_lower_band_unchanged(const MatrixView<T, MatrixFormat::Dense>& AB_before,
                                                        const MatrixView<T, MatrixFormat::Dense>& AB_after,
                                                        int n,
-                                                       int kd,
-                                                       typename base_type<T>::type tol) {
+                                                       int kd) {
     if (AB_before.rows() != AB_after.rows()) {
         return ::testing::AssertionFailure() << "row mismatch: before=" << AB_before.rows() << " after=" << AB_after.rows();
     }
@@ -115,19 +104,18 @@ template <typename T>
                 const auto before = AB_before(r, j, b);
                 const auto after = AB_after(r, j, b);
                 if (r <= rmax) {
-                    const auto diff = static_cast<typename base_type<T>::type>(std::abs(before - after));
-                    if (diff > tol) {
+                    // The input band is read-only: it must come back bit for bit.
+                    if (!(before == after)) {
                         return ::testing::AssertionFailure()
                                << "AB changed at (r=" << r << ", j=" << j << ") batch=" << b
-                               << " diff=" << diff << " tol=" << tol;
+                               << " before=" << before << " after=" << after;
                     }
                 } else {
                     // Rows beyond the stored band should stay exactly zero (by construction).
-                    const auto mag = static_cast<typename base_type<T>::type>(std::abs(after));
-                    if (mag > tol) {
+                    if (!(after == T(0))) {
                         return ::testing::AssertionFailure()
                                << "AB had unexpected fill at (r=" << r << ", j=" << j << ") batch=" << b
-                               << " |after|=" << mag << " tol=" << tol;
+                               << " after=" << after;
                     }
                 }
             }
@@ -143,17 +131,69 @@ struct SytrdSb2stConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-// Ascending eigenvalues of the tridiagonal (d, e), overwriting d; e is not modified. Computed in
-// double by the library's LAPACKE reference.
-template <typename Real>
-bool tridiagonal_spectrum(int n, Real* d, const Real* e) {
-    std::vector<double> dd(d, d + n), ee(e, e + std::max(0, n - 1));
-    if (!batchlas::verify::tridiagonal_eigenvalues(dd, ee)) return false;
-    std::copy(dd.begin(), dd.end(), d);
+// LAPACKE spectra (ascending, in double) per batch item: of the Hermitian A (both triangles valid) and of
+// the tridiagonals (d, e). Both are independent of any BatchLAS operation.
+using Spectra = std::vector<std::vector<double>>;
+
+template <class View>
+bool dense_spectra(const View& A, Spectra& out) {
+    out.assign(static_cast<std::size_t>(A.batch_size()), {});
+    for (int b = 0; b < A.batch_size(); ++b) {
+        auto a = batchlas::verify::copy_item(A, b);
+        if (!batchlas::verify::eigenvalues(A.rows(), a, out[static_cast<std::size_t>(b)])) return false;
+    }
     return true;
 }
-#endif
+
+template <class Real>
+bool tridiagonal_spectra(Vector<Real>& d, Vector<Real>& e, int n, int batch, Spectra& out) {
+    out.assign(static_cast<std::size_t>(batch), {});
+    for (int b = 0; b < batch; ++b) {
+        std::vector<double> dd(static_cast<std::size_t>(n)), ee(static_cast<std::size_t>(std::max(0, n - 1)));
+        for (int i = 0; i < n; ++i) dd[static_cast<std::size_t>(i)] = d(i, b);
+        for (int i = 0; i < n - 1; ++i) ee[static_cast<std::size_t>(i)] = e(i, b);
+        if (!batchlas::verify::tridiagonal_eigenvalues(dd, ee)) return false;
+        out[static_cast<std::size_t>(b)] = std::move(dd);
+    }
+    return true;
+}
+
+// max |got - ref| / max|ref| over the batch (the library's values_error); *worst_item is the item attaining it.
+inline double spectra_error(const Spectra& got, const Spectra& ref, int* worst_item = nullptr) {
+    const int batch = static_cast<int>(ref.size());
+    const int n = static_cast<int>(ref.front().size());
+    std::vector<double> packed;
+    double scale = 0;
+    for (int b = 0; b < batch; ++b) {
+        packed.insert(packed.end(), got[static_cast<std::size_t>(b)].begin(), got[static_cast<std::size_t>(b)].end());
+        for (double l : ref[static_cast<std::size_t>(b)]) scale = batchlas::verify::nanmax(scale, std::fabs(l));
+    }
+    const VectorView<double> w(packed.data(), n, batch);
+    double worst = 0;
+    for (int b = 0; b < batch; ++b) {
+        const double err = batchlas::verify::values_error(w, ref, scale, std::span<const int>(&b, 1));
+        if (worst_item && !(err <= worst)) *worst_item = b;
+        worst = batchlas::verify::nanmax(worst, err);
+    }
+    return worst;
+}
+
+// Spectrum comparisons (Check::values): float keeps the old 10 x tolerance<float>() = 1e-4 absolute, about
+// 3e-5 of the spectral radius (3.3 at n = 256), 1/16 of the kind's bound; measured need 0.009 of the kind's
+// bound. Double's old 1e-9 absolute is looser than the kind's bound, which it meets (need 0.017). @p steps
+// scales the bound for that many accumulated chase steps, as the old tol0 * k.
+template <class T>
+batchlas::verify::Slack spectra_slack(int steps = 1) {
+    if constexpr (std::is_same_v<typename base_type<T>::type, float>)
+        return {0.0625 * std::max(1, steps), "the old 1e-4 absolute spectrum tolerance (about 3e-5 of the spectral radius); measured need 0.009"};
+    else
+        return {1.0 * std::max(1, steps), "the library bound, tighter than the old 1e-9 absolute; measured need 0.017"};
+}
+
+template <class T>
+::testing::AssertionResult spectra_match(const Spectra& got, const Spectra& ref, int n) {
+    return test_utils::verify_pass<T>(batchlas::verify::Check::values, n, spectra_error(got, ref), spectra_slack<T>());
+}
 
 } // namespace
 
@@ -185,6 +225,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     // Ensure this test actually exercises the CTA/sub-group implementation in
     // src/extensions/sytrd_sb2st_cta.cc. If the runtime/device doesn't support
@@ -200,7 +241,6 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     #endif
     const int batch = 5;
     const int block_size = 16;
-    const Real tol = tol_for<Real>();
 
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/7);
 
@@ -219,15 +259,8 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
     fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
-    // Reference eigenvalues from dense SYEV.
-    UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_ref;
+    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
     // Under test: SB2ST on band storage.
     Vector<Real> d_out(n, batch);
@@ -245,26 +278,10 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
         throw;
     }
 
-    // SB2ST outputs tridiagonal (d,e). Use host LAPACK STERF to compute its eigenvalues.
-    // Note: STERF overwrites (d,e), so copy into scratch buffers.
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-    UnifiedVector<Real> d_tri(static_cast<size_t>(n));
-    UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
-
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
-        for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);
-
-        ASSERT_TRUE(tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data()))
-            << "LAPACKE_dsterf failed for SB2ST tridiagonal (batch=" << b << ")";
-        std::sort(d_tri.begin(), d_tri.end());
-
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(eig_ref[static_cast<size_t>(i + b * n)], d_tri[static_cast<size_t>(i)], tol)
-                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
-        }
-    }
-#endif
+    // SB2ST outputs tridiagonal (d,e): its LAPACKE eigenvalues must be those of A0.
+    Spectra tri;
+    ASSERT_TRUE(tridiagonal_spectra(d_out, e_out, n, batch, tri)) << "LAPACKE_dsterf failed for SB2ST tridiagonal";
+    EXPECT_TRUE(spectra_match<T>(tri, eig_ref, n)) << "SB2ST";
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
@@ -273,6 +290,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
     const int n = 12;
@@ -283,7 +301,6 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     #endif
     const int batch = 5;
     const int block_size = 16;
-    const Real tol = tol_for<Real>();
 
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/9);
 
@@ -311,15 +328,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
         }
     }
 
-    // Reference eigenvalues from dense SYEV.
-    UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_ref;
+    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
     // Under test: BANDR1-style band reduction on band storage.
     Vector<Real> d_out(n, batch);
@@ -332,7 +342,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
     // BANDR1 implementation uses internal workspace; input AB should remain unchanged.
-    ASSERT_TRUE(expect_lower_band_unchanged<T>(AB_before, AB, n, kd, tol));
+    ASSERT_TRUE(expect_lower_band_unchanged<T>(AB_before, AB, n, kd));
 
     // Sanity check: schedule-parameter overload accepts non-default d/max_sweeps/kd_work.
     // Different schedules should still preserve eigenvalues (similarity transform).
@@ -349,39 +359,16 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
         sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, params));
     sytrd_band_reduction(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, ws2.to_span(), params).wait();
 
-    // Compute eigenvalues of returned tridiagonal (d,e) via host LAPACK STERF.
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-    UnifiedVector<Real> d_tri(static_cast<size_t>(n));
-    UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
-
+    // The LAPACKE eigenvalues of each returned tridiagonal (d,e) must be those of A0.
     auto check_spectrum = [&](Vector<Real>& d_vec, Vector<Real>& e_vec, const char* label) -> ::testing::AssertionResult {
-        for (int bb = 0; bb < batch; ++bb) {
-            for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_vec(i, bb);
-            for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_vec(i, bb);
-
-            if (!tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data())) {
-                return ::testing::AssertionFailure()
-                       << "LAPACKE_dsterf failed for band_reduction tridiagonal (" << label
-                       << ", batch=" << bb << ")";
-            }
-            std::sort(d_tri.begin(), d_tri.end());
-
-            for (int i = 0; i < n; ++i) {
-                const Real diff = std::abs(eig_ref[static_cast<size_t>(i + bb * n)] - d_tri[static_cast<size_t>(i)]);
-                if (diff > tol) {
-                    return ::testing::AssertionFailure()
-                           << "eigenvalue mismatch at i=" << i << ", batch=" << bb << " (" << label << ")"
-                           << " diff=" << diff << " tol=" << tol;
-                }
-            }
-        }
-
-        return ::testing::AssertionSuccess();
+        Spectra tri;
+        if (!tridiagonal_spectra(d_vec, e_vec, n, batch, tri))
+            return ::testing::AssertionFailure() << "LAPACKE_dsterf failed for band_reduction tridiagonal (" << label << ")";
+        return spectra_match<T>(tri, eig_ref, n) << " (" << label << ")";
     };
 
     ASSERT_TRUE(check_spectrum(d_out, e_out, "default"));
     ASSERT_TRUE(check_spectrum(d_out2, e_out2, "d=2"));
-#endif
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
@@ -390,10 +377,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     const int n = 64;
     const int batch = 3;
-    const Real tol = tol_for<Real>();
 
     for (int kd : {2, 4, 8, 12}) {
         if (kd >= n) continue;
@@ -414,18 +401,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
             Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
             fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
 
-            UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-            UnifiedVector<std::byte> ws_syev(
-                syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-            syev(ctx,
-                       A0.view(),
-                       eig_ref,
-                       {.jobz = JobType::NoEigenVectors},
-                       ws_syev.to_span()).wait();
-            for (int b = 0; b < batch; ++b) {
-                std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                          eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            }
+            Spectra eig_ref;
+            ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
             Vector<Real> d_out(n, batch);
             Vector<Real> e_out(std::max(0, n - 1), batch);
@@ -434,27 +411,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
                 sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
             sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
-            UnifiedVector<Real> d_tri(static_cast<size_t>(n));
-            UnifiedVector<Real> e_tri(static_cast<size_t>(std::max(0, n - 1)));
-
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-            for (int b = 0; b < batch; ++b) {
-                for (int i = 0; i < n; ++i) d_tri[static_cast<size_t>(i)] = d_out(i, b);
-                for (int i = 0; i < n - 1; ++i) e_tri[static_cast<size_t>(i)] = e_out(i, b);
-
-                ASSERT_TRUE(tridiagonal_spectrum<Real>(n, d_tri.data(), e_tri.data()))
-                    << "LAPACKE_dsterf failed (kd=" << kd << ", block_size=" << block_size << ", batch=" << b << ")";
-                std::sort(d_tri.begin(), d_tri.end());
-
-                for (int i = 0; i < n; ++i) {
-                    ASSERT_NEAR(eig_ref[static_cast<size_t>(i + b * n)], d_tri[static_cast<size_t>(i)], tol)
-                        << "eigenvalue mismatch at i=" << i
-                        << ", kd=" << kd
-                        << ", block_size=" << block_size
-                        << ", batch=" << b;
-                }
-            }
-#endif
+            Spectra tri;
+            ASSERT_TRUE(tridiagonal_spectra(d_out, e_out, n, batch, tri))
+                << "LAPACKE_dsterf failed (kd=" << kd << ", block_size=" << block_size << ")";
+            ASSERT_TRUE(spectra_match<T>(tri, eig_ref, n)) << "kd=" << kd << ", block_size=" << block_size;
         }
     }
 }
@@ -497,13 +457,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepBandContainment) {
         sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
     sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws.to_span(), params).wait();
 
-    const Real tol = tol_for<Real>();
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
             const int rmax = std::min(kd_work, n - 1 - j);
             for (int r = rmax + 1; r <= kd_work; ++r) {
                 // Rows that would map past the last matrix row must remain exactly zero.
-                ASSERT_NEAR(static_cast<Real>(std::abs(ABw(r, j, b))), Real(0), tol)
+                ASSERT_TRUE(ABw(r, j, b) == T(0))
                     << "ABw had unexpected fill at (r=" << r << ", j=" << j << ") batch=" << b;
             }
         }
@@ -555,12 +514,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     const int n = 32;
     const int kd = 6;
     const int kd_work = 3 * kd;
     const int batch = 2;
-    const Real tol = tol_for<Real>();
 
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/33);
     for (int b = 0; b < batch; ++b) {
@@ -576,15 +535,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
     fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
 
-    // Reference eigenvalues from dense SYEV on A0.
-    UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_ref;
+    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
     // Run exactly one BANDR1 chase step and reconstruct dense A_after.
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
@@ -623,25 +575,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
         }
     }
 
-    UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev2(
-        syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx,
-               A_after.view(),
-               eig_after,
-               {.jobz = JobType::NoEigenVectors},
-               ws_syev2.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_after;
+    ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eig_ref[static_cast<size_t>(i + b * n)], eig_after[static_cast<size_t>(i + b * n)], tol)
-                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
-        }
-    }
+    ASSERT_TRUE(spectra_match<T>(eig_after, eig_ref, n));
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
@@ -650,12 +587,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     const int n = 64;
     const int kd = 8;
     const int kd_work = 3 * kd;
     const int batch = 2;
-    const Real tol0 = tol_for<Real>();
 
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/35);
     for (int b = 0; b < batch; ++b) {
@@ -671,15 +608,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
     fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
 
-    // Reference eigenvalues from dense SYEV on A0.
-    UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_ref;
+    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
@@ -721,39 +651,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
             }
         }
 
-        UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
-        UnifiedVector<std::byte> ws_syev2(
-            syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-        syev(ctx,
-                   A_after.view(),
-                   eig_after,
-                   {.jobz = JobType::NoEigenVectors},
-                   ws_syev2.to_span()).wait();
-        for (int b = 0; b < batch; ++b) {
-            std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
-                      eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-        }
+        Spectra eig_after;
+        ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
-        const Real tol = tol0 * static_cast<Real>(std::max(1, k));
-        bool ok = true;
-        Real max_abs_diff = Real(0);
         int max_b = 0;
-        int max_i = 0;
-        for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < n; ++i) {
-                const Real diff = std::abs(eig_ref[static_cast<size_t>(i + b * n)] -
-                                           eig_after[static_cast<size_t>(i + b * n)]);
-                if (diff > max_abs_diff) {
-                    max_abs_diff = diff;
-                    max_b = b;
-                    max_i = i;
-                }
-                if (diff > tol) {
-                    ok = false;
-                }
-            }
-        }
-
+        const double err = spectra_error(eig_after, eig_ref, &max_b);
+        const bool ok = batchlas::verify::pass<T>(batchlas::verify::Check::values, n, err, spectra_slack<T>(k));
         if (!ok) {
             // Re-run once with dumps enabled to support Python comparison.
             const std::string dir = std::string("output/bandr1_dumps/gtest_multistep_k") + std::to_string(k);
@@ -763,8 +666,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
             sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
             ADD_FAILURE() << "Spectrum not preserved after k=" << k
-                          << " chase steps. max_abs_diff=" << max_abs_diff
-                          << " at (i=" << max_i << ", batch=" << max_b << ")"
+                          << " chase steps. error=" << err << " in batch=" << max_b
                           << ". BANDR1 dumps written to: " << dir;
             break;
         }
@@ -821,12 +723,12 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     const int n = 64;
     const int kd = 8;
     const int kd_work = 3 * kd;
     const int batch = 2;
-    const Real tol0 = tol_for<Real>();
 
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/71);
     for (int b = 0; b < batch; ++b) {
@@ -842,14 +744,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
     fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
 
-    UnifiedVector<Real> eig_ref(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev(
-        syev_buffer_size(ctx, A0.view(), eig_ref, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx, A0.view(), eig_ref, {.jobz = JobType::NoEigenVectors}, ws_syev.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_ref.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_ref.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_ref;
+    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
 
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
@@ -891,25 +787,9 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
         }
     }
 
-    UnifiedVector<Real> eig_after(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    UnifiedVector<std::byte> ws_syev2(
-        syev_buffer_size(ctx, A_after.view(), eig_after, JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx,
-               A_after.view(),
-               eig_after,
-               {.jobz = JobType::NoEigenVectors},
-               ws_syev2.to_span()).wait();
-    for (int b = 0; b < batch; ++b) {
-        std::sort(eig_after.begin() + static_cast<ptrdiff_t>(b) * n,
-                  eig_after.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-    }
+    Spectra eig_after;
+    ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
-    const Real tol = tol0;
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eig_ref[static_cast<size_t>(i + b * n)], eig_after[static_cast<size_t>(i + b * n)], tol)
-                << "eigenvalue mismatch after one full sweep at i=" << i << ", batch=" << b;
-        }
-    }
+    ASSERT_TRUE(spectra_match<T>(eig_after, eig_ref, n)) << "after one full sweep";
 }
 #endif

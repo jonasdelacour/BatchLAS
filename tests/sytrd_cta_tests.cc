@@ -8,6 +8,9 @@
 #include <batchlas/util/sycl-span.hh>
 #include "test_utils.hh"
 
+#include <batchlas/verify/norms.hh>
+#include <batchlas/verify/residuals.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -18,21 +21,6 @@
 using namespace batchlas;
 
 namespace {
-
-template <typename T>
-T abs_val(T x) {
-	if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-		return std::abs(x);
-	} else {
-		return std::abs(static_cast<double>(x));
-	}
-}
-
-template <typename Real>
-Real tol_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(2) * Real(test_utils::tolerance<float>());
-	return Real(test_utils::tolerance<double>());
-}
 
 template <typename Real>
 void ref_sytd2_upper(std::vector<Real>& a, int n, std::vector<Real>& d, std::vector<Real>& e, std::vector<Real>& tau) {
@@ -225,32 +213,21 @@ Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_cta(Queue& ctx,
 	return Q;
 }
 
+// ||Tmat - tridiag(d, e)||_F / ||A0||_F over the whole matrix: the band must be (d, e) and everything
+// outside it zero.
 template <typename Real>
-void assert_tridiagonal_matches(const MatrixView<Real, MatrixFormat::Dense>& T,
-								int n,
-								Vector<Real>& d,
-								Vector<Real>& e,
-								Real tol) {
-	for (int i = 0; i < n; ++i) {
-		ASSERT_TRUE(std::isfinite(static_cast<double>(d(i, 0))));
-		ASSERT_TRUE(std::isfinite(static_cast<double>(T(i, i, 0))));
-		EXPECT_NEAR(T(i, i, 0), d(i, 0), tol) << "diag mismatch at i=" << i;
-	}
-
-	for (int i = 0; i < n - 1; ++i) {
-		ASSERT_TRUE(std::isfinite(static_cast<double>(e(i, 0))));
-		EXPECT_NEAR(T(i + 1, i, 0), e(i, 0), tol) << "offdiag mismatch at i=" << i;
-		EXPECT_NEAR(T(i, i + 1, 0), e(i, 0), tol) << "offdiag mismatch at i=" << i;
-	}
-
-	// Everything beyond the first off-diagonal should be ~0.
-	const Real ztol = tol * Real(50);
+double tridiagonal_error(const Matrix<Real, MatrixFormat::Dense>& A0, const Matrix<Real, MatrixFormat::Dense>& Tmat,
+						 int n, Vector<Real>& d, Vector<Real>& e) {
+	std::vector<double> D(static_cast<std::size_t>(n) * n);
 	for (int j = 0; j < n; ++j) {
 		for (int i = 0; i < n; ++i) {
-			if (std::abs(i - j) <= 1) continue;
-			EXPECT_NEAR(T(i, j, 0), Real(0), ztol) << "non-tridiagonal at (" << i << "," << j << ")";
+			double t = 0;
+			if (i == j) t = batchlas::verify::up(d(i, 0));
+			else if (std::abs(i - j) == 1) t = batchlas::verify::up(e(std::min(i, j), 0));
+			D[static_cast<std::size_t>(i) + j * n] = batchlas::verify::up(Tmat.view()(i, j, 0)) - t;
 		}
 	}
+	return batchlas::verify::frobenius(batchlas::verify::view(D.data(), n, n, n), 0) / batchlas::verify::frobenius(A0.view(), 0);
 }
 
 template <typename T, Backend B>
@@ -283,7 +260,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 
 	const int n = 16;
 	const int batch = 1;
-	const Real tol = tol_for<Real>();
 
 	Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
 	Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -310,7 +286,8 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
 	this->ctx->wait();
 
-	assert_tridiagonal_matches(Tmat.view(), n, d, e, tol);
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, tridiagonal_error(A0, Tmat, n, d, e));
 }
 
 TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
@@ -319,7 +296,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 
 	const int n = 16;
 	const int batch = 1;
-	const Real tol = tol_for<Real>();
 
 	Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
 	Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -344,28 +320,25 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 		std::vector<Real> a_ref = extract_host_matrix_colmajor(A0, n);
 		std::vector<Real> d_ref, e_ref, tau_ref;
 		ref_sytd2_upper(a_ref, n, d_ref, e_ref, tau_ref);
-		for (int i = 0; i < n; ++i) {
-			EXPECT_NEAR(d(i, 0), d_ref[static_cast<std::size_t>(i)], tol) << "d mismatch vs ref at i=" << i;
-		}
+		// d and e against the reference relative to ||A0||_F; tau and the stored reflectors are O(1) already.
+		double dev_de = 0, dev_refl = 0;
+		for (int i = 0; i < n; ++i) dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(d(i, 0)) - double(d_ref[static_cast<std::size_t>(i)])));
 		for (int i = 0; i < n - 1; ++i) {
-			EXPECT_NEAR(e(i, 0), e_ref[static_cast<std::size_t>(i)], tol) << "e mismatch vs ref at i=" << i;
-			EXPECT_NEAR(tau(i, 0), tau_ref[static_cast<std::size_t>(i)], tol) << "tau mismatch vs ref at i=" << i;
+			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(e(i, 0)) - double(e_ref[static_cast<std::size_t>(i)])));
+			dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(tau(i, 0)) - double(tau_ref[static_cast<std::size_t>(i)])));
 		}
-
-		// Diagnostic: validate that the reflector storage in A matches the reference.
-		// If d/e/tau match but these don't, Q reconstruction from A will be wrong.
+		// Diagnostic: the reflector storage in A must match the reference. If d/e/tau match but these
+		// don't, Q reconstruction from A will be wrong.
 		auto Aoutv = A.view();
-		const Real atol = tol * Real(50);
 		for (int k = 1; k < n; ++k) {
-			// Reflector v is stored in column k, rows 0..k-2; implicit v[k-1] = 1.
-			for (int r = 0; r < k - 1; ++r) {
-				SCOPED_TRACE("k=" + std::to_string(k) + " r=" + std::to_string(r));
-				EXPECT_NEAR(Aoutv(r, k, 0), a_ref[static_cast<std::size_t>(r + k * n)], atol) << "reflector entry mismatch";
-			}
-			// The reflector's beta is stored at (k-1, k).
-			SCOPED_TRACE("k=" + std::to_string(k) + " beta");
-			EXPECT_NEAR(Aoutv(k - 1, k, 0), a_ref[static_cast<std::size_t>((k - 1) + k * n)], atol) << "beta storage mismatch";
+			// Reflector v is stored in column k, rows 0..k-2; implicit v[k-1] = 1. Its beta is stored at (k-1, k).
+			for (int r = 0; r < k - 1; ++r)
+				dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(Aoutv(r, k, 0)) - double(a_ref[static_cast<std::size_t>(r + k * n)])));
+			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
 		}
+		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / batchlas::verify::frobenius(A0.view(), 0));
+		EXPECT_VERIFY_SLACK(Real, batchlas::verify::Check::factorization, n, dev_refl,
+							batchlas::verify::Slack{2.0, "unit-scale tau and reflector entries v = x / (alpha - beta), each rounded in both the kernel and the host sytd2: measured need 0.30 float, 0.51 double"});
 	}
 
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
@@ -375,7 +348,8 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
 	this->ctx->wait();
 
-	assert_tridiagonal_matches(Tmat.view(), n, d, e, tol);
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, tridiagonal_error(A0, Tmat, n, d, e));
 }
 #endif
 

@@ -6,6 +6,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/verify/residuals.hh>
 
 #include <cmath>
 #include <cstddef>
@@ -27,31 +28,29 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
 	return msg.find("subgroup size 32") != std::string::npos;
 }
 
+// Worst componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) over the batch, with Q
+// formed on the host by batchlas::verify from the stored reflectors, independently of any ormqr.
 template <typename T>
-T cta_tol() {
-	if constexpr (std::is_same_v<T, float>) return T(2e-3f);
-	return T(5e-11);
-}
-
-template <typename T>
-void assert_allclose_matrix(const Matrix<T, MatrixFormat::Dense>& A,
-								const Matrix<T, MatrixFormat::Dense>& B,
-								T tol) {
-	ASSERT_EQ(A.rows(), B.rows());
-	ASSERT_EQ(A.cols(), B.cols());
-	ASSERT_EQ(A.batch_size(), B.batch_size());
-
-	auto av = A.view();
-	auto bv = B.view();
-	for (int b = 0; b < A.batch_size(); ++b) {
-		for (int j = 0; j < A.cols(); ++j) {
-			for (int i = 0; i < A.rows(); ++i) {
-				const T a = av(i, j, b);
-				const T c = bv(i, j, b);
-				EXPECT_NEAR(a, c, tol) << "Mismatch at (" << i << "," << j << ") batch=" << b;
-			}
-		}
+double apply_error(const Matrix<T, MatrixFormat::Dense>& A_fact, const VectorView<T>& tau,
+				   const Matrix<T, MatrixFormat::Dense>& C0, const Matrix<T, MatrixFormat::Dense>& C,
+				   Side side, Transpose trans) {
+	using D = batchlas::verify::promoted_t<T>;
+	const int n = A_fact.rows();
+	double worst = 0;
+	for (int b = 0; b < C.batch_size(); ++b) {
+		const auto Q = batchlas::verify::form_q(A_fact.view(), tau, b, n);
+		const auto Qv = batchlas::verify::view(Q.data(), n, n, n);
+		const auto C0b = batchlas::verify::view(C0.view().data_ptr() + static_cast<std::size_t>(b) * C0.view().stride(), n, n, C0.view().ld());
+		const auto Cb = batchlas::verify::view(C.view().data_ptr() + static_cast<std::size_t>(b) * C.view().stride(), n, n, C.view().ld());
+		const double err = side == Side::Left
+			? batchlas::verify::gemm_backward_error(Qv, batchlas::verify::Shape::general, trans, C0b, batchlas::verify::Shape::general,
+													Transpose::NoTrans, C0b, Cb, batchlas::verify::Shape::general, D(1), D(0))
+			: batchlas::verify::gemm_backward_error(C0b, batchlas::verify::Shape::general, Transpose::NoTrans, Qv,
+													batchlas::verify::Shape::general, trans, C0b, Cb, batchlas::verify::Shape::general,
+													D(1), D(0));
+		worst = batchlas::verify::nanmax(worst, err);
 	}
+	return worst;
 }
 
 } // namespace
@@ -80,10 +79,8 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 	const int n = 16;
 	const int batch = 4;
 	const int k = n;
-	const T tol = cta_tol<T>();
 
-	// Build a QR factorization (A_fact, tau) using NETLIB as a stable reference
-	// for the reflector layout.
+	// Build a QR factorization (A_fact, tau) on the CPU queue: the reflector layout the CTA kernel reads.
 	Queue ctx_cpu("cpu");
 	Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2025);
 	Matrix<T, MatrixFormat::Dense> A_fact = A0;
@@ -99,15 +96,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 	auto run_case = [&](Side side, Transpose trans) -> bool {
 		Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/false, batch,
 													   /*seed=*/(side == Side::Left ? 11 : 22) + (trans == Transpose::NoTrans ? 0 : 1));
-		Matrix<T, MatrixFormat::Dense> C_ref = C0;
 		Matrix<T, MatrixFormat::Dense> C_cta = C0;
-
-		const Transpose trans_ref = trans;
-		UnifiedVector<std::byte> ws_ref(ormqr_buffer_size(ctx_cpu, A_fact.view(), C_ref.view(), side,
-																										   trans_ref, tau.to_span()),
-											std::byte{0});
-		ormqr(ctx_cpu, A_fact.view(), C_ref.view(), side, trans_ref, tau.to_span(), ws_ref.to_span()).wait();
-		ctx_cpu.wait();
 
 		UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 		try {
@@ -139,7 +128,8 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 			throw;
 		}
 
-		assert_allclose_matrix(C_cta, C_ref, tol);
+		EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, apply_error(A_fact, tau_view, C0, C_cta, side, trans))
+			<< "side " << int(side) << " trans " << int(trans);
 		return true;
 	};
 

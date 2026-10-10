@@ -16,38 +16,26 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/norms.hh>
+#include <batchlas/verify/scalar.hh>
+
 using namespace batchlas;
 
 namespace {
 
+// ||tril(B) - band(AB)||_F / ||A0||_F: the lower triangle of B = Q^T A0 Q must be AB inside the band
+// (AB(i - j, j) = B(i, j)) and zero below it.
 template <typename Real>
-Real tol_for() {
-    if constexpr (std::is_same_v<Real, float>) return Real(5) * Real(test_utils::tolerance<float>());
-    return Real(5) * Real(test_utils::tolerance<double>());
-}
-
-template <typename Real>
-void expect_lower_banded_matches_ab(const MatrixView<Real, MatrixFormat::Dense>& B,
-                                   const MatrixView<Real, MatrixFormat::Dense>& AB,
-                                   int n,
-                                   int kd,
-                                   Real tol) {
-    const int ldab = AB.ld();
-
+double lower_banded_error(const Matrix<Real, MatrixFormat::Dense>& A0, const MatrixView<Real, MatrixFormat::Dense>& B,
+                          const MatrixView<Real, MatrixFormat::Dense>& AB, int n, int kd) {
+    std::vector<double> D(static_cast<std::size_t>(n) * n, 0.0);
     for (int j = 0; j < n; ++j) {
-        const int i_max = std::min(n - 1, j + kd);
-        for (int i = j; i <= i_max; ++i) {
-            const int r = i - j;
-            EXPECT_NEAR(B(i, j, 0), AB(r, j, 0), tol) << "AB mismatch at (i,j)= (" << i << "," << j << ")";
+        for (int i = j; i < n; ++i) {
+            const double band = i - j <= kd ? batchlas::verify::up(AB(i - j, j, 0)) : 0.0;
+            D[static_cast<std::size_t>(i) + j * n] = batchlas::verify::up(B(i, j, 0)) - band;
         }
     }
-
-    const Real ztol = tol * Real(50);
-    for (int j = 0; j < n; ++j) {
-        for (int i = j + kd + 1; i < n; ++i) {
-            EXPECT_NEAR(B(i, j, 0), Real(0), ztol) << "Not banded below at (" << i << "," << j << ")";
-        }
-    }
+    return batchlas::verify::frobenius(batchlas::verify::view(D.data(), n, n, n), 0) / batchlas::verify::frobenius(A0.view(), 0);
 }
 
 template <typename Real, Backend B = test_utils::gpu_backend>
@@ -114,7 +102,6 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
     constexpr Backend B = TestFixture::BackendType;
 
     const int batch = 1;
-    const Real tol = tol_for<Real>();
 
     // n % kd matters: the final panel is only kd columns wide when kd divides n.
     // A short final panel used to skip part of the two-sided update, so the
@@ -143,7 +130,7 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
         apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
 
         // Validate AB matches the lower band of B.
-        expect_lower_banded_matches_ab(Bwork.view(), AB.view(), n, kd, tol);
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, lower_banded_error(A0, Bwork.view(), AB.view(), n, kd));
     }
 }
 #endif
