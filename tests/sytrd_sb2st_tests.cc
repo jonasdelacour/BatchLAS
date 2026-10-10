@@ -181,13 +181,15 @@ inline double spectra_error(const Spectra& got, const Spectra& ref, int* worst_i
 // Spectrum comparisons (Check::values): float keeps the old 10 x tolerance<float>() = 1e-4 absolute, about
 // 3e-5 of the spectral radius (3.3 at n = 256), 1/16 of the kind's bound; measured need 0.009 of the kind's
 // bound. Double's old 1e-9 absolute is looser than the kind's bound, which it meets (need 0.017). @p steps
-// scales the bound for that many accumulated chase steps, as the old tol0 * k.
+// scales float's bound for that many accumulated chase steps, as the old tol0 * k, never above the kind's
+// bound; double stays at the kind's bound (multistep need <= 0.019 at every step, 2026-10-10).
 template <class T>
 batchlas::verify::Slack spectra_slack(int steps = 1) {
     if constexpr (std::is_same_v<typename base_type<T>::type, float>)
-        return {0.0625 * std::max(1, steps), "the old 1e-4 absolute spectrum tolerance (about 3e-5 of the spectral radius); measured need 0.009"};
+        return {std::min(1.0, 0.0625 * std::max(1, steps)),
+                "the old 1e-4 absolute spectrum tolerance (about 3e-5 of the spectral radius); measured need 0.009"};
     else
-        return {1.0 * std::max(1, steps), "the library bound, tighter than the old 1e-9 absolute; measured need 0.017"};
+        return {1.0, "the library bound, tighter than the old 1e-9 absolute; measured need 0.019"};
 }
 
 template <class T>

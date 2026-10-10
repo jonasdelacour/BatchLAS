@@ -174,13 +174,12 @@ The only `orthogonality` site that changed from columns to rows is `orgqr_tests`
 | `tests/geqrf_tests.cc` `residual_slack`, `tests/geqrf_candidates_tests.cc` `tol`, `tests/orgqr_tests.cc` `recon_slack` | `factorization` | ≤ 1 | the file's old `0.5 (m+n) eps` with its tiny-order floor | tightening (docs/perf/qr.md) |
 | `tests/potrf_tests.cc` `kLeafSlack` | `factorization` | 0.5 | 8 n eps | tightening: the leaf tolerance 4 n eps of docs/perf/potrf.md |
 | `tests/device_blas_tests.cc` `tighten` | `blas` | ≤ 1 | the old absolute tolerance | tightening: exact small-integer data |
-| `tests/sytrd_sb2st_tests.cc` `spectra_slack(k)`, double, `BandReductionMultiStepSpectrumPreservation` | `values` | k (1 to 16 accumulated chase steps) | 32 k n eps | the old bound scaled with the step count (`tol0 · k`); at k = 16 (n = 64) it is 3.6e-12 · ‖A‖₂, far below the old 1.6e-8 absolute; a factor above 1 not yet put to the user |
 
 The tail migration (the last tests on the library) kept every older bound that was stricter than the
 kind's as a `Slack` with factor ≤ 1 and the old bound as its reason, so no test lost power: gemm and
 gemv float against the old vendor-comparison tolerance (`old_vendor_tolerance`,
 `old_relative_tolerance`), the sytrd eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's
-exact data, the sb2st float spectra (1/16), trsm's vendor-substitute `‖AX − B‖ / ‖B‖ < 1e-5`, and the
+exact data, the sb2st float spectra (1/16 per chase step, at most 1; double stays at factor 1), trsm's vendor-substitute `‖AX − B‖ / ‖B‖ < 1e-5`, and the
 float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked, syevx and sytrd_blocked.
 `git grep 'Slack{'` lists them with their reasons.
 
