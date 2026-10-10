@@ -210,8 +210,7 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
         gemm(*(this->ctx), X.view(), AX.view(), XhAX.view(),
              {.transA = Transpose::ConjTrans}).wait();
 
-        // The imaginary part of a diagonal entry, over the largest denominator of the componentwise
-        // error of X^H (AX): two products of length n, so k = 2n.
+        // Imaginary diagonal over the largest denominator of X^H (AX): two products of length n, k = 2n.
         const auto general = batchlas::verify::Shape::general;
         const auto shape_a = uplo == Uplo::Lower ? batchlas::verify::Shape::hermitian_lower : batchlas::verify::Shape::hermitian_upper;
         for (int b = 0; b < batch; ++b) {
@@ -223,7 +222,6 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
                 << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                 << ", batch=" << b;
         }
-        // AX is also right: against the Hermitian expansion of the stored triangle.
         EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
                       batchlas::verify::gemm_backward_error(A.view(), shape_a, Transpose::NoTrans, X.view(), general, Transpose::NoTrans, AX.view(),
                                                             AX.view(), general, 1.0, 0.0, batchlas::verify::all_items(batch)))

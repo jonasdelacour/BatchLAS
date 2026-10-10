@@ -1,11 +1,9 @@
 // Tests for gesvdj_cta, the one-sided Jacobi SVD.
-//
 // Checks are host-side and self-contained rather than shared with
 // gesvd_tests.cc, deliberately: the tolerances there are solver-aware and
 // absolute (and fall back to 5e-2 / 2e-1 / 3e-1 under the normal-equations
 // bidiagonal), too loose to detect a regression in this kernel.
 // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
-//
 // The rectangular, complex and rank-deficient cases are the ones NOT covered by
 // the n=32 square benchmark shape, so they are the reason this file exists.
 
@@ -59,24 +57,6 @@ template <typename T> struct is_cplx_h : std::false_type {};
 template <typename T> struct is_cplx_h<std::complex<T>> : std::true_type {};
 template <typename T> inline constexpr bool is_cplx_v = is_cplx_h<T>::value;
 
-template <typename T>
-inline T conj_h(const T& x) {
-    if constexpr (is_cplx_v<T>) {
-        return std::conj(x);
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
-inline double abs2_h(const T& x) {
-    if constexpr (is_cplx_v<T>) {
-        return static_cast<double>(std::norm(x));
-    } else {
-        return static_cast<double>(x) * static_cast<double>(x);
-    }
-}
-
 template <typename Config>
 class GesvdjCtaTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -111,11 +91,11 @@ protected:
                 for (int i = 0; i < m; ++i) {
                     std::complex<double> acc(0.0, 0.0);
                     for (int t = 0; t < k; ++t) {
-                        const std::complex<double> u = to_cd(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
-                        const std::complex<double> v = to_cd(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
+                        const std::complex<double> u = batchlas::verify::up(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
+                        const std::complex<double> v = batchlas::verify::up(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
                         acc += u * static_cast<double>(s[b * k + t]) * v;
                     }
-                    const std::complex<double> a = to_cd(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
+                    const std::complex<double> a = batchlas::verify::up(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
                     num += std::norm(a - acc);
                     den += std::norm(a);
                 }
@@ -130,14 +110,6 @@ protected:
                                     const Scalar* M, int64_t stride, int ld) {
         const MatrixView<Scalar, MatrixFormat::Dense> V(const_cast<Scalar*>(M), rows, cols, ld, static_cast<int>(stride), batch);
         return batchlas::verify::orthogonality(V, batchlas::verify::all_items(batch));
-    }
-
-    static std::complex<double> to_cd(const Scalar& x) {
-        if constexpr (is_cplx_v<Scalar>) {
-            return std::complex<double>(static_cast<double>(x.real()), static_cast<double>(x.imag()));
-        } else {
-            return std::complex<double>(static_cast<double>(x), 0.0);
-        }
     }
 
     // Runs gesvdj_cta on a caller-provided A and validates the factorisation.
@@ -192,7 +164,7 @@ protected:
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * n + static_cast<size_t>(j) * n + i] =
-                        conj_h(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        batchlas::verify::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
@@ -201,7 +173,6 @@ protected:
     }
 
     // Same validation as check(), but with U as m x k and Vh as k x n.
-    //
     // Worth stating what this can and cannot catch on its own: for m >= n a
     // thin V^H IS a full V^H, and for m <= n a thin U IS a full U, so exactly
     // one side is genuinely narrower in each shape. The tall and wide cases
@@ -261,7 +232,7 @@ protected:
             for (int j = 0; j < k; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * k + static_cast<size_t>(j) * n + i] =
-                        conj_h(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        batchlas::verify::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
@@ -603,9 +574,9 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
             // phase of a singular vector is not determined.
             std::complex<double> acc(0.0, 0.0);
             for (int i = 0; i < m; ++i) {
-                acc += std::conj(TestFixture::to_cd(
+                acc += std::conj(batchlas::verify::up(
                            U_thin.view().data_ptr()[b * U_thin.view().stride() + static_cast<size_t>(c) * U_thin.view().ld() + i]))
-                     * TestFixture::to_cd(
+                     * batchlas::verify::up(
                            U_all.view().data_ptr()[b * U_all.view().stride() + static_cast<size_t>(c) * U_all.view().ld() + i]);
             }
             EXPECT_NEAR(std::abs(acc), 1.0, 1e-3) << "U column " << c << " differs at b=" << b;

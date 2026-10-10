@@ -362,13 +362,7 @@ void expect_orthonormal_rows(const Matrix<Scalar, MatrixFormat::Dense>& M,
         auto Hb = Mh.view().batch_item(b);
         for (int j = 0; j < M.cols(); ++j) {
             for (int i = 0; i < M.rows(); ++i) {
-                const auto v = batchlas::verify::conj(batchlas::verify::up(Mb(i, j, 0)));
-                if constexpr (test_utils::is_complex<Scalar>::value) {
-                    Hb(j, i, 0) = Scalar(static_cast<typename base_type<Scalar>::type>(v.real()),
-                                         static_cast<typename base_type<Scalar>::type>(v.imag()));
-                } else {
-                    Hb(j, i, 0) = static_cast<Scalar>(v);
-                }
+                Hb(j, i, 0) = batchlas::verify::conj(Mb(i, j, 0));
             }
         }
     }

@@ -47,6 +47,7 @@ protected:
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
                           int batch_idx,
+                          Uplo uplo,
                           Transpose trans = Transpose::NoTrans) {
         const bool trace_enabled = []() {
             const char* v = std::getenv("BATCHLAS_TRSM_TRACE");
@@ -58,7 +59,7 @@ protected:
         bool anyChanges = false;
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
-                if (std::abs(B.at(i, j, batch_idx) - B_original.at(i, j, batch_idx)) > test_utils::tolerance<ScalarType>()) {
+                if (B.at(i, j, batch_idx) != B_original.at(i, j, batch_idx)) {
                     anyChanges = true;
                 }
             }
@@ -78,37 +79,16 @@ protected:
             return false;
         }
         
-        bool allMatch = true;
-        for (int i = 0; i < rows; ++i) {
-            for (int j = 0; j < cols; ++j) {
-                ScalarType expected = B_original.at(i, j, batch_idx);
-                ScalarType calculated = static_cast<ScalarType>(0.0);
-                
-                for (int k = 0; k < cols; ++k) {
-                    int a_row = (trans == Transpose::NoTrans) ? i : k;
-                    int a_col = (trans == Transpose::NoTrans) ? k : i;
-                    calculated += A.at(a_row, a_col, batch_idx) * B.at(k, j, batch_idx);
-                }
-                
-                auto tolerance = test_utils::tolerance<ScalarType>();
-                if (std::abs(calculated - expected) > tolerance) {
-                    if (trace_enabled) {
-                        std::cerr << "TRSM TRACE: mismatch at (i=" << i << ", j=" << j << ") batch=" << batch_idx
-                                  << " (trans=" << static_cast<int>(trans) << ")\n"
-                                  << "  expected=" << expected << "\n"
-                                  << "  calculated=" << calculated << "\n"
-                                  << "  |diff|=" << std::abs(calculated - expected) << " tol=" << tolerance
-                                  << std::endl;
-                    }
-                    allMatch = false;
-                    break;
-                }
-            }
-            if (!allMatch) break;
-        }
-        return allMatch;
+        // op(A) X = alpha B0, normwise (Check::solve, n = the order of A); B holds X.
+        const int item = batch_idx;
+        const double res = batchlas::verify::trsm_residual(A, Side::Left, uplo, trans, Diag::NonUnit, B, B_original,
+                                                           batchlas::verify::up(alpha), std::span<const int>(&item, 1));
+        if (trace_enabled)
+            std::cerr << "TRSM TRACE: residual " << res << " bound " << batchlas::verify::bound<ScalarType>(batchlas::verify::Check::solve, rows)
+                      << " for batch " << batch_idx << " (trans=" << static_cast<int>(trans) << ")" << std::endl;
+        return test_utils::verify_pass<ScalarType>(batchlas::verify::Check::solve, rows, res);
     }
-    
+
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         Matrix<ScalarType, MatrixFormat::Dense> A_matrix(rows, rows, test_batch_size);
         Matrix<ScalarType, MatrixFormat::Dense> B_matrix(rows, cols, test_batch_size);
@@ -183,7 +163,7 @@ protected:
         auto B_view = B_matrix.view();
         auto B_original_view = B_original.view();
         for (int b = 0; b < test_batch_size; ++b) {
-            EXPECT_TRUE(verifyTrsmResult(A_view, B_view, B_original_view, b, trans))
+            EXPECT_TRUE(verifyTrsmResult(A_view, B_view, B_original_view, b, uplo, trans))
                 << "TRSM solution verification failed for batch " << b;
         }
     }
@@ -231,17 +211,6 @@ TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
 // evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
 // ===========================================================================
 namespace {
-
-// Also compiles for real T: the float and double drivers below would reject a
-// bare std::conj.
-template <typename T>
-inline T host_conj(const T& v) {
-    if constexpr (batchlas::is_std_complex_v<T>) {
-        return std::conj(v);
-    } else {
-        return v;
-    }
-}
 
 // Must stay non-real, non-symmetric and non-Hermitian: a real-valued complex
 // triangle hides a missing conjugation, a symmetric or Hermitian one hides a

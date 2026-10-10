@@ -41,12 +41,6 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 template <typename T>
-inline T host_conj(T v) {
-    if constexpr (test_utils::is_complex<T>::value) return std::conj(v);
-    else return v;
-}
-
-template <typename T>
 inline RealOf<T> host_real(T v) {
     if constexpr (test_utils::is_complex<T>::value) return v.real();
     else return v;
@@ -80,7 +74,7 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
             T acc{};
             for (int k = 0; k < n; ++k) {
                 acc += M[i + static_cast<size_t>(k) * n] *
-                       host_conj(M[j + static_cast<size_t>(k) * n]);
+                       verify::conj(M[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc / T(R(n));
         }
@@ -93,7 +87,7 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
     // contractually allowed to ignore imag(diag(A)), so the reference must too.
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < i; ++j) {
-            A[j + static_cast<size_t>(i) * n] = host_conj(A[i + static_cast<size_t>(j) * n]);
+            A[j + static_cast<size_t>(i) * n] = verify::conj(A[i + static_cast<size_t>(j) * n]);
         }
     }
     return A;
@@ -148,7 +142,7 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
             T acc{};
             for (int k = 0; k <= std::min(i, j); ++k) {
                 acc += L[i + static_cast<size_t>(k) * n] * verify::make<T>(D[k], R(0)) *
-                       host_conj(L[j + static_cast<size_t>(k) * n]);
+                       verify::conj(L[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc;
         }
@@ -563,7 +557,7 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
 
         // (c) conj(A) is a different Hermitian matrix, so it must give a different factor.
         std::vector<T> refc(ref);
-        for (auto& v : refc) v = host_conj(v);
+        for (auto& v : refc) v = verify::conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
         this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_cta(Ac, Uplo::Lower)[0], 0);
@@ -1110,7 +1104,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         // (c) THE SENSITIVITY: conj(A) must give a different factor. Here the conjugate
         //     that matters is the trailing update's transB (Trans would give L21 L21^T).
         std::vector<T> refc(ref);
-        for (auto& v : refc) v = host_conj(v);
+        for (auto& v : refc) v = verify::conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
         this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_blocked(Ac.view(), Uplo::Lower)[0], 0);
