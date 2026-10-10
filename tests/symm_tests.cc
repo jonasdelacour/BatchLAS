@@ -5,18 +5,11 @@
 #include <cstdlib>
 #include <string>
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 #include "../src/ops/symm/choice.hh"
-#include "../src/select/vendor.hh"
 
 // The forced-route tests pin through select::ScopedPin (docs/design/flat-kernel-selection.md §12).
 using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
-
-// Vendor-free, a `vendor` pin warns and falls back to Auto, which is expand: the reference
-// would then be the code under test. symm_candidates_tests checks expand against a host
-// reference in that tree.
-inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
-#define SKIP_WITHOUT_VENDOR_REFERENCE() \
-    if (!kVendorReference) GTEST_SKIP() << "vendor-free: the vendor reference would be expand itself"
 
 using namespace batchlas;
 
@@ -33,6 +26,23 @@ class SymmTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SymmTest, SymmTestTypes);
 
+// C against alpha A B + beta C0 (Side::Left) or alpha B A + beta C0, with A the symmetric matrix the `uplo`
+// triangle of its storage describes, in double on every item (Check::blas, k = the order of A).
+template <typename T, class VA, class VB, class VC0, class VC>
+void expect_symm_matches(const VA& A, const VB& B, const VC0& C0, const VC& C, Side side, Uplo uplo, T alpha, T beta, int n) {
+    const auto sym = uplo == Uplo::Lower ? batchlas::verify::Shape::symmetric_lower : batchlas::verify::Shape::symmetric_upper;
+    const auto general = batchlas::verify::Shape::general;
+    const auto items = batchlas::verify::all_items(C.batch_size());
+    const double err =
+        side == Side::Left
+            ? batchlas::verify::gemm_backward_error(A, sym, Transpose::NoTrans, B, general, Transpose::NoTrans, C0, C, general,
+                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta), items)
+            : batchlas::verify::gemm_backward_error(B, general, Transpose::NoTrans, A, sym, Transpose::NoTrans, C0, C, general,
+                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta), items);
+    EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
+        << "n=" << n << ", side=" << static_cast<int>(side) << ", uplo=" << static_cast<int>(uplo);
+}
+
 TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -43,7 +53,6 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
     const int batch = 3;
     const T alpha = T(1.25);
     const T beta = T(-0.5);
-    const real_t tol = test_utils::tolerance<T>() * real_t(12 * n);
 
     for (auto side : {Side::Left, Side::Right}) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -54,15 +63,9 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
             Matrix<T, MatrixFormat::Dense> B = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch);
             Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch);
 
-            Matrix<T, MatrixFormat::Dense> A_ref(n, n, batch);
             Matrix<T, MatrixFormat::Dense> C(rows, cols, batch);
-            Matrix<T, MatrixFormat::Dense> C_ref(rows, cols, batch);
 
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), A_ref.view(), A.view()).wait();
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
-
-            A_ref.view().symmetrize(*(this->ctx), uplo).wait();
 
             symm(*(this->ctx),
                      A.view(),
@@ -70,32 +73,7 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
                      C.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
-            if (side == Side::Left) {
-                gemm(*(this->ctx),
-                         A_ref.view(),
-                         B.view(),
-                         C_ref.view(),
-                         {.alpha = alpha, .beta = beta}).wait();
-            } else {
-                gemm(*(this->ctx),
-                         B.view(),
-                         A_ref.view(),
-                         C_ref.view(),
-                         {.alpha = alpha, .beta = beta}).wait();
-            }
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < cols; ++j) {
-                    for (int i = 0; i < rows; ++i) {
-                        ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                            << "side=" << static_cast<int>(side)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
+            expect_symm_matches(A.view(), B.view(), C0.view(), C.view(), side, uplo, alpha, beta, n);
         }
     }
 }
@@ -107,7 +85,6 @@ int main(int argc, char** argv) {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
-    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -117,7 +94,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
     const int batch = 64;
     const float alpha = 1.1f;
     const float beta = -0.3f;
-    const float tol = test_utils::tolerance<float>() * 2048.0f;
 
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 7);
     Matrix<float, MatrixFormat::Dense> B = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 11);
@@ -126,10 +102,8 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
     for (auto side : {Side::Left, Side::Right}) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            Matrix<float, MatrixFormat::Dense> C_vendor(n, n, batch);
 
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
                 const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
@@ -140,27 +114,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
                                     {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
 
-            {
-                const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
-                symm(ctx,
-                                    A.view(),
-                                    B.view(),
-                                    C_vendor.view(),
-                                    {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
-            }
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                            << "side=" << static_cast<int>(side)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
+            expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
         }
     }
 }
@@ -169,7 +123,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
 // a time, so the sizes that matter are the ones where that tiling is ragged and
 // the ones where the storage's leading dimension is not the matrix width.
 TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
-    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -181,8 +134,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
     const float beta = -0.5f;
 
     for (int n : {16, 33, 77, 129}) {
-        const float tol = test_utils::tolerance<float>() * 4096.0f * static_cast<float>(n);
-
         for (auto side : {Side::Left, Side::Right}) {
             for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
                 const int rows = side == Side::Left ? n : m;
@@ -210,34 +161,15 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
                 ctx.wait();
 
                 Matrix<float, MatrixFormat::Dense> C_custom(rows, cols, batch);
-                Matrix<float, MatrixFormat::Dense> C_vendor(rows, cols, batch);
                 MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-                MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
                 {
                     const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                     symm(ctx, A.view(), B.view(), C_custom.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
-                {
-                    const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
-                    symm(ctx, A.view(), B.view(), C_vendor.view(),
-                         {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
-                }
 
-                for (int b = 0; b < batch; ++b) {
-                    for (int j = 0; j < cols; ++j) {
-                        for (int i = 0; i < rows; ++i) {
-                            ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                                << "n=" << n
-                                << ", side=" << static_cast<int>(side)
-                                << ", uplo=" << static_cast<int>(uplo)
-                                << ", batch=" << b
-                                << ", row=" << i
-                                << ", col=" << j;
-                        }
-                    }
-                }
+                expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
             }
         }
     }
@@ -247,7 +179,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
 // stream, which only exists on an in-order queue; the out-of-order case takes a
 // different ordering path and is not otherwise exercised.
 TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
-    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ordered;
     if (ordered.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -258,7 +189,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
     const int batch = 8;
     const float alpha = 1.25f;
     const float beta = -0.5f;
-    const float tol = test_utils::tolerance<float>() * 4096.0f * static_cast<float>(n);
 
     for (auto side : {Side::Left, Side::Right}) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -267,34 +197,16 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
             auto C0 = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 37);
 
             Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            Matrix<float, MatrixFormat::Dense> C_vendor(n, n, batch);
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
                 const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                 symm(ctx, A.view(), B.view(), C_custom.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
-            {
-                const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
-                symm(ctx, A.view(), B.view(), C_vendor.view(),
-                     {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
-            }
             ctx.wait();
 
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                            << "side=" << static_cast<int>(side)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
+            expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
         }
     }
 }

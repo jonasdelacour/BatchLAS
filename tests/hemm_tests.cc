@@ -8,6 +8,7 @@
 #include <string>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -36,7 +37,8 @@ TYPED_TEST_SUITE(HemmTest, HemmTestTypes);
 // that reads the wrong triangle reads the right values anyway. This test
 // poisons exactly the storage HEMM is forbidden to read -- the unreferenced
 // triangle with a value nothing else could produce, and the diagonal with a
-// nonzero imaginary part -- and takes the reference from the clean A.
+// nonzero imaginary part. The library reads A as a Hermitian matrix from the
+// named triangle of the poisoned storage, with a real diagonal, as BLAS does.
 //
 // The shapes are ragged on purpose. The CUDA backend materialises the triangle
 // into packed scratch a 32x32 tile at a time, so what matters is the sizes
@@ -62,7 +64,6 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
     auto sweep = [&](const char* route) {
         for (const auto& shape : shapes) {
             const int n = shape.n;
-            const real_t tol = test_utils::tolerance<T>() * real_t(64 * n);
 
             for (auto side : {Side::Left, Side::Right}) {
                 for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -100,41 +101,26 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
                     this->ctx->wait();
 
                     Matrix<T, MatrixFormat::Dense> C(rows, cols, shape.batch);
-                    Matrix<T, MatrixFormat::Dense> C_ref(rows, cols, shape.batch);
                     MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-                    MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
                     hemm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
-                    if (side == Side::Left) {
-                        gemm(*(this->ctx), A_clean.view(), B.view(), C_ref.view(),
-                             {.alpha = alpha, .beta = beta}).wait();
-                    } else {
-                        gemm(*(this->ctx), B.view(), A_clean.view(), C_ref.view(),
-                             {.alpha = alpha, .beta = beta}).wait();
-                    }
-
-                    for (int b = 0; b < shape.batch; ++b) {
-                        for (int j = 0; j < cols; ++j) {
-                            for (int i = 0; i < rows; ++i) {
-                                const T got = C(i, j, b);
-                                const T want = C_ref(i, j, b);
-                                ASSERT_NEAR(got.real(), want.real(), tol)
-                                    << "hemm read storage it must not touch: " << route
-                                    << " route, n=" << n
-                                    << ", side=" << (side == Side::Left ? "Left" : "Right")
-                                    << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                    << ", batch=" << b << ", row=" << i << ", col=" << j;
-                                ASSERT_NEAR(got.imag(), want.imag(), tol)
-                                    << "hemm read storage it must not touch: " << route
-                                    << " route, n=" << n
-                                    << ", side=" << (side == Side::Left ? "Left" : "Right")
-                                    << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                    << ", batch=" << b << ", row=" << i << ", col=" << j;
-                            }
-                        }
-                    }
+                    const auto shape_a = uplo == Uplo::Lower ? batchlas::verify::Shape::hermitian_lower
+                                                             : batchlas::verify::Shape::hermitian_upper;
+                    const auto general = batchlas::verify::Shape::general;
+                    const double err =
+                        side == Side::Left
+                            ? batchlas::verify::gemm_backward_error(A_poisoned.view(), shape_a, Transpose::NoTrans, B.view(), general,
+                                                                    Transpose::NoTrans, C0.view(), C.view(), general, batchlas::verify::up(alpha),
+                                                                    batchlas::verify::up(beta), batchlas::verify::all_items(shape.batch))
+                            : batchlas::verify::gemm_backward_error(B.view(), general, Transpose::NoTrans, A_poisoned.view(), shape_a,
+                                                                    Transpose::NoTrans, C0.view(), C.view(), general, batchlas::verify::up(alpha),
+                                                                    batchlas::verify::up(beta), batchlas::verify::all_items(shape.batch));
+                    EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
+                        << "hemm read storage it must not touch: " << route << " route, n=" << n
+                        << ", side=" << (side == Side::Left ? "Left" : "Right")
+                        << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper");
                 }
             }
         }
@@ -224,15 +210,24 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
         gemm(*(this->ctx), X.view(), AX.view(), XhAX.view(),
              {.transA = Transpose::ConjTrans}).wait();
 
-        const real_t tol = test_utils::tolerance<T>() * real_t(64 * n);
+        // The imaginary part of a diagonal entry, over the largest denominator of the componentwise
+        // error of X^H (AX): two products of length n, so k = 2n.
+        const auto general = batchlas::verify::Shape::general;
+        const auto shape_a = uplo == Uplo::Lower ? batchlas::verify::Shape::hermitian_lower : batchlas::verify::Shape::hermitian_upper;
         for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(XhAX(i, i, b).imag(), real_t(0), tol)
-                    << "x^H A x is not real, so the expansion lost the conjugate: uplo="
-                    << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                    << ", batch=" << b << ", index=" << i;
-            }
+            double worst = 0;
+            for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, std::abs(double(XhAX(i, i, b).imag())));
+            const double scale = batchlas::verify::gemm_max_denominator(X.view(), general, Transpose::ConjTrans, AX.view(), general,
+                                                                        Transpose::NoTrans, XhAX.view(), 1.0, 0.0, b);
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * n, worst / scale)
+                << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
+                << ", batch=" << b;
         }
+        // AX is also right: against the Hermitian expansion of the stored triangle.
+        EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
+                      batchlas::verify::gemm_backward_error(A.view(), shape_a, Transpose::NoTrans, X.view(), general, Transpose::NoTrans, AX.view(),
+                                                            AX.view(), general, 1.0, 0.0, batchlas::verify::all_items(batch)))
+            << "uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper");
     }
 }
 
