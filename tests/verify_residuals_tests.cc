@@ -187,6 +187,42 @@ template <class T> struct PotrfUpperCase : PotrfCase<T> {
     PotrfUpperCase() : PotrfCase<T>(Uplo::Upper) {}
 };
 
+// ------------------------------------------------------------------ similarity
+
+// Q = P D (a permutation with unit-phase entries, unitary and exact), B small complex integers, A0 = Q B Q^H.
+template <class T> struct SimilarityCase {
+    using type = T;
+    static constexpr Check kind = Check::factorization;
+    static constexpr int n = 6;
+    int bound_n = n, hot_r = 0, hot_c = n - 1;
+    Batched<T> A0 = Batched<T>::matrix(n, n), Q = Batched<T>::matrix(n, n), B = Batched<T>::matrix(n, n);
+
+    SimilarityCase() {
+        using D = promoted_t<T>;
+        batchlas::verify::Rng rng(66);
+        for (int b = 0; b < kB; ++b) {
+            for (int j = 0; j < n; ++j) Q.ex(b, (5 * j + b) % n, j) = phase<T>(j + b);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) {
+                    if (Q.ex(b, i, j) == poison<T>()) Q.ex(b, i, j) = make<T>(0.0, 0.0);
+                    B.ex(b, i, j) = rand_int<T>(rng, 3.0);
+                }
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    D acc = D(0);
+                    for (int k = 0; k < n; ++k)
+                        for (int l = 0; l < n; ++l) acc += up(Q.ex(b, i, k)) * up(B.ex(b, k, l)) * conj(up(Q.ex(b, j, l)));
+                    A0.ex(b, i, j) = down<T>(acc);
+                }
+        }
+        A0.store();
+        Q.store();
+        B.store();
+    }
+    Batched<T>& out() { return B; }
+    double value() { return batchlas::verify::similarity_residual(A0.mview(), Q.mview(), B.mview()); }
+};
+
 // ------------------------------------------------------------------ getrf
 
 template <class T> struct GetrfCase {
@@ -671,6 +707,7 @@ template <class T> struct ValuesCase {
 
 VERIFY_RESIDUAL_SUITE(PotrfResidual, PotrfCase)
 VERIFY_RESIDUAL_SUITE(PotrfUpperResidual, PotrfUpperCase)
+VERIFY_RESIDUAL_SUITE(SimilarityResidual, SimilarityCase)
 VERIFY_RESIDUAL_SUITE(GetrfResidual, GetrfCase)
 VERIFY_RESIDUAL_SUITE(QrResidual, QrCase)
 VERIFY_RESIDUAL_SUITE(SolveResidual, SolveCase)
@@ -881,6 +918,24 @@ template <class C> void trsm_known() {
 
 TYPED_TEST(PotrfResidual, KnownValue) { potrf_known<TypeParam>(Uplo::Lower); }
 TYPED_TEST(PotrfUpperResidual, KnownValue) { potrf_known<TypeParam>(Uplo::Upper); }
+
+// B(0, n-1) += d moves A0 = Q B Q^H by d q_0 q_{n-1}^H, whose norm is |d| for unit columns.
+TYPED_TEST(SimilarityResidual, KnownValue) {
+    SimilarityCase<TypeParam> c;
+    const int b = kB - 1;
+    const TypeParam d = delta<TypeParam>();
+    c.B.at(b, c.hot_r, c.hot_c) += d;
+    expect_value(c, mod(d) / std::sqrt(frob2(c.A0, b)));
+}
+
+// Q and A0 are read through their own ld and stride, not B's.
+TYPED_TEST(SimilarityResidual, QAndA0LayoutsAreRead) {
+    { SimilarityCase<TypeParam> c; c.Q.store_wrong_ld(); expect_fails(c); }
+    { SimilarityCase<TypeParam> c; c.Q.store_wrong_stride(); expect_fails(c); }
+    { SimilarityCase<TypeParam> c; c.A0.store_wrong_ld(); expect_fails(c); }
+    { SimilarityCase<TypeParam> c; c.A0.store_wrong_stride(); expect_fails(c); }
+    { SimilarityCase<TypeParam> c; c.Q.at(kB - 1, 0, 0) += bump<TypeParam>(); expect_fails(c); }
+}
 
 // L(m-1, 0) += d moves row m-1 of L U by d U(0, :).
 TYPED_TEST(GetrfResidual, KnownValue) {

@@ -16,26 +16,20 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/norms.hh>
-#include <batchlas/verify/scalar.hh>
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
 namespace {
 
-// ||tril(B) - band(AB)||_F / ||A0||_F: the lower triangle of B = Q^T A0 Q must be AB inside the band
-// (AB(i - j, j) = B(i, j)) and zero below it.
+// The band AB (AB(i - j, j) = B(i, j), lower storage) as a dense symmetric matrix, zeros outside the band.
 template <typename Real>
-double lower_banded_error(const Matrix<Real, MatrixFormat::Dense>& A0, const MatrixView<Real, MatrixFormat::Dense>& B,
-                          const MatrixView<Real, MatrixFormat::Dense>& AB, int n, int kd) {
-    std::vector<double> D(static_cast<std::size_t>(n) * n, 0.0);
-    for (int j = 0; j < n; ++j) {
-        for (int i = j; i < n; ++i) {
-            const double band = i - j <= kd ? batchlas::verify::up(AB(i - j, j, 0)) : 0.0;
-            D[static_cast<std::size_t>(i) + j * n] = batchlas::verify::up(B(i, j, 0)) - band;
-        }
-    }
-    return batchlas::verify::frobenius(batchlas::verify::view(D.data(), n, n, n), 0) / batchlas::verify::frobenius(A0.view(), 0);
+Matrix<Real, MatrixFormat::Dense> band_to_dense(const MatrixView<Real, MatrixFormat::Dense>& AB, int n, int kd) {
+    auto D = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
+    auto Dv = D.view();
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i <= std::min(n - 1, j + kd); ++i) Dv(i, j, 0) = Dv(j, i, 0) = AB(i - j, j, 0);
+    return D;
 }
 
 template <typename Real, Backend B = test_utils::gpu_backend>
@@ -130,7 +124,10 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
         apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
 
         // Validate AB matches the lower band of B.
-        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, lower_banded_error(A0, Bwork.view(), AB.view(), n, kd));
+        // Bwork = Q^T A0 Q is the explicit similarity transform; AB must be its band, so Bwork = I AB_dense I^T.
+        const auto Bband = band_to_dense(AB.view(), n, kd);
+        const auto I = Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(Bwork.view(), I.view(), Bband.view()));
     }
 }
 #endif

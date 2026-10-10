@@ -213,21 +213,14 @@ Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_cta(Queue& ctx,
 	return Q;
 }
 
-// ||Tmat - tridiag(d, e)||_F / ||A0||_F over the whole matrix: the band must be (d, e) and everything
-// outside it zero.
+// tridiag(d, e) stored densely, zeros outside the band.
 template <typename Real>
-double tridiagonal_error(const Matrix<Real, MatrixFormat::Dense>& A0, const Matrix<Real, MatrixFormat::Dense>& Tmat,
-						 int n, Vector<Real>& d, Vector<Real>& e) {
-	std::vector<double> D(static_cast<std::size_t>(n) * n);
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			double t = 0;
-			if (i == j) t = batchlas::verify::up(d(i, 0));
-			else if (std::abs(i - j) == 1) t = batchlas::verify::up(e(std::min(i, j), 0));
-			D[static_cast<std::size_t>(i) + j * n] = batchlas::verify::up(Tmat.view()(i, j, 0)) - t;
-		}
-	}
-	return batchlas::verify::frobenius(batchlas::verify::view(D.data(), n, n, n), 0) / batchlas::verify::frobenius(A0.view(), 0);
+Matrix<Real, MatrixFormat::Dense> tridiagonal_matrix(int n, Vector<Real>& d, Vector<Real>& e) {
+	auto T = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
+	auto Tv = T.view();
+	for (int i = 0; i < n; ++i) Tv(i, i, 0) = d(i, 0);
+	for (int i = 0; i < n - 1; ++i) Tv(i + 1, i, 0) = Tv(i, i + 1, 0) = e(i, 0);
+	return T;
 }
 
 template <typename T, Backend B>
@@ -280,14 +273,10 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	} */
 
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
-	Matrix<Real, MatrixFormat::Dense> AQ(n, n, batch);
-	Matrix<Real, MatrixFormat::Dense> Tmat(n, n, batch);
-	gemm(*this->ctx, A0.view(), Q.view(), AQ.view(), {.alpha = Real(1), .beta = Real(0)}).wait();
-	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
-	this->ctx->wait();
 
 	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, tridiagonal_error(A0, Tmat, n, d, e));
+	const auto Tri = tridiagonal_matrix(n, d, e);
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(A0.view(), Q.view(), Tri.view()));
 }
 
 TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
@@ -337,19 +326,15 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
 		}
 		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / batchlas::verify::frobenius(A0.view(), 0));
-		EXPECT_VERIFY_SLACK(Real, batchlas::verify::Check::factorization, n, dev_refl,
-							batchlas::verify::Slack{2.0, "unit-scale tau and reflector entries v = x / (alpha - beta), each rounded in both the kernel and the host sytd2: measured need 0.30 float, 0.51 double"});
+		// Reference agreement (absolute elementwise difference vs the independent host sytd2), borrowing the factorization kind's bound.
+		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_refl);
 	}
 
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
-	Matrix<Real, MatrixFormat::Dense> AQ(n, n, batch);
-	Matrix<Real, MatrixFormat::Dense> Tmat(n, n, batch);
-	gemm(*this->ctx, A0.view(), Q.view(), AQ.view(), {.alpha = Real(1), .beta = Real(0)}).wait();
-	gemm(*this->ctx, Q.view(), AQ.view(), Tmat.view(), {.alpha = Real(1), .beta = Real(0), .transA = Transpose::Trans}).wait();
-	this->ctx->wait();
 
 	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, tridiagonal_error(A0, Tmat, n, d, e));
+	const auto Tri = tridiagonal_matrix(n, d, e);
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(A0.view(), Q.view(), Tri.view()));
 }
 #endif
 

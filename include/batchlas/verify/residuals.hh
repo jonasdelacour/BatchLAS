@@ -290,6 +290,41 @@ double potrf_residual(const VA& A0, const VF& F, Uplo uplo, std::span<const int>
     return worst;
 }
 
+/// ‖A0 − Q·B·Qᴴ‖_F / ‖A0‖_F for square A0, an explicit Q and a dense B (a tridiagonal or banded
+/// reduction stored densely; entries outside the band must be stored zeros). Every element of each
+/// operand is read. Judged as a factorization.
+template <class VA, class VQ, class VB>
+double similarity_residual(const VA& A0, const VQ& Q, const VB& B, std::span<const int> items = {}) {
+    using D = promoted_t<detail::value_of_t<VA>>;
+    const int n = A0.rows();
+    if (A0.cols() != n || Q.rows() != n || Q.cols() != n || B.rows() != n || B.cols() != n)
+        detail::bad("similarity_residual", "square matrices of equal order only");
+    detail::Dense<D> QB(n, n);
+    double worst = 0;
+    for (int b : detail::pick(items, A0.batch_size())) {
+        const auto a = detail::item_of(A0, b);
+        const auto q = detail::item_of(Q, b);
+        const auto bb = detail::item_of(B, b);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                D acc = D(0);
+                for (int k = 0; k < n; ++k) acc += detail::get(q, i, k) * detail::get(bb, k, j);
+                QB(i, j) = acc;
+            }
+        double num = 0, den = 0;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                D acc = D(0);
+                for (int k = 0; k < n; ++k) acc += QB(i, k) * conj(detail::get(q, j, k));
+                const D x = detail::get(a, i, j);
+                num += abs(acc - x) * abs(acc - x);
+                den += abs(x) * abs(x);
+            }
+        worst = nanmax(worst, detail::quot(std::sqrt(num), std::sqrt(den)));
+    }
+    return worst;
+}
+
 /// ‖PA0 − LU‖_F / ‖A0‖_F for an m x n factor; pivots packed 1-based, min(m, n) per item. An
 /// out-of-range pivot makes that item NaN.
 template <class VA, class VF>
