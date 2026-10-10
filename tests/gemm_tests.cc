@@ -67,9 +67,15 @@ void ExpectPinRefused(Queue& ctx, const char* word, int m, int n, int k, Transpo
 // C against alpha op(A) op(B) + beta C0, componentwise in double on every item (Check::blas, k the inner
 // dimension). The reference is the library's, not another gemm: the vendor and the other native kernels
 // are no oracle for each other, and a vendor pin is Auto vendor-free.
-// The comparisons this replaced used an absolute tolerance of old_scale * test_utils::tolerance<T>() against a
+// The comparisons this replaced used an absolute tolerance of old_scale * the old vendor-comparison bound against a
 // vendor result, tighter than the relative bound at large k in float. The Slack keeps that power: factor <= 1 so
-// that factor * bound * (largest denominator of the sampled items) is at most the old absolute tolerance.
+// that factor * bound * (largest denominator over the checked items) is at most the old absolute tolerance.
+template <typename T>
+constexpr double old_vendor_tolerance() {  // the old test_utils::tolerance vendor-comparison bound
+    if constexpr (batchlas::verify::is_complex<T>::value) return std::is_same_v<batchlas::verify::real_t<T>, float> ? 2e-5 : 2e-10;
+    else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
+}
+
 template <typename T, class VA, class VB, class VC0, class VC>
 ::testing::AssertionResult GemmMatchesDefinition(const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
                                                  const VC& C, T alpha, T beta, int k, double old_scale = 100) {
@@ -78,10 +84,10 @@ template <typename T, class VA, class VB, class VC0, class VC>
         A, Shape::general, ta, B, Shape::general, tb, C0, C, Shape::general, batchlas::verify::up(alpha),
         batchlas::verify::up(beta), batchlas::verify::all_items(C.batch_size()));
     double den = 0;
-    for (int item : batchlas::verify::default_items(C.batch_size()))
+    for (int item : batchlas::verify::all_items(C.batch_size()))
         den = std::max(den, batchlas::verify::gemm_max_denominator(A, Shape::general, ta, B, Shape::general, tb, C0,
                                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta), item));
-    const double old_tol = static_cast<double>(test_utils::tolerance<T>()) * old_scale;
+    const double old_tol = old_vendor_tolerance<T>() * old_scale;
     const batchlas::verify::Slack slack{
         std::min(1.0, old_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),
         "the old absolute tolerance against the vendor, kept"};

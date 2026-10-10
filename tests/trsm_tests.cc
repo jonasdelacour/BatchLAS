@@ -942,8 +942,20 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
         for (int b = 0; b < bs; ++b) std::copy(b0.begin(), b0.end(), b0_all.begin() + static_cast<std::size_t>(n) * b);
         const MatrixView<T, MatrixFormat::Dense> B0(b0_all.data(), n, 1, n, n, bs);
         const std::vector<int> items{0, bs - 1};
-        EXPECT_VERIFY(T, batchlas::verify::Check::solve, n,
-                      batchlas::verify::trsm_residual(A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, B.view(), B0,
-                                                      batchlas::verify::up(T(1)), items));
+        // Keeps the old ||AX - B|| / ||B|| < 1e-5: the library normalizes by ||A|| ||X|| + ||B|| instead, so the
+        // factor is 1e-5 ||B|| / (bound (||A|| ||X|| + ||B||)), the worst over the checked items (A is the lower triangle).
+        std::vector<T> a_lower(a0);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < j; ++i) a_lower[i + static_cast<std::size_t>(j) * n] = T(0);
+        const double a_norm = batchlas::verify::frobenius(batchlas::verify::view(a_lower.data(), n, n, n), 0);
+        double factor = 1.0;
+        for (int b : items) {
+            const double bn = batchlas::verify::frobenius(B0, b), xn = batchlas::verify::frobenius(B.view(), b);
+            factor = std::min(factor, 1e-5 * bn / (batchlas::verify::bound<T>(batchlas::verify::Check::solve, n) * (a_norm * xn + bn)));
+        }
+        EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::solve, n,
+                            batchlas::verify::trsm_residual(A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, B.view(), B0,
+                                                            batchlas::verify::up(T(1)), items),
+                            (batchlas::verify::Slack{factor, "the old ||AX-B||/||B|| < 1e-5"}));
     }
 }

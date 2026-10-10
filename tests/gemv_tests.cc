@@ -28,11 +28,14 @@ struct TestConfig {
 
 using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
-// These tests used a relative tolerance of test_utils::tolerance<T>() (1e-5 float, 2e-5 cfloat, 1e-10 double),
-// which the relative bound exceeds at long reductions in float. The Slack keeps it.
+// These tests used a relative tolerance of the old test_utils::tolerance vendor-comparison bound (1e-5 float,
+// 2e-5 cfloat, 1e-10 double, 2e-10 cdouble), which the relative bound exceeds at long reductions in float.
+// The Slack keeps it.
 template <typename T>
 batchlas::verify::Slack old_relative_tolerance(int k) {
-    return {std::min(1.0, static_cast<double>(test_utils::tolerance<T>()) / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+    constexpr double old_tol = batchlas::verify::is_complex<T>::value ? (std::is_same_v<batchlas::verify::real_t<T>, float> ? 2e-5 : 2e-10)
+                                                                      : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
+    return {std::min(1.0, old_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
             "the old relative tolerance, kept"};
 }
 
