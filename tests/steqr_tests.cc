@@ -555,7 +555,6 @@ void stress_run_case(Queue& ctx,
                      Vector<Real>& sub,
                      Vector<Real>& steqr_eigs,
                      Vector<Real>& cta_eigs,
-                     std::optional<verify::Slack> alt_slack,
                      bool check_steqr_against_ref = true,
                      bool check_cta_against_ref = true) {
     const int n = diag.size();
@@ -612,8 +611,7 @@ void stress_run_case(Queue& ctx,
     assert_all_finite(steqr_eigs);
     assert_all_finite(cta_eigs);
 
-    // Sorted copies against LAPACKE at Check::values (||T||_2 over the batch); the alternate scheme
-    // gets `alt_factor` x the bound.
+    // Sorted copies against LAPACKE at Check::values (||T||_2 over the batch).
     std::vector<Real> ste(static_cast<std::size_t>(n) * batch), cta(static_cast<std::size_t>(n) * batch);
     for (int j = 0; j < batch; ++j) {
         for (int i = 0; i < n; ++i) {
@@ -625,7 +623,7 @@ void stress_run_case(Queue& ctx,
     }
     const auto all = verify::all_items(batch);
     if (check_steqr_against_ref) expect_values(VectorView<Real>(ste.data(), n, batch), ref, norm2, n, std::nullopt, all);
-    if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, alt_slack, all);
+    if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, std::nullopt, all);
 }
 
 } // namespace
@@ -647,13 +645,11 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
     try {
         // Case 1: very large magnitude (expects scale-down to kick in)
         fill_stress_tridiag(diag, sub, stress_large_scale<float_type>(), stress_large_scale<float_type>());
-        stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                           std::nullopt);
+        stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta);
 
         // Case 2: very small magnitude (expects scale-up to kick in)
         fill_stress_tridiag(diag, sub, stress_small_scale<float_type>(), stress_small_scale<float_type>());
-        stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                           std::nullopt);
+        stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta);
 
         // Case 3: mixed dynamic range without underflow.
         // We keep the “small” entries O(1) so this still stresses conditioning and the
@@ -671,7 +667,6 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
         // the baseline STEQR path can be noticeably less accurate on ill-conditioned
         // mixed-scale inputs. We still require it to produce finite outputs.
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                           /*alt_slack=*/std::nullopt,
                            /*check_steqr_against_ref=*/false,
                            /*check_cta_against_ref=*/true);
 
@@ -738,13 +733,18 @@ Real mixed_convergence_eigenvalue(int b, int i, int n) {
     return Real(1) - Real(std::cos(M_PI * double(i + 1) / double(n + 1)));
 }
 
-// Every item with info == 0 against the closed form at Check::values, each scaled by its own
-// ||T||_2 (32 for the diagonal items, 2 for the Toeplitz ones).
+// Every item with info == 0 is right. Even items are diag(1..n) with e = 0: their eigenvalues are the
+// exact input integers, so they compare exactly. Odd (Toeplitz) items: closed form at Check::values,
+// ||T||_2 = 2.
 template <typename Real>
 void expect_converged_items_right(Vector<Real>& w, const UnifiedVector<int32_t>& info, int n, int batch) {
     std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch), std::vector<double>(static_cast<std::size_t>(n)));
     for (int b = 0; b < batch; ++b) {
         if (info[b] != 0) continue;
+        if (b % 2 == 0) {
+            for (int i = 0; i < n; ++i) EXPECT_EQ(w(i, b), Real(i + 1)) << "item " << b << " reported info == 0, eigenvalue " << i;
+            continue;
+        }
         double norm2 = 0;
         for (int i = 0; i < n; ++i) {
             ref[b][i] = mixed_convergence_eigenvalue<double>(b, i, n);

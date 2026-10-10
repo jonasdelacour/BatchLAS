@@ -200,6 +200,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
     ctx->wait();
     
     // The neig largest against LAPACKE of the dense copy (was: 1087.76, a rounded value, to 0.1).
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     const MatrixView<float, MatrixFormat::Dense> A_dense(A_data.data(), rows, rows, ld, rows * ld, batch_size);
     std::vector<std::vector<double>> top(batch_size);
     double scale = 0;

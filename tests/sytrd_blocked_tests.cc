@@ -60,25 +60,25 @@ std::optional<verify::Slack> float_slack(verify::Slack s) {
     if constexpr (std::is_same_v<Real, float>) return s;
     return std::nullopt;
 }
-// factor = 1e-6 / (32 n u); measured float errors are 0.1-0.2 of these.
-const verify::Slack kSlackN128{0.004, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 128"};
-const verify::Slack kSlackN33{0.016, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 33"};
-const verify::Slack kSlackN192{0.0027, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 192"};
-const verify::Slack kSlackN256{0.002, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 256"};
+// factor = 1e-6 / (32 n u): the old float 1e-6 relative; measured float errors are 0.1-0.2 of it.
+template <typename Real>
+std::optional<verify::Slack> float_old_power(int n) {
+    return float_slack<Real>({1e-6 / (32.0 * n * verify::eps<float>()), "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>)"});
+}
 const verify::Slack kSlackLatrd{0.05, "old float floor 3e-4 absolute over n = 65..256; measured <= 0.0015"};
+
+template <typename Scalar>
+void expect_values_err(int n, double err, std::optional<verify::Slack> slack) {
+    if (slack) EXPECT_VERIFY_SLACK(Scalar, verify::Check::values, n, err, *slack);
+    else EXPECT_VERIFY(Scalar, verify::Check::values, n, err);
+}
 
 // spectrum_error at Check::values (n = the order); skips without LAPACKE.
 template <typename Scalar>
 void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                      std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
-#if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    (void)A0, (void)d, (void)e, (void)slack, (void)items;
-    GTEST_SKIP() << "no host LAPACKE reference in this build";
-#else
-    const double err = spectrum_error(A0, d, e, items);
-    if (slack) EXPECT_VERIFY_SLACK(Scalar, verify::Check::values, A0.rows(), err, *slack);
-    else EXPECT_VERIFY(Scalar, verify::Check::values, A0.rows(), err);
-#endif
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    expect_values_err<Scalar>(A0.rows(), spectrum_error(A0, d, e, items), slack);
 }
 
 template <typename T, Backend B>
@@ -122,7 +122,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
 
     sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>(kSlackN128));
+    expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
 }
 
 // The blocked trailing update (A22 -= V W^H + W V^H) only runs when the trailing
@@ -144,6 +144,8 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
     const auto items = verify::all_items(batch);
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    const auto slack = float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"});
 
     // Runs one trailing-update route; returns its spectrum_error, checked at Check::values.
     auto run_route = [&](const char* route) {
@@ -159,8 +161,10 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
         UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
         sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
-        expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"}), items);
-        return spectrum_error(A0.view(), d, e, items);
+        const double err = spectrum_error(A0.view(), d, e, items);
+        SCOPED_TRACE(route);
+        expect_values_err<Real>(n, err, slack);
+        return err;
     };
 
     const double worst_gemm = run_route("gemm");
@@ -193,7 +197,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
 
     sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>(kSlackN33));
+    expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
 }
 #endif
 
@@ -228,7 +232,7 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
             sytrd_blocked<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
         }
 
-        expect_spectrum<Real>(A0.view(), d, e, n == 192 ? kSlackN192 : kSlackN256);
+        expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
     }
 }
 

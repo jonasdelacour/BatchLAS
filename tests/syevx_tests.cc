@@ -32,6 +32,10 @@ struct Spectrum {
     double norm2 = 0;
 };
 
+// Before every LapackeSpectrum: without LAPACKE there is no reference, so the case skips.
+#define SYEVX_REQUIRE_LAPACKE() \
+    do { if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build"; } while (0)
+
 template <typename T>
 Spectrum LapackeSpectrum(const MatrixView<T, MatrixFormat::Dense>& A) {
     Spectrum s;
@@ -231,6 +235,7 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
         *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(dense.view());
     ExpectValues(W_lobpcg.data(), neig, Extremal(ref, neig, true), ref.norm2, n);
 }
@@ -268,6 +273,7 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
 
     // Against LAPACKE of the dense copy (was: 1087.76, a rounded value, to 0.1).
     const MatrixView<float, MatrixFormat::Dense> A_dense(A_data.data(), rows, rows, ld, rows * ld, batch_size);
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A_dense);
     ExpectValues(W_data.data(), neig, Extremal(ref, neig, true), ref.norm2, rows);
 }
@@ -465,6 +471,7 @@ TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
         *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -517,6 +524,7 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
         *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -606,6 +614,7 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
         *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -708,6 +717,7 @@ TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
         *ctx, A.view(), W.to_span(), neig, ws, JobType::EigenVectors, V.view(), params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -1046,6 +1056,7 @@ TEST_P(SyevxJacobiTest, DenseMatchesReferenceSyev) {
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     auto run = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, find_largest,
                                               LegalJacobi(find_largest), &V);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
     CheckResiduals(A, V, run.W, batch, neig);
@@ -1064,6 +1075,7 @@ TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig, find_largest,
                                             LegalJacobi(find_largest), &V);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
     // Residual against the dense original: the CSR view is a conversion of it, so
@@ -1089,6 +1101,7 @@ TEST_P(SyevxJacobiTest, CsrWithUnsortedDiagonalPosition) {
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr.view(), n, batch, neig, find_largest,
                                             LegalJacobi(find_largest), &V);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
     CheckResiduals(A, V, run.W, batch, neig);
@@ -1118,6 +1131,7 @@ TEST(SyevxJacobiIterations, HelpsOnGradedMatrix) {
                                                       SyevxPreconditioner::None, nullptr, tol);
     const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
                                                     SyevxPreconditioner::Jacobi, nullptr, tol);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(jac.W, W_ref, n, neig, false);
 
@@ -1144,6 +1158,7 @@ TEST(SyevxJacobiIterations, DegradesGracefullyOnRandomSymmetric) {
                                                       SyevxPreconditioner::None, nullptr, tol);
     const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A.view(), n, batch, neig, false,
                                                     SyevxPreconditioner::Jacobi, nullptr, tol);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(jac.W, W_ref, n, neig, false);
     EXPECT_EQ(jac.iterations, plain.iterations)
@@ -1698,6 +1713,7 @@ TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     auto ctx = std::make_shared<Queue>(Device::default_device());
     auto A = MakeShiftedPerItem(n, batch);
     ctx->wait();
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
 
     SyevxParams<float> params;
@@ -1746,6 +1762,7 @@ TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
 
     DirectRangeRun run;
     ASSERT_NO_THROW(run = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors));
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     for (int b = 0; b < batch; ++b) {
         EXPECT_EQ(run.m[b], n);
@@ -1930,6 +1947,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
     auto A = MakeShiftedPerItem(n, batch);
     ctx->wait();
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
 
     SyevxParams<float> params;
@@ -2344,6 +2362,7 @@ TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
     Matrix<float, MatrixFormat::Dense> V(c.n, k, c.batch);
     const auto run = RunRange(p.path, *ctx, A, c.batch, k, params, p.jobz,
                               want_vectors ? &V : nullptr);
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
 
     const bool reverse = (c.order == SortOrder::Descending);
@@ -2804,6 +2823,7 @@ TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
     ctx->wait();
 
     // ...and the degraded path really answered the question that was asked.
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
@@ -2954,6 +2974,7 @@ TEST(SyevxPublicRangeTest, IndexRangeThroughBothOverloadsAgree) {
                                    MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
 
+    SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
