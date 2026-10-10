@@ -5,6 +5,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -198,13 +199,20 @@ TEST_F(LanczosTestBase, LanczosTest) {
                                   {.transA = Transpose::Trans});
     ctx->wait();
     
-    // Verify that the computed eigenvalues match the expected ones
+    // The neig largest against LAPACKE of the dense copy (was: 1087.76, a rounded value, to 0.1).
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    const MatrixView<float, MatrixFormat::Dense> A_dense(A_data.data(), rows, rows, ld, rows * ld, batch_size);
+    std::vector<std::vector<double>> top(batch_size);
+    double scale = 0;
     for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < neig; ++i) {
-            EXPECT_NEAR(W_data[rows*b + i], known_eigenvalues[i], 0.1f)
-                << "Eigenvalue mismatch at batch " << b << ", index " << i;
-        }
+        auto a = verify::copy_item(A_dense, b);
+        std::vector<double> spectrum;
+        ASSERT_TRUE(verify::eigenvalues(rows, a, spectrum)) << "LAPACKE reference failed, item " << b;
+        top[b].assign(spectrum.rbegin(), spectrum.rbegin() + neig);
+        for (double l : spectrum) scale = verify::nanmax(scale, std::fabs(l));
     }
+    const VectorView<float> w(W_data.data(), neig, batch_size, 1, rows);
+    EXPECT_VERIFY(float, verify::Check::values, rows, verify::values_error(w, top, scale, verify::all_items(batch_size)));
 }
 
 TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
@@ -231,24 +239,13 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     (void)lanczos(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
     ctx->wait();
 
-    // expected eigenvalues for Toeplitz matrix
-    UnifiedVector<float> expected(n * batch);
-    (void)syev(*ctx, dense.view(), expected.to_span(),
-         {.jobz = JobType::NoEigenVectors, .uplo = Uplo::Upper});
-    ctx->wait();
-
-    // `syev` returns eigenvalues in ascending order; Lanczos is configured to sort descending.
     for (int b = 0; b < batch; ++b) {
-        std::reverse(expected.begin() + b * n, expected.begin() + (b + 1) * n);
+        for (int i = 1; i < n; ++i) EXPECT_GE(W[b * n + i - 1], W[b * n + i]) << "not descending at " << i;
     }
-
-    auto tol = test_utils::tolerance<float>() * 1e1;
-    
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(W[b * n + i], expected[b * n + i], tol);
-        }
-    }
+    // ||A||_2 = 12, so the kind's bound is 9e-4 absolute: 9x the old 1e-4.
+    test_utils::expect_eigenvalues_match_lapacke<float>(
+        dense.view(), W, n, /*sorted_copy=*/true, verify::all_items(batch),
+        verify::Slack{0.11, "old bound 1e-4 absolute (10x test_utils::tolerance<float>), ||A||_2 = 12"});
 
     // verify eigenvectors A*v = lambda*v
     // Create workspace for residuals
