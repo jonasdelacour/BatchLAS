@@ -16,6 +16,7 @@
 #include <type_traits>
 #include <vector>
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -36,7 +37,7 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
 namespace {
 
-// Magnitudes in [-1, 1], so a long reduction cannot lose the tolerance.
+// Magnitudes in [-1, 1], so a long reduction does not cancel.
 template <typename T>
 T spmm_cov_value(int seed) {
     using R = typename batchlas::base_type<T>::type;
@@ -400,91 +401,46 @@ protected:
             std::memcpy(static_cast<void*>(c_data.data()), c_ptr, c_data.size() * sizeof(S));
         }
 
-        // ---- the reference, written FROM THE DEFINITION ----------------------
-        // Accumulated over the NONZEROS so one loop serves both directions and
-        // duplicate columns SUM -- MatrixView::at returns only the FIRST match.
-        const R tol = test_utils::tolerance<S>();
+        // ---- the reference: the library's componentwise backward error over the nonzeros, so
+        // duplicate columns sum. alpha == 0 never reads A, so the reference reads a finite copy of its values.
+        UnifiedVector<S> a_ref = a_val;
+        if (c.a_starts_nan) {
+            for (int b = 0; b < c.batch; ++b) {
+                const int ib = c.identical_items ? 0 : b;
+                for (int p = 0; p < static_cast<int>(items[static_cast<size_t>(b)].ci.size()); ++p)
+                    a_ref[static_cast<size_t>(b) * matrix_stride + static_cast<size_t>(p)] = spmm_cov_value<S>(ib * 104729 + p * 31 + 7);
+            }
+        }
+        const MatrixView<S, MatrixFormat::CSR> A_ref(a_ref.data(), a_ro.data(), a_ci.data(), c.m, c.kA, NonZeros{max_nnz},
+                                                     matrix_stride, offset_stride, c.batch);
+        // The reduction length of one output entry is the number of nonzeros that land in it: a row of A
+        // under NoTrans, a column under (Conj)Trans.
+        int terms = 0;
+        for (const SpmmPattern& it : items) {
+            if (a_nt) {
+                for (int i = 0; i < c.m; ++i) terms = std::max(terms, it.ro[static_cast<size_t>(i) + 1] - it.ro[static_cast<size_t>(i)]);
+            } else {
+                std::vector<int> per_col(static_cast<size_t>(c.kA), 0);
+                for (int col : it.ci) terms = std::max(terms, ++per_col[static_cast<size_t>(col)]);
+            }
+        }
+        // The uninitialised B column (and its discarded output) is left out: the claim is about the others.
+        const int dead = c.b_nan_col;
+        const int segments[2][2] = {{0, dead < 0 ? c.nrhs : dead}, {dead < 0 ? c.nrhs : dead + 1, c.nrhs}};
+        for (const auto& seg : segments) {
+            const int first = seg[0], count = seg[1] - seg[0];
+            if (count <= 0) continue;
+            const auto Bseg = b_nt ? batchlas::verify::view(b_data.data() + static_cast<size_t>(first) * ldb, b_rows, count, ldb, str_b, c.batch)
+                                   : batchlas::verify::view(b_data.data(), b_rows, b_cols, ldb, str_b, c.batch);
+            const auto Cseg = batchlas::verify::view(c_data.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
+            const auto C0seg = batchlas::verify::view(c_initial.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
+            EXPECT_VERIFY(S, batchlas::verify::Check::blas, terms,
+                          batchlas::verify::spmm_backward_error(A_ref, c.transA, Bseg, c.transB, C0seg, Cseg, batchlas::verify::up(c.alpha),
+                                                                batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)))
+                << "columns " << first << ".." << first + count - 1;
+        }
+
         for (int b = 0; b < c.batch; ++b) {
-            const SpmmPattern& it = items[static_cast<size_t>(b)];
-            const size_t n_out = static_cast<size_t>(std::max(1, out_rows * c.nrhs));
-            std::vector<S> expect(n_out, S(0));
-            std::vector<R> scale(n_out, R(0));
-
-            // alpha == 0 must not read A here either: summing a NaN-filled A
-            // would predict NaN and check nothing.
-            if (c.alpha != S(0)) {
-                for (int i = 0; i < c.m; ++i) {
-                    const int rs = it.ro[static_cast<size_t>(i)];
-                    const int re = it.ro[static_cast<size_t>(i) + 1];
-                    for (int p = rs; p < re; ++p) {
-                        S a = a_val[static_cast<size_t>(b) * matrix_stride +
-                                    static_cast<size_t>(p)];
-                        const int j = it.ci[static_cast<size_t>(p)];
-                        // ConjTrans conjugates the SPARSE operand.
-                        if constexpr (test_utils::is_complex<S>::value) {
-                            if (c.transA == Transpose::ConjTrans) a = std::conj(a);
-                        }
-                        const int o_row = a_nt ? i : j;
-                        const int r_row = a_nt ? j : i;
-                        for (int col = 0; col < c.nrhs; ++col) {
-                            S bv = b_nt
-                                       ? b_data[static_cast<size_t>(b) * str_b +
-                                                static_cast<size_t>(col) * ldb +
-                                                static_cast<size_t>(r_row)]
-                                       : b_data[static_cast<size_t>(b) * str_b +
-                                                static_cast<size_t>(r_row) * ldb +
-                                                static_cast<size_t>(col)];
-                            if constexpr (test_utils::is_complex<S>::value) {
-                                if (c.transB == Transpose::ConjTrans) bv = std::conj(bv);
-                            }
-                            const size_t o = static_cast<size_t>(col) * out_rows +
-                                             static_cast<size_t>(o_row);
-                            expect[o] += a * bv;
-                            scale[o] += std::abs(a) * std::abs(bv);
-                        }
-                    }
-                }
-                for (size_t o = 0; o < n_out; ++o) {
-                    expect[o] *= c.alpha;
-                    scale[o] *= std::abs(c.alpha);
-                }
-            }
-            if (c.beta != S(0)) {
-                for (int col = 0; col < c.nrhs; ++col) {
-                    for (int o_row = 0; o_row < out_rows; ++o_row) {
-                        const S c0 = c_initial[static_cast<size_t>(b) * str_c +
-                                               static_cast<size_t>(col) * ldc +
-                                               static_cast<size_t>(o_row)];
-                        const size_t o = static_cast<size_t>(col) * out_rows +
-                                         static_cast<size_t>(o_row);
-                        expect[o] += c.beta * c0;
-                        scale[o] += std::abs(c.beta) * std::abs(c0);
-                    }
-                }
-            }
-
-            for (int col = 0; col < c.nrhs; ++col) {
-                // Uninitialised by construction; the claim is about the others.
-                if (col == c.b_nan_col) continue;
-                for (int o_row = 0; o_row < out_rows; ++o_row) {
-                    const S got = c_data[static_cast<size_t>(b) * str_c +
-                                         static_cast<size_t>(col) * ldc +
-                                         static_cast<size_t>(o_row)];
-                    const size_t o = static_cast<size_t>(col) * out_rows +
-                                     static_cast<size_t>(o_row);
-                    const S want = expect[o];
-                    // A BACKWARD-ERROR denominator, never |expected|: the transposed
-                    // body is an atomic scatter, not reproducible run to run.
-                    const R denom = std::max(scale[o], R(1));
-                    EXPECT_TRUE(spmm_is_finite(got))
-                        << "batch " << b << " col " << col << " row " << o_row
-                        << " came back non-finite";
-                    EXPECT_LE(std::abs(got - want) / denom, tol)
-                        << "batch " << b << " col " << col << " row " << o_row
-                        << " got " << got << " expected " << want;
-                }
-            }
-
             // Every non-live slot of C must be UNTOUCHED: a body that ignored
             // ldc, or derived C's batch stride, passes every check above.
             for (int t = 0; t < str_c; ++t) {

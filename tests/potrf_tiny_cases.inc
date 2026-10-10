@@ -183,13 +183,13 @@ TYPED_TEST(PotrfTinyTest, TinyAgreesWithCtaWithinOnePanel) {
                         const T a = tiny.at(i, j, b);
                         const T c = cta.at(i, j, b);
                         const R scale =
-                            std::max(R(1), std::max(std::abs(host_real(c)),
-                                                    std::abs(host_imag(c))));
+                            std::max(R(1), std::max(std::abs(std::real(c)),
+                                                    std::abs(std::imag(c))));
                         const R tol = R(8) * std::numeric_limits<R>::epsilon() * scale;
-                        ASSERT_NEAR(host_real(a), host_real(c), tol)
+                        ASSERT_NEAR(std::real(a), std::real(c), tol)
                             << "tiny != cta at n=" << n << " (" << i << "," << j
                             << ") b=" << b << " uplo=" << static_cast<int>(uplo);
-                        ASSERT_NEAR(host_imag(a), host_imag(c), tol);
+                        ASSERT_NEAR(std::imag(a), std::imag(c), tol);
                     }
                 }
             }
@@ -235,12 +235,12 @@ TYPED_TEST(PotrfTinyTest, TinyPaddingIsInert) {
                             const bool in_tri =
                                 (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                             if (!in_tri) continue;
-                            ASSERT_EQ(host_real(clean.at(i, j, b)),
-                                      host_real(poisoned.at(i, j, b)))
+                            ASSERT_EQ(std::real(clean.at(i, j, b)),
+                                      std::real(poisoned.at(i, j, b)))
                                 << "the pad reached the factor at n=" << n << " ("
                                 << i << "," << j << ") b=" << b;
-                            ASSERT_EQ(host_imag(clean.at(i, j, b)),
-                                      host_imag(poisoned.at(i, j, b)));
+                            ASSERT_EQ(std::imag(clean.at(i, j, b)),
+                                      std::imag(poisoned.at(i, j, b)));
                         }
                     }
                 }
@@ -270,9 +270,9 @@ TYPED_TEST(PotrfTinyTest, TinyOtherTriangleIsNeitherReadNorWritten) {
                     for (int j = 0; j < n; ++j) {
                         const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                         if (in_tri) continue;
-                        ASSERT_EQ(host_real(p.at(i, j, b)), host_real(sentinel))
+                        ASSERT_EQ(std::real(p.at(i, j, b)), std::real(sentinel))
                             << "wrote outside the triangle at (" << i << "," << j << ")";
-                        ASSERT_EQ(host_imag(p.at(i, j, b)), host_imag(sentinel));
+                        ASSERT_EQ(std::imag(p.at(i, j, b)), std::imag(sentinel));
                     }
                 }
             }
@@ -287,10 +287,10 @@ TYPED_TEST(PotrfTinyTest, TinyOtherTriangleIsNeitherReadNorWritten) {
                     for (int j = 0; j < n; ++j) {
                         const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                         if (!in_tri) continue;
-                        ASSERT_FALSE(std::isnan(host_real(q.at(i, j, b))))
+                        ASSERT_FALSE(std::isnan(std::real(q.at(i, j, b))))
                             << "NaN leaked from the untouched triangle into ("
                             << i << "," << j << ")";
-                        ASSERT_FALSE(std::isnan(host_imag(q.at(i, j, b))));
+                        ASSERT_FALSE(std::isnan(std::imag(q.at(i, j, b))));
                     }
                 }
             }
@@ -343,10 +343,10 @@ TYPED_TEST(PotrfTinyTest, TinyPackedBatchMatchesSolo) {
             ASSERT_EQ(info_solo[0], 0);
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
-                    ASSERT_EQ(host_real(packed.at(i, j, b)), host_real(solo.at(i, j, 0)))
+                    ASSERT_EQ(std::real(packed.at(i, j, b)), std::real(solo.at(i, j, 0)))
                         << "packed vs solo differ at n=" << n << " b=" << b
                         << " (" << i << "," << j << ")";
-                    ASSERT_EQ(host_imag(packed.at(i, j, b)), host_imag(solo.at(i, j, 0)));
+                    ASSERT_EQ(std::imag(packed.at(i, j, b)), std::imag(solo.at(i, j, 0)));
                 }
             }
         }
@@ -373,7 +373,7 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
                                        verify::make<T>(R(0), R(0)));
             const auto ref = make_planted_ldl<T>(n, {c}, 4242u + static_cast<unsigned>(c));
             if (c >= 1) {
-                ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+                ASSERT_GT(std::real(ref[c + static_cast<size_t>(c) * n]), R(0))
                     << "the planted matrix is not discriminating at column " << c;
             }
             for (int i = 0; i < n; ++i) {
@@ -434,9 +434,9 @@ TYPED_TEST(PotrfTinyTest, TinyInfoIsExactAndFirstFailureWins) {
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
                     const T v = p.at(i, j, bad_items[k]);
-                    ASSERT_TRUE(std::isfinite(host_real(v)))
+                    ASSERT_TRUE(std::isfinite(std::real(v)))
                         << "failed item went non-finite at (" << i << "," << j << ")";
-                    ASSERT_TRUE(std::isfinite(host_imag(v)));
+                    ASSERT_TRUE(std::isfinite(std::imag(v)));
                 }
             }
         }
@@ -545,10 +545,10 @@ TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
         ASSERT_EQ(info_direct[b], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(through.at(i, j, b)), host_real(direct.at(i, j, b)))
+                ASSERT_EQ(std::real(through.at(i, j, b)), std::real(direct.at(i, j, b)))
                     << "the facade did not run the tiny kernel at (" << i << "," << j
                     << ") b=" << b;
-                ASSERT_EQ(host_imag(through.at(i, j, b)), host_imag(direct.at(i, j, b)));
+                ASSERT_EQ(std::imag(through.at(i, j, b)), std::imag(direct.at(i, j, b)));
             }
         }
     }

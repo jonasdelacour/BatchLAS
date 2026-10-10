@@ -9,6 +9,7 @@
 #include <string>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -25,6 +26,20 @@ class SyrkTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyrkTest, SyrkTestTypes);
 
+// The `uplo` triangle of C against alpha op(A) op(A)^T + beta C0 in double, every item (Check::blas, k the
+// inner dimension). The other triangle is not the answer; the poison tests check that it is left alone.
+template <typename T, class VA, class VC0, class VC>
+void expect_syrk_matches(const VA& A, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha, T beta, int k) {
+    const auto general = batchlas::verify::Shape::general;
+    EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                  batchlas::verify::gemm_backward_error(A, general, trans, A, general,
+                                                        trans == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans, C0, C,
+                                                        uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
+                                                        batchlas::verify::up(alpha), batchlas::verify::up(beta),
+                                                        batchlas::verify::all_items(C.batch_size())))
+        << "trans=" << static_cast<int>(trans) << ", uplo=" << static_cast<int>(uplo);
+}
+
 TYPED_TEST(SyrkTest, MatchesGemmReference) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -35,7 +50,6 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
     const int batch = 3;
     const T alpha = T(0.9);
     const T beta = T(-0.35);
-    const real_t tol = test_utils::tolerance<T>() * real_t(12 * k);
 
     for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -45,37 +59,15 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
             Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch);
             Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
             Matrix<T, MatrixFormat::Dense> C(n, n, batch);
-            Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
 
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
             syrk(*(this->ctx),
                      A.view(),
                      C.view(),
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            gemm(*(this->ctx),
-                     A.view(),
-                     A.view(),
-                     C_ref.view(),
-                     {.alpha = alpha, .beta = beta, .transA = transA, .transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans}).wait();
-
-            C.view().symmetrize(*(this->ctx), uplo).wait();
-            C_ref.view().symmetrize(*(this->ctx), uplo).wait();
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                            << "trans=" << static_cast<int>(transA)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
+            expect_syrk_matches(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -96,7 +88,6 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
     const int batch = 3;
     const T alpha = T(0.9);
     const T beta = T(-0.35);
-    const real_t tol = test_utils::tolerance<T>() * real_t(12 * k);
 
     for (int n : {24, 32, 48, 64, 96, 128}) {
         for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
@@ -109,40 +100,14 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
                 Matrix<T, MatrixFormat::Dense> C0 =
                     Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
                 Matrix<T, MatrixFormat::Dense> C(n, n, batch);
-                Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
 
                 MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
                 syrk(*(this->ctx), A.view(), C.view(),
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-                gemm(*(this->ctx), A.view(), A.view(), C_ref.view(),
-                     {.alpha = alpha, .beta = beta, .transA = transA,
-                      .transB = transA == Transpose::NoTrans ? Transpose::Trans
-                                                            : Transpose::NoTrans}).wait();
-
-                // Comparing the untouched half would only compare C0 with
-                // itself, so both sides are mirrored from the half syrk was
-                // asked for -- that way every element of the answer is checked
-                // against the reference, including the ones a wrongly indexed
-                // thread tile would have left at their input value.
-                C.view().symmetrize(*(this->ctx), uplo).wait();
-                C_ref.view().symmetrize(*(this->ctx), uplo).wait();
-
-                for (int b = 0; b < batch; ++b) {
-                    for (int j = 0; j < n; ++j) {
-                        for (int i = 0; i < n; ++i) {
-                            ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                                << "n=" << n
-                                << ", trans=" << static_cast<int>(transA)
-                                << ", uplo=" << static_cast<int>(uplo)
-                                << ", batch=" << b
-                                << ", row=" << i
-                                << ", col=" << j;
-                        }
-                    }
-                }
+                SCOPED_TRACE(::testing::Message() << "n=" << n);
+                expect_syrk_matches(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
             }
         }
     }
@@ -234,23 +199,21 @@ void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo up
     }
 }
 
-void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& C,
-                               Matrix<float, MatrixFormat::Dense>& C_ref,
+void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
+                               Matrix<float, MatrixFormat::Dense>& C,
+                               Matrix<float, MatrixFormat::Dense>& C0,
                                Uplo uplo,
                                Transpose transA,
-                               float tol) {
+                               float alpha,
+                               float beta,
+                               int k) {
+    expect_syrk_matches<float>(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
-                if (referenced) {
-                    ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                        << "n=" << n
-                        << ", trans=" << static_cast<int>(transA)
-                        << ", uplo=" << static_cast<int>(uplo)
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                } else {
+                if (!referenced) {
                     ASSERT_EQ(C(i, j, b), syrk_poison_value(i, j, b, n))
                         << "wrote outside the requested triangle: n=" << n
                         << ", trans=" << static_cast<int>(transA)
@@ -286,7 +249,6 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     const float beta = -0.35f;
 
     for (const auto& shape : shapes) {
-        const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
         for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
             const int a_rows = transA == Transpose::NoTrans ? shape.n : shape.k;
             const int a_cols = transA == Transpose::NoTrans ? shape.k : shape.n;
@@ -294,12 +256,10 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
                 Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 17);
 
             for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-                Matrix<float, MatrixFormat::Dense> C_custom =
+                Matrix<float, MatrixFormat::Dense> C0 =
                     Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 23);
-                Matrix<float, MatrixFormat::Dense> C_vendor =
-                    Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 23);
-                poison_unreferenced_triangle(C_custom, uplo);
-                poison_unreferenced_triangle(C_vendor, uplo);
+                poison_unreferenced_triangle(C0, uplo);
+                auto C_custom = C0.clone();
 
                 {
                     ScopedEnvVar force_route("BATCHLAS_SYRK_ROUTE", "triangular");
@@ -308,15 +268,8 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
                          C_custom.view(),
                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 }
-                {
-                    ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
-                    syrk(ctx,
-                         A.view(),
-                         C_vendor.view(),
-                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-                }
 
-                expect_triangle_respected(C_custom, C_vendor, uplo, transA, tol);
+                expect_triangle_respected(A, C_custom, C0, uplo, transA, alpha, beta, shape.k);
             }
         }
     }
@@ -346,27 +299,20 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
     const float beta = 0.5f;
 
     for (const auto& shape : shapes) {
-        const float tol =
-            test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
-
         Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(
             shape.n, shape.k, false, shape.batch, 41);
 
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_auto =
+            Matrix<float, MatrixFormat::Dense> C0 =
                 Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-            Matrix<float, MatrixFormat::Dense> C_vendor =
-                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-            poison_unreferenced_triangle(C_auto, uplo);
-            poison_unreferenced_triangle(C_vendor, uplo);
+            poison_unreferenced_triangle(C0, uplo);
+            auto C_auto = C0.clone();
+            auto C_native = C0.clone();
 
             syrk(ctx,
                  A.view(),
                  C_auto.view(),
                  {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
-            Matrix<float, MatrixFormat::Dense> C_native =
-                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-            poison_unreferenced_triangle(C_native, uplo);
             {
                 // `native` is a tile kernel, never the both-triangles GEMM it used to reach.
                 ScopedEnvVar native_route("BATCHLAS_SYRK_ROUTE", "native");
@@ -376,16 +322,8 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
             }
 
-            {
-                ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
-                syrk(ctx,
-                     A.view(),
-                     C_vendor.view(),
-                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
-            }
-
-            expect_triangle_respected(C_auto, C_vendor, uplo, Transpose::NoTrans, tol);
-            expect_triangle_respected(C_native, C_vendor, uplo, Transpose::NoTrans, tol);
+            expect_triangle_respected(A, C_auto, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
+            expect_triangle_respected(A, C_native, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
         }
     }
 }

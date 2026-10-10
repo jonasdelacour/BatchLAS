@@ -10,14 +10,7 @@
 #include <string>
 
 #include "test_utils.hh"
-#include "../src/select/vendor.hh"
-
-// Vendor-free, a `vendor` pin warns and falls back to Auto, which is the tile kernel: the
-// reference would then be the code under test (docs/developer/agent-guide.md section 8 rule 7).
-// syr2k_candidates_tests checks the tile kernel against a host reference in that tree.
-inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
-#define SKIP_WITHOUT_VENDOR_REFERENCE() \
-    if (!kVendorReference) GTEST_SKIP() << "vendor-free: the vendor reference would be the tile kernel itself"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -34,6 +27,16 @@ class Syr2kTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(Syr2kTest, Syr2kTestTypes);
 
+// The `uplo` triangle of C against alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C0 in double, every item
+// (Check::blas, 2k terms per entry). The other triangle is not the answer; the poison tests check it.
+template <typename T, class VA, class VB, class VC0, class VC>
+void expect_syr2k_matches(const VA& A, const VB& B, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha, T beta, int k) {
+    EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
+                  batchlas::verify::rank2k_backward_error(A, B, trans, C0, C, uplo, batchlas::verify::up(alpha), batchlas::verify::up(beta),
+                                                          false, batchlas::verify::all_items(C.batch_size())))
+        << "trans=" << static_cast<int>(trans) << ", uplo=" << static_cast<int>(uplo);
+}
+
 TYPED_TEST(Syr2kTest, MatchesGemmReference) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -44,7 +47,6 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
     const int batch = 3;
     const T alpha = T(0.85);
     const T beta = T(-0.15);
-    const real_t tol = test_utils::tolerance<T>() * real_t(20 * k);
 
     for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -55,10 +57,8 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
             Matrix<T, MatrixFormat::Dense> B = Matrix<T, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 29);
             Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);
             Matrix<T, MatrixFormat::Dense> C(n, n, batch);
-            Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
 
             MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
             syr2k(*(this->ctx),
                       A.view(),
@@ -66,33 +66,7 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
                       C.view(),
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-            gemm(*(this->ctx),
-                     A.view(),
-                     B.view(),
-                     C_ref.view(),
-                     {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB}).wait();
-            gemm(*(this->ctx),
-                     B.view(),
-                     A.view(),
-                     C_ref.view(),
-                     {.alpha = alpha, .beta = T(1), .transA = transA, .transB = transB}).wait();
-
-            C.view().symmetrize(*(this->ctx), uplo).wait();
-            C_ref.view().symmetrize(*(this->ctx), uplo).wait();
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                            << "trans=" << static_cast<int>(transA)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
+            expect_syr2k_matches(A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -188,24 +162,22 @@ void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo up
     }
 }
 
-void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& C,
-                               Matrix<float, MatrixFormat::Dense>& C_ref,
+void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
+                               Matrix<float, MatrixFormat::Dense>& B,
+                               Matrix<float, MatrixFormat::Dense>& C,
+                               Matrix<float, MatrixFormat::Dense>& C0,
                                Uplo uplo,
                                Transpose transA,
-                               int k,
-                               float tol) {
+                               float alpha,
+                               float beta,
+                               int k) {
+    expect_syr2k_matches<float>(A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
-                if (referenced) {
-                    ASSERT_NEAR(C(i, j, b), C_ref(i, j, b), tol)
-                        << "n=" << n << ", k=" << k
-                        << ", trans=" << static_cast<int>(transA)
-                        << ", uplo=" << static_cast<int>(uplo)
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                } else {
+                if (!referenced) {
                     ASSERT_EQ(C(i, j, b), syr2k_poison_value(i, j, b, n))
                         << "wrote outside the requested triangle: n=" << n << ", k=" << k
                         << ", trans=" << static_cast<int>(transA)
@@ -217,17 +189,14 @@ void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& C,
     }
 }
 
-// One shape under both the route being exercised and the vendor, comparing the
-// referenced triangle and requiring the poison back bit-exact from the other.
-// A null variant means the automatic route, with the environment variable
-// genuinely absent rather than spelled out.
+// One shape under the route being exercised: the referenced triangle against the definition, and the
+// poison back bit-exact from the other. A null variant means the automatic route, with the environment
+// variable genuinely absent rather than spelled out.
 void expect_route_respects_triangle(Queue& ctx,
                                     const char* variant,
                                     const Syr2kShape& shape,
                                     float alpha,
                                     float beta) {
-    const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
-
     for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
         const int a_rows = transA == Transpose::NoTrans ? shape.n : shape.k;
         const int a_cols = transA == Transpose::NoTrans ? shape.k : shape.n;
@@ -237,12 +206,10 @@ void expect_route_respects_triangle(Queue& ctx,
             Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 31);
 
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_custom =
+            Matrix<float, MatrixFormat::Dense> C0 =
                 Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-            Matrix<float, MatrixFormat::Dense> C_vendor =
-                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-            poison_unreferenced_triangle(C_custom, uplo);
-            poison_unreferenced_triangle(C_vendor, uplo);
+            poison_unreferenced_triangle(C0, uplo);
+            auto C_custom = C0.clone();
 
             {
                 ScopedEnvVar route_variant("BATCHLAS_SYR2K_ROUTE", variant);
@@ -253,17 +220,8 @@ void expect_route_respects_triangle(Queue& ctx,
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
-            {
-                ScopedEnvVar vendor_route("BATCHLAS_SYR2K_ROUTE", "vendor");
-                syr2k(ctx,
-                      A.view(),
-                      B.view(),
-                      C_vendor.view(),
-                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-            }
-
             ASSERT_NO_FATAL_FAILURE(
-                expect_triangle_respected(C_custom, C_vendor, uplo, transA, shape.k, tol));
+                expect_triangle_respected(A, B, C_custom, C0, uplo, transA, alpha, beta, shape.k));
         }
     }
 }
@@ -275,7 +233,6 @@ TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
-    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // 256x64 is whole 128 tiles with a k the 8-deep staging fills exactly, so
     // it takes the unpredicated path; 200x53 breaks both and takes the
@@ -299,7 +256,6 @@ TEST(Syr2kCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
-    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // What this guards is the routing, not any one kernel: whichever route a
     // shape picks, the unreferenced half of C belongs to the caller. The router
@@ -336,7 +292,6 @@ TEST(Syr2kCudaCustomTest, AdversarialShapesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
-    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     struct Case {
         Syr2kShape shape;
@@ -375,7 +330,6 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
-    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     const Syr2kShape shapes[] = {{256, 64, 4}, {200, 53, 3}, {129, 9, 2}};
     const float alpha = 1.25f;
@@ -383,8 +337,6 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
     const float nan_value = std::numeric_limits<float>::quiet_NaN();
 
     for (const auto& shape : shapes) {
-        const float tol = test_utils::tolerance<float>() * 64.0f * static_cast<float>(shape.k);
-
         for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
             const int a_rows = transA == Transpose::NoTrans ? shape.n : shape.k;
             const int a_cols = transA == Transpose::NoTrans ? shape.k : shape.n;
@@ -394,20 +346,19 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
                 Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 31);
 
             for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-                Matrix<float, MatrixFormat::Dense> C_custom =
-                    Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
-                Matrix<float, MatrixFormat::Dense> C_vendor =
+                Matrix<float, MatrixFormat::Dense> C0 =
                     Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
                 for (int b = 0; b < shape.batch; ++b) {
                     for (int j = 0; j < shape.n; ++j) {
                         for (int i = 0; i < shape.n; ++i) {
                             const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
                             if (!referenced) {
-                                C_custom(i, j, b) = nan_value;
+                                C0(i, j, b) = nan_value;
                             }
                         }
                     }
                 }
+                auto C_custom = C0.clone();
 
                 syr2k(ctx,
                       A.view(),
@@ -415,31 +366,9 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
                       C_custom.view(),
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-                {
-                    ScopedEnvVar vendor_route("BATCHLAS_SYR2K_ROUTE", "vendor");
-                    syr2k(ctx,
-                          A.view(),
-                          B.view(),
-                          C_vendor.view(),
-                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-                }
-
-                for (int b = 0; b < shape.batch; ++b) {
-                    for (int j = 0; j < shape.n; ++j) {
-                        for (int i = 0; i < shape.n; ++i) {
-                            const bool referenced = uplo == Uplo::Lower ? i >= j : i <= j;
-                            if (!referenced) {
-                                continue;
-                            }
-                            ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                                << "read outside the requested triangle: n=" << shape.n
-                                << ", k=" << shape.k
-                                << ", trans=" << static_cast<int>(transA)
-                                << ", uplo=" << static_cast<int>(uplo)
-                                << ", batch=" << b << ", row=" << i << ", col=" << j;
-                        }
-                    }
-                }
+                // Only the referenced triangle is read from C0, so a surviving NaN there is a read across the boundary.
+                SCOPED_TRACE(::testing::Message() << "n=" << shape.n << ", k=" << shape.k);
+                expect_syr2k_matches<float>(A.view(), B.view(), C0.view(), C_custom.view(), uplo, transA, alpha, beta, shape.k);
             }
         }
     }

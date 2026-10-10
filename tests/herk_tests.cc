@@ -8,6 +8,7 @@
 #include <string>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -34,9 +35,9 @@ TYPED_TEST_SUITE(HerkTest, HerkTestTypes);
 // both halves of that. This test poisons the storage HERK may not touch -- the
 // unreferenced triangle and the diagonal's imaginary part, each with a value
 // nothing else could produce -- and then asserts three separate things: the
-// referenced triangle matches an independent GEMM taking beta from the clean C,
-// the poison is still bit-for-bit intact afterwards, and the diagonal came out
-// real.
+// referenced triangle matches alpha A A^H + beta C0 in double (C0 clean, with a
+// real diagonal), the poison is still bit-for-bit intact afterwards, and the
+// diagonal came out real.
 //
 // The shapes are ragged on purpose: the GEMM route folds an n x n product into
 // C with a tiled elementwise kernel, so what matters is the sizes where the
@@ -70,8 +71,6 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
         for (const auto& shape : shapes) {
             const int n = shape.n;
             const int k = shape.k;
-            const real_t tol = test_utils::tolerance<T>() * real_t(64 * (n + k));
-
             for (auto trans : {Transpose::NoTrans, Transpose::ConjTrans}) {
                 const int a_rows = trans == Transpose::NoTrans ? n : k;
                 const int a_cols = trans == Transpose::NoTrans ? k : n;
@@ -79,6 +78,9 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
                 auto A = Matrix<T, MatrixFormat::Dense>::Random(a_rows, a_cols, false, shape.batch, 17);
                 auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, shape.batch, 23);
                 this->ctx->wait();
+                // A Hermitian C has a real diagonal: the reference scales its real part by beta.
+                for (int b = 0; b < shape.batch; ++b)
+                    for (int d = 0; d < n; ++d) C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
 
                 for (const auto& scaling : scalings) {
                     for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -108,81 +110,41 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
                         }
                         this->ctx->wait();
 
-                        Matrix<T, MatrixFormat::Dense> R(n, n, shape.batch);
-                        (void)R.view().fill_zeros(*(this->ctx));
-                        this->ctx->wait();
-
                         herk(*(this->ctx), A.view(), C.view(),
                              {.alpha = scaling.alpha,
                               .beta = scaling.beta,
                               .uplo = uplo,
                               .trans = trans}).wait();
 
-                        // A A^H the long way round: a full GEMM writing both
-                        // triangles, with beta applied on the host from the
-                        // clean C rather than from the poisoned one.
-                        gemm(*(this->ctx), A.view(), A.view(), R.view(),
-                             {.alpha = T(scaling.alpha),
-                              .beta = T(0),
-                              .transA = trans,
-                              .transB = trans == Transpose::NoTrans ? Transpose::ConjTrans
-                                                                    : Transpose::NoTrans}).wait();
+                        const auto triangle = uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper;
+                        const auto general = batchlas::verify::Shape::general;
+                        const double err = batchlas::verify::gemm_backward_error(
+                            A.view(), general, trans, A.view(), general,
+                            trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(), triangle,
+                            batchlas::verify::up(T(scaling.alpha)), batchlas::verify::up(T(scaling.beta)),
+                            batchlas::verify::all_items(shape.batch));
+                        EXPECT_VERIFY(T, batchlas::verify::Check::blas, k, err)
+                            << "herk read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
+                            << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
+                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper") << ", beta=" << scaling.beta;
 
                         for (int b = 0; b < shape.batch; ++b) {
                             for (int j = 0; j < n; ++j) {
                                 for (int i = 0; i < n; ++i) {
-                                    const bool referenced =
-                                        (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
+                                    const bool referenced = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                                     const T got = C(i, j, b);
-
                                     if (!referenced) {
                                         ASSERT_EQ(got, poison)
                                             << "herk wrote the unreferenced triangle: " << route
                                             << " route, n=" << n << ", k=" << k
                                             << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                                             << ", batch=" << b << ", row=" << i << ", col=" << j;
-                                        continue;
-                                    }
-
-                                    const T product = R(i, j, b);
-                                    const T prev = C0(i, j, b);
-                                    // The diagonal of a Hermitian matrix is
-                                    // real, so beta scales only its real part.
-                                    const real_t want_real =
-                                        product.real() + scaling.beta * prev.real();
-                                    const real_t want_imag =
-                                        product.imag() + scaling.beta * prev.imag();
-
-                                    ASSERT_NEAR(got.real(), want_real, tol)
-                                        << "herk read storage it must not touch: " << route
-                                        << " route, n=" << n << ", k=" << k
-                                        << ", trans="
-                                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                        << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                        << ", beta=" << scaling.beta
-                                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                                    if (i == j) {
-                                        // BLAS sets the diagonal's imaginary
-                                        // part to zero rather than leaving
-                                        // whatever the arithmetic produced, so
-                                        // this is exact and not a tolerance.
+                                    } else if (i == j) {
+                                        // BLAS sets the diagonal's imaginary part to zero rather than leaving
+                                        // whatever the arithmetic produced, so this is exact.
                                         ASSERT_EQ(got.imag(), real_t(0))
                                             << "herk left an imaginary part on the diagonal: " << route
-                                            << " route, n=" << n << ", k=" << k
-                                            << ", trans="
-                                            << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                            << ", beta=" << scaling.beta
-                                            << ", batch=" << b << ", index=" << i;
-                                    } else {
-                                        ASSERT_NEAR(got.imag(), want_imag, tol)
-                                            << "herk read storage it must not touch: " << route
-                                            << " route, n=" << n << ", k=" << k
-                                            << ", trans="
-                                            << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                            << ", beta=" << scaling.beta
-                                            << ", batch=" << b << ", row=" << i << ", col=" << j;
+                                            << " route, n=" << n << ", k=" << k << ", batch=" << b << ", index=" << i;
                                     }
                                 }
                             }
@@ -209,9 +171,8 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
 
 // A A^H is Hermitian, so the lower triangle HERK writes for Uplo::Lower and the
 // upper one it writes for Uplo::Upper must be conjugate transposes of each
-// other. That is a property of the result rather than of the reference used to
-// check it, so it catches a fold that dropped a conjugate somewhere -- which
-// against a GEMM reference computed the same way could otherwise cancel out.
+// other. Each triangle is checked against alpha A A^H in double; the two
+// references are conjugates of each other, so agreement follows.
 TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -219,7 +180,6 @@ TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
     const int n = 65;
     const int k = 40;
     const int batch = 4;
-    const real_t tol = test_utils::tolerance<T>() * real_t(64 * (n + k));
 
     for (auto trans : {Transpose::NoTrans, Transpose::ConjTrans}) {
         const int a_rows = trans == Transpose::NoTrans ? n : k;
@@ -235,21 +195,16 @@ TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
         herk(*(this->ctx), A.view(), C_lower.view(), {.uplo = Uplo::Lower, .trans = trans}).wait();
         herk(*(this->ctx), A.view(), C_upper.view(), {.uplo = Uplo::Upper, .trans = trans}).wait();
 
-        for (int b = 0; b < batch; ++b) {
-            for (int j = 0; j < n; ++j) {
-                for (int i = j; i < n; ++i) {
-                    const T lower = C_lower(i, j, b);
-                    const T upper = C_upper(j, i, b);
-                    ASSERT_NEAR(lower.real(), upper.real(), tol)
-                        << "herk's two triangles disagree: trans="
-                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                    ASSERT_NEAR(lower.imag(), -upper.imag(), tol)
-                        << "herk's two triangles are not conjugates: trans="
-                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                }
-            }
+        const auto general = batchlas::verify::Shape::general;
+        const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
+        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+            auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                          batchlas::verify::gemm_backward_error(A.view(), general, trans, A.view(), general, other, C.view(), C.view(),
+                                                                uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
+                                                                1.0, 0.0, batchlas::verify::all_items(batch)))
+                << "herk's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
+                << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }
     }
 }
@@ -320,7 +275,6 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     const int batch = 3;
     const real_t alpha = real_t(0.9);
     const real_t beta = real_t(-0.35);
-    const real_t tol = test_utils::tolerance<T>() * real_t(12 * k);
 
     auto sweep = [&](const char* route) {
     for (int n : {24, 32, 48, 64, 96, 128}) {
@@ -334,13 +288,10 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
                 Matrix<T, MatrixFormat::Dense> C0 =
                     Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
                 Matrix<T, MatrixFormat::Dense> C(n, n, batch);
-                Matrix<T, MatrixFormat::Dense> C_ref(n, n, batch);
 
                 // BLAS does not reference the imaginary part of a Hermitian C's
-                // diagonal, so herk drops it and a plain GEMM scales it by beta.
-                // Starting from a real diagonal is what makes the two
-                // comparable; without it the test fails on element (0,0) for a
-                // reason that has nothing to do with the kernel.
+                // diagonal, so herk drops it and the reference would scale it by
+                // beta. A real diagonal makes the two comparable.
                 for (int b = 0; b < batch; ++b) {
                     for (int d = 0; d < n; ++d) {
                         C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
@@ -349,38 +300,18 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
                 this->ctx->wait();
 
                 MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
-                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C_ref.view(), C0.view()).wait();
 
                 herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, uplo, transA).wait();
 
-                gemm(*(this->ctx), A.view(), A.view(), C_ref.view(),
-                     {.alpha = T(alpha), .beta = T(beta), .transA = transA,
-                      .transB = transA == Transpose::NoTrans ? Transpose::ConjTrans
-                                                             : Transpose::NoTrans}).wait();
-
-                // Mirror both, so the half herk was not asked for is compared
-                // against the reference too rather than against its own input.
-                C.view().symmetrize(*(this->ctx), uplo).wait();
-                C_ref.view().symmetrize(*(this->ctx), uplo).wait();
-
-                for (int b = 0; b < batch; ++b) {
-                    for (int j = 0; j < n; ++j) {
-                        for (int i = 0; i < n; ++i) {
-                            const T got = C(i, j, b);
-                            const T want = C_ref(i, j, b);
-                            ASSERT_NEAR(got.real(), want.real(), tol)
-                                << "real route=" << route << " n=" << n
-                                << " trans=" << static_cast<int>(transA)
-                                << " uplo=" << static_cast<int>(uplo)
-                                << " b=" << b << " row=" << i << " col=" << j;
-                            ASSERT_NEAR(got.imag(), want.imag(), tol)
-                                << "imag route=" << route << " n=" << n
-                                << " trans=" << static_cast<int>(transA)
-                                << " uplo=" << static_cast<int>(uplo)
-                                << " b=" << b << " row=" << i << " col=" << j;
-                        }
-                    }
-                }
+                // Only the requested triangle is the answer; its conjugate half is not computed.
+                const auto general = batchlas::verify::Shape::general;
+                EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                              batchlas::verify::gemm_backward_error(
+                                  A.view(), general, transA, A.view(), general,
+                                  transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(),
+                                  uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
+                                  batchlas::verify::up(T(alpha)), batchlas::verify::up(T(beta)), batchlas::verify::all_items(batch)))
+                    << "route=" << route << " n=" << n << " trans=" << static_cast<int>(transA) << " uplo=" << static_cast<int>(uplo);
             }
         }
     }

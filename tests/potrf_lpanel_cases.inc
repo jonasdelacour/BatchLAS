@@ -186,7 +186,7 @@ TYPED_TEST(PotrfLpanelTest, OtherTriangleIsNeitherReadNorWritten) {
             ASSERT_EQ(info[b], 0) << "b=" << b << " pass=" << pass;
             for (int i = 0; i < n; ++i) {
                 for (int j = i + 1; j < n; ++j) {
-                    const bool intact = nan_pass ? std::isnan(host_real(A(i, j, b)))
+                    const bool intact = nan_pass ? std::isnan(std::real(A(i, j, b)))
                                                  : (A(i, j, b) == poison);
                     ASSERT_TRUE(intact)
                         << "the kernel WROTE the upper triangle at (" << i << "," << j
@@ -229,7 +229,7 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j <= i; ++j)
-                    scale = std::max(scale, std::abs(host_real(Bm(i, j, b))));
+                    scale = std::max(scale, std::abs(std::real(Bm(i, j, b))));
         }
         const R tol = R(32) * R(n) * std::numeric_limits<R>::epsilon() * std::max(scale, R(1));
 
@@ -238,9 +238,9 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
             ASSERT_EQ(info_cta[b], info_lp[b]) << "the tiers disagree about info, b=" << b;
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
-                    EXPECT_NEAR(host_real(A(i, j, b)), host_real(Bm(i, j, b)), tol)
+                    EXPECT_NEAR(std::real(A(i, j, b)), std::real(Bm(i, j, b)), tol)
                         << "n=" << n << " (" << i << "," << j << ") b=" << b;
-                    EXPECT_NEAR(host_imag(A(i, j, b)), host_imag(Bm(i, j, b)), tol)
+                    EXPECT_NEAR(std::imag(A(i, j, b)), std::imag(Bm(i, j, b)), tol)
                         << "n=" << n << " (" << i << "," << j << ") b=" << b;
                 }
             }
@@ -271,7 +271,7 @@ TYPED_TEST(PotrfLpanelTest, InfoIndexIsExact) {
         // THE TEST ASSERTS ITS OWN SENSITIVITY: for c >= 1 the ORIGINAL diagonal at the
         // failure column is positive, so only a kernel testing the UPDATED pivot names it.
         if (c >= 1) {
-            ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+            ASSERT_GT(std::real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
         this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
@@ -306,9 +306,9 @@ TYPED_TEST(PotrfLpanelTest, InfoFirstFailureWinsAndFailedItemsStayFinite) {
 
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_TRUE(std::isfinite(host_real(A(i, j, 0))))
+                ASSERT_TRUE(std::isfinite(std::real(A(i, j, 0))))
                     << "a failed item went non-finite at (" << i << "," << j << ")";
-                ASSERT_TRUE(std::isfinite(host_imag(A(i, j, 0))));
+                ASSERT_TRUE(std::isfinite(std::imag(A(i, j, 0))));
             }
         }
     }
@@ -431,10 +431,10 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
         ASSERT_EQ(info_direct[b], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(A(i, j, b)), host_real(direct(i, j, b)))
+                ASSERT_EQ(std::real(A(i, j, b)), std::real(direct(i, j, b)))
                     << "the facade did not run the LPanel kernel at (" << i << "," << j
                     << ") b=" << b;
-                ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
+                ASSERT_EQ(std::imag(A(i, j, b)), std::imag(direct(i, j, b)));
             }
         }
     }

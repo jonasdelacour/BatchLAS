@@ -41,24 +41,6 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 template <typename T>
-inline T host_conj(T v) {
-    if constexpr (test_utils::is_complex<T>::value) return std::conj(v);
-    else return v;
-}
-
-template <typename T>
-inline RealOf<T> host_real(T v) {
-    if constexpr (test_utils::is_complex<T>::value) return v.real();
-    else return v;
-}
-
-template <typename T>
-inline RealOf<T> host_imag(T v) {
-    if constexpr (test_utils::is_complex<T>::value) return v.imag();
-    else return RealOf<T>(0);
-}
-
-template <typename T>
 inline T host_rand(std::mt19937& gen) {
     std::uniform_real_distribution<RealOf<T>> d(RealOf<T>(-1), RealOf<T>(1));
     if constexpr (test_utils::is_complex<T>::value) return T(d(gen), d(gen));
@@ -80,20 +62,20 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
             T acc{};
             for (int k = 0; k < n; ++k) {
                 acc += M[i + static_cast<size_t>(k) * n] *
-                       host_conj(M[j + static_cast<size_t>(k) * n]);
+                       verify::conj(M[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc / T(R(n));
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            verify::make<T>(host_real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
+            verify::make<T>(std::real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
     }
     // Force exact Hermitian symmetry and an exactly real diagonal: the kernel is
     // contractually allowed to ignore imag(diag(A)), so the reference must too.
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < i; ++j) {
-            A[j + static_cast<size_t>(i) * n] = host_conj(A[i + static_cast<size_t>(j) * n]);
+            A[j + static_cast<size_t>(i) * n] = verify::conj(A[i + static_cast<size_t>(j) * n]);
         }
     }
     return A;
@@ -131,14 +113,14 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         R ss = R(0);
         for (int p = 0; p < c; ++p) {
             const T v = L[c + static_cast<size_t>(p) * n];
-            ss += host_real(v) * host_real(v) + host_imag(v) * host_imag(v);
+            ss += std::real(v) * std::real(v) + std::imag(v) * std::imag(v);
         }
         if (ss <= R(0)) continue;
         const R scale = std::sqrt(R(2) / ss);
         for (int p = 0; p < c; ++p) {
             L[c + static_cast<size_t>(p) * n] =
-                verify::make<T>(host_real(L[c + static_cast<size_t>(p) * n]) * scale,
-                               host_imag(L[c + static_cast<size_t>(p) * n]) * scale);
+                verify::make<T>(std::real(L[c + static_cast<size_t>(p) * n]) * scale,
+                               std::imag(L[c + static_cast<size_t>(p) * n]) * scale);
         }
     }
 
@@ -148,14 +130,14 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
             T acc{};
             for (int k = 0; k <= std::min(i, j); ++k) {
                 acc += L[i + static_cast<size_t>(k) * n] * verify::make<T>(D[k], R(0)) *
-                       host_conj(L[j + static_cast<size_t>(k) * n]);
+                       verify::conj(L[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc;
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            verify::make<T>(host_real(A[i + static_cast<size_t>(i) * n]), R(0));
+            verify::make<T>(std::real(A[i + static_cast<size_t>(i) * n]), R(0));
     }
     return A;
 }
@@ -354,10 +336,10 @@ TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
                         const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                         if (!in_tri) {
                             const T v = A(i, j, b);
-                            ASSERT_EQ(host_real(v), host_real(poison))
+                            ASSERT_EQ(std::real(v), std::real(poison))
                                 << "wrote outside the " << static_cast<int>(uplo)
                                 << " triangle at (" << i << "," << j << ")";
-                            ASSERT_EQ(host_imag(v), host_imag(poison));
+                            ASSERT_EQ(std::imag(v), std::imag(poison));
                         }
                     }
                 }
@@ -379,10 +361,10 @@ TYPED_TEST(PotrfCtaTest, OtherTriangleIsNeitherReadNorWritten) {
                         const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                         if (in_tri) {
                             const T v = A(i, j, b);
-                            ASSERT_FALSE(std::isnan(host_real(v)))
+                            ASSERT_FALSE(std::isnan(std::real(v)))
                                 << "NaN leaked from the untouched triangle into ("
                                 << i << "," << j << ")";
-                            ASSERT_FALSE(std::isnan(host_imag(v)));
+                            ASSERT_FALSE(std::isnan(std::imag(v)));
                         }
                     }
                 }
@@ -428,10 +410,10 @@ TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
             ASSERT_EQ(info_solo[0], 0);
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
-                    ASSERT_EQ(host_real(packed(i, j, b)), host_real(solo(i, j, 0)))
+                    ASSERT_EQ(std::real(packed(i, j, b)), std::real(solo(i, j, 0)))
                         << "packed vs solo differ at n=" << n << " b=" << b
                         << " (" << i << "," << j << ")";
-                    ASSERT_EQ(host_imag(packed(i, j, b)), host_imag(solo(i, j, 0)));
+                    ASSERT_EQ(std::imag(packed(i, j, b)), std::imag(solo(i, j, 0)));
                 }
             }
         }
@@ -459,7 +441,7 @@ TYPED_TEST(PotrfCtaTest, InfoIndexIsExact) {
         // THE TEST ASSERTS ITS OWN SENSITIVITY: for c >= 1 the ORIGINAL diagonal at the
         // failure column is positive, so only a kernel testing the UPDATED pivot names it.
         if (c >= 1) {
-            ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+            ASSERT_GT(std::real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
         this->load_triangle(A, 0, n, ref, uplo, verify::make<T>(R(0), R(0)));
@@ -518,10 +500,10 @@ TYPED_TEST(PotrfCtaTest, InfoAtBatchScaleAndFailedItemsStayFinite) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
                 const T v = A(i, j, bad_items[k]);
-                ASSERT_TRUE(std::isfinite(host_real(v)))
+                ASSERT_TRUE(std::isfinite(std::real(v)))
                     << "failed item " << bad_items[k] << " went non-finite at ("
                     << i << "," << j << ")";
-                ASSERT_TRUE(std::isfinite(host_imag(v)));
+                ASSERT_TRUE(std::isfinite(std::imag(v)));
             }
         }
     }
@@ -547,7 +529,7 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         R max_imag = R(0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < i; ++j) {
-                max_imag = std::max(max_imag, std::abs(host_imag(ref[i + static_cast<size_t>(j) * n])));
+                max_imag = std::max(max_imag, std::abs(std::imag(ref[i + static_cast<size_t>(j) * n])));
             }
         }
         ASSERT_GT(max_imag, R(0.01)) << "the generated matrix is effectively real";
@@ -557,20 +539,20 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         ASSERT_EQ(this->run_cta(A, Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
             // (b) EXACTLY zero, not near zero.
-            ASSERT_EQ(host_imag(A(i, i, 0)), R(0)) << "imag(L(" << i << "," << i << ")) != 0";
+            ASSERT_EQ(std::imag(A(i, i, 0)), R(0)) << "imag(L(" << i << "," << i << ")) != 0";
         }
         EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref, A, 0, Uplo::Lower)), kLeafSlack);
 
         // (c) conj(A) is a different Hermitian matrix, so it must give a different factor.
         std::vector<T> refc(ref);
-        for (auto& v : refc) v = host_conj(v);
+        for (auto& v : refc) v = verify::conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
         this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_cta(Ac, Uplo::Lower)[0], 0);
         bool differs = false;
         for (int i = 1; i < n && !differs; ++i) {
             for (int j = 0; j < i && !differs; ++j) {
-                if (host_imag(A(i, j, 0)) != host_imag(Ac(i, j, 0))) differs = true;
+                if (std::imag(A(i, j, 0)) != std::imag(Ac(i, j, 0))) differs = true;
             }
         }
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
@@ -580,14 +562,14 @@ TYPED_TEST(PotrfCtaTest, ComplexDiagonalIsExactlyReal) {
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
         this->load_triangle(Ap, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i) {
-            Ap(i, i, 0) = verify::make<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
+            Ap(i, i, 0) = verify::make<T>(std::real(Ap(i, i, 0)), R(0.75) * R(i + 1));
         }
         ASSERT_EQ(this->run_cta(Ap, Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(Ap(i, j, 0)), host_real(A(i, j, 0)))
+                ASSERT_EQ(std::real(Ap(i, j, 0)), std::real(A(i, j, 0)))
                     << "imag(diag(A)) was not ignored, at (" << i << "," << j << ")";
-                ASSERT_EQ(host_imag(Ap(i, j, 0)), host_imag(A(i, j, 0)));
+                ASSERT_EQ(std::imag(Ap(i, j, 0)), std::imag(A(i, j, 0)));
             }
         }
     }
@@ -650,10 +632,10 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
         ASSERT_EQ(info_direct[b], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(A(i, j, b)), host_real(direct(i, j, b)))
+                ASSERT_EQ(std::real(A(i, j, b)), std::real(direct(i, j, b)))
                     << "the facade did not run the CTA kernel: its answer differs from "
                        "potrf_cta_dispatch's at (" << i << "," << j << ") b=" << b;
-                ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
+                ASSERT_EQ(std::imag(A(i, j, b)), std::imag(direct(i, j, b)));
             }
         }
         EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack) << "b=" << b;
@@ -909,8 +891,8 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
             for (int i = 0; i < nn; ++i) {
                 for (int j = i + 1; j < nn; ++j) {
                     const T v = A(i, j, b);
-                    if (host_real(v) != host_real(poison) ||
-                        host_imag(v) != host_imag(poison)) ++changed;
+                    if (std::real(v) != std::real(poison) ||
+                        std::imag(v) != std::imag(poison)) ++changed;
                 }
             }
         }
@@ -936,10 +918,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedOtherTriangleIsNeitherReadNorWritten) {
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
                     const T v = A(i, j, b);
-                    ASSERT_FALSE(std::isnan(host_real(v)))
+                    ASSERT_FALSE(std::isnan(std::real(v)))
                         << "NaN leaked out of the untouched upper triangle into ("
                         << i << "," << j << ") b=" << b;
-                    ASSERT_FALSE(std::isnan(host_imag(v)));
+                    ASSERT_FALSE(std::isnan(std::imag(v)));
                 }
             }
             EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)));
@@ -964,7 +946,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoIsTheGlobalColumn) {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         const auto ref = make_planted_ldl<T>(n, {c}, 5150u + static_cast<unsigned>(c));
         if (c >= 1) {
-            ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+            ASSERT_GT(std::real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
         this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
@@ -1060,7 +1042,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoAtBatchScaleAndFailedItemsStayFinite) {
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
                 const T v = A(i, j, b);
-                if (!std::isfinite(host_real(v)) || !std::isfinite(host_imag(v))) ++nonfinite;
+                if (!std::isfinite(std::real(v)) || !std::isfinite(std::imag(v))) ++nonfinite;
             }
         }
         EXPECT_EQ(nonfinite, 0) << "failed item " << b << " has " << nonfinite
@@ -1093,7 +1075,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < i; ++j)
                 max_imag = std::max(
-                    max_imag, std::abs(host_imag(ref[i + static_cast<size_t>(j) * n])));
+                    max_imag, std::abs(std::imag(ref[i + static_cast<size_t>(j) * n])));
         ASSERT_GT(max_imag, R(0.01)) << "the generated matrix is effectively real";
 
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
@@ -1102,7 +1084,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
 
         // (b) EXACTLY zero, past every panel boundary, not merely small.
         for (int i = 0; i < n; ++i) {
-            ASSERT_EQ(host_imag(A(i, i, 0)), R(0))
+            ASSERT_EQ(std::imag(A(i, i, 0)), R(0))
                 << "imag(L(" << i << "," << i << ")) != 0 at nb=" << nb;
         }
         EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref, A, 0, Uplo::Lower)));
@@ -1110,14 +1092,14 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         // (c) THE SENSITIVITY: conj(A) must give a different factor. Here the conjugate
         //     that matters is the trailing update's transB (Trans would give L21 L21^T).
         std::vector<T> refc(ref);
-        for (auto& v : refc) v = host_conj(v);
+        for (auto& v : refc) v = verify::conj(v);
         Matrix<T, MatrixFormat::Dense> Ac(n, n, 1);
         this->load_triangle(Ac, 0, n, refc, Uplo::Lower, verify::make<T>(R(0), R(0)));
         ASSERT_EQ(this->run_blocked(Ac.view(), Uplo::Lower)[0], 0);
         bool differs = false;
         for (int i = 1; i < n && !differs; ++i)
             for (int j = 0; j < i && !differs; ++j)
-                if (host_imag(A(i, j, 0)) != host_imag(Ac(i, j, 0))) differs = true;
+                if (std::imag(A(i, j, 0)) != std::imag(Ac(i, j, 0))) differs = true;
         EXPECT_TRUE(differs) << "conjugating the input did not change the factor";
         EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(refc, Ac, 0, Uplo::Lower)));
 
@@ -1126,13 +1108,13 @@ TYPED_TEST(PotrfBlockedTest, BlockedComplexDiagonalIsExactlyReal) {
         Matrix<T, MatrixFormat::Dense> Ap(n, n, 1);
         this->load_triangle(Ap, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         for (int i = 0; i < n; ++i)
-            Ap(i, i, 0) = verify::make<T>(host_real(Ap(i, i, 0)), R(0.75) * R(i + 1));
+            Ap(i, i, 0) = verify::make<T>(std::real(Ap(i, i, 0)), R(0.75) * R(i + 1));
         ASSERT_EQ(this->run_blocked(Ap.view(), Uplo::Lower)[0], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(Ap(i, j, 0)), host_real(A(i, j, 0)))
+                ASSERT_EQ(std::real(Ap(i, j, 0)), std::real(A(i, j, 0)))
                     << "imag(diag(A)) was not ignored, at (" << i << "," << j << ")";
-                ASSERT_EQ(host_imag(Ap(i, j, 0)), host_imag(A(i, j, 0)));
+                ASSERT_EQ(std::imag(Ap(i, j, 0)), std::imag(A(i, j, 0)));
             }
         }
     }
@@ -1316,11 +1298,11 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
         ASSERT_EQ(dinfo[b], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(A(i, j, b)), host_real(direct(i, j, b)))
+                ASSERT_EQ(std::real(A(i, j, b)), std::real(direct(i, j, b)))
                     << "the facade did not run the blocked driver with the routed seams: "
                        "its answer differs from potrf_blocked_dispatch's at ("
                     << i << "," << j << ") b=" << b;
-                ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
+                ASSERT_EQ(std::imag(A(i, j, b)), std::imag(direct(i, j, b)));
             }
         }
         EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)))

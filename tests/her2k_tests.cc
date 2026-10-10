@@ -8,6 +8,7 @@
 #include <string>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -30,12 +31,9 @@ TYPED_TEST_SUITE(Her2kTest, Her2kTestTypes);
 // imaginary part of the diagonal, because C = C^H forces that to zero whatever
 // the caller stored there.
 //
-// The reference here is two separate GEMMs -- alpha * A * B^H and then
-// conj(alpha) * B * A^H accumulated on top -- rather than the one GEMM plus
-// mirrored read the implementation uses, so it is an independent statement of
-// the same arithmetic and not a restatement of the code under test. In
-// particular it puts the conjugate on the second term explicitly, which is the
-// whole of the difference from SYR2K and the easiest thing to lose.
+// The reference is alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C0 in
+// double (the library's rank-2k check), with the conjugate on the second term
+// explicit: the whole of the difference from SYR2K and the easiest thing to lose.
 //
 // The shapes are ragged on purpose, and on CUDA the sweep runs once per route
 // with the choice pinned: left to the default, every shape here would take the
@@ -67,7 +65,6 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
         for (const auto& shape : shapes) {
             const int n = shape.n;
             const int k = shape.k;
-            const real_t tol = test_utils::tolerance<T>() * real_t(128 * (n + k));
 
             for (auto trans : {Transpose::NoTrans, Transpose::ConjTrans}) {
                 const int a_rows = trans == Transpose::NoTrans ? n : k;
@@ -106,85 +103,39 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
                         }
                         this->ctx->wait();
 
-                        Matrix<T, MatrixFormat::Dense> R(n, n, shape.batch);
-                        (void)R.view().fill_zeros(*(this->ctx));
-                        this->ctx->wait();
-
                         her2k(*(this->ctx), A.view(), B.view(), C.view(),
                               {.alpha = scaling.alpha,
                                .beta = scaling.beta,
                                .uplo = uplo,
                                .trans = trans}).wait();
 
-                        const T alpha_conj = T(scaling.alpha.real(), -scaling.alpha.imag());
-                        const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans
-                                                                            : Transpose::NoTrans;
-                        gemm(*(this->ctx), A.view(), B.view(), R.view(),
-                             {.alpha = scaling.alpha,
-                              .beta = T(0),
-                              .transA = trans,
-                              .transB = other}).wait();
-                        gemm(*(this->ctx), B.view(), A.view(), R.view(),
-                             {.alpha = alpha_conj,
-                              .beta = T(1),
-                              .transA = trans,
-                              .transB = other}).wait();
+                        // C0's diagonal is read as real, as BLAS does.
+                        EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
+                                      batchlas::verify::rank2k_backward_error(A.view(), B.view(), trans, C0.view(), C.view(), uplo,
+                                                                              batchlas::verify::up(scaling.alpha),
+                                                                              batchlas::verify::up(T(scaling.beta)), true,
+                                                                              batchlas::verify::all_items(shape.batch)))
+                            << "her2k read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
+                            << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
+                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper") << ", beta=" << scaling.beta;
 
                         for (int b = 0; b < shape.batch; ++b) {
                             for (int j = 0; j < n; ++j) {
                                 for (int i = 0; i < n; ++i) {
-                                    const bool referenced =
-                                        (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
+                                    const bool referenced = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                                     const T got = C(i, j, b);
-
                                     if (!referenced) {
                                         ASSERT_EQ(got, poison)
                                             << "her2k wrote the unreferenced triangle: " << route
                                             << " route, n=" << n << ", k=" << k
                                             << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                                             << ", batch=" << b << ", row=" << i << ", col=" << j;
-                                        continue;
-                                    }
-
-                                    const T product = R(i, j, b);
-                                    const T prev = C0(i, j, b);
-                                    // The diagonal of a Hermitian matrix is
-                                    // real, so beta scales only its real part.
-                                    const real_t want_real =
-                                        product.real() + scaling.beta * prev.real();
-                                    const real_t want_imag =
-                                        product.imag() + scaling.beta * prev.imag();
-
-                                    ASSERT_NEAR(got.real(), want_real, tol)
-                                        << "her2k read storage it must not touch: " << route
-                                        << " route, n=" << n << ", k=" << k
-                                        << ", trans="
-                                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                        << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                        << ", beta=" << scaling.beta
-                                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                                    if (i == j) {
-                                        // BLAS sets the diagonal's imaginary
-                                        // part to zero rather than leaving
-                                        // whatever the arithmetic produced, so
-                                        // this is exact and not a tolerance.
+                                    } else if (i == j) {
+                                        // BLAS sets the diagonal's imaginary part to zero rather than leaving
+                                        // whatever the arithmetic produced, so this is exact.
                                         ASSERT_EQ(got.imag(), real_t(0))
                                             << "her2k left an imaginary part on the diagonal: " << route
-                                            << " route, n=" << n << ", k=" << k
-                                            << ", trans="
-                                            << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                            << ", beta=" << scaling.beta
-                                            << ", batch=" << b << ", index=" << i;
-                                    } else {
-                                        ASSERT_NEAR(got.imag(), want_imag, tol)
-                                            << "her2k read storage it must not touch: " << route
-                                            << " route, n=" << n << ", k=" << k
-                                            << ", trans="
-                                            << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                                            << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
-                                            << ", beta=" << scaling.beta
-                                            << ", batch=" << b << ", row=" << i << ", col=" << j;
+                                            << " route, n=" << n << ", k=" << k << ", batch=" << b << ", index=" << i;
                                     }
                                 }
                             }
@@ -212,8 +163,8 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
 // alpha * A * B^H + conj(alpha) * B * A^H is Hermitian for every alpha, so the
 // lower triangle HER2K writes for Uplo::Lower and the upper one it writes for
 // Uplo::Upper must be conjugate transposes of each other. Losing the conjugate
-// on the second term gives a complex-symmetric sum instead, which fails this
-// wherever alpha or the operands are genuinely complex.
+// on the second term gives a complex-symmetric sum instead. Each triangle is
+// checked against the rank-2k definition; the two references are conjugates.
 TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -221,7 +172,6 @@ TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
     const int n = 65;
     const int k = 40;
     const int batch = 4;
-    const real_t tol = test_utils::tolerance<T>() * real_t(128 * (n + k));
     const T alpha = T(1.25, -0.75);
 
     for (auto trans : {Transpose::NoTrans, Transpose::ConjTrans}) {
@@ -241,21 +191,14 @@ TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
         her2k(*(this->ctx), A.view(), B.view(), C_upper.view(),
               {.alpha = alpha, .uplo = Uplo::Upper, .trans = trans}).wait();
 
-        for (int b = 0; b < batch; ++b) {
-            for (int j = 0; j < n; ++j) {
-                for (int i = j; i < n; ++i) {
-                    const T lower = C_lower(i, j, b);
-                    const T upper = C_upper(j, i, b);
-                    ASSERT_NEAR(lower.real(), upper.real(), tol)
-                        << "her2k's two triangles disagree: trans="
-                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                    ASSERT_NEAR(lower.imag(), -upper.imag(), tol)
-                        << "her2k's two triangles are not conjugates: trans="
-                        << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
-                        << ", batch=" << b << ", row=" << i << ", col=" << j;
-                }
-            }
+        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+            const auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
+                          batchlas::verify::rank2k_backward_error(A.view(), B.view(), trans, C.view(), C.view(), uplo,
+                                                                  batchlas::verify::up(alpha), batchlas::verify::up(T(0)), true,
+                                                                  batchlas::verify::all_items(batch)))
+                << "her2k's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
+                << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }
     }
 }
