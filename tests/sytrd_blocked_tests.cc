@@ -14,55 +14,72 @@
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <vector>
 
 #include "test_utils.hh"
-#include "../src/ops/syev/vendor.hh"
+#include "eigen_verify.hh"
 
 using namespace batchlas;
 
 namespace {
 
-#if BATCHLAS_HAS_HOST_BACKEND
-template <typename Real>
-UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A) {
-    const int n = A.rows();
-    const int batch = A.batch_size();
-
-    Queue ctx_cpu("cpu");
-    auto A_d = A.template astype<double>();
-
-    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-    const size_t ws_bytes = batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::NETLIB, double>(
-        ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
-    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::NETLIB, double>(
-        ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
-    ctx_cpu.wait();
-
-    return ref_eigs;
-}
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
+// The tridiagonalization's backward error seen through its spectrum: max |eig(T) - eig(A0)| / ||A0||_2
+// over `items` (default: first, middle, last), both from LAPACKE in double. T's spectrum comes from
+// (Re d, |e|): a unitary diagonal similarity makes a Hermitian tridiagonal's spectrum the real one's.
 template <typename Scalar>
-UnifiedVector<typename base_type<Scalar>::type> netlib_ref_eigs_dense_native(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
-    using Real = typename base_type<Scalar>::type;
-
-    Queue ctx_cpu("cpu");
-    UnifiedVector<Real> ref_eigs(static_cast<std::size_t>(A.rows()) * static_cast<std::size_t>(A.batch_size()));
-    const size_t ws_bytes = batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::NETLIB, Scalar>(
-        ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
-    UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::NETLIB, Scalar>(
-        ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
-    ctx_cpu.wait();
-
-    return ref_eigs;
+double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
+                      std::span<const int> items = {}) {
+    const int n = A0.rows();
+    const int batch = A0.batch_size();
+    const std::vector<int> picked = items.empty() ? verify::default_items(batch) : std::vector<int>(items.begin(), items.end());
+    std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch));
+    std::vector<double> got(static_cast<std::size_t>(n) * batch, 0.0);
+    double scale = 0;
+    for (int b : picked) {
+        auto a = verify::copy_item(A0, b);
+        std::vector<double> dd(n), ee(std::max(0, n - 1));
+        for (int i = 0; i < n; ++i) dd[i] = std::real(verify::up(d(i, b)));
+        for (int i = 0; i + 1 < n; ++i) ee[i] = verify::abs(verify::up(e(i, b)));
+        if (!verify::eigenvalues(n, a, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee))
+            return std::numeric_limits<double>::quiet_NaN();
+        std::copy(dd.begin(), dd.end(), got.begin() + static_cast<std::ptrdiff_t>(b) * n);
+        for (double l : ref[static_cast<std::size_t>(b)]) scale = verify::nanmax(scale, std::fabs(l));
+    }
+    return verify::values_error(VectorView<double>(got.data(), n, batch), ref, scale, picked);
 }
+
+// float only. The old float bounds, 1e4 x test_utils::tolerance<double>() = 1e-6 relative per value
+// (floors 2.5e-6 / 3e-6 / 3e-4 absolute), sat near n u ||A||_2, far under the kind's 32 n u; these
+// keep that power. double keeps the kind: its old 1e-8 relative was looser.
+template <typename Real>
+std::optional<verify::Slack> float_slack(verify::Slack s) {
+    if constexpr (std::is_same_v<Real, float>) return s;
+    return std::nullopt;
+}
+// factor = 1e-6 / (32 n u); measured float errors are 0.1-0.2 of these.
+const verify::Slack kSlackN128{0.004, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 128"};
+const verify::Slack kSlackN33{0.016, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 33"};
+const verify::Slack kSlackN192{0.0027, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 192"};
+const verify::Slack kSlackN256{0.002, "old float bound 1e-6 relative (1e4 x test_utils::tolerance<double>), n = 256"};
+const verify::Slack kSlackLatrd{0.05, "old float floor 3e-4 absolute over n = 65..256; measured <= 0.0015"};
+
+// spectrum_error at Check::values (n = the order); skips without LAPACKE.
+template <typename Scalar>
+void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
+                     std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
+    (void)A0, (void)d, (void)e, (void)slack, (void)items;
+    GTEST_SKIP() << "no host LAPACKE reference in this build";
+#else
+    const double err = spectrum_error(A0, d, e, items);
+    if (slack) EXPECT_VERIFY_SLACK(Scalar, verify::Check::values, A0.rows(), err, *slack);
+    else EXPECT_VERIFY(Scalar, verify::Check::values, A0.rows(), err);
 #endif
+}
 
 template <typename T, Backend B>
 struct SytrdBlockedConfig {
@@ -93,7 +110,6 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     const int n = 128;
     const int batch = 128;
     const int nb = 32;
-    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
 
     Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/789);
     Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -106,32 +122,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
 
     sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    // Validate a few representative batch items fully. (Validating all 128 would be expensive.)
-    std::vector<int> batch_items;
-    batch_items.push_back(0);
-    if (batch > 1) batch_items.push_back(batch / 2);
-    if (batch > 2) batch_items.push_back(batch - 1);
-
-    Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
-    Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
-
-#if BATCHLAS_HAS_HOST_BACKEND
-    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
-    const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
-
-    for (int b : batch_items) {
-        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
-            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
-            if constexpr (std::is_same_v<Real, float>) {
-                err_tol = std::max(err_tol, 3e-6);
-            }
-            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
-                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
-        }
-    }
-#endif
+    expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>(kSlackN128));
 }
 
 // The blocked trailing update (A22 -= V W^H + W V^H) only runs when the trailing
@@ -150,12 +141,11 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     const int n = 320;
     const int batch = 8;
     const int nb = 32;
-    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
-
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
+    const auto items = verify::all_items(batch);
 
-    // Returns the tridiagonal (d, e) produced under the given trailing-update route.
+    // Runs one trailing-update route; returns its spectrum_error, checked at Check::values.
     auto run_route = [&](const char* route) {
         ScopedEnvVar mode("BATCHLAS_SYTRD_TRAILING_UPDATE", route);
 
@@ -169,58 +159,19 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
         UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
         sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
-
-        Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
-        Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
-        return Tmat;
+        expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"}), items);
+        return spectrum_error(A0.view(), d, e, items);
     };
 
-    Matrix<Real, MatrixFormat::Dense> T_gemm = run_route("gemm");
-    Matrix<Real, MatrixFormat::Dense> T_syr2k = run_route("syr2k");
+    const double worst_gemm = run_route("gemm");
+    const double worst_syr2k = run_route("syr2k");
 
-#if BATCHLAS_HAS_HOST_BACKEND
-    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
-    const auto eig_gemm = netlib_ref_eigs_dense(T_gemm.view());
-    const auto eig_syr2k = netlib_ref_eigs_dense(T_syr2k.view());
-
-    // Both routes perform the same rank-2 update, but sum it in a different
-    // order, so they agree only to rounding. Judge them by how far each lands
-    // from the reference spectrum rather than from each other: the question is
-    // whether syr2k is as accurate as the GEMM pair, not whether it is
-    // bit-identical to it.
-    double worst_gemm = 0.0;
-    double worst_syr2k = 0.0;
-    double spectral_radius = 0.0;
-    for (int b = 0; b < batch; ++b) {
-        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            const std::size_t ix = base + static_cast<std::size_t>(i);
-            spectral_radius = std::max(spectral_radius, std::abs(eig_ref[ix]));
-            worst_gemm = std::max(worst_gemm, std::abs(eig_gemm[ix] - eig_ref[ix]));
-            worst_syr2k = std::max(worst_syr2k, std::abs(eig_syr2k[ix] - eig_ref[ix]));
-        }
-    }
-
-    // Backward error of a Householder tridiagonalisation is O(n * eps * ||A||).
-    const double eps = static_cast<double>(std::numeric_limits<Real>::epsilon());
-    const double backward_err_tol = 4.0 * static_cast<double>(n) * eps * spectral_radius;
-    const double err_tol = std::max(eig_tol * std::max(1.0, spectral_radius), backward_err_tol);
-
-    EXPECT_LT(worst_syr2k, err_tol)
-        << "syr2k trailing update lost accuracy: worst eigenvalue error " << worst_syr2k
-        << " (GEMM route: " << worst_gemm << ", spectral radius " << spectral_radius << ")";
-
-    // The substitution is only justified if it is no worse than what it
-    // replaced. This is the assertion with the teeth: the backward-error bound
-    // above is ~1000x looser than the error either route actually incurs
-    // (measured 2.6e-6 against a 3.2e-3 bound at n=320, float), so on its own it
-    // would pass almost anything. A factor of 4 plus a few ulps of the spectrum
-    // leaves room for the different summation order and nothing else.
-    const double route_tol = 4.0 * worst_gemm + 8.0 * eps * spectral_radius;
-    EXPECT_LT(worst_syr2k, route_tol)
-        << "syr2k route is materially less accurate than the GEMM pair: "
-        << worst_syr2k << " vs " << worst_gemm;
-#endif
+    // Both routes perform the same rank-2 update, summed in a different order, so they agree only
+    // to rounding. The kind's bound is ~1000x the error either route incurs (measured 2.6e-6
+    // absolute at n=320, float), so this is the assertion with teeth: syr2k no worse than the GEMM
+    // pair, 4x plus 16 u of the spectrum (both errors are relative to ||A||_2).
+    EXPECT_LT(worst_syr2k, 4.0 * worst_gemm + 16.0 * verify::eps<Real>())
+        << "syr2k route is materially less accurate than the GEMM pair: " << worst_syr2k << " vs " << worst_gemm;
 }
 
 TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
@@ -230,7 +181,6 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     const int n = 33;
     const int batch = 64;
     const int nb = 8;
-    const double eig_tol = (std::is_same_v<Real, float> ? 10000.0 : 100.0) * test_utils::tolerance<double>();
 
     Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/1337);
     Matrix<Real, MatrixFormat::Dense> A = A0;
@@ -243,31 +193,7 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
 
     sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    std::vector<int> batch_items;
-    batch_items.push_back(0);
-    if (batch > 1) batch_items.push_back(batch / 2);
-    if (batch > 2) batch_items.push_back(batch - 1);
-
-    Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
-    Tmat.view().fill_tridiag(*this->ctx, e, d, e).wait();
-
-#if BATCHLAS_HAS_HOST_BACKEND
-    const auto eig_ref = netlib_ref_eigs_dense(A0.view());
-    const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
-
-    for (int b : batch_items) {
-        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
-            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
-            if constexpr (std::is_same_v<Real, float>) {
-                err_tol = std::max(err_tol, 3e-6);
-            }
-            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
-                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
-        }
-    }
-#endif
+    expect_spectrum<Real>(A0.view(), d, e, float_slack<Real>(kSlackN33));
 }
 #endif
 
@@ -276,8 +202,6 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
     using Real = float;
     constexpr Backend B = Backend::CUDA;
 
-    const double eig_tol = 10000.0 * test_utils::tolerance<double>();
-    const double experiment_floor = 2.5e-6;
     Queue probe;
     if (probe.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "SYTRD SYR2K trailing-update test requires a GPU device";
@@ -304,25 +228,7 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
             sytrd_blocked<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
         }
 
-        std::vector<int> batch_items{0};
-        if (batch > 1) batch_items.push_back(batch / 2);
-        if (batch > 2) batch_items.push_back(batch - 1);
-
-        Matrix<Real, MatrixFormat::Dense> Tmat = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, batch);
-        Tmat.view().fill_tridiag(*ctx, e, d, e).wait();
-
-        const auto eig_ref = netlib_ref_eigs_dense(A0.view());
-        const auto eig_trd = netlib_ref_eigs_dense(Tmat.view());
-
-        for (int b : batch_items) {
-            const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-            for (int i = 0; i < n; ++i) {
-                const double ref = eig_ref[base + static_cast<std::size_t>(i)];
-                const double err_tol = std::max(eig_tol * std::max(1.0, std::abs(ref)), experiment_floor);
-                EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
-                    << "eigenvalue mismatch at n=" << n << ", i=" << i << ", batch=" << b;
-            }
-        }
+        expect_spectrum<Real>(A0.view(), d, e, n == 192 ? kSlackN192 : kSlackN256);
     }
 }
 
@@ -339,7 +245,6 @@ TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReferenc
     const int n = 96;
     const int batch = 16;
     const int nb = 32;
-    const double eig_tol = 100.0 * test_utils::tolerance<double>();
 
     auto ctx = std::make_shared<Queue>(Device("gpu"), true);
 
@@ -355,45 +260,17 @@ TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReferenc
 
     sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    Matrix<Scalar, MatrixFormat::Dense> Tmat = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
-    auto Tview = Tmat.view();
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            Tview.template at<MatrixFormat::Dense>(i, i, b) = Scalar(d(i, b).real(), 0.0);
-            if (i < n - 1) {
-                const Scalar sub = e(i, b);
-                Tview.template at<MatrixFormat::Dense>(i + 1, i, b) = sub;
-                Tview.template at<MatrixFormat::Dense>(i, i + 1, b) = std::conj(sub);
-            }
-        }
-    }
-
-    const auto eig_ref = netlib_ref_eigs_dense_native(A0.view());
-    const auto eig_trd = netlib_ref_eigs_dense_native(Tmat.view());
-
-    std::vector<int> batch_items{0};
-    if (batch > 1) batch_items.push_back(batch / 2);
-    if (batch > 2) batch_items.push_back(batch - 1);
-
-    for (int b : batch_items) {
-        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            const double ref = eig_ref[base + static_cast<std::size_t>(i)];
-            const double err_tol = eig_tol * std::max(1.0, std::abs(ref));
-            EXPECT_NEAR(eig_trd[base + static_cast<std::size_t>(i)], ref, err_tol)
-                << "eigenvalue mismatch at i=" << i << ", batch=" << b;
-        }
-    }
+    expect_spectrum<Scalar>(A0.view(), d, e);
 }
 #endif
 
-#if BATCHLAS_HAS_CUDA_BACKEND && BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND
 // The grid LATRD path (BATCHLAS_LATRD_IMPL=grid) only engages when
 // MAX_COMPUTE_UNITS / batch >= 2, i.e. in the small-batch regime that no other
 // test in this file covers. It also runs the same shapes through the legacy
 // path so a divergence is attributable.
 template <typename Scalar>
-void run_latrd_grid_case(int n, int batch, int nb, const char* impl, double eig_tol_scale) {
+void run_latrd_grid_case(int n, int batch, int nb, const char* impl) {
     using Real = typename base_type<Scalar>::type;
     constexpr Backend B = Backend::CUDA;
 
@@ -415,45 +292,8 @@ void run_latrd_grid_case(int n, int batch, int nb, const char* impl, double eig_
     }
     ctx->wait();
 
-    Matrix<Scalar, MatrixFormat::Dense> Tmat = Matrix<Scalar, MatrixFormat::Dense>::Zeros(n, n, batch);
-    constexpr bool kIsComplex = !std::is_same_v<Scalar, Real>;
-    if constexpr (kIsComplex) {
-        auto Tview = Tmat.view();
-        for (int b = 0; b < batch; ++b) {
-            for (int i = 0; i < n; ++i) {
-                Tview.template at<MatrixFormat::Dense>(i, i, b) = Scalar(d(i, b).real(), Real(0));
-                if (i < n - 1) {
-                    const Scalar sub = e(i, b);
-                    Tview.template at<MatrixFormat::Dense>(i + 1, i, b) = sub;
-                    Tview.template at<MatrixFormat::Dense>(i, i + 1, b) = std::conj(sub);
-                }
-            }
-        }
-        ctx->wait();
-    } else {
-        Tmat.view().fill_tridiag(*ctx, e, d, e).wait();
-    }
-
-    const auto eig_ref = netlib_ref_eigs_dense_native<Scalar>(A0.view());
-    const auto eig_trd = netlib_ref_eigs_dense_native<Scalar>(Tmat.view());
-
-    const double eig_tol = eig_tol_scale * test_utils::tolerance<double>();
-    for (int b = 0; b < batch; ++b) {
-        const std::size_t base = static_cast<std::size_t>(b) * static_cast<std::size_t>(n);
-        for (int i = 0; i < n; ++i) {
-            const double ref = static_cast<double>(eig_ref[base + static_cast<std::size_t>(i)]);
-            double err_tol = eig_tol * std::max(1.0, std::abs(ref));
-            if constexpr (std::is_same_v<Real, float>) {
-                // Single precision tridiagonalization of an n=256 matrix loses
-                // this much on the legacy path too; the floor is not specific
-                // to the grid path.
-                err_tol = std::max(err_tol, 3e-4);
-            }
-            ASSERT_NEAR(static_cast<double>(eig_trd[base + static_cast<std::size_t>(i)]), ref, err_tol)
-                << "impl=" << impl << " n=" << n << " batch=" << batch
-                << " eigenvalue mismatch at i=" << i << ", batch item=" << b;
-        }
-    }
+    SCOPED_TRACE(::testing::Message() << "impl=" << impl << " n=" << n << " batch=" << batch << " nb=" << nb);
+    expect_spectrum<Scalar>(A0.view(), d, e, float_slack<Real>(kSlackLatrd), verify::all_items(batch));
 }
 
 TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {
@@ -466,8 +306,8 @@ TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {
         for (const int n : {65, 96, 129, 256}) {
             for (const int nb : {8, 16, 32}) {
                 for (const char* impl : {"grid", "legacy"}) {
-                    run_latrd_grid_case<float>(n, batch, nb, impl, 20000.0);
-                    run_latrd_grid_case<double>(n, batch, nb, impl, 200.0);
+                    run_latrd_grid_case<float>(n, batch, nb, impl);
+                    run_latrd_grid_case<double>(n, batch, nb, impl);
                 }
             }
         }
@@ -482,7 +322,7 @@ TEST(SytrdBlockedLatrdGridCudaTest, LargeNBatchOneMatchesNetlibReference) {
         GTEST_SKIP() << "LATRD grid path test requires a GPU device";
     }
     for (const char* impl : {"grid", "legacy"}) {
-        run_latrd_grid_case<double>(1024, 1, 32, impl, 4000.0);
+        run_latrd_grid_case<double>(1024, 1, 32, impl);
     }
 }
 
@@ -494,7 +334,7 @@ TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchComplexMatchesNetlibReference) {
 
     for (const int batch : {1, 8}) {
         for (const int n : {96, 257}) {
-            run_latrd_grid_case<std::complex<double>>(n, batch, 32, "grid", 200.0);
+            run_latrd_grid_case<std::complex<double>>(n, batch, 32, "grid");
         }
     }
 }
@@ -586,11 +426,9 @@ TEST(SytrdBlockedLatrdGridCudaTest, SyevBlockedSpectrumMatchesLegacy) {
                                         ws.to_span(), params).wait();
                 ctx->wait();
             }
-            double maxdiff = 0;
-            for (std::size_t i = 0; i < W[0].size(); ++i)
-                maxdiff = std::max(maxdiff, std::abs(W[1][i] - W[0][i]));
-            EXPECT_LT(maxdiff, 1e-9) << "batch=" << batch
-                                     << " jobz=" << (jobz == JobType::EigenVectors ? "EV" : "NoEV");
+            // Two results of the code under test (grid vs legacy LATRD), not a reference.
+            SCOPED_TRACE(::testing::Message() << "batch=" << batch << " jobz=" << (jobz == JobType::EigenVectors ? "EV" : "NoEV"));
+            test_utils::expect_eigenvalues_agree<Scalar>(W[1], W[0], n, batch);
         }
     }
 }
@@ -607,7 +445,7 @@ TEST(SytrdBlockedLatrdGridCudaTest, ForcedGroupCountsAgree) {
         for (const char* wgs : {"32", "128"}) {
             ScopedEnvVar g("BATCHLAS_LATRD_GRID_GROUPS", groups);
             ScopedEnvVar w("BATCHLAS_LATRD_GRID_WG", wgs);
-            run_latrd_grid_case<double>(129, 1, 32, "grid", 200.0);
+            run_latrd_grid_case<double>(129, 1, 32, "grid");
         }
     }
 }

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -44,13 +45,15 @@ void expect_eigenpairs(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat
 
 /// W (n values per item, packed) against LAPACKE ?syevd / ?heevd of A0 (both triangles valid) in
 /// double: max |w - w_ref| / ||A0||_2 at Check::values, over @p items (default: first, middle, last).
-/// @p sorted_copy compares as a multiset, for a solver asked not to sort. Skips without LAPACKE.
+/// @p sorted_copy compares as a multiset, for a solver asked not to sort; @p slack scales the bound.
+/// Skips without LAPACKE.
 template <typename Scalar>
 void expect_eigenvalues_match_lapacke(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A0,
                                       const batchlas::UnifiedVector<typename batchlas::base_type<Scalar>::type>& W, int n,
-                                      bool sorted_copy = false, std::span<const int> items = {}) {
+                                      bool sorted_copy = false, std::span<const int> items = {},
+                                      std::optional<batchlas::verify::Slack> slack = std::nullopt) {
 #if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    (void)A0, (void)W, (void)n, (void)sorted_copy, (void)items;
+    (void)A0, (void)W, (void)n, (void)sorted_copy, (void)items, (void)slack;
     GTEST_SKIP() << "no host LAPACKE reference in this build";
 #else
     using Real = typename batchlas::base_type<Scalar>::type;
@@ -66,7 +69,9 @@ void expect_eigenvalues_match_lapacke(const batchlas::MatrixView<Scalar, batchla
         if (sorted_copy) std::sort(got.begin() + static_cast<std::ptrdiff_t>(b) * n, got.begin() + static_cast<std::ptrdiff_t>(b + 1) * n);
     }
     const batchlas::VectorView<Real> w(got.data(), n, batch);
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, batchlas::verify::values_error(w, ref, scale, picked));
+    const double err = batchlas::verify::values_error(w, ref, scale, picked);
+    if (slack) EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::values, n, err, *slack);
+    else EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, err);
 #endif
 }
 

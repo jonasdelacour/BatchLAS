@@ -329,9 +329,9 @@ void emit_metrics_rows(std::ofstream& out,
 
 template <Backend B, typename Real>
 int run_accuracy(const Options& opt) {
-#if !BATCHLAS_HAS_HOST_BACKEND
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
     (void)opt;
-    std::cerr << "Host backend is required for LAPACKE fp64 STERF reference.\n";
+    std::cerr << "LAPACKE (batchlas::verify) is required for the fp64 STERF reference.\n";
     return 3;
 #else
     const int n = opt.n;

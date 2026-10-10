@@ -5,6 +5,8 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
+#include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <algorithm>
 #include <array>
@@ -12,20 +14,63 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 using namespace batchlas;
 
 namespace {
-#if BATCHLAS_HAS_HOST_BACKEND
+// Eigenvalues of every item of a dense symmetric A (both triangles valid) from LAPACKE, ascending,
+// and ||A||_2 over them. Empty without LAPACKE.
 template <typename Real>
-UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
-                                              const VectorView<Real>& sub);
+std::vector<std::vector<double>> lapacke_spectra(const MatrixView<Real, MatrixFormat::Dense>& A, double& norm2) {
+    std::vector<std::vector<double>> w(static_cast<std::size_t>(A.batch_size()));
+    norm2 = 0;
+    for (int b = 0; b < A.batch_size(); ++b) {
+        auto a = verify::copy_item(A, b);
+        if (!verify::eigenvalues(A.rows(), a, w[static_cast<std::size_t>(b)])) return {};
+        for (double l : w[static_cast<std::size_t>(b)]) norm2 = verify::nanmax(norm2, std::fabs(l));
+    }
+    return w;
+}
 
+// The same closed-form spectrum for each of `batch` items, and its ||.||_2.
+std::vector<std::vector<double>> repeated(const std::vector<double>& one, int batch, double& norm2) {
+    norm2 = 0;
+    for (double l : one) norm2 = verify::nanmax(norm2, std::fabs(l));
+    return std::vector<std::vector<double>>(static_cast<std::size_t>(batch), one);
+}
+
+// w (n values per item) against ref at Check::values, scaled by norm2. An empty ref (no LAPACKE) skips.
 template <typename Real>
-UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A);
-#endif
+void expect_values(const VectorView<Real>& w, const std::vector<std::vector<double>>& ref, double norm2, int n,
+                   std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
+    if (ref.empty()) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    const double err = verify::values_error(w, ref, norm2, items);
+    if (slack) EXPECT_VERIFY_SLACK(Real, verify::Check::values, n, err, *slack);
+    else EXPECT_VERIFY(Real, verify::Check::values, n, err);
+}
+
+// (A, V, w) an eigendecomposition with orthonormal V (eigen_residual, orthogonality_rotations).
+template <typename Real>
+void expect_pairs(const MatrixView<Real, MatrixFormat::Dense>& A, const MatrixView<Real, MatrixFormat::Dense>& V,
+                  const VectorView<Real>& w, std::span<const int> items = {}) {
+    const int n = V.cols();
+    EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, verify::eigen_residual(A, V, w, items));
+    EXPECT_VERIFY(Real, verify::Check::orthogonality_rotations, n, verify::orthogonality(V, items));
+}
+
+// float only: the closed-form checks' old 1e-5 absolute (both types) is 0.16 x the kind's float
+// bound at n = 16, ||T||_2 = 2; double keeps the kind (tighter than 1e-5).
+template <typename Real>
+std::optional<verify::Slack> float_slack(verify::Slack s) {
+    if constexpr (std::is_same_v<Real, float>) return s;
+    return std::nullopt;
+}
+const verify::Slack kClosedFormN16{0.16, "old bound 1e-5 absolute, ||T||_2 = 2"};
 
 static inline const char* update_scheme_name(SteqrUpdateScheme scheme) {
     switch (scheme) {
@@ -51,7 +96,6 @@ struct SteqrConfig {
 };
 
 #include "test_utils.hh"
-#include "../src/ops/syev/vendor.hh"
 // STEQR tests are not meaningful for complex types.
 using SteqrTestTypes = typename test_utils::backend_types_filtered<SteqrConfig, false>::type;
 
@@ -94,23 +138,18 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
         ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
-    // Ritz values
     auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-    this->ctx->wait();
-    
-    for (int i = 0; i < n; ++i) {
-        EXPECT_NEAR(eigenvalues[i], expected_eigenvalues[i], 1e-5) << "Eigenvalue mismatch at index " << i;
-        EXPECT_NEAR(eigenvalues[i], ritz_vals(i, 0), 1e-5) << "Ritz value mismatch at index " << i;
-    }
-
+    double norm2 = 0;
+    const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.end()), batch, norm2);
+    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
+    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
 }
 
 TYPED_TEST(SteqrTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 512;
-    // n=512 with eigenvectors plus a dense 512x512xbatch ritz_values check is
+    // n=512 with eigenvectors plus a dense 512x512xbatch eigenpair check is
     // an O(n^3)*batch job that runs on the host for the NETLIB instantiations.
     // The closed-form Toeplitz spectrum is verified just as well at batch=8.
     const int batch = 8;
@@ -135,21 +174,14 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
     this->ctx->wait();
 
     auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
-    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-    
-    this->ctx->wait();
-    UnifiedVector<float> expected(n);
-    for (int k = 1; k <= n; ++k) {
-        expected[k-1] = float_type(1.0 - 2.0 * std::sqrt(1.0 * 1.0) * std::cos(double(k) * M_PI / double(n + 1)));
-    }
-    std::sort(expected.begin(), expected.end(), std::less<float>());
+    std::vector<double> expected(n);
+    for (int k = 1; k <= n; ++k) expected[k - 1] = 1.0 - 2.0 * std::cos(double(k) * M_PI / double(n + 1));
+    std::sort(expected.begin(), expected.end());
 
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(c(i, j), expected[i], 1e-3) << "Eigenvalue value mismatch at index " << i << ", batch " << j;
-            ASSERT_NEAR(c(i, j), ritz_vals(i, j), 1e-3) << "Ritz value mismatch at index " << i << ", batch " << j;
-        }
-    }
+    double norm2 = 0;
+    const auto ref = repeated(expected, batch, norm2);
+    expect_values(VectorView<float_type>(c), ref, norm2, n, std::nullopt, verify::all_items(batch));
+    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(c));
 }
 
 
@@ -157,7 +189,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 128;
-    // netlib_ref_eigs_dense() below is a host O(n^3) solve per batch item.
+    // lapacke_spectra() below is a host O(n^3) solve per batch item.
     const int batch = 16;
     using float_type = typename base_type<T>::type;
 
@@ -181,26 +213,13 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
         
     this->ctx->wait();
 
-    auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-
-#if BATCHLAS_HAS_HOST_BACKEND
-    const auto ref_eigs = netlib_ref_eigs_dense(dense_A.view());
-    auto eps = test_utils::tolerance<float_type>();
-
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), std::numeric_limits<float_type>::epsilon()*5e2) << "Ritz value mismatch at index " << i << ", batch " << j;
-            ASSERT_NEAR(eigenvalues(i, j), ref_eigs[i + j * n], std::numeric_limits<float_type>::epsilon()*5e2) << "Eigenvalue value mismatch at index " << i << ", batch " << j;
-        }
-    }
-#else
-    // Without NETLIB/host backend, only validate Ritz values (no CPU reference).
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), std::numeric_limits<float_type>::epsilon()*5e2) << "Ritz value mismatch at index " << i << ", batch " << j;
-        }
-    }
-#endif
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    // Diagonal and off-diagonal are uniform [0, 1) (||T||_2 ~ 2.5): the kind's bound is 11x the old
+    // absolute 500 machine eps (1000 u), so the Slack keeps the old power.
+    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n,
+                  verify::Slack{0.1, "old bound 500 machine eps absolute = 1000 u, ||T||_2 ~ 2.5"}, verify::all_items(batch));
+    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), verify::all_items(batch));
 }
 
 TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
@@ -252,23 +271,12 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
                              ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
         this->ctx->wait();
 
-        // Compare eigenvalues directly (both should be correct and similarly ordered after sort)
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(evals_cta[i], evals_ref[i], test_utils::tolerance<T>())
-                << "Eigenvalue mismatch vs STEQR at index " << i;
-        }
-
-        // Compare Ritz values (validates eigenvectors)
-        auto ritz_ref = ritz_values(*this->ctx, dense_A, eigvects_ref);
-        auto ritz_cta = ritz_values(*this->ctx, dense_A, eigvects_cta);
-        this->ctx->wait();
-
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(evals_ref[i], ritz_ref(i, 0), test_utils::tolerance<T>())
-                << "Ritz mismatch (STEQR) at index " << i;
-            ASSERT_NEAR(evals_cta[i], ritz_cta(i, 0), test_utils::tolerance<T>())
-                << "Ritz mismatch (STEQR) at index " << i;
-        }
+        // Two results of the code under test (default vs explicit scheme), not a reference.
+        UnifiedVector<float_type> w_cta(n * batch), w_ref(n * batch);
+        for (int i = 0; i < n * batch; ++i) w_cta[i] = evals_cta(i % n, i / n), w_ref[i] = evals_ref(i % n, i / n);
+        test_utils::expect_eigenvalues_agree<float_type>(w_cta, w_ref, n, batch);
+        expect_pairs(dense_A.view(), eigvects_ref.view(), VectorView<float_type>(evals_ref));
+        expect_pairs(dense_A.view(), eigvects_cta.view(), VectorView<float_type>(evals_cta));
     }
 }
 
@@ -311,19 +319,12 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
-        // Validate eigenvalues against expected analytical values
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues[i], expected_eigenvalues[i], 1e-5) << "Eigenvalue mismatch at index " << i;
-        }
+        double norm2 = 0;
+        const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.end()), batch, norm2);
+        expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
 
-        // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
-        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-        this->ctx->wait();
-
-        for (int i = 0; i < n; ++i) {
-            ASSERT_NEAR(eigenvalues[i], ritz_vals(i, 0), 1e-5) << "Ritz value mismatch at index " << i;
-        }
+        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
     }
 }
 
@@ -368,23 +369,13 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(eigenvalues(i, j), expected_eigenvalues[j * n + i], 1e-5)
-                    << "Eigenvalue mismatch at index " << i << ", batch " << j;
-            }
-        }
+        double norm2 = 0;
+        const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.begin() + n), batch, norm2);
+        const auto all = verify::all_items(batch);
+        expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16), all);
 
-        // Test: Validate eigenvectors by computing Ritz values (should match eigenvalues)
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-        this->ctx->wait();
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j), 1e-5)
-                    << "Ritz value mismatch at index " << i << ", batch " << j;
-            }
-        }
+        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -404,7 +395,6 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
 
         auto dense_A = Matrix<float_type>::Zeros(n, n, batch);
         dense_A.view().fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
-        auto dense_A_copy = dense_A;  // SYEV overwrites its input
 
         auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
         SteqrParams<float_type> params = {};
@@ -421,29 +411,12 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
-        auto ritz_vals = ritz_values(*this->ctx, dense_A, eigvects);
-        this->ctx->wait();
-
-        // Reference eigenvalues via NETLIB double
-#if BATCHLAS_HAS_HOST_BACKEND
-        const auto ref_eigs = netlib_ref_eigs_dense(dense_A_copy.view());
-
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(eigenvalues(i, j), ref_eigs[i + j * n],
-                            5*test_utils::tolerance<T>())
-                    << "Eigenvalue value mismatch at index " << i << ", batch " << j << ", n " << n;
-            }
-        }
-#endif
-
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(eigenvalues(i, j), ritz_vals(i, j),
-                            5*test_utils::tolerance<T>())
-                    << "Ritz value mismatch at index " << i << ", batch " << j << ", n " << n;
-            }
-        }
+        SCOPED_TRACE(::testing::Message() << "n " << n);
+        double norm2 = 0;
+        const auto ref = lapacke_spectra(dense_A.view(), norm2);
+        const auto all = verify::all_items(batch);
+        expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, all);
+        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -493,82 +466,20 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
                          ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
-#if BATCHLAS_HAS_HOST_BACKEND
-    const auto ref_eigs = netlib_ref_eigs_tridiag(VectorView(diag), VectorView(sub));
-    const bool use_rel_tol = std::is_same_v<float_type, float>;
+    std::vector<std::vector<double>> ref(batch);
+    double norm2 = 0;
     for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            const float_type ref = static_cast<float_type>(ref_eigs[i + b * n]);
-            const float_type tol = use_rel_tol
-                ? std::max(float_type(5e-3f), float_type(3e-7f) * (float_type(1) + std::abs(ref)))
-                : float_type(5e-7);
-            ASSERT_NEAR(eigenvalues(i, b), ref, tol)
-                << "Eigenvalue mismatch at index " << i << ", batch " << b;
-        }
+        std::vector<double> d(n), e(n - 1);
+        for (int i = 0; i < n; ++i) d[i] = diag(i, b);
+        for (int i = 0; i + 1 < n; ++i) e[i] = sub(i, b);
+        if (!verify::tridiagonal_eigenvalues(d, e)) { ref.clear(); break; }
+        for (double l : d) norm2 = verify::nanmax(norm2, std::fabs(l));
+        ref[b] = std::move(d);
     }
-#endif
+    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, verify::all_items(batch));
 }
 
 namespace {
-
-#if BATCHLAS_HAS_HOST_BACKEND
-template <typename Real>
-UnifiedVector<double> netlib_ref_eigs_tridiag(const VectorView<Real>& diag,
-                                              const VectorView<Real>& sub) {
-    const int n = diag.size();
-    const int batch = diag.batch_size();
-
-    Queue ctx_cpu("cpu");
-    auto diag_d = diag.template astype<double>();
-    auto sub_d = sub.template astype<double>();
-
-    Matrix<double> A = Matrix<double>::Zeros(n, n, batch);
-    auto A_view = A.view();
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            A_view.at(i, i, b) = diag_d(i, b);
-            if (i < n - 1) {
-                const double off = sub_d(i, b);
-                A_view.at(i + 1, i, b) = off;
-                A_view.at(i, i + 1, b) = off;
-            }
-        }
-    }
-
-    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-    UnifiedVector<std::byte> ws(
-        syev_buffer_size(ctx_cpu, A.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx_cpu,
-                                  A.view(),
-                                  ref_eigs.to_span(),
-                                  {.jobz = JobType::NoEigenVectors},
-                                  ws.to_span()).wait();
-    ctx_cpu.wait();
-
-    return ref_eigs;
-}
-
-template <typename Real>
-UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat::Dense>& A) {
-    const int n = A.rows();
-    const int batch = A.batch_size();
-
-    Queue ctx_cpu("cpu");
-    auto A_d = A.template astype<double>();
-
-    UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-    UnifiedVector<std::byte> ws(
-        syev_buffer_size(ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev(ctx_cpu,
-                                  A_d.view(),
-                                  ref_eigs.to_span(),
-                                  {.jobz = JobType::NoEigenVectors},
-                                  ws.to_span()).wait();
-    ctx_cpu.wait();
-
-    return ref_eigs;
-}
-#endif
 
 inline bool stress_debug_enabled() {
     return std::getenv("BATCHLAS_STEQR_STRESS_DEBUG") != nullptr;
@@ -644,7 +555,7 @@ void stress_run_case(Queue& ctx,
                      Vector<Real>& sub,
                      Vector<Real>& steqr_eigs,
                      Vector<Real>& cta_eigs,
-                     Real rel_tol,
+                     std::optional<verify::Slack> alt_slack,
                      bool check_steqr_against_ref = true,
                      bool check_cta_against_ref = true) {
     const int n = diag.size();
@@ -656,21 +567,8 @@ void stress_run_case(Queue& ctx,
     stress_debug_log("stress_run_case: fill_tridiag");
     dense_A.view().fill_tridiag(ctx, sub, diag, sub).wait();
 
-    // Reference eigenvalues via SYEV.
-    UnifiedVector<Real> ref_eigs(n * batch);
-    {
-        stress_debug_log("stress_run_case: syev reference");
-        auto syev_ws = UnifiedVector<std::byte>(
-            // NOTE: CUDA SYCL stacks can be sensitive to specific kernel launch patterns.
-            // We request eigenvectors here (even though we only compare eigenvalues) because
-            // it exercises the same well-tested SYEV path used elsewhere in this test file.
-            batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, Real>(
-                ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower),
-            std::byte(0));
-        (void)batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Real>(
-            ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
-        ctx.wait();
-    }
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
 
     // steqr: eigenvalues only.
     {
@@ -714,34 +612,20 @@ void stress_run_case(Queue& ctx,
     assert_all_finite(steqr_eigs);
     assert_all_finite(cta_eigs);
 
-    const Real rel = rel_tol;
-
-    // Compare against the reference (sort ref per-batch to be safe).
+    // Sorted copies against LAPACKE at Check::values (||T||_2 over the batch); the alternate scheme
+    // gets `alt_factor` x the bound.
+    std::vector<Real> ste(static_cast<std::size_t>(n) * batch), cta(static_cast<std::size_t>(n) * batch);
     for (int j = 0; j < batch; ++j) {
-        std::vector<Real> ref(n);
-        std::vector<Real> ste(n);
-        std::vector<Real> cta(n);
         for (int i = 0; i < n; ++i) {
-            ref[i] = ref_eigs[i + j * n];
-            ste[i] = steqr_eigs(i, j);
-            cta[i] = cta_eigs(i, j);
-            ASSERT_TRUE(std::isfinite(static_cast<double>(ref[i])));
+            ste[i + j * n] = steqr_eigs(i, j);
+            cta[i + j * n] = cta_eigs(i, j);
         }
-        std::sort(ref.begin(), ref.end());
-        std::sort(ste.begin(), ste.end());
-        std::sort(cta.begin(), cta.end());
-
-        for (int i = 0; i < n; ++i) {
-            const Real r = ref[i];
-            const Real tol = rel * (Real(1) + std::abs(r));
-            if (check_steqr_against_ref) {
-                ASSERT_NEAR(ste[i], r, tol) << "STEQR mismatch at (" << i << "," << j << ")";
-            }
-            if (check_cta_against_ref) {
-                ASSERT_NEAR(cta[i], r, tol * 1e2) << "STEQR mismatch at (" << i << "," << j << ")";
-            }
-        }
+        std::sort(ste.begin() + j * n, ste.begin() + (j + 1) * n);
+        std::sort(cta.begin() + j * n, cta.begin() + (j + 1) * n);
     }
+    const auto all = verify::all_items(batch);
+    if (check_steqr_against_ref) expect_values(VectorView<Real>(ste.data(), n, batch), ref, norm2, n, std::nullopt, all);
+    if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, alt_slack, all);
 }
 
 } // namespace
@@ -764,12 +648,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
         // Case 1: very large magnitude (expects scale-down to kick in)
         fill_stress_tridiag(diag, sub, stress_large_scale<float_type>(), stress_large_scale<float_type>());
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                   (std::is_same_v<float_type, float> ? float_type(5e-5f) : float_type(5e-10)));
+                           std::nullopt);
 
         // Case 2: very small magnitude (expects scale-up to kick in)
         fill_stress_tridiag(diag, sub, stress_small_scale<float_type>(), stress_small_scale<float_type>());
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                   (std::is_same_v<float_type, float> ? float_type(5e-5f) : float_type(5e-10)));
+                           std::nullopt);
 
         // Case 3: mixed dynamic range without underflow.
         // We keep the “small” entries O(1) so this still stresses conditioning and the
@@ -787,7 +671,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
         // the baseline STEQR path can be noticeably less accurate on ill-conditioned
         // mixed-scale inputs. We still require it to produce finite outputs.
         stress_run_case<B>(*this->ctx, diag, sub, evals_steqr, evals_cta,
-                           /*rel_tol=*/float_type(2.5e-1),
+                           /*alt_slack=*/std::nullopt,
                            /*check_steqr_against_ref=*/false,
                            /*check_cta_against_ref=*/true);
 
@@ -854,6 +738,24 @@ Real mixed_convergence_eigenvalue(int b, int i, int n) {
     return Real(1) - Real(std::cos(M_PI * double(i + 1) / double(n + 1)));
 }
 
+// Every item with info == 0 against the closed form at Check::values, each scaled by its own
+// ||T||_2 (32 for the diagonal items, 2 for the Toeplitz ones).
+template <typename Real>
+void expect_converged_items_right(Vector<Real>& w, const UnifiedVector<int32_t>& info, int n, int batch) {
+    std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch), std::vector<double>(static_cast<std::size_t>(n)));
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        double norm2 = 0;
+        for (int i = 0; i < n; ++i) {
+            ref[b][i] = mixed_convergence_eigenvalue<double>(b, i, n);
+            norm2 = verify::nanmax(norm2, std::fabs(ref[b][i]));
+        }
+        const int item[] = {b};
+        EXPECT_VERIFY(Real, verify::Check::values, n, verify::values_error(VectorView<Real>(w), ref, norm2, item))
+            << "item " << b << " reported info == 0";
+    }
+}
+
 }  // namespace
 
 TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
@@ -893,15 +795,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
     }
     // Both halves of the mixed batch must be RIGHT as well as reported converged;
     // otherwise the forced case below could not attribute a wrong answer to the cap.
-    const double tol = std::is_same_v<Real, float> ? 1e-4 : 1e-9;
-    for (int b = 0; b < batch; ++b) {
-        if (info[b] != 0) continue;
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(static_cast<double>(w(i, b)),
-                        static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
-                << "batch " << b << " eigenvalue " << i;
-        }
-    }
+    expect_converged_items_right<Real>(w, info, n, batch);
 }
 
 // THE CASE THAT MATTERS. A test that only ever sees info == 0 cannot tell a
@@ -956,15 +850,7 @@ TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     // library says converged must still be CORRECT. A status channel that
     // reported failure everywhere would satisfy the assertion above on its own;
     // this is what stops that from passing.
-    const double tol = std::is_same_v<Real, float> ? 1e-4 : 1e-9;
-    for (int b = 0; b < batch; ++b) {
-        if (info[b] != 0) continue;
-        for (int i = 0; i < n; ++i) {
-            EXPECT_NEAR(static_cast<double>(w(i, b)),
-                        static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
-                << "item " << b << " reported info == 0 but eigenvalue " << i << " is wrong";
-        }
-    }
+    expect_converged_items_right<Real>(w, info, n, batch);
 }
 
 // An EMPTY span means "not requested" and must cost nothing -- the contract
