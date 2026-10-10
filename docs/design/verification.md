@@ -176,12 +176,17 @@ The only `orthogonality` site that changed from columns to rows is `orgqr_tests`
 | `tests/device_blas_tests.cc` `tighten` | `blas` | ≤ 1 | the old absolute tolerance | tightening: exact small-integer data |
 
 The tail migration (the last tests on the library) kept every older bound that was stricter than the
-kind's as a `Slack` with factor ≤ 1 and the old bound as its reason, so no test lost power: gemm and
-gemv float against the old vendor-comparison tolerance (`old_vendor_tolerance`,
-`old_relative_tolerance`), the sytrd eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's
-exact data, the sb2st float spectra (1/16 per chase step, at most 1; double stays at factor 1), trsm's vendor-substitute `‖AX − B‖ / ‖B‖ < 1e-5`, and the
-float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked, syevx and sytrd_blocked.
-`git grep 'Slack{'` lists them with their reasons.
+kind's as a `Slack` with factor ≤ 1 and the old bound as its reason: gemm and gemv float against the
+old vendor-comparison tolerance (`old_vendor_tolerance`, `old_relative_tolerance`), the sytrd
+eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's exact data, the sb2st float spectra
+(1/16 per chase step, at most 1; double stays at factor 1), trsm's vendor-substitute
+`‖AX − B‖ / ‖B‖ < 1e-5`, the float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked,
+syevx and sytrd_blocked, and ormqr_blocked's float reconstruction (`recon_slack`, 1/64). `git grep
+'Slack{'` lists them with their reasons. Where the old check was entrywise and the library's is
+normwise, the slack keeps the old power only on average. ormqr_blocked's 1/64 catches a single
+`1e-5` error in a Q entry in column j only where ‖R(j,:)‖ is at least 0.76 of the average row norm
+(j ≤ 45 of 64 on random input; a deliberate one-entry break was caught in every float case). A
+column with a small row of R, near the end, no longer is.
 
 The bdsdc and gesvd factors were accepted as 128×/8× and 4×/8× of c = 16 before the split; they
 are re-expressed on `orthogonality_rotations` so that each absolute bound is the one accepted
