@@ -32,7 +32,8 @@ struct Spectrum {
     double norm2 = 0;
 };
 
-// Before every LapackeSpectrum: without LAPACKE there is no reference, so the case skips.
+// At the top of every TEST body that reaches a LapackeSpectrum, also through a helper (a skip inside
+// a helper only returns from the helper): without LAPACKE there is no reference, so the case skips.
 #define SYEVX_REQUIRE_LAPACKE() \
     do { if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build"; } while (0)
 
@@ -524,7 +525,6 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
         *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
-    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -546,6 +546,7 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
 
 TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
     CheckDirectSubset(96, 3, 8, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
@@ -556,6 +557,7 @@ TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
 // dispatcher's small-n threshold, so these pin the algorithm explicitly.
 TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
     const bool find_largest = std::get<0>(GetParam());
     const bool want_vectors = std::get<1>(GetParam());
     for (int n : {5, 17, 33, 64, 65, 97, 130}) {
@@ -569,6 +571,7 @@ TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
 // disagreement here isolates the subset machinery from the reduction.
 TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
     CheckDirectSubset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
@@ -614,7 +617,6 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
         *ctx, A.view(), W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
-    SYEVX_REQUIRE_LAPACKE();
     const auto ref = LapackeSpectrum(A.view());
     ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
@@ -630,11 +632,13 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
 
 TEST_P(SyevxFilteredTest, MatchesReferenceSyev) {
     if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
     CheckFiltered(64, 3, 4, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 TEST_P(SyevxFilteredTest, SmallFractionOfSpectrum) {
     if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
     // k/n = 2%, the band Tier 3 exists to serve.
     CheckFiltered(150, 2, 3, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }

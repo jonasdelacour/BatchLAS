@@ -54,7 +54,7 @@ and benchmarks under `BATCHLAS_BUILD_BENCHMARKS`, so neither directory can own i
 | `scalar.hh` | `promoted_t<T>`, `up`, `conj` (in T for every dtype), `make<T>`, `abs`, `cabs1` (`|re| + |im|`, LAPACK's pivot metric), `finite` (every component), `eps<T>()`, `nanmax`, `Rng` (factor_bench's historical LCG, constants unchanged: `next()` in [−1, 1), `uniform01()`, `normal()`) |
 | `inputs.hh` | `fill_spd`, `fill_lu` (dominant, then row-permuted per item), `fill_random`, `fill_graded_hermitian` (condition ~1e±6), `fill_reflectors` (larfg on random columns, LAPACK storage) |
 | `norms.hh` | `view(data, rows, cols, ld, stride = 0, batch = 1)` (a `KernelMatrixView` over raw host memory, `const T*` too; stride 0 is `ld·cols`); Frobenius, max-abs and one-norm of one item, promoted |
-| `residuals.hh` | `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, the same reflector loop as `qr_residual`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`, Q explicit), `solve_residual` (null B for getri; probe columns above 2^28 elements; an overload reads A through a `Shape` and a `Transpose`), `lu_solve_residual` (the solve quantity for X from getrf factors and pivots: `op(P·L·U)` formed per checked item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`), `gemm_max_denominator` (the largest of those denominators, to turn an absolute tolerance into a componentwise one), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees) |
+| `residuals.hh` | `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, the same reflector loop as `qr_residual`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`, Q explicit), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, B a tridiagonal or banded reduction stored densely; judged as `factorization`), `solve_residual` (null B for getri; probe columns above 2^28 elements; an overload reads A through a `Shape` and a `Transpose`), `lu_solve_residual` (the solve quantity for X from getrf factors and pivots: `op(P·L·U)` formed per checked item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`), `gemm_max_denominator` (the largest of those denominators, to turn an absolute tolerance into a componentwise one), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees) |
 | `reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` factor and tau, `?sterf`. Each returns `false` without LAPACKE, empty input included, and the caller reports NaN or skips, so a check without a reference never passes |
 | `tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()` |
 
@@ -174,6 +174,15 @@ The only `orthogonality` site that changed from columns to rows is `orgqr_tests`
 | `tests/geqrf_tests.cc` `residual_slack`, `tests/geqrf_candidates_tests.cc` `tol`, `tests/orgqr_tests.cc` `recon_slack` | `factorization` | ≤ 1 | the file's old `0.5 (m+n) eps` with its tiny-order floor | tightening (docs/perf/qr.md) |
 | `tests/potrf_tests.cc` `kLeafSlack` | `factorization` | 0.5 | 8 n eps | tightening: the leaf tolerance 4 n eps of docs/perf/potrf.md |
 | `tests/device_blas_tests.cc` `tighten` | `blas` | ≤ 1 | the old absolute tolerance | tightening: exact small-integer data |
+| `tests/sytrd_sb2st_tests.cc` `spectra_slack(k)`, double, `BandReductionMultiStepSpectrumPreservation` | `values` | k (1 to 16 accumulated chase steps) | 32 k n eps | the old bound scaled with the step count (`tol0 · k`); at k = 16 (n = 64) it is 3.6e-12 · ‖A‖₂, far below the old 1.6e-8 absolute; a factor above 1 not yet put to the user |
+
+The tail migration (the last tests on the library) kept every older bound that was stricter than the
+kind's as a `Slack` with factor ≤ 1 and the old bound as its reason, so no test lost power: gemm and
+gemv float against the old vendor-comparison tolerance (`old_vendor_tolerance`,
+`old_relative_tolerance`), the sytrd eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's
+exact data, the sb2st float spectra (1/16), trsm's vendor-substitute `‖AX − B‖ / ‖B‖ < 1e-5`, and the
+float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked, syevx and sytrd_blocked.
+`git grep 'Slack{'` lists them with their reasons.
 
 The bdsdc and gesvd factors were accepted as 128×/8× and 4×/8× of c = 16 before the split; they
 are re-expressed on `orthogonality_rotations` so that each absolute bound is the one accepted
@@ -187,7 +196,15 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/geqrf_tests.cc` `host_geqr2` (`ConventionMatchesReferenceLapackWithoutAVendor`) | an independent host xGEQR2 is the oracle for LAPACK's reflector sign convention, which every residual (and `form_q`, which shares the convention) passes by construction |
 | `tests/syev_blocked_tests.cc` `syev<Backend::NETLIB>` reference | a second implementation of the op under test, compared result to result |
 | `tests/gesvd_tests.cc` `expect_reconstruction` (with its per-type `gesvd_recon_tol`), `tests/gesvdj_cta_tests.cc`, `tests/bdsdc_tests.cc` and `tests/bdsqr_tests.cc` reconstruction | `‖A − UΣVᴴ‖_F / ‖A‖_F` has no library residual: `qr_reconstruction` reads R as upper triangular and ΣVᴴ is not, and a componentwise `gemm_backward_error` of U·(ΣVᴴ) against A judges the SVD's normwise backward error elementwise. The library covers U and V orthogonality and the values |
-| `tests/sytrd_cta_tests.cc` host sytd2, `tests/sytrd_sb2st_hh_tests.cc` similarity check | tridiagonal-reduction references with no library equivalent; sb2st_hh measures with `verify::orthogonality` but keeps its own tolerance |
+| `tests/sytrd_cta_tests.cc` `ref_sytd2_upper` (host unblocked sytd2) | an independent oracle for d, e, tau and the stored reflectors, a convention no residual sees; its deviations are judged at `factorization` (the similarity itself goes through `similarity_residual`) |
+| `tests/sytrd_sb2st_hh_tests.cc` similarity check | measures with `verify::orthogonality` but keeps its own tolerance |
+| `tests/syev_jacobi_cta_tests.cc` `reference_jacobi_eigenvalues` | an independent cyclic two-sided Jacobi in double on exact float input, with the file's own 2n eps ‖A‖_F bound: it isolates the float kernel's rounding from a LAPACKE reference's |
+| `tests/steqr_tests.cc` `GradedTridiagonalRelativeAccuracy` | a long-double Sturm-bisection oracle and per-eigenvalue relative median/max thresholds; no relative-accuracy kind exists |
+| `tests/sytrd_blocked_tests.cc` `GridMatchesLegacyTridiagonal` `elem_tol` | elementwise d and \|e\| agreement (1e-11 n relative) of two LATRD implementations: intermediate outputs, no kind fits |
+| `tests/sytrd_blocked_tests.cc` `TrailingUpdateRoutesAgree` relation | `syr2k ≤ 4 · gemm + 16 u` compares two measured errors (each route is also checked at its kind) |
+| `tests/syevx_tests.cc` LOBPCG instrumentation tests | staged vs host-read history (rates, residual norms, Ritz values): non-eigen quantities from two paths of the code under test |
+| `tests/cond_tests.cc` log10 and `ztol` checks | the random log-cond tolerances against the generator's target, the log10 tolerances and the band-structure zero checks are properties of the inputs and the estimator, not a residual |
+| `tests/norm_tests.cc` `expect_norm_close`, `tests/potrf_tests.cc` `host_real` / `host_imag` | a four-line scalar relative error (judged at `blas`) and scalar part accessors: the library has no scalar-vs-scalar error or part accessor |
 
 ## Rollout
 
@@ -200,7 +217,7 @@ into it, and the library was extended mid-way where a migration needed it (`view
 `Slack`; later `lu_solve_residual`, `pivot_ratio`, working-precision `getrf_pivots` and the split
 orthogonality kinds). A final pass moved the remaining local checks onto it
 (syevx, ortho, trmm, the syev CTA and Jacobi eigenvalue references, gesvd's singular-value bounds,
-syev's closed-form spectra, the candidates tests' scalar helpers, getrf's LAPACKE pivots).
+syev's closed-form spectra, the candidates tests' scalar helpers, getrf's LAPACKE pivots). A tail pass moved the last users of the fixed per-type `test_utils::tolerance` (deleted) onto it, ormqr's identity applications among them: `op(Q)` judged by `qr_reconstruction` against the input and `orthogonality`, not componentwise (Q's near-zero entries make an elementwise relative error meaningless).
 
 The tiered-tuning PR (19 specs) follows it and writes its specs against this library, so
 `lu_residuals.hh`, `qr_common.hh` and `host_reference.hh` from the `tuning-deep-sm120` branch
