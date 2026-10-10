@@ -15,6 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/geqrf_native.hh"
 #include "../src/ops/geqrf/can_run.hh"
@@ -50,18 +52,7 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
-using D = std::complex<double>;
 
-template <typename T>
-T mk(double r, double i) {
-    if constexpr (kCx<T>) return T(RealOf<T>(r), RealOf<T>(i));
-    else return T(r);
-}
-template <typename T>
-D up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -94,8 +85,8 @@ Qr<T> make_qr(const Spec& s) {
     p.s = s;
     p.ld = s.m + 3;
     p.stride = p.ld * s.n + 7;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, mk<T>(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, mk<T>(-12345.0, -12345.0));
+    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, verify::make<T>(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, verify::make<T>(-12345.0, -12345.0));
     p.ptrs = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
@@ -103,42 +94,27 @@ Qr<T> make_qr(const Spec& s) {
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.at(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
+                p.mem[p.at(it, i, j)] = it < reps ? verify::make<T>(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }
 
-// ||Q R - A|| / ||A|| for one item, Q = H_0 ... H_{k-1} from the packed reflectors, in double.
+// ||Q R - A||_F / ||A||_F for one item, from the packed reflectors.
 template <typename T>
 double qr_residual(const Qr<T>& p, int it) {
-    const int m = p.s.m, n = p.s.n, k = p.k();
-    std::vector<D> Q(std::size_t(m) * k, 0.0);
-    for (int j = 0; j < k; ++j) Q[std::size_t(j) * m + j] = 1.0;
-    for (int i = k - 1; i >= 0; --i) {
-        const D t = up(p.tau[std::size_t(it) * k + i]);
-        for (int c = 0; c < k; ++c) {
-            D w = Q[std::size_t(c) * m + i];
-            for (int r = i + 1; r < m; ++r) w += std::conj(up(p.mem[p.at(it, r, i)])) * Q[std::size_t(c) * m + r];
-            const D f = t * w;
-            Q[std::size_t(c) * m + i] -= f;
-            for (int r = i + 1; r < m; ++r) Q[std::size_t(c) * m + r] -= f * up(p.mem[p.at(it, r, i)]);
-        }
-    }
-    double num = 0, den = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < m; ++i) {
-            D acc = 0.0;
-            for (int q = 0; q <= std::min(k - 1, j); ++q) acc += Q[std::size_t(q) * m + i] * up(p.mem[p.at(it, q, j)]);
-            const D a = up(p.mem0[p.at(it, i, j)]);
-            num += std::norm(acc - a);
-            den += std::norm(a);
-        }
-    return den > 0 ? std::sqrt(num / den) : std::sqrt(num);
+    const int k = p.k();
+    const int item[] = {it};
+    const auto F = verify::view(p.mem.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
+    const auto A0 = verify::view(p.mem0.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
+    const VectorView<T> tau(const_cast<T*>(p.tau.data()), k, p.s.batch, 1, k);
+    return verify::qr_residual(A0, F, tau, item);
 }
 
-template <typename T>
-double tol(int m, int n) {
-    return std::max(0.5 * (m + n), 8.0) * double(std::numeric_limits<RealOf<T>>::epsilon());
+// The pre-migration bound max(m+n, 16) eps as a factor on the kind's 16 m eps, never above 1.
+verify::Slack tol(int m, int n) {
+    return {std::min(1.0, std::max(double(m + n), 16.0) / (16.0 * std::max(m, 1))),
+            "kept from this file's 0.5 (m+n) eps tolerance with its 8 eps tiny-order floor "
+            "(docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new)"};
 }
 
 // The checked items' residuals (all of a small batch, the representatives of a repeating one),
@@ -153,7 +129,8 @@ void expect_factored(const Qr<T>& p, const std::string& what) {
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
         const double r = qr_residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.m, s.n)) << what << " item " << it << " residual " << r;
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, s.m, r, tol(s.m, s.n)))
+            << what << " item " << it << " residual " << r;
     }
     for (std::size_t e = 0; e < p.mem.size(); ++e) {
         const int it = int(e / p.stride), off = int(e % p.stride), j = off / p.ld, i = off % p.ld;
@@ -161,7 +138,7 @@ void expect_factored(const Qr<T>& p, const std::string& what) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside A's window at element " << e;
     }
     for (std::size_t e = 0; e < std::size_t(p.k()) * s.batch; ++e)
-        ASSERT_TRUE(std::isfinite(std::abs(up(p.tau[e])))) << what << ": tau[" << e << "] not written";
+        ASSERT_TRUE(std::isfinite(verify::abs(verify::up(p.tau[e])))) << what << ": tau[" << e << "] not written";
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it) {
             for (int j = 0; j < s.n; ++j)

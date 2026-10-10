@@ -15,6 +15,8 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/getrf_native.hh"
 #include "../src/ops/gesv/choice.hh"
@@ -34,51 +36,10 @@ namespace {
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-// Host arithmetic promotes to double before it accumulates, so a float residual
-// measures the KERNEL's error and not the reference's.
-inline double up(float x) { return double(x); }
-inline double up(double x) { return x; }
-inline std::complex<double> up(std::complex<float> x) { return {double(x.real()), double(x.imag())}; }
-inline std::complex<double> up(std::complex<double> x) { return x; }
-
-inline double habs(double x) { return std::fabs(x); }
-inline double habs(std::complex<double> x) { return std::abs(x); }
-inline bool hfinite(double x) { return std::isfinite(x); }
-inline bool hfinite(std::complex<double> x) {
-    return std::isfinite(x.real()) && std::isfinite(x.imag());
-}
-
-template <class T> inline T mk(double re, double im);
-template <> inline float mk<float>(double re, double) { return float(re); }
-template <> inline double mk<double>(double re, double) { return re; }
-template <> inline std::complex<float> mk<std::complex<float>>(double re, double im) {
-    return {float(re), float(im)};
-}
-template <> inline std::complex<double> mk<std::complex<double>>(double re, double im) {
-    return {re, im};
-}
-
-template <typename T>
-constexpr double eps_of() {
-    if constexpr (std::is_same_v<RealOf<T>, float>) return 1.1920929e-7;
-    else return 2.220446049250313e-16;
-}
-
-// LU with partial pivoting is backward stable, so the bound scales with n * eps and
-// not with conditioning -- which is why every residual below runs on a
-// diagonally-dominant matrix whose cond(A) is O(1).
-template <typename T> double solve_tol(int n) { return 400.0 * double(n) * eps_of<T>(); }
-
-// A deterministic LCG rather than <random>: two runs of this file must build the
-// same matrices, because several tests compare two kernels element by element.
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
-    double next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return double(int32_t(uint32_t(s >> 32))) / 2147483648.0;
-    }
-};
+using verify::Check;
+using verify::make;
+using verify::up;
+using verify::Rng;
 
 template <typename T, Backend B>
 struct GesvConfig {
@@ -111,6 +72,8 @@ void reset(Sys<T>& p) {
 
 // Strictly column-diagonally-dominant, so cond(A) is O(1) and the residual bound above
 // is the right one. The diagonal magnitude is 4n against off-diagonals bounded by 1.
+// Rows are shifted cyclically, so every column pivots off the diagonal: an identity
+// interchange list would hide a dropped or reversed row swap from every check here.
 template <typename T>
 Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
                    int ld_pad = 5, int stride_pad = 11, bool singular_col = false) {
@@ -119,7 +82,7 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
     p.lda = n + ld_pad;  p.stra = p.lda * n + stride_pad;
     p.ldb = n + ld_pad;  p.strb = p.ldb * nrhs + stride_pad;
 
-    const T poison = mk<T>(-9.75e3, 4.5e3);
+    const T poison = make<T>(-9.75e3, 4.5e3);
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
@@ -132,18 +95,18 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 const double re = rg.next(), im = rg.next();
-                T v = mk<T>(re, im);
-                if (i == j) v = mk<T>(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
+                T v = make<T>(re, im);
+                if (i == j) v = make<T>(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
                 // A whole zero COLUMN, not a zero diagonal entry: partial pivoting
                 // finds a nonzero pivot for a merely small diagonal, so only a zero
                 // column makes U exactly singular at a predictable step.
                 if (singular_col && j == (n / 2)) v = T{};
-                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = v;
+                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + (i + 1) % n] = v;
             }
         }
         for (int k = 0; k < nrhs; ++k)
             for (int i = 0; i < n; ++i)
-                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = mk<T>(rg.next(), rg.next());
+                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = make<T>(rg.next(), rg.next());
     }
     p.a0.assign(p.a.begin(), p.a.end());
     p.b0.assign(p.b.begin(), p.b.end());
@@ -165,34 +128,10 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
 // ||A x - b||_F / (||A||_F ||x||_F) for ONE batch item, in double.
 template <typename T>
 double solve_residual(const Sys<T>& p, int item) {
-    using D = std::complex<double>;
-    const T* A0 = p.a0.data() + size_t(item) * p.stra;
-    const T* B0 = p.b0.data() + size_t(item) * p.strb;
-    const T* X = p.b.data() + size_t(item) * p.strb;
-
-    double num = 0.0, an = 0.0, xn = 0.0;
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) {
-            const double m = habs(up(A0[size_t(j) * p.lda + i]));
-            an += m * m;
-        }
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const double m = habs(up(X[size_t(k) * p.ldb + i]));
-            xn += m * m;
-        }
-    for (int k = 0; k < p.nrhs; ++k) {
-        for (int i = 0; i < p.n; ++i) {
-            D acc = up(B0[size_t(k) * p.ldb + i]);
-            acc = D(-acc.real(), -acc.imag());
-            for (int t = 0; t < p.n; ++t)
-                acc += up(A0[size_t(t) * p.lda + i]) * up(X[size_t(k) * p.ldb + t]);
-            num += habs(acc) * habs(acc);
-        }
-    }
-    an = std::sqrt(an); xn = std::sqrt(xn);
-    if (an == 0.0 || xn == 0.0) return std::sqrt(num);
-    return std::sqrt(num) / (an * xn);
+    const int items[] = {item};
+    return verify::solve_residual(verify::view(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
+                                  verify::view(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                  verify::view(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // Every element of the working buffer that no correct kernel may touch: the ld pad
@@ -270,8 +209,12 @@ TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
             this->run_tiny(p);
             for (int item : {0, p.batch - 1}) {
                 EXPECT_EQ(p.info[item], 0) << "n=" << n << " nrhs=" << nrhs;
+                bool moved = n == 1;
+                for (int k = 0; k < n; ++k)
+                    moved |= reinterpret_cast<const int*>(p.piv.data())[size_t(item) * n + k] != k + 1;
+                EXPECT_TRUE(moved) << "n=" << n << ": identity interchanges, so a dropped row swap would go unseen";
                 const double r = solve_residual(p, item);
-                EXPECT_LT(r, solve_tol<T>(n))
+                EXPECT_VERIFY(T, Check::solve, n, r)
                     << "n=" << n << " nrhs=" << nrhs << " item=" << item;
             }
         }
@@ -328,7 +271,7 @@ TYPED_TEST(GesvTest, TinyInfoReportsExactSingularityAndLeavesXFinite) {
                 << "n=" << n << ": the zero column is " << (n / 2) << ", 1-based " << (n / 2 + 1);
         }
         for (size_t i = 0; i < p.b.size(); ++i) {
-            ASSERT_TRUE(hfinite(up(p.b[i]))) << "X is not finite at element " << i;
+            ASSERT_TRUE(verify::finite(up(p.b[i]))) << "X is not finite at element " << i;
         }
     }
 }
@@ -372,7 +315,7 @@ TYPED_TEST(GesvTest, TinyPackedLaunchCoversEveryBatchItem) {
             for (int bi = 0; bi < batch; ++bi) {
                 ASSERT_EQ(p.info[bi], 0)
                     << "item " << bi << " of " << batch << " was not written (n=" << n << ")";
-                EXPECT_LT(solve_residual(p, bi), solve_tol<T>(n))
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, bi))
                     << "item " << bi << " of " << batch;
             }
         }
@@ -437,8 +380,8 @@ TYPED_TEST(GesvTest, PublicGesvSolvesAndMatchesTheTinyTier) {
 
         for (int item : {0, p.batch - 1}) {
             EXPECT_EQ(p.info[item], 0);
-            EXPECT_LT(solve_residual(p, item), solve_tol<T>(n)) << "public, n=" << n;
-            EXPECT_LT(solve_residual(q, item), solve_tol<T>(n)) << "tiny, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, item)) << "public, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(q, item)) << "tiny, n=" << n;
         }
         // The pivot lists must agree exactly: both arms run the same getrf recurrence.
         for (size_t i = 0; i < p.piv.size(); ++i) ASSERT_EQ(p.piv[i], q.piv[i]) << i;

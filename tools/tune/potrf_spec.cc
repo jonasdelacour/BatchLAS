@@ -1,14 +1,17 @@
-// potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the factor_bench
-// residual on items 0 and batch-1, every candidates<T>() entry pinned through the public potrf.
+// potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the batchlas::verify
+// factorization residual (docs/design/verification.md), every candidates<T>() entry pinned through
+// the public potrf.
 
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/inputs.hh>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/potrf/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <string>
@@ -37,7 +40,7 @@ struct PotrfProblem {
           A0(stride * std::size_t(batch_)), A(stride * std::size_t(batch_)), pA0(std::size_t(batch_)),
           pA(std::size_t(batch_)), A0v(A0.data(), n, n, ld, int(stride), batch, pA0.data()),
           Av(A.data(), n, n, ld, int(stride), batch, pA.data()), info(std::size_t(batch_), 0) {
-        fill_spd<T>(A0.data(), n, ld, stride, batch);
+        batchlas::verify::fill_spd(A0v);
     }
     std::size_t workspace() { return potrf_buffer_size<kBackend, T>(q, Av, uplo); }
     void reset() {
@@ -54,7 +57,7 @@ struct PotrfProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        return {potrf_residual<T>(A.data(), A0.data(), n, ld, stride, batch, uplo == Uplo::Upper), bad};
+        return {batchlas::verify::potrf_residual(A0v, Av, uplo), bad};
     }
 };
 
@@ -109,8 +112,9 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PotrfProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad, uplo);
-            if (req.mode == "race") return run_race<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
-            return run_arms<P::PotrfChoice>("potrf", p, req, Tol<T>::v);
+            const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::factorization, p.n);
+            if (req.mode == "race") return run_race<P::PotrfChoice>("potrf", p, req, tol);
+            return run_arms<P::PotrfChoice>("potrf", p, req, tol);
         });
     }
 };

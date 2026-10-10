@@ -16,7 +16,7 @@ endif()
 
 # Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
 # any -j: syev_cta_tests has a concurrency wrong-answer flake (docs/developer/agent-guide.md section 8).
-set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
+set(BATCHLAS_HOST_ONLY_TESTS tune_tests verify_tests)
 set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
@@ -34,6 +34,7 @@ set(TEST_TARGETS
     select_tests
     tuned_tables_tests
     tune_tests
+    verify_tests
     tune_race_gpu_tests
     error_model_tests
     linalg_layer_tests
@@ -170,7 +171,7 @@ set(BATCHLAS_TEST_LABELS_util
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests
     settings_tests error_model_tests
-    linalg_layer_tests select_tests tuned_tables_tests tune_tests tune_race_gpu_tests)
+    linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
@@ -269,13 +270,17 @@ function(batchlas_add_test_target test_name)
             BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
             BATCHLAS_TUNE_CMAKE="${CMAKE_COMMAND}"
             BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
+    elseif(test_name STREQUAL "verify_tests")
+        # Host-only: header-only batchlas::verify; MatrixView's constructor lives in the library.
+        target_sources(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/verify_residuals_tests.cc")
+        batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
     elseif(test_name STREQUAL "tune_race_gpu_tests")
         # The tuner's GPU side: the race and the worker against real kernels (potrf, posv, trsm specs).
         # The worker cases run batchlas_tune_impl, built with the benchmarks.
         foreach(_src tune_core race grid ledger schedule spec worker potrf_spec posv_spec trsm_spec)
             target_sources(${test_name} PRIVATE "${PROJECT_SOURCE_DIR}/tools/tune/${_src}.cc")
         endforeach()
-        batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main)
+        batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
         if(BATCHLAS_BUILD_BENCHMARKS)
             target_compile_definitions(${test_name} PRIVATE BATCHLAS_TUNE_IMPL="$<TARGET_FILE:batchlas_tune_impl>")
             add_dependencies(${test_name} batchlas_tune_impl)
@@ -299,33 +304,25 @@ function(batchlas_add_test_target test_name)
     # src/CMakeLists.txt) because PUBLIC pushed absolute -dev paths and a
     # find_dependency(CUDAToolkit) onto every installed consumer.
     #
-    # LAPACKE: these two call LAPACKE_* directly for their reference results.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests|geqrf_tests|getrf_tests)$")
-        target_link_libraries(${test_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
-        target_include_directories(${test_name} SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
-    endif()
+    # batchlas::verify (header-only) brings LAPACKE and BATCHLAS_VERIFY_HAVE_LAPACKE=0|1 to every test.
+    # No test calls LAPACKE_* directly: references go through batchlas::verify (reference.hh), and
+    # geqrf_tests and getrf_tests use it as an independent oracle (rationale below).
+    target_link_libraries(${test_name} PRIVATE batchlas::verify)
     # geqrf_tests compares tau ELEMENTWISE against LAPACKE. NOT because the residual and
     # orthogonality probes are blind to tau -- that was the original rationale and it is
     # measured FALSE: v(j) = 1 is implicit in LAPACK's storage, so for a given stored
     # factor tau is uniquely determined, and armed breaks (store 2v with tau/4; flip
     # LAPACK's beta sign) each turned the RESIDUAL red as well as tau. What LAPACKE adds
     # is an INDEPENDENT ORACLE: every other numerical check in the file measures the
-    # kernel against host_form_Q in that same file, so a convention error shared by the
+    # kernel against batchlas::verify::form_q, so a convention error shared by the
     # kernel and that oracle passes all of them. evidence: docs/perf/qr.md, "Breaks (h)
-    # and (i) correct the rationale D9 was written from". The define is separate from the
-    # link so the test compiles and skips, rather than failing to build, where no host
-    # backend is present.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "geqrf_tests")
-        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE=1)
-    endif()
+    # and (i) correct the rationale D9 was written from". Where no host backend is present
+    # BATCHLAS_VERIFY_HAVE_LAPACKE is 0 and the test compiles and skips.
     # getrf_tests compares the tiny tier's ipiv ELEMENTWISE against LAPACKE on
     # UNSTRUCTURED data. Every other pivot oracle in that file is BatchLAS code: the
     # combinatorial expect_piv, or the CTA tier -- which shares getrf_cta_device.hh's
     # lu_cabs1 with the tier under test, so a defect in the pivot METRIC moves both
     # and leaves the tiny-vs-cta comparisons green.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "getrf_tests")
-        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GETRF_TESTS_HAVE_LAPACKE=1)
-    endif()
     # util_device_queue_tests checks Device::cuda_compute_capability() against the
     # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
     if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart

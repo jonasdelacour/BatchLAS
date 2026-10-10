@@ -1,6 +1,6 @@
 // The LPANEL tier's cases, in their own file only for length; they sit inside
 // potrf_tests.cc's anonymous namespace so make_spd, make_planted_ldl and
-// multiply_back_residual above are the same oracles the CTA cases use.
+// potrf_error above are the same oracles the CTA cases use.
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
 template <typename Config>
@@ -78,14 +78,13 @@ TYPED_TEST(PotrfLpanelTest, ResidualAcrossPanelBoundaries) {
             // Every batch item differs: identical items hide a stride bug.
             ref[b] = make_spd<T>(c.n, 5100u + 31u * b + 3u * static_cast<unsigned>(c.n));
             this->load_triangle(A, b, c.n, ref[b], Uplo::Lower,
-                                make_scalar<T>(R(-999), R(777)));
+                                verify::make<T>(R(-999), R(777)));
         }
         const auto info = this->run_lpanel(A.view());
         for (int b = 0; b < c.batch; ++b) {
             ASSERT_EQ(info[b], 0) << "n=" << c.n << " b=" << b;
-            const auto L = this->extract_L(A, b, c.n, Uplo::Lower);
-            const R res = multiply_back_residual<T>(ref[b], L, c.n);
-            EXPECT_LE(res, residual_tol<T>(c.n))
+            const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, c.n, res, kLeafSlack)
                 << "n=" << c.n << " b=" << b << " residual/(n*eps)="
                 << (res / (R(c.n) * std::numeric_limits<R>::epsilon()));
         }
@@ -123,18 +122,20 @@ TYPED_TEST(PotrfLpanelTest, PanelStoresArePublishedAtSaturatingBatch) {
     const auto ref = make_spd<T>(n, 90210u);
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     for (int b = 0; b < batch; ++b) {
-        this->load_triangle(A, b, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
 
     const auto info = this->run_lpanel(A.view());
 
     ASSERT_EQ(info[0], 0);
-    const auto L0 = this->extract_L(A, 0, n, Uplo::Lower);
-    EXPECT_LE((multiply_back_residual<T>(ref, L0, n)), residual_tol<T>(n))
+    EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref, A, 0, Uplo::Lower)), kLeafSlack)
         << "item 0, n=" << n << " batch=" << batch;
 
     // The kernel is deterministic for identical input and carries no atomics, so every
     // item must come back BIT-identical to item 0.
+    std::vector<T> L0(static_cast<size_t>(n) * n, T{});
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i < n; ++i) L0[i + static_cast<size_t>(j) * n] = A(i, j, 0);
     int bad_items = 0;
     int first_bad = -1;
     for (int b = 1; b < batch; ++b) {
@@ -171,7 +172,7 @@ TYPED_TEST(PotrfLpanelTest, OtherTriangleIsNeitherReadNorWritten) {
 
     for (int pass = 0; pass < 2; ++pass) {
         const bool nan_pass = (pass == 0);
-        const T poison = nan_pass ? make_scalar<T>(qnan, qnan) : make_scalar<T>(R(-999), R(777));
+        const T poison = nan_pass ? verify::make<T>(qnan, qnan) : verify::make<T>(R(-999), R(777));
 
         Matrix<T, MatrixFormat::Dense> A(n, n, batch);
         std::vector<std::vector<T>> ref(batch);
@@ -185,18 +186,17 @@ TYPED_TEST(PotrfLpanelTest, OtherTriangleIsNeitherReadNorWritten) {
             ASSERT_EQ(info[b], 0) << "b=" << b << " pass=" << pass;
             for (int i = 0; i < n; ++i) {
                 for (int j = i + 1; j < n; ++j) {
-                    const bool intact = nan_pass ? std::isnan(host_real(A(i, j, b)))
+                    const bool intact = nan_pass ? std::isnan(std::real(A(i, j, b)))
                                                  : (A(i, j, b) == poison);
                     ASSERT_TRUE(intact)
                         << "the kernel WROTE the upper triangle at (" << i << "," << j
                         << ") b=" << b << " pass=" << pass;
                 }
             }
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            const R res = multiply_back_residual<T>(ref[b], L, n);
+            const double res = potrf_error<T>(ref[b], A, b, Uplo::Lower);
             ASSERT_FALSE(std::isnan(res))
                 << "the kernel READ the poisoned upper triangle, b=" << b;
-            EXPECT_LE(res, residual_tol<T>(n)) << "b=" << b << " pass=" << pass;
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, res, kLeafSlack) << "b=" << b << " pass=" << pass;
         }
     }
 }
@@ -219,8 +219,8 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
         Matrix<T, MatrixFormat::Dense> Bm(n, n, batch);
         for (int b = 0; b < batch; ++b) {
             const auto ref = make_spd<T>(n, 3300u + 7u * b + static_cast<unsigned>(n));
-            this->load_triangle(A, b, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
-            this->load_triangle(Bm, b, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+            this->load_triangle(A, b, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
+            this->load_triangle(Bm, b, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         }
         const auto info_lp = this->run_lpanel(A.view());
         const auto info_cta = this->run_cta(Bm, Uplo::Lower);
@@ -229,7 +229,7 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j <= i; ++j)
-                    scale = std::max(scale, std::abs(host_real(Bm(i, j, b))));
+                    scale = std::max(scale, std::abs(std::real(Bm(i, j, b))));
         }
         const R tol = R(32) * R(n) * std::numeric_limits<R>::epsilon() * std::max(scale, R(1));
 
@@ -238,9 +238,9 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
             ASSERT_EQ(info_cta[b], info_lp[b]) << "the tiers disagree about info, b=" << b;
             for (int i = 0; i < n; ++i) {
                 for (int j = 0; j <= i; ++j) {
-                    EXPECT_NEAR(host_real(A(i, j, b)), host_real(Bm(i, j, b)), tol)
+                    EXPECT_NEAR(std::real(A(i, j, b)), std::real(Bm(i, j, b)), tol)
                         << "n=" << n << " (" << i << "," << j << ") b=" << b;
-                    EXPECT_NEAR(host_imag(A(i, j, b)), host_imag(Bm(i, j, b)), tol)
+                    EXPECT_NEAR(std::imag(A(i, j, b)), std::imag(Bm(i, j, b)), tol)
                         << "n=" << n << " (" << i << "," << j << ") b=" << b;
                 }
             }
@@ -271,10 +271,10 @@ TYPED_TEST(PotrfLpanelTest, InfoIndexIsExact) {
         // THE TEST ASSERTS ITS OWN SENSITIVITY: for c >= 1 the ORIGINAL diagonal at the
         // failure column is positive, so only a kernel testing the UPDATED pivot names it.
         if (c >= 1) {
-            ASSERT_GT(host_real(ref[c + static_cast<size_t>(c) * n]), R(0))
+            ASSERT_GT(std::real(ref[c + static_cast<size_t>(c) * n]), R(0))
                 << "the planted matrix is not discriminating at column " << c;
         }
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_lpanel(A.view());
         EXPECT_EQ(info[0], c + 1)
             << "planted a non-positive pivot at global column " << c << " of " << n
@@ -300,15 +300,15 @@ TYPED_TEST(PotrfLpanelTest, InfoFirstFailureWinsAndFailedItemsStayFinite) {
 
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         const auto ref = make_planted_ldl<T>(n, {c, c2}, 777u + static_cast<unsigned>(c));
-        this->load_triangle(A, 0, n, ref, Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, 0, n, ref, Uplo::Lower, verify::make<T>(R(0), R(0)));
         const auto info = this->run_lpanel(A.view());
         EXPECT_EQ(info[0], c + 1) << "failures planted at " << c << " and " << c2;
 
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_TRUE(std::isfinite(host_real(A(i, j, 0))))
+                ASSERT_TRUE(std::isfinite(std::real(A(i, j, 0))))
                     << "a failed item went non-finite at (" << i << "," << j << ")";
-                ASSERT_TRUE(std::isfinite(host_imag(A(i, j, 0))));
+                ASSERT_TRUE(std::isfinite(std::imag(A(i, j, 0))));
             }
         }
     }
@@ -343,7 +343,7 @@ TYPED_TEST(PotrfLpanelTest, PackedBatchIsIndependentAndTheTailSlotsAreInert) {
         ref[b] = (b == bad_item)
                      ? make_planted_ldl<T>(n, {bad_col}, 61u)
                      : make_spd<T>(n, 400u + 11u * b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
     const auto info = this->run_lpanel(A.view());
 
@@ -351,8 +351,7 @@ TYPED_TEST(PotrfLpanelTest, PackedBatchIsIndependentAndTheTailSlotsAreInert) {
     for (int b = 0; b < batch; ++b) {
         if (b == bad_item) continue;
         ASSERT_EQ(info[b], 0) << "healthy item " << b << " reported a failure";
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack)
             << "item " << b << " (packing G=" << G << ", batch=" << batch << ")";
     }
 }
@@ -371,7 +370,7 @@ TYPED_TEST(PotrfLpanelTest, PaddedLeadingDimensionStrideAndEmptyInfoSpan) {
 
     for (bool pass_info : {true, false}) {
         UnifiedVector<T> buf(static_cast<size_t>(stride) * batch,
-                             make_scalar<T>(R(-11), R(5)));   // non-PD poison
+                             verify::make<T>(R(-11), R(5)));   // non-PD poison
         MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
 
         std::vector<std::vector<T>> ref(batch);
@@ -381,7 +380,7 @@ TYPED_TEST(PotrfLpanelTest, PaddedLeadingDimensionStrideAndEmptyInfoSpan) {
                 for (int j = 0; j < n; ++j) {
                     buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld] =
                         (i >= j) ? ref[b][i + static_cast<size_t>(j) * n]
-                                 : make_scalar<T>(R(0), R(0));
+                                 : verify::make<T>(R(0), R(0));
                 }
             }
         }
@@ -389,14 +388,7 @@ TYPED_TEST(PotrfLpanelTest, PaddedLeadingDimensionStrideAndEmptyInfoSpan) {
         const auto info = this->run_lpanel(V, Uplo::Lower, 0, pass_info);
         for (int b = 0; b < batch; ++b) {
             if (pass_info) ASSERT_EQ(info[b], 0) << "b=" << b;
-            std::vector<T> L(static_cast<size_t>(n) * n, T{});
-            for (int i = 0; i < n; ++i) {
-                for (int j = 0; j <= i; ++j) {
-                    L[i + static_cast<size_t>(j) * n] =
-                        buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
-                }
-            }
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n))
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, potrf_error<T>(ref[b], buf.data() + static_cast<size_t>(b) * stride, ld, n, Uplo::Lower), kLeafSlack)
                 << "b=" << b << " ld=" << ld << " stride=" << stride
                 << " info_span=" << pass_info;
         }
@@ -421,8 +413,8 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) {
         ref[b] = make_spd<T>(n, 8080u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
-        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+        this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
+        this->load_triangle(direct, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
     }
 
     const std::size_t bytes = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
@@ -439,10 +431,10 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
         ASSERT_EQ(info_direct[b], 0);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j <= i; ++j) {
-                ASSERT_EQ(host_real(A(i, j, b)), host_real(direct(i, j, b)))
+                ASSERT_EQ(std::real(A(i, j, b)), std::real(direct(i, j, b)))
                     << "the facade did not run the LPanel kernel at (" << i << "," << j
                     << ") b=" << b;
-                ASSERT_EQ(host_imag(A(i, j, b)), host_imag(direct(i, j, b)));
+                ASSERT_EQ(std::imag(A(i, j, b)), std::imag(direct(i, j, b)));
             }
         }
     }
@@ -468,21 +460,20 @@ TYPED_TEST(PotrfLpanelTest, NbSixteenIsInstantiatedForFloatOnly) {
         std::vector<std::vector<T>> ref(batch);
         for (int b = 0; b < batch; ++b) {
             ref[b] = make_spd<T>(n, 1717u + b);
-            this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower, verify::make<T>(R(0), R(0)));
         }
         EXPECT_EQ(this->geom(n, batch, 16).nb, 16);
         const auto info = this->run_lpanel(A.view(), Uplo::Lower, /*nb_hint=*/16);
         for (int b = 0; b < batch; ++b) {
             ASSERT_EQ(info[b], 0) << "b=" << b;
-            const auto L = this->extract_L(A, b, n, Uplo::Lower);
-            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), residual_tol<T>(n));
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, (potrf_error<T>(ref[b], A, b, Uplo::Lower)), kLeafSlack);
         }
     } else {
         EXPECT_EQ(cap16, 0) << "NB = 16 advertises capacity for a type it is not built for";
         const int n = std::min(40, this->lp_ceiling());
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         A.fill(T{});
-        for (int i = 0; i < n; ++i) A(i, i, 0) = make_scalar<T>(R(2), R(0));
+        for (int i = 0; i < n; ++i) A(i, i, 0) = verify::make<T>(R(2), R(0));
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
         EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(

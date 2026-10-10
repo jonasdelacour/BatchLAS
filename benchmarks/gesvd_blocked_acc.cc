@@ -3,6 +3,7 @@
 
 #include "acc_utils.hh"
 #include "miniacc_accuracy_common.hh"
+#include <batchlas/verify/reference.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -23,8 +24,8 @@ void GesvdAccSizes(Benchmark* b) {
     for (double n : {16.0, 32.0, 64.0, 128.0}) b->Args({n});
 }
 
-template <typename T>
-inline double max_abs_singular_error(const T* ref_desc,
+template <typename R, typename T>
+inline double max_abs_singular_error(const R* ref_desc,
                                      const T* est_desc,
                                      int n) {
     double max_abs = 0.0;
@@ -103,79 +104,6 @@ inline std::string gesvd_failure_reason(double u_ortho,
     if (recon_rel > recon_tol) return "recon_rel_exceeds_tol";
     if (sv_max_abs_err > sv_tol) return "sv_max_abs_err_exceeds_tol";
     return {};
-}
-
-template <typename Scalar>
-inline int lapacke_gesvd_values_only(int n,
-                                     Scalar* a_col_major,
-                                     typename base_type<Scalar>::type* s_out,
-                                     typename base_type<Scalar>::type* superb) {
-#if BATCHLAS_HAS_HOST_BACKEND
-    if constexpr (std::is_same_v<Scalar, float>) {
-        return LAPACKE_sgesvd(LAPACK_COL_MAJOR,
-                              'N',
-                              'N',
-                              n,
-                              n,
-                              a_col_major,
-                              n,
-                              s_out,
-                              nullptr,
-                              1,
-                              nullptr,
-                              1,
-                              superb);
-    } else if constexpr (std::is_same_v<Scalar, double>) {
-        return LAPACKE_dgesvd(LAPACK_COL_MAJOR,
-                              'N',
-                              'N',
-                              n,
-                              n,
-                              a_col_major,
-                              n,
-                              s_out,
-                              nullptr,
-                              1,
-                              nullptr,
-                              1,
-                              superb);
-    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
-        return LAPACKE_cgesvd(LAPACK_COL_MAJOR,
-                              'N',
-                              'N',
-                              n,
-                              n,
-                              reinterpret_cast<lapack_complex_float*>(a_col_major),
-                              n,
-                              s_out,
-                              nullptr,
-                              1,
-                              nullptr,
-                              1,
-                              superb);
-    } else {
-        static_assert(std::is_same_v<Scalar, std::complex<double>>);
-        return LAPACKE_zgesvd(LAPACK_COL_MAJOR,
-                              'N',
-                              'N',
-                              n,
-                              n,
-                              reinterpret_cast<lapack_complex_double*>(a_col_major),
-                              n,
-                              s_out,
-                              nullptr,
-                              1,
-                              nullptr,
-                              1,
-                              superb);
-    }
-#else
-    (void)n;
-    (void)a_col_major;
-    (void)s_out;
-    (void)superb;
-    return -1;
-#endif
 }
 
 template <typename Scalar, Backend B>
@@ -306,23 +234,16 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
             }
             const double recon_rel = std::sqrt(err2 / std::max(ref2, 1e-30));
 
+            // Reference: double ?gesdd since 2026-10-09 (was working-precision ?gesvd), so older CSVs'
+            // sv_max_abs_err is not like for like. evidence: docs/perf/gesvd.md#gesvd-defect-c-an-accuracy-harness-that-could-not-see-relative-error
             double sv_max_abs_err = std::numeric_limits<double>::quiet_NaN();
-#if BATCHLAS_HAS_HOST_BACKEND
             {
-                std::vector<Scalar> a_host(static_cast<size_t>(n) * static_cast<size_t>(n));
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        a_host[static_cast<size_t>(j) * static_cast<size_t>(n) + static_cast<size_t>(i)] = Ab_ref(i, j, 0);
-                    }
-                }
-                std::vector<Real> s_ref(static_cast<size_t>(n));
-                std::vector<Real> superb(static_cast<size_t>(std::max(0, n - 1)));
-                const int info = lapacke_gesvd_values_only<Scalar>(n, a_host.data(), s_ref.data(), superb.data());
-                if (info == 0) {
-                    sv_max_abs_err = max_abs_singular_error<Real>(s_ref.data(), sb, n);
+                auto a_host = batchlas::verify::copy_item(Ab_ref, 0);
+                std::vector<double> s_ref;
+                if (batchlas::verify::singular_values(n, n, a_host, s_ref)) {
+                    sv_max_abs_err = max_abs_singular_error(s_ref.data(), sb, n);
                 }
             }
-#endif
 
             const double u_ortho = std::sqrt(u_ortho_num) / static_cast<double>(n);
             const double vh_ortho = std::sqrt(vh_ortho_num) / static_cast<double>(n);

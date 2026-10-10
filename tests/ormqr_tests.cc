@@ -12,13 +12,11 @@ struct OrmqrConfig {
 };
 
 #include "test_utils.hh"
+#include "ormqr_verify.hh"
 using OrmqrTestTypes = typename test_utils::backend_types<OrmqrConfig>::type;
 
 template <typename Config>
-class OrmqrTest : public test_utils::BatchLASTest<Config> {
-protected:
-    Transpose trans = test_utils::is_complex<typename Config::ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
-};
+class OrmqrTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(OrmqrTest, OrmqrTestTypes);
 
@@ -28,6 +26,7 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     const int n = 4;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(n);
     UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
     (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
@@ -38,17 +37,8 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
-    Matrix<T, MatrixFormat::Dense> Result(n, n);
-    (void)gemm(*this->ctx, Q.view(), Q.view(), Result.view(), {.transA = this->trans});
-    this->ctx->wait();
-
-    auto r = Result.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            T expected = (i == j) ? T(1) : T(0);
-            test_utils::assert_near(r[i * Result.ld() + j], expected);
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q, Transpose::NoTrans));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
 }
 
 TYPED_TEST(OrmqrTest, BatchedMatrices) {
@@ -58,6 +48,7 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     const int batch = 3;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(n * batch);
     UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
     (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
@@ -68,19 +59,8 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
-    Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
-    (void)gemm(*this->ctx, Q.view(), Q.view(), Result.view(), {.transA = this->trans});
-    this->ctx->wait();
-
-    auto r = Result.data();
-    for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                T expected = (i == j) ? T(1) : T(0);
-                test_utils::assert_near(r[b * Result.stride() + i * Result.ld() + j], expected);
-            }
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q, Transpose::NoTrans));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
 }
 
 // The two routing regressions that lived here (an unmatched forced provider whose size and

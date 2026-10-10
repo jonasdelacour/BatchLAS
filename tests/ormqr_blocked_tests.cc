@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "test_utils.hh"
+#include "ormqr_verify.hh"
 #include "../src/ops/ormqr/vendor.hh"
 
 using namespace batchlas;
@@ -79,8 +80,19 @@ inline int32_t get_block_size_or_default(int32_t def) {
 }
 } // namespace
 
-// This test is expected to FAIL until ormqr_blocked is fixed.
-// It compares ormqr_blocked against the backend ormqr (CUSOLVER) implementation.
+// Float keeps the old entrywise 1e-5 against the reference ormqr. One entry of Q column j off by d moves
+// ||A0 - QR||_F / ||A0||_F by d ||R(j,:)|| / ||A0||_F, about d / sqrt(n) for an average row: 1.25e-6 at
+// n = 64, 1/49 of the float bound 16 n u = 6.1e-5. 1/64 catches it wherever ||R(j,:)|| >= 0.76 of the
+// average (j <= 45 of 64 on random input); measured need 0.007 of the unslacked bound.
+template <typename T>
+batchlas::verify::Slack recon_slack() {
+    if constexpr (std::is_same_v<batchlas::verify::real_t<T>, float>)
+        return {1.0 / 64, "the old 1e-5 entrywise tolerance vs the reference ormqr (1e-5/sqrt(64) = 1/49 of the bound)"};
+    else
+        return {1.0, "the library bound (double's old 1e-10 entrywise is looser)"};
+}
+
+// ormqr_blocked and the backend ormqr are each judged against Q formed on the host from the reflectors.
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -89,6 +101,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     const int batch = 1;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
@@ -119,27 +132,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
         this->ctx->wait();
     }
 
-    // Check orthonormality for the blocked output.
-    Matrix<T, MatrixFormat::Dense> QtQ = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
-    (void)gemm(*this->ctx, Q_blk.view(), Q_blk.view(), QtQ.view(), {.transA = this->trans_h()});
-    this->ctx->wait();
-
-    auto r = QtQ.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            const T expected = (i == j) ? T(1) : T(0);
-            test_utils::expect_near(r[i * QtQ.ld() + j], expected);
-        }
-    }
-
-    // Compare blocked vs reference.
-    auto ref = Q_ref.data();
-    auto blk = Q_blk.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            test_utils::expect_near(blk[i * Q_blk.ld() + j], ref[i * Q_ref.ld() + j]);
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q_blk.view()));
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_blk, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_blk";
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_ref, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_ref";
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
@@ -150,6 +149,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     const int batch = 1;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
@@ -180,13 +180,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
         this->ctx->wait();
     }
 
-    auto ref = Q_ref.data();
-    auto blk = Q_blk.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            test_utils::expect_near(blk[i * Q_blk.ld() + j], ref[i * Q_ref.ld() + j]);
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q_blk.view()));
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_blk, this->trans_h()),
+                        recon_slack<T>())
+        << "Q_blk";
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_ref, this->trans_h()),
+                        recon_slack<T>())
+        << "Q_ref";
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
@@ -197,6 +197,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     const int batch = 1;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
@@ -227,13 +228,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
         this->ctx->wait();
     }
 
-    auto ref = Q_ref.data();
-    auto blk = Q_blk.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            test_utils::expect_near(blk[i * Q_blk.ld() + j], ref[i * Q_ref.ld() + j]);
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q_blk.view()));
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_blk, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_blk";
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_ref, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_ref";
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
@@ -244,6 +245,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     const int batch = 1;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
@@ -275,13 +277,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
         this->ctx->wait();
     }
 
-    auto ref = Q_ref.data();
-    auto blk = Q_blk.data();
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            test_utils::expect_near(blk[i * Q_blk.ld() + j], ref[i * Q_ref.ld() + j]);
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q_blk.view()));
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_blk, this->trans_h()),
+                        recon_slack<T>())
+        << "Q_blk";
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_ref, this->trans_h()),
+                        recon_slack<T>())
+        << "Q_ref";
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
@@ -292,6 +294,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     const int batch = 8;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/false, batch);
+    const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
@@ -322,19 +325,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
         this->ctx->wait();
     }
 
-    // Compare blocked vs reference per batch item.
-    auto ref = Q_ref.data();
-    auto blk = Q_blk.data();
-    for (int b = 0; b < batch; ++b) {
-        const size_t off_ref = static_cast<size_t>(b) * static_cast<size_t>(Q_ref.stride());
-        const size_t off_blk = static_cast<size_t>(b) * static_cast<size_t>(Q_blk.stride());
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                test_utils::expect_near(blk[off_blk + static_cast<size_t>(i) * static_cast<size_t>(Q_blk.ld()) + static_cast<size_t>(j)],
-                                        ref[off_ref + static_cast<size_t>(i) * static_cast<size_t>(Q_ref.ld()) + static_cast<size_t>(j)]);
-            }
-        }
-    }
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q_blk.view()));
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_blk, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_blk";
+    EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q_ref, Transpose::NoTrans),
+                        recon_slack<T>())
+        << "Q_ref";
 }
 
 } // namespace

@@ -16,38 +16,20 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/residuals.hh>
+
 using namespace batchlas;
 
 namespace {
 
+// The band AB (AB(i - j, j) = B(i, j), lower storage) as a dense symmetric matrix, zeros outside the band.
 template <typename Real>
-Real tol_for() {
-    if constexpr (std::is_same_v<Real, float>) return Real(5) * Real(test_utils::tolerance<float>());
-    return Real(5) * Real(test_utils::tolerance<double>());
-}
-
-template <typename Real>
-void expect_lower_banded_matches_ab(const MatrixView<Real, MatrixFormat::Dense>& B,
-                                   const MatrixView<Real, MatrixFormat::Dense>& AB,
-                                   int n,
-                                   int kd,
-                                   Real tol) {
-    const int ldab = AB.ld();
-
-    for (int j = 0; j < n; ++j) {
-        const int i_max = std::min(n - 1, j + kd);
-        for (int i = j; i <= i_max; ++i) {
-            const int r = i - j;
-            EXPECT_NEAR(B(i, j, 0), AB(r, j, 0), tol) << "AB mismatch at (i,j)= (" << i << "," << j << ")";
-        }
-    }
-
-    const Real ztol = tol * Real(50);
-    for (int j = 0; j < n; ++j) {
-        for (int i = j + kd + 1; i < n; ++i) {
-            EXPECT_NEAR(B(i, j, 0), Real(0), ztol) << "Not banded below at (" << i << "," << j << ")";
-        }
-    }
+Matrix<Real, MatrixFormat::Dense> band_to_dense(const MatrixView<Real, MatrixFormat::Dense>& AB, int n, int kd) {
+    auto D = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
+    auto Dv = D.view();
+    for (int j = 0; j < n; ++j)
+        for (int i = j; i <= std::min(n - 1, j + kd); ++i) Dv(i, j, 0) = Dv(j, i, 0) = AB(i - j, j, 0);
+    return D;
 }
 
 template <typename Real, Backend B = test_utils::gpu_backend>
@@ -114,7 +96,6 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
     constexpr Backend B = TestFixture::BackendType;
 
     const int batch = 1;
-    const Real tol = tol_for<Real>();
 
     // n % kd matters: the final panel is only kd columns wide when kd divides n.
     // A short final panel used to skip part of the two-sided update, so the
@@ -143,7 +124,10 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
         apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
 
         // Validate AB matches the lower band of B.
-        expect_lower_banded_matches_ab(Bwork.view(), AB.view(), n, kd, tol);
+        // Bwork = Q^T A0 Q is the explicit similarity transform; AB must be its band, so Bwork = I AB_dense I^T.
+        const auto Bband = band_to_dense(AB.view(), n, kd);
+        const auto I = Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(Bwork.view(), I.view(), Bband.view()));
     }
 }
 #endif

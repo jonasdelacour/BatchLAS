@@ -3,6 +3,8 @@
 // constants; which kernel ran is read back from the select trace or a bit-for-bit comparison
 // with the direct driver, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
@@ -51,16 +53,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -112,7 +104,7 @@ struct Solve {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
 }
 
 // Strictly diagonally dominant owned triangle, every entry with a nonzero imaginary part; a
@@ -128,13 +120,13 @@ void fill(Solve<T>& p) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 if (i == j)
-                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? mk<T>(R(300), R(-200))
-                                                                 : mk<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? batchlas::verify::make<T>(R(300), R(-200))
+                                                                 : batchlas::verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
                 else if (p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
+                    p.mem[p.ai(it, i, j)] = batchlas::verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < p.b.cols; ++j)
-            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = batchlas::verify::make<T>(u(gen), u(gen));
     }
     for (int it = reps; it < s.batch; ++it) {
         const int r = it % reps;
@@ -149,7 +141,7 @@ void fill(Solve<T>& p) {
 
 template <typename T>
 T alpha_of() {
-    return mk<T>(RealOf<T>(1.5), RealOf<T>(-0.5));
+    return batchlas::verify::make<T>(RealOf<T>(1.5), RealOf<T>(-0.5));
 }
 
 template <typename T>
@@ -189,48 +181,17 @@ Solve<T> make_panel(const Spec& s, int parent, int j0) {
     return p;
 }
 
-// ||op(A) X - alpha B|| / (||op(A)|| ||X|| + |alpha| ||B||) for one item, in double.
+// ||op(A) X - alpha B|| / (||A|| ||X|| + |alpha| ||B||) for one item through the library: A and B
+// from the pristine copy, X from the result buffer, A's other triangle and a Unit diagonal unread.
 template <typename T>
 double residual(const Solve<T>& p, int it) {
     const Spec& s = p.s;
-    const int n = s.n, q = s.q;
-    std::vector<std::complex<double>> tri(std::size_t(n) * n, 0.0);
-    double an = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> v = 0.0;
-            if (i == j) v = s.diag == Diag::Unit ? 1.0 : up(p.mem0[p.ai(it, i, j)]);
-            else if (p.owned(i, j)) v = up(p.mem0[p.ai(it, i, j)]);
-            // op(A)(i, j)
-            const int oi = s.trans == Transpose::NoTrans ? i : j, oj = s.trans == Transpose::NoTrans ? j : i;
-            tri[oi + std::size_t(oj) * n] = s.trans == Transpose::ConjTrans ? std::conj(v) : v;
-            an += std::norm(v);
-        }
-    const std::complex<double> al = up(p.alpha);
-    double num = 0, xn = 0, bn = 0;
-    for (int r = 0; r < q; ++r)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> acc = 0.0;
-            if (s.side == Side::Left) {
-                for (int t = 0; t < n; ++t) acc += tri[i + std::size_t(t) * n] * up(p.mem[p.bi(it, t, r)]);
-                acc -= al * up(p.mem0[p.bi(it, i, r)]);
-                xn += std::norm(up(p.mem[p.bi(it, i, r)]));
-                bn += std::norm(up(p.mem0[p.bi(it, i, r)]));
-            } else {
-                for (int t = 0; t < n; ++t) acc += up(p.mem[p.bi(it, r, t)]) * tri[t + std::size_t(i) * n];
-                acc -= al * up(p.mem0[p.bi(it, r, i)]);
-                xn += std::norm(up(p.mem[p.bi(it, r, i)]));
-                bn += std::norm(up(p.mem0[p.bi(it, r, i)]));
-            }
-            num += std::norm(acc);
-        }
-    const double den = std::sqrt(an * xn) + std::abs(al) * std::sqrt(bn);
-    return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    using View = MatrixView<T, MatrixFormat::Dense>;
+    const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off, s.n, s.n, p.a.ld, p.a.stride, s.batch);
+    const auto B0 = batchlas::verify::view(p.mem0.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    const auto X = batchlas::verify::view(p.mem.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    const int one[] = {it};
+    return batchlas::verify::trsm_residual(A0, s.side, s.uplo, s.trans, s.diag, X, B0, batchlas::verify::up(p.alpha), one);
 }
 
 // Residuals of the checked items (all of them for small batches; the representatives of a
@@ -249,7 +210,9 @@ void expect_solved(const Solve<T>& p, const std::string& what) {
     }
     for (int it : items) {
         const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
+        ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, s.n, r))
+            << what << " item " << it << " residual " << r << " exceeds "
+            << batchlas::verify::bound<T>(batchlas::verify::Check::solve, s.n);
     }
     std::vector<char> inb(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
@@ -691,8 +654,8 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = batchlas::verify::make<T>(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
+    Bm.fill(batchlas::verify::make<T>(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());

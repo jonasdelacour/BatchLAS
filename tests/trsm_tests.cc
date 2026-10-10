@@ -10,6 +10,8 @@
 #include <random>
 #include <type_traits>
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 #include "../src/select/vendor.hh"
@@ -41,10 +43,11 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
     }
     
-    bool verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
+    ::testing::AssertionResult verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
                           int batch_idx,
+                          Uplo uplo,
                           Transpose trans = Transpose::NoTrans) {
         const bool trace_enabled = []() {
             const char* v = std::getenv("BATCHLAS_TRSM_TRACE");
@@ -56,7 +59,7 @@ protected:
         bool anyChanges = false;
         for (int i = 0; i < rows && !anyChanges; ++i) {
             for (int j = 0; j < cols && !anyChanges; ++j) {
-                if (std::abs(B.at(i, j, batch_idx) - B_original.at(i, j, batch_idx)) > test_utils::tolerance<ScalarType>()) {
+                if (B.at(i, j, batch_idx) != B_original.at(i, j, batch_idx)) {
                     anyChanges = true;
                 }
             }
@@ -73,40 +76,19 @@ protected:
                               << " (orig=" << B_original.at(row, col, batch_idx) << ")" << std::endl;
                 }
             }
-            return false;
+            return ::testing::AssertionFailure() << "trsm left B unchanged";
         }
-        
-        bool allMatch = true;
-        for (int i = 0; i < rows; ++i) {
-            for (int j = 0; j < cols; ++j) {
-                ScalarType expected = B_original.at(i, j, batch_idx);
-                ScalarType calculated = static_cast<ScalarType>(0.0);
-                
-                for (int k = 0; k < cols; ++k) {
-                    int a_row = (trans == Transpose::NoTrans) ? i : k;
-                    int a_col = (trans == Transpose::NoTrans) ? k : i;
-                    calculated += A.at(a_row, a_col, batch_idx) * B.at(k, j, batch_idx);
-                }
-                
-                auto tolerance = test_utils::tolerance<ScalarType>();
-                if (std::abs(calculated - expected) > tolerance) {
-                    if (trace_enabled) {
-                        std::cerr << "TRSM TRACE: mismatch at (i=" << i << ", j=" << j << ") batch=" << batch_idx
-                                  << " (trans=" << static_cast<int>(trans) << ")\n"
-                                  << "  expected=" << expected << "\n"
-                                  << "  calculated=" << calculated << "\n"
-                                  << "  |diff|=" << std::abs(calculated - expected) << " tol=" << tolerance
-                                  << std::endl;
-                    }
-                    allMatch = false;
-                    break;
-                }
-            }
-            if (!allMatch) break;
-        }
-        return allMatch;
+
+        // op(A) X = alpha B0, normwise (Check::solve, n = the order of A); B holds X.
+        const int item = batch_idx;
+        const double res = batchlas::verify::trsm_residual(A, Side::Left, uplo, trans, Diag::NonUnit, B, B_original,
+                                                           batchlas::verify::up(alpha), std::span<const int>(&item, 1));
+        if (trace_enabled)
+            std::cerr << "TRSM TRACE: residual " << res << " bound " << batchlas::verify::bound<ScalarType>(batchlas::verify::Check::solve, rows)
+                      << " for batch " << batch_idx << " (trans=" << static_cast<int>(trans) << ")" << std::endl;
+        return test_utils::verify_pass<ScalarType>(batchlas::verify::Check::solve, rows, res);
     }
-    
+
     void performTrsmTest(Uplo uplo, Transpose trans, int test_batch_size = 1) {
         Matrix<ScalarType, MatrixFormat::Dense> A_matrix(rows, rows, test_batch_size);
         Matrix<ScalarType, MatrixFormat::Dense> B_matrix(rows, cols, test_batch_size);
@@ -181,7 +163,7 @@ protected:
         auto B_view = B_matrix.view();
         auto B_original_view = B_original.view();
         for (int b = 0; b < test_batch_size; ++b) {
-            EXPECT_TRUE(verifyTrsmResult(A_view, B_view, B_original_view, b, trans))
+            EXPECT_TRUE(verifyTrsmResult(A_view, B_view, B_original_view, b, uplo, trans))
                 << "TRSM solution verification failed for batch " << b;
         }
     }
@@ -229,17 +211,6 @@ TYPED_TEST(TrsmOperationsTest, BatchedUpperTriangularSolveTrans) {
 // evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
 // ===========================================================================
 namespace {
-
-// Also compiles for real T: the float and double drivers below would reject a
-// bare std::conj.
-template <typename T>
-inline T host_conj(const T& v) {
-    if constexpr (batchlas::is_std_complex_v<T>) {
-        return std::conj(v);
-    } else {
-        return v;
-    }
-}
 
 // Must stay non-real, non-symmetric and non-Hermitian: a real-valued complex
 // triangle hides a missing conjugation, a symmetric or Hermitian one hides a
@@ -319,51 +290,15 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    // A real accumulator would drop the imaginary part and pass on wrong answers.
-    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
-    // float_t<T>, not T: is_same_v<T,float> is false for std::complex<float>,
-    // which would judge a single-precision solve at the double tolerance.
-    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 2e-3 : 1e-10;
-
-    for (int b = 0; b < bs; ++b) {
-        std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
-        for (int c = 0; c < n; ++c) {
-            for (int r = 0; r < n; ++r) {
-                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
-                if (!in_tri) continue;
-                T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
-                if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                // Built from the definition, so it cannot share the kernel's fold error.
-                if (tc.transA == Transpose::NoTrans) {
-                    opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
-                } else {
-                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] =
-                        (tc.transA == Transpose::ConjTrans) ? host_conj<T>(v) : v;
-                }
-            }
-        }
-        for (int r = 0; r < brows; ++r) {
-            for (int c = 0; c < bcols; ++c) {
-                Acc got = Acc(0);
-                for (int t = 0; t < n; ++t) {
-                    // Left : (op(A) X)(r,c) = sum_t opA(r,t) * X(t,c)
-                    // Right: (X op(A))(r,c) = sum_t X(r,t) * opA(t,c)
-                    got += (tc.side == Side::Left)
-                               ? Acc(opA[static_cast<size_t>(r) + static_cast<size_t>(t) * n]) *
-                                     Acc(Bv.at(t, c, b))
-                               : Acc(Bv.at(r, t, b)) *
-                                     Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
-                }
-                const Acc want =
-                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
-                ASSERT_LE(std::abs(got - want), tol)
-                    << (tc.side == Side::Left ? "op(A)*X != alpha*B at b=" : "X*op(A) != alpha*B at b=") << b << " r=" << r << " c=" << c
-                    << "  n=" << n << " q=" << q
-                    << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
-                    << " diag=" << int(tc.diag);
-            }
-        }
-    }
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const MV A0(a_host.data(), n, n, n, n * n, bs);
+    const MV B0(b_in.data(), brows, bcols, brows, brows * bcols, bs);
+    const double res = batchlas::verify::trsm_residual(A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0,
+                                                       batchlas::verify::up(tc.alpha));
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
+        << "residual " << res << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n)
+        << "  n=" << n << " q=" << q << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
+        << " transA=" << int(tc.transA) << " diag=" << int(tc.diag);
 }
 
 }  // namespace
@@ -483,41 +418,14 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
            ComputePrecision p) { return gemm<Backend::CUDA, T>(c, ga, gb, gc, al, be, ta, tb, p); });
     ctx->wait();
 
-    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
-    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 5e-3 : 1e-9;
-    for (int b = 0; b < bs; ++b) {
-        std::vector<T> opA(static_cast<size_t>(n) * n, T(0));
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < n; ++r) {
-                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r >= c) : (r <= c);
-                if (!in_tri) continue;
-                T v = a_host[(static_cast<size_t>(b) * n + c) * n + r];
-                if (tc.diag == Diag::Unit && r == c) v = static_cast<T>(1);
-                if (tc.transA == Transpose::NoTrans) {
-                    opA[static_cast<size_t>(r) + static_cast<size_t>(c) * n] = v;
-                } else {
-                    opA[static_cast<size_t>(c) + static_cast<size_t>(r) * n] =
-                        (tc.transA == Transpose::ConjTrans) ? host_conj<T>(v) : v;
-                }
-            }
-        for (int r = 0; r < brows; ++r)
-            for (int c = 0; c < bcols; ++c) {
-                Acc got = Acc(0);
-                for (int t = 0; t < n; ++t)
-                    got += (tc.side == Side::Left)
-                               ? Acc(opA[static_cast<size_t>(r) + static_cast<size_t>(t) * n]) *
-                                     Acc(Bv.at(t, c, b))
-                               : Acc(Bv.at(r, t, b)) *
-                                     Acc(opA[static_cast<size_t>(t) + static_cast<size_t>(c) * n]);
-                const Acc want =
-                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * bcols + c) * brows + r]);
-                ASSERT_LE(std::abs(got - want), tol)
-                    << "blocked: b=" << b << " r=" << r << " c=" << c << " n=" << n
-                    << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
-                    << " transA=" << int(tc.transA) << " diag=" << int(tc.diag)
-                    << " |alpha|=" << std::abs(tc.alpha);
-            }
-    }
+    const MV A0(a_host.data(), n, n, n, n * n, bs);
+    const MV B0(b_in.data(), brows, bcols, brows, brows * bcols, bs);
+    const double res = batchlas::verify::trsm_residual(A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0,
+                                                       batchlas::verify::up(tc.alpha));
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
+        << "blocked: residual " << res << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n)
+        << "  n=" << n << " q=" << q << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
+        << " transA=" << int(tc.transA) << " diag=" << int(tc.diag);
 }
 }  // namespace
 
@@ -865,36 +773,14 @@ std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
     }
     if (!check) return x;
 
-    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
-    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 2e-3 : 1e-10;
-    for (int b = 0; b < bs; ++b) {
-        auto opA = [&](int r, int c) -> Acc {
-            const int sr = (tc.transA == Transpose::NoTrans) ? r : c;
-            const int sc = (tc.transA == Transpose::NoTrans) ? c : r;
-            const bool in_tri = (tc.uplo == Uplo::Lower) ? (sr >= sc) : (sr <= sc);
-            if (!in_tri) return Acc(0);
-            T v = (sr == sc && tc.diag == Diag::Unit)
-                      ? T(1)
-                      : a_host[static_cast<size_t>(b) * sa + sc * lda + sr];
-            if (tc.transA == Transpose::ConjTrans) v = host_conj<T>(v);
-            return Acc(v);
-        };
-        for (int r = 0; r < n; ++r)
-            for (int c = 0; c < q; ++c) {
-                Acc got = Acc(0);
-                for (int t = 0; t < n; ++t)
-                    got += opA(r, t) * Acc(x[(static_cast<size_t>(b) * q + c) * n + t]);
-                const Acc want =
-                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * q + c) * n + r]);
-                if (std::abs(got - want) > tol) {
-                    ADD_FAILURE() << "sg-left b=" << b << " r=" << r << " c=" << c << " n=" << n
-                                  << " q=" << q << " uplo=" << int(tc.uplo)
-                                  << " transA=" << int(tc.transA) << " diag=" << int(tc.diag)
-                                  << " err=" << std::abs(got - want);
-                    return x;
-                }
-            }
-    }
+    const MatrixView<T, MatrixFormat::Dense> A0(const_cast<T*>(a_host.data()), n, n, lda, sa, bs);
+    const MatrixView<T, MatrixFormat::Dense> B0(b_in.data(), n, q, n, n * q, bs);
+    const double res = batchlas::verify::trsm_residual(A0, Side::Left, tc.uplo, tc.transA, tc.diag, Bv, B0,
+                                                       batchlas::verify::up(tc.alpha));
+    if (!batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
+        ADD_FAILURE() << "sg-left n=" << n << " q=" << q << " uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
+                      << " diag=" << int(tc.diag) << " residual=" << res << " exceeds "
+                      << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n);
     return x;
 }
 
@@ -1051,17 +937,25 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
         (void)backend::trsm_vendor<Backend::CUDA, T>(*ctx, A.view(), B.view(), Side::Left, Uplo::Lower,
                                                      Transpose::NoTrans, Diag::NonUnit, T(1));
         ctx->wait();
-        for (int b : {0, bs - 1}) {
-            const T* x = B.view().data_ptr() + static_cast<std::size_t>(n) * b;
-            double num = 0, den = 0;
-            for (int i = 0; i < n; ++i) {
-                std::complex<double> s = 0;
-                for (int k = 0; k <= i; ++k)
-                    s += std::complex<double>(a0[i + static_cast<std::size_t>(k) * n]) * std::complex<double>(x[k]);
-                num += std::norm(s - std::complex<double>(b0[i]));
-                den += std::norm(std::complex<double>(b0[i]));
-            }
-            EXPECT_LT(std::sqrt(num / den), 1e-5) << "item " << b;
+        // Only items 0 and bs - 1 hold a system; B0 repeats b0 so that both read the same right-hand side.
+        std::vector<T> b0_all(static_cast<std::size_t>(n) * bs);
+        for (int b = 0; b < bs; ++b) std::copy(b0.begin(), b0.end(), b0_all.begin() + static_cast<std::size_t>(n) * b);
+        const MatrixView<T, MatrixFormat::Dense> B0(b0_all.data(), n, 1, n, n, bs);
+        const std::vector<int> items{0, bs - 1};
+        // Keeps the old ||AX - B|| / ||B|| < 1e-5: the library normalizes by ||A|| ||X|| + ||B|| instead, so the
+        // factor is 1e-5 ||B|| / (bound (||A|| ||X|| + ||B||)), the worst over the checked items (A is the lower triangle).
+        std::vector<T> a_lower(a0);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < j; ++i) a_lower[i + static_cast<std::size_t>(j) * n] = T(0);
+        const double a_norm = batchlas::verify::frobenius(batchlas::verify::view(a_lower.data(), n, n, n), 0);
+        double factor = 1.0;
+        for (int b : items) {
+            const double bn = batchlas::verify::frobenius(B0, b), xn = batchlas::verify::frobenius(B.view(), b);
+            factor = std::min(factor, 1e-5 * bn / (batchlas::verify::bound<T>(batchlas::verify::Check::solve, n) * (a_norm * xn + bn)));
         }
+        EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::solve, n,
+                            batchlas::verify::trsm_residual(A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, B.view(), B0,
+                                                            batchlas::verify::up(T(1)), items),
+                            (batchlas::verify::Slack{factor, "the old ||AX-B||/||B|| < 1e-5"}));
     }
 }

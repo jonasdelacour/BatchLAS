@@ -10,6 +10,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -24,127 +25,6 @@ using namespace batchlas;
 
 namespace {
 
-template <typename Real>
-Real tol_eig_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(2e-3f);
-	return Real(5e-10);
-}
-
-template <typename Real>
-Real tol_ortho_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(5e-3f);
-	return Real(5e-10);
-}
-
-template <typename Real>
-Real tol_resid_for() {
-	if constexpr (std::is_same_v<Real, float>) return Real(2e-2f);
-	return Real(5e-9);
-}
-
-template <typename Scalar, Backend B>
-typename base_type<Scalar>::type blocked_cuda_tolerance_floor_eig() {
-	using Real = typename base_type<Scalar>::type;
-	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
-		return Real(1e-8);
-	}
-	return Real(0);
-}
-
-template <typename Scalar, Backend B>
-typename base_type<Scalar>::type blocked_cuda_tolerance_floor_ortho() {
-	using Real = typename base_type<Scalar>::type;
-	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
-		return Real(3e-8);
-	}
-	return Real(0);
-}
-
-template <typename Scalar, Backend B>
-typename base_type<Scalar>::type blocked_cuda_tolerance_floor_resid() {
-	using Real = typename base_type<Scalar>::type;
-	if constexpr (B == Backend::CUDA && std::is_same_v<Real, double>) {
-		return Real(1e-7);
-	}
-	return Real(0);
-}
-
-template <typename Scalar>
-using RealOf = typename base_type<Scalar>::type;
-
-template <typename Scalar>
-inline constexpr bool is_complex_scalar_v =
-    std::is_same_v<std::remove_cv_t<std::remove_reference_t<Scalar>>, std::complex<RealOf<Scalar>>>;
-
-template <typename Scalar>
-static RealOf<Scalar> abs_val(const Scalar& x) {
-	using Real = RealOf<Scalar>;
-	return static_cast<Real>(std::abs(x));
-}
-
-template <typename Scalar>
-static Scalar conj_val(const Scalar& x) {
-	if constexpr (is_complex_scalar_v<Scalar>) {
-		return std::conj(x);
-	} else {
-		return x;
-	}
-}
-
-template <typename Scalar>
-static void check_orthonormal_columns(const MatrixView<Scalar, MatrixFormat::Dense>& V,
-										  const UnifiedVector<RealOf<Scalar>>& W,
-										  RealOf<Scalar> tol) {
-	using Real = RealOf<Scalar>;
-	const int n = V.rows();
-
-	// Check V^H V ~= I
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			Scalar dot = Scalar(0);
-			for (int k = 0; k < n; ++k) {
-				dot += conj_val(V(k, i)) * V(k, j);
-			}
-			const Scalar expected = (i == j) ? Scalar(1) : Scalar(0);
-			EXPECT_LE(abs_val(dot - expected), tol) << "(i,j)= (" << i << "," << j << ")";
-		}
-	}
-
-	(void)W;
-}
-
-template <typename Scalar>
-static void check_eigen_residual(const MatrixView<Scalar, MatrixFormat::Dense>& A0,
-									const MatrixView<Scalar, MatrixFormat::Dense>& V,
-									const UnifiedVector<RealOf<Scalar>>& W,
-									RealOf<Scalar> tol) {
-	using Real = RealOf<Scalar>;
-	const int n = A0.rows();
-
-	// For each eigenpair: ||A*v - w*v|| / ||A||
-	Real normA = Real(0);
-	for (int c = 0; c < n; ++c) {
-		for (int r = 0; r < n; ++r) {
-			normA = std::max(normA, abs_val(A0(r, c)));
-		}
-	}
-	if (normA == Real(0)) normA = Real(1);
-
-	for (int j = 0; j < n; ++j) {
-		const Real w = W[j];
-		Real max_res = Real(0);
-		for (int i = 0; i < n; ++i) {
-			Scalar avi = Scalar(0);
-			for (int k = 0; k < n; ++k) {
-				avi += A0(i, k) * V(k, j);
-			}
-			const Scalar r = avi - Scalar(w) * V(i, j);
-			max_res = std::max(max_res, abs_val(r));
-		}
-		EXPECT_LE(max_res / normA, tol) << "eigenvector col=" << j;
-	}
-}
-
 template <typename T, Backend B>
 struct SyevBlockedConfig {
 	using ScalarType = T;
@@ -153,8 +33,6 @@ struct SyevBlockedConfig {
 
 } // namespace
 
-#include "test_utils.hh"
-#include "../src/ops/syev/vendor.hh"
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
 template <typename Config>
@@ -182,35 +60,8 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 		Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 123);
 		Matrix<Scalar, MatrixFormat::Dense> A_blk = A0;
-		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 		auto W_blk = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-
-		// Reference: the VENDOR solver for this backend, called directly.
-		//
-		// Not the queue-dispatching syev(): on the CUDA fixture its table
-		// (tuned/syev.<dtype>.<device>.txt) sends
-		// (NoEigenVectors && 32 < n <= 320) straight to blocked -- so the
-		// n = 96 and n = 320 arms would compare syev_blocked against itself and
-		// could not fail. Checked by injection: flipping bp.order to Descending
-		// in syev_blocked.cc, or making stebz drop every slot >= local_size,
-		// left both arms green. n = 320 is the only shape here that exercises
-		// stebz's wg-clamped strided slot loop (wg = min(256, max_wanted)), so
-		// that gap was precisely the one this test was widened to close.
-		{
-			auto ws_ref = UnifiedVector<std::byte>(batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, Scalar>(*this->ctx,
-																A_ref.view(),
-																W_ref.to_span(),
-																JobType::NoEigenVectors,
-																Uplo::Lower));
-			batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Scalar>(*this->ctx,
-							A_ref.view(),
-							W_ref.to_span(),
-							JobType::NoEigenVectors,
-							Uplo::Lower,
-							ws_ref.to_span()).wait();
-		}
 
 		// Blocked pipeline
 		{
@@ -230,14 +81,13 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 							params).wait();
 		}
 
-		// Element-by-element, so this doubles as the ordering test: stebz must
-		// return the same ascending order stedc did.
-		const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
-		for (int j = 0; j < batch; ++j) {
-			for (int i = 0; i < n; ++i) {
-				EXPECT_NEAR(W_blk[i + j * n], W_ref[i + j * n], tol) << "(i,b)= (" << i << "," << j << ")";
-			}
-		}
+		// LAPACKE, never the queue-dispatching syev(): its table sends jobz=N, 32 < n <= 320 to
+		// blocked, so it would compare syev_blocked with itself. n = 320 alone reaches stebz's
+		// wg-clamped strided slot loop. Element-by-element: this is also the ordering test.
+		// float n = 320: the kind's 32 n u ||A||_2 (||A||_2 ~ 20) is 6x the old 2e-3 absolute.
+		std::optional<verify::Slack> slack;
+		if (std::is_same_v<Real, float> && n == 320) slack = verify::Slack{0.25, "old float bound 2e-3 absolute, ||A||_2 ~ 20 at n = 320"};
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n, false, verify::all_items(batch), slack);
 	}
 }
 
@@ -251,20 +101,8 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 
 	Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 456);
 	Matrix<Scalar, MatrixFormat::Dense> A_blk = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
 
 	auto W_blk = UnifiedVector<Real>(static_cast<std::size_t>(n));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n));
-
-	// Reference eigenvalues (CPU LAPACKE)
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-															A_ref.view(),
-															W_ref.to_span(),
-															JobType::EigenVectors,
-															Uplo::Lower));
-		syev(*this->ctx, A_ref.view(), W_ref.to_span(), {}, ws_ref.to_span()).wait();
-	}
 
 	{
 		StedcParams<Real> params;
@@ -283,13 +121,8 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 						params).wait();
 	}
 
-	const Real tol_w = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
-	for (int i = 0; i < n; ++i) {
-		EXPECT_NEAR(W_blk[i], W_ref[i], tol_w);
-	}
-
-	check_orthonormal_columns(A_blk.view(), W_blk, std::max(tol_ortho_for<Real>(), blocked_cuda_tolerance_floor_ortho<Scalar, B>()));
-	check_eigen_residual(A0.view(), A_blk.view(), W_blk, std::max(tol_resid_for<Real>(), blocked_cuda_tolerance_floor_resid<Scalar, B>()));
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n);
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_blk.view(), W_blk, n);
 }
 
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
@@ -362,10 +195,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 		EXPECT_TRUE(std::isfinite(W_two_stage[i])) << "non-finite eigenvalue at i=" << i;
 	}
 
-	const Real ortho_tol = std::max(tol_ortho_for<Real>(), Real(1e-7));
-	const Real resid_tol = std::max(tol_resid_for<Real>(), Real(1e-7));
-	check_orthonormal_columns(A_two_stage.view(), W_two_stage, ortho_tol);
-	check_eigen_residual(A0.view(), A_two_stage.view(), W_two_stage, resid_tol);
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_two_stage.view(), W_two_stage, n);
 }
 // n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
 // sytrd_block_size_default<T> now returns a different panel width for complex
@@ -413,18 +243,12 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 	// Eigenvalues of a symmetric/Hermitian matrix are real and ascending.
 	for (int b = 0; b < batch; ++b) {
 		for (int i = 1; i < n; ++i) {
-			EXPECT_LE(W[b * n + i - 1], W[b * n + i] + tol_eig_for<Real>())
+			EXPECT_LE(W[b * n + i - 1], W[b * n + i])
 				<< "eigenvalues not ascending at b=" << b << " i=" << i;
 		}
 	}
 
-	const Real ortho_tol = std::max(tol_ortho_for<Real>(),
-									blocked_cuda_tolerance_floor_ortho<Scalar, TestFixture::BackendType>());
-	const Real resid_tol = std::max(tol_resid_for<Real>(),
-									blocked_cuda_tolerance_floor_resid<Scalar, TestFixture::BackendType>());
-
-	check_orthonormal_columns(A.view(), W, ortho_tol);
-	check_eigen_residual(A0.view(), A.view(), W, resid_tol);
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
 }
 
 // The n <= 32 range, where Auto picks among the three CTA kernels rather than a
@@ -462,16 +286,11 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 			ASSERT_TRUE(std::isfinite(W[i])) << "non-finite eigenvalue, n=" << n << " i=" << i;
 		}
 		for (int i = 1; i < n; ++i) {
-			EXPECT_LE(W[i - 1], W[i] + tol_eig_for<Real>())
+			EXPECT_LE(W[i - 1], W[i])
 				<< "eigenvalues not ascending, n=" << n << " i=" << i;
 		}
 
-		const Real ortho_tol = std::max(tol_ortho_for<Real>(),
-										blocked_cuda_tolerance_floor_ortho<Scalar, TestFixture::BackendType>());
-		const Real resid_tol = std::max(tol_resid_for<Real>(),
-										blocked_cuda_tolerance_floor_resid<Scalar, TestFixture::BackendType>());
-		check_orthonormal_columns(A.view(), W, ortho_tol);
-		check_eigen_residual(A0.view(), A.view(), W, resid_tol);
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
 	}
 }
 #endif
@@ -495,6 +314,35 @@ int main(int argc, char** argv) {
 // strictly-lower entries are overwritten with garbage after the reference is taken from the
 // upper triangle, so a solver that reads the lower triangle without mirroring gets the wrong
 // answer.
+// A0 with its strictly-lower triangle replaced by the conjugate mirror of the upper one: the
+// Hermitian matrix an Uplo::Upper solve of A0 must see, as LAPACKE's reference reads it.
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFormat::Dense>& A0) {
+	Matrix<Scalar, MatrixFormat::Dense> M = A0;
+	const int n = M.view().rows();
+	const int ld = static_cast<int>(M.view().ld());
+	for (int b = 0; b < M.view().batch_size(); ++b) {
+		Scalar* Mb = M.view().data().data() + static_cast<std::size_t>(b) * M.view().stride();
+		for (int c = 0; c < n; ++c)
+			for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = verify::conj(Mb[c + r * ld]);
+	}
+	return M;
+}
+
+// max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE.
+template <typename Scalar>
+double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B) {
+	double gap = 0;
+	for (int b = 0; b < A.batch_size(); ++b) {
+		auto a = verify::copy_item(A, b);
+		auto c = verify::copy_item(B, b);
+		std::vector<double> wa, wc;
+		if (!verify::eigenvalues(A.rows(), a, wa) || !verify::eigenvalues(B.rows(), c, wc)) return std::numeric_limits<double>::quiet_NaN();
+		for (std::size_t i = 0; i < wa.size(); ++i) gap = verify::nanmax(gap, std::fabs(wa[i] - wc[i]));
+	}
+	return gap;
+}
+
 TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
@@ -518,39 +366,17 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 	}
 
 	Matrix<Scalar, MatrixFormat::Dense> A_ours = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
-
+	const auto A_sym = upper_mirrored(A0);
 	auto W_ours = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-	auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-
-	// Reference: CPU LAPACKE, reading the UPPER triangle.
-	{
-		auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
-			*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Upper));
-		syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(),
-							  JobType::NoEigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
-	}
 
 	// PROVE THE FIXTURE HAS TEETH. If the poisoning above did not take effect the matrix is
 	// still symmetric, Upper and Lower are interchangeable, and this test would pass even if
-	// the mirror never ran. Solve the SAME matrix reading the LOWER triangle and require a
-	// different spectrum -- that is what makes the Upper comparison below meaningful.
-	{
-		Matrix<Scalar, MatrixFormat::Dense> A_lo = A0;
-		auto W_lo = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-		auto ws_lo = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
-			*this->ctx, A_lo.view(), W_lo.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-		syev<Backend::NETLIB>(*this->ctx, A_lo.view(), W_lo.to_span(),
-							  JobType::NoEigenVectors, Uplo::Lower, ws_lo.to_span()).wait();
-		Real max_gap = Real(0);
-		for (int j = 0; j < batch; ++j) {
-			for (int i = 0; i < n; ++i) {
-				max_gap = std::max(max_gap, std::abs(W_lo[i + j * n] - W_ref[i + j * n]));
-			}
-		}
-		ASSERT_GT(max_gap, Real(1))
-			<< "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
-	}
+	// the mirror never ran. The spectrum read from the LOWER triangle must differ from the
+	// Upper one (LAPACKE on both) -- that is what makes the Upper comparison below meaningful.
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
+	ASSERT_GT(lapacke_spectrum_gap(A0.view(), A_sym.view()), 1.0)
+		<< "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
+#endif
 
 	// Ours: blocked path with Uplo::Upper, which must mirror before reducing.
 	{
@@ -562,13 +388,7 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 								JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 	}
 
-	const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
-	for (int j = 0; j < batch; ++j) {
-		for (int i = 0; i < n; ++i) {
-			EXPECT_NEAR(W_ours[i + j * n], W_ref[i + j * n], tol)
-				<< "(i,b)= (" << i << "," << j << ")";
-		}
-	}
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, verify::all_items(batch));
 }
 
 // Same, through the two-stage provider, which has its own mirror call site.
@@ -596,16 +416,9 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 		}
 
 		Matrix<Scalar, MatrixFormat::Dense> A_ours = A0;
-		Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+		const auto A_sym = upper_mirrored(A0);
 		auto W_ours = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-		auto W_ref = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-		{
-			auto ws_ref = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
-				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Upper));
-			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(),
-								  JobType::NoEigenVectors, Uplo::Upper, ws_ref.to_span()).wait();
-		}
 		{
 			StedcParams<Real> params;
 			auto ws = UnifiedVector<std::byte>(syev_two_stage_buffer_size<B, Scalar>(
@@ -614,12 +427,6 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 									  JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 		}
 
-		const Real tol = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>());
-		for (int j = 0; j < batch; ++j) {
-			for (int i = 0; i < n; ++i) {
-				EXPECT_NEAR(W_ours[i + j * n], W_ref[i + j * n], tol)
-					<< "(i,b)= (" << i << "," << j << ")";
-			}
-		}
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, verify::all_items(batch));
 	}
 }

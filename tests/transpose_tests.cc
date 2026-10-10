@@ -4,6 +4,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
 
@@ -14,10 +15,6 @@ protected:
         ctx = std::make_shared<Queue>(Device::default_device());
     }
     std::shared_ptr<Queue> ctx;
-
-    static auto tolerance() {
-        return test_utils::tolerance<T>();
-    }
 };
 
 using TestTypes = ::testing::Types<float, double>;
@@ -42,18 +39,17 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
     (void)gemm(*this->ctx, At.view(), A.view(), Prod.view(), {});
     this->ctx->wait();
 
-    auto prod_data = Prod.data();
-    int stride = Prod.stride();
-    T tol = TestFixture::tolerance();
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < k; ++i) {
-            for (int j = 0; j < k; ++j) {
-                T expected = (i == j) ? T(1) : T(0);
-                T val = prod_data[b * stride + j * Prod.ld() + i];
-                ASSERT_NEAR(val, expected, tol);
-            }
-        }
-    }
+    // Three facts make Prod the identity: the copy is exactly A^T, the gemm of the two is right, and
+    // A is orthonormal (SVQB orthogonalizes the given columns directly, so Check::orthogonality).
+    const auto items = batchlas::verify::all_items(batch_size);
+    EXPECT_VERIFY(T, batchlas::verify::Check::blas, m,
+                  batchlas::verify::gemm_backward_error(At.view(), batchlas::verify::Shape::general, Transpose::NoTrans, A.view(),
+                                                        batchlas::verify::Shape::general, Transpose::NoTrans, Prod.view(),
+                                                        Prod.view(), batchlas::verify::Shape::general, 1.0, 0.0, items));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, m, batchlas::verify::orthogonality(A.view(), items));
+    for (int b = 0; b < batch_size; ++b)
+        for (int i = 0; i < m; ++i)
+            for (int j = 0; j < k; ++j) ASSERT_EQ(At(j, i, b), A(i, j, b)) << "batch " << b << " (" << i << "," << j << ")";
 }
 
 TYPED_TEST(TransposeTest, SimpleTranspose) {
@@ -72,21 +68,10 @@ TYPED_TEST(TransposeTest, SimpleTranspose) {
     ASSERT_EQ(At.cols(), m);
     ASSERT_EQ(At.batch_size(), batch_size);
 
-    auto a_data = A.data();
-    auto at_data = At.data();
-    int a_stride = A.stride();
-    int at_stride = At.stride();
-    T tol = TestFixture::tolerance();
-
-    for (int b = 0; b < batch_size; ++b) {
-        for (int i = 0; i < m; ++i) {
-            for (int j = 0; j < k; ++j) {
-                T val_a = a_data[b * a_stride + j * A.ld() + i];
-                T val_at = at_data[b * at_stride + i * At.ld() + j];
-                ASSERT_NEAR(val_a, val_at, tol);
-            }
-        }
-    }
+    // A transpose moves values and does no arithmetic: every element is bit-identical.
+    for (int b = 0; b < batch_size; ++b)
+        for (int i = 0; i < m; ++i)
+            for (int j = 0; j < k; ++j) ASSERT_EQ(At(j, i, b), A(i, j, b)) << "batch " << b << " (" << i << "," << j << ")";
 }
 
 #endif // BATCHLAS_HAS_GPU_BACKEND

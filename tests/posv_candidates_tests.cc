@@ -15,6 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/getrs_native.hh"
 #include "../src/extensions/solve_native.hh"
@@ -54,21 +56,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -81,11 +68,11 @@ std::vector<T> make_hpd(int n, std::mt19937& gen) {
     std::uniform_real_distribution<R> d(R(0.1), R(1));
     std::vector<T> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = mk<T>(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const T v = verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = cj(v);
+            A[j + static_cast<size_t>(i) * n] = verify::make<T>(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -114,7 +101,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     Sys<T> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch, p.uplo = uplo;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = mk<T>(R(-999), R(777));
+    const T poison = verify::make<T>(R(-999), R(777));
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(batch, nullptr);
@@ -126,7 +113,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     for (int it = 0; it < batch; ++it) {
         p.full[it] = (identical && it > 0) ? p.full[0] : make_hpd<T>(n, gen);
         if (!identical || it == 0)
-            for (auto& v : rhs) v = mk<T>(d(gen), d(gen));
+            for (auto& v : rhs) v = verify::make<T>(d(gen), d(gen));
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 if (p.in_tri(i, j))
@@ -139,25 +126,12 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     return p;
 }
 
-// ||A X - B||_F / (||A||_F ||X||_F) in double.
+// ||A X - B||_F / (||A||_F ||X||_F) in double, A the whole Hermitian matrix of item it.
 template <typename T>
 double residual(const Sys<T>& p, int it) {
-    double num = 0, an = 0, xn = 0;
-    for (const T& e : p.full[it]) an += std::norm(up(e));
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const size_t col = size_t(it) * p.strb + size_t(k) * p.ldb;
-            xn += std::norm(up(p.b[col + i]));
-            std::complex<double> acc = -up(p.b0[col + i]);
-            for (int t = 0; t < p.n; ++t) acc += up(p.full[it][i + size_t(t) * p.n]) * up(p.b[col + t]);
-            num += std::norm(acc);
-        }
-    return (an == 0 || xn == 0) ? std::sqrt(num) : std::sqrt(num / (an * xn));
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    return verify::solve_residual(verify::view(p.full[it].data(), p.n, p.n, p.n),
+                                  verify::view(p.b.data() + size_t(it) * p.strb, p.n, p.nrhs, p.ldb),
+                                  verify::view(p.b0.data() + size_t(it) * p.strb, p.n, p.nrhs, p.ldb));
 }
 
 // info, the residual of the first and last item, and every element the solve must not touch,
@@ -168,7 +142,7 @@ void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std:
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
     for (int it : {0, p.batch - 1}) {
         const double r = residual(p, it);
-        EXPECT_TRUE(std::isfinite(r) && r <= tol<T>(p.n)) << what << " item " << it << " residual " << r;
+        EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " item " << it << " residual " << r;
     }
     for (size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stra), i = r % p.lda, j = r / p.lda;
@@ -547,8 +521,8 @@ TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 4 : -3), R(0));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = verify::make<T>(R(i == j ? 4 : -3), R(0));
+    Bm.fill(verify::make<T>(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());

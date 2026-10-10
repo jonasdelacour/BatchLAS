@@ -1,6 +1,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
 #include "accuracy_utils.hh"
+#include <batchlas/verify/reference.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "../src/queue.hh"
@@ -115,22 +116,34 @@ Options parse_args(int argc, char** argv) {
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
-template <typename OutType, typename InType>
-UnifiedVector<OutType> netlib_ref_eigs(const MatrixView<InType, MatrixFormat::Dense>& A) {
+// The netlib_syev32 arm (measured, not the reference): LAPACKE_ssyev in float per item, what the
+// NETLIB backend's syev calls.
+UnifiedVector<float> lapacke_ssyev_eigs(const MatrixView<float, MatrixFormat::Dense>& A) {
     const int n = A.rows();
     const int batch = A.batch_size();
-    Queue ctx_cpu("cpu");
-    auto A_conv = A.template astype<OutType>();
-    UnifiedVector<OutType> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-    UnifiedVector<std::byte> ws(
-        syev_buffer_size<Backend::NETLIB, OutType>(ctx_cpu, A_conv.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev<Backend::NETLIB>(ctx_cpu,
-                                   A_conv.view(),
-                                   ref_eigs.to_span(),
-                                   {.jobz = JobType::NoEigenVectors},
-                                   ws.to_span()).wait();
-    ctx_cpu.wait();
-    return ref_eigs;
+    UnifiedVector<float> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    for (int b = 0; b < batch; ++b) {
+        auto a = batchlas::verify::copy_item_native(A, b);
+        const lapack_int info = LAPACKE_ssyev(LAPACK_COL_MAJOR, 'N', 'L', n, a.data(), n, out.data() + static_cast<std::size_t>(b) * n);
+        if (info != 0)
+            for (int i = 0; i < n; ++i) out[static_cast<std::size_t>(i + b * n)] = std::numeric_limits<float>::quiet_NaN();
+    }
+    return out;
+}
+
+template <typename InType>
+UnifiedVector<double> lapacke_ref_eigs(const MatrixView<InType, MatrixFormat::Dense>& A) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    UnifiedVector<double> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
+    for (int b = 0; b < batch; ++b) {
+        auto a_host = batchlas::verify::copy_item(A, b);
+        std::vector<double> w;
+        const bool ok = batchlas::verify::eigenvalues(n, a_host, w);
+        for (int i = 0; i < n; ++i)
+            out[static_cast<std::size_t>(i + b * n)] = ok ? w[static_cast<std::size_t>(i)] : std::numeric_limits<double>::quiet_NaN();
+    }
+    return out;
 }
 
 template <typename Real>
@@ -343,11 +356,11 @@ int run_accuracy(const Options& opt) {
         if (run_netlib_sterf) call_lapack_variant(eigs_netlib_sterf, "LAPACKE_xsterf", call_lapack_sterf<Real>);
         if (run_netlib_stedc) call_lapack_variant(eigs_netlib_stedc, "LAPACKE_xstedc", call_lapack_stedc<Real>);
 
-        const auto ref_eigs = netlib_ref_eigs<double>(dense_A.view());
-        UnifiedVector<float> ref_eigs_f;
+        const auto ref_eigs = lapacke_ref_eigs(dense_A.view());
+        UnifiedVector<float> eigs_ssyev32;
         if constexpr (std::is_same_v<Real, float>) {
             if (run_netlib32) {
-                ref_eigs_f = netlib_ref_eigs<float>(dense_A.view());
+                eigs_ssyev32 = lapacke_ssyev_eigs(dense_A.view());
             }
         }
         const auto conds = cond<B>(*q, dense_A.view(), NormType::Spectral);
@@ -417,7 +430,7 @@ int run_accuracy(const Options& opt) {
             }
             if constexpr (std::is_same_v<Real, float>) {
                 if (run_netlib32) {
-                    VectorView<float> eigs32(ref_eigs_f.to_span(), /*size=*/n, /*batch_size=*/cur_batch, /*inc=*/1, /*stride=*/n);
+                    VectorView<float> eigs32(eigs_ssyev32.to_span(), /*size=*/n, /*batch_size=*/cur_batch, /*inc=*/1, /*stride=*/n);
                     write_row(eigs32, "netlib_syev32");
                 }
             }

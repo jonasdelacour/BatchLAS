@@ -17,6 +17,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/ormqr/choice.hh"
 
@@ -52,16 +54,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-T mk(double r, double i) {
-    if constexpr (kCx<T>) return T(RealOf<T>(r), RealOf<T>(i));
-    else return T(r);
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -117,8 +109,8 @@ Apply<T> make_apply(const Spec& s) {
     p.a = {0, s.m, s.k, s.m + 3, (s.m + 3) * s.k + 5};
     const int cr = s.side == Side::Left ? s.m : s.q, cc = s.side == Side::Left ? s.q : s.m;
     p.c = {std::size_t(p.a.stride) * s.batch + 11, cr, cc, cr + 2, (cr + 2) * cc + 7};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, mk<T>(-999, 777));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, mk<T>(0, 0));
+    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, verify::make<T>(-999, 777));
+    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, verify::make<T>(0, 0));
     p.aptr = UnifiedVector<T*>(s.batch, nullptr);
     p.cptr = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
@@ -134,65 +126,49 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                const T v = i > j ? mk<T>(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
-                                  : mk<T>(300, -200);
+                const T v = i > j ? verify::make<T>(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
+                                  : verify::make<T>(300, -200);
                 p.mem[p.ai(it, i, j)] = v;
-                if (i > j) norm2 += std::norm(up(v));
+                if (i > j) norm2 += std::norm(verify::up(v));
             }
             if (it != r) {
                 p.tau[std::size_t(it) * s.k + j] = p.tau[std::size_t(r) * s.k + j];
                 continue;
             }
             const cd t = (1.0 + std::polar(1.0, theta)) / norm2;
-            p.tau[std::size_t(it) * s.k + j] = mk<T>(t.real(), t.imag());
+            p.tau[std::size_t(it) * s.k + j] = verify::make<T>(t.real(), t.imag());
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
-                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : mk<T>(u(gen), u(gen));
+                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : verify::make<T>(u(gen), u(gen));
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }
 
-// op(Q) C or C op(Q) for one item, in double, from the stored reflectors and tau.
+// Q = H_0 ... H_{k-1} (m x m) of one item, formed by batchlas::verify from the stored reflectors and tau.
 template <typename T>
-std::vector<cd> reference(const Apply<T>& p, int it) {
+std::vector<verify::promoted_t<T>> reflector_q(const Apply<T>& p, int it) {
     const Spec& s = p.s;
-    const int m = s.m;
-    std::vector<cd> Q(std::size_t(m) * m, 0.0);
-    for (int i = 0; i < m; ++i) Q[i + std::size_t(i) * m] = 1.0;
-    for (int j = 0; j < s.k; ++j) {  // Q <- Q H_j
-        std::vector<cd> v(m, 0.0);
-        v[j] = 1.0;
-        for (int i = j + 1; i < m; ++i) v[i] = up(p.mem0[p.ai(it, i, j)]);
-        const cd tj = up(p.tau[std::size_t(it) * s.k + j]);
-        for (int r = 0; r < m; ++r) {
-            cd w = 0.0;
-            for (int i = 0; i < m; ++i) w += Q[r + std::size_t(i) * m] * v[i];
-            for (int i = 0; i < m; ++i) Q[r + std::size_t(i) * m] -= tj * w * std::conj(v[i]);
-        }
-    }
-    auto opq = [&](int i, int j) {
-        if (s.trans == Transpose::NoTrans) return Q[i + std::size_t(j) * m];
-        const cd x = Q[j + std::size_t(i) * m];
-        return s.trans == Transpose::ConjTrans ? std::conj(x) : x;
-    };
-    const int rows = p.c.rows, cols = p.c.cols;
-    std::vector<cd> X(std::size_t(rows) * cols, 0.0);
-    for (int j = 0; j < cols; ++j)
-        for (int i = 0; i < rows; ++i) {
-            cd acc = 0.0;
-            for (int t = 0; t < m; ++t)
-                acc += s.side == Side::Left ? opq(i, t) * up(p.mem0[p.ci(it, t, j)])
-                                            : up(p.mem0[p.ci(it, i, t)]) * opq(t, j);
-            X[i + std::size_t(j) * rows] = acc;
-        }
-    return X;
+    const auto F = verify::view(p.mem0.data() + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
+    return verify::form_q(F, VectorView<T>(const_cast<T*>(p.tau.data()), s.k, s.batch, 1, s.k), it, s.m);
 }
 
+// Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item.
 template <typename T>
-double tol(const Spec& s) {
-    return 64.0 * (s.m + s.k + 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+double apply_error(const Apply<T>& p, int it) {
+    const Spec& s = p.s;
+    using D = verify::promoted_t<T>;
+    auto Q = reflector_q(p, it);
+    const auto Qv = verify::view(Q.data(), s.m, s.m, s.m);
+    const auto C0 = verify::view(p.mem0.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
+    const auto C = verify::view(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
+    const int item[] = {0};
+    if (s.side == Side::Left)
+        return verify::gemm_backward_error(Qv, verify::Shape::general, s.trans, C0, verify::Shape::general, Transpose::NoTrans, C0, C,
+                                           verify::Shape::general, D(1), D(0), item);
+    return verify::gemm_backward_error(C0, verify::Shape::general, Transpose::NoTrans, Qv, verify::Shape::general, s.trans, C0, C,
+                                       verify::Shape::general, D(1), D(0), item);
 }
 
 // The checked items against the reference, every element outside C's footprint bit for bit,
@@ -205,15 +181,8 @@ void expect_applied(const Apply<T>& p, const std::string& what) {
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
-        const auto X = reference(p, it);
-        double err = 0, scale = 1;
-        for (int j = 0; j < p.c.cols; ++j)
-            for (int i = 0; i < p.c.rows; ++i) {
-                const cd x = X[i + std::size_t(j) * p.c.rows];
-                err = std::max(err, std::abs(up(p.mem[p.ci(it, i, j)]) - x));
-                scale = std::max(scale, std::abs(x));
-            }
-        ASSERT_TRUE(std::isfinite(err) && err / scale <= tol<T>(s)) << what << " item " << it << " error " << err / scale;
+        const double err = apply_error(p, it);
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
     }
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)

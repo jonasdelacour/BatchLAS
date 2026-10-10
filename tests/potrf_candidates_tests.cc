@@ -14,6 +14,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/ops/potrf/choice.hh"
@@ -49,26 +51,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
-RealOf<T> re(T v) {
-    if constexpr (kCx<T>) return v.real();
-    else return v;
-}
-template <typename T>
-RealOf<T> im(T v) {
-    if constexpr (kCx<T>) return v.imag();
-    else return RealOf<T>(0);
-}
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -83,19 +65,14 @@ std::vector<T> make_hpd(int n, unsigned seed) {
     std::uniform_real_distribution<R> d(R(0.1), R(1));
     std::vector<T> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = mk<T>(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const T v = verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = cj(v);
+            A[j + static_cast<size_t>(i) * n] = verify::make<T>(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
-}
-
-template <typename T>
-RealOf<T> tol(int n) {
-    return RealOf<T>(16) * RealOf<T>(std::max(n, 1)) * std::numeric_limits<RealOf<T>>::epsilon();
 }
 
 // One batch at a padded ld and a stride that is not ld*n. Everything outside the factored
@@ -128,7 +105,7 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
     p.uplo = uplo;
     p.ld = n + 3;
     p.stride = p.ld * n + 5;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, mk<T>(R(-999), R(777)));
+    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, verify::make<T>(R(-999), R(777)));
     p.ptrs = UnifiedVector<T*>(batch, nullptr);
     p.ref.resize(batch);
     for (int b = 0; b < batch; ++b) {
@@ -141,25 +118,11 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
     return p;
 }
 
-// ||L L^H - A||_F / ||A||_F over the lower triangle (A is Hermitian).
+// ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper) over the factored triangle.
 template <typename T>
-RealOf<T> residual(const Prob<T>& p, int b) {
-    using R = RealOf<T>;
-    const int n = p.n;
-    auto L = [&](int i, int j) -> T {
-        return p.uplo == Uplo::Lower ? p.buf[p.at(i, j, b)] : cj(p.buf[p.at(j, i, b)]);
-    };
-    R num = 0, den = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = j; i < n; ++i) {
-            T acc{};
-            for (int k = 0; k <= j; ++k) acc += L(i, k) * cj(L(j, k));
-            const T a = p.ref[b][i + static_cast<size_t>(j) * n];
-            const T d = acc - a;
-            num += re(d) * re(d) + im(d) * im(d);
-            den += re(a) * re(a) + im(a) * im(a);
-        }
-    return den == R(0) ? R(0) : std::sqrt(num / den);
+double residual(const Prob<T>& p, int b) {
+    return verify::potrf_residual(verify::view(p.ref[b].data(), p.n, p.n, p.n),
+                                  verify::view(p.buf.data() + static_cast<size_t>(b) * p.stride, p.n, p.n, p.ld), p.uplo);
 }
 
 // info, the residual of the first and last item, and every element the factor must not
@@ -168,7 +131,7 @@ template <typename T>
 void expect_factored(const Prob<T>& p, const std::vector<int32_t>& info, const std::string& what,
                      bool other_triangle_is_scratch = false) {
     for (int b = 0; b < p.batch; ++b) ASSERT_EQ(info[b], 0) << what << " b=" << b;
-    for (int b : {0, p.batch - 1}) EXPECT_LE(residual(p, b), tol<T>(p.n)) << what << " b=" << b;
+    for (int b : {0, p.batch - 1}) EXPECT_VERIFY(T, verify::Check::factorization, p.n, residual(p, b)) << what << " b=" << b;
     for (size_t e = 0; e < p.before.size(); ++e) {
         const int b = static_cast<int>(e / p.stride);
         const int r = static_cast<int>(e % p.stride);
@@ -490,7 +453,7 @@ TYPED_TEST(PotrfCandidates, CanRunEqualsLaunch) {
             Matrix<T, MatrixFormat::Dense> A(n, n, 4);
             A.fill(T{});
             for (int b = 0; b < 4; ++b)
-                for (int i = 0; i < n; ++i) A(i, i, b) = mk<T>(R(2), R(0));
+                for (int i = 0; i < n; ++i) A(i, i, b) = verify::make<T>(R(2), R(0));
             UnifiedVector<int> act(4);
             for (int b = 0; b < 4; ++b) act[b] = n - b;
             auto V = A.view().with_active_dims(act.to_span(), act.to_span());

@@ -3,6 +3,8 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
+#include <batchlas/verify/norms.hh>
+#include <batchlas/verify/residuals.hh>
 #include <complex>
 #include <vector>
 #include <iostream>
@@ -46,190 +48,51 @@ protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
 
-    // Helper to check for orthonormality: Q^T * Q = I or Q * Q^T = I
-    // For column orthonormality (transA = NoTrans), check Q^T * Q = I
-    // For row orthonormality (transA = Trans), check Q * Q^T = I
-    void check_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q_view, Transpose transQ, typename base_type<ScalarType>::type tolerance) {
-        int m = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols();
-        int k = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows();
-        int batch_size = Q_view.batch_size();
-
-        Matrix<ScalarType, MatrixFormat::Dense> I_expected = Matrix<ScalarType, MatrixFormat::Dense>::Identity(k, batch_size);
-        Matrix<ScalarType, MatrixFormat::Dense> Result_actual(k, k, batch_size);
-        auto I_expected_view = I_expected.view();
-        auto Result_actual_view = Result_actual.view();
-
-        // print_matrix(Q_view, "Q_view for check");
-
-        auto transp = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
-        if (transQ == Transpose::NoTrans) { // Columns are orthogonal, Q is m x k
-            // Result_actual = Q^T * Q
-            (void)gemm(*(this->ctx),
-                              Q_view,
-                              Q_view,
-                              Result_actual_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = transp});
-        } else { // Rows are orthogonal, Q is k x m
-            // Result_actual = Q * Q^T
-            (void)gemm(*(this->ctx),
-                              Q_view,
-                              Q_view,
-                              Result_actual_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transB = transp});
-        }
-        this->ctx->wait();
-        // print_matrix(Result_actual_view, "Result_actual (Q^T*Q or Q*Q^T)");
-        // print_matrix(I_expected_view, "I_expected");
-
-
-        auto res_data = Result_actual_view.data();
-        auto eye_data = I_expected_view.data();
-
-        for (int b = 0; b < batch_size; ++b) {
-            for (int i = 0; i < k; ++i) {
-                for (int j = 0; j < k; ++j) {
-                    ScalarType expected_val = (i == j) ? ScalarType(1.0) : ScalarType(0.0);
-                    // Indexing for Result_actual_view (k x k) and I_expected_view (k x k)
-                    // These are always k x k, ld = k, stride = k*k
-                    size_t idx = b * k * k + i * k + j;
-                    test_utils::assert_near(res_data[idx], expected_val, tolerance);
-                }
-            }
-        }
+    // The vectors of Q (its columns for NoTrans, its rows for Trans) as the columns of a host
+    // dim x count batch, conjugated for rows, so one orthogonality call checks either orientation.
+    static std::vector<ScalarType> vectors_of(const MatrixView<ScalarType, MatrixFormat::Dense>& Q, Transpose transQ, int& dim, int& count) {
+        dim = transQ == Transpose::NoTrans ? Q.rows() : Q.cols();
+        count = transQ == Transpose::NoTrans ? Q.cols() : Q.rows();
+        std::vector<ScalarType> out(static_cast<size_t>(dim) * count * Q.batch_size());
+        for (int b = 0; b < Q.batch_size(); ++b)
+            for (int v = 0; v < count; ++v)
+                for (int i = 0; i < dim; ++i)
+                    out[(static_cast<size_t>(b) * count + v) * dim + i] =
+                        transQ == Transpose::NoTrans ? Q(i, v, b) : verify::conj(Q(v, i, b));
+        return out;
     }
 
-    // Helper to check M-orthogonality: Q^T * M * Q = I
-    void check_M_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q_view,
-                                const MatrixView<ScalarType, MatrixFormat::Dense>& M_view,
-                                Transpose transQ, // Determines orientation of Q for M-orthogonality check
-                                typename base_type<ScalarType>::type tolerance) {
-        int m_q = transQ == Transpose::NoTrans ? Q_view.rows() : Q_view.cols(); // num_vectors in Q
-        int k_q = transQ == Transpose::NoTrans ? Q_view.cols() : Q_view.rows(); // dimension of vectors in Q
-
-        int m_m = M_view.rows();
-        int k_m = M_view.cols();
-        int batch_size = Q_view.batch_size();
-
-        ASSERT_EQ(batch_size, M_view.batch_size());
-
-        // We expect Q^T * M * Q = I (if transQ = NoTrans, Q is dim x num_vecs)
-        // or Q * M * Q^T = I (if transQ = Trans, Q is num_vecs x dim)
-        // The identity matrix will be k_q x k_q
-
-        Matrix<ScalarType, MatrixFormat::Dense> I_expected = Matrix<ScalarType, MatrixFormat::Dense>::Identity(k_q, batch_size);
-        Matrix<ScalarType, MatrixFormat::Dense> Temp_MQ(m_m, k_q, batch_size); // M*Q or M^T*Q
-        Matrix<ScalarType, MatrixFormat::Dense> Result_actual(k_q, k_q, batch_size);
-
-        auto I_expected_view = I_expected.view();
-        auto Temp_MQ_view = Temp_MQ.view();
-        auto Result_actual_view = Result_actual.view();
-
-        if (transQ == Transpose::NoTrans) { // Q is m x k_q (vectors are columns)
-            // M is m x m (assuming M is symmetric and defines inner product for columns of Q)
-            // Temp_MQ (m x k_q) = M (m x m) * Q (m x k_q)
-            gemm(*(this->ctx),
-                              M_view,
-                              Q_view,
-                              Temp_MQ_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
-            // Result_actual (k_q x k_q) = Q^T (k_q x m) * Temp_MQ (m x k_q)
-            gemm(*(this->ctx),
-                              Q_view,
-                              Temp_MQ_view,
-                              Result_actual_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = Transpose::Trans});
-        } else { // Q is k_q x m (vectors are rows)
-            // M is m x m
-            // Temp_MQ (k_q x m) = Q (k_q x m) * M (m x m)
-            gemm(*(this->ctx),
-                              Q_view,
-                              M_view,
-                              Temp_MQ_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
-            // Result_actual (k_q x k_q) = Temp_MQ (k_q x m) * Q^T (m x k_q)
-            gemm(*(this->ctx),
-                              Temp_MQ_view,
-                              Q_view,
-                              Result_actual_view,
-                              {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transB = Transpose::Trans});
-        }
-        this->ctx->wait();
-
-        // print_matrix(Result_actual_view, "Result_actual (M-ortho)");
-        // print_matrix(I_expected_view, "I_expected (M-ortho)");
-
-        auto res_data = Result_actual_view.data().to_vector();
-        for (int b = 0; b < batch_size; ++b) {
-            for (int i = 0; i < k_q; ++i) {
-                for (int j = 0; j < k_q; ++j) {
-                    ScalarType expected_val = (i == j) ? ScalarType(1.0) : ScalarType(0.0);
-                    size_t idx = b * k_q * k_q + i * k_q + j;
-                    test_utils::assert_near(res_data[idx], expected_val, tolerance);
-                }
-            }
-        }
+    // ||Q^H Q - I||_F over every item on the host, judged at @p kind with n = the vector length.
+    void check_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q, Transpose transQ, verify::Check kind) {
+        int dim = 0, count = 0;
+        const auto q = vectors_of(Q, transQ, dim, count);
+        const auto V = verify::view(q.data(), dim, count, dim, dim * count, Q.batch_size());
+        EXPECT_VERIFY(ScalarType, kind, dim, verify::orthogonality(V, verify::all_items(Q.batch_size())));
     }
-    // Helper to check A is orthogonal to M_basis: A^T * M_basis = 0 or A * M_basis^T = 0
-    void check_orthogonality_to_M(const MatrixView<ScalarType, MatrixFormat::Dense>& A_view,
-                                   const MatrixView<ScalarType, MatrixFormat::Dense>& M_basis_view,
-                                   Transpose transA, // Orientation of A
-                                   Transpose transM, // Orientation of M_basis
-                                   typename base_type<ScalarType>::type tolerance) {
-        int a_rows = A_view.rows();
-        int a_cols = A_view.cols();
-        int m_rows = M_basis_view.rows();
-        int m_cols = M_basis_view.cols();
-        int batch_size = A_view.batch_size();
 
-        // Determine dimensions of the result matrix (should be all zeros)
-        // If A has columns as vectors (transA=NoTrans, A is dim x nA)
-        // and M_basis has columns as vectors (transM=NoTrans, M_basis is dim x nM)
-        // Then A^T * M_basis should be zero (nA x nM)
-        int res_rows, res_cols;
-        Transpose opA, opM;
-        auto trans = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
-        if (transA == Transpose::NoTrans) { // A vectors are columns (dim x nA)
-            opA = trans;
-            res_rows = a_cols; // nA
-        } else { // A vectors are rows (nA x dim)
-            opA = Transpose::NoTrans; // Use A (nA x dim)
-            res_rows = a_rows; // nA
+    // A orthonormal and orthogonal to the orthonormal basis M: the columns of [M A] are orthonormal,
+    // so its Gram matrix holds M^H A in the off-diagonal block.
+    void check_orthogonality_to_M(const MatrixView<ScalarType, MatrixFormat::Dense>& A, const MatrixView<ScalarType, MatrixFormat::Dense>& M,
+                                  Transpose transA, Transpose transM, verify::Check kind) {
+        int dim = 0, na = 0, dm = 0, nm = 0;
+        const auto a = vectors_of(A, transA, dim, na);
+        const auto m = vectors_of(M, transM, dm, nm);
+        ASSERT_EQ(dim, dm);
+        const int batch = A.batch_size(), cols = nm + na;
+        std::vector<ScalarType> ma(static_cast<size_t>(dim) * cols * batch);
+        for (int b = 0; b < batch; ++b) {
+            std::copy_n(m.begin() + static_cast<std::ptrdiff_t>(b) * dim * nm, dim * nm, ma.begin() + static_cast<std::ptrdiff_t>(b) * dim * cols);
+            std::copy_n(a.begin() + static_cast<std::ptrdiff_t>(b) * dim * na, dim * na, ma.begin() + static_cast<std::ptrdiff_t>(b) * dim * cols + dim * nm);
         }
-
-        if (transM == Transpose::NoTrans) { // M_basis vectors are columns (dim x nM)
-            opM = Transpose::NoTrans; // Use M_basis (dim x nM)
-            res_cols = m_cols; // nM
-            ASSERT_EQ( (transA == Transpose::NoTrans ? a_rows : a_cols) , m_rows ); // Dimensions must match
-        } else { // M_basis vectors are rows (nM x dim)
-            opM = Transpose::Trans; // Use M_basis^T (dim x nM)
-            res_cols = m_rows; // nM
-            ASSERT_EQ( (transA == Transpose::NoTrans ? a_rows : a_cols) , m_cols ); // Dimensions must match
-        }
-
-
-        Matrix<ScalarType, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
-        auto Result_AM_view = Result_AM.view();
-
-        (void)gemm(*(this->ctx),
-                          A_view,
-                          M_basis_view,
-                          Result_AM_view,
-                          {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = opA, .transB = opM});
-        this->ctx->wait();
-
-        // print_matrix(Result_AM_view, "Result_AM (A vs M_basis)");
-
-        auto res_data = Result_AM_view.data();
-        for (int b = 0; b < batch_size; ++b) {
-            for (int r = 0; r < res_rows; ++r) {
-                for (int c = 0; c < res_cols; ++c) {
-                    size_t idx = b * res_rows * res_cols + r * res_cols + c; // Assuming result is row-major
-                    test_utils::assert_near(res_data[idx], ScalarType(0.0), tolerance);
-                }
-            }
-        }
+        const auto V = verify::view(ma.data(), dim, cols, dim, dim * cols, batch);
+        EXPECT_VERIFY(ScalarType, kind, dim, verify::orthogonality(V, verify::all_items(batch)));
     }
 };
+
+// Every algorithm orthogonalizes the input columns directly (reflectors, Cholesky QR, Gram-Schmidt
+// or the Gram matrix's eigenbasis, twice where it has a second pass): Householder-grade orthogonality,
+// measured c <= 6 at n = 10, 12 (verification.md).
+constexpr verify::Check kOrtho = verify::Check::orthogonality;
 
 template <typename Config>
 class OrthoMatrixTest : public OrthoTest<Config> {};
@@ -244,7 +107,6 @@ TYPED_TEST_SUITE(OrthoAgainstMTest, OrthoTestTypes);
 TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
-    auto tol = test_utils::tolerance<T>();
 
     const std::vector<Transpose> transposes = {Transpose::NoTrans};
     std::vector<OrthoAlgorithm> algos = {
@@ -280,7 +142,7 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
             (void)ortho(*(this->ctx), A.view(), transA, workspace.to_span(), algo);
             this->ctx->wait();
 
-            this->check_orthonormality(A, transA, tol);
+            this->check_orthonormality(A, transA, kOrtho);
         }
     }
 }
@@ -288,7 +150,6 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
 TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
-    auto tol = test_utils::tolerance<T>();
 
     const std::vector<Transpose> transposes = {Transpose::NoTrans};
     std::vector<OrthoAlgorithm> algos = {
@@ -324,7 +185,7 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 (void)ortho(*(this->ctx), M.view(), transM, workspace_M_ortho.to_span(), algo);
                 this->ctx->wait();
 
-                this->check_orthonormality(M, transM, tol);
+                this->check_orthonormality(M, transM, kOrtho);
 
                 size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), M.view(), transA, transM, algo);
                 UnifiedVector<std::byte> workspace(buffer_size);
@@ -333,8 +194,8 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 (void)ortho(*(this->ctx), A.view(), M.view(), transA, transM, workspace.to_span(), algo, iterations);
                 this->ctx->wait();
 
-                this->check_orthonormality(A, transA, tol);
-                this->check_orthogonality_to_M(A, M, transA, transM, tol);
+                this->check_orthonormality(A, transA, kOrtho);
+                this->check_orthogonality_to_M(A, M, transA, transM, kOrtho);
             }
         }
     }

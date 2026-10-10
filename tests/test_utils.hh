@@ -3,6 +3,8 @@
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <type_traits>
 #include <cstdlib>
@@ -177,20 +179,7 @@ template <typename T>
 struct is_complex<std::complex<T>> : std::true_type {};
 
 template <typename T>
-constexpr typename batchlas::base_type<T>::type tolerance() {
-    using real_t = typename batchlas::base_type<T>::type;
-    if constexpr (is_complex<T>::value) {
-        if constexpr (std::is_same_v<real_t, float>) return real_t(2e-5f);
-        else return real_t(2e-10);
-    } else {
-        if constexpr (std::is_same_v<real_t, float>) return real_t(1e-5f);
-        else return real_t(1e-10);
-    }
-}
-
-template <typename T>
-inline void expect_near(const T& a, const T& b, typename batchlas::base_type<T>::type tol = tolerance<T>()) {
-    using real_t = typename batchlas::base_type<T>::type;
+inline void expect_near(const T& a, const T& b, typename batchlas::base_type<T>::type tol) {
     if constexpr (is_complex<T>::value) {
         EXPECT_NEAR(a.real(), b.real(), tol);
         EXPECT_NEAR(a.imag(), b.imag(), tol);
@@ -199,15 +188,20 @@ inline void expect_near(const T& a, const T& b, typename batchlas::base_type<T>:
     }
 }
 
+// batchlas::verify::pass (recorded) with value, bound, kind and n in the failure message.
 template <typename T>
-inline void assert_near(const T& a, const T& b, typename batchlas::base_type<T>::type tol = tolerance<T>()) {
-    using real_t = typename batchlas::base_type<T>::type;
-    if constexpr (is_complex<T>::value) {
-        ASSERT_NEAR(a.real(), b.real(), tol);
-        ASSERT_NEAR(a.imag(), b.imag(), tol);
-    } else {
-        ASSERT_NEAR(a, b, tol);
-    }
+::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value) {
+    if (batchlas::verify::pass<T>(kind, n, value)) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
+                                         << batchlas::verify::bound<T>(kind, n) << " (n=" << n << ")";
+}
+
+template <typename T>
+::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value, batchlas::verify::Slack slack) {
+    if (batchlas::verify::pass<T>(kind, n, value, slack)) return ::testing::AssertionSuccess();
+    return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
+                                         << batchlas::verify::bound<T>(kind, n, slack) << " (n=" << n << ", slack " << slack.factor
+                                         << " (" << slack.reason << "))";
 }
 
 // Unified base test fixture for all BatchLAS tests
@@ -266,3 +260,7 @@ protected:
 };
 
 } // namespace test_utils
+
+// EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
+#define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))
+#define EXPECT_VERIFY_SLACK(T, kind, n, value, ...) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value), __VA_ARGS__))

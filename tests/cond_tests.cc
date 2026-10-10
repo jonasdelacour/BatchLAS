@@ -54,9 +54,10 @@ protected:
         }
     }
 
-    static constexpr real_t tolerance() {
-        return test_utils::tolerance<ScalarType>();
-    }
+    // |cond - exact| / exact at Check::blas: each norm is a reduction over k terms (a row or column
+    // for One/Inf, every element for Frobenius/Max).
+    static double cond_error(real_t got, real_t exact) { return std::fabs(double(got) - double(exact)) / double(exact); }
+    static int reduction_length(NormType nt, int n) { return (nt == NormType::One || nt == NormType::Inf) ? n : n * n; }
 
     // Compute expected condition number for a diagonal matrix
     static real_t expected_cond_diagonal(const std::vector<real_t>& diag, NormType nt) {
@@ -104,14 +105,14 @@ TYPED_TEST(CondTest, IdentityMatrix) {
         auto conds = cond<B>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
-            test_utils::expect_near(conds[b], static_cast<T>(real_t(1)), this->tolerance());
+            EXPECT_VERIFY(T, verify::Check::blas, this->reduction_length(nt, n), this->cond_error(conds[b], real_t(1)));
         }
     }
 
     auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
     this->ctx->wait();
     for (int b = 0; b < batch_size; ++b) {
-        test_utils::expect_near(conds[b], static_cast<T>(real_t(n)), this->tolerance());
+        EXPECT_VERIFY(T, verify::Check::blas, n * n, this->cond_error(conds[b], real_t(n)));
     }
 }
 
@@ -135,7 +136,7 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
         auto conds = cond<B>(*this->ctx, mat.view(), nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
-            test_utils::expect_near(conds[b], static_cast<T>(expected), this->tolerance());
+            EXPECT_VERIFY(T, verify::Check::blas, this->reduction_length(nt, n), this->cond_error(conds[b], expected));
         }
     }
 }
