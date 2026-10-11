@@ -8,6 +8,11 @@
 #include <cstdint>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/env.hh>
+#include "../src/select/vendor.hh"
+#include <algorithm>
+#include <complex>
+#include <string>
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -277,3 +282,116 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     }
 }
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+
+// ---------------------------------------------------------------------------
+// The vendor route on non-natural accessors (ld > n, sub-views, padded batch
+// stride), the layouts LOBPCG hands it; the wrapper was suspected of an ld bug and cleared.
+// evidence: docs/design/known-defects.md#lobpcg-picked-a-spurious-zero-ritz-value-from-a-null-p-column
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct VendorSyevShape {
+    int n, ld, stride, batch;
+};
+
+// Graded, sign-mixed spectrum: |lambda| from 1 to 1e3.
+double vendor_syev_lambda(int i, int n) {
+    const double mag = std::pow(10.0, 3.0 * double(i) / double(std::max(1, n - 1)));
+    return (i % 2) ? -mag : mag;
+}
+
+// Item b is Q_b diag(lambda) Q_b^H with a random Householder Q_b (complex for complex T).
+template <typename T>
+std::vector<std::complex<double>> vendor_syev_item(int n, int b) {
+    std::mt19937 gen(1234u + 7u * unsigned(b));
+    std::uniform_real_distribution<double> dis(-1.0, 1.0);
+    std::vector<std::complex<double>> u(n);
+    double unorm2 = 0.0;
+    for (auto& x : u) {
+        x = {dis(gen), is_std_complex_v<T> ? dis(gen) : 0.0};
+        unorm2 += std::norm(x);
+    }
+    std::vector<std::complex<double>> Q(size_t(n) * n), A(size_t(n) * n);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            Q[i + size_t(j) * n] = (i == j ? 1.0 : 0.0) - 2.0 * u[i] * std::conj(u[j]) / unorm2;
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            std::complex<double> acc = 0.0;
+            for (int k = 0; k < n; ++k)
+                acc += Q[i + size_t(k) * n] * vendor_syev_lambda(k, n) * std::conj(Q[j + size_t(k) * n]);
+            A[i + size_t(j) * n] = acc;
+        }
+    return A;
+}
+
+template <typename T>
+T vendor_syev_cast(std::complex<double> z) {
+    if constexpr (is_std_complex_v<T>) return T(z.real(), z.imag());
+    else return T(z.real());
+}
+
+}  // namespace
+
+TYPED_TEST(SyevTest, VendorRouteHonoursLdSubViewsAndBatchStride) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    if constexpr (!batchlas::select::solver_vendor_available<TestFixture::BackendType>) {
+        GTEST_SKIP() << "no vendor solver in this build";
+    } else {
+        const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", "vendor");
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        const T poison = vendor_syev_cast<T>({777.0, is_std_complex_v<T> ? 333.0 : 0.0});
+        // natural packed; packed with ld > n; LOBPCG's 12x12 corner of an 18x18 slab;
+        // ld > n with a padded batch stride; batch 1 with ld > n.
+        const VendorSyevShape shapes[] = {
+            {18, 18, 18 * 18, 2}, {12, 15, 15 * 12, 3}, {12, 18, 18 * 18, 2}, {9, 12, 12 * 9 + 7, 3}, {7, 10, 70, 1}};
+        for (const auto& s : shapes) {
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                const std::string where = "n=" + std::to_string(s.n) + " ld=" + std::to_string(s.ld) +
+                                          " stride=" + std::to_string(s.stride) + " batch=" +
+                                          std::to_string(s.batch) + (jobz == JobType::EigenVectors ? " V" : " N");
+                UnifiedVector<T> buf(size_t(s.stride) * s.batch, poison);
+                Matrix<T, MatrixFormat::Dense> A0(s.n, s.n, s.batch);
+                for (int b = 0; b < s.batch; ++b) {
+                    const auto ref = vendor_syev_item<T>(s.n, b);
+                    for (int j = 0; j < s.n; ++j)
+                        for (int i = 0; i < s.n; ++i) {
+                            const T v = vendor_syev_cast<T>(ref[i + size_t(j) * s.n]);
+                            buf[size_t(b) * s.stride + i + size_t(j) * s.ld] = v;
+                            A0.view()(i, j, b) = v;
+                        }
+                }
+                MatrixView<T, MatrixFormat::Dense> A(buf.data(), s.n, s.n, s.ld, s.stride, s.batch);
+                UnifiedVector<Real> W(size_t(s.n) * s.batch, Real(-1));
+                UnifiedVector<std::byte> ws(syev_buffer_size(*this->ctx, A, W.to_span(), jobz, Uplo::Lower));
+                (void)syev(*this->ctx, A, W.to_span(), SyevOptions{.jobz = jobz}, ws.to_span());
+                this->ctx->wait();
+
+                std::vector<double> want(s.n);
+                for (int i = 0; i < s.n; ++i) want[i] = vendor_syev_lambda(i, s.n);
+                std::sort(want.begin(), want.end());
+                for (int b = 0; b < s.batch; ++b) {
+                    const T* item = buf.data() + size_t(b) * s.stride;
+                    for (int o = 0; o < s.stride; ++o) {
+                        if (o % s.ld < s.n && o / s.ld < s.n) continue;
+                        ASSERT_EQ(item[o], poison) << where << ": item " << b << " padding offset " << o << " written";
+                    }
+                }
+                // ||A||_2 = max |lambda| = 1e3.
+                const VectorView<Real> w(W.data(), s.n, s.batch);
+                EXPECT_VERIFY(T, verify::Check::values, s.n,
+                              MV::values_error(w, std::vector<std::vector<double>>(s.batch, want), 1e3, A0.view().all_items()))
+                    << where;
+                if (jobz != JobType::EigenVectors) continue;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, s.n,
+                              MV::eigen_residual(*this->ctx, A0.view(), A, w, A0.view().all_items()))
+                    << where;
+                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, s.n,
+                              MV::orthogonality(*this->ctx, A, A0.view().all_items()))
+                    << where;
+            }
+        }
+    }
+}

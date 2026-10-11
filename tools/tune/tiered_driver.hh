@@ -8,6 +8,7 @@
 #include "tier.hh"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@ struct TieredOpts {
     std::vector<std::string> dtypes;
     std::vector<int> devices;
     Tier tier = Tier::preview;
+    std::int64_t max_dim = 2048;  // 0 = off: skip:dim above this matrix dimension
     double budget_h = 0, cap_gib = 4, overhead_s = kChildOverheadS;
     double audit_fraction = -1;     // < 0: the tier's
     double refine_cap_factor = -1;  // < 0: the tier's
@@ -26,6 +28,8 @@ struct TieredOpts {
     std::string repo, ledger_root, out, argv;
     std::string run_id;  // empty: make_run_id()
     std::map<std::string, std::vector<std::string>> grid;
+    // --remeasure-keys, "op.dtype" -> cells: measured in round 0 at this tier whatever the ledger holds
+    std::map<std::string, std::set<CellKey>> remeasure;
 };
 
 struct RunIdentity {
@@ -42,6 +46,7 @@ struct CellJob {
     Tier tier = Tier::preview;
     TierParams p{};
     double footprint = 0;  // item_footprint: a worker restarts before a smaller one
+    std::vector<std::string> ld_audit;  // arms not yet ld-audited in this (op, dtype): CellRequest::ld_audit
 };
 
 // One outcome per requested arm; `error` names a child failure that hit every arm.

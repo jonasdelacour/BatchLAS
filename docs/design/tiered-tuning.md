@@ -1,13 +1,14 @@
 # Tiered tuning {#design_tiered_tuning}
 
 > **Status:** current · sub-project 1 (engine) implemented, validated on threadripper02 (RTX PRO 6000,
-> sm_120) 2026-10-07 · sub-projects 2 and 3 specified at interface level only
+> sm_120) 2026-10-07 · specs for all 19 ops; the sm_120 deep run ships `tuned/*.sm_120.txt` · Tuning
+> tab built 2026-10-09 · the constants tuner (sub-project 2) is specified at interface level only
 
 The tuner fills the selection tables and the tuning constants in tiers. The user picks a tier
 (preview, coarse or deep) per run. Measurements that cannot change a table are skipped, and a
 per-cell ledger ensures that a cheaper run never overwrites a better result. The current tuner is
 described in @ref tune_tool_readme; the flat selection it feeds is in @ref design_flat_selection §6.
-No shipped table comes from the engine yet.
+The sm_120 tables come from the engine ("Engine: the sm_120 deep run").
 
 ## Why tiered tuning
 
@@ -40,8 +41,8 @@ No shipped table comes from the engine yet.
 | # | Sub-project | Depends on | State |
 | --- | --- | --- | --- |
 | 1 | Engine: tiers, racing, adaptive grid, persistent worker, ledger, table generation, on the 4 existing specs | none | implemented |
-| 2 | Coverage: specs for the other 15 ops; constants tuner on the engine; `tuning_params.hh` generated | 1 | interface below |
-| 3 | benchviz Tuning tab: four views | 1 | interface below |
+| 2 | Coverage: specs for the other 15 ops; constants tuner on the engine; `tuning_params.hh` generated | 1 | specs implemented; constants tuner: interface below |
+| 3 | benchviz Tuning tab: four views | 1 | built 2026-10-09; interface and as-built notes below |
 
 Sub-projects 2 and 3 can proceed in parallel once the spec interface, ledger schema and progress
 protocol are frozen.
@@ -88,7 +89,8 @@ Across cells:
   dtype and device, or from a flop/byte model against the device ceilings. `--budget <h>` stops
   refinement; the starting lattice always completes.
 - **Op order follows dependencies.** potrf and trsm are tuned before posv, whose times depend on
-  their choices (@ref tune_tool_readme, section Specs).
+  their choices (@ref tune_tool_readme, section Specs). The map over all 19 ops is in "Engine: op
+  order over all 19 ops".
 
 ## Engine: the ledger and table generation
 
@@ -115,7 +117,9 @@ coupling is explicit: posv's families list the potrf and trsm families they call
 record is:
 
 - **Current** when every candidate's hash matches the source tree. A candidate stored as `skipped`
-  is not compared, because a change to what can run goes through the hashed `<op>.cc`.
+  is not compared, because a change to what can run goes through the hashed `<op>.cc`. A candidate
+  skipped with reason `dominated:<key>` was never tried there, so its family is stale whatever its
+  hash ("Engine: dominance carry-forward removed").
 - **Partly stale** when only some hashes changed, or a family appeared that the record never raced.
   The next run re-races just those candidates against the stored winner and runner-up, at the stored
   tier, and appends a merged record. Editing one kernel keeps every deep cell deep.
@@ -174,7 +178,7 @@ fails in a fresh process. Two defences:
 For potrf float and double, posv float and trsm float, at batch 512, a worker raced the larger cell
 then the smaller one at or just below the 48 KB hole, and a fresh child raced the smaller one. Every
 candidate's feasibility agreed. potrf pads requests out of the hole and its kernels carry no static
-shared ([the 48 KB launch hole](../perf/potrf.md)). The guard stays in the test suite. The mismatch
+shared ([potrf: the 48 KB launch hole](../perf/potrf.md#potrf-the-48-kb-launch-hole)). The guard stays in the test suite. The mismatch
 path is covered by injected verdicts in `tune_tests`.
 
 ## Engine: measured per-child overhead
@@ -324,6 +328,249 @@ The tab reads ledgers and tables directly and drives `batchlas_tune --plan`, `--
   candidate's timing and interval.
 - **Diff against the shipped table.** Cells whose winner changed, with the predicted per-cell
   speedup or slowdown, before tables are written.
+
+Built on 2026-10-09 as `/tuning` in `benchviz serve` (`benchmarks/benchviz/tuning.py`,
+`tuning.html`; user guide in benchmarks/benchviz/README.md "Tuning tab"). Where it departs from the
+interface above:
+
+| Interface above | As built | Why |
+| --- | --- | --- |
+| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (best record, staleness, `ledger_rows`, `nearest`) | the views show exactly what `--ledger` would write next, need no build, and all 70 sm_120 ledgers load in about 2 s |
+| `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`) | the tuner already guards every GPU it uses; a run is not a campaign |
+| figure style | interactive SVG | the map is clicked, not printed |
+
+The diff's two picks are the same section 5.4 lookup: in the shipped table, and in the rows
+`sweep_to_table.py --ledger` would write now. Each takes the first entry the cell's record did not
+refuse (`skipped`, that is `can_run` false). The predicted speedup is the ratio of the two picks'
+medians in that one record. A race calls candidates within 3% a tie and keeps the earlier one, so
+a changed pick can read as low as 0.971×. Against main's tables (2026-10-09), gemm double
+on sm_120 changes 2918 picks, geomean 1.08× where both are timed.
+
+Two engine additions came with it: every progress event carries `t` (Unix seconds), and `--plan`
+emits one `plan_job` event per (op, dtype) (tools/tune/README.md). `ledger_rows` now compares a row
+only with keys in its own and the adjacent `floor(index / stride)` buckets. All 70 sm_120 ledger
+tables came out byte-identical, in 8.4 s instead of 126.6 s.
+
+## Engine: readiness for a deep run over all 19 ops
+
+> **Status:** as built 2026-10-08, after every op got a spec. The problems come from the spec
+> writers' preview runs on threadripper02 (sm_120).
+
+**Strict pins.** `vendor` is both the vendor family's spelling and a routing class word, and a
+class word that cannot serve the shape falls back to Auto with a warning. A tuner arm pinned to
+`vendor` where `can_run` refuses it therefore timed Auto and credited the time to the vendor
+(seen on spmm cdouble N/N nrhs=1 and on gesvd). The tuner's pin is now strict
+(`select::ScopedPin(op, word, select::StrictPin{})`, used only in `cell_runner.hh`): a class word
+that nothing in its class can serve throws `std::invalid_argument`, as a spelling does, and
+`vendor` must resolve to the candidate spelled `vendor`. The arm is `skipped`, reason
+`pin refused (strict): ...`. Library callers and `BATCHLAS_<OP>_ROUTE` keep the fallback. spmm's
+spec-level workaround is gone; gesvd's stays, because there `can_run` admits a shape whose vendor
+call faults the device (known defect 15), which no pin rule can see.
+
+**Gross losers.** After every round, from the first on and whatever `min_reps` says, the race
+eliminates an arm whose median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
+`race.hh`). It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
+(`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
+cells, and before this rule each of its timed rounds cost minutes.
+
+## Engine: matrix-dimension cap
+
+`--max-dim N` (default 2048 for tiered runs, 0 = off) is a maintainer rule: no cell is measured with a matrix dimension above N, whatever its bytes. `OpSpec::dims` returns the extents a cell allocates (default: every integer key but `batch`; geqrf overrides it because its `m` is derived from `form`, `n` and `aspect`), and `plan_round` plans a larger cell as `skip:dim` before the byte cap, so refinement never measures one either.
+
+## Engine: dominance carry-forward removed
+
+Until 2026-10-08 an arm eliminated at more than 10x the winner's median was not timed at cells
+*beyond* that cell in the same run, op and dtype (larger along `refine_key()`, or every other
+integer key at least as large with more bytes), and was recorded `skipped`, reason
+`dominated:<key of the losing cell>`. It was removed after it fired thousands of times in the
+sm_120 deep run (`trsm cdouble vendor` 569 cells, `symm double vendor` 660; also gemm, syrk,
+syr2k, trmm, geqrf):
+
+- It assumed an arm that loses by 10x keeps losing as the cell grows. That is false at a
+  vendor/native crossover: the vendor arm loses on launch overhead at small sizes and wins at large
+  ones, which is exactly the edge the tables must place.
+- "Beyond" crossed lines: a loss at one `aspect` or other key carried to cells with a different
+  one, where the ranking need not be related.
+- Its motivation, a geqrf vendor call of many minutes on a float tall n=1024 aspect=256 cell, is gone
+  with the matrix-dimension cap above.
+
+What stays is the in-race gross-loser rule (ratio > 4 after one round), which only uses data from
+the same cell. A ledger record that still holds a `dominated:` skip is *partly stale*: the skipped
+arm's family counts as stale whatever its hash, so the next run re-races exactly those arms against
+the stored winner and runner-up at the stored tier and writes a merged record (`stale_candidates`,
+`ledger.cc`, and `stale_families` in `sweep_to_table.py`; shared fixture
+`tests/data/ledger_dominated`).
+
+## Engine: guard retries a failed nvidia-smi query
+
+The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer reset
+GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed guard query
+(`--query-compute-apps` or the utilization sample) is now retried after 5 s, doubling to 60 s,
+until `--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry;
+only then does the run stop (`query_with_backoff`, `tune_core.hh`).
+
+## Engine: repeat crashers are dropped
+
+An arm benched for confirmed worker errors (two consecutive cells in which the worker and the fresh
+child both reported `error`) races alone in a fresh child per cell. If it then errors in 5
+consecutive such cells (`kDropAfterErrors`, `worker.hh`), it is dropped for the rest of that op and
+dtype in this run: `error`, reason `dropped after 5 consecutive errors`, not run. One clean cell
+resets the count. The case is the cdouble gemv vendor, which segfaults inside cuBLASLt on every
+shape on sm_120 (known defect 13) and cost two worker crashes and a retry per cell, about +3 h on a
+deep gemv cdouble run.
+
+## Engine: op order over all 19 ops
+
+A multi-op run measures op by op in a stable topological order of `op_dependencies()`
+(`schedule.cc`): an op follows every op whose table its timings depend on through a public entry
+point, and input order breaks ties. `all` starts from every registered spec in the canonical order,
+which gives
+
+gemm, trsm, syr2k, gemv, spmm, trmm, symm, syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv,
+gesv, orgqr, syev, gesvd.
+
+| op | after |
+| --- | --- |
+| trmm, symm | gemm (`expand` calls the public gemm) |
+| getrf | gemm, trsm |
+| getrs | trsm |
+| geqrf | gemm |
+| ormqr | gemm, trmm |
+| getri | trsm, getrf |
+| posv | potrf, trsm |
+| gesv | getrf, getrs |
+| orgqr | ormqr |
+| syev | gemm, trmm, syr2k, geqrf, ormqr |
+| gesvd | gemm, trmm, syr2k |
+
+A dependency not in the run holds nothing back. The hashes still do not follow a dependency's
+table: retuning gemm changes trmm's `expand` times without staling trmm's cells.
+
+In a multi-op run, an (op, dtype) pair the spec refuses (symm, syrk and syr2k are real-only) is
+skipped with one printed `== note: skipping <op> <dtype>: ...` line. A single-op run still refuses
+it.
+
+## Engine: pipelined cell queues across op and dtype jobs
+
+The driver used to shard each round round-robin over the GPUs and join every GPU at the end of each
+(op, dtype) round, so one GPU finishing gemm float's largest round-2 cells left the other three
+idle; over 19 ops, 4 dtypes and several rounds those tails cost hours. Now each job's round is one
+queue sorted by (per-item footprint, bytes), and one thread per GPU (`gpu_loop` in
+`tiered_driver.cc`) pops the next cell of the earliest job, in op order, that has queued cells.
+Every GPU therefore still runs ascending footprints within a job's round, and the carve-out restart
+rule is unchanged; moving to another job usually costs a restart, which the summary line and the
+`schedule` progress event count. A job's next round is planned by whichever thread records its last
+cell, never earlier, because refinement reads that round's results; until then the job waits for
+its stragglers while idle GPUs work on later jobs. Pipelining does not break the op order's
+dependencies: during one run a composed op times against the library's embedded tables, not the
+ledger, so an earlier op's unfinished rounds change nothing it measures. Host tests
+(`TuneTieredPipeline.*`) check no wait behind a straggler, ascending footprints per GPU and round,
+planning only after the round's last record, and records identical to a one-GPU run.
+
+## Engine: the ld audit
+
+Added 2026-10-09. Every cell times and verifies at one leading dimension (`ld_pad`, normally 0), so a
+candidate that derives `ld` from `n` verifies, wins and ships. The deep sm_120 run was suspected of
+shipping exactly that for the syev `vendor` family. That suspicion turned out to be wrong
+(@ref md_docs_2design_2known-defects "known defects", the LOBPCG entry), but nothing in the tuner
+could have caught such a defect if it had been real.
+
+**The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified
+cell* (status `ok`, or `eliminated` after passing verification) for one extra verification at
+`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`). The check runs in the same worker or child,
+straight after the timed cell, as a `verify`-mode cell, which is a fresh problem built by the spec
+at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict. A candidate
+that the cell did not verify stays wanted for its next cell.
+
+**On a failure.** If the padded verification comes back `bad` or `error`, or throws, the arm is
+`bad` in that cell's record with the reason `ld audit: ld_pad +3: ...`, so it is never ranked
+there. The driver prints `ld audit FAILED`, emits an `ld_audit` progress event, and the run summary
+gives one line per (op, dtype) with passed, skipped and failed counts and lists the failures (event
+`ld_audit_summary`). A pin that refuses the padded shape counts as `skipped`. The carve-out audit
+(above) leaves out an arm that failed the ld audit, because its fresh child re-verifies at the
+natural `ld`, where the arm passes. Counting that as a worker mismatch would send the rest of the
+run to fresh children for nothing.
+
+**Limits.** The batch stride is padded only where a spec derives it from `ld` (most use
+`ld * cols`). gemm's `packed` layout ignores `ld_pad`. A spec that takes no `ld_pad` audits
+nothing. The audit is a once-per-candidate check, not a sweep: a defect that appears only at some
+shapes can still get through.
+
+**Evidence.** Host tests `TuneLdAudit.*` cover the child-side fold, the book, the request and
+outcome round trip, the driver's first-cell rule and reporting, and the carve-out interplay. A
+deliberate break of each part turns exactly its own test red. GPU check (threadripper02, GPU 2): with
+vendor syev's run calls passing `rows()` as `lda`, a preview `syev float jobz=V n=12:18
+batch=2:256` sweep reported `ld audit FAILED: vendor ... bad residual` on its first cell and
+`5 passed, 0 skipped, 1 failed`. With the break removed, the same sweep reported `6 passed, 0
+skipped, 0 failed`.
+
+## Engine: re-measuring named cells
+
+Added 2026-10-09 for the cells of the sm_120 deep run that the box's other user damaged.
+`--remeasure-keys FILE` takes one `<op> <dtype> <key>` line per cell, the key in the ledger's
+own `name=value,...` form and field order. Each named cell counts as missing, whatever the
+ledger holds: `plan_round` gives it the reason `remeasure`, every runnable candidate, the
+running tier and a fresh record, not a merge. The stored record's `round` carries over, so a
+re-measured refinement midpoint stays a refinement record for the cap and the margin hedge. The
+driver appends the named cells to round 0 when they are off the lattice. Round 0 is never
+budgeted, so `--budget 1e-9` runs exactly the named cells and starts no refinement. A named cell
+is measured past `--max-dim`, because the deep run measured some cells before the cap existed,
+but not past `--cap-gib`. A key whose fields do not match the op's, or an op and dtype the run
+does not tune, stops the run. The newer record wins in `best_records` (same tier, later date or
+run id), so the tables pick up the re-measure with no other change. Host tests: `TuneRemeasure.*`
+(a deliberate break of the planner or of the round-0 append turns them red).
+
+## Engine: the sm_120 deep run
+
+> **Status:** measured 2026-10-08/09 on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120,
+> CUDA 13.2, DPC++ `/opt/dpcpp-cuda`), GPUs 0-3, on a box shared with another user. The tables
+> it produced ship as `tuned/*.sm_120.txt`; the ledger is `benchmarks/results/tuning/ledger/`.
+
+**What ran.** `batchlas_tune all --tier deep --dtype float,double,cfloat,cdouble --devices 0,1,2,3`
+covered all 19 ops and every dtype each op instantiates: 70 (op, dtype) jobs, matrix dimensions up
+to 2048. It ran from 2026-10-08 06:23 to 2026-10-09 04:54 CEST, with four starts. The first
+ran 11.5 h and wrote 56,144 cells, until a geqrf cell with an 8192-wide matrix timed out its
+worker. The second died after 3 minutes and 345 cells when `nvidia-smi` failed during a GPU reset.
+The third ran 4.2 h (32,912 cells) and the fourth 4.9 h (35,323 cells), when the maintainer
+stopped it. That is about 20.6 h of measuring and 124,724 cell records. On 2026-10-09 two
+follow-up runs went into the same ledger. One re-measured 250 cells that the other user's jobs
+had damaged ("Engine: re-measuring named cells"): 2.5 min on 4 GPUs. The other re-ran gemv in
+full (8,515 cells in 33.5 min on 4 GPUs; float, double and cfloat hit the 2.0x refinement cap), because the defect-13 fix below edited `src/ops/gemv/gemv.cc`
+and so staled every gemv record. The final ledger holds 133,489 records over 118,854
+distinct cells.
+
+**Refinement coverage.** Every job's starting lattice is complete. Refinement is not: geqrf,
+ormqr, getri, posv, gesv, orgqr, syev, gesvd and complex getrs got little of it before the stop
+(a resumed run wanted 4,072 more refinement cells for the 15 ops of the re-measure run alone), so
+their crossovers sit on lattice spacing.
+
+**Interference.** Cells where every candidate stalled (about 2.3 ms or 7-11 ms, more than twice
+both log-neighbours, which agree on the winner) were screened over each table's first log key: 83
+strict outliers (over 2x both neighbours) and 252 soft ones (over 2x their log-interpolated
+time). The 250 non-gemv soft cells were re-measured at deep; afterwards the screen found 16 strict and 154 soft outliers, 153 of them among the cells just re-measured.
+The cells left reproduce, so they are real behaviour. Most are the gesvd `jacobi` cliff
+at m = 33, where the sub-group solver stops fitting, and spmm and syrk cells within a few
+microseconds of their neighbours.
+
+**What the run found, and what was fixed.** Each fix has its own section or defect entry:
+
+- *Dominance carry-forward* fired thousands of times and hid vendor/native crossovers. It was
+  removed ("Engine: dominance carry-forward removed").
+- *Unbounded matrix dimensions:* a geqrf vendor cell took many minutes. Fixed by the dimension
+  cap ("Engine: matrix-dimension cap").
+- *Idle tails:* GPUs waited at every (op, dtype) round boundary. Fixed by the pipelined queues
+  ("Engine: pipelined cell queues across op and dtype jobs").
+- *A transient `nvidia-smi` failure* killed the second start. The guard now retries
+  ("Engine: guard retries a failed nvidia-smi query").
+- *Repeat crashers:* the complex<double> cuBLAS gemv segfaults on every shape. The tuner now drops
+  such an arm ("Engine: repeat crashers are dropped"), and the library refuses it in `can_run`
+  (known defects, defect 13).
+- *LOBPCG:* with the new syev tables, LOBPCG's smallest-end solve returned 0. The cause was null P
+  columns, not the vendor (known defects, the LOBPCG entry). The projected solves also need more
+  accuracy than the speed tables can see, so they are now pinned to the CTA solver at n <= 32
+  ([LOBPCG: the accuracy pin on the projected syev](../perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev)).
+- *Single-`ld` verification* could not catch a candidate that derives `ld` from `n`. Fixed by
+  "Engine: the ld audit".
 
 ## Open risks
 

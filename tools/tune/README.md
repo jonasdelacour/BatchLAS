@@ -72,10 +72,11 @@ families changed are re-raced (`partial:<family>`).
 
 | flag | default | meaning |
 |---|---|---|
-| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all`. Tiered runs take potrf and trsm before posv. Gate and custom runs take one op |
+| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all` (every registered spec). Tiered runs take the ops in dependency order ("Op order" below) and skip, with one note, a dtype a spec refuses. Gate and custom runs take one op |
 | `--tier` | none | `preview`, `coarse` or `deep` |
 | `--plan` | off | print cells, skips with reasons and the estimate, then exit. No GPU |
 | `--budget H` | none | stop refinement after H hours; the starting lattice always completes. `--plan` warns if its estimate exceeds H |
+| `--remeasure-keys FILE` | none | lines `<op> <dtype> <name=v,...>` (the ledger key, in its field order): those cells are measured again in round 0 at the run's tier whatever the ledger holds, refinement midpoints and cells past `--max-dim` included (not past `--cap-gib`). Every op and dtype named must be in the run. With `--budget 1e-9` nothing else is measured. See "Engine: re-measuring named cells" in [tiered tuning](../../docs/design/tiered-tuning.md) |
 | `--progress-fd N` | none | one JSON event per line on fd N |
 | `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table. Custom runs record here only when given |
 | `--device-key sm_NN` | compute capability of the first `--devices` GPU | device whose ledger `--plan` reads |
@@ -93,6 +94,7 @@ families changed are re-raced (`partial:<family>`).
 | `--refine-ratio`, `--no-refine` | 1.1 | custom: §6.2 bisection stops when hi/lo < ratio |
 | `--no-jit` | off | custom: skip the throwaway JIT pass |
 | `--cap-gib` | 4 | skip cells whose matrices exceed this |
+| `--max-dim` | 2048 tiered, off custom | `skip:dim`: no cell with a matrix dimension (m, n, k, order, q, nrhs, derived rows; never `batch`) above this; 0 = off |
 | `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
@@ -107,31 +109,59 @@ Parameters and record rules: [tiered tuning](../../docs/design/tiered-tuning.md)
 the per-cell algorithm"; "Engine: the ledger and table generation"). The driver is `tiered_driver.cc`
 and planning is in `schedule.cc`.
 
+- **Op order.** A stable topological sort over `op_dependencies()` (`schedule.cc`), input order
+  breaking ties. `all` starts from the canonical order gemm, trsm, syr2k, gemv, spmm, trmm, symm,
+  syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd ("Engine: op order
+  over all 19 ops" in the design page).
 - **Rounds.** Round 0 is the tier's starting lattice for every op and dtype, in op order. Refinement
   rounds follow over each cell ranked inside the requested grid, until no midpoint is left, `--budget`
-  is spent or the refinement cap is hit. Each GPU takes cells round-robin in ascending input bytes.
+  is spent or the refinement cap is hit.
+- **Pipelined queues.** Rounds are per (op, dtype) job. Each round is one queue sorted by (per-item
+  footprint, bytes); every GPU pops the next cell of the earliest job (op order) that has queued
+  cells, and a job's next round is planned only once all of its current round's cells are recorded.
+  A GPU never waits for another job's straggler. The summary counts the (op, dtype) switches and the
+  carve-out restarts they cost (progress `schedule`). See "Engine: pipelined cell queues across op
+  and dtype jobs".
 - **Refinement.** A bracket is a flip when its two winners differ and the other end's winner is more
   than the 3% tie slower there (or cannot win there). Near-tie alternation refines nothing. The preview
   margin (runner-up within 10%) applies only between round-0 cells at the running tier. Refinement per
   op and dtype is capped at `refine_cap_factor` x round-0 records (preview 3.0, coarse 1.0, deep 2.0).
   Past the cap the run prints `refinement cap hit` and emits `refine_cap`.
-- **Per cell.** Over `--cap-gib`: `skip:cap`. A current record at the same or higher tier: `skip:current`.
+- **Per cell.** A dimension over `--max-dim` (`OpSpec::dims`, checked first): `skip:dim`. Over `--cap-gib`: `skip:cap`. A current record at the same or higher tier: `skip:current`.
   A partly stale record re-races only the changed or added families, plus its stored winner and
-  runner-up (`partial:<families>`). `<op>.cc` (where `can_run` lives) is a dependency of every family.
+  runner-up (`partial:<families>`). A candidate stored `skipped` is not compared, but one skipped
+  `dominated:` by the removed carry-forward is stale. `<op>.cc` (where `can_run` lives) is a dependency
+  of every family.
   A stale record, or one where every candidate is `error`, counts as missing. A cell whose probe found
   at most one runnable candidate is `skip:single` and is written as an untimed row.
 - **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`): a warm-up per live candidate,
   then interleaved rounds of one timed run per candidate until a winner, a tie or `max_reps` rounds.
   Eliminated candidates are still verified; a passing one keeps its median with status `eliminated`
-  (ranked after the survivors). A failing one is `bad` and left out.
+  (ranked after the survivors). A failing one is `bad` and left out. From the first round on, whatever
+  `min_reps` says, an arm whose median paired ratio to the leader exceeds 4.0 is eliminated (a gross
+  loser).
+- **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`) pin
+  that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of timing Auto
+  under the vendor's name.
+- **No dominance carry-forward.** Every arm is timed at every cell. A ledger record still holding a
+  `dominated:<key>` skip is partly stale; the next run re-races those arms against the stored winner
+  and runner-up ("Engine: dominance carry-forward removed").
 - **Worker.** Each GPU runs one `batchlas_tune_impl --worker`. A worker that exits or exceeds
   `--cell-timeout` is restarted and the cell retried once. A second failure, or any `error` candidate,
-  restarts the worker and races the cell in a fresh child.
+  restarts the worker and races the cell in a fresh child. An arm whose `error` the fresh child
+  reproduced in two consecutive cells races alone in a fresh child per cell; if it errors in 5
+  consecutive such cells it is dropped for the rest of that op and dtype (`error`, reason
+  `dropped after 5 consecutive errors`, not run).
 - **Audit.** A worker cell is re-raced in a fresh child when `fnv1a64(run_id + key) % 1000` falls
   below `audit_fraction * 1000`. The first worker cell of each op and dtype is always audited. A
   mismatch (usable in one run and refused or failing in the other, or a different winner more than
   10% slower in the fresh run) is logged as an `audit` record. The rest of that op and dtype then runs
   in fresh children.
+- **ld audit.** Each candidate's first verified cell per op and dtype is verified once more, in the
+  same worker or child, at `ld_pad + 3`. A failure makes the arm `bad` there (reason `ld audit: ...`),
+  prints `ld audit FAILED`, and the summary gives passed/skipped/failed per op and dtype. The audit
+  above ignores an ld-audit failure (its fresh child verifies at the natural ld). Rationale:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-ld-audit).
 - **Ledger.** One run file per (op, dtype) under `--ledger`. Its `run` record holds the full key spec
   and candidate list, whatever `--grid` narrowed.
 - **Estimate.** Per cell: `--cell-overhead-s` plus, per candidate, `max_reps` times the nearest ledger
@@ -139,17 +169,21 @@ and planning is in `schedule.cc`.
   lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so divide by
   `--devices`; it ran 1.3x to 1.8x high on threadripper02.
 
-Progress events (`--progress-fd`), one JSON object per line:
+Progress events (`--progress-fd`), one JSON object per line; every event also carries `t`, Unix time in seconds:
 
 | event | fields |
 |---|---|
 | `plan` | `cells`, `est_s` (lattice only), `refine_cells`, `est_refine_s`, `est_total_s` |
+| `plan_job` | one per (op, dtype), before `plan`: `op`, `dtype`, `device`, `cells`, `measure`, `mix` (`12 current, 300 measure`), `est_s`, `refine_cells`, `est_refine_s` |
 | `refine_cap` | `op`, `dtype`, `lattice`, `refined`, `cap`, `dropped` |
 | `cell_start` | op, dtype, key fields, `gpu` |
-| `cell_done` | op, dtype, key fields, `ranked` (`a\|b`), `tier` |
+| `cell_done` | op, dtype, key fields, `ranked` (`a\|b`), `tier`, `round` (absent on a single-candidate cell) |
 | `eliminated` | op, dtype, key fields, `cand`, `round` |
 | `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh` |
 | `worker_restart` | op, dtype, key fields, `gpu`, `restarts`, `fallback` |
+| `ld_audit` | op, dtype, key fields, `cand`, `verdict` (`fail`), `reason` |
+| `ld_audit_summary` | `op`, `dtype`, `passed`, `skipped`, `failed`, `failures` |
+| `schedule` | `switches`, `restarts`, `switch_restarts` |
 | `done` | none |
 
 ## Custom protocol (§6.3)
@@ -253,3 +287,25 @@ Limits of the hash: posv's list holds only its own kernels, but its `cta` and `b
 potrf's and trsm's choices (not yet followed). trsm's list covers its native kernels, not the vendor
 TU. Its `uplo` and `diag` are hidden axes fixed at L and N. Its `trans=T` times ConjTrans for complex
 scalars, and it has no workspace, so a pin is probed by one untimed run.
+
+gemv, trmm, symm, syrk and syr2k take no workspace either and are probed the same way. Their
+non-key arguments are fixed: trmm uplo L, trans N, diag N; symm side L, uplo L; syrk uplo L; syr2k
+uplo L, trans N; gemv's `trans=T` times ConjTrans for a complex scalar. Inputs carry large finite
+poison in the triangle an op must not read (A for trmm and symm) or write (C for syrk and syr2k: a
+changed element is a nonzero info), and trmm's output is re-poisoned before every run. symm, syrk
+and syr2k are real-only: `--dtype cfloat` is refused and `--list` prints `-`. symm and syrk key on
+`form`, which `form_of` derives from the extents, so their `grid()` holds only the consistent cells
+of the lattice (`--grid` filters it, as gemm's does). trmm's and symm's `expand` call the public
+gemm, so their deps list gemm's kernels and `gemm.cc`, and their tables should be tuned after gemm's.
+
+syev and gesvd check values-only results against host LAPACKE (`host_reference.hh`; without the host
+backend those arms are `bad`). gesvd has no batch key: each cell runs at a batch derived from m and n
+(a power of two in [128, 16384] with m n batch <= 2^24), and its grid drops the cells no call keys
+(Hermitian non-square, square thin). One vendor refusal lives in a spec because the library would
+not report it as a refused pin: gesvd's values-only non-square vendor call faults the device (known
+defect 15) although `can_run` admits it. spmm's `vendor` arm needs none: where `can_run` refuses it
+(known defect 17), the strict pin refuses it too. spmm tunes the GPU tables only; its cpu tables stay
+transcribed.
+
+The specs other than potrf, posv, trsm and gemm still verify through local helpers (`residuals.hh`,
+`lu_residuals.hh`, `qr_common.hh`, `host_reference.hh`), not yet through `batchlas::verify`.

@@ -1,458 +1,654 @@
-# op=syr2k dtype=float device=sm_120 batchlas=ff340fc6 kernels=unknown date=2026-10-06 source=transcribed:ff340fc6
-# transcriber_csv=tuned/transcribed/syr2k.csv (the old router's preference order per grid cell, untimed)
+# op=syr2k dtype=float device=sm_120 batchlas=209d9fb8 kernels=d06203ff family_kernels=triangular:56ab2ce2,vendor:a0f35155 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/syr2k.float.sm_120 tiers=deep:592,coarse:0,preview:0,custom:0,transcribed:59
 # keys: n:log:2 k:log batch:log
-n=1 k=1 batch=1 | vendor - | triangular -
-n=1 k=1 batch=2 | triangular - | vendor -
-n=1 k=1 batch=3 | triangular - | vendor -
-n=1 k=1 batch=128 | triangular - | vendor -
-n=1 k=1 batch=1024 | triangular - | vendor -
-n=1 k=1 batch=8192 | triangular - | vendor -
-n=1 k=1 batch=32768 | triangular - | vendor -
-n=1 k=8 batch=1 | vendor - | triangular -
-n=1 k=8 batch=2 | triangular - | vendor -
-n=1 k=8 batch=3 | triangular - | vendor -
-n=1 k=8 batch=128 | triangular - | vendor -
-n=1 k=8 batch=1024 | triangular - | vendor -
-n=1 k=8 batch=8192 | triangular - | vendor -
-n=1 k=8 batch=32768 | triangular - | vendor -
-n=1 k=64 batch=1 | vendor - | triangular -
-n=1 k=64 batch=2 | triangular - | vendor -
-n=1 k=64 batch=3 | triangular - | vendor -
-n=1 k=64 batch=128 | triangular - | vendor -
-n=1 k=64 batch=1024 | triangular - | vendor -
-n=1 k=64 batch=8192 | triangular - | vendor -
-n=1 k=64 batch=32768 | triangular - | vendor -
-n=1 k=512 batch=1 | vendor - | triangular -
-n=1 k=512 batch=2 | triangular - | vendor -
-n=1 k=512 batch=3 | triangular - | vendor -
-n=1 k=512 batch=128 | triangular - | vendor -
-n=1 k=512 batch=1024 | triangular - | vendor -
-n=1 k=512 batch=8192 | triangular - | vendor -
-n=1 k=512 batch=32768 | triangular - | vendor -
-n=1 k=4096 batch=1 | vendor - | triangular -
-n=1 k=4096 batch=2 | triangular - | vendor -
-n=1 k=4096 batch=3 | triangular - | vendor -
-n=1 k=4096 batch=128 | triangular - | vendor -
-n=1 k=4096 batch=1024 | triangular - | vendor -
-n=1 k=4096 batch=8192 | triangular - | vendor -
-n=1 k=4096 batch=32768 | triangular - | vendor -
-n=2 k=1 batch=1 | vendor - | triangular -
-n=2 k=1 batch=2 | triangular - | vendor -
-n=2 k=1 batch=3 | triangular - | vendor -
-n=2 k=1 batch=128 | triangular - | vendor -
-n=2 k=1 batch=1024 | triangular - | vendor -
-n=2 k=1 batch=8192 | triangular - | vendor -
-n=2 k=1 batch=32768 | triangular - | vendor -
-n=2 k=8 batch=1 | vendor - | triangular -
-n=2 k=8 batch=2 | triangular - | vendor -
-n=2 k=8 batch=3 | triangular - | vendor -
-n=2 k=8 batch=128 | triangular - | vendor -
-n=2 k=8 batch=1024 | triangular - | vendor -
-n=2 k=8 batch=8192 | triangular - | vendor -
-n=2 k=8 batch=32768 | triangular - | vendor -
-n=2 k=64 batch=1 | vendor - | triangular -
-n=2 k=64 batch=2 | triangular - | vendor -
-n=2 k=64 batch=3 | triangular - | vendor -
-n=2 k=64 batch=128 | triangular - | vendor -
-n=2 k=64 batch=1024 | triangular - | vendor -
-n=2 k=64 batch=8192 | triangular - | vendor -
-n=2 k=64 batch=32768 | triangular - | vendor -
-n=2 k=512 batch=1 | vendor - | triangular -
-n=2 k=512 batch=2 | triangular - | vendor -
-n=2 k=512 batch=3 | triangular - | vendor -
-n=2 k=512 batch=128 | triangular - | vendor -
-n=2 k=512 batch=1024 | triangular - | vendor -
-n=2 k=512 batch=8192 | triangular - | vendor -
-n=2 k=512 batch=32768 | triangular - | vendor -
-n=2 k=4096 batch=1 | vendor - | triangular -
-n=2 k=4096 batch=2 | triangular - | vendor -
-n=2 k=4096 batch=3 | triangular - | vendor -
-n=2 k=4096 batch=128 | triangular - | vendor -
-n=2 k=4096 batch=1024 | triangular - | vendor -
-n=2 k=4096 batch=8192 | triangular - | vendor -
-n=2 k=4096 batch=32768 | triangular - | vendor -
-n=4 k=1 batch=1 | vendor - | triangular -
-n=4 k=1 batch=2 | triangular - | vendor -
-n=4 k=1 batch=3 | triangular - | vendor -
-n=4 k=1 batch=128 | triangular - | vendor -
-n=4 k=1 batch=1024 | triangular - | vendor -
-n=4 k=1 batch=8192 | triangular - | vendor -
-n=4 k=1 batch=32768 | triangular - | vendor -
-n=4 k=8 batch=1 | vendor - | triangular -
-n=4 k=8 batch=2 | triangular - | vendor -
-n=4 k=8 batch=3 | triangular - | vendor -
-n=4 k=8 batch=128 | triangular - | vendor -
-n=4 k=8 batch=1024 | triangular - | vendor -
-n=4 k=8 batch=8192 | triangular - | vendor -
-n=4 k=8 batch=32768 | triangular - | vendor -
-n=4 k=64 batch=1 | vendor - | triangular -
-n=4 k=64 batch=2 | triangular - | vendor -
-n=4 k=64 batch=3 | triangular - | vendor -
-n=4 k=64 batch=128 | triangular - | vendor -
-n=4 k=64 batch=1024 | triangular - | vendor -
-n=4 k=64 batch=8192 | triangular - | vendor -
-n=4 k=64 batch=32768 | triangular - | vendor -
-n=4 k=512 batch=1 | vendor - | triangular -
-n=4 k=512 batch=2 | triangular - | vendor -
-n=4 k=512 batch=3 | triangular - | vendor -
-n=4 k=512 batch=128 | triangular - | vendor -
-n=4 k=512 batch=1024 | triangular - | vendor -
-n=4 k=512 batch=8192 | triangular - | vendor -
-n=4 k=512 batch=32768 | triangular - | vendor -
-n=4 k=4096 batch=1 | vendor - | triangular -
-n=4 k=4096 batch=2 | triangular - | vendor -
-n=4 k=4096 batch=3 | triangular - | vendor -
-n=4 k=4096 batch=128 | triangular - | vendor -
-n=4 k=4096 batch=1024 | triangular - | vendor -
-n=4 k=4096 batch=8192 | triangular - | vendor -
-n=4 k=4096 batch=32768 | triangular - | vendor -
-n=8 k=1 batch=1 | vendor - | triangular -
-n=8 k=1 batch=2 | triangular - | vendor -
-n=8 k=1 batch=3 | triangular - | vendor -
-n=8 k=1 batch=128 | triangular - | vendor -
-n=8 k=1 batch=1024 | triangular - | vendor -
-n=8 k=1 batch=8192 | triangular - | vendor -
-n=8 k=1 batch=32768 | triangular - | vendor -
-n=8 k=8 batch=1 | vendor - | triangular -
-n=8 k=8 batch=2 | triangular - | vendor -
-n=8 k=8 batch=3 | triangular - | vendor -
-n=8 k=8 batch=128 | triangular - | vendor -
-n=8 k=8 batch=1024 | triangular - | vendor -
-n=8 k=8 batch=8192 | triangular - | vendor -
-n=8 k=8 batch=32768 | triangular - | vendor -
-n=8 k=64 batch=1 | vendor - | triangular -
-n=8 k=64 batch=2 | triangular - | vendor -
-n=8 k=64 batch=3 | triangular - | vendor -
-n=8 k=64 batch=128 | triangular - | vendor -
-n=8 k=64 batch=1024 | triangular - | vendor -
-n=8 k=64 batch=8192 | triangular - | vendor -
-n=8 k=64 batch=32768 | triangular - | vendor -
-n=8 k=512 batch=1 | vendor - | triangular -
-n=8 k=512 batch=2 | triangular - | vendor -
-n=8 k=512 batch=3 | triangular - | vendor -
-n=8 k=512 batch=128 | triangular - | vendor -
-n=8 k=512 batch=1024 | triangular - | vendor -
-n=8 k=512 batch=8192 | triangular - | vendor -
-n=8 k=512 batch=32768 | triangular - | vendor -
-n=8 k=4096 batch=1 | vendor - | triangular -
-n=8 k=4096 batch=2 | triangular - | vendor -
-n=8 k=4096 batch=3 | triangular - | vendor -
-n=8 k=4096 batch=128 | triangular - | vendor -
-n=8 k=4096 batch=1024 | triangular - | vendor -
-n=8 k=4096 batch=8192 | triangular - | vendor -
-n=8 k=4096 batch=32768 | triangular - | vendor -
-n=16 k=1 batch=1 | vendor - | triangular -
-n=16 k=1 batch=2 | triangular - | vendor -
-n=16 k=1 batch=3 | triangular - | vendor -
-n=16 k=1 batch=128 | triangular - | vendor -
-n=16 k=1 batch=1024 | triangular - | vendor -
-n=16 k=1 batch=8192 | triangular - | vendor -
-n=16 k=1 batch=32768 | triangular - | vendor -
-n=16 k=8 batch=1 | vendor - | triangular -
-n=16 k=8 batch=2 | triangular - | vendor -
-n=16 k=8 batch=3 | triangular - | vendor -
-n=16 k=8 batch=128 | triangular - | vendor -
-n=16 k=8 batch=1024 | triangular - | vendor -
-n=16 k=8 batch=8192 | triangular - | vendor -
-n=16 k=8 batch=32768 | triangular - | vendor -
-n=16 k=64 batch=1 | vendor - | triangular -
-n=16 k=64 batch=2 | triangular - | vendor -
-n=16 k=64 batch=3 | triangular - | vendor -
-n=16 k=64 batch=128 | triangular - | vendor -
-n=16 k=64 batch=1024 | triangular - | vendor -
-n=16 k=64 batch=8192 | triangular - | vendor -
-n=16 k=64 batch=32768 | triangular - | vendor -
-n=16 k=512 batch=1 | vendor - | triangular -
-n=16 k=512 batch=2 | triangular - | vendor -
-n=16 k=512 batch=3 | triangular - | vendor -
-n=16 k=512 batch=128 | triangular - | vendor -
-n=16 k=512 batch=1024 | triangular - | vendor -
-n=16 k=512 batch=8192 | triangular - | vendor -
-n=16 k=512 batch=32768 | triangular - | vendor -
-n=16 k=4096 batch=1 | vendor - | triangular -
-n=16 k=4096 batch=2 | triangular - | vendor -
-n=16 k=4096 batch=3 | triangular - | vendor -
-n=16 k=4096 batch=128 | triangular - | vendor -
-n=16 k=4096 batch=1024 | triangular - | vendor -
-n=16 k=4096 batch=8192 | triangular - | vendor -
-n=16 k=4096 batch=32768 | triangular - | vendor -
-n=32 k=1 batch=1 | vendor - | triangular -
-n=32 k=1 batch=2 | triangular - | vendor -
-n=32 k=1 batch=3 | triangular - | vendor -
-n=32 k=1 batch=128 | triangular - | vendor -
-n=32 k=1 batch=1024 | triangular - | vendor -
-n=32 k=1 batch=8192 | triangular - | vendor -
-n=32 k=1 batch=32768 | triangular - | vendor -
-n=32 k=8 batch=1 | vendor - | triangular -
-n=32 k=8 batch=2 | triangular - | vendor -
-n=32 k=8 batch=3 | triangular - | vendor -
-n=32 k=8 batch=128 | triangular - | vendor -
-n=32 k=8 batch=1024 | triangular - | vendor -
-n=32 k=8 batch=8192 | triangular - | vendor -
-n=32 k=8 batch=32768 | triangular - | vendor -
-n=32 k=64 batch=1 | vendor - | triangular -
-n=32 k=64 batch=2 | triangular - | vendor -
-n=32 k=64 batch=3 | triangular - | vendor -
-n=32 k=64 batch=128 | triangular - | vendor -
-n=32 k=64 batch=1024 | triangular - | vendor -
-n=32 k=64 batch=8192 | triangular - | vendor -
-n=32 k=64 batch=32768 | triangular - | vendor -
-n=32 k=512 batch=1 | vendor - | triangular -
-n=32 k=512 batch=2 | triangular - | vendor -
-n=32 k=512 batch=3 | triangular - | vendor -
-n=32 k=512 batch=128 | triangular - | vendor -
-n=32 k=512 batch=1024 | triangular - | vendor -
-n=32 k=512 batch=8192 | triangular - | vendor -
-n=32 k=512 batch=32768 | triangular - | vendor -
-n=32 k=4096 batch=1 | vendor - | triangular -
-n=32 k=4096 batch=2 | triangular - | vendor -
-n=32 k=4096 batch=3 | triangular - | vendor -
-n=32 k=4096 batch=128 | triangular - | vendor -
-n=32 k=4096 batch=1024 | triangular - | vendor -
-n=32 k=4096 batch=8192 | triangular - | vendor -
-n=32 k=4096 batch=32768 | triangular - | vendor -
-n=64 k=1 batch=1 | vendor - | triangular -
-n=64 k=1 batch=2 | triangular - | vendor -
-n=64 k=1 batch=3 | triangular - | vendor -
-n=64 k=1 batch=128 | triangular - | vendor -
-n=64 k=1 batch=1024 | triangular - | vendor -
-n=64 k=1 batch=8192 | triangular - | vendor -
-n=64 k=1 batch=32768 | triangular - | vendor -
-n=64 k=8 batch=1 | vendor - | triangular -
-n=64 k=8 batch=2 | triangular - | vendor -
-n=64 k=8 batch=3 | triangular - | vendor -
-n=64 k=8 batch=128 | triangular - | vendor -
-n=64 k=8 batch=1024 | triangular - | vendor -
-n=64 k=8 batch=8192 | triangular - | vendor -
-n=64 k=8 batch=32768 | triangular - | vendor -
-n=64 k=64 batch=1 | vendor - | triangular -
-n=64 k=64 batch=2 | triangular - | vendor -
-n=64 k=64 batch=3 | triangular - | vendor -
-n=64 k=64 batch=128 | triangular - | vendor -
-n=64 k=64 batch=1024 | triangular - | vendor -
-n=64 k=64 batch=8192 | triangular - | vendor -
-n=64 k=64 batch=32768 | triangular - | vendor -
-n=64 k=512 batch=1 | vendor - | triangular -
-n=64 k=512 batch=2 | triangular - | vendor -
-n=64 k=512 batch=3 | triangular - | vendor -
-n=64 k=512 batch=128 | triangular - | vendor -
-n=64 k=512 batch=1024 | triangular - | vendor -
-n=64 k=512 batch=8192 | triangular - | vendor -
-n=64 k=512 batch=32768 | triangular - | vendor -
-n=64 k=4096 batch=1 | vendor - | triangular -
-n=64 k=4096 batch=2 | triangular - | vendor -
-n=64 k=4096 batch=3 | triangular - | vendor -
-n=64 k=4096 batch=128 | triangular - | vendor -
-n=64 k=4096 batch=1024 | triangular - | vendor -
-n=64 k=4096 batch=8192 | triangular - | vendor -
-n=64 k=4096 batch=32768 | triangular - | vendor -
-n=128 k=1 batch=1 | vendor - | triangular -
-n=128 k=1 batch=2 | triangular - | vendor -
-n=128 k=1 batch=3 | triangular - | vendor -
-n=128 k=1 batch=128 | triangular - | vendor -
-n=128 k=1 batch=1024 | triangular - | vendor -
-n=128 k=1 batch=8192 | triangular - | vendor -
-n=128 k=1 batch=32768 | triangular - | vendor -
-n=128 k=8 batch=1 | vendor - | triangular -
-n=128 k=8 batch=2 | triangular - | vendor -
-n=128 k=8 batch=3 | triangular - | vendor -
-n=128 k=8 batch=128 | triangular - | vendor -
-n=128 k=8 batch=1024 | triangular - | vendor -
-n=128 k=8 batch=8192 | triangular - | vendor -
-n=128 k=8 batch=32768 | triangular - | vendor -
-n=128 k=64 batch=1 | vendor - | triangular -
-n=128 k=64 batch=2 | triangular - | vendor -
-n=128 k=64 batch=3 | triangular - | vendor -
-n=128 k=64 batch=128 | triangular - | vendor -
-n=128 k=64 batch=1024 | triangular - | vendor -
-n=128 k=64 batch=8192 | triangular - | vendor -
-n=128 k=64 batch=32768 | triangular - | vendor -
-n=128 k=512 batch=1 | vendor - | triangular -
-n=128 k=512 batch=2 | triangular - | vendor -
-n=128 k=512 batch=3 | triangular - | vendor -
-n=128 k=512 batch=128 | triangular - | vendor -
-n=128 k=512 batch=1024 | triangular - | vendor -
-n=128 k=512 batch=8192 | triangular - | vendor -
-n=128 k=512 batch=32768 | triangular - | vendor -
-n=128 k=4096 batch=1 | vendor - | triangular -
-n=128 k=4096 batch=2 | triangular - | vendor -
-n=128 k=4096 batch=3 | triangular - | vendor -
-n=128 k=4096 batch=128 | triangular - | vendor -
-n=128 k=4096 batch=1024 | triangular - | vendor -
-n=128 k=4096 batch=8192 | triangular - | vendor -
-n=128 k=4096 batch=32768 | triangular - | vendor -
-n=256 k=1 batch=1 | vendor - | triangular -
-n=256 k=1 batch=2 | triangular - | vendor -
-n=256 k=1 batch=3 | triangular - | vendor -
-n=256 k=1 batch=128 | triangular - | vendor -
-n=256 k=1 batch=1024 | triangular - | vendor -
-n=256 k=1 batch=8192 | triangular - | vendor -
-n=256 k=1 batch=32768 | triangular - | vendor -
-n=256 k=8 batch=1 | vendor - | triangular -
-n=256 k=8 batch=2 | triangular - | vendor -
-n=256 k=8 batch=3 | triangular - | vendor -
-n=256 k=8 batch=128 | triangular - | vendor -
-n=256 k=8 batch=1024 | triangular - | vendor -
-n=256 k=8 batch=8192 | triangular - | vendor -
-n=256 k=8 batch=32768 | triangular - | vendor -
-n=256 k=64 batch=1 | vendor - | triangular -
-n=256 k=64 batch=2 | triangular - | vendor -
-n=256 k=64 batch=3 | triangular - | vendor -
-n=256 k=64 batch=128 | triangular - | vendor -
-n=256 k=64 batch=1024 | triangular - | vendor -
-n=256 k=64 batch=8192 | triangular - | vendor -
-n=256 k=64 batch=32768 | triangular - | vendor -
-n=256 k=512 batch=1 | vendor - | triangular -
-n=256 k=512 batch=2 | triangular - | vendor -
-n=256 k=512 batch=3 | triangular - | vendor -
-n=256 k=512 batch=128 | triangular - | vendor -
-n=256 k=512 batch=1024 | triangular - | vendor -
-n=256 k=512 batch=8192 | triangular - | vendor -
-n=256 k=512 batch=32768 | triangular - | vendor -
-n=256 k=4096 batch=1 | vendor - | triangular -
-n=256 k=4096 batch=2 | triangular - | vendor -
-n=256 k=4096 batch=3 | triangular - | vendor -
-n=256 k=4096 batch=128 | triangular - | vendor -
-n=256 k=4096 batch=1024 | triangular - | vendor -
-n=256 k=4096 batch=8192 | triangular - | vendor -
-n=256 k=4096 batch=32768 | triangular - | vendor -
-n=512 k=1 batch=1 | vendor - | triangular -
-n=512 k=1 batch=2 | triangular - | vendor -
-n=512 k=1 batch=3 | triangular - | vendor -
-n=512 k=1 batch=128 | triangular - | vendor -
-n=512 k=1 batch=1024 | triangular - | vendor -
-n=512 k=1 batch=8192 | triangular - | vendor -
-n=512 k=1 batch=32768 | triangular - | vendor -
-n=512 k=8 batch=1 | vendor - | triangular -
-n=512 k=8 batch=2 | triangular - | vendor -
-n=512 k=8 batch=3 | triangular - | vendor -
-n=512 k=8 batch=128 | triangular - | vendor -
-n=512 k=8 batch=1024 | triangular - | vendor -
-n=512 k=8 batch=8192 | triangular - | vendor -
-n=512 k=8 batch=32768 | triangular - | vendor -
-n=512 k=64 batch=1 | vendor - | triangular -
-n=512 k=64 batch=2 | triangular - | vendor -
-n=512 k=64 batch=3 | triangular - | vendor -
-n=512 k=64 batch=128 | triangular - | vendor -
-n=512 k=64 batch=1024 | triangular - | vendor -
-n=512 k=64 batch=8192 | triangular - | vendor -
-n=512 k=64 batch=32768 | triangular - | vendor -
-n=512 k=512 batch=1 | vendor - | triangular -
-n=512 k=512 batch=2 | triangular - | vendor -
-n=512 k=512 batch=3 | triangular - | vendor -
-n=512 k=512 batch=128 | triangular - | vendor -
-n=512 k=512 batch=1024 | triangular - | vendor -
-n=512 k=512 batch=8192 | triangular - | vendor -
-n=512 k=512 batch=32768 | triangular - | vendor -
-n=512 k=4096 batch=1 | vendor - | triangular -
-n=512 k=4096 batch=2 | triangular - | vendor -
-n=512 k=4096 batch=3 | triangular - | vendor -
-n=512 k=4096 batch=128 | triangular - | vendor -
-n=512 k=4096 batch=1024 | triangular - | vendor -
-n=512 k=4096 batch=8192 | triangular - | vendor -
-n=512 k=4096 batch=32768 | triangular - | vendor -
-n=1024 k=1 batch=1 | vendor - | triangular -
-n=1024 k=1 batch=2 | triangular - | vendor -
-n=1024 k=1 batch=3 | triangular - | vendor -
-n=1024 k=1 batch=128 | triangular - | vendor -
-n=1024 k=1 batch=1024 | triangular - | vendor -
-n=1024 k=1 batch=8192 | triangular - | vendor -
-n=1024 k=1 batch=32768 | triangular - | vendor -
-n=1024 k=8 batch=1 | vendor - | triangular -
-n=1024 k=8 batch=2 | triangular - | vendor -
-n=1024 k=8 batch=3 | triangular - | vendor -
-n=1024 k=8 batch=128 | triangular - | vendor -
-n=1024 k=8 batch=1024 | triangular - | vendor -
-n=1024 k=8 batch=8192 | triangular - | vendor -
-n=1024 k=8 batch=32768 | triangular - | vendor -
-n=1024 k=64 batch=1 | vendor - | triangular -
-n=1024 k=64 batch=2 | triangular - | vendor -
-n=1024 k=64 batch=3 | triangular - | vendor -
-n=1024 k=64 batch=128 | triangular - | vendor -
-n=1024 k=64 batch=1024 | triangular - | vendor -
-n=1024 k=64 batch=8192 | triangular - | vendor -
-n=1024 k=64 batch=32768 | triangular - | vendor -
-n=1024 k=512 batch=1 | vendor - | triangular -
-n=1024 k=512 batch=2 | triangular - | vendor -
-n=1024 k=512 batch=3 | triangular - | vendor -
-n=1024 k=512 batch=128 | triangular - | vendor -
-n=1024 k=512 batch=1024 | triangular - | vendor -
-n=1024 k=512 batch=8192 | triangular - | vendor -
-n=1024 k=512 batch=32768 | triangular - | vendor -
-n=1024 k=4096 batch=1 | vendor - | triangular -
-n=1024 k=4096 batch=2 | triangular - | vendor -
-n=1024 k=4096 batch=3 | triangular - | vendor -
-n=1024 k=4096 batch=128 | triangular - | vendor -
-n=1024 k=4096 batch=1024 | triangular - | vendor -
-n=1024 k=4096 batch=8192 | triangular - | vendor -
-n=1024 k=4096 batch=32768 | triangular - | vendor -
-n=2048 k=1 batch=1 | vendor - | triangular -
-n=2048 k=1 batch=2 | triangular - | vendor -
-n=2048 k=1 batch=3 | triangular - | vendor -
-n=2048 k=1 batch=128 | triangular - | vendor -
-n=2048 k=1 batch=1024 | triangular - | vendor -
-n=2048 k=1 batch=8192 | triangular - | vendor -
-n=2048 k=1 batch=32768 | triangular - | vendor -
-n=2048 k=8 batch=1 | vendor - | triangular -
-n=2048 k=8 batch=2 | triangular - | vendor -
-n=2048 k=8 batch=3 | triangular - | vendor -
-n=2048 k=8 batch=128 | triangular - | vendor -
-n=2048 k=8 batch=1024 | triangular - | vendor -
-n=2048 k=8 batch=8192 | triangular - | vendor -
-n=2048 k=8 batch=32768 | triangular - | vendor -
-n=2048 k=64 batch=1 | vendor - | triangular -
-n=2048 k=64 batch=2 | triangular - | vendor -
-n=2048 k=64 batch=3 | triangular - | vendor -
-n=2048 k=64 batch=128 | triangular - | vendor -
-n=2048 k=64 batch=1024 | triangular - | vendor -
-n=2048 k=64 batch=8192 | triangular - | vendor -
-n=2048 k=64 batch=32768 | triangular - | vendor -
-n=2048 k=512 batch=1 | vendor - | triangular -
-n=2048 k=512 batch=2 | triangular - | vendor -
-n=2048 k=512 batch=3 | triangular - | vendor -
-n=2048 k=512 batch=128 | triangular - | vendor -
-n=2048 k=512 batch=1024 | triangular - | vendor -
-n=2048 k=512 batch=8192 | triangular - | vendor -
-n=2048 k=512 batch=32768 | triangular - | vendor -
-n=2048 k=4096 batch=1 | vendor - | triangular -
-n=2048 k=4096 batch=2 | triangular - | vendor -
-n=2048 k=4096 batch=3 | triangular - | vendor -
-n=2048 k=4096 batch=128 | triangular - | vendor -
-n=2048 k=4096 batch=1024 | triangular - | vendor -
-n=2048 k=4096 batch=8192 | triangular - | vendor -
-n=2048 k=4096 batch=32768 | triangular - | vendor -
-n=4096 k=1 batch=1 | vendor - | triangular -
-n=4096 k=1 batch=2 | triangular - | vendor -
-n=4096 k=1 batch=3 | triangular - | vendor -
-n=4096 k=1 batch=128 | triangular - | vendor -
-n=4096 k=1 batch=1024 | triangular - | vendor -
-n=4096 k=1 batch=8192 | triangular - | vendor -
-n=4096 k=1 batch=32768 | triangular - | vendor -
-n=4096 k=8 batch=1 | vendor - | triangular -
-n=4096 k=8 batch=2 | triangular - | vendor -
-n=4096 k=8 batch=3 | triangular - | vendor -
-n=4096 k=8 batch=128 | triangular - | vendor -
-n=4096 k=8 batch=1024 | triangular - | vendor -
-n=4096 k=8 batch=8192 | triangular - | vendor -
-n=4096 k=8 batch=32768 | triangular - | vendor -
-n=4096 k=64 batch=1 | vendor - | triangular -
-n=4096 k=64 batch=2 | triangular - | vendor -
-n=4096 k=64 batch=3 | triangular - | vendor -
-n=4096 k=64 batch=128 | triangular - | vendor -
-n=4096 k=64 batch=1024 | triangular - | vendor -
-n=4096 k=64 batch=8192 | triangular - | vendor -
-n=4096 k=64 batch=32768 | triangular - | vendor -
-n=4096 k=512 batch=1 | vendor - | triangular -
-n=4096 k=512 batch=2 | triangular - | vendor -
-n=4096 k=512 batch=3 | triangular - | vendor -
-n=4096 k=512 batch=128 | triangular - | vendor -
-n=4096 k=512 batch=1024 | triangular - | vendor -
-n=4096 k=512 batch=8192 | triangular - | vendor -
-n=4096 k=512 batch=32768 | triangular - | vendor -
-n=4096 k=4096 batch=1 | vendor - | triangular -
-n=4096 k=4096 batch=2 | triangular - | vendor -
-n=4096 k=4096 batch=3 | triangular - | vendor -
-n=4096 k=4096 batch=128 | triangular - | vendor -
-n=4096 k=4096 batch=1024 | triangular - | vendor -
-n=4096 k=4096 batch=8192 | triangular - | vendor -
-n=4096 k=4096 batch=32768 | triangular - | vendor -
+n=1 k=1 batch=1 | triangular 0.01124 | vendor 0.04708 # deep
+n=1 k=1 batch=2 | triangular 0.01048 | vendor 0.07240 # deep
+n=1 k=1 batch=3 | triangular 0.01051 | vendor 0.1196 # deep
+n=1 k=1 batch=128 | triangular 0.01126 | vendor 4.474 # deep
+n=1 k=1 batch=1024 | triangular 0.02535 | vendor 36.55 # deep
+n=1 k=1 batch=8192 | triangular 0.1266 | vendor 280.7 # deep
+n=1 k=1 batch=32768 | triangular 0.4728 | vendor 1120 # deep
+n=1 k=8 batch=1 | triangular 0.01151 | vendor 0.04110 # deep
+n=1 k=8 batch=2 | triangular 0.01054 | vendor 0.07548 # deep
+n=1 k=8 batch=3 | triangular 0.01100 | vendor 0.1113 # deep
+n=1 k=8 batch=128 | triangular 0.01169 | vendor 4.416 # deep
+n=1 k=8 batch=1024 | triangular 0.02493 | vendor 35.13 # deep
+n=1 k=8 batch=8192 | triangular 0.1252 | vendor 274.1 # deep
+n=1 k=8 batch=32768 | triangular 0.4674 | vendor 1090 # deep
+n=1 k=64 batch=1 | triangular 0.02095 | vendor 0.04269 # deep
+n=1 k=64 batch=2 | triangular 0.02120 | vendor 0.08134 # deep
+n=1 k=64 batch=3 | triangular 0.02016 | vendor 0.1125 # deep
+n=1 k=64 batch=128 | triangular 0.02129 | vendor 4.592 # deep
+n=1 k=64 batch=1024 | triangular 0.07601 | vendor 35.11 # deep
+n=1 k=64 batch=8192 | triangular 0.4982 | vendor 282.9 # deep
+n=1 k=64 batch=32768 | triangular 1.943 | vendor 1129 # deep
+n=1 k=181 batch=1 | triangular 0.04147 | vendor 0.04841 # deep
+n=1 k=181 batch=2 | triangular 0.04133 | vendor 0.08432 # deep
+n=1 k=206 batch=1 | triangular 0.04505 | vendor 0.04637 # deep
+n=1 k=220 batch=1 | triangular 0.04824 | vendor 0.04757 # deep
+n=1 k=235 batch=1 | vendor 0.04642 | triangular 0.05068 # deep
+n=1 k=304 batch=1 | vendor 0.05040 | triangular 0.06161 # deep
+n=1 k=304 batch=2 | triangular 0.06138 | vendor 0.08783 # deep
+n=1 k=395 batch=2 | triangular 0.07751 | vendor 0.09031 # deep
+n=1 k=450 batch=2 | triangular 0.08800 | vendor 0.09244 # deep
+n=1 k=480 batch=2 | triangular 0.09144 | vendor 0.09429 # deep
+n=1 k=512 batch=1 | vendor 0.05612 | triangular 0.09638 # deep
+n=1 k=512 batch=2 | vendor 0.09216 | triangular 0.09716 # deep
+n=1 k=512 batch=3 | triangular 0.09740 | vendor 0.1262 # deep
+n=1 k=512 batch=128 | triangular 0.09839 | vendor 5.100 # deep
+n=1 k=512 batch=1024 | triangular 0.4882 | vendor 40.01 # deep
+n=1 k=512 batch=8192 | triangular 3.488 | vendor 312.1 # deep
+n=1 k=512 batch=32768 | triangular 14.34 | vendor 1233 # deep
+n=1 k=4096 batch=1 | vendor 0.1352 | triangular 0.7092 # deep
+n=1 k=4096 batch=2 | vendor 0.2373 | triangular 0.7014 # deep
+n=1 k=4096 batch=3 | triangular 0.7094 # deep
+n=1 k=4096 batch=128 | triangular 0.7168 # deep
+n=1 k=4096 batch=1024 | triangular 4.046 # deep
+n=1 k=4096 batch=8192 | triangular 32.53 # deep
+n=1 k=4096 batch=32768 | triangular 134.7 # deep
+n=2 k=1 batch=1 | triangular 0.01167 | vendor 0.04319 # deep
+n=2 k=1 batch=2 | triangular 0.01095 | vendor 0.07383 # deep
+n=2 k=1 batch=3 | triangular 0.01004 | vendor 0.1139 # deep
+n=2 k=1 batch=128 | triangular 0.01154 | vendor 4.656 # deep
+n=2 k=1 batch=1024 | triangular 0.02722 | vendor 34.70 # deep
+n=2 k=1 batch=8192 | triangular 0.1304 | vendor 276.7 # deep
+n=2 k=1 batch=32768 | triangular 0.4861 | vendor 1130 # deep
+n=2 k=8 batch=1 | triangular 0.01153 | vendor 0.04205 # deep
+n=2 k=8 batch=2 | triangular 0.01120 | vendor 0.08085 # deep
+n=2 k=8 batch=3 | triangular 0.01100 | vendor 0.1139 # deep
+n=2 k=8 batch=128 | triangular 0.01113 | vendor 4.085 # deep
+n=2 k=8 batch=1024 | triangular 0.02594 | vendor 34.29 # deep
+n=2 k=8 batch=8192 | triangular 0.1320 | vendor 273.3 # deep
+n=2 k=8 batch=32768 | triangular 0.4900 | vendor 1085 # deep
+n=2 k=64 batch=1 | triangular 0.02109 | vendor 0.04160 # deep
+n=2 k=64 batch=2 | triangular 0.02118 | vendor 0.08179 # deep
+n=2 k=64 batch=3 | triangular 0.02058 | vendor 0.1264 # deep
+n=2 k=64 batch=128 | triangular 0.02133 | vendor 4.510 # deep
+n=2 k=64 batch=1024 | triangular 0.07804 | vendor 35.47 # deep
+n=2 k=64 batch=8192 | triangular 0.4958 | vendor 287.6 # deep
+n=2 k=64 batch=32768 | triangular 1.950 | vendor 1132 # deep
+n=2 k=181 batch=1 | triangular 0.04140 | vendor 0.04792 # deep
+n=2 k=206 batch=1 | triangular 0.04551 | vendor 0.04601 # deep
+n=2 k=220 batch=1 | vendor 0.04628 | triangular 0.04799 # deep
+n=2 k=235 batch=1 | vendor 0.04922 | triangular 0.05077 # deep
+n=2 k=304 batch=1 | vendor 0.05104 | triangular 0.06180 # deep
+n=2 k=512 batch=1 | vendor 0.05748 | triangular 0.09685 # deep
+n=2 k=512 batch=2 | triangular 0.09846 | vendor 0.09704 # deep
+n=2 k=512 batch=3 | triangular 0.09744 | vendor 0.1304 # deep
+n=2 k=512 batch=128 | triangular 0.09965 | vendor 4.943 # deep
+n=2 k=512 batch=1024 | triangular 0.4970 | vendor 38.24 # deep
+n=2 k=512 batch=8192 | triangular 3.541 | vendor 310.1 # deep
+n=2 k=512 batch=32768 | triangular 14.88 | vendor 1222 # deep
+n=2 k=546 batch=2 | vendor 0.09626 | triangular 0.1033 # deep
+n=2 k=583 batch=2 | vendor 0.08976 | triangular 0.1083 # deep
+n=2 k=664 batch=2 | vendor 0.09692 | triangular 0.1242 # deep
+n=2 k=861 batch=2 | vendor 0.1075 | triangular 0.1575 # deep
+n=2 k=1448 batch=2 | vendor 0.1177 | triangular 0.2573 # deep
+n=2 k=4096 batch=1 | vendor 0.1367 | triangular 0.7064 # deep
+n=2 k=4096 batch=2 | vendor 0.2386 | triangular 0.7086 # deep
+n=2 k=4096 batch=3 | triangular 0.7018 # deep
+n=2 k=4096 batch=128 | triangular 0.7135 # deep
+n=2 k=4096 batch=1024 | triangular 4.071 # deep
+n=2 k=4096 batch=8192 | triangular 33.10 # deep
+n=2 k=4096 batch=32768 | triangular 132.0 # deep
+n=3 k=1 batch=1 | triangular 0.01190 | vendor 0.04156 # deep
+n=3 k=8 batch=1 | triangular 0.01193 | vendor 0.03918 # deep
+n=3 k=64 batch=1 | triangular 0.02173 | vendor 0.04414 # deep
+n=3 k=64 batch=2 | triangular 0.02173 | vendor 0.08021 # deep
+n=3 k=181 batch=2 | triangular 0.04281 | vendor 0.08436 # deep
+n=3 k=304 batch=2 | triangular 0.06278 | vendor 0.08106 # deep
+n=3 k=395 batch=2 | triangular 0.08024 | vendor 0.08713 # deep
+n=3 k=450 batch=2 | triangular 0.08957 | vendor 0.08989 # deep
+n=3 k=480 batch=2 | triangular 0.09405 | vendor 0.09262 # deep
+n=3 k=512 batch=2 | vendor 0.09030 | triangular 0.09881 # deep
+n=3 k=512 batch=3 | triangular 0.09983 | vendor 0.1359 # deep
+n=4 k=1 batch=1 | vendor 0.009905 | triangular 0.01230 # deep
+n=4 k=1 batch=2 | triangular 0.01169 | vendor 0.01239 # deep
+n=4 k=1 batch=3 | triangular 0.01199 | vendor 0.01583 # deep
+n=4 k=1 batch=128 | triangular 0.01188 | vendor 0.4209 # deep
+n=4 k=1 batch=1024 | triangular 0.02766 | vendor 3.114 # deep
+n=4 k=1 batch=8192 | triangular 0.1480 | vendor 26.61 # deep
+n=4 k=1 batch=32768 | triangular 0.5540 | vendor 105.8 # deep
+n=4 k=8 batch=1 | vendor 0.01001 | triangular 0.01223 # deep
+n=4 k=8 batch=2 | triangular 0.01174 | vendor 0.01249 # deep
+n=4 k=8 batch=3 | triangular 0.01180 | vendor 0.01525 # deep
+n=4 k=8 batch=128 | triangular 0.01192 | vendor 0.4218 # deep
+n=4 k=8 batch=1024 | triangular 0.02769 | vendor 3.397 # deep
+n=4 k=8 batch=8192 | triangular 0.1483 | vendor 25.77 # deep
+n=4 k=8 batch=32768 | triangular 0.5644 | vendor 105.4 # deep
+n=4 k=23 batch=2 | triangular 0.01498 | vendor 0.01480 # deep
+n=4 k=24 batch=2 | triangular 0.01499 | vendor 0.01465 # deep
+n=4 k=26 batch=2 | vendor 0.01524 | triangular 0.01636 # deep
+n=4 k=30 batch=2 | vendor 0.01477 | triangular 0.01611 # deep
+n=4 k=38 batch=2 | vendor 0.01665 | triangular 0.01724 # deep
+n=4 k=64 batch=1 | vendor 0.01223 | triangular 0.02193 # deep
+n=4 k=64 batch=2 | vendor 0.01672 | triangular 0.02140 # deep
+n=4 k=64 batch=3 | triangular 0.02157 | vendor 0.02116 # deep
+n=4 k=64 batch=128 | triangular 0.02248 | vendor 0.6293 # deep
+n=4 k=64 batch=1024 | triangular 0.08143 | vendor 4.981 # deep
+n=4 k=64 batch=8192 | triangular 0.5249 | vendor 39.78 # deep
+n=4 k=64 batch=32768 | triangular 1.994 | vendor 157.6 # deep
+n=4 k=108 batch=3 | triangular 0.02970 | vendor 0.02909 # deep
+n=4 k=115 batch=3 | triangular 0.03171 | vendor 0.03099 # deep
+n=4 k=123 batch=3 | vendor 0.03074 | triangular 0.03277 # deep
+n=4 k=140 batch=3 | vendor 0.03362 | triangular 0.03599 # deep
+n=4 k=181 batch=3 | vendor 0.03977 | triangular 0.04222 # deep
+n=4 k=512 batch=1 | vendor 0.03229 | triangular 0.09984 # deep
+n=4 k=512 batch=2 | vendor 0.05753 | triangular 0.09978 # deep
+n=4 k=512 batch=3 | vendor 0.08249 | triangular 0.09939 # deep
+n=4 k=512 batch=128 | triangular 0.1012 | vendor 3.246 # deep
+n=4 k=512 batch=1024 | triangular 0.5071 | vendor 25.93 # deep
+n=4 k=512 batch=8192 | triangular 3.645 | vendor 205.5 # deep
+n=4 k=512 batch=32768 | triangular 15.24 | vendor 843.1 # deep
+n=4 k=1448 batch=3 | vendor 0.1856 | triangular 0.2640 # deep
+n=4 k=4096 batch=1 | vendor 0.09517 | triangular 0.7303 # deep
+n=4 k=4096 batch=2 | vendor 0.1490 | triangular 0.7295 # deep
+n=4 k=4096 batch=3 | triangular 0.7290 # deep
+n=4 k=4096 batch=128 | triangular 0.7320 # deep
+n=4 k=4096 batch=1024 | triangular 4.330 # deep
+n=4 k=4096 batch=8192 | triangular 34.09 # deep
+n=5 k=38 batch=2 | triangular 0.01834 | vendor 0.1132 # deep
+n=6 k=23 batch=2 | triangular 0.01515 | vendor 0.07054 # deep
+n=6 k=38 batch=2 | triangular 0.01803 | vendor 0.07454 # deep
+n=7 k=23 batch=2 | triangular 0.01573 | vendor 0.06876 # deep
+n=8 k=1 batch=1 | vendor 0.009970 | triangular 0.01309 # deep
+n=8 k=1 batch=2 | triangular 0.01335 | vendor 0.01330 # deep
+n=8 k=1 batch=3 | triangular 0.01296 | vendor 0.01567 # deep
+n=8 k=1 batch=128 | triangular 0.01323 | vendor 0.4161 # deep
+n=8 k=1 batch=1024 | triangular 0.03174 | vendor 3.343 # deep
+n=8 k=1 batch=8192 | triangular 0.1720 | vendor 25.63 # deep
+n=8 k=1 batch=32768 | triangular 0.6609 | vendor 106.0 # deep
+n=8 k=8 batch=1 | vendor 0.01014 | triangular 0.01315 # deep
+n=8 k=8 batch=2 | triangular 0.01307 | vendor 0.01336 # deep
+n=8 k=8 batch=3 | triangular 0.01306 | vendor 0.01614 # deep
+n=8 k=8 batch=128 | triangular 0.01324 | vendor 0.4133 # deep
+n=8 k=8 batch=1024 | triangular 0.03137 | vendor 3.525 # deep
+n=8 k=8 batch=8192 | triangular 0.1760 | vendor 28.34 # deep
+n=8 k=8 batch=32768 | triangular 0.6690 | vendor 107.2 # deep
+n=8 k=9 batch=2 | vendor 0.01276 | triangular 0.01432 # deep
+n=8 k=11 batch=2 | vendor 0.01312 | triangular 0.01476 # deep
+n=8 k=14 batch=2 | vendor 0.01342 | triangular 0.01494 # deep
+n=8 k=23 batch=2 | vendor 0.01528 | triangular 0.01618 # deep
+n=8 k=64 batch=1 | vendor 0.01262 | triangular 0.02345 # deep
+n=8 k=64 batch=2 | vendor 0.01772 | triangular 0.02304 # deep
+n=8 k=64 batch=3 | triangular 0.02273 | vendor 0.02257 # deep
+n=8 k=64 batch=128 | triangular 0.02343 | vendor 0.6942 # deep
+n=8 k=64 batch=1024 | triangular 0.08567 | vendor 5.480 # deep
+n=8 k=64 batch=8192 | triangular 0.5463 | vendor 43.96 # deep
+n=8 k=64 batch=32768 | triangular 2.244 | vendor 176.3 # deep
+n=8 k=108 batch=3 | triangular 0.03090 | vendor 0.03080 # deep
+n=8 k=115 batch=3 | triangular 0.03236 | vendor 0.03196 # deep
+n=8 k=123 batch=3 | vendor 0.03298 | triangular 0.03428 # deep
+n=8 k=140 batch=3 | vendor 0.03528 | triangular 0.03731 # deep
+n=8 k=181 batch=3 | vendor 0.04217 | triangular 0.04412 # deep
+n=8 k=512 batch=1 | vendor 0.03269 | triangular 0.1001 # deep
+n=8 k=512 batch=2 | vendor 0.05847 | triangular 0.1010 # deep
+n=8 k=512 batch=3 | vendor 0.08422 | triangular 0.1009 # deep
+n=8 k=512 batch=128 | triangular 0.1032 | vendor 3.328 # deep
+n=8 k=512 batch=1024 | triangular 0.5181 | vendor 26.45 # deep
+n=8 k=512 batch=8192 | triangular 3.955 | vendor 216.8 # deep
+n=8 k=512 batch=32768 | triangular 15.99 | vendor 876.5 # deep
+n=8 k=1448 batch=3 | vendor 0.1957 | triangular 0.2657 # deep
+n=8 k=4096 batch=1 | vendor 0.1088 | triangular 0.7268 # deep
+n=8 k=4096 batch=2 | vendor 0.1732 | triangular 0.7200 # deep
+n=8 k=4096 batch=3 | triangular 0.7201 # deep
+n=8 k=4096 batch=128 | triangular 0.7302 # deep
+n=8 k=4096 batch=1024 | triangular 4.608 # deep
+n=8 k=4096 batch=8192 | triangular 36.81 # deep
+n=9 k=38 batch=2 | triangular 0.01900 | vendor 0.07704 # deep
+n=16 k=1 batch=1 | vendor 0.01003 | triangular 0.01307 # deep
+n=16 k=1 batch=2 | triangular 0.01330 | vendor 0.01318 # deep
+n=16 k=1 batch=3 | triangular 0.01316 | vendor 0.01574 # deep
+n=16 k=1 batch=128 | triangular 0.01306 | vendor 0.3981 # deep
+n=16 k=1 batch=1024 | triangular 0.03127 | vendor 3.201 # deep
+n=16 k=1 batch=8192 | triangular 0.1751 | vendor 26.88 # deep
+n=16 k=1 batch=32768 | triangular 0.6665 | vendor 108.1 # deep
+n=16 k=8 batch=1 | vendor 0.01034 | triangular 0.01348 # deep
+n=16 k=8 batch=2 | triangular 0.01346 | vendor 0.01336 # deep
+n=16 k=8 batch=3 | triangular 0.01333 | vendor 0.01637 # deep
+n=16 k=8 batch=128 | triangular 0.01336 | vendor 0.4206 # deep
+n=16 k=8 batch=1024 | triangular 0.03201 | vendor 3.330 # deep
+n=16 k=8 batch=8192 | triangular 0.1781 | vendor 25.95 # deep
+n=16 k=8 batch=32768 | triangular 0.6793 | vendor 115.0 # deep
+n=16 k=9 batch=2 | vendor 0.01316 | triangular 0.01468 # deep
+n=16 k=11 batch=2 | vendor 0.01314 | triangular 0.01448 # deep
+n=16 k=14 batch=2 | vendor 0.01318 | triangular 0.01462 # deep
+n=16 k=23 batch=2 | vendor 0.01523 | triangular 0.01654 # deep
+n=16 k=64 batch=1 | vendor 0.01239 | triangular 0.02322 # deep
+n=16 k=64 batch=2 | vendor 0.01754 | triangular 0.02265 # deep
+n=16 k=64 batch=3 | triangular 0.02289 | vendor 0.02287 # deep
+n=16 k=64 batch=128 | triangular 0.02309 | vendor 0.6937 # deep
+n=16 k=64 batch=1024 | triangular 0.08595 | vendor 5.494 # deep
+n=16 k=64 batch=8192 | triangular 0.5491 | vendor 44.11 # deep
+n=16 k=64 batch=32768 | triangular 2.386 | vendor 201.7 # deep
+n=16 k=108 batch=3 | triangular 0.03128 | vendor 0.03113 # deep
+n=16 k=115 batch=3 | triangular 0.03252 | vendor 0.03210 # deep
+n=16 k=123 batch=3 | vendor 0.03251 | triangular 0.03391 # deep
+n=16 k=140 batch=3 | vendor 0.03515 | triangular 0.03686 # deep
+n=16 k=181 batch=3 | vendor 0.04236 | triangular 0.04402 # deep
+n=16 k=512 batch=1 | vendor 0.03320 | triangular 0.1012 # deep
+n=16 k=512 batch=2 | vendor 0.05863 | triangular 0.1010 # deep
+n=16 k=512 batch=3 | vendor 0.08418 | triangular 0.1010 # deep
+n=16 k=512 batch=128 | triangular 0.1019 | vendor 3.317 # deep
+n=16 k=512 batch=1024 | triangular 0.5189 | vendor 26.48 # deep
+n=16 k=512 batch=8192 | triangular 4.189 | vendor 218.4 # deep
+n=16 k=512 batch=32768 | triangular 16.67 | vendor 881.0 # deep
+n=16 k=1448 batch=3 | vendor 0.1980 | triangular 0.2631 # deep
+n=16 k=4096 batch=1 | vendor 0.1043 | triangular 0.7273 # deep
+n=16 k=4096 batch=2 | vendor 0.1705 | triangular 0.7194 # deep
+n=16 k=4096 batch=3 | triangular 0.7290 # deep
+n=16 k=4096 batch=128 | triangular 0.7376 # deep
+n=16 k=4096 batch=1024 | triangular 4.929 # deep
+n=16 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=17 k=11 batch=2 | triangular 0.01403 | vendor 0.07475 # deep
+n=19 k=11 batch=2 | triangular 0.01424 | vendor 0.07506 # deep
+n=19 k=38 batch=2 | triangular 0.01879 | vendor 0.07016 # deep
+n=23 k=11 batch=2 | triangular 0.01440 | vendor 0.07119 # deep
+n=23 k=64 batch=3 | triangular 0.02304 | vendor 0.1122 # deep
+n=27 k=64 batch=3 | triangular 0.02276 | vendor 0.1136 # deep
+n=29 k=64 batch=3 | triangular 0.02276 | vendor 0.1175 # deep
+n=30 k=64 batch=3 | triangular 0.02282 | vendor 0.1087 # deep
+n=32 k=1 batch=1 | vendor 0.009735 | triangular 0.01287 # deep
+n=32 k=1 batch=2 | triangular 0.01326 | vendor 0.01316 # deep
+n=32 k=1 batch=3 | triangular 0.01324 | vendor 0.01579 # deep
+n=32 k=1 batch=128 | triangular 0.01304 | vendor 0.4150 # deep
+n=32 k=1 batch=1024 | triangular 0.03244 | vendor 3.533 # deep
+n=32 k=1 batch=8192 | triangular 0.1780 | vendor 26.40 # deep
+n=32 k=1 batch=32768 | triangular 0.7979 | vendor 131.6 # deep
+n=32 k=8 batch=1 | vendor 0.01002 | triangular 0.01356 # deep
+n=32 k=8 batch=2 | triangular 0.01326 | vendor 0.01290 # deep
+n=32 k=8 batch=3 | triangular 0.01352 | vendor 0.01585 # deep
+n=32 k=8 batch=128 | triangular 0.01317 | vendor 0.4014 # deep
+n=32 k=8 batch=1024 | triangular 0.03186 | vendor 3.210 # deep
+n=32 k=8 batch=8192 | triangular 0.1799 | vendor 26.77 # deep
+n=32 k=8 batch=32768 | triangular 0.8305 | vendor 136.5 # deep
+n=32 k=11 batch=2 | triangular 0.01497 | vendor 0.01747 # deep
+n=32 k=12 batch=2 | vendor 0.01248 | triangular 0.01438 # deep
+n=32 k=14 batch=2 | vendor 0.01314 | triangular 0.01515 # deep
+n=32 k=23 batch=2 | vendor 0.01471 | triangular 0.01605 # deep
+n=32 k=23 batch=3 | triangular 0.01607 | vendor 0.01830 # deep
+n=32 k=38 batch=3 | triangular 0.01926 | vendor 0.02157 # deep
+n=32 k=49 batch=3 | triangular 0.02163 | vendor 0.02376 # deep
+n=32 k=52 batch=3 | vendor 0.02061 | triangular 0.02214 # deep
+n=32 k=56 batch=3 | vendor 0.02012 | triangular 0.02140 # deep
+n=32 k=64 batch=1 | vendor 0.01034 | triangular 0.02295 # deep
+n=32 k=64 batch=2 | vendor 0.01381 | triangular 0.02330 # deep
+n=32 k=64 batch=3 | vendor 0.01707 | triangular 0.02307 # deep
+n=32 k=64 batch=128 | triangular 0.02392 | vendor 0.4456 # deep
+n=32 k=64 batch=1024 | triangular 0.08741 | vendor 3.517 # deep
+n=32 k=64 batch=8192 | triangular 0.6428 | vendor 31.66 # deep
+n=32 k=64 batch=32768 | triangular 2.641 | vendor 142.9 # deep
+n=32 k=512 batch=1 | vendor 0.02011 | triangular 0.1018 # deep
+n=32 k=512 batch=2 | vendor 0.03303 | triangular 0.1013 # deep
+n=32 k=512 batch=3 | vendor 0.04584 | triangular 0.1002 # deep
+n=32 k=512 batch=128 | triangular 0.1028 | vendor 1.662 # deep
+n=32 k=512 batch=1024 | triangular 0.5919 | vendor 13.76 # deep
+n=32 k=512 batch=8192 | triangular 4.402 | vendor 114.5 # deep
+n=32 k=1448 batch=3 | vendor 0.1553 | triangular 0.2648 # deep
+n=32 k=4096 batch=1 | vendor 0.08277 | triangular 0.7302 # deep
+n=32 k=4096 batch=2 | vendor 0.1198 | triangular 0.7246 # deep
+n=32 k=4096 batch=3 | triangular 0.7203 # deep
+n=32 k=4096 batch=128 | triangular 0.8518 # deep
+n=32 k=4096 batch=1024 | triangular 5.103 # deep
+n=32 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=45 k=11 batch=2 | triangular 0.01426 | vendor 0.07505 # deep
+n=54 k=11 batch=2 | triangular 0.01415 | vendor 0.07158 # deep
+n=59 k=11 batch=2 | triangular 0.01449 | vendor 0.08115 # deep
+n=64 k=1 batch=1 | vendor 0.009920 | triangular 0.01302 # deep
+n=64 k=1 batch=2 | triangular 0.01310 | vendor 0.01295 # deep
+n=64 k=1 batch=3 | triangular 0.01345 | vendor 0.01654 # deep
+n=64 k=1 batch=128 | triangular 0.01287 | vendor 0.3977 # deep
+n=64 k=1 batch=1024 | triangular 0.03370 | vendor 3.196 # deep
+n=64 k=1 batch=8192 | triangular 0.2363 | vendor 34.11 # deep
+n=64 k=1 batch=32768 | triangular 0.8995 | vendor 136.3 # deep
+n=64 k=8 batch=1 | vendor 0.01023 | triangular 0.01304 # deep
+n=64 k=8 batch=2 | triangular 0.01309 | vendor 0.01309 # deep
+n=64 k=8 batch=3 | triangular 0.01335 | vendor 0.01609 # deep
+n=64 k=8 batch=128 | triangular 0.01390 | vendor 0.4418 # deep
+n=64 k=8 batch=1024 | triangular 0.03401 | vendor 3.182 # deep
+n=64 k=8 batch=8192 | triangular 0.2484 | vendor 34.84 # deep
+n=64 k=8 batch=32768 | triangular 0.9520 | vendor 138.3 # deep
+n=64 k=9 batch=2 | vendor 0.01298 | triangular 0.01441 # deep
+n=64 k=11 batch=2 | vendor 0.01297 | triangular 0.01434 # deep
+n=64 k=14 batch=2 | vendor 0.01308 | triangular 0.01463 # deep
+n=64 k=23 batch=2 | vendor 0.01484 | triangular 0.01590 # deep
+n=64 k=23 batch=3 | triangular 0.01608 | vendor 0.01851 # deep
+n=64 k=38 batch=3 | triangular 0.01878 | vendor 0.02110 # deep
+n=64 k=49 batch=3 | triangular 0.02189 | vendor 0.02392 # deep
+n=64 k=52 batch=3 | vendor 0.02052 | triangular 0.02199 # deep
+n=64 k=56 batch=3 | vendor 0.02084 | triangular 0.02196 # deep
+n=64 k=64 batch=1 | vendor 0.01037 | triangular 0.02311 # deep
+n=64 k=64 batch=2 | vendor 0.01418 | triangular 0.02321 # deep
+n=64 k=64 batch=3 | vendor 0.01733 | triangular 0.02312 # deep
+n=64 k=64 batch=128 | triangular 0.02412 | vendor 0.4550 # deep
+n=64 k=64 batch=1024 | triangular 0.09207 | vendor 3.581 # deep
+n=64 k=64 batch=8192 | triangular 0.7688 | vendor 36.67 # deep
+n=64 k=64 batch=32768 | triangular 3.057 | vendor 145.6 # deep
+n=64 k=512 batch=1 | vendor 0.02004 | triangular 0.1055 # deep
+n=64 k=512 batch=2 | vendor 0.03314 | triangular 0.1019 # deep
+n=64 k=512 batch=3 | vendor 0.04561 | triangular 0.1017 # deep
+n=64 k=512 batch=128 | triangular 0.1050 | vendor 1.674 # deep
+n=64 k=512 batch=1024 | triangular 0.6739 | vendor 14.16 # deep
+n=64 k=512 batch=8192 | triangular 5.043 | vendor 114.7 # deep
+n=64 k=1448 batch=2 | vendor 0.1164 | triangular 0.2680 # deep
+n=64 k=1448 batch=3 | vendor 0.1595 | triangular 0.2709 # deep
+n=64 k=4096 batch=1 | vendor 0.08333 | triangular 0.7427 # deep
+n=64 k=4096 batch=2 | vendor 0.1263 | triangular 0.7351 # deep
+n=64 k=4096 batch=3 | triangular 0.7404 # deep
+n=64 k=4096 batch=128 | triangular 0.9453 # deep
+n=64 k=4096 batch=1024 | triangular 5.811 # deep
+n=64 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=91 k=1 batch=2 | triangular 0.01770 | vendor 0.08026 # deep
+n=91 k=1 batch=3 | triangular 0.01759 | vendor 0.1172 # deep
+n=91 k=8 batch=2 | triangular 0.01761 | vendor 0.07874 # deep
+n=91 k=8 batch=3 | triangular 0.01803 | vendor 0.1087 # deep
+n=91 k=38 batch=2 | triangular 0.02413 | vendor 0.07789 # deep
+n=99 k=1 batch=2 | triangular 0.01766 | vendor 0.07935 # deep
+n=99 k=1 batch=3 | triangular 0.01781 | vendor 0.1175 # deep
+n=99 k=8 batch=2 | triangular 0.01779 | vendor 0.07349 # deep
+n=99 k=8 batch=3 | triangular 0.01779 | vendor 0.1130 # deep
+n=108 k=1 batch=2 | vendor 0.01301 | triangular 0.01741 # deep
+n=108 k=1 batch=3 | vendor 0.01628 | triangular 0.01764 # deep
+n=108 k=8 batch=2 | vendor 0.01361 | triangular 0.01807 # deep
+n=108 k=8 batch=3 | vendor 0.01570 | triangular 0.01686 # deep
+n=128 k=1 batch=1 | vendor 0.009800 | triangular 0.01674 # deep
+n=128 k=1 batch=2 | vendor 0.01324 | triangular 0.01746 # deep
+n=128 k=1 batch=3 | vendor 0.01586 | triangular 0.01705 # deep
+n=128 k=1 batch=128 | triangular 0.01801 | vendor 0.4360 # deep
+n=128 k=1 batch=1024 | triangular 0.06009 | vendor 3.270 # deep
+n=128 k=1 batch=8192 | triangular 0.4956 | vendor 35.15 # deep
+n=128 k=8 batch=1 | vendor 0.009880 | triangular 0.01676 # deep
+n=128 k=8 batch=2 | vendor 0.01318 | triangular 0.01631 # deep
+n=128 k=8 batch=3 | vendor 0.01594 | triangular 0.01709 # deep
+n=128 k=8 batch=128 | triangular 0.01776 | vendor 0.4168 # deep
+n=128 k=8 batch=1024 | triangular 0.06212 | vendor 3.478 # deep
+n=128 k=8 batch=8192 | triangular 0.5128 | vendor 35.30 # deep
+n=128 k=64 batch=1 | vendor 0.01010 | triangular 0.02697 # deep
+n=128 k=64 batch=2 | vendor 0.01394 | triangular 0.02775 # deep
+n=128 k=64 batch=3 | vendor 0.01758 | triangular 0.02776 # deep
+n=128 k=64 batch=128 | triangular 0.02882 | vendor 0.4617 # deep
+n=128 k=64 batch=1024 | triangular 0.1406 | vendor 4.103 # deep
+n=128 k=64 batch=8192 | triangular 1.096 | vendor 37.54 # deep
+n=128 k=181 batch=3 | vendor 0.03455 | triangular 0.04975 # deep
+n=128 k=512 batch=1 | vendor 0.02029 | triangular 0.1115 # deep
+n=128 k=512 batch=2 | vendor 0.03357 | triangular 0.1118 # deep
+n=128 k=512 batch=3 | vendor 0.04613 | triangular 0.1110 # deep
+n=128 k=512 batch=128 | triangular 0.1176 | vendor 1.691 # deep
+n=128 k=512 batch=1024 | triangular 0.8240 | vendor 14.59 # deep
+n=128 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=128 k=1448 batch=3 | vendor 0.1577 | triangular 0.2851 # deep
+n=128 k=4096 batch=1 | vendor 0.08197 | triangular 0.7800 # deep
+n=128 k=4096 batch=2 | vendor 0.1277 | triangular 0.7736 # deep
+n=128 k=4096 batch=3 | triangular 0.7716 # deep
+n=128 k=4096 batch=128 | triangular 1.156 # deep
+n=128 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=128 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=137 k=181 batch=3 | triangular 0.05333 | vendor 0.1180 # deep
+n=146 k=181 batch=3 | triangular 0.05336 | vendor 0.1231 # deep
+n=152 k=56 batch=3 | vendor 0.02309 | triangular 0.02665 # deep
+n=160 k=56 batch=3 | vendor 0.02103 | triangular 0.02688 # deep
+n=166 k=181 batch=3 | triangular 0.05385 | vendor 0.1170 # deep
+n=169 k=56 batch=3 | triangular 0.02817 | vendor 0.1105 # deep
+n=189 k=56 batch=3 | triangular 0.02783 | vendor 0.1032 # deep
+n=215 k=181 batch=3 | triangular 0.05985 | vendor 0.1231 # deep
+n=235 k=56 batch=3 | triangular 0.03131 | vendor 0.09972 # deep
+n=256 k=1 batch=1 | vendor 0.01043 | triangular 0.01784 # deep
+n=256 k=1 batch=2 | vendor 0.01326 | triangular 0.01771 # deep
+n=256 k=1 batch=3 | vendor 0.01600 | triangular 0.01757 # deep
+n=256 k=1 batch=128 | triangular 0.03801 | vendor 0.4063 # deep
+n=256 k=1 batch=1024 | triangular 0.2338 | vendor 4.388 # deep
+n=256 k=1 batch=32768 | triangular - | vendor - # transcribed
+n=256 k=8 batch=1 | vendor 0.01019 | triangular 0.01718 # deep
+n=256 k=8 batch=2 | vendor 0.01327 | triangular 0.01770 # deep
+n=256 k=8 batch=3 | vendor 0.01630 | triangular 0.01786 # deep
+n=256 k=8 batch=128 | triangular 0.02866 | vendor 0.4091 # deep
+n=256 k=8 batch=1024 | triangular 0.2247 | vendor 4.464 # deep
+n=256 k=8 batch=32768 | triangular - | vendor - # transcribed
+n=256 k=64 batch=1 | vendor 0.01021 | triangular 0.02718 # deep
+n=256 k=64 batch=2 | vendor 0.01428 | triangular 0.02809 # deep
+n=256 k=64 batch=3 | vendor 0.01749 | triangular 0.02760 # deep
+n=256 k=64 batch=128 | triangular 0.06105 | vendor 0.4685 # deep
+n=256 k=64 batch=1024 | triangular 0.3965 | vendor 4.819 # deep
+n=256 k=64 batch=32768 | triangular - | vendor - # transcribed
+n=256 k=512 batch=1 | vendor 0.02001 | triangular 0.1162 # deep
+n=256 k=512 batch=2 | vendor 0.03340 | triangular 0.1162 # deep
+n=256 k=512 batch=3 | vendor 0.04650 | triangular 0.1167 # deep
+n=256 k=512 batch=128 | triangular 0.3722 | vendor 1.791 # deep
+n=256 k=512 batch=1024 | triangular 2.314 | vendor 14.78 # deep
+n=256 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=256 k=1448 batch=3 | vendor 0.1544 | triangular 0.3069 # deep
+n=256 k=4096 batch=1 | vendor 0.1042 | triangular 0.8461 # deep
+n=256 k=4096 batch=2 | vendor 0.1669 | triangular 0.8500 # deep
+n=256 k=4096 batch=3 | triangular 0.8452 # deep
+n=256 k=4096 batch=128 | triangular 3.071 # deep
+n=256 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=256 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=362 k=56 batch=3 | triangular 0.03068 | vendor 0.09396 # deep
+n=362 k=181 batch=3 | triangular 0.06019 | vendor 0.1028 # deep
+n=362 k=1448 batch=2 | vendor 0.1236 | triangular 0.3539 # deep
+n=512 k=1 batch=1 | vendor 0.01028 | triangular 0.01866 # deep
+n=512 k=1 batch=2 | vendor 0.01366 | triangular 0.01875 # deep
+n=512 k=1 batch=3 | vendor 0.01730 | triangular 0.01891 # deep
+n=512 k=1 batch=128 | triangular 0.1098 | vendor 0.6049 # deep
+n=512 k=1 batch=1024 | triangular 0.8053 | vendor 4.948 # deep
+n=512 k=1 batch=32768 | triangular - | vendor - # transcribed
+n=512 k=8 batch=1 | vendor 0.009845 | triangular 0.01712 # deep
+n=512 k=8 batch=2 | vendor 0.01324 | triangular 0.01744 # deep
+n=512 k=8 batch=3 | vendor 0.01611 | triangular 0.01746 # deep
+n=512 k=8 batch=128 | triangular 0.1026 | vendor 0.6029 # deep
+n=512 k=8 batch=1024 | triangular 0.8115 | vendor 4.927 # deep
+n=512 k=8 batch=32768 | triangular - | vendor - # transcribed
+n=512 k=64 batch=1 | vendor 0.01194 | triangular 0.02758 # deep
+n=512 k=64 batch=2 | vendor 0.01594 | triangular 0.02666 # deep
+n=512 k=64 batch=3 | vendor 0.02164 | triangular 0.02787 # deep
+n=512 k=64 batch=128 | triangular 0.1750 | vendor 0.7581 # deep
+n=512 k=64 batch=1024 | triangular 1.376 | vendor 6.040 # deep
+n=512 k=64 batch=32768 | triangular - | vendor - # transcribed
+n=512 k=512 batch=1 | vendor 0.02688 | triangular 0.1171 # deep
+n=512 k=512 batch=2 | vendor 0.04734 | triangular 0.1164 # deep
+n=512 k=512 batch=3 | vendor 0.06859 | triangular 0.1175 # deep
+n=512 k=512 batch=128 | triangular 1.019 | vendor 2.872 # deep
+n=512 k=512 batch=1024 | triangular 8.337 | vendor 22.40 # deep
+n=512 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=512 k=1448 batch=3 | vendor 0.1874 | triangular 0.3080 # deep
+n=512 k=4096 batch=1 | vendor 0.1383 | triangular 0.8564 # deep
+n=512 k=4096 batch=2 | vendor 0.2447 | triangular 0.8554 # deep
+n=512 k=4096 batch=3 | triangular 0.8403 # deep
+n=512 k=4096 batch=128 | triangular 7.928 # deep
+n=512 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=512 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=558 k=1 batch=3 | triangular 0.02031 | vendor 0.1001 # deep
+n=558 k=64 batch=3 | triangular 0.03322 | vendor 0.09368 # deep
+n=609 k=1 batch=3 | triangular 0.02123 | vendor 0.1164 # deep
+n=609 k=64 batch=3 | triangular 0.03466 | vendor 0.1144 # deep
+n=724 k=1 batch=3 | triangular 0.01945 | vendor 0.02008 # deep
+n=724 k=3 batch=3 | triangular 0.01963 | vendor 0.02017 # deep
+n=724 k=5 batch=3 | triangular 0.02070 | vendor 0.02138 # deep
+n=724 k=6 batch=3 | triangular 0.01951 | vendor 0.01990 # deep
+n=724 k=7 batch=3 | triangular 0.01944 | vendor 0.01972 # deep
+n=724 k=8 batch=2 | vendor 0.01454 | triangular 0.01934 # deep
+n=724 k=8 batch=3 | vendor 0.01867 | triangular 0.01976 # deep
+n=724 k=9 batch=3 | triangular 0.02184 | vendor 0.02295 # deep
+n=724 k=11 batch=3 | triangular 0.02155 | vendor 0.02296 # deep
+n=724 k=14 batch=3 | triangular 0.02203 | vendor 0.02272 # deep
+n=724 k=23 batch=3 | triangular 0.02377 | vendor 0.02539 # deep
+n=724 k=64 batch=3 | triangular 0.03229 | vendor 0.03299 # deep
+n=724 k=139 batch=3 | triangular 0.05083 | vendor 0.06366 # deep
+n=724 k=206 batch=3 | triangular 0.06598 | vendor 0.08731 # deep
+n=724 k=250 batch=3 | triangular 0.07705 | vendor 0.1044 # deep
+n=724 k=263 batch=3 | triangular 0.07870 | vendor 0.1097 # deep
+n=724 k=276 batch=3 | vendor 0.07718 | triangular 0.08269 # deep
+n=724 k=304 batch=3 | vendor 0.08471 | triangular 0.08876 # deep
+n=724 k=1448 batch=3 | vendor 0.2790 | triangular 0.3638 # deep
+n=790 k=8 batch=2 | triangular 0.02098 | vendor 0.06771 # deep
+n=790 k=8 batch=3 | triangular 0.02061 | vendor 0.1063 # deep
+n=790 k=304 batch=3 | triangular 0.08979 | vendor 0.1085 # deep
+n=790 k=1448 batch=3 | triangular 0.3587 | vendor 0.4004 # deep
+n=861 k=8 batch=2 | triangular 0.02258 | vendor 0.08524 # deep
+n=861 k=8 batch=3 | triangular 0.02208 | vendor 0.1323 # deep
+n=861 k=108 batch=2 | triangular 0.04548 | vendor 0.07998 # deep
+n=861 k=304 batch=3 | triangular 0.09073 | vendor 0.1281 # deep
+n=861 k=395 batch=2 | triangular 0.1137 | vendor 0.1127 # deep
+n=861 k=428 batch=2 | triangular 0.1202 | vendor 0.1182 # deep
+n=861 k=464 batch=2 | vendor 0.1197 | triangular 0.1283 # deep
+n=861 k=546 batch=2 | vendor 0.1382 | triangular 0.1491 # deep
+n=861 k=756 batch=2 | vendor 0.1717 | triangular 0.1986 # deep
+n=861 k=1448 batch=2 | vendor 0.2807 | triangular 0.3542 # deep
+n=861 k=1448 batch=3 | triangular 0.3569 | vendor 0.4086 # deep
+n=959 k=1448 batch=2 | vendor 0.2903 | triangular 0.3599 # deep
+n=1013 k=1448 batch=2 | vendor 0.3036 | triangular 0.3606 # deep
+n=1024 k=1 batch=1 | vendor 0.01263 | triangular 0.01965 # deep
+n=1024 k=1 batch=2 | vendor 0.01764 | triangular 0.01980 # deep
+n=1024 k=1 batch=3 | triangular 0.01979 | vendor 0.02228 # deep
+n=1024 k=1 batch=128 | triangular 0.4061 | vendor 0.8353 # deep
+n=1024 k=1 batch=8192 | triangular - | vendor - # transcribed
+n=1024 k=1 batch=32768 | triangular - | vendor - # transcribed
+n=1024 k=3 batch=2 | vendor 0.01749 | triangular 0.01962 # deep
+n=1024 k=5 batch=2 | vendor 0.01708 | triangular 0.01949 # deep
+n=1024 k=6 batch=2 | vendor 0.01716 | triangular 0.01962 # deep
+n=1024 k=7 batch=2 | vendor 0.01771 | triangular 0.02002 # deep
+n=1024 k=8 batch=1 | vendor 0.01191 | triangular 0.01720 # deep
+n=1024 k=8 batch=2 | triangular 0.01758 | vendor 0.01730 # deep
+n=1024 k=8 batch=3 | triangular 0.01743 | vendor 0.02195 # deep
+n=1024 k=8 batch=128 | triangular 0.4106 | vendor 1.009 # deep
+n=1024 k=8 batch=8192 | triangular - | vendor - # transcribed
+n=1024 k=8 batch=32768 | triangular - | vendor - # transcribed
+n=1024 k=9 batch=2 | vendor 0.01843 | triangular 0.02128 # deep
+n=1024 k=11 batch=2 | vendor 0.01893 | triangular 0.02121 # deep
+n=1024 k=14 batch=2 | vendor 0.01863 | triangular 0.02146 # deep
+n=1024 k=23 batch=2 | vendor 0.02076 | triangular 0.02317 # deep
+n=1024 k=64 batch=1 | vendor 0.01655 | triangular 0.02814 # deep
+n=1024 k=64 batch=2 | vendor 0.02578 | triangular 0.02802 # deep
+n=1024 k=64 batch=3 | triangular 0.02810 | vendor 0.03429 # deep
+n=1024 k=64 batch=128 | triangular 0.6602 | vendor 1.553 # deep
+n=1024 k=64 batch=8192 | triangular - | vendor - # transcribed
+n=1024 k=64 batch=32768 | triangular - | vendor - # transcribed
+n=1024 k=181 batch=3 | triangular 0.06073 | vendor 0.1159 # deep
+n=1024 k=304 batch=3 | triangular 0.08608 | vendor 0.09229 # deep
+n=1024 k=395 batch=3 | triangular 0.1210 | vendor 0.1622 # deep
+n=1024 k=450 batch=3 | triangular 0.1349 | vendor 0.1854 # deep
+n=1024 k=480 batch=3 | vendor 0.1135 | triangular 0.1299 # deep
+n=1024 k=512 batch=1 | vendor 0.04147 | triangular 0.1205 # deep
+n=1024 k=512 batch=2 | vendor 0.07570 | triangular 0.1228 # deep
+n=1024 k=512 batch=3 | vendor 0.1207 | triangular 0.1373 # deep
+n=1024 k=512 batch=128 | triangular 4.030 | vendor 6.136 # deep
+n=1024 k=512 batch=8192 | triangular - | vendor - # transcribed
+n=1024 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=1024 k=546 batch=3 | triangular 0.1607 | vendor 0.2247 # deep
+n=1024 k=583 batch=3 | triangular 0.1683 | vendor 0.2307 # deep
+n=1024 k=664 batch=3 | triangular 0.1827 | vendor 0.1795 # deep
+n=1024 k=861 batch=3 | triangular 0.2437 | vendor 0.2934 # deep
+n=1024 k=1448 batch=3 | triangular 0.3401 | vendor 0.3738 # deep
+n=1024 k=4096 batch=1 | vendor 0.2530 | triangular 0.8669 # deep
+n=1024 k=4096 batch=2 | vendor 0.4643 | triangular 0.8719 # deep
+n=1024 k=4096 batch=3 | triangular 0.9474 # deep
+n=1024 k=4096 batch=1024 | triangular - | vendor - # transcribed
+n=1024 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=1024 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=1069 k=1448 batch=2 | triangular 0.3598 | vendor 0.3674 # deep
+n=1117 k=1 batch=2 | triangular 0.02147 | vendor 0.09134 # deep
+n=1117 k=23 batch=2 | triangular 0.02553 | vendor 0.06710 # deep
+n=1117 k=512 batch=2 | triangular 0.1434 | vendor 0.1641 # deep
+n=1218 k=1 batch=2 | triangular 0.02086 | vendor 0.09438 # deep
+n=1218 k=23 batch=2 | triangular 0.02453 | vendor 0.1113 # deep
+n=1218 k=64 batch=3 | triangular 0.03733 | vendor 0.1208 # deep
+n=1218 k=512 batch=2 | triangular 0.1496 | vendor 0.2001 # deep
+n=1328 k=64 batch=3 | vendor 0.04224 | triangular 0.04628 # deep
+n=1328 k=1448 batch=2 | triangular 0.3907 | vendor 0.4650 # deep
+n=1448 k=1 batch=1 | vendor 0.01826 | triangular 0.01921 # deep
+n=1448 k=1 batch=2 | triangular 0.02258 | vendor 0.03040 # deep
+n=1448 k=23 batch=2 | triangular 0.02716 | vendor 0.03948 # deep
+n=1448 k=64 batch=3 | vendor 0.05119 | triangular 0.05362 # deep
+n=1448 k=67 batch=3 | triangular 0.05489 | vendor 0.06329 # deep
+n=1448 k=71 batch=3 | triangular 0.05662 | vendor 0.06362 # deep
+n=1448 k=78 batch=3 | triangular 0.06026 | vendor 0.06344 # deep
+n=1448 k=94 batch=3 | triangular 0.06599 | vendor 0.07037 # deep
+n=1448 k=139 batch=3 | triangular 0.08741 | vendor 0.09694 # deep
+n=1448 k=304 batch=3 | triangular 0.1743 | vendor 0.1895 # deep
+n=1448 k=512 batch=2 | triangular 0.1692 | vendor 0.2003 # deep
+n=1448 k=1448 batch=3 | triangular 0.7262 | vendor 0.7103 # deep
+n=1579 k=1 batch=1 | triangular 0.02217 | vendor 0.05142 # deep
+n=1722 k=1 batch=1 | triangular 0.02121 | vendor 0.05669 # deep
+n=1722 k=1448 batch=3 | triangular 0.7926 | vendor 1.063 # deep
+n=1878 k=1448 batch=3 | triangular 0.8548 | vendor 1.489 # deep
+n=2048 k=1 batch=1 | triangular 0.01965 | vendor 0.02095 # deep
+n=2048 k=1 batch=2 | triangular 0.03132 | vendor 0.03567 # deep
+n=2048 k=1 batch=3 | triangular 0.04679 | vendor 0.04993 # deep
+n=2048 k=1 batch=1024 | triangular - | vendor - # transcribed
+n=2048 k=1 batch=8192 | triangular - | vendor - # transcribed
+n=2048 k=1 batch=32768 | triangular - | vendor - # transcribed
+n=2048 k=3 batch=1 | triangular 0.01973 | vendor 0.02094 # deep
+n=2048 k=5 batch=1 | triangular 0.02028 | vendor 0.02145 # deep
+n=2048 k=6 batch=1 | triangular 0.01983 | vendor 0.02084 # deep
+n=2048 k=7 batch=1 | triangular 0.01981 | vendor 0.02093 # deep
+n=2048 k=8 batch=1 | vendor 0.01574 | triangular 0.01760 # deep
+n=2048 k=8 batch=2 | triangular 0.02127 | vendor 0.02433 # deep
+n=2048 k=8 batch=3 | triangular 0.02977 | vendor 0.03222 # deep
+n=2048 k=8 batch=1024 | triangular - | vendor - # transcribed
+n=2048 k=8 batch=8192 | triangular - | vendor - # transcribed
+n=2048 k=8 batch=32768 | triangular - | vendor - # transcribed
+n=2048 k=23 batch=2 | triangular 0.03708 | vendor 0.04211 # deep
+n=2048 k=23 batch=3 | triangular 0.05867 | vendor 0.06288 # deep
+n=2048 k=38 batch=2 | triangular 0.04306 | vendor 0.05060 # deep
+n=2048 k=38 batch=3 | triangular 0.07255 | vendor 0.07427 # deep
+n=2048 k=49 batch=2 | triangular 0.04924 | vendor 0.05653 # deep
+n=2048 k=49 batch=3 | triangular 0.08680 | vendor 0.08652 # deep
+n=2048 k=56 batch=2 | triangular 0.04061 | vendor 0.04751 # deep
+n=2048 k=56 batch=3 | triangular 0.06182 | vendor 0.06986 # deep
+n=2048 k=60 batch=2 | vendor 0.04710 | triangular 0.05332 # deep
+n=2048 k=60 batch=3 | vendor 0.06882 | triangular 0.09381 # deep
+n=2048 k=64 batch=1 | vendor 0.02477 | triangular 0.02888 # deep
+n=2048 k=64 batch=2 | vendor 0.04334 | triangular 0.04479 # deep
+n=2048 k=64 batch=3 | vendor 0.06385 | triangular 0.06731 # deep
+n=2048 k=64 batch=1024 | triangular - | vendor - # transcribed
+n=2048 k=64 batch=8192 | triangular - | vendor - # transcribed
+n=2048 k=64 batch=32768 | triangular - | vendor - # transcribed
+n=2048 k=68 batch=2 | vendor 0.05350 | triangular 0.05612 # deep
+n=2048 k=73 batch=2 | triangular 0.05927 | vendor 0.06417 # deep
+n=2048 k=83 batch=2 | triangular 0.06451 | vendor 0.07284 # deep
+n=2048 k=108 batch=2 | triangular 0.07620 | vendor 0.08220 # deep
+n=2048 k=181 batch=2 | triangular 0.1121 | vendor 0.1317 # deep
+n=2048 k=512 batch=1 | vendor 0.1282 | triangular 0.1467 # deep
+n=2048 k=512 batch=2 | triangular 0.2615 | vendor 0.2562 # deep
+n=2048 k=512 batch=3 | vendor 0.3689 | triangular 0.3888 # deep
+n=2048 k=512 batch=1024 | triangular - | vendor - # transcribed
+n=2048 k=512 batch=8192 | triangular - | vendor - # transcribed
+n=2048 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=2048 k=1448 batch=2 | triangular 0.7051 | vendor 0.7143 # deep
+n=2048 k=1448 batch=3 | vendor 1.105 | triangular 1.150 # deep
+n=2048 k=4096 batch=1 | vendor 0.9253 | triangular 1.093 # deep
+n=2048 k=4096 batch=2 | vendor 1.761 | triangular 1.946 # deep
+n=2048 k=4096 batch=3 | triangular 3.014 # deep
+n=2048 k=4096 batch=1024 | triangular - | vendor - # transcribed
+n=2048 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=2048 k=4096 batch=32768 | triangular - | vendor - # transcribed
+n=4096 k=1 batch=1 | vendor 0.05554 | triangular 0.06177 # deep
+n=4096 k=1 batch=2 | triangular 0.1066 | vendor 0.1138 # deep
+n=4096 k=1 batch=3 | triangular 0.1671 # deep
+n=4096 k=1 batch=1024 | triangular - | vendor - # transcribed
+n=4096 k=1 batch=8192 | triangular - | vendor - # transcribed
+n=4096 k=1 batch=32768 | triangular - | vendor - # transcribed
+n=4096 k=8 batch=1 | vendor 0.03165 | triangular 0.03645 # deep
+n=4096 k=8 batch=2 | triangular 0.08886 | vendor 0.1021 # deep
+n=4096 k=8 batch=3 | triangular 0.1490 # deep
+n=4096 k=8 batch=1024 | triangular - | vendor - # transcribed
+n=4096 k=8 batch=8192 | triangular - | vendor - # transcribed
+n=4096 k=8 batch=32768 | triangular - | vendor - # transcribed
+n=4096 k=64 batch=1 | triangular 0.07933 | vendor 0.07826 # deep
+n=4096 k=64 batch=2 | triangular 0.1538 | vendor 0.1720 # deep
+n=4096 k=64 batch=3 | triangular 0.2312 # deep
+n=4096 k=64 batch=1024 | triangular - | vendor - # transcribed
+n=4096 k=64 batch=8192 | triangular - | vendor - # transcribed
+n=4096 k=64 batch=32768 | triangular - | vendor - # transcribed
+n=4096 k=512 batch=1 | triangular 0.4451 | vendor 0.4342 # deep
+n=4096 k=512 batch=2 | triangular 0.8759 | vendor 0.9229 # deep
+n=4096 k=512 batch=3 | triangular 1.258 # deep
+n=4096 k=512 batch=1024 | triangular - | vendor - # transcribed
+n=4096 k=512 batch=8192 | triangular - | vendor - # transcribed
+n=4096 k=512 batch=32768 | triangular - | vendor - # transcribed
+n=4096 k=4096 batch=1 | triangular 3.524 | vendor 3.767 # deep
+n=4096 k=4096 batch=2 | triangular 6.597 | vendor 6.836 # deep
+n=4096 k=4096 batch=3 | triangular 9.642 # deep
+n=4096 k=4096 batch=1024 | triangular - | vendor - # transcribed
+n=4096 k=4096 batch=8192 | triangular - | vendor - # transcribed
+n=4096 k=4096 batch=32768 | triangular - | vendor - # transcribed

@@ -539,6 +539,33 @@ TEST_F(Select, VendorPinWithNoRunnableVendorFallsBackToAutoAndWarnsOnce) {
                    "using the automatic choice\n");
 }
 
+// The tuner's arms: a strict class word that cannot serve the shape throws instead of timing Auto.
+TEST_F(Select, StrictClassWordPinThrowsInsteadOfFallingBack) {
+    sel::testing::set_builtin_tables({file("sm_120", kPinRow)});
+    auto strict_error = [](const std::string& pin, const Pred& ok) -> std::string {
+        sel::ScopedPin<C> p("synth", pin, sel::StrictPin{});
+        try {
+            return S(choose("sm_120", key("L", 64, 1024), ok));
+        } catch (const std::invalid_argument& e) {
+            return e.what();
+        }
+    };
+    EXPECT_EQ(strict_error("vendor", kAll), "vendor");
+    EXPECT_EQ(strict_error("native", kAll), "lpanel:panel=8");
+    EXPECT_EQ(strict_error("cta", kAll), "cta");
+    EXPECT_EQ(strict_error("vendor", all_but({"vendor"})),
+              "synth: ScopedPin=\"vendor\" (strict): no vendor candidate can run this shape on sm_120");
+    EXPECT_EQ(strict_error("native", only({"vendor"})),
+              "synth: ScopedPin=\"native\" (strict): no native candidate can run this shape on sm_120");
+    EXPECT_EQ(pin_error("vendor", all_but({"vendor"})), "<no throw>") << "an ordinary pin still falls back";
+    {
+        sel::ScopedPin<C> outer("synth", "vendor", sel::StrictPin{});
+        sel::ScopedPin<C> inner("synth", "vendor");
+        EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024), all_but({"vendor"}))), "lpanel:panel=8")
+            << "strictness belongs to the innermost pin";
+    }
+}
+
 TEST_F(Select, ConcretePinsAndNormalisation) {
     sel::testing::set_builtin_tables({file("sm_120", kPinRow)});
     EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), "vendor");

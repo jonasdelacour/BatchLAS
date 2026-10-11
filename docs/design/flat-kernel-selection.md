@@ -90,7 +90,7 @@ use `cpu`.
   mid-process is not seen until `detail::reload_settings()` runs (`ScopedEnvVar` does this). See
   [route pins are raw strings](environment.md#environment-route-pins-are-raw-strings).
 
-### 5.4 Tables and provenance
+### 5.4 Tables and provenance {#flat-selection-tables-and-provenance}
 
 Each table is one file, `tuned/<op>.<dtype>.<device>.txt`, embedded at build time and parsed once
 per op. `BATCHLAS_TUNED_DIR=<dir>` replaces a built-in table with a file of the same name (the trace

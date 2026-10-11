@@ -1,543 +1,435 @@
-# op=ormqr dtype=cdouble device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/ormqr.csv (the old router's preference order per grid cell, untimed)
+# op=ormqr dtype=cdouble device=sm_120 batchlas=a01c3c96 kernels=14d6bd3d family_kernels=blocked:3c554ab8,vendor:3460432e date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/ormqr.cdouble.sm_120 tiers=deep:252,coarse:0,preview:0,custom:0,transcribed:180
 # keys: side:exact trans:exact m:log k:log q:log batch:log
-side=L trans=C m=1 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=1 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=8 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=64 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=32 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=32 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=32 batch=32768 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1024 batch=128 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=C m=512 k=512 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=1 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=8 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=64 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=32 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=32 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=32 batch=32768 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1024 batch=128 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1024 batch=2048 | blocked - | vendor -
-side=L trans=N m=512 k=512 q=1024 batch=32768 | blocked - | vendor -
-side=L trans=T m=1 k=1 q=1 batch=128 | vendor -
-side=L trans=T m=1 k=1 q=1 batch=2048 | vendor -
-side=L trans=T m=1 k=1 q=1 batch=32768 | vendor -
-side=L trans=T m=1 k=1 q=32 batch=128 | vendor -
-side=L trans=T m=1 k=1 q=32 batch=2048 | vendor -
-side=L trans=T m=1 k=1 q=32 batch=32768 | vendor -
-side=L trans=T m=1 k=1 q=1024 batch=128 | vendor -
-side=L trans=T m=1 k=1 q=1024 batch=2048 | vendor -
-side=L trans=T m=1 k=1 q=1024 batch=32768 | vendor -
-side=L trans=T m=8 k=1 q=1 batch=128 | vendor -
-side=L trans=T m=8 k=1 q=1 batch=2048 | vendor -
-side=L trans=T m=8 k=1 q=1 batch=32768 | vendor -
-side=L trans=T m=8 k=1 q=32 batch=128 | vendor -
-side=L trans=T m=8 k=1 q=32 batch=2048 | vendor -
-side=L trans=T m=8 k=1 q=32 batch=32768 | vendor -
-side=L trans=T m=8 k=1 q=1024 batch=128 | vendor -
-side=L trans=T m=8 k=1 q=1024 batch=2048 | vendor -
-side=L trans=T m=8 k=1 q=1024 batch=32768 | vendor -
-side=L trans=T m=8 k=8 q=1 batch=128 | vendor -
-side=L trans=T m=8 k=8 q=1 batch=2048 | vendor -
-side=L trans=T m=8 k=8 q=1 batch=32768 | vendor -
-side=L trans=T m=8 k=8 q=32 batch=128 | vendor -
-side=L trans=T m=8 k=8 q=32 batch=2048 | vendor -
-side=L trans=T m=8 k=8 q=32 batch=32768 | vendor -
-side=L trans=T m=8 k=8 q=1024 batch=128 | vendor -
-side=L trans=T m=8 k=8 q=1024 batch=2048 | vendor -
-side=L trans=T m=8 k=8 q=1024 batch=32768 | vendor -
-side=L trans=T m=64 k=1 q=1 batch=128 | vendor -
-side=L trans=T m=64 k=1 q=1 batch=2048 | vendor -
-side=L trans=T m=64 k=1 q=1 batch=32768 | vendor -
-side=L trans=T m=64 k=1 q=32 batch=128 | vendor -
-side=L trans=T m=64 k=1 q=32 batch=2048 | vendor -
-side=L trans=T m=64 k=1 q=32 batch=32768 | vendor -
-side=L trans=T m=64 k=1 q=1024 batch=128 | vendor -
-side=L trans=T m=64 k=1 q=1024 batch=2048 | vendor -
-side=L trans=T m=64 k=1 q=1024 batch=32768 | vendor -
-side=L trans=T m=64 k=8 q=1 batch=128 | vendor -
-side=L trans=T m=64 k=8 q=1 batch=2048 | vendor -
-side=L trans=T m=64 k=8 q=1 batch=32768 | vendor -
-side=L trans=T m=64 k=8 q=32 batch=128 | vendor -
-side=L trans=T m=64 k=8 q=32 batch=2048 | vendor -
-side=L trans=T m=64 k=8 q=32 batch=32768 | vendor -
-side=L trans=T m=64 k=8 q=1024 batch=128 | vendor -
-side=L trans=T m=64 k=8 q=1024 batch=2048 | vendor -
-side=L trans=T m=64 k=8 q=1024 batch=32768 | vendor -
-side=L trans=T m=64 k=64 q=1 batch=128 | vendor -
-side=L trans=T m=64 k=64 q=1 batch=2048 | vendor -
-side=L trans=T m=64 k=64 q=1 batch=32768 | vendor -
-side=L trans=T m=64 k=64 q=32 batch=128 | vendor -
-side=L trans=T m=64 k=64 q=32 batch=2048 | vendor -
-side=L trans=T m=64 k=64 q=32 batch=32768 | vendor -
-side=L trans=T m=64 k=64 q=1024 batch=128 | vendor -
-side=L trans=T m=64 k=64 q=1024 batch=2048 | vendor -
-side=L trans=T m=64 k=64 q=1024 batch=32768 | vendor -
-side=L trans=T m=512 k=1 q=1 batch=128 | vendor -
-side=L trans=T m=512 k=1 q=1 batch=2048 | vendor -
-side=L trans=T m=512 k=1 q=1 batch=32768 | vendor -
-side=L trans=T m=512 k=1 q=32 batch=128 | vendor -
-side=L trans=T m=512 k=1 q=32 batch=2048 | vendor -
-side=L trans=T m=512 k=1 q=32 batch=32768 | vendor -
-side=L trans=T m=512 k=1 q=1024 batch=128 | vendor -
-side=L trans=T m=512 k=1 q=1024 batch=2048 | vendor -
-side=L trans=T m=512 k=1 q=1024 batch=32768 | vendor -
-side=L trans=T m=512 k=8 q=1 batch=128 | vendor -
-side=L trans=T m=512 k=8 q=1 batch=2048 | vendor -
-side=L trans=T m=512 k=8 q=1 batch=32768 | vendor -
-side=L trans=T m=512 k=8 q=32 batch=128 | vendor -
-side=L trans=T m=512 k=8 q=32 batch=2048 | vendor -
-side=L trans=T m=512 k=8 q=32 batch=32768 | vendor -
-side=L trans=T m=512 k=8 q=1024 batch=128 | vendor -
-side=L trans=T m=512 k=8 q=1024 batch=2048 | vendor -
-side=L trans=T m=512 k=8 q=1024 batch=32768 | vendor -
-side=L trans=T m=512 k=64 q=1 batch=128 | vendor -
-side=L trans=T m=512 k=64 q=1 batch=2048 | vendor -
-side=L trans=T m=512 k=64 q=1 batch=32768 | vendor -
-side=L trans=T m=512 k=64 q=32 batch=128 | vendor -
-side=L trans=T m=512 k=64 q=32 batch=2048 | vendor -
-side=L trans=T m=512 k=64 q=32 batch=32768 | vendor -
-side=L trans=T m=512 k=64 q=1024 batch=128 | vendor -
-side=L trans=T m=512 k=64 q=1024 batch=2048 | vendor -
-side=L trans=T m=512 k=64 q=1024 batch=32768 | vendor -
-side=L trans=T m=512 k=512 q=1 batch=128 | vendor -
-side=L trans=T m=512 k=512 q=1 batch=2048 | vendor -
-side=L trans=T m=512 k=512 q=1 batch=32768 | vendor -
-side=L trans=T m=512 k=512 q=32 batch=128 | vendor -
-side=L trans=T m=512 k=512 q=32 batch=2048 | vendor -
-side=L trans=T m=512 k=512 q=32 batch=32768 | vendor -
-side=L trans=T m=512 k=512 q=1024 batch=128 | vendor -
-side=L trans=T m=512 k=512 q=1024 batch=2048 | vendor -
-side=L trans=T m=512 k=512 q=1024 batch=32768 | vendor -
-side=R trans=C m=1 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=1 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=8 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=64 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=32 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=32 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=32 batch=32768 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1024 batch=128 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=C m=512 k=512 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=1 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=8 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=64 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=1 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=8 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=64 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=32 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=32 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=32 batch=32768 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1024 batch=128 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1024 batch=2048 | blocked - | vendor -
-side=R trans=N m=512 k=512 q=1024 batch=32768 | blocked - | vendor -
-side=R trans=T m=1 k=1 q=1 batch=128 | vendor -
-side=R trans=T m=1 k=1 q=1 batch=2048 | vendor -
-side=R trans=T m=1 k=1 q=1 batch=32768 | vendor -
-side=R trans=T m=1 k=1 q=32 batch=128 | vendor -
-side=R trans=T m=1 k=1 q=32 batch=2048 | vendor -
-side=R trans=T m=1 k=1 q=32 batch=32768 | vendor -
-side=R trans=T m=1 k=1 q=1024 batch=128 | vendor -
-side=R trans=T m=1 k=1 q=1024 batch=2048 | vendor -
-side=R trans=T m=1 k=1 q=1024 batch=32768 | vendor -
-side=R trans=T m=8 k=1 q=1 batch=128 | vendor -
-side=R trans=T m=8 k=1 q=1 batch=2048 | vendor -
-side=R trans=T m=8 k=1 q=1 batch=32768 | vendor -
-side=R trans=T m=8 k=1 q=32 batch=128 | vendor -
-side=R trans=T m=8 k=1 q=32 batch=2048 | vendor -
-side=R trans=T m=8 k=1 q=32 batch=32768 | vendor -
-side=R trans=T m=8 k=1 q=1024 batch=128 | vendor -
-side=R trans=T m=8 k=1 q=1024 batch=2048 | vendor -
-side=R trans=T m=8 k=1 q=1024 batch=32768 | vendor -
-side=R trans=T m=8 k=8 q=1 batch=128 | vendor -
-side=R trans=T m=8 k=8 q=1 batch=2048 | vendor -
-side=R trans=T m=8 k=8 q=1 batch=32768 | vendor -
-side=R trans=T m=8 k=8 q=32 batch=128 | vendor -
-side=R trans=T m=8 k=8 q=32 batch=2048 | vendor -
-side=R trans=T m=8 k=8 q=32 batch=32768 | vendor -
-side=R trans=T m=8 k=8 q=1024 batch=128 | vendor -
-side=R trans=T m=8 k=8 q=1024 batch=2048 | vendor -
-side=R trans=T m=8 k=8 q=1024 batch=32768 | vendor -
-side=R trans=T m=64 k=1 q=1 batch=128 | vendor -
-side=R trans=T m=64 k=1 q=1 batch=2048 | vendor -
-side=R trans=T m=64 k=1 q=1 batch=32768 | vendor -
-side=R trans=T m=64 k=1 q=32 batch=128 | vendor -
-side=R trans=T m=64 k=1 q=32 batch=2048 | vendor -
-side=R trans=T m=64 k=1 q=32 batch=32768 | vendor -
-side=R trans=T m=64 k=1 q=1024 batch=128 | vendor -
-side=R trans=T m=64 k=1 q=1024 batch=2048 | vendor -
-side=R trans=T m=64 k=1 q=1024 batch=32768 | vendor -
-side=R trans=T m=64 k=8 q=1 batch=128 | vendor -
-side=R trans=T m=64 k=8 q=1 batch=2048 | vendor -
-side=R trans=T m=64 k=8 q=1 batch=32768 | vendor -
-side=R trans=T m=64 k=8 q=32 batch=128 | vendor -
-side=R trans=T m=64 k=8 q=32 batch=2048 | vendor -
-side=R trans=T m=64 k=8 q=32 batch=32768 | vendor -
-side=R trans=T m=64 k=8 q=1024 batch=128 | vendor -
-side=R trans=T m=64 k=8 q=1024 batch=2048 | vendor -
-side=R trans=T m=64 k=8 q=1024 batch=32768 | vendor -
-side=R trans=T m=64 k=64 q=1 batch=128 | vendor -
-side=R trans=T m=64 k=64 q=1 batch=2048 | vendor -
-side=R trans=T m=64 k=64 q=1 batch=32768 | vendor -
-side=R trans=T m=64 k=64 q=32 batch=128 | vendor -
-side=R trans=T m=64 k=64 q=32 batch=2048 | vendor -
-side=R trans=T m=64 k=64 q=32 batch=32768 | vendor -
-side=R trans=T m=64 k=64 q=1024 batch=128 | vendor -
-side=R trans=T m=64 k=64 q=1024 batch=2048 | vendor -
-side=R trans=T m=64 k=64 q=1024 batch=32768 | vendor -
-side=R trans=T m=512 k=1 q=1 batch=128 | vendor -
-side=R trans=T m=512 k=1 q=1 batch=2048 | vendor -
-side=R trans=T m=512 k=1 q=1 batch=32768 | vendor -
-side=R trans=T m=512 k=1 q=32 batch=128 | vendor -
-side=R trans=T m=512 k=1 q=32 batch=2048 | vendor -
-side=R trans=T m=512 k=1 q=32 batch=32768 | vendor -
-side=R trans=T m=512 k=1 q=1024 batch=128 | vendor -
-side=R trans=T m=512 k=1 q=1024 batch=2048 | vendor -
-side=R trans=T m=512 k=1 q=1024 batch=32768 | vendor -
-side=R trans=T m=512 k=8 q=1 batch=128 | vendor -
-side=R trans=T m=512 k=8 q=1 batch=2048 | vendor -
-side=R trans=T m=512 k=8 q=1 batch=32768 | vendor -
-side=R trans=T m=512 k=8 q=32 batch=128 | vendor -
-side=R trans=T m=512 k=8 q=32 batch=2048 | vendor -
-side=R trans=T m=512 k=8 q=32 batch=32768 | vendor -
-side=R trans=T m=512 k=8 q=1024 batch=128 | vendor -
-side=R trans=T m=512 k=8 q=1024 batch=2048 | vendor -
-side=R trans=T m=512 k=8 q=1024 batch=32768 | vendor -
-side=R trans=T m=512 k=64 q=1 batch=128 | vendor -
-side=R trans=T m=512 k=64 q=1 batch=2048 | vendor -
-side=R trans=T m=512 k=64 q=1 batch=32768 | vendor -
-side=R trans=T m=512 k=64 q=32 batch=128 | vendor -
-side=R trans=T m=512 k=64 q=32 batch=2048 | vendor -
-side=R trans=T m=512 k=64 q=32 batch=32768 | vendor -
-side=R trans=T m=512 k=64 q=1024 batch=128 | vendor -
-side=R trans=T m=512 k=64 q=1024 batch=2048 | vendor -
-side=R trans=T m=512 k=64 q=1024 batch=32768 | vendor -
-side=R trans=T m=512 k=512 q=1 batch=128 | vendor -
-side=R trans=T m=512 k=512 q=1 batch=2048 | vendor -
-side=R trans=T m=512 k=512 q=1 batch=32768 | vendor -
-side=R trans=T m=512 k=512 q=32 batch=128 | vendor -
-side=R trans=T m=512 k=512 q=32 batch=2048 | vendor -
-side=R trans=T m=512 k=512 q=32 batch=32768 | vendor -
-side=R trans=T m=512 k=512 q=1024 batch=128 | vendor -
-side=R trans=T m=512 k=512 q=1024 batch=2048 | vendor -
-side=R trans=T m=512 k=512 q=1024 batch=32768 | vendor -
+side=L trans=C m=1 k=1 q=1 batch=128 | blocked 0.02718 | vendor 0.5385 # deep
+side=L trans=C m=1 k=1 q=1 batch=2048 | blocked 0.04396 | vendor 9.206 # deep
+side=L trans=C m=1 k=1 q=1 batch=32768 | blocked 0.2776 | vendor 153.4 # deep
+side=L trans=C m=1 k=1 q=32 batch=128 | blocked 0.02913 | vendor 0.5986 # deep
+side=L trans=C m=1 k=1 q=32 batch=2048 | blocked 0.05293 | vendor 9.415 # deep
+side=L trans=C m=1 k=1 q=32 batch=32768 | blocked 0.5508 | vendor 161.9 # deep
+side=L trans=C m=1 k=1 q=1024 batch=128 | blocked 0.08072 | vendor 2.580 # deep
+side=L trans=C m=1 k=1 q=1024 batch=2048 | blocked 0.9393 | vendor 41.15 # deep
+side=L trans=C m=1 k=1 q=1024 batch=32768 | blocked 14.66 | vendor 108961 # deep
+side=L trans=C m=8 k=1 q=1 batch=128 | blocked 0.02857 | vendor 0.5833 # deep
+side=L trans=C m=8 k=1 q=1 batch=2048 | blocked 0.04524 | vendor 9.039 # deep
+side=L trans=C m=8 k=1 q=1 batch=32768 | blocked 0.2827 | vendor 147.0 # deep
+side=L trans=C m=8 k=1 q=32 batch=128 | blocked 0.04136 | vendor 0.6984 # deep
+side=L trans=C m=8 k=1 q=32 batch=2048 | blocked 0.1696 | vendor 11.07 # deep
+side=L trans=C m=8 k=1 q=32 batch=32768 | blocked 2.264 | vendor 197.3 # deep
+side=L trans=C m=8 k=1 q=1024 batch=128 | blocked 0.2915 | vendor 3.825 # deep
+side=L trans=C m=8 k=1 q=1024 batch=2048 | blocked 4.378 | vendor 63.53 # deep
+side=L trans=C m=8 k=8 q=1 batch=128 | blocked 0.07981 | vendor 1.243 # deep
+side=L trans=C m=8 k=8 q=1 batch=2048 | blocked 0.1755 | vendor 19.79 # deep
+side=L trans=C m=8 k=8 q=1 batch=32768 | blocked 2.546 | vendor 329.3 # deep
+side=L trans=C m=8 k=8 q=32 batch=128 | blocked 0.1321 | vendor 3.290 # deep
+side=L trans=C m=8 k=8 q=32 batch=2048 | blocked 0.5003 | vendor 52.52 # deep
+side=L trans=C m=8 k=8 q=32 batch=32768 | blocked 7.416 | vendor 861.2 # deep
+side=L trans=C m=8 k=8 q=1024 batch=128 | blocked 0.6917 | vendor 9.592 # deep
+side=L trans=C m=8 k=8 q=1024 batch=2048 | blocked 10.07 | vendor 157.0 # deep
+side=L trans=C m=64 k=1 q=1 batch=128 | blocked 0.02732 | vendor 1.484 # deep
+side=L trans=C m=64 k=1 q=1 batch=2048 | blocked 0.04545 | vendor 23.69 # deep
+side=L trans=C m=64 k=1 q=1 batch=32768 | blocked 0.3314 | vendor 402.7 # deep
+side=L trans=C m=64 k=1 q=32 batch=128 | blocked 0.09077 | vendor 1.619 # deep
+side=L trans=C m=64 k=1 q=32 batch=2048 | blocked 0.4895 | vendor 26.09 # deep
+side=L trans=C m=64 k=1 q=32 batch=32768 | blocked 7.617 | vendor 450.0 # deep
+side=L trans=C m=64 k=1 q=1024 batch=128 | blocked 0.9350 | vendor 10.11 # deep
+side=L trans=C m=64 k=8 q=1 batch=128 | blocked 0.09426 | vendor 11.20 # deep
+side=L trans=C m=64 k=8 q=1 batch=2048 | blocked 0.2273 | vendor 179.1 # deep
+side=L trans=C m=64 k=8 q=1 batch=32768 | blocked 3.659 | vendor 2988 # deep
+side=L trans=C m=64 k=8 q=32 batch=128 | blocked 0.2114 | vendor 12.26 # deep
+side=L trans=C m=64 k=8 q=32 batch=2048 | blocked 1.171 | vendor 199.9 # deep
+side=L trans=C m=64 k=8 q=32 batch=32768 | blocked 17.71 | vendor 3258 # deep
+side=L trans=C m=64 k=8 q=1024 batch=128 | blocked 1.906 | vendor 15.94 # deep
+side=L trans=C m=64 k=64 q=1 batch=128 | blocked 1.524 | vendor 88.79 # deep
+side=L trans=C m=64 k=64 q=1 batch=2048 | blocked 5.203 | vendor 1458 # deep
+side=L trans=C m=64 k=64 q=32 batch=128 | blocked 1.856 | vendor 96.95 # deep
+side=L trans=C m=64 k=64 q=32 batch=2048 | blocked 7.801 | vendor 1597 # deep
+side=L trans=C m=64 k=64 q=1024 batch=128 | blocked 6.636 | vendor 40.78 # deep
+side=L trans=C m=512 k=1 q=1 batch=128 | blocked 0.03459 | vendor 2.280 # deep
+side=L trans=C m=512 k=1 q=1 batch=2048 | blocked 0.1151 | vendor 36.40 # deep
+side=L trans=C m=512 k=1 q=1 batch=32768 | blocked 2.379 | vendor 709.9 # deep
+side=L trans=C m=512 k=1 q=32 batch=128 | blocked 0.5587 | vendor 2.492 # deep
+side=L trans=C m=512 k=1 q=32 batch=2048 | blocked 3.852 | vendor 46.60 # deep
+side=L trans=C m=512 k=1 q=1024 batch=128 | blocked 7.179 | vendor 67.71 # deep
+side=L trans=C m=512 k=8 q=1 batch=128 | blocked 0.1550 | vendor 17.57 # deep
+side=L trans=C m=512 k=8 q=1 batch=2048 | blocked 1.381 | vendor 293.7 # deep
+side=L trans=C m=512 k=8 q=32 batch=128 | blocked 0.8871 | vendor 19.26 # deep
+side=L trans=C m=512 k=8 q=32 batch=2048 | blocked 7.926 | vendor 323.8 # deep
+side=L trans=C m=512 k=8 q=1024 batch=128 | blocked 12.93 | vendor 27.75 # deep
+side=L trans=C m=512 k=64 q=1 batch=128 | blocked 11.41 | vendor 140.7 # deep
+side=L trans=C m=512 k=64 q=1 batch=2048 | blocked 66.55 | vendor 2322 # deep
+side=L trans=C m=512 k=64 q=32 batch=128 | blocked 13.78 | vendor 157.4 # deep
+side=L trans=C m=512 k=64 q=32 batch=2048 | blocked 92.55 | vendor 2523 # deep
+side=L trans=C m=512 k=64 q=1024 batch=128 | blocked 66.36 | vendor 118.0 # deep
+side=L trans=C m=512 k=512 q=1 batch=128 | blocked 98.32 | vendor 295.2 # deep
+side=L trans=C m=512 k=512 q=32 batch=128 | blocked 108.8 | vendor 466.1 # deep
+side=L trans=C m=512 k=512 q=1024 batch=128 | blocked 358.3 | vendor 781.7 # deep
+side=L trans=N m=1 k=1 q=1 batch=128 | blocked 0.02747 | vendor 0.5513 # deep
+side=L trans=N m=1 k=1 q=1 batch=2048 | blocked 0.04112 | vendor 8.182 # deep
+side=L trans=N m=1 k=1 q=1 batch=32768 | blocked 0.2570 | vendor 137.3 # deep
+side=L trans=N m=1 k=1 q=32 batch=128 | blocked 0.02792 | vendor 0.5897 # deep
+side=L trans=N m=1 k=1 q=32 batch=2048 | blocked 0.05091 | vendor 9.351 # deep
+side=L trans=N m=1 k=1 q=32 batch=32768 | blocked 0.5474 | vendor 160.9 # deep
+side=L trans=N m=1 k=1 q=1024 batch=128 | blocked 0.07787 | vendor 2.493 # deep
+side=L trans=N m=1 k=1 q=1024 batch=2048 | blocked 0.9390 | vendor 39.03 # deep
+side=L trans=N m=1 k=1 q=1024 batch=32768 | blocked 14.63 | vendor 108839 # deep
+side=L trans=N m=8 k=1 q=1 batch=128 | blocked 0.02599 | vendor 0.5187 # deep
+side=L trans=N m=8 k=1 q=1 batch=2048 | blocked 0.04398 | vendor 8.704 # deep
+side=L trans=N m=8 k=1 q=1 batch=32768 | blocked 0.2635 | vendor 136.4 # deep
+side=L trans=N m=8 k=1 q=32 batch=128 | blocked 0.04101 | vendor 0.6924 # deep
+side=L trans=N m=8 k=1 q=32 batch=2048 | blocked 0.1679 | vendor 11.02 # deep
+side=L trans=N m=8 k=1 q=32 batch=32768 | blocked 2.265 | vendor 196.5 # deep
+side=L trans=N m=8 k=1 q=1024 batch=128 | blocked 0.2890 | vendor 3.701 # deep
+side=L trans=N m=8 k=1 q=1024 batch=2048 | blocked 4.336 | vendor 61.40 # deep
+side=L trans=N m=8 k=8 q=1 batch=128 | blocked 0.08045 | vendor 1.236 # deep
+side=L trans=N m=8 k=8 q=1 batch=2048 | blocked 0.1748 | vendor 19.68 # deep
+side=L trans=N m=8 k=8 q=1 batch=32768 | blocked 2.540 | vendor 325.3 # deep
+side=L trans=N m=8 k=8 q=32 batch=128 | blocked 0.1311 | vendor 3.275 # deep
+side=L trans=N m=8 k=8 q=32 batch=2048 | blocked 0.4984 | vendor 52.32 # deep
+side=L trans=N m=8 k=8 q=32 batch=32768 | blocked 7.409 | vendor 858.1 # deep
+side=L trans=N m=8 k=8 q=1024 batch=128 | blocked 0.6887 | vendor 9.558 # deep
+side=L trans=N m=8 k=8 q=1024 batch=2048 | blocked 10.03 | vendor 156.6 # deep
+side=L trans=N m=64 k=1 q=1 batch=128 | blocked 0.02815 | vendor 1.476 # deep
+side=L trans=N m=64 k=1 q=1 batch=2048 | blocked 0.05018 | vendor 23.55 # deep
+side=L trans=N m=64 k=1 q=1 batch=32768 | blocked 0.3349 | vendor 400.5 # deep
+side=L trans=N m=64 k=1 q=32 batch=128 | blocked 0.09008 | vendor 1.612 # deep
+side=L trans=N m=64 k=1 q=32 batch=2048 | blocked 0.4842 | vendor 26.46 # deep
+side=L trans=N m=64 k=1 q=32 batch=32768 | blocked 7.614 | vendor 447.4 # deep
+side=L trans=N m=64 k=1 q=1024 batch=128 | blocked 0.9055 | vendor 9.975 # deep
+side=L trans=N m=64 k=8 q=1 batch=128 | blocked 0.09328 | vendor 11.15 # deep
+side=L trans=N m=64 k=8 q=1 batch=2048 | blocked 0.2242 | vendor 178.3 # deep
+side=L trans=N m=64 k=8 q=1 batch=32768 | blocked 3.650 | vendor 2978 # deep
+side=L trans=N m=64 k=8 q=32 batch=128 | blocked 0.2105 | vendor 12.18 # deep
+side=L trans=N m=64 k=8 q=32 batch=2048 | blocked 1.161 | vendor 200.5 # deep
+side=L trans=N m=64 k=8 q=32 batch=32768 | blocked 17.65 | vendor 3255 # deep
+side=L trans=N m=64 k=8 q=1024 batch=128 | blocked 1.906 | vendor 15.89 # deep
+side=L trans=N m=64 k=64 q=1 batch=128 | blocked 1.519 | vendor 88.28 # deep
+side=L trans=N m=64 k=64 q=1 batch=2048 | blocked 5.173 | vendor 1450 # deep
+side=L trans=N m=64 k=64 q=32 batch=128 | blocked 1.851 | vendor 96.35 # deep
+side=L trans=N m=64 k=64 q=32 batch=2048 | blocked 7.753 | vendor 1593 # deep
+side=L trans=N m=64 k=64 q=1024 batch=128 | blocked 6.612 | vendor 40.60 # deep
+side=L trans=N m=512 k=1 q=1 batch=128 | blocked 0.03282 | vendor 2.270 # deep
+side=L trans=N m=512 k=1 q=1 batch=2048 | blocked 0.1139 | vendor 36.22 # deep
+side=L trans=N m=512 k=1 q=1 batch=32768 | blocked 2.372 | vendor 706.1 # deep
+side=L trans=N m=512 k=1 q=32 batch=128 | blocked 0.5560 | vendor 2.473 # deep
+side=L trans=N m=512 k=1 q=32 batch=2048 | blocked 3.840 | vendor 46.37 # deep
+side=L trans=N m=512 k=1 q=1024 batch=128 | blocked 7.136 | vendor 67.28 # deep
+side=L trans=N m=512 k=8 q=1 batch=128 | blocked 0.1549 | vendor 17.48 # deep
+side=L trans=N m=512 k=8 q=1 batch=2048 | blocked 1.370 | vendor 290.9 # deep
+side=L trans=N m=512 k=8 q=32 batch=128 | blocked 0.8844 | vendor 19.12 # deep
+side=L trans=N m=512 k=8 q=32 batch=2048 | blocked 7.900 | vendor 322.6 # deep
+side=L trans=N m=512 k=8 q=1024 batch=128 | blocked 12.89 | vendor 27.60 # deep
+side=L trans=N m=512 k=64 q=1 batch=128 | blocked 11.36 | vendor 139.9 # deep
+side=L trans=N m=512 k=64 q=1 batch=2048 | blocked 66.23 | vendor 2314 # deep
+side=L trans=N m=512 k=64 q=32 batch=128 | blocked 13.71 | vendor 155.7 # deep
+side=L trans=N m=512 k=64 q=32 batch=2048 | blocked 92.57 | vendor 2528 # deep
+side=L trans=N m=512 k=64 q=1024 batch=128 | blocked 66.08 | vendor 117.5 # deep
+side=L trans=N m=512 k=512 q=1 batch=128 | blocked 97.75 | vendor 294.4 # deep
+side=L trans=N m=512 k=512 q=32 batch=128 | blocked 108.2 | vendor 464.5 # deep
+side=L trans=N m=512 k=512 q=1024 batch=128 | blocked 362.7 | vendor 791.3 # deep
+side=L trans=T m=1 k=1 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=1 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=8 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=64 k=64 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=64 q=1024 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=32 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=32 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=32 batch=32768 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1024 batch=128 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1024 batch=2048 | vendor - # transcribed
+side=L trans=T m=512 k=512 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=C m=1 k=1 q=1 batch=128 | blocked 0.02620 | vendor 0.4957 # deep
+side=R trans=C m=1 k=1 q=1 batch=2048 | blocked 0.04039 | vendor 8.241 # deep
+side=R trans=C m=1 k=1 q=1 batch=32768 | blocked 0.2587 | vendor 136.2 # deep
+side=R trans=C m=1 k=1 q=32 batch=128 | blocked 0.02649 | vendor 0.5078 # deep
+side=R trans=C m=1 k=1 q=32 batch=2048 | blocked 0.04470 | vendor 8.431 # deep
+side=R trans=C m=1 k=1 q=32 batch=32768 | blocked 0.2813 | vendor 143.8 # deep
+side=R trans=C m=1 k=1 q=1024 batch=128 | blocked 0.03429 | vendor 2.204 # deep
+side=R trans=C m=1 k=1 q=1024 batch=2048 | blocked 0.2525 | vendor 36.64 # deep
+side=R trans=C m=1 k=1 q=1024 batch=32768 | blocked 5.252 | vendor 58127 # deep
+side=R trans=C m=8 k=1 q=1 batch=128 | blocked 0.02692 | vendor 0.5236 # deep
+side=R trans=C m=8 k=1 q=1 batch=2048 | blocked 0.04751 | vendor 8.461 # deep
+side=R trans=C m=8 k=1 q=1 batch=32768 | blocked 0.3355 | vendor 136.9 # deep
+side=R trans=C m=8 k=1 q=32 batch=128 | blocked 0.02741 | vendor 0.5253 # deep
+side=R trans=C m=8 k=1 q=32 batch=2048 | blocked 0.04998 | vendor 8.570 # deep
+side=R trans=C m=8 k=1 q=32 batch=32768 | blocked 0.4006 | vendor 141.7 # deep
+side=R trans=C m=8 k=1 q=1024 batch=128 | blocked 0.04959 | vendor 2.908 # deep
+side=R trans=C m=8 k=1 q=1024 batch=2048 | blocked 0.6394 | vendor 50.40 # deep
+side=R trans=C m=8 k=8 q=1 batch=128 | blocked 0.1124 | vendor 1.239 # deep
+side=R trans=C m=8 k=8 q=1 batch=2048 | blocked 0.3875 | vendor 19.72 # deep
+side=R trans=C m=8 k=8 q=1 batch=32768 | blocked 5.674 | vendor 331.1 # deep
+side=R trans=C m=8 k=8 q=32 batch=128 | blocked 0.1304 | vendor 1.458 # deep
+side=R trans=C m=8 k=8 q=32 batch=2048 | blocked 0.4953 | vendor 23.24 # deep
+side=R trans=C m=8 k=8 q=32 batch=32768 | blocked 7.348 | vendor 392.0 # deep
+side=R trans=C m=8 k=8 q=1024 batch=128 | blocked 0.6836 | vendor 4.028 # deep
+side=R trans=C m=8 k=8 q=1024 batch=2048 | blocked 10.01 | vendor 67.79 # deep
+side=R trans=C m=64 k=1 q=1 batch=128 | blocked 0.03219 | vendor 1.549 # deep
+side=R trans=C m=64 k=1 q=1 batch=2048 | blocked 0.08742 | vendor 24.65 # deep
+side=R trans=C m=64 k=1 q=1 batch=32768 | blocked 0.9520 | vendor 414.1 # deep
+side=R trans=C m=64 k=1 q=32 batch=128 | blocked 0.03234 | vendor 1.623 # deep
+side=R trans=C m=64 k=1 q=32 batch=2048 | blocked 0.1050 | vendor 26.16 # deep
+side=R trans=C m=64 k=1 q=32 batch=32768 | blocked 2.297 | vendor 469.8 # deep
+side=R trans=C m=64 k=1 q=1024 batch=128 | blocked 0.2271 | vendor 3.659 # deep
+side=R trans=C m=64 k=8 q=1 batch=128 | blocked 0.1285 | vendor 11.70 # deep
+side=R trans=C m=64 k=8 q=1 batch=2048 | blocked 0.5273 | vendor 187.1 # deep
+side=R trans=C m=64 k=8 q=1 batch=32768 | blocked 8.392 | vendor 3126 # deep
+side=R trans=C m=64 k=8 q=32 batch=128 | blocked 0.2101 | vendor 12.27 # deep
+side=R trans=C m=64 k=8 q=32 batch=2048 | blocked 1.153 | vendor 200.6 # deep
+side=R trans=C m=64 k=8 q=32 batch=32768 | blocked 17.65 | vendor 3293 # deep
+side=R trans=C m=64 k=8 q=1024 batch=128 | blocked 1.918 | vendor 15.43 # deep
+side=R trans=C m=64 k=64 q=1 batch=128 | blocked 1.668 | vendor 92.06 # deep
+side=R trans=C m=64 k=64 q=1 batch=2048 | blocked 6.446 | vendor 1510 # deep
+side=R trans=C m=64 k=64 q=32 batch=128 | blocked 1.836 | vendor 96.11 # deep
+side=R trans=C m=64 k=64 q=32 batch=2048 | blocked 7.628 | vendor 1596 # deep
+side=R trans=C m=64 k=64 q=1024 batch=128 | blocked 6.428 | vendor 30.60 # deep
+side=R trans=C m=512 k=1 q=1 batch=128 | blocked 0.05271 | vendor 2.060 # deep
+side=R trans=C m=512 k=1 q=1 batch=2048 | blocked 0.4269 | vendor 32.85 # deep
+side=R trans=C m=512 k=1 q=1 batch=32768 | blocked 6.944 | vendor 754.1 # deep
+side=R trans=C m=512 k=1 q=32 batch=128 | blocked 0.05801 | vendor 2.147 # deep
+side=R trans=C m=512 k=1 q=32 batch=2048 | blocked 1.109 | vendor 50.67 # deep
+side=R trans=C m=512 k=1 q=1024 batch=128 | blocked 2.185 | vendor 5.674 # deep
+side=R trans=C m=512 k=8 q=1 batch=128 | blocked 0.2790 | vendor 15.83 # deep
+side=R trans=C m=512 k=8 q=1 batch=2048 | blocked 3.118 | vendor 265.4 # deep
+side=R trans=C m=512 k=8 q=32 batch=128 | blocked 0.8848 | vendor 16.47 # deep
+side=R trans=C m=512 k=8 q=32 batch=2048 | blocked 7.952 | vendor 289.0 # deep
+side=R trans=C m=512 k=8 q=1024 batch=128 | blocked 12.97 | vendor 21.18 # deep
+side=R trans=C m=512 k=64 q=1 batch=128 | blocked 11.88 | vendor 126.5 # deep
+side=R trans=C m=512 k=64 q=1 batch=2048 | blocked 73.53 | vendor 2106 # deep
+side=R trans=C m=512 k=64 q=32 batch=128 | blocked 13.59 | vendor 135.6 # deep
+side=R trans=C m=512 k=64 q=32 batch=2048 | blocked 89.96 | vendor 2216 # deep
+side=R trans=C m=512 k=64 q=1024 batch=128 | blocked 59.45 | vendor 84.30 # deep
+side=R trans=C m=512 k=512 q=1 batch=128 | blocked 100.6 | vendor 600.2 # deep
+side=R trans=C m=512 k=512 q=32 batch=128 | blocked 107.2 | vendor 632.6 # deep
+side=R trans=C m=512 k=512 q=1024 batch=128 | blocked 318.1 | vendor 771.4 # deep
+side=R trans=N m=1 k=1 q=1 batch=128 | blocked 0.02776 | vendor 0.5221 # deep
+side=R trans=N m=1 k=1 q=1 batch=2048 | blocked 0.03925 | vendor 7.949 # deep
+side=R trans=N m=1 k=1 q=1 batch=32768 | blocked 0.2624 | vendor 130.4 # deep
+side=R trans=N m=1 k=1 q=32 batch=128 | blocked 0.02751 | vendor 0.5709 # deep
+side=R trans=N m=1 k=1 q=32 batch=2048 | blocked 0.04025 | vendor 8.042 # deep
+side=R trans=N m=1 k=1 q=32 batch=32768 | blocked 0.2788 | vendor 137.7 # deep
+side=R trans=N m=1 k=1 q=1024 batch=128 | blocked 0.03477 | vendor 2.214 # deep
+side=R trans=N m=1 k=1 q=1024 batch=2048 | blocked 0.2537 | vendor 36.85 # deep
+side=R trans=N m=1 k=1 q=1024 batch=32768 | blocked 9.943 | vendor 113686 # deep
+side=R trans=N m=8 k=1 q=1 batch=128 | blocked 0.02409 | vendor 0.4825 # deep
+side=R trans=N m=8 k=1 q=1 batch=2048 | blocked 0.04804 | vendor 8.378 # deep
+side=R trans=N m=8 k=1 q=1 batch=32768 | blocked 0.3296 | vendor 130.8 # deep
+side=R trans=N m=8 k=1 q=32 batch=128 | blocked 0.02606 | vendor 0.5350 # deep
+side=R trans=N m=8 k=1 q=32 batch=2048 | blocked 0.04752 | vendor 8.593 # deep
+side=R trans=N m=8 k=1 q=32 batch=32768 | blocked 0.3993 | vendor 141.7 # deep
+side=R trans=N m=8 k=1 q=1024 batch=128 | blocked 0.04890 | vendor 2.894 # deep
+side=R trans=N m=8 k=1 q=1024 batch=2048 | blocked 0.6344 | vendor 50.59 # deep
+side=R trans=N m=8 k=8 q=1 batch=128 | blocked 0.09728 | vendor 1.249 # deep
+side=R trans=N m=8 k=8 q=1 batch=2048 | blocked 0.2848 | vendor 19.88 # deep
+side=R trans=N m=8 k=8 q=1 batch=32768 | blocked 4.196 | vendor 333.7 # deep
+side=R trans=N m=8 k=8 q=32 batch=128 | blocked 0.1312 | vendor 1.476 # deep
+side=R trans=N m=8 k=8 q=32 batch=2048 | blocked 0.4980 | vendor 23.50 # deep
+side=R trans=N m=8 k=8 q=32 batch=32768 | blocked 7.423 | vendor 396.7 # deep
+side=R trans=N m=8 k=8 q=1024 batch=128 | blocked 0.6902 | vendor 4.049 # deep
+side=R trans=N m=8 k=8 q=1024 batch=2048 | blocked 10.09 | vendor 68.33 # deep
+side=R trans=N m=64 k=1 q=1 batch=128 | blocked 0.03157 | vendor 1.559 # deep
+side=R trans=N m=64 k=1 q=1 batch=2048 | blocked 0.08630 | vendor 24.86 # deep
+side=R trans=N m=64 k=1 q=1 batch=32768 | blocked 0.9556 | vendor 415.7 # deep
+side=R trans=N m=64 k=1 q=32 batch=128 | blocked 0.03206 | vendor 1.635 # deep
+side=R trans=N m=64 k=1 q=32 batch=2048 | blocked 0.1061 | vendor 26.36 # deep
+side=R trans=N m=64 k=1 q=32 batch=32768 | blocked 2.280 | vendor 473.9 # deep
+side=R trans=N m=64 k=1 q=1024 batch=128 | blocked 0.2063 | vendor 3.700 # deep
+side=R trans=N m=64 k=8 q=1 batch=128 | blocked 0.1129 | vendor 11.82 # deep
+side=R trans=N m=64 k=8 q=1 batch=2048 | blocked 0.4270 | vendor 189.0 # deep
+side=R trans=N m=64 k=8 q=1 batch=32768 | blocked 6.910 | vendor 3150 # deep
+side=R trans=N m=64 k=8 q=32 batch=128 | blocked 0.2110 | vendor 12.39 # deep
+side=R trans=N m=64 k=8 q=32 batch=2048 | blocked 1.158 | vendor 203.6 # deep
+side=R trans=N m=64 k=8 q=32 batch=32768 | blocked 17.79 | vendor 3307 # deep
+side=R trans=N m=64 k=8 q=1024 batch=128 | blocked 1.921 | vendor 15.55 # deep
+side=R trans=N m=64 k=64 q=1 batch=128 | blocked 1.609 | vendor 92.74 # deep
+side=R trans=N m=64 k=64 q=1 batch=2048 | blocked 5.972 | vendor 1523 # deep
+side=R trans=N m=64 k=64 q=32 batch=128 | blocked 1.853 | vendor 96.86 # deep
+side=R trans=N m=64 k=64 q=32 batch=2048 | blocked 7.683 | vendor 1596 # deep
+side=R trans=N m=64 k=64 q=1024 batch=128 | blocked 6.453 | vendor 30.87 # deep
+side=R trans=N m=512 k=1 q=1 batch=128 | blocked 0.05310 | vendor 2.072 # deep
+side=R trans=N m=512 k=1 q=1 batch=2048 | blocked 0.4304 | vendor 33.03 # deep
+side=R trans=N m=512 k=1 q=1 batch=32768 | blocked 7.003 | vendor 754.1 # deep
+side=R trans=N m=512 k=1 q=32 batch=128 | blocked 0.05753 | vendor 2.164 # deep
+side=R trans=N m=512 k=1 q=32 batch=2048 | blocked 1.089 | vendor 50.62 # deep
+side=R trans=N m=512 k=1 q=1024 batch=128 | blocked 2.188 | vendor 5.693 # deep
+side=R trans=N m=512 k=8 q=1 batch=128 | blocked 0.2648 | vendor 15.92 # deep
+side=R trans=N m=512 k=8 q=1 batch=2048 | blocked 3.023 | vendor 267.8 # deep
+side=R trans=N m=512 k=8 q=32 batch=128 | blocked 0.8883 | vendor 16.63 # deep
+side=R trans=N m=512 k=8 q=32 batch=2048 | blocked 8.001 | vendor 290.4 # deep
+side=R trans=N m=512 k=8 q=1024 batch=128 | blocked 13.08 | vendor 21.34 # deep
+side=R trans=N m=512 k=64 q=1 batch=128 | blocked 11.86 | vendor 127.3 # deep
+side=R trans=N m=512 k=64 q=1 batch=2048 | blocked 73.35 | vendor 2115 # deep
+side=R trans=N m=512 k=64 q=32 batch=128 | blocked 13.72 | vendor 136.3 # deep
+side=R trans=N m=512 k=64 q=32 batch=2048 | blocked 89.75 | vendor 2205 # deep
+side=R trans=N m=512 k=64 q=1024 batch=128 | blocked 59.97 | vendor 85.03 # deep
+side=R trans=N m=512 k=512 q=1 batch=128 | blocked 100.5 | vendor 571.8 # deep
+side=R trans=N m=512 k=512 q=32 batch=128 | blocked 108.1 | vendor 638.3 # deep
+side=R trans=N m=512 k=512 q=1024 batch=128 | blocked 321.9 | vendor 780.6 # deep
+side=R trans=T m=1 k=1 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=1 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=8 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=64 k=64 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=1 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=8 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=64 q=1024 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=32 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=32 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=32 batch=32768 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1024 batch=128 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1024 batch=2048 | vendor - # transcribed
+side=R trans=T m=512 k=512 q=1024 batch=32768 | vendor - # transcribed

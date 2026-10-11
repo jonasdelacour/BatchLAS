@@ -11,6 +11,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,15 +25,17 @@ inline constexpr double kModelBytesPerS = 500e9;
 struct PlanSpec {  // plain data, so tests need no OpSpec
     std::vector<std::string> candidates;  // the full current list, in tie order
     std::function<double(const CellKey&)> bytes;
+    std::function<std::int64_t(const CellKey&)> max_dim;  // empty = no extents known (never skip:dim)
 };
 
 struct PlannedCell {
     CellKey key;
-    std::string reason;  // "" = measure, "skip:current", "skip:single", "skip:cap", "partial:<fams>"
+    std::string reason;  // "" = measure, "remeasure", "skip:current", "skip:single", "skip:cap", "skip:dim", "partial:<fams>"
     std::vector<std::string> arms;
     double est_s = 0;
     Tier tier = Tier::preview;            // a partial re-race keeps the stored record's tier
     const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
+    int round = -1;                       // remeasure: the stored record's round (-1: the running round)
 };
 
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand,
@@ -45,9 +48,19 @@ double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<st
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
-                                    const std::map<CellKey, std::vector<std::string>>* runnable = nullptr);
+                                    const std::map<CellKey, std::vector<std::string>>* runnable = nullptr,
+                                    std::int64_t max_dim = 0,  // > 0: a cell with a larger matrix dimension is skip:dim
+                                    const std::set<CellKey>* remeasure = nullptr);  // missing, past max_dim too: "remeasure"
 
-// potrf and trsm before posv; otherwise input order.
+// --remeasure-keys: "<op> <dtype> <key_arg>" lines -> "op.dtype" -> cells; throws std::runtime_error on a bad
+// line. evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
+std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& path);
+
+// op -> the ops whose tables its timings read. evidence: docs/design/tiered-tuning.md#engine-op-order-over-all-19-ops
+const std::map<std::string, std::vector<std::string>>& op_dependencies();
+const std::vector<std::string>& canonical_op_order();  // the order `all` starts from
+std::vector<std::string> all_ops(std::vector<std::string> registered);  // canonical order, unknown ones last
+// Stable topological sort: an op follows every dependency in the list; input order breaks ties.
 std::vector<std::string> op_order(std::vector<std::string> ops);
 
 // Empty when the estimate (lattice and refinement) fits the budget (or there is none); the lattice runs either way.
@@ -80,6 +93,15 @@ struct AuditResult {
 };
 AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector<ArmOutcome>& fresh,
                           const std::vector<std::string>& order, double tie = 0.03, double margin = 0.10);
+
+// One (op, dtype)'s ld audit (spec.hh kLdAuditPad). An arm the cell did not verify stays wanted.
+struct LdAuditBook {
+    std::set<std::string> done;  // arms with a verdict: pass, fail or skipped
+    std::size_t passed = 0, skipped = 0;
+    std::vector<std::string> failed;  // "<arm> @ <key>: <reason>"
+    std::vector<std::string> want(const std::vector<std::string>& arms) const;  // those with no verdict yet
+    std::vector<std::string> note(const CellKey& key, const std::vector<ArmOutcome>& out);  // returns this cell's fails
+};
 
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);

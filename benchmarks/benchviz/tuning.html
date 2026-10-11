@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BatchLAS tuning</title>
+<link rel="stylesheet" href="/static/benchviz.css">
+<style>
+/* Tuning tab only; everything shared lives in benchviz.css. */
+html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page */
+:root { --t-deep: var(--accent); --t-coarse: color-mix(in srgb, var(--accent) 55%, var(--surface));
+  --t-preview: color-mix(in srgb, var(--accent) 25%, var(--surface)); --t-custom: var(--warn); --t-transcribed: var(--hair-2); }
+.tierbar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--sunken); margin: 2px 0 5px; }
+.tierbar i { display: block; height: 100%; }
+.mx td { vertical-align: top; min-width: 150px; }
+.mx td.cell { cursor: pointer; } .mx td.cell:hover { background: var(--hover); }
+.mx .big { font-variant-numeric: tabular-nums; font-weight: 600; }
+.badge { display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 7px; margin: 0 4px 0 0; border: 1px solid var(--hair-2); color: var(--ink-2); white-space: nowrap; }
+.badge.warn { border-color: var(--warn); color: var(--warn); } .badge.bad { border-color: var(--bad); color: var(--bad); }
+.badge.good { border-color: var(--good); color: var(--good); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.ctl { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-bottom: 12px; }
+.ctl label { font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.ctl select { min-width: 84px; }
+.map { padding: 14px; }
+.map svg { display: block; width: 100%; height: auto; }
+.map svg rect.c { cursor: pointer; }
+.detail { margin-top: 12px; }
+.detail table td, .detail table th { padding: 6px 10px; }
+.ival { position: relative; height: 10px; min-width: 120px; background: var(--sunken); border-radius: 2px; }
+.ival i { position: absolute; top: 3px; height: 4px; background: var(--accent); opacity: .45; border-radius: 2px; }
+.ival b { position: absolute; top: 0; width: 2px; height: 10px; background: var(--ink); }
+.lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0; }
+.lanes > div { padding: 12px 16px; border-left: 1px solid var(--hair); min-width: 0; }
+.lanes > div:first-child { border-left: 0; }
+.lanes .k { font-size: 12px; color: var(--muted); }
+.lanes .w { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog { height: 4px; background: var(--sunken); border-radius: 2px; overflow: hidden; min-width: 80px; }
+.prog i { display: block; height: 100%; background: var(--accent); }
+.planlist { max-height: 220px; overflow: auto; font: 12px/1.6 var(--mono); color: var(--ink-2); background: var(--sunken); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+.tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tiers label { display: flex; flex-direction: column; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px; cursor: pointer; }
+.tiers input { position: absolute; opacity: 0; pointer-events: none; }
+.tiers b { font-size: 13px; } .tiers span { font-size: 11px; color: var(--muted); }
+.tiers label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 760px) {
+  header.top .brand { display: none; }
+  header.top { gap: 8px; }
+  header.top #device { min-width: 92px; padding-right: 22px; }
+  header.top .status, header.top #theme { display: none; }
+  #st-dev { word-break: break-all; }
+  .tiers { grid-template-columns: 1fr; }
+  .opgrid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">BatchLAS</span>
+  <nav class="seg pages" aria-label="Page"><a href="/">Benchmarks</a><a class="on" href="/tuning">Tuning</a></nav>
+  <select class="sel" id="device" aria-label="Device" title="The device whose ledgers and tables are shown"></select>
+  <div class="status">
+    <span class="state" id="state"><span class="dot"></span><span>idle</span></span>
+    <span class="track hide-md"><i id="fill"></i></span>
+    <span class="stat-inline keep" id="count"></span>
+    <span class="stat-inline" id="rate"></span>
+    <span class="stat-inline keep" id="eta"></span>
+    <span class="current" id="current"></span>
+  </div>
+  <button class="btn danger" id="stop" hidden>Stop</button>
+  <button class="btn primary" id="newrun">New<span class="hide-sm"> tuning run</span></button>
+  <button class="btn ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+</header>
+
+<div class="shell">
+  <nav class="rail" id="rail"></nav>
+  <main class="view"><div class="wrap" id="view"><div class="empty">Loading the ledgers…</div></div></main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="New tuning run">
+  <div class="dh"><h3>New tuning run</h3><button class="btn ghost" id="dclose" aria-label="Close">✕</button></div>
+  <div class="db">
+    <div id="dbin"></div>
+    <div class="lbl">Tier <span class="hint">a cheaper tier never replaces a better record</span></div>
+    <div class="tiers" id="dtier"></div>
+    <div class="lbl">Operations <a id="dall">all / none</a></div>
+    <div class="opgrid" id="dops"></div>
+    <div class="lbl">Precision</div>
+    <div class="chips" id="dtypes"></div>
+    <div class="lbl">GPUs <span class="hint">each pulls cells from one shared queue</span></div>
+    <div class="chips" id="dgpus"></div>
+    <div class="g3">
+      <div><label class="fl" for="dmax">Largest dimension</label><input class="field num" id="dmax" type="number" min="1" value="2048"></div>
+      <div><label class="fl" for="dbudget">Refinement budget [h]</label><input class="field num" id="dbudget" type="number" min="0" step="0.5" placeholder="none"></div>
+      <div><label class="fl" for="dwait">Wait for a busy GPU [min]</label><input class="field num" id="dwait" type="number" min="0" value="60"></div>
+    </div>
+    <label class="fl"><input type="checkbox" id="dexcl"> Exclusive GPUs <span class="muted">— also refuse a GPU that only holds another user's idle context</span></label>
+    <div class="lbl">Name</div>
+    <input class="field" id="dname" placeholder="tier-date-time">
+    <div class="planlist" id="dplan" hidden></div>
+    <p class="msg">Cells the ledger already holds at this tier or better, measured with the current kernel sources, are skipped,
+      so a stopped run resumes by starting the same run again. Results append to <span class="mono" id="dledger"></span>.</p>
+  </div>
+  <div class="df"><span class="est" id="estimate"></span><span style="flex:1"></span><button class="btn primary" id="dstart">Start</button></div>
+</aside>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
+const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", preview: "--t-preview", custom: "--t-custom", transcribed: "--t-transcribed" };
+const PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#e377c2", "#bcbd22", "#17becf", "#8c564b", "#393b79"];
+const VENDOR = "#7f7f7f";
+let meta = null, ST = null, RUN = null, route = { page: "status" }, device = null, es = null, built = null;
+let OPV = null, opKey = null, mapCfg = {}, sel = null, mode = "winner", diffSort = 1;
+
+// ---------------------------------------------------------------- utils
+function patch(el, html) { if (el && el.__h !== html) { el.innerHTML = html; el.__h = html; } }
+function text(el, t) { if (el && el.textContent !== t) el.textContent = t; }
+async function getJ(url) { return (await fetch(url)).json(); }
+async function post(url, body) { return (await fetch(url, { method: "POST", body: JSON.stringify(body) })).json(); }
+function dur(s) {
+  if (s == null || !isFinite(s)) return "—";
+  s = Math.round(s); if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`;
+}
+const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "";
+const fmtMs = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(4) : v.toPrecision(3);
+const fmtX = (v) => v == null ? "—" : (v >= 9.95 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(2) : v.toFixed(3)) + "×";
+const fmtN = (v) => v >= 1024 && v % 1024 === 0 ? `${v / 1024}k` : String(v);
+const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "—";
+const family = (s) => String(s || "").split(":")[0];
+function famColor(fams, f) {
+  if (f === "vendor") return VENDOR;
+  const native = fams.filter(x => x !== "vendor"), i = native.indexOf(f);
+  return i < 0 ? VENDOR : PALETTE[i % PALETTE.length];
+}
+function tierBar(tiers, total) {
+  if (!total) return `<div class="tierbar"></div>`;
+  return `<div class="tierbar">${meta.tierOrder.filter(t => tiers[t]).map(t =>
+    `<i style="width:${(100 * tiers[t] / total).toFixed(2)}%;background:var(${TIER_VAR[t]})" title="${t}: ${tiers[t]}"></i>`).join("")}</div>`;
+}
+function tierLegend() {
+  return `<div class="legend">${meta.tierOrder.slice(0, 4).map(t => `<span><i style="background:var(${TIER_VAR[t]})"></i>${t}</span>`).join("")}</div>`;
+}
+
+// ---------------------------------------------------------------- theme
+function setTheme(t) { t ? document.documentElement.dataset.theme = t : delete document.documentElement.dataset.theme;
+  try { t ? localStorage.setItem("bv-theme", t) : localStorage.removeItem("bv-theme"); } catch (e) {} }
+try { const t = localStorage.getItem("bv-theme"); if (t) setTheme(t); } catch (e) {}
+$("theme").onclick = () => {
+  const d = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  setTheme(d ? "light" : "dark");
+};
+
+// ---------------------------------------------------------------- routing
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  if (h[0] === "op" && h[1]) route = { page: "op", op: h[1], dtype: h[2] || null };
+  else if (h[0] === "run") route = { page: "run", run: h[1] || null };
+  else route = { page: "status" };
+}
+window.addEventListener("hashchange", () => { parseHash(); built = null; sel = null; watchRun(); render(); window.scrollTo(0, 0); });
+$("device").onchange = (e) => { device = e.target.value; try { localStorage.setItem("bv-tune-device", device); } catch (x) {} built = null; opKey = null; render(); };
+
+async function loadStatus() {
+  ST = await getJ("/api/tune/status");
+  const devs = ST.devices.filter(d => ST.rows.some(r => r.device === d && r.best));
+  const all = devs.length ? devs : ST.devices;
+  let saved = null; try { saved = localStorage.getItem("bv-tune-device"); } catch (e) {}
+  if (!device || !all.includes(device)) device = all.includes(saved) ? saved : all.slice().sort((a, b) =>
+    ST.rows.filter(r => r.device === b).reduce((s, r) => s + r.best, 0) - ST.rows.filter(r => r.device === a).reduce((s, r) => s + r.best, 0))[0];
+  patch($("device"), ST.devices.map(d => `<option ${d === device ? "selected" : ""}>${esc(d)}</option>`).join(""));
+  render();
+}
+// The status matrix and the op view re-read the ledger while a run writes to it.
+let lastDone = -1;
+setInterval(() => { if (RUN && RUN.state === "running" && RUN.done !== lastDone) { lastDone = RUN.done; loadStatus(); if (route.page === "op") opKey = null; } }, 20000);
+
+function watchRun() {
+  const name = route.page === "run" ? route.run || "" : "";
+  if (es && es.__name === name) return;
+  if (es) es.close();
+  es = new EventSource(`/api/tune/events?run=${encodeURIComponent(name)}`);
+  es.__name = name;
+  es.onmessage = (ev) => { RUN = JSON.parse(ev.data); renderHeader(); if (route.page === "run") render(); };
+}
+
+// ---------------------------------------------------------------- header & rail
+function renderHeader() {
+  const r = RUN && RUN.name ? RUN : null, state = r ? r.state : "idle", running = state === "running";
+  // The header is about the box: a run in progress, else idle (the newest run's outcome is on the Runs page).
+  $("state").className = "state " + (running ? "running" : "");
+  text($("state").lastElementChild, running ? "tuning" : "idle");
+  $("state").title = r ? `${r.name}: ${state}` : "";
+  $("fill").style.width = running && r.total ? `${(100 * Math.min(r.done, r.total) / r.total).toFixed(1)}%` : "0";
+  patch($("count"), running && r.total ? `<b style="color:var(--ink)">${r.done}</b> / ~${r.total} cells` : "");
+  text($("rate"), running && r.rate_per_min ? `${r.rate_per_min.toFixed(0)} cells/min` : "");
+  text($("eta"), running && r.eta_s ? `${dur(r.eta_s)} left` : "");
+  text($("current"), running && r.gpus.length ? r.gpus.map(g => `gpu${g.gpu} ${g.op} ${g.dtype}`).join(" · ") : "");
+  $("stop").hidden = !running || meta.read_only;
+  $("newrun").hidden = meta.read_only;
+}
+function renderRail() {
+  let h = `<a href="#/status" class="${route.page === "status" ? "on" : ""}"><span style="font-weight:600;color:var(--ink)">Status</span><span></span></a>
+    <a href="#/run${RUN && RUN.name ? "/" + encodeURIComponent(RUN.name) : ""}" class="${route.page === "run" ? "on" : ""}${RUN && RUN.state === "running" ? " live" : ""}"><span style="font-weight:600;color:var(--ink)">Runs</span><span></span></a>
+    <div class="grp">Operations</div>`;
+  for (const o of meta.ops) {
+    const rows = ST ? ST.rows.filter(r => r.op === o.name && r.device === device) : [];
+    const best = rows.reduce((s, r) => s + r.best, 0), deep = rows.reduce((s, r) => s + r.tiers.deep, 0);
+    const stale = rows.reduce((s, r) => s + r.stale + r.partial, 0);
+    const on = route.page === "op" && route.op === o.name;
+    h += `<a href="#/op/${o.name}" class="${on ? "on" : ""}${best ? "" : " off"}"><span class="nm">${o.name}</span>
+      <span class="sp" style="color:${stale ? "var(--warn)" : "var(--muted)"}" title="${stale ? `${stale} stale or partly stale cells` : "cells with a current record"}">${best ? (stale ? `${stale}!` : best) : ""}</span>
+      ${best ? `<span class="bar"><i style="width:${(100 * deep / best).toFixed(1)}%" title="deep share"></i></span>` : ""}</a>`;
+  }
+  patch($("rail"), h);
+}
+
+function render() {
+  if (!meta) return;
+  renderHeader(); renderRail();
+  if (!ST) return;
+  const key = `${route.page}|${route.op || ""}|${route.dtype || ""}|${route.run || ""}|${device}`;
+  if (built !== key) { built = key; route.page === "op" ? buildOp() : route.page === "run" ? buildRun() : buildStatus(); }
+  if (route.page === "op") updateOp(); else if (route.page === "run") updateRun(); else updateStatus();
+}
+
+// ---------------------------------------------------------------- status matrix
+function buildStatus() {
+  $("view").innerHTML = `<div class="head"><h1>Tuning status</h1><span class="muted" id="st-dev"></span></div>
+    <p class="lede">The best record of every cell in the tuning ledger, judged against the kernel sources in this checkout, next to
+      the table shipped in <span class="mono">tuned/</span>. A record is kept until a higher tier measures its cell; a stale one
+      (its winner's kernels changed) is measured again by the next run of any tier. Click a cell for its winner map.</p>
+    <div class="panel stats" id="st-stats"></div>
+    <div class="sec"><h2>Operations × precision</h2><span class="sp-grow"></span><div id="st-leg"></div></div>
+    <div class="panel"><div style="overflow-x:auto" id="st-mx"></div></div>`;
+}
+function updateStatus() {
+  const rows = ST.rows.filter(r => r.device === device);
+  text($("st-dev"), `${device} · ledger ${ST.ledger}`);
+  const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+  const best = sum(r => r.best), deep = sum(r => r.tiers.deep), stale = sum(r => r.stale), partial = sum(r => r.partial);
+  const bad = sum(r => r.audits.mismatch), audited = sum(r => r.audits.ok + r.audits.mismatch + r.audits.inconclusive);
+  const ledgers = rows.filter(r => r.best).length;
+  const behind = rows.filter(r => r.best && (!r.table || r.table.source !== "ledger" || r.table.date < r.newest)).length;
+  patch($("st-stats"), `
+    <div><div class="k">Cells with a current record</div><div class="v">${best.toLocaleString()}</div><div class="f">${ledgers} of ${meta.ops.length * 4} op × precision ledgers</div></div>
+    <div><div class="k">Deep</div><div class="v">${pct(deep, best)}</div><div class="f">${tierLegend()}</div></div>
+    <div><div class="k">Stale · partly stale</div><div class="v" ${stale + partial ? 'style="color:var(--warn)"' : ""}>${stale}<small> · ${partial}</small></div><div class="f">stale: no current record; partly: a losing family changed. The next run re-measures both within its size cap</div></div>
+    <div><div class="k">Audit mismatches</div><div class="v" ${bad ? 'style="color:var(--bad)"' : ""}>${bad}<small> / ${audited}</small></div><div class="f">fresh process vs warm worker</div></div>
+    <div><div class="k">Tables behind the ledger</div><div class="v" ${behind ? 'style="color:var(--warn)"' : ""}>${behind}</div><div class="f">not written from it, or older</div></div>`);
+  const dts = meta.dtypes;
+  patch($("st-mx"), `<table class="mx"><thead><tr><th>Operation</th>${dts.map(t => `<th>${PREC[t][0]}</th>`).join("")}</tr></thead><tbody>${meta.ops.map(o =>
+    `<tr><td><span class="mono">${o.name}</span><span class="sub2 mono">${esc(o.keys.split(" ").map(k => k.split(":")[0]).join(" "))}</span></td>${dts.map(t => statusCell(o.name, t)).join("")}</tr>`).join("")}</tbody></table>`);
+}
+function statusCell(op, dtype) {
+  const r = ST.rows.find(x => x.op === op && x.dtype === dtype && x.device === device);
+  if (!r) return `<td class="muted">—</td>`;
+  const tbl = r.table, age = r.age_days == null ? "" : r.age_days < 1 ? "today" : `${Math.floor(r.age_days)} d ago`;
+  const tblText = !tbl ? `<span class="badge warn">no table</span>` : tbl.source === "ledger"
+    ? `<span class="muted">table ${esc(tbl.date)}</span>${r.newest && tbl.date < r.newest ? ` <span class="badge warn" title="the ledger has records newer than the table">behind</span>` : ""}`
+    : `<span class="muted">table ${esc(tbl.source)}${tbl.date ? " " + esc(tbl.date) : ""}</span>`;
+  if (!r.best) return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'"><span class="muted">no ledger</span><span class="sub2">${tblText}</span></td>`;
+  const badges = [r.stale ? `<span class="badge warn" title="records whose winner's kernels changed">${r.stale} stale</span>` : "",
+    r.partial ? `<span class="badge warn" title="a losing family's kernels changed; only it is raced again">${r.partial} partial</span>` : "",
+    r.audits.mismatch ? `<span class="badge bad" title="fresh-process audit disagreed">${r.audits.mismatch} audit</span>` : ""].join("");
+  return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'" title="${esc(Object.entries(r.tiers).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(", "))}; ${r.runs} runs">
+    ${tierBar(r.tiers, r.best)}<span class="big">${r.best.toLocaleString()}</span> <span class="muted num">· ${pct(r.refined, r.best)} refined · ${age}</span>
+    <span class="sub2">${badges}${tblText}</span></td>`;
+}
+
+// ---------------------------------------------------------------- op: winner map and table diff
+function buildOp() {
+  const o = meta.ops.find(x => x.name === route.op);
+  if (!o) { location.hash = "#/status"; return; }
+  const have = meta.dtypes.filter(t => ST.rows.some(r => r.op === o.name && r.dtype === t && r.device === device && r.best));
+  if (!route.dtype || !meta.dtypes.includes(route.dtype)) { route.dtype = have[0] || meta.dtypes[0]; history.replaceState(null, "", `#/op/${o.name}/${route.dtype}`); }
+  $("view").innerHTML = `<div class="head"><h1><span class="mono">${o.name}</span></h1>
+      <div class="chips">${meta.dtypes.map(t => `<button class="chip ${t === route.dtype ? "on" : ""}" ${have.includes(t) ? "" : 'style="opacity:.45"'} onclick="location.hash='#/op/${o.name}/${t}'">${PREC[t][0]}</button>`).join("")}</div>
+      <span class="muted num" id="op-count"></span></div>
+    <p class="lede" id="op-lede"></p>
+    <div class="panel stats" id="op-stats"></div>
+    <div class="sec"><h2>Winner map</h2><span class="sp-grow"></span><div class="seg" id="op-mode"></div></div>
+    <div class="panel map"><div class="ctl" id="op-ctl"></div><div id="op-svg"><div class="empty">Loading…</div></div><div class="legend" id="op-leg" style="margin-top:10px"></div></div>
+    <div class="panel detail" id="op-detail" hidden></div>
+    <div class="sec"><h2>Against the shipped table</h2><span class="sp-grow"></span><span class="muted" id="op-dsum"></span></div>
+    <div class="panel"><div class="scroll" id="op-diff"><div class="empty">Loading…</div></div></div>`;
+  opKey = null;
+}
+async function updateOp() {
+  const k = `${route.op}|${route.dtype}|${device}`;
+  if (opKey !== k) {
+    opKey = k;
+    const v = await getJ(`/api/tune/op?op=${route.op}&dtype=${route.dtype}&device=${encodeURIComponent(device)}`);
+    if (opKey !== k) return;
+    OPV = v; initMap(); drawOp();
+  }
+}
+function initMap() {
+  const logs = OPV.keys.filter(x => x.log).map(x => x.name);
+  const keep = mapCfg.op === route.op ? mapCfg : null;
+  const y = keep && logs.includes(keep.y) ? keep.y : logs[0];
+  // Two shape keys make the map shape x shape at the commonest batch; one shape key pairs it with batch.
+  const shapes = logs.filter(n => n !== "batch");
+  const x = keep && logs.includes(keep.x) && keep.x !== y ? keep.x : shapes.length > 1 ? shapes.find(n => n !== y) : logs.find(n => n !== y) || y;
+  mapCfg = { op: route.op, x, y, fixed: {} };
+  pickFixed();
+}
+// Fixed keys default to their most common value among the cells, so the first slice is the densest.
+function pickFixed(prefer) {
+  const ix = Object.fromEntries(OPV.keys.map((k, i) => [k.name, i]));
+  let pool = OPV.cells;
+  for (const k of OPV.keys) {
+    if (k.name === mapCfg.x || k.name === mapCfg.y) continue;
+    const counts = new Map();
+    pool.forEach(c => counts.set(c[0][ix[k.name]], (counts.get(c[0][ix[k.name]]) || 0) + 1));
+    const want = prefer && prefer[k.name] !== undefined ? prefer[k.name] : mapCfg.fixed[k.name];
+    const v = counts.has(want) ? want : [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] > b[0] ? 1 : -1))[0]?.[0];
+    mapCfg.fixed[k.name] = v;
+    pool = pool.filter(c => c[0][ix[k.name]] === v);
+  }
+}
+function setAxis(which, v) { mapCfg[which] = v; if (mapCfg.x === mapCfg.y) mapCfg[which === "x" ? "y" : "x"] = OPV.keys.find(k => k.log && k.name !== v).name; pickFixed(); sel = null; drawOp(); }
+function setFixed(name, raw) { const k = OPV.keys.find(x => x.name === name); mapCfg.fixed[name] = k.log ? +raw : raw; pickFixed(mapCfg.fixed); sel = null; drawOp(); }
+function setMode(m) { mode = m; drawOp(); }
+
+function drawOp() {
+  const v = OPV, ix = Object.fromEntries(v.keys.map((k, i) => [k.name, i]));
+  const cells = v.cells, fams = v.families;
+  const changed = cells.filter(c => c[7] >= 0 && c[9] >= 0 && c[7] !== c[9]);
+  const sps = changed.map(c => c[8]).filter(x => x);
+  const gm = sps.length ? Math.exp(sps.reduce((a, s) => a + Math.log(s), 0) / sps.length) : null;
+  const tiers = {}; cells.forEach(c => tiers[v.tiers[c[1]]] = (tiers[v.tiers[c[1]]] || 0) + 1);
+  const wins = {}; cells.forEach(c => { const f = c[3] >= 0 ? family(v.cands[c[3]]) : "none"; wins[f] = (wins[f] || 0) + 1; });
+  const top = Object.entries(wins).sort((a, b) => b[1] - a[1]);
+  text($("op-count"), `${cells.length.toLocaleString()} cells on ${device}`);
+  patch($("op-lede"), `Each cell's best record from <span class="mono">${esc(v.op)}.${esc(v.dtype)}.${esc(v.device)}</span>: ${v.cands.length} candidates in ${fams.length} families,
+    keys <span class="mono">${esc(v.keys.map(k => k.name).join(" "))}</span>. Shipped table: ${v.table ? `${esc(v.table.source)}, ${esc(v.table.date)}, ${v.table.rows} rows` : "none"}.
+    ${v.table_error ? `<span style="color:var(--warn)">${esc(v.table_error)}</span>` : ""}`);
+  patch($("op-stats"), `
+    <div><div class="k">Cells</div><div class="v">${cells.length.toLocaleString()}</div><div class="f">${tierBar(tiers, cells.length)}${Object.entries(tiers).map(([t, n]) => `${t} ${n}`).join(" · ")}</div></div>
+    <div><div class="k">Refined</div><div class="v">${pct(cells.filter(c => c[2] > 0).length, cells.length)}</div><div class="f">cells added between lattice points</div></div>
+    <div><div class="k">Winning families</div><div class="v" style="font-size:18px">${top.slice(0, 3).map(([f, n]) => `<span style="color:${famColor(fams, f)}">${esc(f)}</span> <small>${pct(n, cells.length)}</small>`).join("<br>")}</div><div class="f"></div></div>
+    <div><div class="k">Pick changes vs the table</div><div class="v" ${changed.length ? 'style="color:var(--accent)"' : ""}>${changed.length}</div><div class="f">${gm ? `geomean ${fmtX(gm)} where timed` : "the table matches this ledger"}</div></div>`);
+  patch($("op-mode"), [["winner", "Winner"], ["diff", "Change vs table"]].map(([k, l]) => `<button class="${mode === k ? "on" : ""}" onclick="setMode('${k}')">${l}</button>`).join(""));
+  const logs = v.keys.filter(k => k.log).map(k => k.name);
+  const opt = (vals, cur) => vals.map(x => `<option value="${esc(x)}" ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
+  let ctl = `<label>Y<select class="sel" onchange="setAxis('y', this.value)">${opt(logs, mapCfg.y)}</select></label>
+    <label>X<select class="sel" onchange="setAxis('x', this.value)">${opt(logs.filter(n => n !== mapCfg.y), mapCfg.x)}</select></label>`;
+  let pool = cells;
+  for (const k of v.keys) {
+    if (k.name === mapCfg.x || k.name === mapCfg.y) continue;
+    const vals = [...new Set(pool.map(c => c[0][ix[k.name]]))].sort((a, b) => a > b ? 1 : a < b ? -1 : 0);
+    ctl += `<label>${esc(k.name)}<select class="sel" onchange="setFixed('${k.name}', this.value)">${opt(vals, mapCfg.fixed[k.name])}</select></label>`;
+    pool = pool.filter(c => c[0][ix[k.name]] === mapCfg.fixed[k.name]);
+  }
+  patch($("op-ctl"), ctl);
+  drawMap(pool, ix);
+  drawDiff(changed, ix);
+}
+
+function cellFill(c) {
+  const v = OPV;
+  if (mode === "diff") {
+    if (c[7] < 0 || c[9] < 0 || c[7] === c[9]) return ["var(--sunken)", 1];
+    if (c[8] == null) return ["var(--muted)", .35];
+    const s = Math.min(1, Math.abs(Math.log(c[8])) / Math.log(2));
+    return [c[8] >= 1 ? "var(--win)" : "var(--lose)", .25 + .75 * s];
+  }
+  if (c[3] < 0) return ["var(--muted)", .25];
+  const m = c[4] == null ? .5 : .3 + .7 * Math.min(1, Math.log1p(c[4]) / Math.log(1.5));
+  return [famColor(v.families, family(v.cands[c[3]])), m];
+}
+function drawMap(pool, ix) {
+  const v = OPV, xi = ix[mapCfg.x], yi = ix[mapCfg.y];
+  if (!pool.length) { patch($("op-svg"), `<div class="empty">No cells in this slice${v.cells.length ? "" : ": this ledger is empty on " + esc(device)}.</div>`); patch($("op-leg"), ""); return; }
+  const xs = [...new Set(pool.map(c => c[0][xi]))].sort((a, b) => a - b), ys = [...new Set(pool.map(c => c[0][yi]))].sort((a, b) => a - b);
+  const L = 58, T = 8, W = 900, B = 34, cw = Math.max(6, Math.min(90, (W - L - 8) / xs.length)), ch = Math.max(10, Math.min(28, 760 / ys.length));
+  const H = T + ys.length * ch + B, at = new Map(pool.map(c => [`${c[0][xi]}|${c[0][yi]}`, c]));
+  let h = "";
+  ys.forEach((yv, i) => {
+    if (ys.length <= 40 || i % Math.ceil(ys.length / 40) === 0)
+      h += `<text x="${L - 6}" y="${T + i * ch + ch * .68}" text-anchor="end" font-size="${Math.min(11, ch * .8)}" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(yv)}</text>`;
+    xs.forEach((xv, j) => {
+      const c = at.get(`${xv}|${yv}`);
+      if (!c) return;
+      const [fill, op] = cellFill(c), x0 = L + j * cw, y0 = T + i * ch, tier = v.tiers[c[1]];
+      const isSel = sel && sel.join("|") === c[0].join("|");
+      const tip = `${v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" ")}\nwinner ${c[3] >= 0 ? v.cands[c[3]] : "none"}${c[4] != null ? `, runner-up +${(100 * c[4]).toFixed(1)}%` : ""}\n${tier}, round ${c[2]}${c[5] ? ", partly stale" : ""}${c[6] && c[6] !== "ok" ? `\naudit: ${c[6]}` : ""}` +
+        (c[7] >= 0 && c[9] >= 0 && c[7] !== c[9] ? `\ntable picks ${v.cands[c[7]]}, ledger ${v.cands[c[9]]}: ${fmtX(c[8])}` : "");
+      h += `<rect class="c" data-k="${esc(JSON.stringify(c[0]))}" x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="${fill}" fill-opacity="${op}"
+        stroke="${isSel ? "var(--ink)" : c[6] && c[6] !== "ok" && c[6] !== "inconclusive" ? "var(--bad)" : "none"}" stroke-width="${isSel ? 2 : 1.5}"><title>${esc(tip)}</title></rect>`;
+      const cx = x0 + cw / 2, cy = y0 + ch / 2, r = Math.min(cw, ch) * .16;
+      if (tier === "coarse") h += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--surface)" pointer-events="none"/>`;
+      else if (tier === "preview") h += `<circle cx="${cx}" cy="${cy}" r="${r * 1.3}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+      else if (tier === "custom") h += `<path d="M${cx - r} ${cy - r}L${cx + r} ${cy + r}M${cx + r} ${cy - r}L${cx - r} ${cy + r}" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+      if (c[5]) h += `<path d="M${x0 + cw - 1 - Math.min(cw, ch) * .35} ${y0 + 1}h${Math.min(cw, ch) * .35}v${Math.min(cw, ch) * .35}z" fill="var(--warn)" pointer-events="none"/>`;
+    });
+  });
+  const step = Math.ceil(xs.length / 16);
+  xs.forEach((xv, j) => { if (j % step === 0) h += `<text x="${L + j * cw + cw / 2}" y="${T + ys.length * ch + 14}" text-anchor="middle" font-size="10" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(xv)}</text>`; });
+  h += `<text x="${L + xs.length * cw / 2}" y="${H - 4}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7">${esc(mapCfg.x)}</text>`;
+  h += `<text x="12" y="${T + ys.length * ch / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7" transform="rotate(-90 12 ${T + ys.length * ch / 2})">${esc(mapCfg.y)}</text>`;
+  patch($("op-svg"), `<svg viewBox="0 0 ${Math.max(W, L + xs.length * cw + 8)} ${H}" role="img" aria-label="Winner map">${h}</svg>`);
+  $("op-svg").querySelector("svg").onclick = (e) => { const r = e.target.closest("rect.c"); if (r) selectCell(JSON.parse(r.dataset.k)); };
+  if (mode === "diff") patch($("op-leg"), `<span><i style="background:var(--win)"></i>the ledger's pick is faster than the table's</span><span><i style="background:var(--lose)"></i>slower</span>
+    <span><i style="background:var(--sunken);border:1px solid var(--hair-2)"></i>same pick</span><span><i style="background:var(--muted);opacity:.35"></i>changed, not timed at the cell</span><span class="muted">full colour at 2×</span>`);
+  else {
+    const present = [...new Set(pool.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
+    patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") +
+      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
+  }
+}
+
+async function selectCell(key) {
+  sel = key; drawOp();
+  const box = $("op-detail"); box.hidden = false;
+  const d = await getJ(`/api/tune/cell?op=${route.op}&dtype=${route.dtype}&device=${encodeURIComponent(device)}&key=${encodeURIComponent(JSON.stringify(key))}`);
+  if (!sel || sel.join("|") !== key.join("|")) return;
+  if (!d.records.length) { patch(box, `<div class="empty">No record.</div>`); return; }
+  patch(box, d.records.map((r, i) => {
+    const ok = r.cands.filter(c => c.median > 0 && (c.status === "ok" || c.status === "eliminated"));
+    const lo = Math.min(...ok.map(c => c.lo || c.median)), hi = Math.max(...ok.map(c => c.hi || c.median));
+    const lx = (t) => hi > lo ? 100 * Math.log(t / lo) / Math.log(hi / lo) : 50;
+    const order = r.cands.slice().sort((a, b) => (r.ranked.indexOf(a.cand) + 1 || 999) - (r.ranked.indexOf(b.cand) + 1 || 999) || (a.median ?? 1e30) - (b.median ?? 1e30));
+    const best = ok.length ? Math.min(...ok.map(c => c.median)) : null;
+    return `<details ${i === 0 ? "open" : ""}><summary><span class="mono">${esc(r.key)}</span>
+      <span class="badge ${r.best ? "good" : ""}">${r.best ? "best" : "superseded"}</span><span class="badge">${esc(r.tier)} · round ${r.round}</span>
+      ${r.fresh !== "current" ? `<span class="badge warn">${esc(r.fresh.replace("_", " "))}</span>` : ""}${r.audit ? `<span class="badge ${r.audit === "ok" ? "" : "bad"}">audit ${esc(r.audit)}</span>` : ""}
+      <span class="muted" style="font-weight:400">${esc(r.date)} · ${esc(r.run_id)}</span></summary>
+      <div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Candidate</th><th>Status</th><th class="r">Median [ms]</th><th class="r">vs best</th><th>Interval (log scale)</th><th class="r">Reps</th><th>Note</th></tr></thead><tbody>
+      ${order.map(c => { const k = r.ranked.indexOf(c.cand);
+        return `<tr><td class="num muted">${k >= 0 ? k + 1 : ""}</td><td class="mono" style="color:${famColor(OPV.families, family(c.cand))}">${esc(c.cand)}${c.current ? "" : ' <span class="badge warn">stale</span>'}</td>
+        <td>${esc(c.status)}</td><td class="r num">${fmtMs(c.median)}</td><td class="r num">${c.median && best ? fmtX(c.median / best) : ""}</td>
+        <td>${c.median > 0 && ok.length > 1 ? `<div class="ival"><i style="left:${lx(c.lo || c.median)}%;width:${Math.max(.5, lx(c.hi || c.median) - lx(c.lo || c.median))}%"></i><b style="left:calc(${lx(c.median)}% - 1px)"></b></div>` : ""}</td>
+        <td class="r num muted">${c.reps || ""}</td><td class="route" style="white-space:normal;max-width:340px">${esc(c.reason)}</td></tr>`; }).join("")}
+      </tbody></table></div></details>`; }).join(""));
+}
+
+function drawDiff(changed, ix) {
+  const v = OPV;
+  patch($("op-dsum"), changed.length ? `${changed.length} cells pick a different candidate than the shipped table` : "");
+  if (!v.table) { patch($("op-diff"), `<div class="empty">No shipped table for ${esc(v.op)} ${esc(v.dtype)} on ${esc(v.device)}: every cell is new.</div>`); return; }
+  if (!changed.length) { patch($("op-diff"), `<div class="empty">The table <span class="mono">sweep_to_table.py --ledger</span> would write now picks what the shipped one picks at every measured cell.</div>`); return; }
+  const rows = changed.slice().sort((a, b) => ((a[8] ?? 1) - (b[8] ?? 1)) * diffSort).slice(0, 400);
+  patch($("op-diff"), `<table><thead><tr><th>Cell</th><th>Tier</th><th>Table picks</th><th>Ledger picks</th>
+    <th class="r s" onclick="diffSort=-diffSort;drawOp()">Predicted ${diffSort > 0 ? "↑" : "↓"}</th></tr></thead><tbody>${rows.map(c =>
+      `<tr class="link" onclick='jumpTo(${JSON.stringify(c[0])})'><td class="mono" style="font-size:12px">${esc(v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" "))}</td>
+      <td>${esc(v.tiers[c[1]])}</td><td class="route">${esc(v.cands[c[7]])}</td><td class="route">${esc(v.cands[c[9]])}</td>
+      <td class="r"><span class="sp ${c[8] == null ? "" : c[8] >= 1 ? "win" : "lose"}">${fmtX(c[8])}</span></td></tr>`).join("")}</tbody></table>
+    <p class="msg" style="padding:0 14px 12px">The table's pick is the first entry of its nearest row that this cell's record did not refuse; the ledger's is the same
+      lookup in the table <span class="mono">sweep_to_table.py --ledger</span> would write now. Predicted = the table pick's median over the ledger pick's, both from the
+      cell's own record; above 1× the new table is faster there. A race calls two candidates within 3% a tie and keeps the
+      earlier one, so a change can read as low as 0.971×.${changed.length > 400 ? ` Showing 400 of ${changed.length}.` : ""}</p>`);
+}
+function jumpTo(key) {
+  const ix = Object.fromEntries(OPV.keys.map((k, i) => [k.name, i]));
+  const fixed = {}; OPV.keys.forEach(k => { if (k.name !== mapCfg.x && k.name !== mapCfg.y) fixed[k.name] = key[ix[k.name]]; });
+  mapCfg.fixed = fixed; pickFixed(fixed); selectCell(key);
+  $("op-svg").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// ---------------------------------------------------------------- runs
+function buildRun() {
+  $("view").innerHTML = `<div class="head"><h1>Tuning runs</h1><select class="sel" id="runsel" aria-label="Run"></select><span class="muted" id="run-state"></span>
+      <span class="sp-grow" style="flex:1"></span><button class="btn" id="resume" hidden>Run again</button></div>
+    <p class="lede" id="run-lede"></p>
+    <div id="run-body"></div>`;
+  $("runsel").onchange = (e) => { location.hash = `#/run/${encodeURIComponent(e.target.value)}`; };
+}
+function updateRun() {
+  const r = RUN;
+  if (!r) return;
+  const runs = r.runs || [];
+  patch($("runsel"), runs.length ? runs.map(n => `<option ${n === r.name ? "selected" : ""}>${esc(n)}</option>`).join("") : `<option>no runs yet</option>`);
+  if (!r.name) {
+    patch($("run-body"), `<div class="panel empty">No tuning run ${runs.length ? "is running" : "yet"}.${meta.read_only ? "" : `&ensp;<button class="btn primary" onclick="openDrawer(true)">New tuning run</button>`}</div>`);
+    patch($("run-lede"), ""); text($("run-state"), ""); $("resume").hidden = true; return;
+  }
+  text($("run-state"), `${r.state}${r.exit != null && r.exit !== 0 ? ` (exit ${r.exit})` : ""} · started ${new Date((r.started || 0) * 1000).toLocaleString()}`);
+  $("resume").hidden = meta.read_only || r.state === "running";
+  $("resume").onclick = () => openDrawer(true, r.request);
+  patch($("run-lede"), `<span class="mono" style="font-size:12px;word-break:break-all">${esc((r.argv || []).join(" "))}</span>`);
+  if (!$("run-stats")) {
+    $("run-body").innerHTML = `<div class="panel stats" id="run-stats"></div>
+      <div class="sec"><h2>GPUs</h2></div><div class="panel lanes" id="run-gpus"></div>
+      <div class="sec"><h2>Jobs</h2><span class="sp-grow"></span><span class="muted">refinement totals are the plan's estimate</span></div>
+      <div class="panel"><div class="scroll" id="run-jobs"></div></div>
+      <div class="sec"><h2>Activity</h2></div>
+      <div class="cols"><div class="panel"><div class="scroll" id="run-feed" style="max-height:420px"></div></div>
+        <div><details class="panel" open><summary>Run log</summary><pre class="log" id="run-log"></pre></details></div></div>`;
+  }
+  const el = (r.started && (r.state === "running" ? Date.now() / 1000 : (r.feed[0] && r.feed[0].t) || Date.now() / 1000) - r.started) || null;
+  const elim = r.jobs.reduce((s, j) => s + j.eliminated, 0), bad = r.jobs.reduce((s, j) => s + j.audit_bad, 0);
+  const restarts = r.jobs.reduce((s, j) => s + j.restarts, 0), ldf = r.jobs.reduce((s, j) => s + j.ld_failed, 0);
+  const ng = (r.request.devices || []).length || 1;
+  patch($("run-stats"), `
+    <div><div class="k">Cells measured</div><div class="v">${r.done.toLocaleString()}<small> / ~${r.total.toLocaleString()}</small></div><div class="f">${r.plan ? `${r.plan.cells} planned + ~${r.plan.refine_cells} refinement` : "waiting for the plan"}</div></div>
+    <div><div class="k">${r.state === "running" ? "Left" : "Wall time"}</div><div class="v">${r.state === "running" ? dur(r.eta_s) : dur(el)}</div><div class="f">${r.rate_per_min ? `${r.rate_per_min.toFixed(0)} cells/min over the last 15 min` : r.est_total_s ? `planned ${dur(r.est_total_s / ng)} on ${ng} GPU${ng > 1 ? "s" : ""}` : ""}</div></div>
+    <div><div class="k">Candidates eliminated</div><div class="v">${elim.toLocaleString()}</div><div class="f">gross losers dropped mid-race</div></div>
+    <div><div class="k">Audits failed</div><div class="v" ${bad + ldf ? 'style="color:var(--bad)"' : ""}>${bad}<small> · ld ${ldf}</small></div><div class="f">${restarts} worker restarts (carve-out)</div></div>`);
+  patch($("run-gpus"), r.gpus.length ? r.gpus.map(g => `<div><div class="k">GPU ${g.gpu} · ${dur(Date.now() / 1000 - g.t)}</div>
+      <div><span class="mono">${esc(g.op)}</span> ${esc(PREC[g.dtype] ? PREC[g.dtype][1] : g.dtype)}</div><div class="w" title="${esc(g.key)}">${esc(g.key)}</div></div>`).join("")
+    : `<div class="muted" style="padding:14px 16px">${r.state === "running" ? "planning, or waiting for a GPU" : "idle"}</div>`);
+  patch($("run-jobs"), r.jobs.length ? `<table><thead><tr><th>Job</th><th>Plan</th><th class="r">Measured</th><th>Progress</th><th class="r">Refined</th><th class="r">Eliminated</th><th class="r">Audits</th><th class="r">Restarts</th></tr></thead><tbody>${r.jobs.map(j => {
+      const want = j.measure + j.refine_est, f = want ? Math.min(1, j.done / want) : j.done ? 1 : 0;
+      return `<tr class="link" onclick="location.hash='#/op/${j.op}/${j.dtype}'"><td><span class="mono">${esc(j.op)}</span> ${esc(PREC[j.dtype] ? PREC[j.dtype][0] : j.dtype)}</td>
+        <td class="route" style="white-space:normal">${esc(j.mix)}</td><td class="r num">${j.done} <span class="muted">/ ~${want}</span></td>
+        <td><div class="prog"><i style="width:${(100 * f).toFixed(1)}%"></i></div></td><td class="r num">${j.refined}${j.capped ? ' <span class="badge warn">cap</span>' : ""}</td>
+        <td class="r num">${j.eliminated}</td><td class="r num">${j.audit_ok + j.audit_bad}${j.audit_bad ? ` <span class="badge bad">${j.audit_bad}</span>` : ""}${j.ld_failed ? ` <span class="badge bad">ld ${j.ld_failed}</span>` : ""}</td>
+        <td class="r num">${j.restarts}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty">Waiting for the plan.</div>`);
+  patch($("run-feed"), r.feed.length ? `<ul class="feed">${r.feed.map(f => `<li style="grid-template-columns:62px minmax(0,1fr) auto;height:auto;min-height:34px;padding:6px 16px">
+      <span class="t">${clock(f.t)}</span><span class="w" title="${esc(f.key)}"><span class="mono">${esc(f.op)}</span> ${esc(PREC[f.dtype] ? PREC[f.dtype][1] : f.dtype)} · <span class="muted">${esc(f.key)}</span></span>
+      <span class="x" style="white-space:nowrap">${f.kind === "cell" ? `<span class="mono" style="color:${OPV && OPV.op === f.op ? famColor(OPV.families, family(f.win)) : "var(--ink)"}">${esc(f.win)}</span>${f.round ? ` <span class="muted">r${f.round}</span>` : ""}${f.eliminated ? ` <span class="muted">−${f.eliminated}</span>` : ""}`
+        : `<span class="bad">${esc(f.kind)}: ${esc(f.text)}</span>`}</span></li>`).join("")}</ul>` : `<div class="empty">No cell finished yet.</div>`);
+  const log = $("run-log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 24, t = (r.log || []).join("\n");
+  if (log.textContent !== t) { log.textContent = t; if (atEnd) log.scrollTop = log.scrollHeight; }
+}
+
+// ---------------------------------------------------------------- new run drawer
+function openDrawer(on, req) {
+  $("drawer").classList.toggle("on", on); $("scrim").classList.toggle("on", on);
+  if (on && req) fillDrawer(req);
+  if (on) estimate();
+}
+$("newrun").onclick = () => openDrawer(true);
+$("dclose").onclick = $("scrim").onclick = () => openDrawer(false);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") openDrawer(false); });
+$("stop").onclick = async () => {
+  if (!RUN || !RUN.name) return;
+  $("stop").disabled = true; $("stop").textContent = "Stopping…";
+  await post("/api/tune/stop", { run: RUN.name });
+  setTimeout(() => { $("stop").disabled = false; $("stop").textContent = "Stop"; }, 4000);
+};
+function buildDrawer() {
+  $("dtier").innerHTML = Object.entries(meta.tiers).map(([t, note]) => `<label><input type="radio" name="tier" value="${t}" ${t === "coarse" ? "checked" : ""}><b>${t}</b><span>${esc(note)}</span></label>`).join("");
+  $("dops").innerHTML = meta.ops.map(o => `<label class="opc" title="${esc(o.cands.join(" "))}"><input type="checkbox" value="${o.name}"><b>${o.name}</b><span>${esc(o.keys.split(" ").map(k => k.split(":")[0]).join(" "))}</span></label>`).join("");
+  $("dtypes").innerHTML = meta.dtypes.map(t => `<button type="button" class="chip on" data-t="${t}">${PREC[t][0]}</button>`).join("");
+  const gl = meta.gpus.length ? meta.gpus : [{ index: 0, name: "" }];
+  $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip on" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
+  for (const id of ["dtypes", "dgpus"]) $(id).onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
+  $("dall").onclick = () => { const bs = [...$("dops").querySelectorAll("input")], on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
+  for (const id of ["dtier", "dops", "dexcl"]) $(id).onchange = estimate;
+  for (const id of ["dmax", "dbudget", "dwait"]) $(id).oninput = estimate;
+  $("dledger").textContent = meta.ledger;
+  $("dbin").innerHTML = meta.binary ? `<div class="buildok">Measures with <code>${esc(meta.binary)}</code></div>`
+    : `<div class="buildwarn">No build has <code>tools/tune/batchlas_tune</code>; build the <code>batchlas_tune</code> target first.</div>`;
+}
+function fillDrawer(q) {
+  $("dtier").querySelectorAll("input").forEach(i => i.checked = i.value === q.tier);
+  $("dops").querySelectorAll("input").forEach(i => i.checked = (q.ops || []).includes(i.value));
+  $("dtypes").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (q.dtypes || []).includes(b.dataset.t)));
+  $("dgpus").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (q.devices || []).includes(+b.dataset.g)));
+  $("dmax").value = q.max_dim || ""; $("dbudget").value = q.budget_h || ""; $("dwait").value = q.guard_wait_s ? Math.round(q.guard_wait_s / 60) : "";
+  $("dexcl").checked = q.allow_idle_foreign === false; $("dname").value = "";
+}
+function runBody() {
+  return { tier: ($("dtier").querySelector("input:checked") || {}).value, ops: [...$("dops").querySelectorAll("input:checked")].map(i => i.value),
+    dtypes: [...$("dtypes").querySelectorAll(".chip.on")].map(b => b.dataset.t), devices: [...$("dgpus").querySelectorAll(".chip.on")].map(b => +b.dataset.g),
+    max_dim: +$("dmax").value || null, budget_h: +$("dbudget").value || null, guard_wait_s: $("dwait").value === "" ? null : 60 * +$("dwait").value,
+    allow_idle_foreign: !$("dexcl").checked, name: $("dname").value.trim() };
+}
+let estSeq = 0, estTimer = null;
+function estimate() {
+  clearTimeout(estTimer);
+  const b = runBody();
+  if (!b.ops.length || !b.dtypes.length || !b.devices.length) { $("estimate").textContent = "Pick an op, a precision and a GPU."; $("dstart").disabled = true; $("dplan").hidden = true; return; }
+  $("dstart").disabled = !meta.binary; $("estimate").textContent = "planning…";
+  estTimer = setTimeout(async () => {
+    const seq = ++estSeq, e = await post("/api/tune/plan", b);
+    if (seq !== estSeq) return;
+    if (e.error) { $("estimate").textContent = [].concat(e.error).join(" "); $("dplan").hidden = true; return; }
+    const t = e.total, ng = b.devices.length;
+    $("estimate").innerHTML = `<b>${t.cells.toLocaleString()}</b> cells + ~${t.refine_cells.toLocaleString()} refinement · about <b>${dur(t.est_total_s / ng)}</b> on ${ng} GPU${ng > 1 ? "s" : ""}`;
+    $("dplan").hidden = false;
+    $("dplan").innerHTML = e.jobs.map(j => `${esc(j.op.padEnd(6))} ${esc(j.dtype.padEnd(7))} ${String(j.measure).padStart(6)} / ${String(j.cells).padEnd(6)} ~${String(j.refine_cells).padEnd(5)} ${dur(j.est_s + j.est_refine_s).padStart(8)}  <span class="muted">${esc(j.mix)}</span>`).join("<br>");
+    $("dstart").disabled = !t.cells;
+  }, 500);
+}
+$("dstart").onclick = async () => {
+  $("dstart").disabled = true;
+  const j = await post("/api/tune/run", runBody());
+  $("dstart").disabled = false;
+  if (j.error) { $("estimate").textContent = j.error; return; }
+  openDrawer(false); location.hash = `#/run/${encodeURIComponent(j.run)}`;
+};
+
+// ---------------------------------------------------------------- boot
+(async () => {
+  parseHash();
+  meta = await getJ("/api/tune/meta");
+  meta.tierOrder = ["deep", "coarse", "preview", "custom", "transcribed"];
+  buildDrawer();
+  watchRun();
+  await loadStatus();
+})();
+</script>
+</body>
+</html>

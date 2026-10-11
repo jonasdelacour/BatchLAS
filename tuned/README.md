@@ -1,6 +1,6 @@
 # Tuned selection tables {#tuned_tables_readme}
 
-> **Status:** current · inventory as of 2026-10-06 · the generated @ref selection_tables page is always current.
+> **Status:** current · inventory as of 2026-10-09 · the generated @ref selection_tables page is always current.
 
 One file per (op, dtype, device): `<op>.<dtype>.<device>.txt`, for example `potrf.float.sm_120.txt`.
 Each row is a measured shape and the ranked list of every candidate timed there, fastest first
@@ -18,37 +18,66 @@ and syr2k are real only) on sm_89 and sm_120. spmm also ships a CPU table. Any o
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
 checks this inventory.
 
-Each table has one of three sources:
+Each table has one of four sources:
 
-- **measured**: timed by the tuner, `source=tuner:<raw jsonl>`, raw data in `benchmarks/results/tuning/`.
+- **deep**: a tiered `--tier deep` run's ledger, `source=ledger:<dir>`, raw data in
+  `benchmarks/results/tuning/ledger/`. See "The sm_120 deep tables" below.
+- **measured**: timed by the old tuner, `source=tuner:<raw jsonl>`, raw data in `benchmarks/results/tuning/`.
 - **converted**: timed forced-route sweeps, `source=benchmarks/results/routing/<sweep>.jsonl`.
 - **transcribed**: an old router's preference order, untimed, `source=transcribed:<sha>`, CSV in
   `transcribed/`. "Relabelled" means the sm_89 CSV was written for sm_120 with `--device sm_120`.
 
 | op | dtype | sm_89 | sm_120 |
 |---|---|---|---|
-| potrf | all | converted (`sm89_potrf_archive.jsonl`) | converted (`sm120_potrf_sweep{,_edges}.jsonl`) |
-| posv | all | transcribed `7e71a6e0` (`posv.sm_89.csv`) | converted (`sm120_posv_sweep.jsonl`) |
-| trsm | float, double | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | **measured** (`tuning/trsm.<dtype>.sm_120.jsonl`) |
-| trsm | cfloat, cdouble | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | transcribed, relabelled |
-| gemm | all | transcribed `424a45bc` (`gemm.sm_89.csv`) | transcribed, relabelled |
-| gemv, getri, gesv, spmm, syev | all | transcribed `424a45bc` (`<op>.sm_89.csv`) | transcribed `424a45bc` (`<op>.sm_120.csv`) |
-| geqrf, orgqr, ormqr, getrf, getrs, gesvd | all | transcribed `424a45bc` (one CSV per op, both devices) | same CSV |
-| symm, syrk, syr2k | float, double | transcribed `ff340fc6` (one CSV per op, both devices) | same CSV |
-| trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | same CSV |
+| potrf | all | converted (`sm89_potrf_archive.jsonl`) | **deep** (`ledger/<op>.<dtype>.sm_120`) |
+| posv | all | transcribed `7e71a6e0` (`posv.sm_89.csv`) | **deep** |
+| trsm | all | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | **deep** |
+| gemm | all | transcribed `424a45bc` (`gemm.sm_89.csv`) | **deep** |
+| gemv, getri, gesv, spmm, syev | all | transcribed `424a45bc` (`<op>.sm_89.csv`) | **deep** |
+| geqrf, orgqr, ormqr, getrf, getrs, gesvd | all | transcribed `424a45bc` (one CSV per op, both devices) | **deep** |
+| symm, syrk, syr2k | float, double | transcribed `ff340fc6` (one CSV per op, both devices) | **deep** |
+| trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | **deep** |
 
 spmm also has a CPU table, transcribed (`spmm.cpu.csv`).
 
 Counts: 144 files, 70 per GPU device (16 ops x 4 dtypes, plus symm, syrk and syr2k x 2 dtypes) and
-4 CPU. Ten are timed on sm_120 (potrf and posv x 4 dtypes converted, trsm float and double measured),
-plus the 4 sm_89 potrf tables. The other 130 replay an old router.
+4 CPU. All 70 sm_120 tables are timed (deep ledger tables), plus the 4 sm_89 potrf tables. The other
+70 (sm_89 and CPU) replay an old router. A deep table keeps a transcribed row only where no measured
+row lies within the lattice spacing (`tiers=...,transcribed:<n>` in its header counts them).
+
+## The sm_120 deep tables
+
+All 70 sm_120 tables come from one `--tier deep` campaign over all 19 ops and every dtype each op
+instantiates, on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120, CUDA 13.2, DPC++
+`/opt/dpcpp-cuda`), 2026-10-08 06:23 to 2026-10-09 04:54 CEST, four starts of
+`batchlas_tune all --tier deep --devices 0,1,2,3`. Two follow-up runs on 2026-10-09 went into the same
+ledger: a re-measure of 250 cells the box's other user had damaged (`--remeasure-keys`), and a fresh
+deep gemv run, because the defect-13 fix edited `src/ops/gemv/gemv.cc`, which every gemv family
+hashes. The ledger is `benchmarks/results/tuning/ledger/` (LFS). Details are in
+[tiered tuning](../docs/design/tiered-tuning.md), "Engine: the sm_120 deep run". Regenerate with:
+
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out tuned --replace-timed
+
+- **Dimension cap 2048.** No cell was planned with a matrix dimension above 2048 (`--max-dim`). The
+  first run measured some larger cells before the cap existed; they stay. Above the cap the nearest
+  measured row decides.
+- **Refinement coverage is uneven.** Every starting lattice is complete. geqrf, ormqr, getri, posv,
+  gesv, orgqr, syev, gesvd and complex getrs are only lightly refined, so their crossovers sit on
+  lattice spacing.
+- **Accuracy is not timed.** LOBPCG pins its projected syev solves to the CTA solver at n <= 32 for
+  that reason (`docs/perf/syevx.md`, "LOBPCG: the accuracy pin on the projected syev").
+- **sm_120 only.** The sm_89 tables are untouched.
 
 ## Producing tables
 
 **Do not edit the converted, tuner or ledger tables by hand.** Regenerate them:
 
-    python3 scripts/sweep_to_table.py --date 2026-10-04   # rewrite tuned/potrf.*.txt, posv.*.sm_120.txt
-    python3 scripts/sweep_to_table.py --check             # verify tuned/ against the sweeps
+    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger   # rewrite every sm_120 table
+    python3 scripts/sweep_to_table.py --date 2026-10-04   # rewrite tuned/potrf.*.sm_89.txt
+    python3 scripts/sweep_to_table.py --check             # verify tuned/ against ledgers, sweeps and CSVs
+
+Every sm_120 table is written from its ledger. The old sm_120 potrf and posv sweeps are still
+validated but no longer write a table.
 
 `--check` fails on any difference, the header date included, hence `--date`. The posv sweep
 resumed after guard refusals. Its OpSpec sets `dedupe_latest`, so a later kept row replaces an
@@ -92,9 +121,9 @@ writes raw JSONL, then calls `python3 scripts/sweep_to_table.py --tuner <jsonl> 
 `--check` re-derives a tuned table from its raw file when that file is present. A tuned table
 replaces the converted one for its (op, dtype, device).
 
-- The two tuner tables are `trsm.{float,double}.sm_120.txt`, from
-  `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`. The tuner stopped during cfloat,
-  so cfloat and cdouble stay transcribed.
+- No tuner table ships any more. The old trsm float/double sm_120 tables
+  (`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`) and the converted sm_120 potrf and
+  posv tables were replaced by the deep ledger tables with `--replace-timed`; their raw files stay.
 
 ### Ledger tables
 
@@ -111,13 +140,13 @@ see [tiered tuning](../docs/design/tiered-tuning.md)) append per-cell records to
   stale, and the next run re-races that candidate.
 - The converter refuses to overwrite a converted or `tuner:` table without `--replace-timed`.
   Transcribed and ledger tables are replaced without it.
-- No shipped table is ledger-sourced yet. The switch needs coarse or deep runs and a maintainer decision.
+- Every sm_120 table is ledger-sourced since 2026-10-09 ("The sm_120 deep tables").
 
 ## Staleness
 
 - Converted and transcribed tables say `kernels=unknown`, so they are reported stale.
-- The trsm tuner tables say `kernels=c923160f`, against `1dbe529b` at HEAD. The two source changes
-  since then do not touch a kernel or a candidate, so the timings still describe the shipped kernels.
+- The sm_120 deep tables carry real `kernels=` and `family_kernels=` hashes from the tree they were
+  generated in, so they read current until a hashed source changes.
 - Retuning an op on a device stamps its kernel-source hash and clears the stale report.
 - `python3 .github/ci/check_tuned_tables.py` and the CMake configure step recompute each op's hash
   from `tools/tune/<op>_spec.cc` and warn on a `kernels=` mismatch. They never fail.

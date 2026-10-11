@@ -1,156 +1,146 @@
-# op=orgqr dtype=cfloat device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
-# transcriber_csv=tuned/transcribed/orgqr.csv (the old router's preference order per grid cell, untimed)
+# op=orgqr dtype=cfloat device=sm_120 batchlas=a01c3c96 kernels=5decabb2 family_kernels=blocked:366f3c06,vendor:b592e8a2 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/orgqr.cfloat.sm_120 tiers=deep:126,coarse:0,preview:0,custom:0,transcribed:17
 # keys: m:log n:log:2
-m=1 n=1 | blocked - | vendor -
-m=2 n=1 | blocked - | vendor -
-m=2 n=2 | blocked - | vendor -
-m=4 n=1 | blocked - | vendor -
-m=4 n=2 | blocked - | vendor -
-m=4 n=4 | blocked - | vendor -
-m=8 n=1 | blocked - | vendor -
-m=8 n=2 | blocked - | vendor -
-m=8 n=4 | blocked - | vendor -
-m=8 n=8 | blocked - | vendor -
-m=16 n=1 | blocked - | vendor -
-m=16 n=2 | blocked - | vendor -
-m=16 n=4 | blocked - | vendor -
-m=16 n=8 | blocked - | vendor -
-m=16 n=16 | blocked - | vendor -
-m=32 n=1 | blocked - | vendor -
-m=32 n=2 | blocked - | vendor -
-m=32 n=4 | blocked - | vendor -
-m=32 n=8 | blocked - | vendor -
-m=32 n=16 | blocked - | vendor -
-m=32 n=32 | blocked - | vendor -
-m=64 n=1 | blocked - | vendor -
-m=64 n=2 | blocked - | vendor -
-m=64 n=4 | blocked - | vendor -
-m=64 n=8 | blocked - | vendor -
-m=64 n=16 | blocked - | vendor -
-m=64 n=32 | blocked - | vendor -
-m=64 n=64 | blocked - | vendor -
-m=128 n=1 | blocked - | vendor -
-m=128 n=2 | blocked - | vendor -
-m=128 n=4 | blocked - | vendor -
-m=128 n=8 | blocked - | vendor -
-m=128 n=16 | blocked - | vendor -
-m=128 n=32 | blocked - | vendor -
-m=128 n=64 | blocked - | vendor -
-m=128 n=128 | blocked - | vendor -
-m=256 n=1 | blocked - | vendor -
-m=256 n=2 | blocked - | vendor -
-m=256 n=4 | blocked - | vendor -
-m=256 n=8 | blocked - | vendor -
-m=256 n=16 | blocked - | vendor -
-m=256 n=32 | blocked - | vendor -
-m=256 n=64 | blocked - | vendor -
-m=256 n=128 | blocked - | vendor -
-m=256 n=256 | blocked - | vendor -
-m=384 n=1 | blocked - | vendor -
-m=384 n=2 | blocked - | vendor -
-m=384 n=4 | blocked - | vendor -
-m=384 n=8 | blocked - | vendor -
-m=384 n=16 | blocked - | vendor -
-m=384 n=32 | blocked - | vendor -
-m=384 n=64 | blocked - | vendor -
-m=384 n=128 | blocked - | vendor -
-m=384 n=256 | blocked - | vendor -
-m=384 n=384 | blocked - | vendor -
-m=512 n=1 | blocked - | vendor -
-m=512 n=2 | blocked - | vendor -
-m=512 n=4 | blocked - | vendor -
-m=512 n=8 | blocked - | vendor -
-m=512 n=16 | blocked - | vendor -
-m=512 n=32 | blocked - | vendor -
-m=512 n=64 | blocked - | vendor -
-m=512 n=128 | blocked - | vendor -
-m=512 n=256 | blocked - | vendor -
-m=512 n=384 | blocked - | vendor -
-m=512 n=512 | blocked - | vendor -
-m=513 n=1 | vendor - | blocked -
-m=513 n=2 | vendor - | blocked -
-m=513 n=4 | vendor - | blocked -
-m=513 n=8 | vendor - | blocked -
-m=513 n=16 | vendor - | blocked -
-m=513 n=32 | vendor - | blocked -
-m=513 n=64 | vendor - | blocked -
-m=513 n=128 | vendor - | blocked -
-m=513 n=256 | vendor - | blocked -
-m=513 n=384 | vendor - | blocked -
-m=513 n=512 | vendor - | blocked -
-m=513 n=513 | vendor - | blocked -
-m=768 n=1 | vendor - | blocked -
-m=768 n=2 | vendor - | blocked -
-m=768 n=4 | vendor - | blocked -
-m=768 n=8 | vendor - | blocked -
-m=768 n=16 | vendor - | blocked -
-m=768 n=32 | vendor - | blocked -
-m=768 n=64 | vendor - | blocked -
-m=768 n=128 | vendor - | blocked -
-m=768 n=256 | vendor - | blocked -
-m=768 n=384 | vendor - | blocked -
-m=768 n=512 | vendor - | blocked -
-m=768 n=513 | vendor - | blocked -
-m=768 n=768 | vendor - | blocked -
-m=1024 n=1 | vendor - | blocked -
-m=1024 n=2 | vendor - | blocked -
-m=1024 n=4 | vendor - | blocked -
-m=1024 n=8 | vendor - | blocked -
-m=1024 n=16 | vendor - | blocked -
-m=1024 n=32 | vendor - | blocked -
-m=1024 n=64 | vendor - | blocked -
-m=1024 n=128 | vendor - | blocked -
-m=1024 n=256 | vendor - | blocked -
-m=1024 n=384 | vendor - | blocked -
-m=1024 n=512 | vendor - | blocked -
-m=1024 n=513 | vendor - | blocked -
-m=1024 n=768 | vendor - | blocked -
-m=1024 n=1024 | vendor - | blocked -
-m=2048 n=1 | vendor - | blocked -
-m=2048 n=2 | vendor - | blocked -
-m=2048 n=4 | vendor - | blocked -
-m=2048 n=8 | vendor - | blocked -
-m=2048 n=16 | vendor - | blocked -
-m=2048 n=32 | vendor - | blocked -
-m=2048 n=64 | vendor - | blocked -
-m=2048 n=128 | vendor - | blocked -
-m=2048 n=256 | vendor - | blocked -
-m=2048 n=384 | vendor - | blocked -
-m=2048 n=512 | vendor - | blocked -
-m=2048 n=513 | vendor - | blocked -
-m=2048 n=768 | vendor - | blocked -
-m=2048 n=1024 | vendor - | blocked -
-m=2048 n=2048 | vendor - | blocked -
-m=4096 n=1 | vendor - | blocked -
-m=4096 n=2 | vendor - | blocked -
-m=4096 n=4 | vendor - | blocked -
-m=4096 n=8 | vendor - | blocked -
-m=4096 n=16 | vendor - | blocked -
-m=4096 n=32 | vendor - | blocked -
-m=4096 n=64 | vendor - | blocked -
-m=4096 n=128 | vendor - | blocked -
-m=4096 n=256 | vendor - | blocked -
-m=4096 n=384 | vendor - | blocked -
-m=4096 n=512 | vendor - | blocked -
-m=4096 n=513 | vendor - | blocked -
-m=4096 n=768 | vendor - | blocked -
-m=4096 n=1024 | vendor - | blocked -
-m=4096 n=2048 | vendor - | blocked -
-m=4096 n=4096 | vendor - | blocked -
-m=8192 n=1 | vendor - | blocked -
-m=8192 n=2 | vendor - | blocked -
-m=8192 n=4 | vendor - | blocked -
-m=8192 n=8 | vendor - | blocked -
-m=8192 n=16 | vendor - | blocked -
-m=8192 n=32 | vendor - | blocked -
-m=8192 n=64 | vendor - | blocked -
-m=8192 n=128 | vendor - | blocked -
-m=8192 n=256 | vendor - | blocked -
-m=8192 n=384 | vendor - | blocked -
-m=8192 n=512 | vendor - | blocked -
-m=8192 n=513 | vendor - | blocked -
-m=8192 n=768 | vendor - | blocked -
-m=8192 n=1024 | vendor - | blocked -
-m=8192 n=2048 | vendor - | blocked -
-m=8192 n=4096 | vendor - | blocked -
-m=8192 n=8192 | vendor - | blocked -
+m=1 n=1 | blocked 0.1490 | vendor 651.2 # deep
+m=2 n=1 | blocked 0.1440 | vendor 680.4 # deep
+m=2 n=2 | blocked 0.4965 | vendor 646.1 # deep
+m=4 n=1 | blocked 0.1478 | vendor 645.4 # deep
+m=4 n=2 | blocked 0.4969 | vendor 664.5 # deep
+m=4 n=4 | blocked 0.4941 | vendor 650.2 # deep
+m=8 n=1 | blocked 0.1419 | vendor 658.4 # deep
+m=8 n=2 | blocked 0.4952 | vendor 676.8 # deep
+m=8 n=4 | blocked 0.4995 | vendor 671.3 # deep
+m=8 n=8 | blocked 0.5885 | vendor 667.9 # deep
+m=16 n=1 | blocked 0.1557 | vendor 660.7 # deep
+m=16 n=2 | blocked 0.5614 | vendor 650.1 # deep
+m=16 n=4 | blocked 0.5642 | vendor 677.7 # deep
+m=16 n=8 | blocked 0.6654 | vendor 681.3 # deep
+m=16 n=16 | blocked 1.585 | vendor 685.5 # deep
+m=32 n=1 | blocked 0.1508 | vendor 666.5 # deep
+m=32 n=2 | blocked 0.7111 | vendor 655.0 # deep
+m=32 n=4 | blocked 0.7069 | vendor 676.4 # deep
+m=32 n=8 | blocked 0.7365 | vendor 668.4 # deep
+m=32 n=16 | blocked 1.729 | vendor 684.0 # deep
+m=32 n=32 | blocked 8.020 | vendor 675.7 # deep
+m=64 n=1 | blocked 0.1654 | vendor 665.9 # deep
+m=64 n=2 | blocked 0.6816 | vendor 667.2 # deep
+m=64 n=4 | blocked 0.6981 | vendor 676.2 # deep
+m=64 n=8 | blocked 0.9626 | vendor 664.7 # deep
+m=64 n=16 | blocked 2.262 | vendor 679.8 # deep
+m=64 n=32 | blocked 9.843 | vendor 707.7 # deep
+m=64 n=64 | blocked 10.03 | vendor 355.4 # deep
+m=128 n=1 | blocked 0.1876 | vendor 643.5 # deep
+m=128 n=2 | blocked 0.9529 | vendor 673.5 # deep
+m=128 n=4 | blocked 1.168 | vendor 702.5 # deep
+m=128 n=8 | blocked 1.772 | vendor 687.4 # deep
+m=128 n=16 | blocked 3.532 | vendor 719.7 # deep
+m=128 n=32 | blocked 6.281 | vendor 359.0 # deep
+m=128 n=64 | blocked 7.082 | vendor 188.9 # deep
+m=128 n=128 | blocked 7.507 | vendor 126.1 # deep
+m=256 n=1 | blocked 0.2445 | vendor 666.1 # deep
+m=256 n=2 | blocked 1.680 | vendor 693.7 # deep
+m=256 n=4 | blocked 2.200 | vendor 704.8 # deep
+m=256 n=8 | blocked 3.320 | vendor 693.1 # deep
+m=256 n=16 | blocked 3.219 | vendor 355.1 # deep
+m=256 n=32 | blocked 4.662 | vendor 178.9 # deep
+m=256 n=64 | blocked 5.039 | vendor 91.14 # deep
+m=256 n=128 | blocked 7.642 | vendor 69.17 # deep
+m=256 n=256 | blocked 10.51 | vendor 79.81 # deep
+m=384 n=1 | blocked 0.2963 | vendor 669.5 # deep
+m=384 n=2 | blocked 2.592 | vendor 695.1 # deep
+m=384 n=4 | blocked 3.273 | vendor 693.8 # deep
+m=384 n=8 | blocked 2.510 | vendor 374.7 # deep
+m=384 n=16 | blocked 2.631 | vendor 188.8 # deep
+m=384 n=32 | blocked 3.998 | vendor 85.97 # deep
+m=384 n=64 | blocked 4.496 | vendor 46.84 # deep
+m=384 n=128 | blocked 6.899 | vendor 37.18 # deep
+m=384 n=256 | blocked 10.74 | vendor 43.55 # deep
+m=384 n=384 | blocked 10.48 | vendor 31.96 # deep
+m=512 n=1 | blocked 0.4257 | vendor 671.1 # deep
+m=512 n=2 | blocked 3.372 | vendor 695.1 # deep
+m=512 n=4 | blocked 4.269 | vendor 691.3 # deep
+m=512 n=8 | blocked 3.166 | vendor 353.8 # deep
+m=512 n=16 | blocked 3.278 | vendor 179.2 # deep
+m=512 n=32 | blocked 4.669 | vendor 91.52 # deep
+m=512 n=64 | blocked 5.278 | vendor 43.89 # deep
+m=512 n=128 | blocked 7.949 | vendor 35.17 # deep
+m=512 n=256 | blocked 13.40 | vendor 42.93 # deep
+m=512 n=384 | blocked 13.03 | vendor 34.08 # deep
+m=512 n=512 | blocked 17.38 | vendor 45.76 # deep
+m=513 n=1 | blocked 0.4709 | vendor 653.2 # deep
+m=513 n=2 | blocked 3.629 | vendor 716.2 # deep
+m=513 n=4 | blocked 2.203 | vendor 359.2 # deep
+m=513 n=8 | blocked 1.644 | vendor 175.2 # deep
+m=513 n=16 | blocked 1.656 | vendor 83.70 # deep
+m=513 n=32 | blocked 2.412 | vendor 45.80 # deep
+m=513 n=64 | blocked 3.545 | vendor 24.62 # deep
+m=513 n=128 | blocked 5.940 | vendor 17.94 # deep
+m=513 n=256 | blocked 8.749 | vendor 21.69 # deep
+m=513 n=384 | blocked 13.73 | vendor 34.59 # deep
+m=513 n=512 | blocked 14.45 | vendor 23.03 # deep
+m=513 n=513 | blocked 14.48 | vendor 24.10 # deep
+m=768 n=1 | blocked 0.8621 | vendor 659.8 # deep
+m=768 n=2 | blocked 4.922 | vendor 706.4 # deep
+m=768 n=4 | blocked 3.150 | vendor 354.5 # deep
+m=768 n=8 | blocked 2.278 | vendor 175.2 # deep
+m=768 n=16 | blocked 2.271 | vendor 83.29 # deep
+m=768 n=32 | blocked 3.427 | vendor 45.43 # deep
+m=768 n=64 | blocked 4.328 | vendor 25.10 # deep
+m=768 n=128 | blocked 7.338 | vendor 20.04 # deep
+m=768 n=256 | blocked 12.11 | vendor 22.48 # deep
+m=768 n=384 | blocked 15.38 | vendor 18.11 # deep
+m=768 n=512 | blocked 20.36 | vendor 24.75 # deep
+m=768 n=513 | blocked 21.09 | vendor 26.29 # deep
+m=768 n=628 | blocked 24.98 | vendor 31.77 # deep
+m=768 n=768 | vendor 18.39 | blocked 24.68 # deep
+m=887 n=513 | blocked 25.59 | vendor 27.06 # deep
+m=1024 n=1 | blocked 1.182 | vendor 652.7 # deep
+m=1024 n=2 | blocked 6.533 | vendor 694.8 # deep
+m=1024 n=4 | blocked 4.093 | vendor 350.2 # deep
+m=1024 n=8 | blocked 3.064 | vendor 170.3 # deep
+m=1024 n=16 | blocked 2.905 | vendor 88.91 # deep
+m=1024 n=32 | blocked 4.465 | vendor 46.30 # deep
+m=1024 n=64 | blocked 5.310 | vendor 25.76 # deep
+m=1024 n=128 | blocked 8.726 | vendor 20.79 # deep
+m=1024 n=256 | blocked 15.15 | vendor 23.97 # deep
+m=1024 n=384 | blocked 19.35 | vendor 19.41 # deep
+m=1024 n=512 | blocked 26.41 | vendor 26.32 # deep
+m=1024 n=513 | vendor 13.46 | blocked 21.96 # deep
+m=1024 n=768 | vendor 20.59 | blocked 32.03 # deep
+m=1024 n=1024 | vendor 27.51 | blocked 39.93 # deep
+m=1448 n=256 | vendor 13.81 | blocked 15.48 # deep
+m=1448 n=384 | vendor 10.32 | blocked 20.91 # deep
+m=1448 n=512 | vendor 14.39 | blocked 28.33 # deep
+m=2048 n=1 | blocked 2.375 | vendor 666.4 # deep
+m=2048 n=2 | blocked 6.329 | vendor 385.7 # deep
+m=2048 n=4 | blocked 4.086 | vendor 167.8 # deep
+m=2048 n=8 | blocked 3.122 | vendor 81.87 # deep
+m=2048 n=16 | blocked 3.276 | vendor 43.35 # deep
+m=2048 n=32 | blocked 4.782 | vendor 25.32 # deep
+m=2048 n=64 | blocked 6.012 | vendor 17.87 # deep
+m=2048 n=128 | blocked 10.31 | vendor 13.04 # deep
+m=2048 n=181 | blocked 12.71 | vendor 12.67 # deep
+m=2048 n=256 | vendor 15.16 | blocked 19.45 # deep
+m=2048 n=384 | vendor 11.93 | blocked 26.36 # deep
+m=2048 n=512 | vendor 17.09 | blocked 36.26 # deep
+m=2048 n=513 | vendor 8.762 | blocked 30.57 # deep
+m=2048 n=768 | vendor 13.56 | blocked 48.33 # deep
+m=2048 n=1024 | vendor 19.02 | blocked 65.07 # deep
+m=2048 n=2048 | vendor 21.08 | blocked 97.85 # deep
+m=8192 n=1 | vendor - | blocked - # transcribed
+m=8192 n=2 | vendor - | blocked - # transcribed
+m=8192 n=4 | vendor - | blocked - # transcribed
+m=8192 n=8 | vendor - | blocked - # transcribed
+m=8192 n=16 | vendor - | blocked - # transcribed
+m=8192 n=32 | vendor - | blocked - # transcribed
+m=8192 n=64 | vendor - | blocked - # transcribed
+m=8192 n=128 | vendor - | blocked - # transcribed
+m=8192 n=256 | vendor - | blocked - # transcribed
+m=8192 n=384 | vendor - | blocked - # transcribed
+m=8192 n=512 | vendor - | blocked - # transcribed
+m=8192 n=513 | vendor - | blocked - # transcribed
+m=8192 n=768 | vendor - | blocked - # transcribed
+m=8192 n=1024 | vendor - | blocked - # transcribed
+m=8192 n=2048 | vendor - | blocked - # transcribed
+m=8192 n=4096 | vendor - | blocked - # transcribed
+m=8192 n=8192 | vendor - | blocked - # transcribed

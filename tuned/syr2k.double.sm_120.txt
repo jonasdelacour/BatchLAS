@@ -1,458 +1,394 @@
-# op=syr2k dtype=double device=sm_120 batchlas=ff340fc6 kernels=unknown date=2026-10-06 source=transcribed:ff340fc6
-# transcriber_csv=tuned/transcribed/syr2k.csv (the old router's preference order per grid cell, untimed)
+# op=syr2k dtype=double device=sm_120 batchlas=f60e715f kernels=d06203ff family_kernels=vendor:a0f35155 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/syr2k.double.sm_120 tiers=deep:349,coarse:0,preview:0,custom:0,transcribed:42
 # keys: n:log:2 k:log batch:log
-n=1 k=1 batch=1 | vendor -
-n=1 k=1 batch=2 | vendor -
-n=1 k=1 batch=3 | vendor -
-n=1 k=1 batch=128 | vendor -
-n=1 k=1 batch=1024 | vendor -
-n=1 k=1 batch=8192 | vendor -
-n=1 k=1 batch=32768 | vendor -
-n=1 k=8 batch=1 | vendor -
-n=1 k=8 batch=2 | vendor -
-n=1 k=8 batch=3 | vendor -
-n=1 k=8 batch=128 | vendor -
-n=1 k=8 batch=1024 | vendor -
-n=1 k=8 batch=8192 | vendor -
-n=1 k=8 batch=32768 | vendor -
-n=1 k=64 batch=1 | vendor -
-n=1 k=64 batch=2 | vendor -
-n=1 k=64 batch=3 | vendor -
-n=1 k=64 batch=128 | vendor -
-n=1 k=64 batch=1024 | vendor -
-n=1 k=64 batch=8192 | vendor -
-n=1 k=64 batch=32768 | vendor -
-n=1 k=512 batch=1 | vendor -
-n=1 k=512 batch=2 | vendor -
-n=1 k=512 batch=3 | vendor -
-n=1 k=512 batch=128 | vendor -
-n=1 k=512 batch=1024 | vendor -
-n=1 k=512 batch=8192 | vendor -
-n=1 k=512 batch=32768 | vendor -
-n=1 k=4096 batch=1 | vendor -
-n=1 k=4096 batch=2 | vendor -
-n=1 k=4096 batch=3 | vendor -
-n=1 k=4096 batch=128 | vendor -
-n=1 k=4096 batch=1024 | vendor -
-n=1 k=4096 batch=8192 | vendor -
-n=1 k=4096 batch=32768 | vendor -
-n=2 k=1 batch=1 | vendor -
-n=2 k=1 batch=2 | vendor -
-n=2 k=1 batch=3 | vendor -
-n=2 k=1 batch=128 | vendor -
-n=2 k=1 batch=1024 | vendor -
-n=2 k=1 batch=8192 | vendor -
-n=2 k=1 batch=32768 | vendor -
-n=2 k=8 batch=1 | vendor -
-n=2 k=8 batch=2 | vendor -
-n=2 k=8 batch=3 | vendor -
-n=2 k=8 batch=128 | vendor -
-n=2 k=8 batch=1024 | vendor -
-n=2 k=8 batch=8192 | vendor -
-n=2 k=8 batch=32768 | vendor -
-n=2 k=64 batch=1 | vendor -
-n=2 k=64 batch=2 | vendor -
-n=2 k=64 batch=3 | vendor -
-n=2 k=64 batch=128 | vendor -
-n=2 k=64 batch=1024 | vendor -
-n=2 k=64 batch=8192 | vendor -
-n=2 k=64 batch=32768 | vendor -
-n=2 k=512 batch=1 | vendor -
-n=2 k=512 batch=2 | vendor -
-n=2 k=512 batch=3 | vendor -
-n=2 k=512 batch=128 | vendor -
-n=2 k=512 batch=1024 | vendor -
-n=2 k=512 batch=8192 | vendor -
-n=2 k=512 batch=32768 | vendor -
-n=2 k=4096 batch=1 | vendor -
-n=2 k=4096 batch=2 | vendor -
-n=2 k=4096 batch=3 | vendor -
-n=2 k=4096 batch=128 | vendor -
-n=2 k=4096 batch=1024 | vendor -
-n=2 k=4096 batch=8192 | vendor -
-n=2 k=4096 batch=32768 | vendor -
-n=4 k=1 batch=1 | vendor -
-n=4 k=1 batch=2 | vendor -
-n=4 k=1 batch=3 | vendor -
-n=4 k=1 batch=128 | vendor -
-n=4 k=1 batch=1024 | vendor -
-n=4 k=1 batch=8192 | vendor -
-n=4 k=1 batch=32768 | vendor -
-n=4 k=8 batch=1 | vendor -
-n=4 k=8 batch=2 | vendor -
-n=4 k=8 batch=3 | vendor -
-n=4 k=8 batch=128 | vendor -
-n=4 k=8 batch=1024 | vendor -
-n=4 k=8 batch=8192 | vendor -
-n=4 k=8 batch=32768 | vendor -
-n=4 k=64 batch=1 | vendor -
-n=4 k=64 batch=2 | vendor -
-n=4 k=64 batch=3 | vendor -
-n=4 k=64 batch=128 | vendor -
-n=4 k=64 batch=1024 | vendor -
-n=4 k=64 batch=8192 | vendor -
-n=4 k=64 batch=32768 | vendor -
-n=4 k=512 batch=1 | vendor -
-n=4 k=512 batch=2 | vendor -
-n=4 k=512 batch=3 | vendor -
-n=4 k=512 batch=128 | vendor -
-n=4 k=512 batch=1024 | vendor -
-n=4 k=512 batch=8192 | vendor -
-n=4 k=512 batch=32768 | vendor -
-n=4 k=4096 batch=1 | vendor -
-n=4 k=4096 batch=2 | vendor -
-n=4 k=4096 batch=3 | vendor -
-n=4 k=4096 batch=128 | vendor -
-n=4 k=4096 batch=1024 | vendor -
-n=4 k=4096 batch=8192 | vendor -
-n=4 k=4096 batch=32768 | vendor -
-n=8 k=1 batch=1 | vendor -
-n=8 k=1 batch=2 | vendor -
-n=8 k=1 batch=3 | vendor -
-n=8 k=1 batch=128 | vendor -
-n=8 k=1 batch=1024 | vendor -
-n=8 k=1 batch=8192 | vendor -
-n=8 k=1 batch=32768 | vendor -
-n=8 k=8 batch=1 | vendor -
-n=8 k=8 batch=2 | vendor -
-n=8 k=8 batch=3 | vendor -
-n=8 k=8 batch=128 | vendor -
-n=8 k=8 batch=1024 | vendor -
-n=8 k=8 batch=8192 | vendor -
-n=8 k=8 batch=32768 | vendor -
-n=8 k=64 batch=1 | vendor -
-n=8 k=64 batch=2 | vendor -
-n=8 k=64 batch=3 | vendor -
-n=8 k=64 batch=128 | vendor -
-n=8 k=64 batch=1024 | vendor -
-n=8 k=64 batch=8192 | vendor -
-n=8 k=64 batch=32768 | vendor -
-n=8 k=512 batch=1 | vendor -
-n=8 k=512 batch=2 | vendor -
-n=8 k=512 batch=3 | vendor -
-n=8 k=512 batch=128 | vendor -
-n=8 k=512 batch=1024 | vendor -
-n=8 k=512 batch=8192 | vendor -
-n=8 k=512 batch=32768 | vendor -
-n=8 k=4096 batch=1 | vendor -
-n=8 k=4096 batch=2 | vendor -
-n=8 k=4096 batch=3 | vendor -
-n=8 k=4096 batch=128 | vendor -
-n=8 k=4096 batch=1024 | vendor -
-n=8 k=4096 batch=8192 | vendor -
-n=8 k=4096 batch=32768 | vendor -
-n=16 k=1 batch=1 | vendor -
-n=16 k=1 batch=2 | vendor -
-n=16 k=1 batch=3 | vendor -
-n=16 k=1 batch=128 | vendor -
-n=16 k=1 batch=1024 | vendor -
-n=16 k=1 batch=8192 | vendor -
-n=16 k=1 batch=32768 | vendor -
-n=16 k=8 batch=1 | vendor -
-n=16 k=8 batch=2 | vendor -
-n=16 k=8 batch=3 | vendor -
-n=16 k=8 batch=128 | vendor -
-n=16 k=8 batch=1024 | vendor -
-n=16 k=8 batch=8192 | vendor -
-n=16 k=8 batch=32768 | vendor -
-n=16 k=64 batch=1 | vendor -
-n=16 k=64 batch=2 | vendor -
-n=16 k=64 batch=3 | vendor -
-n=16 k=64 batch=128 | vendor -
-n=16 k=64 batch=1024 | vendor -
-n=16 k=64 batch=8192 | vendor -
-n=16 k=64 batch=32768 | vendor -
-n=16 k=512 batch=1 | vendor -
-n=16 k=512 batch=2 | vendor -
-n=16 k=512 batch=3 | vendor -
-n=16 k=512 batch=128 | vendor -
-n=16 k=512 batch=1024 | vendor -
-n=16 k=512 batch=8192 | vendor -
-n=16 k=512 batch=32768 | vendor -
-n=16 k=4096 batch=1 | vendor -
-n=16 k=4096 batch=2 | vendor -
-n=16 k=4096 batch=3 | vendor -
-n=16 k=4096 batch=128 | vendor -
-n=16 k=4096 batch=1024 | vendor -
-n=16 k=4096 batch=8192 | vendor -
-n=16 k=4096 batch=32768 | vendor -
-n=32 k=1 batch=1 | vendor -
-n=32 k=1 batch=2 | vendor -
-n=32 k=1 batch=3 | vendor -
-n=32 k=1 batch=128 | vendor -
-n=32 k=1 batch=1024 | vendor -
-n=32 k=1 batch=8192 | vendor -
-n=32 k=1 batch=32768 | vendor -
-n=32 k=8 batch=1 | vendor -
-n=32 k=8 batch=2 | vendor -
-n=32 k=8 batch=3 | vendor -
-n=32 k=8 batch=128 | vendor -
-n=32 k=8 batch=1024 | vendor -
-n=32 k=8 batch=8192 | vendor -
-n=32 k=8 batch=32768 | vendor -
-n=32 k=64 batch=1 | vendor -
-n=32 k=64 batch=2 | vendor -
-n=32 k=64 batch=3 | vendor -
-n=32 k=64 batch=128 | vendor -
-n=32 k=64 batch=1024 | vendor -
-n=32 k=64 batch=8192 | vendor -
-n=32 k=64 batch=32768 | vendor -
-n=32 k=512 batch=1 | vendor -
-n=32 k=512 batch=2 | vendor -
-n=32 k=512 batch=3 | vendor -
-n=32 k=512 batch=128 | vendor -
-n=32 k=512 batch=1024 | vendor -
-n=32 k=512 batch=8192 | vendor -
-n=32 k=512 batch=32768 | vendor -
-n=32 k=4096 batch=1 | vendor -
-n=32 k=4096 batch=2 | vendor -
-n=32 k=4096 batch=3 | vendor -
-n=32 k=4096 batch=128 | vendor -
-n=32 k=4096 batch=1024 | vendor -
-n=32 k=4096 batch=8192 | vendor -
-n=32 k=4096 batch=32768 | vendor -
-n=64 k=1 batch=1 | vendor -
-n=64 k=1 batch=2 | vendor -
-n=64 k=1 batch=3 | vendor -
-n=64 k=1 batch=128 | vendor -
-n=64 k=1 batch=1024 | vendor -
-n=64 k=1 batch=8192 | vendor -
-n=64 k=1 batch=32768 | vendor -
-n=64 k=8 batch=1 | vendor -
-n=64 k=8 batch=2 | vendor -
-n=64 k=8 batch=3 | vendor -
-n=64 k=8 batch=128 | vendor -
-n=64 k=8 batch=1024 | vendor -
-n=64 k=8 batch=8192 | vendor -
-n=64 k=8 batch=32768 | vendor -
-n=64 k=64 batch=1 | vendor -
-n=64 k=64 batch=2 | vendor -
-n=64 k=64 batch=3 | vendor -
-n=64 k=64 batch=128 | vendor -
-n=64 k=64 batch=1024 | vendor -
-n=64 k=64 batch=8192 | vendor -
-n=64 k=64 batch=32768 | vendor -
-n=64 k=512 batch=1 | vendor -
-n=64 k=512 batch=2 | vendor -
-n=64 k=512 batch=3 | vendor -
-n=64 k=512 batch=128 | vendor -
-n=64 k=512 batch=1024 | vendor -
-n=64 k=512 batch=8192 | vendor -
-n=64 k=512 batch=32768 | vendor -
-n=64 k=4096 batch=1 | vendor -
-n=64 k=4096 batch=2 | vendor -
-n=64 k=4096 batch=3 | vendor -
-n=64 k=4096 batch=128 | vendor -
-n=64 k=4096 batch=1024 | vendor -
-n=64 k=4096 batch=8192 | vendor -
-n=64 k=4096 batch=32768 | vendor -
-n=128 k=1 batch=1 | vendor -
-n=128 k=1 batch=2 | vendor -
-n=128 k=1 batch=3 | vendor -
-n=128 k=1 batch=128 | vendor -
-n=128 k=1 batch=1024 | vendor -
-n=128 k=1 batch=8192 | vendor -
-n=128 k=1 batch=32768 | vendor -
-n=128 k=8 batch=1 | vendor -
-n=128 k=8 batch=2 | vendor -
-n=128 k=8 batch=3 | vendor -
-n=128 k=8 batch=128 | vendor -
-n=128 k=8 batch=1024 | vendor -
-n=128 k=8 batch=8192 | vendor -
-n=128 k=8 batch=32768 | vendor -
-n=128 k=64 batch=1 | vendor -
-n=128 k=64 batch=2 | vendor -
-n=128 k=64 batch=3 | vendor -
-n=128 k=64 batch=128 | vendor -
-n=128 k=64 batch=1024 | vendor -
-n=128 k=64 batch=8192 | vendor -
-n=128 k=64 batch=32768 | vendor -
-n=128 k=512 batch=1 | vendor -
-n=128 k=512 batch=2 | vendor -
-n=128 k=512 batch=3 | vendor -
-n=128 k=512 batch=128 | vendor -
-n=128 k=512 batch=1024 | vendor -
-n=128 k=512 batch=8192 | vendor -
-n=128 k=512 batch=32768 | vendor -
-n=128 k=4096 batch=1 | vendor -
-n=128 k=4096 batch=2 | vendor -
-n=128 k=4096 batch=3 | vendor -
-n=128 k=4096 batch=128 | vendor -
-n=128 k=4096 batch=1024 | vendor -
-n=128 k=4096 batch=8192 | vendor -
-n=128 k=4096 batch=32768 | vendor -
-n=256 k=1 batch=1 | vendor -
-n=256 k=1 batch=2 | vendor -
-n=256 k=1 batch=3 | vendor -
-n=256 k=1 batch=128 | vendor -
-n=256 k=1 batch=1024 | vendor -
-n=256 k=1 batch=8192 | vendor -
-n=256 k=1 batch=32768 | vendor -
-n=256 k=8 batch=1 | vendor -
-n=256 k=8 batch=2 | vendor -
-n=256 k=8 batch=3 | vendor -
-n=256 k=8 batch=128 | vendor -
-n=256 k=8 batch=1024 | vendor -
-n=256 k=8 batch=8192 | vendor -
-n=256 k=8 batch=32768 | vendor -
-n=256 k=64 batch=1 | vendor -
-n=256 k=64 batch=2 | vendor -
-n=256 k=64 batch=3 | vendor -
-n=256 k=64 batch=128 | vendor -
-n=256 k=64 batch=1024 | vendor -
-n=256 k=64 batch=8192 | vendor -
-n=256 k=64 batch=32768 | vendor -
-n=256 k=512 batch=1 | vendor -
-n=256 k=512 batch=2 | vendor -
-n=256 k=512 batch=3 | vendor -
-n=256 k=512 batch=128 | vendor -
-n=256 k=512 batch=1024 | vendor -
-n=256 k=512 batch=8192 | vendor -
-n=256 k=512 batch=32768 | vendor -
-n=256 k=4096 batch=1 | vendor -
-n=256 k=4096 batch=2 | vendor -
-n=256 k=4096 batch=3 | vendor -
-n=256 k=4096 batch=128 | vendor -
-n=256 k=4096 batch=1024 | vendor -
-n=256 k=4096 batch=8192 | vendor -
-n=256 k=4096 batch=32768 | vendor -
-n=512 k=1 batch=1 | vendor -
-n=512 k=1 batch=2 | vendor -
-n=512 k=1 batch=3 | vendor -
-n=512 k=1 batch=128 | vendor -
-n=512 k=1 batch=1024 | vendor -
-n=512 k=1 batch=8192 | vendor -
-n=512 k=1 batch=32768 | vendor -
-n=512 k=8 batch=1 | vendor -
-n=512 k=8 batch=2 | vendor -
-n=512 k=8 batch=3 | vendor -
-n=512 k=8 batch=128 | vendor -
-n=512 k=8 batch=1024 | vendor -
-n=512 k=8 batch=8192 | vendor -
-n=512 k=8 batch=32768 | vendor -
-n=512 k=64 batch=1 | vendor -
-n=512 k=64 batch=2 | vendor -
-n=512 k=64 batch=3 | vendor -
-n=512 k=64 batch=128 | vendor -
-n=512 k=64 batch=1024 | vendor -
-n=512 k=64 batch=8192 | vendor -
-n=512 k=64 batch=32768 | vendor -
-n=512 k=512 batch=1 | vendor -
-n=512 k=512 batch=2 | vendor -
-n=512 k=512 batch=3 | vendor -
-n=512 k=512 batch=128 | vendor -
-n=512 k=512 batch=1024 | vendor -
-n=512 k=512 batch=8192 | vendor -
-n=512 k=512 batch=32768 | vendor -
-n=512 k=4096 batch=1 | vendor -
-n=512 k=4096 batch=2 | vendor -
-n=512 k=4096 batch=3 | vendor -
-n=512 k=4096 batch=128 | vendor -
-n=512 k=4096 batch=1024 | vendor -
-n=512 k=4096 batch=8192 | vendor -
-n=512 k=4096 batch=32768 | vendor -
-n=1024 k=1 batch=1 | vendor -
-n=1024 k=1 batch=2 | vendor -
-n=1024 k=1 batch=3 | vendor -
-n=1024 k=1 batch=128 | vendor -
-n=1024 k=1 batch=1024 | vendor -
-n=1024 k=1 batch=8192 | vendor -
-n=1024 k=1 batch=32768 | vendor -
-n=1024 k=8 batch=1 | vendor -
-n=1024 k=8 batch=2 | vendor -
-n=1024 k=8 batch=3 | vendor -
-n=1024 k=8 batch=128 | vendor -
-n=1024 k=8 batch=1024 | vendor -
-n=1024 k=8 batch=8192 | vendor -
-n=1024 k=8 batch=32768 | vendor -
-n=1024 k=64 batch=1 | vendor -
-n=1024 k=64 batch=2 | vendor -
-n=1024 k=64 batch=3 | vendor -
-n=1024 k=64 batch=128 | vendor -
-n=1024 k=64 batch=1024 | vendor -
-n=1024 k=64 batch=8192 | vendor -
-n=1024 k=64 batch=32768 | vendor -
-n=1024 k=512 batch=1 | vendor -
-n=1024 k=512 batch=2 | vendor -
-n=1024 k=512 batch=3 | vendor -
-n=1024 k=512 batch=128 | vendor -
-n=1024 k=512 batch=1024 | vendor -
-n=1024 k=512 batch=8192 | vendor -
-n=1024 k=512 batch=32768 | vendor -
-n=1024 k=4096 batch=1 | vendor -
-n=1024 k=4096 batch=2 | vendor -
-n=1024 k=4096 batch=3 | vendor -
-n=1024 k=4096 batch=128 | vendor -
-n=1024 k=4096 batch=1024 | vendor -
-n=1024 k=4096 batch=8192 | vendor -
-n=1024 k=4096 batch=32768 | vendor -
-n=2048 k=1 batch=1 | vendor -
-n=2048 k=1 batch=2 | vendor -
-n=2048 k=1 batch=3 | vendor -
-n=2048 k=1 batch=128 | vendor -
-n=2048 k=1 batch=1024 | vendor -
-n=2048 k=1 batch=8192 | vendor -
-n=2048 k=1 batch=32768 | vendor -
-n=2048 k=8 batch=1 | vendor -
-n=2048 k=8 batch=2 | vendor -
-n=2048 k=8 batch=3 | vendor -
-n=2048 k=8 batch=128 | vendor -
-n=2048 k=8 batch=1024 | vendor -
-n=2048 k=8 batch=8192 | vendor -
-n=2048 k=8 batch=32768 | vendor -
-n=2048 k=64 batch=1 | vendor -
-n=2048 k=64 batch=2 | vendor -
-n=2048 k=64 batch=3 | vendor -
-n=2048 k=64 batch=128 | vendor -
-n=2048 k=64 batch=1024 | vendor -
-n=2048 k=64 batch=8192 | vendor -
-n=2048 k=64 batch=32768 | vendor -
-n=2048 k=512 batch=1 | vendor -
-n=2048 k=512 batch=2 | vendor -
-n=2048 k=512 batch=3 | vendor -
-n=2048 k=512 batch=128 | vendor -
-n=2048 k=512 batch=1024 | vendor -
-n=2048 k=512 batch=8192 | vendor -
-n=2048 k=512 batch=32768 | vendor -
-n=2048 k=4096 batch=1 | vendor -
-n=2048 k=4096 batch=2 | vendor -
-n=2048 k=4096 batch=3 | vendor -
-n=2048 k=4096 batch=128 | vendor -
-n=2048 k=4096 batch=1024 | vendor -
-n=2048 k=4096 batch=8192 | vendor -
-n=2048 k=4096 batch=32768 | vendor -
-n=4096 k=1 batch=1 | vendor -
-n=4096 k=1 batch=2 | vendor -
-n=4096 k=1 batch=3 | vendor -
-n=4096 k=1 batch=128 | vendor -
-n=4096 k=1 batch=1024 | vendor -
-n=4096 k=1 batch=8192 | vendor -
-n=4096 k=1 batch=32768 | vendor -
-n=4096 k=8 batch=1 | vendor -
-n=4096 k=8 batch=2 | vendor -
-n=4096 k=8 batch=3 | vendor -
-n=4096 k=8 batch=128 | vendor -
-n=4096 k=8 batch=1024 | vendor -
-n=4096 k=8 batch=8192 | vendor -
-n=4096 k=8 batch=32768 | vendor -
-n=4096 k=64 batch=1 | vendor -
-n=4096 k=64 batch=2 | vendor -
-n=4096 k=64 batch=3 | vendor -
-n=4096 k=64 batch=128 | vendor -
-n=4096 k=64 batch=1024 | vendor -
-n=4096 k=64 batch=8192 | vendor -
-n=4096 k=64 batch=32768 | vendor -
-n=4096 k=512 batch=1 | vendor -
-n=4096 k=512 batch=2 | vendor -
-n=4096 k=512 batch=3 | vendor -
-n=4096 k=512 batch=128 | vendor -
-n=4096 k=512 batch=1024 | vendor -
-n=4096 k=512 batch=8192 | vendor -
-n=4096 k=512 batch=32768 | vendor -
-n=4096 k=4096 batch=1 | vendor -
-n=4096 k=4096 batch=2 | vendor -
-n=4096 k=4096 batch=3 | vendor -
-n=4096 k=4096 batch=128 | vendor -
-n=4096 k=4096 batch=1024 | vendor -
-n=4096 k=4096 batch=8192 | vendor -
-n=4096 k=4096 batch=32768 | vendor -
+n=1 k=1 batch=1 | vendor 0.01646 # deep
+n=1 k=1 batch=2 | vendor 0.02576 # deep
+n=1 k=1 batch=3 | vendor 0.03522 # deep
+n=1 k=1 batch=128 | vendor 1.226 # deep
+n=1 k=1 batch=1024 | vendor 9.768 # deep
+n=1 k=1 batch=8192 | vendor 78.35 # deep
+n=1 k=1 batch=32768 | vendor 313.4 # deep
+n=1 k=8 batch=1 | vendor 0.01631 # deep
+n=1 k=8 batch=2 | vendor 0.02564 # deep
+n=1 k=8 batch=3 | vendor 0.03502 # deep
+n=1 k=8 batch=128 | vendor 1.233 # deep
+n=1 k=8 batch=1024 | vendor 9.820 # deep
+n=1 k=8 batch=8192 | vendor 78.22 # deep
+n=1 k=8 batch=32768 | vendor 313.9 # deep
+n=1 k=64 batch=1 | vendor 0.04070 # deep
+n=1 k=64 batch=2 | vendor 0.07451 # deep
+n=1 k=64 batch=3 | vendor 0.1083 # deep
+n=1 k=64 batch=128 | vendor 4.332 # deep
+n=1 k=64 batch=1024 | vendor 34.47 # deep
+n=1 k=64 batch=8192 | vendor 275.9 # deep
+n=1 k=64 batch=32768 | vendor 1107 # deep
+n=1 k=512 batch=1 | vendor 0.2667 # deep
+n=1 k=512 batch=2 | vendor 0.5189 # deep
+n=1 k=512 batch=3 | vendor 0.7745 # deep
+n=1 k=512 batch=128 | vendor 32.74 # deep
+n=1 k=512 batch=1024 | vendor 261.9 # deep
+n=1 k=512 batch=8192 | vendor 2104 # deep
+n=1 k=512 batch=32768 | vendor 8387 # deep
+n=1 k=4096 batch=1 | vendor 2.051 # deep
+n=1 k=4096 batch=2 | vendor 4.037 # deep
+n=1 k=4096 batch=3 | vendor 6.140 # deep
+n=1 k=4096 batch=128 | vendor 261.7 # deep
+n=1 k=4096 batch=1024 | vendor 2063 # deep
+n=1 k=4096 batch=8192 | vendor 16504 # deep
+n=1 k=4096 batch=32768 | vendor 66722 # deep
+n=2 k=1 batch=1 | vendor 0.01633 # deep
+n=2 k=1 batch=2 | vendor 0.02654 # deep
+n=2 k=1 batch=3 | vendor 0.03593 # deep
+n=2 k=1 batch=128 | vendor 1.269 # deep
+n=2 k=1 batch=1024 | vendor 10.10 # deep
+n=2 k=1 batch=8192 | vendor 81.11 # deep
+n=2 k=1 batch=32768 | vendor 320.4 # deep
+n=2 k=8 batch=1 | vendor 0.01634 # deep
+n=2 k=8 batch=2 | vendor 0.02617 # deep
+n=2 k=8 batch=3 | vendor 0.03672 # deep
+n=2 k=8 batch=128 | vendor 1.275 # deep
+n=2 k=8 batch=1024 | vendor 10.06 # deep
+n=2 k=8 batch=8192 | vendor 81.38 # deep
+n=2 k=8 batch=32768 | vendor 321.6 # deep
+n=2 k=64 batch=1 | vendor 0.04161 # deep
+n=2 k=64 batch=2 | vendor 0.07670 # deep
+n=2 k=64 batch=3 | vendor 0.1117 # deep
+n=2 k=64 batch=128 | vendor 4.408 # deep
+n=2 k=64 batch=1024 | vendor 35.56 # deep
+n=2 k=64 batch=8192 | vendor 284.6 # deep
+n=2 k=64 batch=32768 | vendor 1138 # deep
+n=2 k=512 batch=1 | vendor 0.2658 # deep
+n=2 k=512 batch=2 | vendor 0.5346 # deep
+n=2 k=512 batch=3 | vendor 0.7982 # deep
+n=2 k=512 batch=128 | vendor 33.62 # deep
+n=2 k=512 batch=1024 | vendor 268.8 # deep
+n=2 k=512 batch=8192 | vendor 2128 # deep
+n=2 k=512 batch=32768 | vendor 8604 # deep
+n=2 k=4096 batch=1 | vendor 2.095 # deep
+n=2 k=4096 batch=2 | vendor 4.181 # deep
+n=2 k=4096 batch=3 | vendor 6.204 # deep
+n=2 k=4096 batch=128 | vendor 267.2 # deep
+n=2 k=4096 batch=1024 | vendor 2147 # deep
+n=2 k=4096 batch=8192 | vendor 17177 # deep
+n=4 k=1 batch=1 | vendor 0.01759 # deep
+n=4 k=1 batch=2 | vendor 0.02812 # deep
+n=4 k=1 batch=3 | vendor 0.03894 # deep
+n=4 k=1 batch=128 | vendor 1.391 # deep
+n=4 k=1 batch=1024 | vendor 11.04 # deep
+n=4 k=1 batch=8192 | vendor 88.17 # deep
+n=4 k=1 batch=32768 | vendor 352.9 # deep
+n=4 k=8 batch=1 | vendor 0.01757 # deep
+n=4 k=8 batch=2 | vendor 0.02806 # deep
+n=4 k=8 batch=3 | vendor 0.03889 # deep
+n=4 k=8 batch=128 | vendor 1.379 # deep
+n=4 k=8 batch=1024 | vendor 11.07 # deep
+n=4 k=8 batch=8192 | vendor 87.84 # deep
+n=4 k=8 batch=32768 | vendor 354.0 # deep
+n=4 k=64 batch=1 | vendor 0.04244 # deep
+n=4 k=64 batch=2 | vendor 0.07733 # deep
+n=4 k=64 batch=3 | vendor 0.1143 # deep
+n=4 k=64 batch=128 | vendor 4.579 # deep
+n=4 k=64 batch=1024 | vendor 36.15 # deep
+n=4 k=64 batch=8192 | vendor 291.9 # deep
+n=4 k=64 batch=32768 | vendor 1158 # deep
+n=4 k=512 batch=1 | vendor 0.2704 # deep
+n=4 k=512 batch=2 | vendor 0.5343 # deep
+n=4 k=512 batch=3 | vendor 0.8031 # deep
+n=4 k=512 batch=128 | vendor 33.38 # deep
+n=4 k=512 batch=1024 | vendor 269.7 # deep
+n=4 k=512 batch=8192 | vendor 2161 # deep
+n=4 k=512 batch=32768 | vendor 8659 # deep
+n=4 k=4096 batch=1 | vendor 2.104 # deep
+n=4 k=4096 batch=2 | vendor 4.201 # deep
+n=4 k=4096 batch=3 | vendor 6.297 # deep
+n=4 k=4096 batch=128 | vendor 267.3 # deep
+n=4 k=4096 batch=1024 | vendor 2117 # deep
+n=4 k=4096 batch=8192 | vendor 17186 # deep
+n=8 k=1 batch=1 | vendor 0.01797 # deep
+n=8 k=1 batch=2 | vendor 0.02868 # deep
+n=8 k=1 batch=3 | vendor 0.04020 # deep
+n=8 k=1 batch=128 | vendor 1.427 # deep
+n=8 k=1 batch=1024 | vendor 11.42 # deep
+n=8 k=1 batch=8192 | vendor 90.84 # deep
+n=8 k=1 batch=32768 | vendor 363.6 # deep
+n=8 k=8 batch=1 | vendor 0.01747 # deep
+n=8 k=8 batch=2 | vendor 0.02856 # deep
+n=8 k=8 batch=3 | vendor 0.03970 # deep
+n=8 k=8 batch=128 | vendor 1.432 # deep
+n=8 k=8 batch=1024 | vendor 11.45 # deep
+n=8 k=8 batch=8192 | vendor 91.56 # deep
+n=8 k=8 batch=32768 | vendor 364.4 # deep
+n=8 k=64 batch=1 | vendor 0.04302 # deep
+n=8 k=64 batch=2 | vendor 0.07900 # deep
+n=8 k=64 batch=3 | vendor 0.1135 # deep
+n=8 k=64 batch=128 | vendor 4.614 # deep
+n=8 k=64 batch=1024 | vendor 36.49 # deep
+n=8 k=64 batch=8192 | vendor 294.8 # deep
+n=8 k=64 batch=32768 | vendor 1200 # deep
+n=8 k=512 batch=1 | vendor 0.2684 # deep
+n=8 k=512 batch=2 | vendor 0.5346 # deep
+n=8 k=512 batch=3 | vendor 0.7982 # deep
+n=8 k=512 batch=128 | vendor 33.92 # deep
+n=8 k=512 batch=1024 | vendor 270.1 # deep
+n=8 k=512 batch=8192 | vendor 2176 # deep
+n=8 k=512 batch=32768 | vendor 8672 # deep
+n=8 k=4096 batch=1 | vendor 2.094 # deep
+n=8 k=4096 batch=2 | vendor 4.141 # deep
+n=8 k=4096 batch=3 | vendor 6.210 # deep
+n=8 k=4096 batch=128 | vendor 267.2 # deep
+n=8 k=4096 batch=1024 | vendor 2148 # deep
+n=16 k=1 batch=1 | vendor 0.01784 # deep
+n=16 k=1 batch=2 | vendor 0.02918 # deep
+n=16 k=1 batch=3 | vendor 0.04260 # deep
+n=16 k=1 batch=128 | vendor 1.434 # deep
+n=16 k=1 batch=1024 | vendor 11.38 # deep
+n=16 k=1 batch=8192 | vendor 90.24 # deep
+n=16 k=1 batch=32768 | vendor 370.8 # deep
+n=16 k=8 batch=1 | vendor 0.01772 # deep
+n=16 k=8 batch=2 | vendor 0.02890 # deep
+n=16 k=8 batch=3 | vendor 0.03985 # deep
+n=16 k=8 batch=128 | vendor 1.425 # deep
+n=16 k=8 batch=1024 | vendor 11.43 # deep
+n=16 k=8 batch=8192 | vendor 91.34 # deep
+n=16 k=8 batch=32768 | vendor 389.5 # deep
+n=16 k=64 batch=1 | vendor 0.04536 # deep
+n=16 k=64 batch=2 | vendor 0.07852 # deep
+n=16 k=64 batch=3 | vendor 0.1141 # deep
+n=16 k=64 batch=128 | vendor 4.570 # deep
+n=16 k=64 batch=1024 | vendor 36.86 # deep
+n=16 k=64 batch=8192 | vendor 297.9 # deep
+n=16 k=64 batch=32768 | vendor 1214 # deep
+n=16 k=512 batch=1 | vendor 0.2708 # deep
+n=16 k=512 batch=2 | vendor 0.5350 # deep
+n=16 k=512 batch=3 | vendor 0.7994 # deep
+n=16 k=512 batch=128 | vendor 33.92 # deep
+n=16 k=512 batch=1024 | vendor 267.4 # deep
+n=16 k=512 batch=8192 | vendor 2179 # deep
+n=16 k=4096 batch=1 | vendor 2.096 # deep
+n=16 k=4096 batch=2 | vendor 4.142 # deep
+n=16 k=4096 batch=3 | vendor 6.298 # deep
+n=16 k=4096 batch=128 | vendor 267.4 # deep
+n=16 k=4096 batch=1024 | vendor 2139 # deep
+n=32 k=1 batch=1 | vendor 0.01768 # deep
+n=32 k=1 batch=2 | vendor 0.02843 # deep
+n=32 k=1 batch=3 | vendor 0.03954 # deep
+n=32 k=1 batch=128 | vendor 1.403 # deep
+n=32 k=1 batch=1024 | vendor 11.25 # deep
+n=32 k=1 batch=8192 | vendor 90.55 # deep
+n=32 k=1 batch=32768 | vendor 404.4 # deep
+n=32 k=8 batch=1 | vendor 0.01786 # deep
+n=32 k=8 batch=2 | vendor 0.02847 # deep
+n=32 k=8 batch=3 | vendor 0.03976 # deep
+n=32 k=8 batch=128 | vendor 1.412 # deep
+n=32 k=8 batch=1024 | vendor 11.18 # deep
+n=32 k=8 batch=8192 | vendor 92.69 # deep
+n=32 k=8 batch=32768 | vendor 408.5 # deep
+n=32 k=64 batch=1 | vendor 0.04039 # deep
+n=32 k=64 batch=2 | vendor 0.07442 # deep
+n=32 k=64 batch=3 | vendor 0.1081 # deep
+n=32 k=64 batch=128 | vendor 4.369 # deep
+n=32 k=64 batch=1024 | vendor 34.43 # deep
+n=32 k=64 batch=8192 | vendor 289.6 # deep
+n=32 k=64 batch=32768 | vendor 1160 # deep
+n=32 k=512 batch=1 | vendor 0.2575 # deep
+n=32 k=512 batch=2 | vendor 0.5052 # deep
+n=32 k=512 batch=3 | vendor 0.7477 # deep
+n=32 k=512 batch=128 | vendor 31.89 # deep
+n=32 k=512 batch=1024 | vendor 255.9 # deep
+n=32 k=512 batch=8192 | vendor 2051 # deep
+n=32 k=4096 batch=1 | vendor 1.988 # deep
+n=32 k=4096 batch=2 | vendor 3.952 # deep
+n=32 k=4096 batch=3 | vendor 5.863 # deep
+n=32 k=4096 batch=128 | vendor 250.0 # deep
+n=32 k=4096 batch=1024 | vendor 2000 # deep
+n=64 k=1 batch=1 | vendor 0.01774 # deep
+n=64 k=1 batch=2 | vendor 0.02836 # deep
+n=64 k=1 batch=3 | vendor 0.03916 # deep
+n=64 k=1 batch=128 | vendor 1.418 # deep
+n=64 k=1 batch=1024 | vendor 11.34 # deep
+n=64 k=1 batch=8192 | vendor 102.0 # deep
+n=64 k=1 batch=32768 | vendor 404.3 # deep
+n=64 k=8 batch=1 | vendor 0.01768 # deep
+n=64 k=8 batch=2 | vendor 0.02895 # deep
+n=64 k=8 batch=3 | vendor 0.03977 # deep
+n=64 k=8 batch=128 | vendor 1.419 # deep
+n=64 k=8 batch=1024 | vendor 11.35 # deep
+n=64 k=8 batch=8192 | vendor 101.5 # deep
+n=64 k=8 batch=32768 | vendor 409.5 # deep
+n=64 k=64 batch=1 | vendor 0.04085 # deep
+n=64 k=64 batch=2 | vendor 0.07397 # deep
+n=64 k=64 batch=3 | vendor 0.1091 # deep
+n=64 k=64 batch=128 | vendor 4.358 # deep
+n=64 k=64 batch=1024 | vendor 34.97 # deep
+n=64 k=64 batch=8192 | vendor 290.9 # deep
+n=64 k=64 batch=32768 | vendor 1164 # deep
+n=64 k=512 batch=1 | vendor 0.2564 # deep
+n=64 k=512 batch=2 | vendor 0.5000 # deep
+n=64 k=512 batch=3 | vendor 0.7564 # deep
+n=64 k=512 batch=128 | vendor 31.87 # deep
+n=64 k=512 batch=1024 | vendor 256.4 # deep
+n=64 k=4096 batch=1 | vendor 1.988 # deep
+n=64 k=4096 batch=2 | vendor 3.912 # deep
+n=64 k=4096 batch=3 | vendor 5.918 # deep
+n=64 k=4096 batch=128 | vendor 250.0 # deep
+n=128 k=1 batch=1 | vendor 0.01753 # deep
+n=128 k=1 batch=2 | vendor 0.02851 # deep
+n=128 k=1 batch=3 | vendor 0.03980 # deep
+n=128 k=1 batch=128 | vendor 1.418 # deep
+n=128 k=1 batch=1024 | vendor 12.78 # deep
+n=128 k=1 batch=8192 | vendor 103.2 # deep
+n=128 k=8 batch=1 | vendor 0.01767 # deep
+n=128 k=8 batch=2 | vendor 0.02867 # deep
+n=128 k=8 batch=3 | vendor 0.04004 # deep
+n=128 k=8 batch=128 | vendor 1.438 # deep
+n=128 k=8 batch=1024 | vendor 12.65 # deep
+n=128 k=8 batch=8192 | vendor 103.6 # deep
+n=128 k=64 batch=1 | vendor 0.04073 # deep
+n=128 k=64 batch=2 | vendor 0.07514 # deep
+n=128 k=64 batch=3 | vendor 0.1093 # deep
+n=128 k=64 batch=128 | vendor 4.373 # deep
+n=128 k=64 batch=1024 | vendor 36.15 # deep
+n=128 k=64 batch=8192 | vendor 292.6 # deep
+n=128 k=512 batch=1 | vendor 0.2575 # deep
+n=128 k=512 batch=2 | vendor 0.5075 # deep
+n=128 k=512 batch=3 | vendor 0.7559 # deep
+n=128 k=512 batch=128 | vendor 31.71 # deep
+n=128 k=512 batch=1024 | vendor 256.8 # deep
+n=128 k=4096 batch=1 | vendor 1.987 # deep
+n=128 k=4096 batch=2 | vendor 3.921 # deep
+n=128 k=4096 batch=3 | vendor 5.878 # deep
+n=128 k=4096 batch=128 | vendor 252.6 # deep
+n=128 k=4096 batch=32768 | vendor - # transcribed
+n=256 k=1 batch=1 | vendor 0.01808 # deep
+n=256 k=1 batch=2 | vendor 0.02883 # deep
+n=256 k=1 batch=3 | vendor 0.04004 # deep
+n=256 k=1 batch=128 | vendor 1.468 # deep
+n=256 k=1 batch=1024 | vendor 12.94 # deep
+n=256 k=8 batch=1 | vendor 0.01743 # deep
+n=256 k=8 batch=2 | vendor 0.02880 # deep
+n=256 k=8 batch=3 | vendor 0.03983 # deep
+n=256 k=8 batch=128 | vendor 1.489 # deep
+n=256 k=8 batch=1024 | vendor 12.96 # deep
+n=256 k=64 batch=1 | vendor 0.04100 # deep
+n=256 k=64 batch=2 | vendor 0.07521 # deep
+n=256 k=64 batch=3 | vendor 0.1100 # deep
+n=256 k=64 batch=128 | vendor 4.426 # deep
+n=256 k=64 batch=1024 | vendor 36.72 # deep
+n=256 k=512 batch=1 | vendor 0.2575 # deep
+n=256 k=512 batch=2 | vendor 0.5076 # deep
+n=256 k=512 batch=3 | vendor 0.7604 # deep
+n=256 k=512 batch=128 | vendor 32.15 # deep
+n=256 k=512 batch=1024 | vendor 257.1 # deep
+n=256 k=4096 batch=1 | vendor 1.985 # deep
+n=256 k=4096 batch=2 | vendor 3.961 # deep
+n=256 k=4096 batch=3 | vendor 5.941 # deep
+n=256 k=4096 batch=128 | vendor 253.1 # deep
+n=256 k=4096 batch=32768 | vendor - # transcribed
+n=512 k=1 batch=1 | vendor 0.02424 # deep
+n=512 k=1 batch=2 | vendor 0.04186 # deep
+n=512 k=1 batch=3 | vendor 0.05969 # deep
+n=512 k=1 batch=128 | vendor 2.443 # deep
+n=512 k=1 batch=32768 | vendor - # transcribed
+n=512 k=8 batch=1 | vendor 0.02431 # deep
+n=512 k=8 batch=2 | vendor 0.04221 # deep
+n=512 k=8 batch=3 | vendor 0.05953 # deep
+n=512 k=8 batch=128 | vendor 2.452 # deep
+n=512 k=8 batch=32768 | vendor - # transcribed
+n=512 k=64 batch=1 | vendor 0.06645 # deep
+n=512 k=64 batch=2 | vendor 0.1269 # deep
+n=512 k=64 batch=3 | vendor 0.1879 # deep
+n=512 k=64 batch=128 | vendor 7.903 # deep
+n=512 k=64 batch=32768 | vendor - # transcribed
+n=512 k=512 batch=1 | vendor 0.4621 # deep
+n=512 k=512 batch=2 | vendor 0.9086 # deep
+n=512 k=512 batch=3 | vendor 1.375 # deep
+n=512 k=512 batch=128 | vendor 57.98 # deep
+n=512 k=512 batch=32768 | vendor - # transcribed
+n=512 k=4096 batch=1 | vendor 3.629 # deep
+n=512 k=4096 batch=2 | vendor 7.163 # deep
+n=512 k=4096 batch=3 | vendor 10.74 # deep
+n=512 k=4096 batch=32768 | vendor - # transcribed
+n=1024 k=1 batch=1 | vendor 0.03335 # deep
+n=1024 k=1 batch=2 | vendor 0.05999 # deep
+n=1024 k=1 batch=3 | vendor 0.08641 # deep
+n=1024 k=1 batch=128 | vendor 3.587 # deep
+n=1024 k=1 batch=8192 | vendor - # transcribed
+n=1024 k=1 batch=32768 | vendor - # transcribed
+n=1024 k=8 batch=1 | vendor 0.03341 # deep
+n=1024 k=8 batch=2 | vendor 0.06021 # deep
+n=1024 k=8 batch=3 | vendor 0.08627 # deep
+n=1024 k=8 batch=128 | vendor 3.653 # deep
+n=1024 k=8 batch=8192 | vendor - # transcribed
+n=1024 k=8 batch=32768 | vendor - # transcribed
+n=1024 k=64 batch=1 | vendor 0.1270 # deep
+n=1024 k=64 batch=2 | vendor 0.2434 # deep
+n=1024 k=64 batch=3 | vendor 0.3654 # deep
+n=1024 k=64 batch=128 | vendor 15.40 # deep
+n=1024 k=64 batch=8192 | vendor - # transcribed
+n=1024 k=64 batch=32768 | vendor - # transcribed
+n=1024 k=512 batch=1 | vendor 0.9133 # deep
+n=1024 k=512 batch=2 | vendor 1.826 # deep
+n=1024 k=512 batch=3 | vendor 2.729 # deep
+n=1024 k=512 batch=128 | vendor 115.2 # deep
+n=1024 k=512 batch=8192 | vendor - # transcribed
+n=1024 k=512 batch=32768 | vendor - # transcribed
+n=1024 k=4096 batch=1 | vendor 14.71 # deep
+n=1024 k=4096 batch=2 | vendor 29.40 # deep
+n=1024 k=4096 batch=3 | vendor 44.07 # deep
+n=1024 k=4096 batch=8192 | vendor - # transcribed
+n=1024 k=4096 batch=32768 | vendor - # transcribed
+n=2048 k=1 batch=1 | vendor 0.06046 # deep
+n=2048 k=1 batch=2 | vendor 0.1163 # deep
+n=2048 k=1 batch=3 | vendor 0.1743 # deep
+n=2048 k=1 batch=8192 | vendor - # transcribed
+n=2048 k=1 batch=32768 | vendor - # transcribed
+n=2048 k=8 batch=1 | vendor 0.1023 # deep
+n=2048 k=8 batch=2 | vendor 0.2002 # deep
+n=2048 k=8 batch=3 | vendor 0.3043 # deep
+n=2048 k=8 batch=8192 | vendor - # transcribed
+n=2048 k=8 batch=32768 | vendor - # transcribed
+n=2048 k=64 batch=1 | vendor 0.3609 # deep
+n=2048 k=64 batch=2 | vendor 0.7234 # deep
+n=2048 k=64 batch=3 | vendor 1.079 # deep
+n=2048 k=64 batch=8192 | vendor - # transcribed
+n=2048 k=64 batch=32768 | vendor - # transcribed
+n=2048 k=512 batch=1 | vendor 2.764 # deep
+n=2048 k=512 batch=2 | vendor 5.523 # deep
+n=2048 k=512 batch=3 | vendor 8.315 # deep
+n=2048 k=512 batch=8192 | vendor - # transcribed
+n=2048 k=512 batch=32768 | vendor - # transcribed
+n=2048 k=4096 batch=1 | vendor 21.97 # deep
+n=2048 k=4096 batch=2 | vendor 44.12 # deep
+n=2048 k=4096 batch=3 | vendor 65.86 # deep
+n=2048 k=4096 batch=8192 | vendor - # transcribed
+n=2048 k=4096 batch=32768 | vendor - # transcribed
+n=4096 k=1 batch=1 | vendor 0.2009 # deep
+n=4096 k=1 batch=2 | vendor 0.3972 # deep
+n=4096 k=1 batch=3 | vendor 0.5905 # deep
+n=4096 k=1 batch=1024 | vendor - # transcribed
+n=4096 k=1 batch=8192 | vendor - # transcribed
+n=4096 k=1 batch=32768 | vendor - # transcribed
+n=4096 k=8 batch=1 | vendor 0.3887 # deep
+n=4096 k=8 batch=2 | vendor 0.7641 # deep
+n=4096 k=8 batch=3 | vendor 1.150 # deep
+n=4096 k=8 batch=1024 | vendor - # transcribed
+n=4096 k=8 batch=8192 | vendor - # transcribed
+n=4096 k=8 batch=32768 | vendor - # transcribed
+n=4096 k=64 batch=1 | vendor 1.410 # deep
+n=4096 k=64 batch=2 | vendor 2.802 # deep
+n=4096 k=64 batch=3 | vendor 4.190 # deep
+n=4096 k=64 batch=1024 | vendor - # transcribed
+n=4096 k=64 batch=8192 | vendor - # transcribed
+n=4096 k=64 batch=32768 | vendor - # transcribed
+n=4096 k=512 batch=1 | vendor 10.91 # deep
+n=4096 k=512 batch=2 | vendor 21.53 # deep
+n=4096 k=512 batch=3 | vendor 32.69 # deep
+n=4096 k=512 batch=1024 | vendor - # transcribed
+n=4096 k=512 batch=8192 | vendor - # transcribed
+n=4096 k=512 batch=32768 | vendor - # transcribed
+n=4096 k=4096 batch=1 | vendor 86.62 # deep
+n=4096 k=4096 batch=2 | vendor 173.5 # deep
+n=4096 k=4096 batch=3 | vendor 257.4 # deep
+n=4096 k=4096 batch=1024 | vendor - # transcribed
+n=4096 k=4096 batch=8192 | vendor - # transcribed
+n=4096 k=4096 batch=32768 | vendor - # transcribed

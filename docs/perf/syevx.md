@@ -360,6 +360,26 @@ is on the [syev page](syev.md#syev-the-lobpcg-projected-solve-knob).
 `BATCHLAS_SYEVX_PROJECTED_VENDOR` forces the vendor for the projected solve; it changes workspace size, so it must
 not change between a buffer-size query and the call.
 
+### LOBPCG: the accuracy pin on the projected syev
+
+**Since 2026-10-09 (deep sm_120 tables).** The tuned `syev` tables rank families by time
+only, and the deep sm_120 run ranks cuSOLVER (`vendor`) or `jacobi` first for many small
+eigenvector-mode cells. LOBPCG cannot afford that trade. On threadripper02 (RTX PRO 6000,
+sm_120), float, n = 16, cuSOLVER's eigenvalues are about 1.9e-5 off, against 2.7e-6 for the CTA
+solver. With the projected solves on `vendor` or `jacobi`,
+`ILUKTests.SyevxInstrumentationAndPreconditioner` (`iluk_k3`, case `d0.06_b0.5`) stalls at
+a residual of 5.2e-6 against its 4.2e-6 target. It passes on CTA.
+
+`projected_syev_pin` (`src/extensions/syevx_lobpcg.cc`) therefore pins every projected solve
+(XtAX, StAS and its restart size) to `cta_fused` when the CTA solvers can take the shape
+(n <= 32, a GPU with 32-wide sub-groups). The buffer-size query uses the same pin, so the
+workspace and the run branch identically. `cta` has the same `can_run` as `cta_fused`, so it is
+never a fallback rung. Above n = 32 the table decides. An explicit route (`BATCHLAS_SYEV_ROUTE`
+or an outer `select::ScopedPin`) still wins, which keeps the five
+`Pinned/SyevxProjectedSyevRouteTest.*` cases exercising each family.
+`SyevxProjectedSyevPin.CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFirst` guards the pin
+through the selection trace, under a synthetic table that ranks the vendor first.
+
 ## syevx: open measurement debts
 
 - **`BM_SYEVX_RangePosition` has not been run** (@ref design_syevx_range).

@@ -125,6 +125,7 @@ import argparse
 import csv
 import datetime
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -226,7 +227,8 @@ POTRF = OpSpec(
     candidate_order=["tiny", "cta", "lpanel:panel=8", "lpanel:panel=16", "blocked", "vendor"],
     sources=[
         Source("sm_120", ["sm120_potrf_sweep.jsonl", "sm120_potrf_sweep_edges.jsonl"],
-               "a1063892", "converted, passes 1+2"),
+               "a1063892", "converted, passes 1+2",
+               adopted=False),  # superseded by the deep ledger (tuned/README.md): validated, never written
         Source("sm_89", ["sm89_potrf_archive.jsonl"], "unknown",
                "converted, kernel_current rows only; repeated medians averaged", current_only=True),
     ],
@@ -256,7 +258,7 @@ POSV = OpSpec(
     # (cell, arm, pass) can appear twice: the later row wins (routing/README.md).
     sources=[Source("sm_120", ["sm120_posv_sweep.jsonl"], "886537e8",
                     "converted, passes 1+2, resumed rows replace earlier duplicates",
-                    dedupe_latest=True)],
+                    dedupe_latest=True, adopted=False)],  # superseded by the deep ledger, as potrf sm_120
     route_field="reached",
     keep_not_ok=relsd_only,
 )
@@ -896,9 +898,12 @@ def read_cell(rec):
         raise ValueError(f"unknown tier '{rec['tier']}'")
     key = tuple(tuple(kv.split("=", 1)) for kv in rec["key"].split(","))
     names = [n for n in rec["cands"].split("|") if n]
-    cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""), "median": rec.get(f"m{i}")}
+    cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""),
+              "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}"), "lo": rec.get(f"lo{i}"),
+              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}")}
              for i, n in enumerate(names)]
     return {"run_id": rec["run_id"], "tier": rec["tier"], "key": key, "date": rec.get("date", ""),
+            "round": int(rec.get("round", 0)),
             "ranked": [r for r in rec.get("ranked", "").split("|") if r], "cands": cands}
 
 
@@ -908,7 +913,10 @@ def stale_families(cell, family_hash):
         fam = spelling_family(c["cand"])
         seen.add(fam)
         # A candidate that could not run there (skipped) cannot change the ranking: its hash is ignored.
-        if c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
+        # A dominated skip (the removed carry-forward) was never tried there: stale, as in C++.
+        if c["status"] == "skipped" and c.get("reason", "").startswith("dominated:"):
+            out.add(fam)
+        elif c["status"] != "skipped" and family_hash.get(fam) != c["hash"]:
             out.add(fam)
     return out | (set(family_hash) - seen)
 
@@ -1010,19 +1018,41 @@ def ledger_rows(spec, keyspec, ledger, family_hash, old_rows):
         if entries:
             cand_rows.append((key_tuple(spec, keyspec, key), c["tier"], entries))
     cand_rows += [(k, "transcribed", entries) for k, entries in old_rows]
-    def near(a, b, stride):
-        return all(a[i] == b[i] for i in exact_pos) and all(
-            abs(lattice_index(lattice[i], a[i]) - lattice_index(lattice[i], b[i])) < stride for i in log_pos)
+    pos = {}
+
+    def index_of(k):
+        if k not in pos:
+            pos[k] = tuple(lattice_index(lattice[i], k[i]) for i in log_pos)
+        return pos[k]
+
+    def bracketed_by(against, stride):
+        """near(a, b) = equal exact keys and index distance < stride on every log key. Two such keys
+        sit in the same or an adjacent floor(index / stride) bucket, so only those are compared."""
+        buckets = defaultdict(list)
+        for k in against:
+            p = index_of(k)
+            buckets[(tuple(k[i] for i in exact_pos), tuple(math.floor(x / stride) for x in p))].append(p)
+
+        def hit(key):
+            exact, p = tuple(key[i] for i in exact_pos), index_of(key)
+            home = [math.floor(x / stride) for x in p]
+            for off in itertools.product((-1, 0, 1), repeat=len(p)):
+                for q in buckets.get((exact, tuple(h + o for h, o in zip(home, off))), ()):
+                    if all(abs(a - b) < stride for a, b in zip(p, q)):
+                        return True
+            return False
+        return hit
 
     kept = {}
     for tier in LEDGER_TIERS:
         # Measured rows are bracketed by kept higher rows; a transcribed row by any measured row,
         # kept or dropped, since a dropped preview row still says the region was measured.
         against = [k for k, t, _ in cand_rows if t != "transcribed"] if tier == "transcribed" else list(kept)
+        near = bracketed_by(against, LEDGER_STRIDE[tier])
         for key, t, entries in cand_rows:
             if t != tier or key in kept:
                 continue
-            if not any(near(hk, key, LEDGER_STRIDE[tier]) for hk in against):
+            if not near(key):
                 kept[key] = (tier, entries)
     return kept
 
@@ -1854,6 +1884,14 @@ def self_test_ledger():
         rows10 = ledger_text(spec, "float", "sm_0", read_ledger(fix), fix, None, True)[0].splitlines()[3:]
         if rows10 != ["uplo=L n=64 nrhs=1 batch=128 | tiny 1.000 | cta 2.000 # preview"]:
             bad.append(f"self-test: ledger_all_error_record_counts_as_no_record -> {rows10}")
+        # a dominated skip (removed carry-forward) is partly stale, its family stale; a refused pin is
+        # not. Shared with tune_tests' TuneSchedule.ADominatedSkipIsPartlyStaleAndReRacedAgainstTheTopTwo.
+        fixd = os.path.join(REPO, "tests", "data", "ledger_dominated", "posv.float.sm_0")
+        dom = read_ledger(fixd).cells
+        fhd = {"tiny": "htiny", "cta": "hcta", "blocked": "hblocked"}
+        gotd = [(sorted(stale_families(c, fhd)), freshness(c, fhd)) for c in dom]
+        if gotd != [(["blocked"], "partly_stale"), ([], "current")]:
+            bad.append(f"self-test: ledger_dominated_skip_is_partly_stale -> {gotd}")
         # --ledger refuses to overwrite a timed non-ledger table unless --replace-timed
         tabs = os.path.join(d, "tabs")
         os.makedirs(tabs)

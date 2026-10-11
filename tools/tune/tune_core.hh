@@ -4,6 +4,7 @@
 // refinement, the JSONL records, the §6.4 hash. No SYCL: tests/tune_tests.cc links it alone.
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -175,5 +176,12 @@ struct GuardCheck {
 };
 GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign);
 std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+
+// A guard query that fails (nvidia-smi errors while a GPU is reset) is retried after `first_s`,
+// doubling to `max_s`, until `wait_s` of sleeping has passed; then nullopt (the caller stops).
+// evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+std::optional<std::string> query_with_backoff(const std::function<std::optional<std::string>()>& query, double wait_s,
+                                              const std::function<void(double)>& sleep_s, double first_s = 5,
+                                              double max_s = 60);
 
 }  // namespace batchlas::tune

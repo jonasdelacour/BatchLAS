@@ -7,6 +7,7 @@
 
 #include "tune_core.hh"
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -19,7 +20,7 @@ struct CellRequest {
     std::string dtype;
     CellKey key;
     std::vector<std::string> arms;
-    std::string mode;  // "time" | "race" | "jit" | "probe"
+    std::string mode;  // "time" | "race" | "jit" | "probe" | "verify" (the ld audit: verify only)
     int reps = 16;
     double warm_s = 1.5;   // race: the per-arm warm top-up
     bool reverse = false;  // pass 2: the base arm order reversed (§6.3 step 4)
@@ -29,7 +30,10 @@ struct CellRequest {
     double confidence = 0.80;
     bool alternate_reverse = false;
     std::vector<std::string> seed_order;  // arms to put first (the nearest finished cell's winner)
+    std::vector<std::string> ld_audit;    // arms to re-verify at ld_pad + kLdAuditPad if this cell verifies them
 };
+
+inline constexpr int kLdAuditPad = 3;  // ld audit; evidence: docs/design/tiered-tuning.md#engine-the-ld-audit
 
 struct ArmOutcome {
     std::string arm;
@@ -39,6 +43,7 @@ struct ArmOutcome {
     std::vector<int> slot;   // the arm's position within each rep's rotated order
     double residual = 0;
     int info_nonzero = 0;
+    std::string ld_audit;  // "" not audited | pass | fail | skipped (the pin refused the padded shape)
 };
 
 class OpSpec {
@@ -54,6 +59,9 @@ public:
     // Bytes of the op's inputs at a cell (the 4 GiB cap) and the key §6.2 bisects.
     virtual double bytes(const std::string& dtype, const CellKey& key) const = 0;
     virtual std::string refine_key() const { return "n"; }
+    // The matrix extents a cell allocates (rows/cols of every operand); --max-dim caps their max. Default:
+    // every integer-valued key but `batch`. Override where an extent is derived rather than keyed.
+    virtual std::vector<std::int64_t> dims(const std::string& dtype, const CellKey& key) const;
     // §6.4: repo-relative kernel sources (the kernel-sources block CI and CMake read too).
     virtual std::vector<std::string> kernel_sources() const = 0;
     virtual std::string spec_file() const = 0;
@@ -73,6 +81,11 @@ public:
 inline double dtype_bytes(const std::string& dtype) {
     return dtype == "float" ? 4 : dtype == "cdouble" ? 16 : 8;
 }
+
+std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out,  // of `wanted`, those out verified
+                                       const std::vector<std::string>& wanted);
+void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit);  // bad/error there: bad here
+std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req);  // run_cell + its ld audit
 
 void register_spec(const OpSpec* spec);
 const OpSpec* find_spec(std::string_view op);

@@ -14,8 +14,28 @@ add_executable(batchlas_tune_impl
     potrf_spec.cc
     posv_spec.cc
     trsm_spec.cc
-    gemm_spec.cc)
+    gemm_spec.cc
+    getrf_spec.cc
+    getrs_spec.cc
+    getri_spec.cc
+    gesv_spec.cc
+    gemv_spec.cc
+    trmm_spec.cc
+    symm_spec.cc
+    syrk_spec.cc
+    syr2k_spec.cc
+    syev_spec.cc
+    gesvd_spec.cc
+    spmm_spec.cc
+    geqrf_spec.cc
+    orgqr_spec.cc
+    ormqr_spec.cc)
 batchlas_configure_binary_target(batchlas_tune_impl LIBRARIES batchlas::verify)
+# syev and gesvd check eigen- and singular values against host LAPACKE (host_reference.hh); batchlas::verify
+# brings the LAPACKE link and include path, the specs still test their own macro.
+if(BATCHLAS_HAS_HOST_BACKEND)
+    target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_HAVE_LAPACKE=1)
+endif()
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 

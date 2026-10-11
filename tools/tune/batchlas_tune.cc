@@ -77,9 +77,10 @@ struct Opts {
     std::optional<Tier> tier;      // --tier; the protocol flags below make the run tier custom
     std::string custom_flag;       // the first protocol flag seen (custom tier, the two-pass path)
     double budget_h = 0, overhead_s = kChildOverheadS;
+    std::int64_t max_dim = -1;  // --max-dim; unset: 2048 for tiered runs, off for custom
     bool plan = false, status = false, ledger_given = false;  // custom runs touch a ledger only when given
     int progress_fd = -1;
-    std::string ledger, import_raw, device_key;
+    std::string ledger, import_raw, device_key, remeasure_keys;
     std::vector<std::string> dtypes{"float"};
     std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
@@ -219,13 +220,14 @@ int child_main(const std::vector<std::string>& a) {
         else if (a[i] == "--confidence") req.confidence = std::stod(val());
         else if (a[i] == "--alternate-reverse") req.alternate_reverse = true;
         else if (a[i] == "--seed-order") req.seed_order = split(val(), ',');
+        else if (a[i] == "--ld-audit") req.ld_audit = split(val(), ',');
         else if (a[i] == "--result") result = val();
         else die("--cell: unknown argument " + a[i]);
     }
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
     std::ofstream out(result);
-    out << outcome_text(spec->run_cell(req));
+    out << outcome_text(run_cell_audited(*spec, req));
     return out ? 0 : 1;
 }
 
@@ -269,7 +271,7 @@ int worker_main(const std::vector<std::string>& a) {
         if (!req) die("--worker: bad request (" + err + "): " + line);
         const OpSpec* spec = find_spec(req->first);
         if (!spec) die("--worker: unknown op " + req->first);
-        const std::string text = outcome_text(spec->run_cell(req->second)) + Json().str("kind", "done").line();
+        const std::string text = outcome_text(run_cell_audited(*spec, req->second)) + Json().str("kind", "done").line();
         for (std::size_t done = 0; done < text.size();) {
             const ssize_t n = ::write(out, text.data() + done, text.size() - done);
             if (n <= 0) return 1;
@@ -464,14 +466,28 @@ private:
     void convert(const std::string& jsonl);
 };
 
+// A failed nvidia-smi query (a GPU reset elsewhere in the box) retries with backoff for --guard-wait.
+std::optional<std::string> retried(int gpu, const std::string& what, double wait_s,
+                                   const std::function<std::optional<std::string>()>& query) {
+    return query_with_backoff(query, wait_s, [&](double s) {
+        std::fprintf(stderr, "batchlas_tune: nvidia-smi %s failed on GPU %d; retrying in %.0f s\n", what.c_str(), gpu, s);
+        std::this_thread::sleep_for(std::chrono::duration<double>(s));
+    });
+}
+
 AppScan Driver::apps(int gpu) {
     const std::string id = "nvidia-smi --id=" + std::to_string(gpu);
-    std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
-    const auto rc = out.rfind("rc=");
-    if (rc == std::string::npos || out.substr(rc) != "rc=0")
-        die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi (--no-guard measures without the guard)");
-    out.resize(rc);
-    AppScan scan = scan_compute_apps(out, long(::getpid()));
+    const auto got = retried(gpu, "--query-compute-apps", o_.guard_wait, [&]() -> std::optional<std::string> {
+        std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
+        const auto rc = out.rfind("rc=");
+        if (rc == std::string::npos || out.substr(rc) != "rc=0") return std::nullopt;
+        out.resize(rc);
+        return out;
+    });
+    if (!got)
+        die("cannot query GPU " + std::to_string(gpu) + " with nvidia-smi after " + fmt(o_.guard_wait, "%.0f") +
+            " s of retries (--no-guard measures without the guard)");
+    AppScan scan = scan_compute_apps(*got, long(::getpid()));
     if (scan.self) die("the driver holds a CUDA context on GPU " + std::to_string(gpu) + ": start it via the launcher");
     const std::string w = std::to_string(worker_pid(gpu));
     scan.foreign.erase(std::remove(scan.foreign.begin(), scan.foreign.end(), w), scan.foreign.end());
@@ -479,11 +495,17 @@ AppScan Driver::apps(int gpu) {
 }
 
 double Driver::utilization(int gpu) {
-    const std::string util = capture("nvidia-smi --id=" + std::to_string(gpu) +
-                                     " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
-    if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos)
-        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "'); --no-guard skips the guard");
-    return std::stod(util);
+    std::string util;
+    const auto got = retried(gpu, "--query-gpu=utilization.gpu", o_.guard_wait, [&]() -> std::optional<std::string> {
+        util = capture("nvidia-smi --id=" + std::to_string(gpu) +
+                       " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
+        if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+        return util;
+    });
+    if (!got)
+        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "') after " + fmt(o_.guard_wait, "%.0f") +
+            " s of retries; --no-guard skips the guard");
+    return std::stod(*got);
 }
 
 // The foreign pids this child runs beside (always empty in strict mode).
@@ -607,6 +629,7 @@ CellRequest Driver::race_request(const CellJob& j) const {
     r.confidence = j.p.confidence;
     r.alternate_reverse = j.p.alternate_reverse;
     r.seed_order = j.arms;
+    r.ld_audit = j.ld_audit;
     return r;
 }
 
@@ -615,6 +638,7 @@ std::vector<std::string> Driver::race_args(const CellJob& j) const {
                                std::to_string(j.p.max_reps), "--confidence", fmt(j.p.confidence, "%.17g"),
                                "--seed-order", join(j.arms, ",")};
     if (j.p.alternate_reverse) a.push_back("--alternate-reverse");
+    if (!j.ld_audit.empty()) a.insert(a.end(), {"--ld-audit", join(j.ld_audit, ",")});
     return a;
 }
 
@@ -775,7 +799,10 @@ int Driver::tune() {
                 Cell& c = cells[k];
                 c.key = k;
                 c.round = round;
-                if (spec_.bytes(dtype, k) > cap) c.skip = "cap: " + fmt(spec_.bytes(dtype, k) / cap * o_.cap_gib) + " GiB";
+                const auto dm = spec_.dims(dtype, k);
+                if (o_.max_dim > 0 && !dm.empty() && *std::max_element(dm.begin(), dm.end()) > o_.max_dim)
+                    c.skip = "dim: " + std::to_string(*std::max_element(dm.begin(), dm.end()));
+                else if (spec_.bytes(dtype, k) > cap) c.skip = "cap: " + fmt(spec_.bytes(dtype, k) / cap * o_.cap_gib) + " GiB";
                 else todo.push_back(&c);
             }
             std::printf("== %s %s %s round %d: %zu cells (%zu over the cap)\n", spec_.op().c_str(), dtype.c_str(),
@@ -1039,9 +1066,10 @@ void usage() {
         "       batchlas_tune --status | --import-raw RAW.jsonl | --list\n"
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
         "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
+        "        --remeasure-keys FILE (lines '<op> <dtype> <name=v,...>': measure those cells again in round 0)\n"
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
-        "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --cell-timeout 1800 --no-guard --guard-wait 300\n"
+        "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
         "         --util-ceiling 5 --allow-idle-foreign\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
@@ -1054,8 +1082,13 @@ int list_main(const std::string& repo) {
         const auto hash = kernel_hash(repo, s->kernel_sources(), &missing);
         std::printf("%s keys: %s kernels=%s\n", s->op().c_str(), join(s->key_names(), " ").c_str(),
                     hash ? hash->c_str() : ("missing " + missing).c_str());
-        for (const char* d : {"float", "double", "cfloat", "cdouble"})
-            std::printf("  %-7s %s\n", d, join(s->candidates(d), " ").c_str());
+        for (const char* d : {"float", "double", "cfloat", "cdouble"}) {
+            try {
+                std::printf("  %-7s %s\n", d, join(s->candidates(d), " ").c_str());
+            } catch (const std::invalid_argument&) {
+                std::printf("  %-7s -\n", d);  // a real-only op
+            }
+        }
     }
     return 0;
 }
@@ -1070,6 +1103,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.tier = *o.tier;
     t.budget_h = o.budget_h;
     t.cap_gib = o.cap_gib;
+    t.max_dim = o.max_dim < 0 ? 2048 : o.max_dim;
     t.overhead_s = o.overhead_s;
     t.audit_fraction = o.audit_fraction;
     t.plan = o.plan;
@@ -1079,6 +1113,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.out = o.out;
     t.argv = join(o.argv, " ");
     t.grid = o.grid;
+    if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
 }
 
@@ -1133,11 +1168,13 @@ int main(int argc, char** argv) {
         else if (f == "--progress-fd") o.progress_fd = std::stoi(val());
         else if (f == "--ledger") o.ledger = val(), o.ledger_given = true;
         else if (f == "--import-raw") o.import_raw = val();
+        else if (f == "--remeasure-keys") o.remeasure_keys = val();
         else if (f == "--device-key") o.device_key = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
         else if (f == "--no-worker") o.worker = false;
         else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
         else if (f == "--cap-gib") o.cap_gib = std::stod(val());
+        else if (f == "--max-dim") o.max_dim = std::stoll(val());
         else if (f == "--cell-timeout") o.cell_timeout = std::stod(val());
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
@@ -1169,9 +1206,12 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         die(e.what());
     }
-    if (o.op == "all")
+    if (o.op == "all") {
         for (const OpSpec* s : all_specs()) o.ops.push_back(s->op());
-    else o.ops = csv_list(o.op);
+        o.ops = all_ops(o.ops);
+    } else {
+        o.ops = csv_list(o.op);
+    }
     if (o.ops.empty()) die("no op given (--list)");
     for (const std::string& op : o.ops)
         if (!find_spec(op)) die("unknown op '" + op + "' (--list)");
@@ -1183,10 +1223,17 @@ int main(int argc, char** argv) {
         die("give --tier preview|coarse|deep, or a protocol flag (--reps, --warm, --passes, --remeasure, --refine-ratio, "
             "--no-refine, --no-jit, --ld-pad, --raw) for a custom two-pass run");
     if (!tiered && o.ops.size() != 1) die("--gate and the custom protocol take one op");
-    if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0)) die("--plan, --budget and --progress-fd need --tier");
+    if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0 || !o.remeasure_keys.empty()))
+        die("--plan, --budget, --progress-fd and --remeasure-keys need --tier");
     for (const std::string& op : o.ops) {
         const OpSpec* s = find_spec(op);
-        for (const auto& d : o.dtypes) (void)s->candidates(d);
+        for (const auto& d : o.dtypes) {
+            try {
+                (void)s->candidates(d);
+            } catch (const std::invalid_argument& e) {
+                if (!tiered || o.ops.size() == 1) die(e.what());  // a multi-op run skips the pair (run_tiered)
+            }
+        }
         std::ifstream f(o.repo + "/" + s->spec_file());
         std::stringstream ss;
         ss << f.rdbuf();

@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <limits>
 #include <set>
+#include <stdexcept>
 
 namespace batchlas::tune {
 
@@ -104,7 +106,8 @@ double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<st
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,
                                     const std::map<std::string, std::string>& family_hash, double cap_gib,
                                     double per_cell_overhead_s,
-                                    const std::map<CellKey, std::vector<std::string>>* runnable) {
+                                    const std::map<CellKey, std::vector<std::string>>* runnable,
+                                    std::int64_t max_dim, const std::set<CellKey>* remeasure) {
     const TimeIndex idx(l);
     const auto best = best_records(l, family_hash);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
@@ -115,6 +118,13 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
         c.tier = tier;
         const double bytes = spec.bytes(key);
         auto finish = [&] { out.emplace_back(bytes, std::move(c)); };
+        const bool named = remeasure && remeasure->count(key);
+        // A named cell was measured once already, maybe before the cap: the user asked for it again.
+        if (!named && max_dim > 0 && spec.max_dim && spec.max_dim(key) > max_dim) {
+            c.reason = "skip:dim";
+            finish();
+            continue;
+        }
         if (bytes > cap) {
             c.reason = "skip:cap";
             finish();
@@ -135,7 +145,11 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
             }
         }
         const auto b = best.find(key);
-        if (b != best.end() && tier_rank(b->second->tier) >= tier_rank(tier)) {
+        if (named) {  // whatever the ledger holds, at the running tier
+            c.reason = "remeasure";
+            c.arms = live;
+            if (b != best.end()) c.round = b->second->round;
+        } else if (b != best.end() && tier_rank(b->second->tier) >= tier_rank(tier)) {
             const CellRecord& rec = *b->second;
             if (freshness(rec, family_hash) == Freshness::current) {
                 c.reason = "skip:current";
@@ -173,15 +187,77 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
     return plan;
 }
 
+std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("--remeasure-keys: cannot read " + path);
+    std::map<std::string, std::set<CellKey>> out;
+    int n = 0;
+    for (std::string line; std::getline(in, line);) {
+        ++n;
+        if (const auto hash = line.find('#'); hash != std::string::npos) line.erase(hash);
+        const std::vector<std::string> f = split(line, ' ');
+        if (f.empty()) continue;
+        const auto key = f.size() == 3 ? parse_key_arg(f[2]) : std::nullopt;
+        if (!key)
+            throw std::runtime_error(path + ":" + std::to_string(n) + ": want '<op> <dtype> <name=v,...>', got '" + line + "'");
+        out[f[0] + "." + f[1]].insert(*key);
+    }
+    return out;
+}
+
+const std::map<std::string, std::vector<std::string>>& op_dependencies() {
+    static const std::map<std::string, std::vector<std::string>> deps{
+        {"trmm", {"gemm"}},
+        {"symm", {"gemm"}},
+        {"getrf", {"gemm", "trsm"}},
+        {"getrs", {"trsm"}},
+        {"geqrf", {"gemm"}},
+        {"ormqr", {"gemm", "trmm"}},
+        {"getri", {"trsm", "getrf"}},
+        {"posv", {"potrf", "trsm"}},
+        {"gesv", {"getrf", "getrs"}},
+        {"orgqr", {"ormqr"}},
+        {"syev", {"gemm", "trmm", "syr2k", "geqrf", "ormqr"}},
+        {"gesvd", {"gemm", "trmm", "syr2k"}},
+    };
+    return deps;
+}
+
+const std::vector<std::string>& canonical_op_order() {
+    static const std::vector<std::string> order{"gemm",  "trsm",  "syr2k", "gemv",  "spmm", "trmm",  "symm",
+                                                "syrk",  "potrf", "getrf", "getrs", "geqrf", "ormqr", "getri",
+                                                "posv",  "gesv",  "orgqr", "syev",  "gesvd"};
+    return order;
+}
+
+std::vector<std::string> all_ops(std::vector<std::string> registered) {
+    const auto& c = canonical_op_order();
+    auto rank = [&](const std::string& op) { return std::find(c.begin(), c.end(), op) - c.begin(); };
+    std::stable_sort(registered.begin(), registered.end(),
+                     [&](const std::string& a, const std::string& b) { return rank(a) < rank(b); });
+    return registered;
+}
+
 std::vector<std::string> op_order(std::vector<std::string> ops) {
-    const auto posv = std::find(ops.begin(), ops.end(), "posv");
-    std::ptrdiff_t last = -1;
-    for (std::size_t i = 0; i < ops.size(); ++i)
-        if (ops[i] == "potrf" || ops[i] == "trsm") last = std::ptrdiff_t(i);
-    if (posv == ops.end() || posv - ops.begin() > last) return ops;
-    ops.erase(posv);
-    ops.insert(ops.begin() + last, "posv");
-    return ops;
+    const auto& deps = op_dependencies();
+    std::vector<std::string> out;
+    std::vector<bool> done(ops.size(), false);
+    auto emitted = [&](const std::string& op) { return std::find(out.begin(), out.end(), op) != out.end(); };
+    auto present = [&](const std::string& op) { return std::find(ops.begin(), ops.end(), op) != ops.end(); };
+    while (out.size() < ops.size()) {
+        std::size_t pick = ops.size();
+        for (std::size_t i = 0; i < ops.size() && pick == ops.size(); ++i) {
+            if (done[i]) continue;
+            const auto it = deps.find(ops[i]);
+            if (it == deps.end() || std::all_of(it->second.begin(), it->second.end(),
+                                                [&](const std::string& d) { return !present(d) || emitted(d); }))
+                pick = i;
+        }
+        if (pick == ops.size()) pick = std::size_t(std::find(done.begin(), done.end(), false) - done.begin());
+        done[pick] = true;
+        out.push_back(ops[pick]);
+    }
+    return out;
 }
 
 std::string budget_warning(double est_s, double budget_h) {
@@ -389,6 +465,24 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
     }
     r.verdict = "ok";
     return r;
+}
+
+std::vector<std::string> LdAuditBook::want(const std::vector<std::string>& arms) const {
+    std::vector<std::string> out;
+    for (const std::string& a : arms)
+        if (!done.count(a)) out.push_back(a);
+    return out;
+}
+
+std::vector<std::string> LdAuditBook::note(const CellKey& key, const std::vector<ArmOutcome>& out) {
+    std::vector<std::string> fails;
+    for (const ArmOutcome& o : out) {
+        if (o.ld_audit.empty() || !done.insert(o.arm).second) continue;
+        if (o.ld_audit == "pass") ++passed;
+        else if (o.ld_audit == "skipped") ++skipped;
+        else fails.push_back(o.arm), failed.push_back(o.arm + " @ " + key_text(key) + ": " + o.reason);
+    }
+    return fails;
 }
 
 }  // namespace batchlas::tune

@@ -168,7 +168,11 @@ struct Decision {
     std::string op, spelling, detail, tag;
 };
 
-thread_local std::vector<std::pair<std::string, std::string>> t_pins;
+struct PinEntry {
+    std::string first, second;  // op, pin text
+    bool strict = false;
+};
+thread_local std::vector<PinEntry> t_pins;
 thread_local std::vector<Decision> t_decisions;
 thread_local int t_depth = 0;
 
@@ -513,7 +517,14 @@ std::optional<std::string> pin_text(std::string_view op, std::string* source) {
     return text;
 }
 
-void push_pin(std::string_view op, std::string text) { t_pins.emplace_back(std::string(op), std::move(text)); }
+void push_pin(std::string_view op, std::string text, bool strict) {
+    t_pins.push_back({std::string(op), std::move(text), strict});
+}
+
+bool pin_strict(std::string_view op) {
+    const auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });
+    return it != t_pins.rend() && it->strict;
+}
 
 void pop_pin(std::string_view op) {
     const auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });

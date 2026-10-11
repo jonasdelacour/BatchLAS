@@ -1,787 +1,1761 @@
-# op=posv dtype=cdouble device=sm_120 batchlas=886537e8 kernels=unknown date=2026-10-04
-# source=benchmarks/results/routing/sm120_posv_sweep.jsonl (converted, passes 1+2, resumed rows replace earlier duplicates)
+# op=posv dtype=cdouble device=sm_120 batchlas=a01c3c96 kernels=b905a231 family_kernels=tiny:427df52d,cta:e157556e,blocked:e2a6d1d8 date=2026-10-08
+# source=ledger:benchmarks/results/tuning/ledger/posv.cdouble.sm_120 tiers=deep:1758,coarse:0,preview:0,custom:0,transcribed:0
 # keys: uplo:exact n:log:3 nrhs:log batch:log
-uplo=L n=1 nrhs=1 batch=128 | cta 0.01514 | tiny 0.01691 | blocked 0.02929
-uplo=L n=1 nrhs=1 batch=512 | cta 0.01523 | tiny 0.01667 | blocked 0.02932
-uplo=L n=1 nrhs=1 batch=2048 | tiny 0.01656 | cta 0.02023 | blocked 0.05417
-uplo=L n=1 nrhs=1 batch=8192 | tiny 0.02505 | cta 0.05073 | blocked 0.1793
-uplo=L n=1 nrhs=1 batch=32768 | tiny 0.07610 | cta 0.1588 | blocked 0.6717
-uplo=L n=1 nrhs=2 batch=128 | cta 0.01534 | tiny 0.01780 | blocked 0.02895
-uplo=L n=1 nrhs=2 batch=512 | cta 0.01724 | tiny 0.01787 | blocked 0.02982
-uplo=L n=1 nrhs=2 batch=2048 | tiny 0.01730 | cta 0.02814 | blocked 0.05405
-uplo=L n=1 nrhs=2 batch=8192 | tiny 0.02702 | cta 0.07885 | blocked 0.1781
-uplo=L n=1 nrhs=2 batch=32768 | tiny 0.07893 | cta 0.2835 | blocked 0.6782
-uplo=L n=1 nrhs=4 batch=128 | tiny 0.02114 | cta 0.02417 | blocked 0.03366   # noisy
-uplo=L n=1 nrhs=4 batch=512 | tiny 0.01971 | cta 0.02215 | blocked 0.02947
-uplo=L n=1 nrhs=4 batch=2048 | tiny 0.01928 | cta 0.04391 | blocked 0.05426
-uplo=L n=1 nrhs=4 batch=8192 | tiny 0.02988 | cta 0.1400 | blocked 0.1780
-uplo=L n=1 nrhs=4 batch=32768 | tiny 0.09961 | cta 0.5245 | blocked 0.6723
-uplo=L n=1 nrhs=8 batch=128 | cta 0.02784 | blocked 0.02933
-uplo=L n=1 nrhs=8 batch=512 | blocked 0.02911 | cta 0.03113
-uplo=L n=1 nrhs=8 batch=2048 | blocked 0.05411 | cta 0.1017
-uplo=L n=1 nrhs=8 batch=8192 | blocked 0.1789 | cta 0.2873
-uplo=L n=1 nrhs=8 batch=32768 | blocked 0.6719 | cta 1.017
-uplo=L n=1 nrhs=16 batch=128 | blocked 0.02888
-uplo=L n=1 nrhs=16 batch=512 | blocked 0.02905
-uplo=L n=1 nrhs=16 batch=2048 | blocked 0.05771   # noisy
-uplo=L n=1 nrhs=16 batch=8192 | blocked 0.1778
-uplo=L n=1 nrhs=16 batch=32768 | blocked 0.6761
-uplo=L n=1 nrhs=64 batch=128 | blocked 0.03086   # noisy
-uplo=L n=1 nrhs=64 batch=512 | blocked 0.03815   # noisy
-uplo=L n=1 nrhs=64 batch=2048 | blocked 0.08650
-uplo=L n=1 nrhs=64 batch=8192 | blocked 0.3046
-uplo=L n=1 nrhs=64 batch=32768 | blocked 1.175
-uplo=L n=2 nrhs=1 batch=128 | cta 0.01926 | tiny 0.02416 | blocked 0.02941
-uplo=L n=2 nrhs=1 batch=512 | cta 0.01935 | tiny 0.02381 | blocked 0.02950
-uplo=L n=2 nrhs=1 batch=2048 | tiny 0.02356 | cta 0.03127 | blocked 0.05597
-uplo=L n=2 nrhs=1 batch=8192 | tiny 0.04286 | cta 0.09507 | blocked 0.1872
-uplo=L n=2 nrhs=1 batch=32768 | tiny 0.1472 | cta 0.3291 | blocked 0.7020
-uplo=L n=2 nrhs=2 batch=128 | cta 0.01985 | tiny 0.02638 | blocked 0.02971
-uplo=L n=2 nrhs=2 batch=512 | cta 0.02186 | tiny 0.02609 | blocked 0.02951
-uplo=L n=2 nrhs=2 batch=2048 | tiny 0.02566 | cta 0.04838 | blocked 0.05596
-uplo=L n=2 nrhs=2 batch=8192 | tiny 0.04724 | cta 0.1570 | blocked 0.1864
-uplo=L n=2 nrhs=2 batch=32768 | tiny 0.1527 | cta 0.5919 | blocked 0.7069
-uplo=L n=2 nrhs=4 batch=128 | cta 0.02678 | blocked 0.02909 | tiny 0.03005
-uplo=L n=2 nrhs=4 batch=512 | tiny 0.03004 | blocked 0.02951 | cta 0.03131
-uplo=L n=2 nrhs=4 batch=2048 | tiny 0.02976 | blocked 0.05645 | cta 0.08227
-uplo=L n=2 nrhs=4 batch=8192 | tiny 0.05437 | blocked 0.1865 | cta 0.2870
-uplo=L n=2 nrhs=4 batch=32768 | tiny 0.2047 | blocked 0.7066 | cta 1.113
-uplo=L n=2 nrhs=8 batch=128 | blocked 0.02940 | cta 0.04136
-uplo=L n=2 nrhs=8 batch=512 | blocked 0.02948 | cta 0.04985
-uplo=L n=2 nrhs=8 batch=2048 | blocked 0.05778 | cta 0.2053
-uplo=L n=2 nrhs=8 batch=8192 | blocked 0.1904 | cta 0.6005
-uplo=L n=2 nrhs=8 batch=32768 | blocked 0.7016 | cta 2.148
-uplo=L n=2 nrhs=16 batch=128 | blocked 0.04716   # noisy
-uplo=L n=2 nrhs=16 batch=512 | blocked 0.02934
-uplo=L n=2 nrhs=16 batch=2048 | blocked 0.05683
-uplo=L n=2 nrhs=16 batch=8192 | blocked 0.1888
-uplo=L n=2 nrhs=16 batch=32768 | blocked 0.7062
-uplo=L n=2 nrhs=64 batch=128 | blocked 0.02876
-uplo=L n=2 nrhs=64 batch=512 | blocked 0.03911   # noisy
-uplo=L n=2 nrhs=64 batch=2048 | blocked 0.09361   # noisy
-uplo=L n=2 nrhs=64 batch=8192 | blocked 0.3128
-uplo=L n=2 nrhs=64 batch=32768 | blocked 1.215
-uplo=L n=3 nrhs=1 batch=128 | cta 0.02571 | tiny 0.03197 | blocked 0.03242   # noisy
-uplo=L n=3 nrhs=1 batch=512 | cta 0.02481 | tiny 0.03110 | blocked 0.03112
-uplo=L n=3 nrhs=1 batch=2048 | tiny 0.03079 | cta 0.04361 | blocked 0.05926
-uplo=L n=3 nrhs=1 batch=8192 | tiny 0.06152 | cta 0.1418 | blocked 0.1996
-uplo=L n=3 nrhs=1 batch=32768 | tiny 0.2163 | cta 0.5090 | blocked 0.7423
-uplo=L n=3 nrhs=2 batch=128 | cta 0.02721 | blocked 0.03359 | tiny 0.03597   # noisy
-uplo=L n=3 nrhs=2 batch=512 | cta 0.03225 | blocked 0.03511 | tiny 0.03622   # noisy
-uplo=L n=3 nrhs=2 batch=2048 | tiny 0.03412 | blocked 0.05882 | cta 0.06976
-uplo=L n=3 nrhs=2 batch=8192 | tiny 0.06946 | blocked 0.2004 | cta 0.2411
-uplo=L n=3 nrhs=2 batch=32768 | tiny 0.2299 | blocked 0.7475 | cta 0.9115
-uplo=L n=3 nrhs=4 batch=128 | blocked 0.03085 | cta 0.03692 | tiny 0.04083
-uplo=L n=3 nrhs=4 batch=512 | blocked 0.03053 | tiny 0.04033 | cta 0.04324
-uplo=L n=3 nrhs=4 batch=2048 | tiny 0.04127 | blocked 0.06118 | cta 0.1234
-uplo=L n=3 nrhs=4 batch=8192 | tiny 0.08067 | blocked 0.2001 | cta 0.4403
-uplo=L n=3 nrhs=4 batch=32768 | tiny 0.3040 | blocked 0.7458 | cta 1.707
-uplo=L n=3 nrhs=8 batch=128 | blocked 0.03118 | cta 0.06008
-uplo=L n=3 nrhs=8 batch=512 | blocked 0.03308 | cta 0.07404   # noisy
-uplo=L n=3 nrhs=8 batch=2048 | blocked 0.06127 | cta 0.3090
-uplo=L n=3 nrhs=8 batch=8192 | blocked 0.2028 | cta 0.9168
-uplo=L n=3 nrhs=8 batch=32768 | blocked 0.7428 | cta 3.295
-uplo=L n=3 nrhs=16 batch=128 | blocked 0.03213   # noisy
-uplo=L n=3 nrhs=16 batch=512 | blocked 0.03223
-uplo=L n=3 nrhs=16 batch=2048 | blocked 0.06119
-uplo=L n=3 nrhs=16 batch=8192 | blocked 0.2000
-uplo=L n=3 nrhs=16 batch=32768 | blocked 0.7468
-uplo=L n=3 nrhs=64 batch=128 | blocked 0.03231   # noisy
-uplo=L n=3 nrhs=64 batch=512 | blocked 0.03768
-uplo=L n=3 nrhs=64 batch=2048 | blocked 0.09997   # noisy
-uplo=L n=3 nrhs=64 batch=8192 | blocked 0.3253
-uplo=L n=3 nrhs=64 batch=32768 | blocked 1.253
-uplo=L n=4 nrhs=1 batch=128 | cta 0.03070 | blocked 0.03401 | tiny 0.03962
-uplo=L n=4 nrhs=1 batch=512 | cta 0.02972 | blocked 0.03262 | tiny 0.03849
-uplo=L n=4 nrhs=1 batch=2048 | tiny 0.03846 | cta 0.05591 | blocked 0.06244
-uplo=L n=4 nrhs=1 batch=8192 | tiny 0.08062 | cta 0.1772 | blocked 0.1994
-uplo=L n=4 nrhs=1 batch=32768 | tiny 0.2855 | cta 0.6527 | blocked 0.7454
-uplo=L n=4 nrhs=2 batch=128 | cta 0.03028 | blocked 0.03265 | tiny 0.04376
-uplo=L n=4 nrhs=2 batch=512 | blocked 0.03290 | cta 0.03507 | tiny 0.04358
-uplo=L n=4 nrhs=2 batch=2048 | tiny 0.04274 | blocked 0.06222 | cta 0.09101
-uplo=L n=4 nrhs=2 batch=8192 | tiny 0.08986 | blocked 0.1984 | cta 0.3085
-uplo=L n=4 nrhs=2 batch=32768 | tiny 0.3086 | blocked 0.7504 | cta 1.194
-uplo=L n=4 nrhs=4 batch=128 | blocked 0.04785 | tiny 0.05757 | cta 0.05855   # noisy
-uplo=L n=4 nrhs=4 batch=512 | blocked 0.03277 | tiny 0.05156 | cta 0.05406
-uplo=L n=4 nrhs=4 batch=2048 | tiny 0.05108 | blocked 0.06264 | cta 0.1609
-uplo=L n=4 nrhs=4 batch=8192 | tiny 0.1062 | blocked 0.2003 | cta 0.5782
-uplo=L n=4 nrhs=4 batch=32768 | tiny 0.4041 | blocked 0.7468 | cta 2.261
-uplo=L n=4 nrhs=8 batch=128 | blocked 0.03272 | cta 0.07450
-uplo=L n=4 nrhs=8 batch=512 | blocked 0.03372 | cta 0.09264
-uplo=L n=4 nrhs=8 batch=2048 | blocked 0.06236 | cta 0.3997
-uplo=L n=4 nrhs=8 batch=8192 | blocked 0.1994 | cta 1.190
-uplo=L n=4 nrhs=8 batch=32768 | blocked 0.7459 | cta 4.397
-uplo=L n=4 nrhs=16 batch=128 | blocked 0.03233
-uplo=L n=4 nrhs=16 batch=512 | blocked 0.03250
-uplo=L n=4 nrhs=16 batch=2048 | blocked 0.06233
-uplo=L n=4 nrhs=16 batch=8192 | blocked 0.1981
-uplo=L n=4 nrhs=16 batch=32768 | blocked 0.7511
-uplo=L n=4 nrhs=64 batch=128 | blocked 0.03288
-uplo=L n=4 nrhs=64 batch=512 | blocked 0.04042
-uplo=L n=4 nrhs=64 batch=2048 | blocked 0.09509
-uplo=L n=4 nrhs=64 batch=8192 | blocked 0.3249
-uplo=L n=4 nrhs=64 batch=32768 | blocked 1.257
-uplo=L n=6 nrhs=1 batch=128 | blocked 0.03686 | cta 0.04049 | tiny 0.05466
-uplo=L n=6 nrhs=1 batch=512 | blocked 0.03696 | cta 0.04090 | tiny 0.05418
-uplo=L n=6 nrhs=1 batch=2048 | tiny 0.05610 | blocked 0.06465 | cta 0.07636
-uplo=L n=6 nrhs=1 batch=8192 | tiny 0.1213 | blocked 0.1993 | cta 0.2488
-uplo=L n=6 nrhs=1 batch=32768 | tiny 0.4275 | blocked 0.7424 | cta 0.9320
-uplo=L n=6 nrhs=2 batch=128 | blocked 0.03889 | cta 0.04366 | tiny 0.06275   # noisy
-uplo=L n=6 nrhs=2 batch=512 | blocked 0.03914 | cta 0.05103 | tiny 0.06262   # noisy
-uplo=L n=6 nrhs=2 batch=2048 | tiny 0.06081 | blocked 0.06257 | cta 0.1278
-uplo=L n=6 nrhs=2 batch=8192 | tiny 0.1350 | blocked 0.1984 | cta 0.4483
-uplo=L n=6 nrhs=2 batch=32768 | tiny 0.4751 | blocked 0.7479 | cta 1.752
-uplo=L n=6 nrhs=4 batch=128 | blocked 0.03677 | cta 0.06404 | tiny 0.07373
-uplo=L n=6 nrhs=4 batch=512 | blocked 0.03705 | tiny 0.07374 | cta 0.07785
-uplo=L n=6 nrhs=4 batch=2048 | blocked 0.06298 | tiny 0.07366 | cta 0.2336
-uplo=L n=6 nrhs=4 batch=8192 | tiny 0.1586 | blocked 0.1980 | cta 0.8548
-uplo=L n=6 nrhs=4 batch=32768 | tiny 0.6190 | blocked 0.7504 | cta 3.374
-uplo=L n=6 nrhs=8 batch=128 | blocked 0.03810 | cta 0.1094
-uplo=L n=6 nrhs=8 batch=512 | blocked 0.03681 | cta 0.1345
-uplo=L n=6 nrhs=8 batch=2048 | blocked 0.06268 | cta 0.5399
-uplo=L n=6 nrhs=8 batch=8192 | blocked 0.2004 | cta 1.748
-uplo=L n=6 nrhs=8 batch=32768 | blocked 0.7436 | cta 6.602
-uplo=L n=6 nrhs=16 batch=128 | blocked 0.03670
-uplo=L n=6 nrhs=16 batch=512 | blocked 0.03752
-uplo=L n=6 nrhs=16 batch=2048 | blocked 0.06269
-uplo=L n=6 nrhs=16 batch=8192 | blocked 0.1989
-uplo=L n=6 nrhs=16 batch=32768 | blocked 0.7529
-uplo=L n=6 nrhs=64 batch=128 | blocked 0.03750
-uplo=L n=6 nrhs=64 batch=512 | blocked 0.04765   # noisy
-uplo=L n=6 nrhs=64 batch=2048 | blocked 0.09609
-uplo=L n=6 nrhs=64 batch=8192 | blocked 0.3262
-uplo=L n=6 nrhs=64 batch=32768 | blocked 1.284
-uplo=L n=8 nrhs=1 batch=128 | blocked 0.03867 | cta 0.04856 | tiny 0.07078
-uplo=L n=8 nrhs=1 batch=512 | blocked 0.03846 | cta 0.04881 | tiny 0.07003
-uplo=L n=8 nrhs=1 batch=2048 | blocked 0.06321 | tiny 0.07150 | cta 0.09241
-uplo=L n=8 nrhs=1 batch=8192 | tiny 0.1633 | blocked 0.2003 | cta 0.3203
-uplo=L n=8 nrhs=1 batch=32768 | tiny 0.5747 | blocked 0.7439 | cta 1.209
-uplo=L n=8 nrhs=2 batch=128 | blocked 0.03847 | cta 0.04989 | tiny 0.07978
-uplo=L n=8 nrhs=2 batch=512 | blocked 0.03886 | cta 0.05990 | tiny 0.07989
-uplo=L n=8 nrhs=2 batch=2048 | blocked 0.06313 | tiny 0.07878 | cta 0.1641
-uplo=L n=8 nrhs=2 batch=8192 | tiny 0.1811 | blocked 0.1997 | cta 0.5870
-uplo=L n=8 nrhs=2 batch=32768 | tiny 0.6461 | blocked 0.7485 | cta 2.308
-uplo=L n=8 nrhs=4 batch=128 | blocked 0.03855 | cta 0.07987 | tiny 0.09587
-uplo=L n=8 nrhs=4 batch=512 | blocked 0.03893 | tiny 0.09577 | cta 0.09804
-uplo=L n=8 nrhs=4 batch=2048 | blocked 0.06347 | tiny 0.09576 | cta 0.3060
-uplo=L n=8 nrhs=4 batch=8192 | blocked 0.1989 | tiny 0.2123 | cta 1.132
-uplo=L n=8 nrhs=4 batch=32768 | blocked 0.7469 | tiny 0.8302 | cta 4.479
-uplo=L n=8 nrhs=8 batch=128 | blocked 0.03870 | cta 0.1389
-uplo=L n=8 nrhs=8 batch=512 | blocked 0.03871 | cta 0.1741
-uplo=L n=8 nrhs=8 batch=2048 | blocked 0.07054 | cta 0.7218   # noisy
-uplo=L n=8 nrhs=8 batch=8192 | blocked 0.2007 | cta 2.327
-uplo=L n=8 nrhs=8 batch=32768 | blocked 0.7502 | cta 8.815
-uplo=L n=8 nrhs=16 batch=128 | blocked 0.04045
-uplo=L n=8 nrhs=16 batch=512 | blocked 0.04217
-uplo=L n=8 nrhs=16 batch=2048 | blocked 0.06538
-uplo=L n=8 nrhs=16 batch=8192 | blocked 0.2032
-uplo=L n=8 nrhs=16 batch=32768 | blocked 0.7682
-uplo=L n=8 nrhs=64 batch=128 | blocked 0.04279   # noisy
-uplo=L n=8 nrhs=64 batch=512 | blocked 0.05206
-uplo=L n=8 nrhs=64 batch=2048 | blocked 0.1146
-uplo=L n=8 nrhs=64 batch=8192 | blocked 0.3556
-uplo=L n=8 nrhs=64 batch=32768 | blocked 1.497
-uplo=L n=12 nrhs=1 batch=128 | cta 0.06984 | blocked 0.07756 | tiny 0.1136
-uplo=L n=12 nrhs=1 batch=512 | cta 0.07593 | blocked 0.08295 | tiny 0.1115
-uplo=L n=12 nrhs=1 batch=2048 | tiny 0.1371 | cta 0.1687 | blocked 0.1760
-uplo=L n=12 nrhs=1 batch=8192 | tiny 0.5178 | cta 0.6275 | blocked 0.6439
-uplo=L n=12 nrhs=1 batch=32768 | tiny 1.893 | cta 2.372 | blocked 2.473
-uplo=L n=12 nrhs=2 batch=128 | cta 0.07218 | blocked 0.07737 | tiny 0.1276
-uplo=L n=12 nrhs=2 batch=512 | blocked 0.08384 | cta 0.09252 | tiny 0.1263
-uplo=L n=12 nrhs=2 batch=2048 | tiny 0.1494 | blocked 0.1735 | cta 0.2733
-uplo=L n=12 nrhs=2 batch=8192 | tiny 0.5615 | blocked 0.6395 | cta 1.036
-uplo=L n=12 nrhs=2 batch=32768 | tiny 2.245 | blocked 2.491 | cta 4.035
-uplo=L n=12 nrhs=4 batch=128 | blocked 0.07699 | cta 0.1168 | tiny 0.1518
-uplo=L n=12 nrhs=4 batch=512 | blocked 0.08348 | cta 0.1496 | tiny 0.1501
-uplo=L n=12 nrhs=4 batch=2048 | tiny 0.1756 | blocked 0.1743 | cta 0.4877
-uplo=L n=12 nrhs=4 batch=8192 | tiny 0.6577 | blocked 0.6451 | cta 1.851
-uplo=L n=12 nrhs=4 batch=32768 | blocked 2.491 | tiny 2.628 | cta 7.312
-uplo=L n=12 nrhs=8 batch=128 | blocked 0.07962 | cta 0.2079
-uplo=L n=12 nrhs=8 batch=512 | blocked 0.08346 | cta 0.2644
-uplo=L n=12 nrhs=8 batch=2048 | blocked 0.1734 | cta 1.103
-uplo=L n=12 nrhs=8 batch=8192 | blocked 0.6432 | cta 3.652
-uplo=L n=12 nrhs=8 batch=32768 | blocked 2.529 | cta 13.88
-uplo=L n=12 nrhs=16 batch=128 | blocked 0.07751
-uplo=L n=12 nrhs=16 batch=512 | blocked 0.08693
-uplo=L n=12 nrhs=16 batch=2048 | blocked 0.1753
-uplo=L n=12 nrhs=16 batch=8192 | blocked 0.6453
-uplo=L n=12 nrhs=16 batch=32768 | blocked 2.565
-uplo=L n=12 nrhs=64 batch=128 | blocked 0.08054
-uplo=L n=12 nrhs=64 batch=512 | blocked 0.1083
-uplo=L n=12 nrhs=64 batch=2048 | blocked 0.3200
-uplo=L n=12 nrhs=64 batch=8192 | blocked 1.177
-uplo=L n=12 nrhs=64 batch=32768 | blocked 4.329
-uplo=L n=16 nrhs=1 batch=128 | blocked 0.08224 | cta 0.08746 | tiny 0.1495
-uplo=L n=16 nrhs=1 batch=512 | blocked 0.08963 | cta 0.09600 | tiny 0.1472
-uplo=L n=16 nrhs=1 batch=2048 | blocked 0.1745 | tiny 0.1859 | cta 0.2028
-uplo=L n=16 nrhs=1 batch=8192 | blocked 0.6600 | tiny 0.7095 | cta 0.7736
-uplo=L n=16 nrhs=1 batch=32768 | blocked 2.549 | tiny 2.653 | cta 3.004
-uplo=L n=16 nrhs=2 batch=128 | blocked 0.08197 | cta 0.09028 | tiny 0.1678
-uplo=L n=16 nrhs=2 batch=512 | blocked 0.09184 | cta 0.1188 | tiny 0.1675
-uplo=L n=16 nrhs=2 batch=2048 | blocked 0.1740 | tiny 0.2042 | cta 0.3465
-uplo=L n=16 nrhs=2 batch=8192 | blocked 0.6629 | tiny 0.7782 | cta 1.320
-uplo=L n=16 nrhs=2 batch=32768 | blocked 2.549 | tiny 3.135 | cta 5.215
-uplo=L n=16 nrhs=4 batch=128 | blocked 0.08172 | cta 0.1503 | tiny 0.2008
-uplo=L n=16 nrhs=4 batch=512 | blocked 0.08997 | cta 0.1940 | tiny 0.1987
-uplo=L n=16 nrhs=4 batch=2048 | blocked 0.1750 | tiny 0.2380 | cta 0.6332
-uplo=L n=16 nrhs=4 batch=8192 | blocked 0.6570 | tiny 0.9053 | cta 2.422
-uplo=L n=16 nrhs=4 batch=32768 | blocked 2.544 | tiny 3.644 | cta 9.582
-uplo=L n=16 nrhs=8 batch=128 | blocked 0.08255 | cta 0.2691
-uplo=L n=16 nrhs=8 batch=512 | blocked 0.09002 | cta 0.3476
-uplo=L n=16 nrhs=8 batch=2048 | blocked 0.1752 | cta 1.457
-uplo=L n=16 nrhs=8 batch=8192 | blocked 0.6702 | cta 4.819
-uplo=L n=16 nrhs=8 batch=32768 | blocked 2.563 | cta 18.34
-uplo=L n=16 nrhs=16 batch=128 | blocked 0.08243
-uplo=L n=16 nrhs=16 batch=512 | blocked 0.09650
-uplo=L n=16 nrhs=16 batch=2048 | blocked 0.1808
-uplo=L n=16 nrhs=16 batch=8192 | blocked 0.6926
-uplo=L n=16 nrhs=16 batch=32768 | blocked 2.595
-uplo=L n=16 nrhs=64 batch=128 | blocked 0.08668
-uplo=L n=16 nrhs=64 batch=512 | blocked 0.1204
-uplo=L n=16 nrhs=64 batch=2048 | blocked 0.3391
-uplo=L n=16 nrhs=64 batch=8192 | blocked 1.289
-uplo=L n=16 nrhs=64 batch=32768 | blocked 4.772
-uplo=L n=20 nrhs=1 batch=128 | cta 0.1376 | blocked 0.2371
-uplo=L n=20 nrhs=1 batch=512 | cta 0.1458 | blocked 0.2419
-uplo=L n=20 nrhs=1 batch=2048 | cta 0.3346 | blocked 0.7163
-uplo=L n=20 nrhs=1 batch=8192 | cta 1.243 | blocked 2.221
-uplo=L n=20 nrhs=1 batch=32768 | cta 4.831 | blocked 8.168
-uplo=L n=20 nrhs=2 batch=128 | cta 0.1431 | blocked 0.2362   # noisy
-uplo=L n=20 nrhs=2 batch=512 | cta 0.1758 | blocked 0.2453   # noisy
-uplo=L n=20 nrhs=2 batch=2048 | cta 0.5222 | blocked 0.7144
-uplo=L n=20 nrhs=2 batch=8192 | cta 1.941 | blocked 2.205
-uplo=L n=20 nrhs=2 batch=32768 | cta 7.694 | blocked 8.223
-uplo=L n=20 nrhs=4 batch=128 | cta 0.2228 | blocked 0.2354
-uplo=L n=20 nrhs=4 batch=512 | blocked 0.2428 | cta 0.2754
-uplo=L n=20 nrhs=4 batch=2048 | blocked 0.7190 | cta 0.8954
-uplo=L n=20 nrhs=4 batch=8192 | blocked 2.212 | cta 3.353
-uplo=L n=20 nrhs=4 batch=32768 | blocked 8.198 | cta 13.32
-uplo=L n=20 nrhs=8 batch=128 | blocked 0.2373 | cta 0.3787
-uplo=L n=20 nrhs=8 batch=512 | blocked 0.2441 | cta 0.4736
-uplo=L n=20 nrhs=8 batch=2048 | blocked 0.7209 | cta 1.952
-uplo=L n=20 nrhs=8 batch=8192 | blocked 2.247 | cta 6.472
-uplo=L n=20 nrhs=8 batch=32768 | blocked 8.209 | cta 24.60
-uplo=L n=20 nrhs=16 batch=128 | blocked 0.2373
-uplo=L n=20 nrhs=16 batch=512 | blocked 0.2488
-uplo=L n=20 nrhs=16 batch=2048 | blocked 0.7289
-uplo=L n=20 nrhs=16 batch=8192 | blocked 2.267
-uplo=L n=20 nrhs=16 batch=32768 | blocked 8.326
-uplo=L n=20 nrhs=64 batch=128 | blocked 0.2417
-uplo=L n=20 nrhs=64 batch=512 | blocked 0.3079
-uplo=L n=20 nrhs=64 batch=2048 | blocked 1.056
-uplo=L n=20 nrhs=64 batch=8192 | blocked 3.817
-uplo=L n=20 nrhs=64 batch=32768 | blocked 14.41
-uplo=L n=24 nrhs=1 batch=128 | cta 0.1553 | blocked 0.2419
-uplo=L n=24 nrhs=1 batch=512 | cta 0.1705 | blocked 0.2533
-uplo=L n=24 nrhs=1 batch=2048 | cta 0.3932 | blocked 0.7377
-uplo=L n=24 nrhs=1 batch=8192 | cta 1.464 | blocked 2.303
-uplo=L n=24 nrhs=1 batch=32768 | cta 5.697 | blocked 8.508
-uplo=L n=24 nrhs=2 batch=128 | cta 0.1613 | blocked 0.2406
-uplo=L n=24 nrhs=2 batch=512 | cta 0.2057 | blocked 0.2565
-uplo=L n=24 nrhs=2 batch=2048 | cta 0.6168 | blocked 0.7365
-uplo=L n=24 nrhs=2 batch=8192 | cta 2.295 | blocked 2.293
-uplo=L n=24 nrhs=2 batch=32768 | blocked 8.575 | cta 9.139
-uplo=L n=24 nrhs=4 batch=128 | blocked 0.2404 | cta 0.2576
-uplo=L n=24 nrhs=4 batch=512 | blocked 0.2535 | cta 0.3251
-uplo=L n=24 nrhs=4 batch=2048 | blocked 0.7414 | cta 1.064
-uplo=L n=24 nrhs=4 batch=8192 | blocked 2.292 | cta 3.998
-uplo=L n=24 nrhs=4 batch=32768 | blocked 8.537 | cta 15.89
-uplo=L n=24 nrhs=8 batch=128 | blocked 0.2424 | cta 0.4437
-uplo=L n=24 nrhs=8 batch=512 | blocked 0.2586 | cta 0.5667
-uplo=L n=24 nrhs=8 batch=2048 | blocked 0.7455 | cta 2.336
-uplo=L n=24 nrhs=8 batch=8192 | blocked 2.329 | cta 7.739
-uplo=L n=24 nrhs=8 batch=32768 | blocked 8.551 | cta 29.45
-uplo=L n=24 nrhs=16 batch=128 | blocked 0.2422
-uplo=L n=24 nrhs=16 batch=512 | blocked 0.2629
-uplo=L n=24 nrhs=16 batch=2048 | blocked 0.6718
-uplo=L n=24 nrhs=16 batch=8192 | blocked 2.365
-uplo=L n=24 nrhs=16 batch=32768 | blocked 8.717
-uplo=L n=24 nrhs=64 batch=128 | blocked 0.2482
-uplo=L n=24 nrhs=64 batch=512 | blocked 0.3195
-uplo=L n=24 nrhs=64 batch=2048 | blocked 1.095
-uplo=L n=24 nrhs=64 batch=8192 | blocked 3.935
-uplo=L n=24 nrhs=64 batch=32768 | blocked 14.87
-uplo=L n=28 nrhs=1 batch=128 | cta 0.1733 | blocked 0.2466
-uplo=L n=28 nrhs=1 batch=512 | cta 0.2183 | blocked 0.2871
-uplo=L n=28 nrhs=1 batch=2048 | cta 0.5052 | blocked 0.8145
-uplo=L n=28 nrhs=1 batch=8192 | cta 1.890 | blocked 2.585
-uplo=L n=28 nrhs=1 batch=32768 | cta 7.355 | blocked 9.633
-uplo=L n=28 nrhs=2 batch=128 | cta 0.1801 | blocked 0.2451
-uplo=L n=28 nrhs=2 batch=512 | cta 0.2570 | blocked 0.2883
-uplo=L n=28 nrhs=2 batch=2048 | cta 0.7692 | blocked 0.8166
-uplo=L n=28 nrhs=2 batch=8192 | blocked 2.572 | cta 2.865
-uplo=L n=28 nrhs=2 batch=32768 | blocked 9.701 | cta 11.38
-uplo=L n=28 nrhs=4 batch=128 | blocked 0.2452 | cta 0.2923
-uplo=L n=28 nrhs=4 batch=512 | blocked 0.2875 | cta 0.3977
-uplo=L n=28 nrhs=4 batch=2048 | blocked 0.8189 | cta 1.290
-uplo=L n=28 nrhs=4 batch=8192 | blocked 2.571 | cta 4.848
-uplo=L n=28 nrhs=4 batch=32768 | blocked 9.658 | cta 19.27
-uplo=L n=28 nrhs=8 batch=128 | blocked 0.2468 | cta 0.5091
-uplo=L n=28 nrhs=8 batch=512 | blocked 0.2895 | cta 0.6763
-uplo=L n=28 nrhs=8 batch=2048 | blocked 0.8227 | cta 2.774
-uplo=L n=28 nrhs=8 batch=8192 | blocked 2.596 | cta 9.217
-uplo=L n=28 nrhs=8 batch=32768 | blocked 9.673 | cta 35.11
-uplo=L n=28 nrhs=16 batch=128 | blocked 0.2454
-uplo=L n=28 nrhs=16 batch=512 | blocked 0.2983
-uplo=L n=28 nrhs=16 batch=2048 | blocked 0.7656
-uplo=L n=28 nrhs=16 batch=8192 | blocked 2.619
-uplo=L n=28 nrhs=16 batch=32768 | blocked 9.819
-uplo=L n=28 nrhs=64 batch=128 | blocked 0.2551
-uplo=L n=28 nrhs=64 batch=512 | blocked 0.3560
-uplo=L n=28 nrhs=64 batch=2048 | blocked 1.189
-uplo=L n=28 nrhs=64 batch=8192 | blocked 4.224
-uplo=L n=28 nrhs=64 batch=32768 | blocked 16.07
-uplo=L n=32 nrhs=1 batch=128 | cta 0.1905 | blocked 0.2519
-uplo=L n=32 nrhs=1 batch=512 | cta 0.2398 | blocked 0.2954
-uplo=L n=32 nrhs=1 batch=2048 | cta 0.5616 | blocked 0.8367
-uplo=L n=32 nrhs=1 batch=8192 | cta 2.111 | blocked 2.668
-uplo=L n=32 nrhs=1 batch=32768 | cta 8.216 | blocked 9.978
-uplo=L n=32 nrhs=2 batch=128 | cta 0.1983 | blocked 0.2511
-uplo=L n=32 nrhs=2 batch=512 | cta 0.2851 | blocked 0.2974
-uplo=L n=32 nrhs=2 batch=2048 | blocked 0.8358 | cta 0.8621
-uplo=L n=32 nrhs=2 batch=8192 | blocked 2.652 | cta 3.224
-uplo=L n=32 nrhs=2 batch=32768 | blocked 10.05 | cta 12.83
-uplo=L n=32 nrhs=4 batch=128 | blocked 0.2503 | cta 0.3257
-uplo=L n=32 nrhs=4 batch=512 | blocked 0.2959 | cta 0.4455
-uplo=L n=32 nrhs=4 batch=2048 | blocked 0.8416 | cta 1.461
-uplo=L n=32 nrhs=4 batch=8192 | blocked 2.644 | cta 5.502
-uplo=L n=32 nrhs=4 batch=32768 | blocked 10.02 | cta 21.85
-uplo=L n=32 nrhs=8 batch=128 | blocked 0.2556 | cta 0.5754
-uplo=L n=32 nrhs=8 batch=512 | blocked 0.2970 | cta 0.7634
-uplo=L n=32 nrhs=8 batch=2048 | blocked 0.8481 | cta 3.161
-uplo=L n=32 nrhs=8 batch=8192 | blocked 2.671 | cta 10.49
-uplo=L n=32 nrhs=8 batch=32768 | blocked 10.05 | cta 39.96
-uplo=L n=32 nrhs=16 batch=128 | blocked 0.2548
-uplo=L n=32 nrhs=16 batch=512 | blocked 0.3068
-uplo=L n=32 nrhs=16 batch=2048 | blocked 0.7754
-uplo=L n=32 nrhs=16 batch=8192 | blocked 2.734
-uplo=L n=32 nrhs=16 batch=32768 | blocked 10.22
-uplo=L n=32 nrhs=64 batch=128 | blocked 0.2622
-uplo=L n=32 nrhs=64 batch=512 | blocked 0.3689
-uplo=L n=32 nrhs=64 batch=2048 | blocked 1.225
-uplo=L n=32 nrhs=64 batch=8192 | blocked 4.408
-uplo=L n=32 nrhs=64 batch=32768 | blocked 16.85
-uplo=L n=36 nrhs=1 batch=128 | cta 0.2478
-uplo=L n=36 nrhs=1 batch=512 | cta 0.3064
-uplo=L n=36 nrhs=1 batch=2048 | cta 0.8221
-uplo=L n=36 nrhs=1 batch=8192 | cta 3.221
-uplo=L n=36 nrhs=1 batch=32768 | cta 12.81
-uplo=L n=36 nrhs=2 batch=128 | cta 0.2588 | blocked 0.3790
-uplo=L n=36 nrhs=2 batch=512 | cta 0.3579 | blocked 0.5057
-uplo=L n=36 nrhs=2 batch=2048 | cta 1.171 | blocked 1.525
-uplo=L n=36 nrhs=2 batch=8192 | cta 4.481 | blocked 5.283
-uplo=L n=36 nrhs=2 batch=32768 | cta 18.03 | blocked 20.86
-uplo=L n=36 nrhs=4 batch=128 | blocked 0.3826 | cta 0.4098
-uplo=L n=36 nrhs=4 batch=512 | blocked 0.4997 | cta 0.5382
-uplo=L n=36 nrhs=4 batch=2048 | blocked 1.531 | cta 1.854
-uplo=L n=36 nrhs=4 batch=8192 | blocked 5.343 | cta 7.140
-uplo=L n=36 nrhs=4 batch=32768 | blocked 20.63 | cta 28.12
-uplo=L n=36 nrhs=8 batch=128 | blocked 0.3838 | cta 0.6947
-uplo=L n=36 nrhs=8 batch=512 | blocked 0.5076 | cta 0.9096
-uplo=L n=36 nrhs=8 batch=2048 | blocked 1.524 | cta 3.758
-uplo=L n=36 nrhs=8 batch=8192 | blocked 5.393 | cta 12.82
-uplo=L n=36 nrhs=8 batch=32768 | blocked 20.85 | cta 49.17
-uplo=L n=36 nrhs=16 batch=128 | blocked 0.3813
-uplo=L n=36 nrhs=16 batch=512 | blocked 0.5165
-uplo=L n=36 nrhs=16 batch=2048 | blocked 1.479
-uplo=L n=36 nrhs=16 batch=8192 | blocked 5.410
-uplo=L n=36 nrhs=16 batch=32768 | blocked 21.05
-uplo=L n=36 nrhs=64 batch=128 | blocked 0.3981
-uplo=L n=36 nrhs=64 batch=512 | blocked 0.6552
-uplo=L n=36 nrhs=64 batch=2048 | blocked 2.349
-uplo=L n=36 nrhs=64 batch=8192 | blocked 8.822
-uplo=L n=36 nrhs=64 batch=32768 | blocked 33.64
-uplo=L n=40 nrhs=1 batch=128 | cta 0.2674
-uplo=L n=40 nrhs=1 batch=512 | cta 0.3898
-uplo=L n=40 nrhs=1 batch=2048 | cta 1.017
-uplo=L n=40 nrhs=1 batch=8192 | cta 3.785
-uplo=L n=40 nrhs=1 batch=32768 | cta 14.79
-uplo=L n=40 nrhs=2 batch=128 | cta 0.2788 | blocked 0.3847
-uplo=L n=40 nrhs=2 batch=512 | cta 0.4455 | blocked 0.5739
-uplo=L n=40 nrhs=2 batch=2048 | cta 1.405 | blocked 1.686
-uplo=L n=40 nrhs=2 batch=8192 | cta 5.183 | blocked 5.726
-uplo=L n=40 nrhs=2 batch=32768 | cta 20.53 | blocked 22.23
-uplo=L n=40 nrhs=4 batch=128 | blocked 0.3912 | cta 0.4493
-uplo=L n=40 nrhs=4 batch=512 | blocked 0.5770 | cta 0.6552
-uplo=L n=40 nrhs=4 batch=2048 | blocked 1.680 | cta 2.149
-uplo=L n=40 nrhs=4 batch=8192 | blocked 5.766 | cta 8.117
-uplo=L n=40 nrhs=4 batch=32768 | blocked 22.22 | cta 31.99
-uplo=L n=40 nrhs=8 batch=128 | blocked 0.3868 | cta 0.7556
-uplo=L n=40 nrhs=8 batch=512 | blocked 0.5802 | cta 1.061
-uplo=L n=40 nrhs=8 batch=2048 | blocked 1.696 | cta 4.295
-uplo=L n=40 nrhs=8 batch=8192 | blocked 5.791 | cta 14.32
-uplo=L n=40 nrhs=8 batch=32768 | blocked 22.44 | cta 55.32
-uplo=L n=40 nrhs=16 batch=128 | blocked 0.3924
-uplo=L n=40 nrhs=16 batch=512 | blocked 0.5867
-uplo=L n=40 nrhs=16 batch=2048 | blocked 1.632
-uplo=L n=40 nrhs=16 batch=8192 | blocked 5.890
-uplo=L n=40 nrhs=16 batch=32768 | blocked 22.56
-uplo=L n=40 nrhs=64 batch=128 | blocked 0.4046
-uplo=L n=40 nrhs=64 batch=512 | blocked 0.7345
-uplo=L n=40 nrhs=64 batch=2048 | blocked 2.480
-uplo=L n=40 nrhs=64 batch=8192 | blocked 9.366
-uplo=L n=40 nrhs=64 batch=32768 | blocked 35.96
-uplo=L n=48 nrhs=1 batch=128 | cta 0.3026
-uplo=L n=48 nrhs=1 batch=512 | cta 0.4177
-uplo=L n=48 nrhs=1 batch=2048 | cta 1.189
-uplo=L n=48 nrhs=1 batch=8192 | cta 4.590
-uplo=L n=48 nrhs=1 batch=32768 | cta 18.02
-uplo=L n=48 nrhs=2 batch=128 | cta 0.3184 | blocked 0.4260
-uplo=L n=48 nrhs=2 batch=512 | cta 0.4875 | blocked 0.6093
-uplo=L n=48 nrhs=2 batch=2048 | cta 1.641 | blocked 1.797
-uplo=L n=48 nrhs=2 batch=8192 | cta 6.293 | blocked 6.588
-uplo=L n=48 nrhs=2 batch=32768 | cta 25.04 | blocked 25.61
-uplo=L n=48 nrhs=4 batch=128 | blocked 0.4283 | cta 0.5150
-uplo=L n=48 nrhs=4 batch=512 | blocked 0.6066 | cta 0.7321
-uplo=L n=48 nrhs=4 batch=2048 | blocked 1.803 | cta 2.552
-uplo=L n=48 nrhs=4 batch=8192 | blocked 6.593 | cta 9.743
-uplo=L n=48 nrhs=4 batch=32768 | blocked 25.51 | cta 38.71
-uplo=L n=48 nrhs=8 batch=128 | blocked 0.4301 | cta 0.8902
-uplo=L n=48 nrhs=8 batch=512 | blocked 0.6095 | cta 1.215
-uplo=L n=48 nrhs=8 batch=2048 | blocked 1.817 | cta 4.976
-uplo=L n=48 nrhs=8 batch=8192 | blocked 6.676 | cta 17.02
-uplo=L n=48 nrhs=8 batch=32768 | blocked 25.54 | cta 66.21
-uplo=L n=48 nrhs=16 batch=128 | blocked 0.4320
-uplo=L n=48 nrhs=16 batch=512 | blocked 0.6243
-uplo=L n=48 nrhs=16 batch=2048 | blocked 1.795
-uplo=L n=48 nrhs=16 batch=8192 | blocked 6.802
-uplo=L n=48 nrhs=16 batch=32768 | blocked 25.93
-uplo=L n=48 nrhs=64 batch=128 | blocked 0.4452
-uplo=L n=48 nrhs=64 batch=512 | blocked 0.7838
-uplo=L n=48 nrhs=64 batch=2048 | blocked 2.788
-uplo=L n=48 nrhs=64 batch=8192 | blocked 10.51
-uplo=L n=48 nrhs=64 batch=32768 | blocked 40.35
-uplo=L n=56 nrhs=1 batch=128 | cta 0.3898
-uplo=L n=56 nrhs=1 batch=512 | cta 0.5796
-uplo=L n=56 nrhs=1 batch=2048 | cta 1.508
-uplo=L n=56 nrhs=1 batch=8192 | cta 5.558
-uplo=L n=56 nrhs=1 batch=32768 | cta 21.92
-uplo=L n=56 nrhs=2 batch=128 | cta 0.4063 | blocked 0.5972
-uplo=L n=56 nrhs=2 batch=512 | cta 0.6634 | blocked 0.8593
-uplo=L n=56 nrhs=2 batch=2048 | cta 2.062 | blocked 2.506
-uplo=L n=56 nrhs=2 batch=8192 | cta 7.531 | blocked 8.456
-uplo=L n=56 nrhs=2 batch=32768 | cta 30.21 | blocked 32.62
-uplo=L n=56 nrhs=4 batch=128 | blocked 0.6034 | cta 0.6433
-uplo=L n=56 nrhs=4 batch=512 | blocked 0.8468 | cta 0.9443
-uplo=L n=56 nrhs=4 batch=2048 | blocked 2.496 | cta 3.143
-uplo=L n=56 nrhs=4 batch=8192 | blocked 8.548 | cta 11.78
-uplo=L n=56 nrhs=4 batch=32768 | blocked 32.25 | cta 46.05
-uplo=L n=56 nrhs=8 batch=128 | blocked 0.6066 | cta 1.088
-uplo=L n=56 nrhs=8 batch=512 | blocked 0.8593 | cta 1.532
-uplo=L n=56 nrhs=8 batch=2048 | blocked 2.498 | cta 5.624
-uplo=L n=56 nrhs=8 batch=8192 | blocked 8.612 | cta 20.05
-uplo=L n=56 nrhs=8 batch=32768 | blocked 32.66 | cta 79.64
-uplo=L n=56 nrhs=16 batch=128 | blocked 0.6016
-uplo=L n=56 nrhs=16 batch=512 | blocked 0.8738
-uplo=L n=56 nrhs=16 batch=2048 | blocked 2.445
-uplo=L n=56 nrhs=16 batch=8192 | blocked 8.649
-uplo=L n=56 nrhs=16 batch=32768 | blocked 33.00
-uplo=L n=56 nrhs=64 batch=128 | blocked 0.7013
-uplo=L n=56 nrhs=64 batch=512 | blocked 1.274
-uplo=L n=56 nrhs=64 batch=2048 | blocked 4.487
-uplo=L n=56 nrhs=64 batch=8192 | blocked 16.59
-uplo=L n=56 nrhs=64 batch=32768 | blocked 63.43
-uplo=L n=64 nrhs=1 batch=128 | cta 0.4334
-uplo=L n=64 nrhs=1 batch=512 | cta 0.6391
-uplo=L n=64 nrhs=1 batch=2048 | cta 1.778
-uplo=L n=64 nrhs=1 batch=8192 | cta 6.587
-uplo=L n=64 nrhs=1 batch=32768 | cta 25.77
-uplo=L n=64 nrhs=2 batch=128 | cta 0.4466 | blocked 0.6090
-uplo=L n=64 nrhs=2 batch=512 | cta 0.7278 | blocked 0.8829
-uplo=L n=64 nrhs=2 batch=2048 | cta 2.417 | blocked 2.713
-uplo=L n=64 nrhs=2 batch=8192 | cta 8.856 | blocked 9.273
-uplo=L n=64 nrhs=2 batch=32768 | cta 35.07 | blocked 35.36
-uplo=L n=64 nrhs=4 batch=128 | blocked 0.6152 | cta 0.7147
-uplo=L n=64 nrhs=4 batch=512 | blocked 0.8824 | cta 1.061
-uplo=L n=64 nrhs=4 batch=2048 | blocked 2.689 | cta 3.852
-uplo=L n=64 nrhs=4 batch=8192 | blocked 9.353 | cta 13.64
-uplo=L n=64 nrhs=4 batch=32768 | blocked 35.34 | cta 53.86
-uplo=L n=64 nrhs=8 batch=128 | blocked 0.6135 | cta 1.215
-uplo=L n=64 nrhs=8 batch=512 | blocked 0.8910 | cta 1.730
-uplo=L n=64 nrhs=8 batch=2048 | blocked 2.706 | cta 6.718
-uplo=L n=64 nrhs=8 batch=8192 | blocked 9.347 | cta 23.11
-uplo=L n=64 nrhs=8 batch=32768 | blocked 35.68 | cta 91.70
-uplo=L n=64 nrhs=16 batch=128 | blocked 0.6150
-uplo=L n=64 nrhs=16 batch=512 | blocked 0.9047
-uplo=L n=64 nrhs=16 batch=2048 | blocked 2.647
-uplo=L n=64 nrhs=16 batch=8192 | blocked 9.485
-uplo=L n=64 nrhs=16 batch=32768 | blocked 35.78
-uplo=L n=64 nrhs=64 batch=128 | blocked 0.7077
-uplo=L n=64 nrhs=64 batch=512 | blocked 1.324
-uplo=L n=64 nrhs=64 batch=2048 | blocked 4.696
-uplo=L n=64 nrhs=64 batch=8192 | blocked 17.43
-uplo=L n=64 nrhs=64 batch=32768 | blocked 67.01
-uplo=L n=80 nrhs=1 batch=128 | cta 0.6585
-uplo=L n=80 nrhs=1 batch=512 | cta 1.006
-uplo=L n=80 nrhs=1 batch=2048 | cta 3.505
-uplo=L n=80 nrhs=1 batch=8192 | cta 12.03
-uplo=L n=80 nrhs=1 batch=32768 | cta 46.87
-uplo=L n=80 nrhs=2 batch=128 | cta 0.6887 | blocked 0.9685
-uplo=L n=80 nrhs=2 batch=512 | cta 1.121 | blocked 1.513
-uplo=L n=80 nrhs=2 batch=2048 | cta 4.270 | blocked 5.138
-uplo=L n=80 nrhs=2 batch=8192 | cta 14.95 | blocked 17.53
-uplo=L n=80 nrhs=2 batch=32768 | cta 59.10 | blocked 67.87
-uplo=L n=80 nrhs=4 batch=128 | blocked 0.9669 | cta 1.019
-uplo=L n=80 nrhs=4 batch=512 | cta 1.543 | blocked 1.512
-uplo=L n=80 nrhs=4 batch=2048 | blocked 5.178 | cta 6.102
-uplo=L n=80 nrhs=4 batch=8192 | blocked 17.56 | cta 20.97
-uplo=L n=80 nrhs=4 batch=32768 | blocked 67.60 | cta 82.47
-uplo=L n=80 nrhs=8 batch=128 | blocked 0.9754 | cta 1.665
-uplo=L n=80 nrhs=8 batch=512 | blocked 1.517 | cta 2.373
-uplo=L n=80 nrhs=8 batch=2048 | blocked 5.196 | cta 9.233
-uplo=L n=80 nrhs=8 batch=8192 | blocked 17.72 | cta 34.58
-uplo=L n=80 nrhs=8 batch=32768 | blocked 67.66 | cta 130.7
-uplo=L n=80 nrhs=16 batch=128 | blocked 0.9810
-uplo=L n=80 nrhs=16 batch=512 | blocked 1.539
-uplo=L n=80 nrhs=16 batch=2048 | blocked 5.207
-uplo=L n=80 nrhs=16 batch=8192 | blocked 17.88
-uplo=L n=80 nrhs=16 batch=32768 | blocked 68.64
-uplo=L n=80 nrhs=64 batch=128 | blocked 1.072
-uplo=L n=80 nrhs=64 batch=512 | blocked 2.128
-uplo=L n=80 nrhs=64 batch=2048 | blocked 8.118
-uplo=L n=80 nrhs=64 batch=8192 | blocked 29.32
-uplo=L n=96 nrhs=1 batch=128 | cta 0.8062
-uplo=L n=96 nrhs=1 batch=512 | cta 1.288
-uplo=L n=96 nrhs=1 batch=2048 | cta 4.191
-uplo=L n=96 nrhs=1 batch=8192 | cta 14.85
-uplo=L n=96 nrhs=2 batch=128 | cta 0.8422 | blocked 1.171
-uplo=L n=96 nrhs=2 batch=512 | cta 1.434 | blocked 1.864
-uplo=L n=96 nrhs=2 batch=2048 | cta 5.227 | blocked 6.282
-uplo=L n=96 nrhs=2 batch=8192 | cta 18.38 | blocked 20.91
-uplo=L n=96 nrhs=4 batch=128 | blocked 1.174 | cta 1.254
-uplo=L n=96 nrhs=4 batch=512 | blocked 1.856 | cta 1.946
-uplo=L n=96 nrhs=4 batch=2048 | blocked 6.239 | cta 7.574
-uplo=L n=96 nrhs=4 batch=8192 | blocked 21.04 | cta 25.78
-uplo=L n=96 nrhs=8 batch=128 | blocked 1.175 | cta 2.029
-uplo=L n=96 nrhs=8 batch=512 | blocked 1.866 | cta 2.970
-uplo=L n=96 nrhs=8 batch=2048 | blocked 6.312 | cta 11.55
-uplo=L n=96 nrhs=8 batch=8192 | blocked 21.00 | cta 40.57
-uplo=L n=96 nrhs=16 batch=128 | blocked 1.180
-uplo=L n=96 nrhs=16 batch=512 | blocked 1.904
-uplo=L n=96 nrhs=16 batch=2048 | blocked 6.266
-uplo=L n=96 nrhs=16 batch=8192 | blocked 21.26
-uplo=L n=96 nrhs=64 batch=128 | blocked 1.418
-uplo=L n=96 nrhs=64 batch=512 | blocked 2.890
-uplo=L n=96 nrhs=64 batch=2048 | blocked 10.76
-uplo=L n=96 nrhs=64 batch=8192 | blocked 39.82
-uplo=L n=112 nrhs=1 batch=128 | cta 1.054
-uplo=L n=112 nrhs=1 batch=512 | cta 1.929
-uplo=L n=112 nrhs=1 batch=2048 | cta 6.232
-uplo=L n=112 nrhs=1 batch=8192 | cta 24.30
-uplo=L n=112 nrhs=2 batch=128 | cta 1.105 | blocked 1.608
-uplo=L n=112 nrhs=2 batch=512 | cta 2.110 | blocked 2.893
-uplo=L n=112 nrhs=2 batch=2048 | cta 7.401 | blocked 9.425
-uplo=L n=112 nrhs=2 batch=8192 | cta 28.70 | blocked 34.77
-uplo=L n=112 nrhs=4 batch=128 | cta 1.582 | blocked 1.597
-uplo=L n=112 nrhs=4 batch=512 | cta 2.696 | blocked 2.866
-uplo=L n=112 nrhs=4 batch=2048 | blocked 9.465 | cta 10.66
-uplo=L n=112 nrhs=4 batch=8192 | blocked 34.56 | cta 37.10
-uplo=L n=112 nrhs=8 batch=128 | blocked 1.604 | cta 2.504
-uplo=L n=112 nrhs=8 batch=512 | blocked 2.901 | cta 3.931
-uplo=L n=112 nrhs=8 batch=2048 | blocked 9.432 | cta 14.62
-uplo=L n=112 nrhs=8 batch=8192 | blocked 34.75 | cta 54.87
-uplo=L n=112 nrhs=16 batch=128 | blocked 1.617
-uplo=L n=112 nrhs=16 batch=512 | blocked 2.912
-uplo=L n=112 nrhs=16 batch=2048 | blocked 9.452
-uplo=L n=112 nrhs=16 batch=8192 | blocked 35.17
-uplo=L n=112 nrhs=64 batch=128 | blocked 1.852
-uplo=L n=112 nrhs=64 batch=512 | blocked 4.260
-uplo=L n=112 nrhs=64 batch=2048 | blocked 15.27
-uplo=L n=112 nrhs=64 batch=8192 | blocked 58.27
-uplo=L n=128 nrhs=1 batch=128 | cta 1.219
-uplo=L n=128 nrhs=1 batch=512 | cta 2.258
-uplo=L n=128 nrhs=1 batch=2048 | cta 7.248
-uplo=L n=128 nrhs=1 batch=8192 | cta 28.06
-uplo=L n=128 nrhs=2 batch=128 | cta 1.271 | blocked 1.815
-uplo=L n=128 nrhs=2 batch=512 | cta 2.470 | blocked 3.276
-uplo=L n=128 nrhs=2 batch=2048 | cta 8.788 | blocked 10.68
-uplo=L n=128 nrhs=2 batch=8192 | cta 32.92 | blocked 38.91
-uplo=L n=128 nrhs=4 batch=128 | cta 1.842 | blocked 1.825
-uplo=L n=128 nrhs=4 batch=512 | cta 3.163 | blocked 3.249
-uplo=L n=128 nrhs=4 batch=2048 | blocked 10.67 | cta 11.56
-uplo=L n=128 nrhs=4 batch=8192 | blocked 39.12 | cta 43.66
-uplo=L n=128 nrhs=8 batch=128 | blocked 1.816 | cta 2.894
-uplo=L n=128 nrhs=8 batch=512 | blocked 3.265 | cta 4.570
-uplo=L n=128 nrhs=8 batch=2048 | blocked 10.73 | cta 17.03
-uplo=L n=128 nrhs=8 batch=8192 | blocked 38.97 | cta 63.04
-uplo=L n=128 nrhs=16 batch=128 | blocked 1.822
-uplo=L n=128 nrhs=16 batch=512 | blocked 3.306
-uplo=L n=128 nrhs=16 batch=2048 | blocked 10.58
-uplo=L n=128 nrhs=16 batch=8192 | blocked 39.35
-uplo=L n=128 nrhs=64 batch=128 | blocked 2.281
-uplo=L n=128 nrhs=64 batch=512 | blocked 5.201
-uplo=L n=128 nrhs=64 batch=2048 | blocked 18.85
-uplo=L n=128 nrhs=64 batch=8192 | blocked 72.80
-uplo=L n=160 nrhs=1 batch=128 | cta 1.810
-uplo=L n=160 nrhs=1 batch=512 | cta 3.641
-uplo=L n=160 nrhs=1 batch=2048 | cta 12.98
-uplo=L n=160 nrhs=1 batch=8192 | cta 48.87
-uplo=L n=160 nrhs=2 batch=128 | cta 1.863 | blocked 2.792
-uplo=L n=160 nrhs=2 batch=512 | cta 3.904 | blocked 5.226
-uplo=L n=160 nrhs=2 batch=2048 | cta 14.18 | blocked 17.84
-uplo=L n=160 nrhs=2 batch=8192 | cta 55.49 | blocked 66.13
-uplo=L n=160 nrhs=4 batch=128 | cta 2.024 | blocked 2.788
-uplo=L n=160 nrhs=4 batch=512 | cta 4.737 | blocked 5.191
-uplo=L n=160 nrhs=4 batch=2048 | cta 17.64 | blocked 18.10
-uplo=L n=160 nrhs=4 batch=8192 | blocked 65.95 | cta 68.25
-uplo=L n=160 nrhs=8 batch=128 | cta 2.741 | blocked 2.769
-uplo=L n=160 nrhs=8 batch=512 | blocked 5.269 | cta 6.579
-uplo=L n=160 nrhs=8 batch=2048 | blocked 18.04 | cta 25.26
-uplo=L n=160 nrhs=8 batch=8192 | blocked 65.53 | cta 94.66
-uplo=L n=160 nrhs=16 batch=128 | blocked 2.816
-uplo=L n=160 nrhs=16 batch=512 | blocked 5.304
-uplo=L n=160 nrhs=16 batch=2048 | blocked 17.96
-uplo=L n=160 nrhs=16 batch=8192 | blocked 66.84
-uplo=L n=160 nrhs=64 batch=128 | blocked 3.540
-uplo=L n=160 nrhs=64 batch=512 | blocked 8.295
-uplo=L n=160 nrhs=64 batch=2048 | blocked 30.95
-uplo=L n=192 nrhs=1 batch=128 | cta 2.390
-uplo=L n=192 nrhs=1 batch=512 | cta 6.062
-uplo=L n=192 nrhs=1 batch=2048 | cta 21.74
-uplo=L n=192 nrhs=2 batch=128 | cta 2.461 | blocked 3.512
-uplo=L n=192 nrhs=2 batch=512 | cta 6.306 | blocked 8.009
-uplo=L n=192 nrhs=2 batch=2048 | cta 23.37 | blocked 28.63
-uplo=L n=192 nrhs=4 batch=128 | cta 2.671 | blocked 3.506
-uplo=L n=192 nrhs=4 batch=512 | cta 7.379 | blocked 8.017
-uplo=L n=192 nrhs=4 batch=2048 | cta 27.62 | blocked 28.67
-uplo=L n=192 nrhs=8 batch=128 | cta 3.582 | blocked 3.509
-uplo=L n=192 nrhs=8 batch=512 | blocked 8.061 | cta 9.566
-uplo=L n=192 nrhs=8 batch=2048 | blocked 28.66 | cta 36.99
-uplo=L n=192 nrhs=16 batch=128 | blocked 3.531
-uplo=L n=192 nrhs=16 batch=512 | blocked 8.109
-uplo=L n=192 nrhs=16 batch=2048 | blocked 28.73
-uplo=L n=192 nrhs=64 batch=128 | blocked 4.622
-uplo=L n=192 nrhs=64 batch=512 | blocked 12.51
-uplo=L n=192 nrhs=64 batch=2048 | blocked 47.61
-uplo=L n=224 nrhs=1 batch=128 | cta 3.460
-uplo=L n=224 nrhs=1 batch=512 | cta 9.337
-uplo=L n=224 nrhs=1 batch=2048 | cta 34.54
-uplo=L n=224 nrhs=2 batch=128 | cta 3.540 | blocked 5.004
-uplo=L n=224 nrhs=2 batch=512 | cta 9.612 | blocked 12.08
-uplo=L n=224 nrhs=2 batch=2048 | cta 36.60 | blocked 44.03
-uplo=L n=224 nrhs=4 batch=128 | cta 3.818 | blocked 5.024
-uplo=L n=224 nrhs=4 batch=512 | cta 10.91 | blocked 12.08
-uplo=L n=224 nrhs=4 batch=2048 | cta 41.65 | blocked 43.99
-uplo=L n=224 nrhs=8 batch=128 | cta 4.906 | blocked 5.040
-uplo=L n=224 nrhs=8 batch=512 | blocked 12.09 | cta 13.48
-uplo=L n=224 nrhs=8 batch=2048 | blocked 44.11 | cta 52.95
-uplo=L n=224 nrhs=16 batch=128 | blocked 5.029
-uplo=L n=224 nrhs=16 batch=512 | blocked 12.18
-uplo=L n=224 nrhs=16 batch=2048 | blocked 43.98
-uplo=L n=224 nrhs=64 batch=128 | blocked 6.515
-uplo=L n=224 nrhs=64 batch=512 | blocked 18.17
-uplo=L n=224 nrhs=64 batch=2048 | blocked 69.88
-uplo=L n=256 nrhs=1 batch=128 | cta 4.323
-uplo=L n=256 nrhs=1 batch=512 | cta 12.37
-uplo=L n=256 nrhs=1 batch=2048 | cta 45.36
-uplo=L n=256 nrhs=2 batch=128 | cta 4.425 | blocked 6.116
-uplo=L n=256 nrhs=2 batch=512 | cta 12.63 | blocked 15.70
-uplo=L n=256 nrhs=2 batch=2048 | cta 47.87 | blocked 57.48
-uplo=L n=256 nrhs=4 batch=128 | cta 4.743 | blocked 6.123
-uplo=L n=256 nrhs=4 batch=512 | cta 14.17 | blocked 15.71
-uplo=L n=256 nrhs=4 batch=2048 | cta 53.58 | blocked 57.51
-uplo=L n=256 nrhs=8 batch=128 | cta 6.007 | blocked 6.129
-uplo=L n=256 nrhs=8 batch=512 | blocked 15.73 | cta 19.36
-uplo=L n=256 nrhs=8 batch=2048 | blocked 57.58 | cta 67.32
-uplo=L n=256 nrhs=16 batch=128 | blocked 6.146
-uplo=L n=256 nrhs=16 batch=512 | blocked 15.80
-uplo=L n=256 nrhs=16 batch=2048 | blocked 57.51
-uplo=L n=256 nrhs=64 batch=128 | blocked 8.102
-uplo=L n=256 nrhs=64 batch=512 | blocked 23.74
-uplo=L n=256 nrhs=64 batch=2048 | blocked 91.46
-uplo=L n=288 nrhs=1 batch=128 | cta 5.695
-uplo=L n=288 nrhs=1 batch=512 | cta 17.20
-uplo=L n=288 nrhs=1 batch=2048 | cta 66.17
-uplo=L n=288 nrhs=2 batch=128 | cta 5.818 | blocked 8.137
-uplo=L n=288 nrhs=2 batch=512 | cta 17.55 | blocked 21.64
-uplo=L n=288 nrhs=2 batch=2048 | cta 68.44 | blocked 80.66
-uplo=L n=288 nrhs=4 batch=128 | cta 6.121 | blocked 8.141
-uplo=L n=288 nrhs=4 batch=512 | cta 19.28 | blocked 21.64
-uplo=L n=288 nrhs=4 batch=2048 | cta 74.78 | blocked 80.72
-uplo=L n=288 nrhs=8 batch=128 | cta 7.160 | blocked 8.147
-uplo=L n=288 nrhs=8 batch=512 | blocked 21.68 | cta 22.97
-uplo=L n=288 nrhs=8 batch=2048 | blocked 80.84 | cta 88.07
-uplo=L n=288 nrhs=16 batch=128 | blocked 8.196
-uplo=L n=288 nrhs=16 batch=512 | blocked 21.80
-uplo=L n=288 nrhs=16 batch=2048 | blocked 80.71
-uplo=L n=288 nrhs=64 batch=128 | blocked 10.67
-uplo=L n=288 nrhs=64 batch=512 | blocked 31.86
-uplo=L n=288 nrhs=64 batch=2048 | blocked 123.4
-uplo=L n=320 nrhs=1 batch=128 | cta 6.992
-uplo=L n=320 nrhs=1 batch=512 | cta 21.66
-uplo=L n=320 nrhs=1 batch=2048 | cta 83.03
-uplo=L n=320 nrhs=2 batch=128 | cta 7.114 | blocked 9.543
-uplo=L n=320 nrhs=2 batch=512 | cta 22.06 | blocked 26.76
-uplo=L n=320 nrhs=2 batch=2048 | cta 85.72 | blocked 100.6
-uplo=L n=320 nrhs=4 batch=128 | cta 7.493 | blocked 9.556
-uplo=L n=320 nrhs=4 batch=512 | cta 24.02 | blocked 26.75
-uplo=L n=320 nrhs=4 batch=2048 | cta 92.94 | blocked 100.7
-uplo=L n=320 nrhs=8 batch=128 | cta 8.682 | blocked 9.561
-uplo=L n=320 nrhs=8 batch=512 | blocked 26.79 | cta 28.23
-uplo=L n=320 nrhs=8 batch=2048 | blocked 100.7 | cta 108.1
-uplo=L n=320 nrhs=16 batch=128 | blocked 9.593
-uplo=L n=320 nrhs=16 batch=512 | blocked 26.88
-uplo=L n=320 nrhs=16 batch=2048 | blocked 100.9
-uplo=L n=320 nrhs=64 batch=128 | blocked 12.73
-uplo=L n=320 nrhs=64 batch=512 | blocked 39.39
-uplo=L n=320 nrhs=64 batch=2048 | blocked 153.8
-uplo=L n=384 nrhs=1 batch=128 | cta 10.78
-uplo=L n=384 nrhs=1 batch=512 | cta 34.89
-uplo=L n=384 nrhs=2 batch=128 | cta 10.94 | blocked 14.27
-uplo=L n=384 nrhs=2 batch=512 | cta 35.65 | blocked 42.46
-uplo=L n=384 nrhs=4 batch=128 | cta 11.42 | blocked 14.26
-uplo=L n=384 nrhs=4 batch=512 | cta 38.00 | blocked 42.28
-uplo=L n=384 nrhs=8 batch=128 | cta 13.00 | blocked 14.37
-uplo=L n=384 nrhs=8 batch=512 | blocked 42.27 | cta 43.68
-uplo=L n=384 nrhs=16 batch=128 | blocked 14.32
-uplo=L n=384 nrhs=16 batch=512 | blocked 42.64
-uplo=L n=384 nrhs=64 batch=128 | blocked 18.77
-uplo=L n=384 nrhs=64 batch=512 | blocked 60.58
-uplo=L n=448 nrhs=1 batch=128 | cta 15.77
-uplo=L n=448 nrhs=1 batch=512 | cta 52.25
-uplo=L n=448 nrhs=2 batch=128 | cta 15.91 | blocked 20.16
-uplo=L n=448 nrhs=2 batch=512 | cta 53.15 | blocked 62.21
-uplo=L n=448 nrhs=4 batch=128 | cta 16.46 | blocked 20.07
-uplo=L n=448 nrhs=4 batch=512 | cta 56.61 | blocked 62.64
-uplo=L n=448 nrhs=8 batch=128 | cta 18.25 | blocked 20.08
-uplo=L n=448 nrhs=8 batch=512 | cta 63.29 | blocked 62.38
-uplo=L n=448 nrhs=16 batch=128 | blocked 20.23
-uplo=L n=448 nrhs=16 batch=512 | blocked 62.42
-uplo=L n=448 nrhs=64 batch=128 | blocked 26.26
-uplo=L n=448 nrhs=64 batch=512 | blocked 87.71
-uplo=L n=512 nrhs=1 batch=128 | cta 21.88
-uplo=L n=512 nrhs=1 batch=512 | cta 74.67
-uplo=L n=512 nrhs=2 batch=128 | cta 22.20 | blocked 27.61
-uplo=L n=512 nrhs=2 batch=512 | cta 76.19 | blocked 88.01
-uplo=L n=512 nrhs=4 batch=128 | cta 22.70 | blocked 27.27
-uplo=L n=512 nrhs=4 batch=512 | cta 80.80 | blocked 88.30
-uplo=L n=512 nrhs=8 batch=128 | cta 25.08 | blocked 27.55
-uplo=L n=512 nrhs=8 batch=512 | cta 87.41 | blocked 87.22
-uplo=L n=512 nrhs=16 batch=128 | blocked 27.66
-uplo=L n=512 nrhs=16 batch=512 | blocked 88.23
-uplo=L n=512 nrhs=64 batch=128 | blocked 35.27
-uplo=L n=512 nrhs=64 batch=512 | blocked 121.1
-uplo=L n=640 nrhs=1 batch=128 | cta 38.34
-uplo=L n=640 nrhs=1 batch=512 | cta 142.7
-uplo=L n=640 nrhs=2 batch=128 | cta 38.74 | blocked 46.78
-uplo=L n=640 nrhs=2 batch=512 | cta 143.6 | blocked 158.2
-uplo=L n=640 nrhs=4 batch=128 | cta 39.76 | blocked 46.70
-uplo=L n=640 nrhs=4 batch=512 | cta 146.1 | blocked 157.5
-uplo=L n=640 nrhs=8 batch=128 | blocked 47.01
-uplo=L n=640 nrhs=8 batch=512 | blocked 157.3
-uplo=L n=640 nrhs=16 batch=128 | blocked 46.86
-uplo=L n=640 nrhs=16 batch=512 | blocked 158.5
-uplo=L n=640 nrhs=64 batch=128 | blocked 59.34
-uplo=L n=640 nrhs=64 batch=512 | blocked 208.6
-uplo=L n=768 nrhs=1 batch=128 | cta 62.47
-uplo=L n=768 nrhs=2 batch=128 | cta 62.26 | blocked 73.21
-uplo=L n=768 nrhs=4 batch=128 | cta 64.50 | blocked 74.11
-uplo=L n=768 nrhs=8 batch=128 | blocked 73.92
-uplo=L n=768 nrhs=16 batch=128 | blocked 73.25
-uplo=L n=768 nrhs=64 batch=128 | blocked 92.48
-uplo=L n=1024 nrhs=1 batch=128 | cta 135.2
-uplo=L n=1024 nrhs=2 batch=128 | cta 136.1 | blocked 154.5
-uplo=L n=1024 nrhs=4 batch=128 | cta 139.1 | blocked 155.3
-uplo=L n=1024 nrhs=8 batch=128 | blocked 154.3
-uplo=L n=1024 nrhs=16 batch=128 | blocked 154.6
-uplo=L n=1024 nrhs=64 batch=128 | blocked 187.9
+uplo=L n=1 nrhs=1 batch=128 | cta 0.01441 | tiny 0.01671 | blocked 0.02939 # deep
+uplo=L n=1 nrhs=1 batch=512 | cta 0.01486 | tiny 0.01667 | blocked 0.02930 # deep
+uplo=L n=1 nrhs=1 batch=2048 | tiny 0.01639 | cta 0.01937 | blocked 0.05406 # deep
+uplo=L n=1 nrhs=1 batch=8192 | tiny 0.02496 | cta 0.04979 | blocked 0.1768 # deep
+uplo=L n=1 nrhs=1 batch=32768 | tiny 0.07595 | cta 0.1585 | blocked 0.6752 # deep
+uplo=L n=1 nrhs=2 batch=128 | cta 0.01573 | tiny 0.01811 | blocked 0.03006 # deep
+uplo=L n=1 nrhs=2 batch=512 | cta 0.01646 | tiny 0.01766 | blocked 0.02915 # deep
+uplo=L n=1 nrhs=2 batch=2048 | tiny 0.01748 | cta 0.02763 | blocked 0.05451 # deep
+uplo=L n=1 nrhs=2 batch=8192 | tiny 0.02729 | cta 0.07799 | blocked 0.1781 # deep
+uplo=L n=1 nrhs=2 batch=32768 | tiny 0.07791 | cta 0.2802 | blocked 0.6730 # deep
+uplo=L n=1 nrhs=3 batch=128 | tiny 0.01968 | cta 0.01946 | blocked 0.03040 # deep
+uplo=L n=1 nrhs=3 batch=512 | tiny 0.01961 | cta 0.02088 | blocked 0.03014 # deep
+uplo=L n=1 nrhs=4 batch=128 | tiny 0.01997 | cta 0.02015 | blocked 0.03047 # deep
+uplo=L n=1 nrhs=4 batch=512 | tiny 0.01999 | cta 0.02286 | blocked 0.03067 # deep
+uplo=L n=1 nrhs=4 batch=2048 | tiny 0.01938 | cta 0.04353 | blocked 0.05464 # deep
+uplo=L n=1 nrhs=4 batch=8192 | tiny 0.02986 | cta 0.1395 | blocked 0.1772 # deep
+uplo=L n=1 nrhs=4 batch=32768 | tiny 0.09873 | cta 0.5265 | blocked 0.6735 # deep
+uplo=L n=1 nrhs=6 batch=128 | cta 0.02443 | blocked 0.02992 # deep
+uplo=L n=1 nrhs=6 batch=512 | cta 0.02651 | blocked 0.03037 # deep
+uplo=L n=1 nrhs=6 batch=2048 | blocked 0.05465 | cta 0.07955 # deep
+uplo=L n=1 nrhs=6 batch=8192 | blocked 0.1779 | cta 0.2200 # deep
+uplo=L n=1 nrhs=6 batch=32768 | blocked 0.6746 | cta 0.7767 # deep
+uplo=L n=1 nrhs=8 batch=128 | cta 0.02716 | blocked 0.02885 # deep
+uplo=L n=1 nrhs=8 batch=512 | blocked 0.02946 | cta 0.03128 # deep
+uplo=L n=1 nrhs=8 batch=2048 | blocked 0.05442 | cta 0.1012 # deep
+uplo=L n=1 nrhs=8 batch=8192 | blocked 0.1774 | cta 0.2866 # deep
+uplo=L n=1 nrhs=8 batch=32768 | blocked 0.6744 | cta 1.021 # deep
+uplo=L n=1 nrhs=11 batch=128 | blocked 0.02937 # deep
+uplo=L n=1 nrhs=16 batch=128 | blocked 0.02932 # deep
+uplo=L n=1 nrhs=16 batch=512 | blocked 0.02925 # deep
+uplo=L n=1 nrhs=16 batch=2048 | blocked 0.05451 # deep
+uplo=L n=1 nrhs=16 batch=8192 | blocked 0.1785 # deep
+uplo=L n=1 nrhs=16 batch=32768 | blocked 0.6738 # deep
+uplo=L n=1 nrhs=64 batch=128 | blocked 0.02910 # deep
+uplo=L n=1 nrhs=64 batch=512 | blocked 0.03690 # deep
+uplo=L n=1 nrhs=64 batch=2048 | blocked 0.08725 # deep
+uplo=L n=1 nrhs=64 batch=8192 | blocked 0.3060 # deep
+uplo=L n=1 nrhs=64 batch=32768 | blocked 1.179 # deep
+uplo=L n=2 nrhs=1 batch=128 | cta 0.01837 | tiny 0.02407 | blocked 0.02896 # deep
+uplo=L n=2 nrhs=1 batch=512 | cta 0.01862 | tiny 0.02382 | blocked 0.02896 # deep
+uplo=L n=2 nrhs=1 batch=2048 | tiny 0.02372 | cta 0.03095 | blocked 0.05591 # deep
+uplo=L n=2 nrhs=1 batch=8192 | tiny 0.04323 | cta 0.09410 | blocked 0.1864 # deep
+uplo=L n=2 nrhs=1 batch=32768 | tiny 0.1426 | cta 0.3295 | blocked 0.7060 # deep
+uplo=L n=2 nrhs=2 batch=128 | cta 0.01946 | tiny 0.02688 | blocked 0.02998 # deep
+uplo=L n=2 nrhs=2 batch=512 | cta 0.02184 | tiny 0.02668 | blocked 0.03058 # deep
+uplo=L n=2 nrhs=2 batch=2048 | tiny 0.02616 | cta 0.04820 | blocked 0.05577 # deep
+uplo=L n=2 nrhs=2 batch=8192 | tiny 0.04702 | cta 0.1558 | blocked 0.1845 # deep
+uplo=L n=2 nrhs=2 batch=32768 | tiny 0.1525 | cta 0.5896 | blocked 0.7055 # deep
+uplo=L n=2 nrhs=3 batch=512 | tiny 0.02900 | cta 0.02820 | blocked 0.02967 # deep
+uplo=L n=2 nrhs=4 batch=128 | cta 0.02642 | blocked 0.02960 | tiny 0.03040 # deep
+uplo=L n=2 nrhs=4 batch=512 | tiny 0.03024 | cta 0.03073 | blocked 0.02994 # deep
+uplo=L n=2 nrhs=4 batch=2048 | tiny 0.03005 | blocked 0.05588 | cta 0.08190 # deep
+uplo=L n=2 nrhs=4 batch=8192 | tiny 0.05521 | blocked 0.1870 | cta 0.2893 # deep
+uplo=L n=2 nrhs=4 batch=32768 | tiny 0.2033 | blocked 0.7040 | cta 1.113 # deep
+uplo=L n=2 nrhs=6 batch=128 | blocked 0.03003 | cta 0.03344 # deep
+uplo=L n=2 nrhs=6 batch=512 | blocked 0.03002 | cta 0.04015 # deep
+uplo=L n=2 nrhs=6 batch=2048 | blocked 0.05582 | cta 0.1567 # deep
+uplo=L n=2 nrhs=6 batch=8192 | blocked 0.1872 | cta 0.4543 # deep
+uplo=L n=2 nrhs=6 batch=32768 | blocked 0.7054 | cta 1.637 # deep
+uplo=L n=2 nrhs=8 batch=128 | blocked 0.02969 | cta 0.04142 # deep
+uplo=L n=2 nrhs=8 batch=512 | blocked 0.02929 | cta 0.04960 # deep
+uplo=L n=2 nrhs=8 batch=2048 | blocked 0.05573 | cta 0.2052 # deep
+uplo=L n=2 nrhs=8 batch=8192 | blocked 0.1852 | cta 0.5911 # deep
+uplo=L n=2 nrhs=8 batch=32768 | blocked 0.7046 | cta 2.159 # deep
+uplo=L n=2 nrhs=16 batch=128 | blocked 0.02949 # deep
+uplo=L n=2 nrhs=16 batch=512 | blocked 0.02972 # deep
+uplo=L n=2 nrhs=16 batch=2048 | blocked 0.05580 # deep
+uplo=L n=2 nrhs=16 batch=8192 | blocked 0.1847 # deep
+uplo=L n=2 nrhs=16 batch=32768 | blocked 0.7041 # deep
+uplo=L n=2 nrhs=64 batch=128 | blocked 0.02953 # deep
+uplo=L n=2 nrhs=64 batch=512 | blocked 0.03687 # deep
+uplo=L n=2 nrhs=64 batch=2048 | blocked 0.08831 # deep
+uplo=L n=2 nrhs=64 batch=8192 | blocked 0.3143 # deep
+uplo=L n=2 nrhs=64 batch=32768 | blocked 1.215 # deep
+uplo=L n=3 nrhs=1 batch=128 | cta 0.02388 | blocked 0.02973 | tiny 0.03087 # deep
+uplo=L n=3 nrhs=1 batch=512 | cta 0.02410 | blocked 0.03049 | tiny 0.03130 # deep
+uplo=L n=3 nrhs=1 batch=2048 | tiny 0.03082 | cta 0.04278 | blocked 0.05865 # deep
+uplo=L n=3 nrhs=1 batch=8192 | tiny 0.06176 | cta 0.1416 | blocked 0.1987 # deep
+uplo=L n=3 nrhs=1 batch=32768 | tiny 0.2191 | cta 0.5127 | blocked 0.7479 # deep
+uplo=L n=3 nrhs=2 batch=128 | cta 0.02494 | blocked 0.03045 | tiny 0.03523 # deep
+uplo=L n=3 nrhs=2 batch=512 | cta 0.02791 | blocked 0.03044 | tiny 0.03503 # deep
+uplo=L n=3 nrhs=2 batch=2048 | tiny 0.03455 | blocked 0.05863 | cta 0.06955 # deep
+uplo=L n=3 nrhs=2 batch=8192 | tiny 0.06834 | blocked 0.1983 | cta 0.2388 # deep
+uplo=L n=3 nrhs=2 batch=32768 | tiny 0.2297 | blocked 0.7454 | cta 0.9097 # deep
+uplo=L n=3 nrhs=3 batch=128 | blocked 0.03080 | cta 0.03586 | tiny 0.03982 # deep
+uplo=L n=3 nrhs=3 batch=512 | blocked 0.03031 | cta 0.03878 | tiny 0.03917 # deep
+uplo=L n=3 nrhs=4 batch=128 | blocked 0.03040 | cta 0.03648 | tiny 0.04121 # deep
+uplo=L n=3 nrhs=4 batch=512 | blocked 0.03076 | tiny 0.04109 | cta 0.04321 # deep
+uplo=L n=3 nrhs=4 batch=2048 | tiny 0.04053 | blocked 0.05870 | cta 0.1209 # deep
+uplo=L n=3 nrhs=4 batch=8192 | tiny 0.08008 | blocked 0.1983 | cta 0.4409 # deep
+uplo=L n=3 nrhs=4 batch=32768 | tiny 0.3045 | blocked 0.7453 | cta 1.713 # deep
+uplo=L n=3 nrhs=6 batch=2048 | blocked 0.05892 | cta 0.2353 # deep
+uplo=L n=3 nrhs=6 batch=8192 | blocked 0.1996 | cta 0.6958 # deep
+uplo=L n=3 nrhs=6 batch=32768 | blocked 0.7456 | cta 2.517 # deep
+uplo=L n=3 nrhs=8 batch=128 | blocked 0.03057 | cta 0.05897 # deep
+uplo=L n=3 nrhs=8 batch=512 | blocked 0.03112 | cta 0.07220 # deep
+uplo=L n=3 nrhs=8 batch=2048 | blocked 0.05875 | cta 0.3092 # deep
+uplo=L n=3 nrhs=8 batch=8192 | blocked 0.1975 | cta 0.9040 # deep
+uplo=L n=3 nrhs=8 batch=32768 | blocked 0.7377 | cta 3.280 # deep
+uplo=L n=3 nrhs=16 batch=128 | blocked 0.03069 # deep
+uplo=L n=3 nrhs=16 batch=512 | blocked 0.03058 # deep
+uplo=L n=3 nrhs=16 batch=2048 | blocked 0.05899 # deep
+uplo=L n=3 nrhs=16 batch=8192 | blocked 0.1986 # deep
+uplo=L n=3 nrhs=16 batch=32768 | blocked 0.7454 # deep
+uplo=L n=3 nrhs=64 batch=128 | blocked 0.03077 # deep
+uplo=L n=3 nrhs=64 batch=512 | blocked 0.03745 # deep
+uplo=L n=3 nrhs=64 batch=2048 | blocked 0.09096 # deep
+uplo=L n=3 nrhs=64 batch=8192 | blocked 0.3258 # deep
+uplo=L n=3 nrhs=64 batch=32768 | blocked 1.250 # deep
+uplo=L n=4 nrhs=1 batch=128 | cta 0.02871 | blocked 0.03177 | tiny 0.03885 # deep
+uplo=L n=4 nrhs=1 batch=512 | cta 0.02931 | blocked 0.03192 | tiny 0.03865 # deep
+uplo=L n=4 nrhs=1 batch=2048 | tiny 0.03863 | cta 0.05518 | blocked 0.06180 # deep
+uplo=L n=4 nrhs=1 batch=8192 | tiny 0.08050 | cta 0.1761 | blocked 0.1983 # deep
+uplo=L n=4 nrhs=1 batch=32768 | tiny 0.2780 | cta 0.6495 | blocked 0.7416 # deep
+uplo=L n=4 nrhs=2 batch=128 | cta 0.03027 | blocked 0.03252 | tiny 0.04440 # deep
+uplo=L n=4 nrhs=2 batch=512 | blocked 0.03168 | cta 0.03442 | tiny 0.04324 # deep
+uplo=L n=4 nrhs=2 batch=2048 | tiny 0.04276 | blocked 0.06143 | cta 0.09001 # deep
+uplo=L n=4 nrhs=2 batch=8192 | tiny 0.08939 | blocked 0.1965 | cta 0.3062 # deep
+uplo=L n=4 nrhs=2 batch=32768 | tiny 0.3099 | blocked 0.7494 | cta 1.194 # deep
+uplo=L n=4 nrhs=3 batch=128 | blocked 0.03186 | cta 0.04348 | tiny 0.04960 # deep
+uplo=L n=4 nrhs=4 batch=128 | blocked 0.03191 | cta 0.04439 | tiny 0.05207 # deep
+uplo=L n=4 nrhs=4 batch=512 | blocked 0.03202 | tiny 0.05177 | cta 0.05312 # deep
+uplo=L n=4 nrhs=4 batch=2048 | tiny 0.05154 | blocked 0.06212 | cta 0.1604 # deep
+uplo=L n=4 nrhs=4 batch=8192 | tiny 0.1055 | blocked 0.1974 | cta 0.5718 # deep
+uplo=L n=4 nrhs=4 batch=32768 | tiny 0.4055 | blocked 0.7496 | cta 2.268 # deep
+uplo=L n=4 nrhs=6 batch=2048 | blocked 0.06246 | cta 0.2949 # deep
+uplo=L n=4 nrhs=6 batch=8192 | blocked 0.1991 | cta 0.9194 # deep
+uplo=L n=4 nrhs=6 batch=32768 | blocked 0.7497 | cta 3.345 # deep
+uplo=L n=4 nrhs=8 batch=128 | blocked 0.03255 | cta 0.07415 # deep
+uplo=L n=4 nrhs=8 batch=512 | blocked 0.03201 | cta 0.09040 # deep
+uplo=L n=4 nrhs=8 batch=2048 | blocked 0.06176 | cta 0.3833 # deep
+uplo=L n=4 nrhs=8 batch=8192 | blocked 0.1982 | cta 1.164 # deep
+uplo=L n=4 nrhs=8 batch=32768 | blocked 0.7484 | cta 4.418 # deep
+uplo=L n=4 nrhs=16 batch=128 | blocked 0.03208 # deep
+uplo=L n=4 nrhs=16 batch=512 | blocked 0.03187 # deep
+uplo=L n=4 nrhs=16 batch=2048 | blocked 0.06252 # deep
+uplo=L n=4 nrhs=16 batch=8192 | blocked 0.1995 # deep
+uplo=L n=4 nrhs=16 batch=32768 | blocked 0.7500 # deep
+uplo=L n=4 nrhs=64 batch=128 | blocked 0.03222 # deep
+uplo=L n=4 nrhs=64 batch=512 | blocked 0.03922 # deep
+uplo=L n=4 nrhs=64 batch=2048 | blocked 0.09396 # deep
+uplo=L n=4 nrhs=64 batch=8192 | blocked 0.3265 # deep
+uplo=L n=4 nrhs=64 batch=32768 | blocked 1.253 # deep
+uplo=L n=5 nrhs=1 batch=128 | cta 0.03442 | blocked 0.03412 | tiny 0.04663 # deep
+uplo=L n=5 nrhs=1 batch=512 | cta 0.03488 | blocked 0.03424 | tiny 0.04656 # deep
+uplo=L n=5 nrhs=2 batch=128 | blocked 0.03436 | cta 0.03571 | tiny 0.05305 # deep
+uplo=L n=5 nrhs=4 batch=2048 | tiny 0.06244 | blocked 0.06229 | cta 0.1968 # deep
+uplo=L n=6 nrhs=1 batch=128 | blocked 0.03643 | cta 0.04030 | tiny 0.05497 # deep
+uplo=L n=6 nrhs=1 batch=512 | blocked 0.03633 | cta 0.04045 | tiny 0.05429 # deep
+uplo=L n=6 nrhs=1 batch=2048 | tiny 0.05547 | blocked 0.06264 | cta 0.07431 # deep
+uplo=L n=6 nrhs=1 batch=8192 | tiny 0.1213 | blocked 0.1984 | cta 0.2476 # deep
+uplo=L n=6 nrhs=1 batch=32768 | tiny 0.4231 | blocked 0.7461 | cta 0.9360 # deep
+uplo=L n=6 nrhs=2 batch=128 | blocked 0.03655 | cta 0.04141 | tiny 0.06195 # deep
+uplo=L n=6 nrhs=2 batch=512 | blocked 0.03647 | cta 0.04845 | tiny 0.06181 # deep
+uplo=L n=6 nrhs=2 batch=2048 | tiny 0.06112 | blocked 0.06210 | cta 0.1277 # deep
+uplo=L n=6 nrhs=2 batch=8192 | tiny 0.1347 | blocked 0.1959 | cta 0.4445 # deep
+uplo=L n=6 nrhs=2 batch=32768 | tiny 0.4718 | blocked 0.7397 | cta 1.731 # deep
+uplo=L n=6 nrhs=3 batch=2048 | blocked 0.06253 | tiny 0.07010 | cta 0.1820 # deep
+uplo=L n=6 nrhs=4 batch=128 | blocked 0.03583 | cta 0.06306 | tiny 0.07369 # deep
+uplo=L n=6 nrhs=4 batch=512 | blocked 0.03632 | tiny 0.07338 | cta 0.07647 # deep
+uplo=L n=6 nrhs=4 batch=2048 | blocked 0.06251 | tiny 0.07405 | cta 0.2332 # deep
+uplo=L n=6 nrhs=4 batch=8192 | tiny 0.1602 | blocked 0.1992 | cta 0.8617 # deep
+uplo=L n=6 nrhs=4 batch=32768 | tiny 0.6196 | blocked 0.7467 | cta 3.384 # deep
+uplo=L n=6 nrhs=6 batch=8192 | blocked 0.1988 | cta 1.320 # deep
+uplo=L n=6 nrhs=6 batch=32768 | blocked 0.7483 | cta 5.021 # deep
+uplo=L n=6 nrhs=8 batch=128 | blocked 0.03649 | cta 0.1064 # deep
+uplo=L n=6 nrhs=8 batch=512 | blocked 0.03661 | cta 0.1347 # deep
+uplo=L n=6 nrhs=8 batch=2048 | blocked 0.06255 | cta 0.5417 # deep
+uplo=L n=6 nrhs=8 batch=8192 | blocked 0.1998 | cta 1.751 # deep
+uplo=L n=6 nrhs=8 batch=32768 | blocked 0.7464 | cta 6.634 # deep
+uplo=L n=6 nrhs=16 batch=128 | blocked 0.03606 # deep
+uplo=L n=6 nrhs=16 batch=512 | blocked 0.03686 # deep
+uplo=L n=6 nrhs=16 batch=2048 | blocked 0.06276 # deep
+uplo=L n=6 nrhs=16 batch=8192 | blocked 0.1983 # deep
+uplo=L n=6 nrhs=16 batch=32768 | blocked 0.7463 # deep
+uplo=L n=6 nrhs=64 batch=128 | blocked 0.03723 # deep
+uplo=L n=6 nrhs=64 batch=512 | blocked 0.04541 # deep
+uplo=L n=6 nrhs=64 batch=2048 | blocked 0.09527 # deep
+uplo=L n=6 nrhs=64 batch=8192 | blocked 0.3270 # deep
+uplo=L n=6 nrhs=64 batch=32768 | blocked 1.249 # deep
+uplo=L n=7 nrhs=1 batch=2048 | tiny 0.06339 | blocked 0.06267 | cta 0.08332 # deep
+uplo=L n=7 nrhs=2 batch=2048 | blocked 0.06282 | tiny 0.07076 | cta 0.1469 # deep
+uplo=L n=7 nrhs=4 batch=8192 | tiny 0.1883 | blocked 0.1993 | cta 1.000 # deep
+uplo=L n=7 nrhs=4 batch=32768 | tiny 0.7230 | blocked 0.7395 | cta 3.900 # deep
+uplo=L n=8 nrhs=1 batch=128 | blocked 0.03772 | cta 0.04754 | tiny 0.07060 # deep
+uplo=L n=8 nrhs=1 batch=512 | blocked 0.03838 | cta 0.04869 | tiny 0.07067 # deep
+uplo=L n=8 nrhs=1 batch=2048 | blocked 0.06262 | tiny 0.07189 | cta 0.09200 # deep
+uplo=L n=8 nrhs=1 batch=8192 | tiny 0.1635 | blocked 0.1994 | cta 0.3195 # deep
+uplo=L n=8 nrhs=1 batch=32768 | tiny 0.5770 | blocked 0.7460 | cta 1.214 # deep
+uplo=L n=8 nrhs=2 batch=128 | blocked 0.03805 | cta 0.04929 | tiny 0.07999 # deep
+uplo=L n=8 nrhs=2 batch=512 | blocked 0.03803 | cta 0.05911 | tiny 0.07969 # deep
+uplo=L n=8 nrhs=2 batch=2048 | blocked 0.06251 | tiny 0.07933 | cta 0.1643 # deep
+uplo=L n=8 nrhs=2 batch=8192 | tiny 0.1825 | blocked 0.1999 | cta 0.5909 # deep
+uplo=L n=8 nrhs=2 batch=32768 | tiny 0.6465 | blocked 0.7486 | cta 2.310 # deep
+uplo=L n=8 nrhs=3 batch=8192 | tiny 0.1995 | blocked 0.1999 | cta 0.8646 # deep
+uplo=L n=8 nrhs=3 batch=32768 | blocked 0.7496 | tiny 0.7783 | cta 3.411 # deep
+uplo=L n=8 nrhs=4 batch=128 | blocked 0.03823 | cta 0.07976 | tiny 0.09641 # deep
+uplo=L n=8 nrhs=4 batch=512 | blocked 0.03819 | tiny 0.09595 | cta 0.09728 # deep
+uplo=L n=8 nrhs=4 batch=2048 | blocked 0.06327 | tiny 0.09553 | cta 0.3059 # deep
+uplo=L n=8 nrhs=4 batch=8192 | blocked 0.1997 | tiny 0.2147 | cta 1.140 # deep
+uplo=L n=8 nrhs=4 batch=32768 | blocked 0.7464 | tiny 0.8334 | cta 4.493 # deep
+uplo=L n=8 nrhs=8 batch=128 | blocked 0.03758 | cta 0.1363 # deep
+uplo=L n=8 nrhs=8 batch=512 | blocked 0.03895 | cta 0.1754 # deep
+uplo=L n=8 nrhs=8 batch=2048 | blocked 0.06340 | cta 0.7158 # deep
+uplo=L n=8 nrhs=8 batch=8192 | blocked 0.1980 | cta 2.301 # deep
+uplo=L n=8 nrhs=8 batch=32768 | blocked 0.7495 | cta 8.865 # deep
+uplo=L n=8 nrhs=16 batch=128 | blocked 0.03854 # deep
+uplo=L n=8 nrhs=16 batch=512 | blocked 0.04016 # deep
+uplo=L n=8 nrhs=16 batch=2048 | blocked 0.06543 # deep
+uplo=L n=8 nrhs=16 batch=8192 | blocked 0.2008 # deep
+uplo=L n=8 nrhs=16 batch=32768 | blocked 0.7554 # deep
+uplo=L n=8 nrhs=64 batch=128 | blocked 0.04063 # deep
+uplo=L n=8 nrhs=64 batch=512 | blocked 0.05154 # deep
+uplo=L n=8 nrhs=64 batch=2048 | blocked 0.1128 # deep
+uplo=L n=8 nrhs=64 batch=8192 | blocked 0.3514 # deep
+uplo=L n=8 nrhs=64 batch=32768 | blocked 1.456 # deep
+uplo=L n=10 nrhs=1 batch=128 | cta 0.06017 | blocked 0.07452 | tiny 0.09650 # deep
+uplo=L n=10 nrhs=1 batch=512 | cta 0.06577 | blocked 0.07947 | tiny 0.09496 # deep
+uplo=L n=10 nrhs=1 batch=2048 | tiny 0.1128 | cta 0.1476 | blocked 0.1732 # deep
+uplo=L n=10 nrhs=2 batch=128 | cta 0.06264 | blocked 0.07494 | tiny 0.1090 # deep
+uplo=L n=10 nrhs=2 batch=2048 | tiny 0.1247 | blocked 0.1732 | cta 0.2376 # deep
+uplo=L n=10 nrhs=4 batch=2048 | tiny 0.1459 | blocked 0.1737 | cta 0.4126 # deep
+uplo=L n=10 nrhs=4 batch=8192 | tiny 0.5455 | blocked 0.6541 | cta 1.575 # deep
+uplo=L n=12 nrhs=1 batch=128 | cta 0.06866 | blocked 0.07620 | tiny 0.1137 # deep
+uplo=L n=12 nrhs=1 batch=512 | cta 0.07537 | blocked 0.08252 | tiny 0.1121 # deep
+uplo=L n=12 nrhs=1 batch=2048 | tiny 0.1361 | cta 0.1657 | blocked 0.1736 # deep
+uplo=L n=12 nrhs=1 batch=8192 | tiny 0.5167 | cta 0.6198 | blocked 0.6411 # deep
+uplo=L n=12 nrhs=1 batch=32768 | tiny 1.907 | cta 2.390 | blocked 2.487 # deep
+uplo=L n=12 nrhs=2 batch=128 | cta 0.07140 | blocked 0.07692 | tiny 0.1283 # deep
+uplo=L n=12 nrhs=2 batch=512 | blocked 0.08351 | cta 0.09204 | tiny 0.1271 # deep
+uplo=L n=12 nrhs=2 batch=2048 | tiny 0.1493 | blocked 0.1716 | cta 0.2715 # deep
+uplo=L n=12 nrhs=2 batch=8192 | tiny 0.5647 | blocked 0.6504 | cta 1.030 # deep
+uplo=L n=12 nrhs=2 batch=32768 | tiny 2.211 | blocked 2.486 | cta 4.027 # deep
+uplo=L n=12 nrhs=3 batch=128 | blocked 0.07668 | cta 0.1135 | tiny 0.1460 # deep
+uplo=L n=12 nrhs=3 batch=32768 | tiny 2.471 | blocked 2.494 | cta 5.700 # deep
+uplo=L n=12 nrhs=4 batch=128 | blocked 0.07659 | cta 0.1170 | tiny 0.1529 # deep
+uplo=L n=12 nrhs=4 batch=512 | blocked 0.08270 | cta 0.1493 | tiny 0.1507 # deep
+uplo=L n=12 nrhs=4 batch=2048 | tiny 0.1758 | blocked 0.1738 | cta 0.4880 # deep
+uplo=L n=12 nrhs=4 batch=8192 | tiny 0.6636 | blocked 0.6572 | cta 1.859 # deep
+uplo=L n=12 nrhs=4 batch=32768 | blocked 2.524 | tiny 2.632 | cta 7.354 # deep
+uplo=L n=12 nrhs=6 batch=2048 | blocked 0.1735 | cta 0.8444 # deep
+uplo=L n=12 nrhs=6 batch=8192 | blocked 0.6417 | cta 2.777 # deep
+uplo=L n=12 nrhs=8 batch=128 | blocked 0.07674 | cta 0.2052 # deep
+uplo=L n=12 nrhs=8 batch=512 | blocked 0.08312 | cta 0.2651 # deep
+uplo=L n=12 nrhs=8 batch=2048 | blocked 0.1738 | cta 1.106 # deep
+uplo=L n=12 nrhs=8 batch=8192 | blocked 0.6438 | cta 3.668 # deep
+uplo=L n=12 nrhs=8 batch=32768 | blocked 2.532 | cta 13.96 # deep
+uplo=L n=12 nrhs=16 batch=128 | blocked 0.07636 # deep
+uplo=L n=12 nrhs=16 batch=512 | blocked 0.08536 # deep
+uplo=L n=12 nrhs=16 batch=2048 | blocked 0.1753 # deep
+uplo=L n=12 nrhs=16 batch=8192 | blocked 0.6537 # deep
+uplo=L n=12 nrhs=16 batch=32768 | blocked 2.539 # deep
+uplo=L n=12 nrhs=64 batch=128 | blocked 0.08037 # deep
+uplo=L n=12 nrhs=64 batch=512 | blocked 0.1080 # deep
+uplo=L n=12 nrhs=64 batch=2048 | blocked 0.3204 # deep
+uplo=L n=12 nrhs=64 batch=8192 | blocked 1.205 # deep
+uplo=L n=12 nrhs=64 batch=32768 | blocked 4.228 # deep
+uplo=L n=14 nrhs=1 batch=128 | cta 0.07838 | blocked 0.07952 | tiny 0.1319 # deep
+uplo=L n=14 nrhs=1 batch=512 | cta 0.08528 | blocked 0.08548 | tiny 0.1299 # deep
+uplo=L n=14 nrhs=1 batch=2048 | tiny 0.1609 | blocked 0.1741 | cta 0.1847 # deep
+uplo=L n=14 nrhs=1 batch=8192 | tiny 0.6077 | blocked 0.6570 | cta 0.7000 # deep
+uplo=L n=14 nrhs=1 batch=32768 | tiny 2.228 | blocked 2.474 | cta 2.652 # deep
+uplo=L n=14 nrhs=2 batch=128 | cta 0.08051 | blocked 0.07889 | tiny 0.1480 # deep
+uplo=L n=14 nrhs=2 batch=2048 | tiny 0.1774 | blocked 0.1740 | cta 0.3104 # deep
+uplo=L n=14 nrhs=2 batch=8192 | blocked 0.6430 | tiny 0.6700 | cta 1.168 # deep
+uplo=L n=14 nrhs=2 batch=32768 | blocked 2.538 | tiny 2.676 | cta 4.642 # deep
+uplo=L n=14 nrhs=4 batch=2048 | blocked 0.1743 | tiny 0.2069 | cta 0.5602 # deep
+uplo=L n=14 nrhs=4 batch=8192 | blocked 0.6527 | tiny 0.7874 | cta 2.154 # deep
+uplo=L n=16 nrhs=1 batch=128 | blocked 0.08098 | cta 0.08653 | tiny 0.1491 # deep
+uplo=L n=16 nrhs=1 batch=512 | blocked 0.08908 | cta 0.09595 | tiny 0.1484 # deep
+uplo=L n=16 nrhs=1 batch=2048 | blocked 0.1748 | tiny 0.1868 | cta 0.2035 # deep
+uplo=L n=16 nrhs=1 batch=8192 | blocked 0.6465 | tiny 0.7110 | cta 0.7675 # deep
+uplo=L n=16 nrhs=1 batch=32768 | blocked 2.514 | tiny 2.634 | cta 2.976 # deep
+uplo=L n=16 nrhs=2 batch=128 | blocked 0.08187 | cta 0.09045 | tiny 0.1691 # deep
+uplo=L n=16 nrhs=2 batch=512 | blocked 0.08893 | cta 0.1159 | tiny 0.1651 # deep
+uplo=L n=16 nrhs=2 batch=2048 | blocked 0.1751 | tiny 0.2061 | cta 0.3490 # deep
+uplo=L n=16 nrhs=2 batch=8192 | blocked 0.6507 | tiny 0.7745 | cta 1.310 # deep
+uplo=L n=16 nrhs=2 batch=32768 | blocked 2.545 | tiny 3.135 | cta 5.206 # deep
+uplo=L n=16 nrhs=4 batch=128 | blocked 0.08193 | cta 0.1506 | tiny 0.2021 # deep
+uplo=L n=16 nrhs=4 batch=512 | blocked 0.08865 | cta 0.1927 | tiny 0.1975 # deep
+uplo=L n=16 nrhs=4 batch=2048 | blocked 0.1748 | tiny 0.2389 | cta 0.6300 # deep
+uplo=L n=16 nrhs=4 batch=8192 | blocked 0.6598 | tiny 0.9109 | cta 2.422 # deep
+uplo=L n=16 nrhs=4 batch=32768 | blocked 2.555 | tiny 3.660 | cta 9.605 # deep
+uplo=L n=16 nrhs=8 batch=128 | blocked 0.08204 | cta 0.2682 # deep
+uplo=L n=16 nrhs=8 batch=512 | blocked 0.09061 | cta 0.3491 # deep
+uplo=L n=16 nrhs=8 batch=2048 | blocked 0.1746 | cta 1.460 # deep
+uplo=L n=16 nrhs=8 batch=8192 | blocked 0.6716 | cta 4.815 # deep
+uplo=L n=16 nrhs=8 batch=32768 | blocked 2.568 | cta 18.44 # deep
+uplo=L n=16 nrhs=16 batch=128 | blocked 0.08190 # deep
+uplo=L n=16 nrhs=16 batch=512 | blocked 0.09429 # deep
+uplo=L n=16 nrhs=16 batch=2048 | blocked 0.1807 # deep
+uplo=L n=16 nrhs=16 batch=8192 | blocked 0.6750 # deep
+uplo=L n=16 nrhs=16 batch=32768 | blocked 2.585 # deep
+uplo=L n=16 nrhs=64 batch=128 | blocked 0.08607 # deep
+uplo=L n=16 nrhs=64 batch=512 | blocked 0.1174 # deep
+uplo=L n=16 nrhs=64 batch=2048 | blocked 0.3343 # deep
+uplo=L n=16 nrhs=64 batch=8192 | blocked 1.246 # deep
+uplo=L n=16 nrhs=64 batch=32768 | blocked 4.496 # deep
+uplo=L n=18 nrhs=1 batch=128 | cta 0.1280 | blocked 0.2338 # deep
+uplo=L n=18 nrhs=1 batch=512 | cta 0.1350 | blocked 0.2384 # deep
+uplo=L n=18 nrhs=1 batch=2048 | cta 0.3108 | blocked 0.7092 # deep
+uplo=L n=18 nrhs=1 batch=8192 | cta 1.127 | blocked 2.162 # deep
+uplo=L n=18 nrhs=1 batch=32768 | cta 4.482 | blocked 8.094 # deep
+uplo=L n=18 nrhs=2 batch=128 | cta 0.1336 | blocked 0.2336 # deep
+uplo=L n=18 nrhs=2 batch=512 | cta 0.1595 | blocked 0.2381 # deep
+uplo=L n=18 nrhs=2 batch=2048 | cta 0.4807 | blocked 0.7089 # deep
+uplo=L n=18 nrhs=2 batch=8192 | cta 1.755 | blocked 2.164 # deep
+uplo=L n=18 nrhs=2 batch=32768 | cta 7.024 | blocked 8.112 # deep
+uplo=L n=18 nrhs=4 batch=128 | cta 0.2064 | blocked 0.2333 # deep
+uplo=L n=20 nrhs=1 batch=128 | cta 0.1351 | blocked 0.2334 # deep
+uplo=L n=20 nrhs=1 batch=512 | cta 0.1463 | blocked 0.2428 # deep
+uplo=L n=20 nrhs=1 batch=2048 | cta 0.3359 | blocked 0.7189 # deep
+uplo=L n=20 nrhs=1 batch=8192 | cta 1.226 | blocked 2.188 # deep
+uplo=L n=20 nrhs=1 batch=32768 | cta 4.804 | blocked 8.123 # deep
+uplo=L n=20 nrhs=2 batch=128 | cta 0.1426 | blocked 0.2354 # deep
+uplo=L n=20 nrhs=2 batch=512 | cta 0.1744 | blocked 0.2424 # deep
+uplo=L n=20 nrhs=2 batch=2048 | cta 0.5237 | blocked 0.7179 # deep
+uplo=L n=20 nrhs=2 batch=8192 | cta 1.942 | blocked 2.212 # deep
+uplo=L n=20 nrhs=2 batch=32768 | cta 7.683 | blocked 8.176 # deep
+uplo=L n=20 nrhs=3 batch=512 | cta 0.2470 | blocked 0.2429 # deep
+uplo=L n=20 nrhs=3 batch=2048 | cta 0.7084 | blocked 0.7165 # deep
+uplo=L n=20 nrhs=3 batch=8192 | blocked 2.198 | cta 2.628 # deep
+uplo=L n=20 nrhs=3 batch=32768 | blocked 8.204 | cta 10.54 # deep
+uplo=L n=20 nrhs=4 batch=128 | cta 0.2234 | blocked 0.2359 # deep
+uplo=L n=20 nrhs=4 batch=512 | blocked 0.2428 | cta 0.2752 # deep
+uplo=L n=20 nrhs=4 batch=2048 | blocked 0.7180 | cta 0.8945 # deep
+uplo=L n=20 nrhs=4 batch=8192 | blocked 2.212 | cta 3.373 # deep
+uplo=L n=20 nrhs=4 batch=32768 | blocked 8.229 | cta 13.39 # deep
+uplo=L n=20 nrhs=6 batch=128 | blocked 0.2354 | cta 0.2987 # deep
+uplo=L n=20 nrhs=8 batch=128 | blocked 0.2356 | cta 0.3762 # deep
+uplo=L n=20 nrhs=8 batch=512 | blocked 0.2444 | cta 0.4752 # deep
+uplo=L n=20 nrhs=8 batch=2048 | blocked 0.7225 | cta 1.956 # deep
+uplo=L n=20 nrhs=8 batch=8192 | blocked 2.241 | cta 6.458 # deep
+uplo=L n=20 nrhs=8 batch=32768 | blocked 8.230 | cta 24.70 # deep
+uplo=L n=20 nrhs=16 batch=128 | blocked 0.2362 # deep
+uplo=L n=20 nrhs=16 batch=512 | blocked 0.2468 # deep
+uplo=L n=20 nrhs=16 batch=2048 | blocked 0.6942 # deep
+uplo=L n=20 nrhs=16 batch=8192 | blocked 2.254 # deep
+uplo=L n=20 nrhs=16 batch=32768 | blocked 8.312 # deep
+uplo=L n=20 nrhs=64 batch=128 | blocked 0.2424 # deep
+uplo=L n=20 nrhs=64 batch=512 | blocked 0.3071 # deep
+uplo=L n=20 nrhs=64 batch=2048 | blocked 1.048 # deep
+uplo=L n=20 nrhs=64 batch=8192 | blocked 3.812 # deep
+uplo=L n=20 nrhs=64 batch=32768 | blocked 14.43 # deep
+uplo=L n=22 nrhs=2 batch=32768 | cta 8.392 | blocked 8.355 # deep
+uplo=L n=22 nrhs=4 batch=128 | cta 0.2407 | blocked 0.2379 # deep
+uplo=L n=24 nrhs=1 batch=128 | cta 0.1538 | blocked 0.2395 # deep
+uplo=L n=24 nrhs=1 batch=512 | cta 0.1705 | blocked 0.2532 # deep
+uplo=L n=24 nrhs=1 batch=2048 | cta 0.3938 | blocked 0.7401 # deep
+uplo=L n=24 nrhs=1 batch=8192 | cta 1.456 | blocked 2.304 # deep
+uplo=L n=24 nrhs=1 batch=32768 | cta 5.712 | blocked 8.536 # deep
+uplo=L n=24 nrhs=2 batch=128 | cta 0.1613 | blocked 0.2414 # deep
+uplo=L n=24 nrhs=2 batch=512 | cta 0.2014 | blocked 0.2514 # deep
+uplo=L n=24 nrhs=2 batch=2048 | cta 0.6126 | blocked 0.7326 # deep
+uplo=L n=24 nrhs=2 batch=8192 | cta 2.310 | blocked 2.314 # deep
+uplo=L n=24 nrhs=2 batch=32768 | blocked 8.554 | cta 9.131 # deep
+uplo=L n=24 nrhs=3 batch=128 | blocked 0.2403 | cta 0.2487 # deep
+uplo=L n=24 nrhs=3 batch=512 | blocked 0.2537 | cta 0.2929 # deep
+uplo=L n=24 nrhs=3 batch=2048 | blocked 0.7409 | cta 0.8422 # deep
+uplo=L n=24 nrhs=3 batch=8192 | blocked 2.302 | cta 3.177 # deep
+uplo=L n=24 nrhs=4 batch=128 | blocked 0.2406 | cta 0.2576 # deep
+uplo=L n=24 nrhs=4 batch=512 | blocked 0.2544 | cta 0.3252 # deep
+uplo=L n=24 nrhs=4 batch=2048 | blocked 0.7394 | cta 1.062 # deep
+uplo=L n=24 nrhs=4 batch=8192 | blocked 2.310 | cta 4.024 # deep
+uplo=L n=24 nrhs=4 batch=32768 | blocked 8.557 | cta 15.94 # deep
+uplo=L n=24 nrhs=8 batch=128 | blocked 0.2394 | cta 0.4374 # deep
+uplo=L n=24 nrhs=8 batch=512 | blocked 0.2564 | cta 0.5653 # deep
+uplo=L n=24 nrhs=8 batch=2048 | blocked 0.7467 | cta 2.341 # deep
+uplo=L n=24 nrhs=8 batch=8192 | blocked 2.326 | cta 7.718 # deep
+uplo=L n=24 nrhs=8 batch=32768 | blocked 8.585 | cta 29.58 # deep
+uplo=L n=24 nrhs=16 batch=128 | blocked 0.2403 # deep
+uplo=L n=24 nrhs=16 batch=512 | blocked 0.2584 # deep
+uplo=L n=24 nrhs=16 batch=2048 | blocked 0.6698 # deep
+uplo=L n=24 nrhs=16 batch=8192 | blocked 2.362 # deep
+uplo=L n=24 nrhs=16 batch=32768 | blocked 8.699 # deep
+uplo=L n=24 nrhs=64 batch=128 | blocked 0.2505 # deep
+uplo=L n=24 nrhs=64 batch=512 | blocked 0.3221 # deep
+uplo=L n=24 nrhs=64 batch=2048 | blocked 1.093 # deep
+uplo=L n=24 nrhs=64 batch=8192 | blocked 3.943 # deep
+uplo=L n=24 nrhs=64 batch=32768 | blocked 14.84 # deep
+uplo=L n=26 nrhs=2 batch=8192 | blocked 2.525 | cta 2.668 # deep
+uplo=L n=28 nrhs=1 batch=128 | cta 0.1721 | blocked 0.2446 # deep
+uplo=L n=28 nrhs=1 batch=512 | cta 0.2185 | blocked 0.2875 # deep
+uplo=L n=28 nrhs=1 batch=2048 | cta 0.5071 | blocked 0.8177 # deep
+uplo=L n=28 nrhs=1 batch=8192 | cta 1.883 | blocked 2.585 # deep
+uplo=L n=28 nrhs=1 batch=32768 | cta 7.390 | blocked 9.681 # deep
+uplo=L n=28 nrhs=2 batch=128 | cta 0.1800 | blocked 0.2457 # deep
+uplo=L n=28 nrhs=2 batch=512 | cta 0.2567 | blocked 0.2873 # deep
+uplo=L n=28 nrhs=2 batch=2048 | cta 0.7719 | blocked 0.8174 # deep
+uplo=L n=28 nrhs=2 batch=8192 | blocked 2.589 | cta 2.870 # deep
+uplo=L n=28 nrhs=2 batch=32768 | blocked 9.678 | cta 11.37 # deep
+uplo=L n=28 nrhs=3 batch=128 | blocked 0.2456 | cta 0.2823 # deep
+uplo=L n=28 nrhs=3 batch=512 | blocked 0.2883 | cta 0.3607 # deep
+uplo=L n=28 nrhs=3 batch=2048 | blocked 0.8181 | cta 1.032 # deep
+uplo=L n=28 nrhs=4 batch=128 | blocked 0.2455 | cta 0.2929 # deep
+uplo=L n=28 nrhs=4 batch=512 | blocked 0.2883 | cta 0.3982 # deep
+uplo=L n=28 nrhs=4 batch=2048 | blocked 0.8170 | cta 1.288 # deep
+uplo=L n=28 nrhs=4 batch=8192 | blocked 2.580 | cta 4.873 # deep
+uplo=L n=28 nrhs=4 batch=32768 | blocked 9.691 | cta 19.36 # deep
+uplo=L n=28 nrhs=8 batch=128 | blocked 0.2470 | cta 0.5085 # deep
+uplo=L n=28 nrhs=8 batch=512 | blocked 0.2902 | cta 0.6783 # deep
+uplo=L n=28 nrhs=8 batch=2048 | blocked 0.8245 | cta 2.785 # deep
+uplo=L n=28 nrhs=8 batch=8192 | blocked 2.580 | cta 9.201 # deep
+uplo=L n=28 nrhs=8 batch=32768 | blocked 9.712 | cta 35.31 # deep
+uplo=L n=28 nrhs=16 batch=128 | blocked 0.2462 # deep
+uplo=L n=28 nrhs=16 batch=512 | blocked 0.2955 # deep
+uplo=L n=28 nrhs=16 batch=2048 | blocked 0.7542 # deep
+uplo=L n=28 nrhs=16 batch=8192 | blocked 2.620 # deep
+uplo=L n=28 nrhs=16 batch=32768 | blocked 9.793 # deep
+uplo=L n=28 nrhs=64 batch=128 | blocked 0.2553 # deep
+uplo=L n=28 nrhs=64 batch=512 | blocked 0.3563 # deep
+uplo=L n=28 nrhs=64 batch=2048 | blocked 1.190 # deep
+uplo=L n=28 nrhs=64 batch=8192 | blocked 4.230 # deep
+uplo=L n=28 nrhs=64 batch=32768 | blocked 15.94 # deep
+uplo=L n=30 nrhs=2 batch=2048 | cta 0.8171 | blocked 0.8274 # deep
+uplo=L n=32 nrhs=1 batch=128 | cta 0.1898 | blocked 0.2511 # deep
+uplo=L n=32 nrhs=1 batch=512 | cta 0.2409 | blocked 0.2962 # deep
+uplo=L n=32 nrhs=1 batch=2048 | cta 0.5637 | blocked 0.8393 # deep
+uplo=L n=32 nrhs=1 batch=8192 | cta 2.113 | blocked 2.662 # deep
+uplo=L n=32 nrhs=1 batch=32768 | cta 8.254 | blocked 10.02 # deep
+uplo=L n=32 nrhs=2 batch=128 | cta 0.1989 | blocked 0.2514 # deep
+uplo=L n=32 nrhs=2 batch=512 | cta 0.2849 | blocked 0.2970 # deep
+uplo=L n=32 nrhs=2 batch=2048 | blocked 0.8394 | cta 0.8663 # deep
+uplo=L n=32 nrhs=2 batch=8192 | blocked 2.647 | cta 3.229 # deep
+uplo=L n=32 nrhs=2 batch=32768 | blocked 10.02 | cta 12.80 # deep
+uplo=L n=32 nrhs=3 batch=128 | blocked 0.2514 | cta 0.3149 # deep
+uplo=L n=32 nrhs=3 batch=512 | blocked 0.2970 | cta 0.4018 # deep
+uplo=L n=32 nrhs=4 batch=128 | blocked 0.2501 | cta 0.3253 # deep
+uplo=L n=32 nrhs=4 batch=512 | blocked 0.2964 | cta 0.4464 # deep
+uplo=L n=32 nrhs=4 batch=2048 | blocked 0.8408 | cta 1.459 # deep
+uplo=L n=32 nrhs=4 batch=8192 | blocked 2.634 | cta 5.465 # deep
+uplo=L n=32 nrhs=4 batch=32768 | blocked 10.04 | cta 21.92 # deep
+uplo=L n=32 nrhs=8 batch=128 | blocked 0.2523 | cta 0.5728 # deep
+uplo=L n=32 nrhs=8 batch=512 | blocked 0.2979 | cta 0.7674 # deep
+uplo=L n=32 nrhs=8 batch=2048 | blocked 0.8497 | cta 3.170 # deep
+uplo=L n=32 nrhs=8 batch=8192 | blocked 2.678 | cta 10.48 # deep
+uplo=L n=32 nrhs=8 batch=32768 | blocked 9.997 | cta 39.76 # deep
+uplo=L n=32 nrhs=16 batch=128 | blocked 0.2522 # deep
+uplo=L n=32 nrhs=16 batch=512 | blocked 0.3018 # deep
+uplo=L n=32 nrhs=16 batch=2048 | blocked 0.7742 # deep
+uplo=L n=32 nrhs=16 batch=8192 | blocked 2.765 # deep
+uplo=L n=32 nrhs=16 batch=32768 | blocked 10.23 # deep
+uplo=L n=32 nrhs=64 batch=128 | blocked 0.2590 # deep
+uplo=L n=32 nrhs=64 batch=512 | blocked 0.3661 # deep
+uplo=L n=32 nrhs=64 batch=2048 | blocked 1.211 # deep
+uplo=L n=32 nrhs=64 batch=8192 | blocked 4.349 # deep
+uplo=L n=32 nrhs=64 batch=32768 | blocked 16.53 # deep
+uplo=L n=34 nrhs=2 batch=2048 | cta 1.120 | blocked 1.512 # deep
+uplo=L n=34 nrhs=2 batch=8192 | cta 4.048 | blocked 5.009 # deep
+uplo=L n=34 nrhs=2 batch=32768 | cta 16.02 | blocked 19.39 # deep
+uplo=L n=36 nrhs=1 batch=128 | cta 0.2488 | blocked 0.3168 # deep
+uplo=L n=36 nrhs=1 batch=512 | cta 0.3062 | blocked 0.3676 # deep
+uplo=L n=36 nrhs=1 batch=2048 | cta 0.8246 | blocked 1.113 # deep
+uplo=L n=36 nrhs=1 batch=8192 | cta 3.235 | blocked 3.814 # deep
+uplo=L n=36 nrhs=1 batch=32768 | cta 12.80 | blocked 14.73 # deep
+uplo=L n=36 nrhs=2 batch=128 | cta 0.2611 | blocked 0.3817 # deep
+uplo=L n=36 nrhs=2 batch=512 | cta 0.3611 | blocked 0.5074 # deep
+uplo=L n=36 nrhs=2 batch=2048 | cta 1.170 | blocked 1.524 # deep
+uplo=L n=36 nrhs=2 batch=8192 | cta 4.518 | blocked 5.328 # deep
+uplo=L n=36 nrhs=2 batch=32768 | cta 17.98 | blocked 20.78 # deep
+uplo=L n=36 nrhs=3 batch=128 | blocked 0.3826 | cta 0.3945 # deep
+uplo=L n=36 nrhs=3 batch=512 | cta 0.4925 | blocked 0.5038 # deep
+uplo=L n=36 nrhs=3 batch=2048 | cta 1.493 | blocked 1.511 # deep
+uplo=L n=36 nrhs=3 batch=8192 | blocked 5.352 | cta 5.840 # deep
+uplo=L n=36 nrhs=3 batch=32768 | blocked 20.80 | cta 23.19 # deep
+uplo=L n=36 nrhs=4 batch=128 | blocked 0.3827 | cta 0.4096 # deep
+uplo=L n=36 nrhs=4 batch=512 | blocked 0.5053 | cta 0.5427 # deep
+uplo=L n=36 nrhs=4 batch=2048 | blocked 1.526 | cta 1.848 # deep
+uplo=L n=36 nrhs=4 batch=8192 | blocked 5.338 | cta 7.139 # deep
+uplo=L n=36 nrhs=4 batch=32768 | blocked 20.81 | cta 28.39 # deep
+uplo=L n=36 nrhs=8 batch=128 | blocked 0.3827 | cta 0.6929 # deep
+uplo=L n=36 nrhs=8 batch=512 | blocked 0.5116 | cta 0.9140 # deep
+uplo=L n=36 nrhs=8 batch=2048 | blocked 1.538 | cta 3.793 # deep
+uplo=L n=36 nrhs=8 batch=8192 | blocked 5.375 | cta 12.78 # deep
+uplo=L n=36 nrhs=8 batch=32768 | blocked 20.85 | cta 49.23 # deep
+uplo=L n=36 nrhs=16 batch=128 | blocked 0.3848 # deep
+uplo=L n=36 nrhs=16 batch=512 | blocked 0.5141 # deep
+uplo=L n=36 nrhs=16 batch=2048 | blocked 1.484 # deep
+uplo=L n=36 nrhs=16 batch=8192 | blocked 5.451 # deep
+uplo=L n=36 nrhs=16 batch=32768 | blocked 20.95 # deep
+uplo=L n=36 nrhs=64 batch=128 | blocked 0.3969 # deep
+uplo=L n=36 nrhs=64 batch=512 | blocked 0.6611 # deep
+uplo=L n=36 nrhs=64 batch=2048 | blocked 2.341 # deep
+uplo=L n=36 nrhs=64 batch=8192 | blocked 8.808 # deep
+uplo=L n=36 nrhs=64 batch=32768 | blocked 34.00 # deep
+uplo=L n=40 nrhs=1 batch=128 | cta 0.2676 | blocked 0.3208 # deep
+uplo=L n=40 nrhs=1 batch=512 | cta 0.3919 | blocked 0.4390 # deep
+uplo=L n=40 nrhs=1 batch=2048 | cta 1.018 | blocked 1.270 # deep
+uplo=L n=40 nrhs=1 batch=8192 | cta 3.785 | blocked 4.227 # deep
+uplo=L n=40 nrhs=1 batch=32768 | cta 14.87 | blocked 16.27 # deep
+uplo=L n=40 nrhs=2 batch=128 | cta 0.2780 | blocked 0.3828 # deep
+uplo=L n=40 nrhs=2 batch=512 | cta 0.4420 | blocked 0.5696 # deep
+uplo=L n=40 nrhs=2 batch=2048 | cta 1.411 | blocked 1.696 # deep
+uplo=L n=40 nrhs=2 batch=8192 | cta 5.216 | blocked 5.766 # deep
+uplo=L n=40 nrhs=2 batch=32768 | cta 20.40 | blocked 22.10 # deep
+uplo=L n=40 nrhs=3 batch=128 | blocked 0.3880 | cta 0.4284 # deep
+uplo=L n=40 nrhs=3 batch=512 | blocked 0.5752 | cta 0.5978 # deep
+uplo=L n=40 nrhs=3 batch=2048 | blocked 1.666 | cta 1.758 # deep
+uplo=L n=40 nrhs=3 batch=8192 | blocked 5.759 | cta 6.666 # deep
+uplo=L n=40 nrhs=3 batch=32768 | blocked 22.33 | cta 26.42 # deep
+uplo=L n=40 nrhs=4 batch=128 | blocked 0.3879 | cta 0.4457 # deep
+uplo=L n=40 nrhs=4 batch=512 | blocked 0.5776 | cta 0.6562 # deep
+uplo=L n=40 nrhs=4 batch=2048 | blocked 1.688 | cta 2.160 # deep
+uplo=L n=40 nrhs=4 batch=8192 | blocked 5.689 | cta 8.033 # deep
+uplo=L n=40 nrhs=4 batch=32768 | blocked 22.32 | cta 32.16 # deep
+uplo=L n=40 nrhs=8 batch=128 | blocked 0.3829 | cta 0.7502 # deep
+uplo=L n=40 nrhs=8 batch=512 | blocked 0.5807 | cta 1.062 # deep
+uplo=L n=40 nrhs=8 batch=2048 | blocked 1.642 | cta 4.276 # deep
+uplo=L n=40 nrhs=8 batch=8192 | blocked 5.814 | cta 14.41 # deep
+uplo=L n=40 nrhs=8 batch=32768 | blocked 22.39 | cta 55.30 # deep
+uplo=L n=40 nrhs=16 batch=128 | blocked 0.3885 # deep
+uplo=L n=40 nrhs=16 batch=512 | blocked 0.5814 # deep
+uplo=L n=40 nrhs=16 batch=2048 | blocked 1.634 # deep
+uplo=L n=40 nrhs=16 batch=8192 | blocked 5.857 # deep
+uplo=L n=40 nrhs=16 batch=32768 | blocked 22.62 # deep
+uplo=L n=40 nrhs=64 batch=128 | blocked 0.4047 # deep
+uplo=L n=40 nrhs=64 batch=512 | blocked 0.7309 # deep
+uplo=L n=40 nrhs=64 batch=2048 | blocked 2.491 # deep
+uplo=L n=40 nrhs=64 batch=8192 | blocked 9.336 # deep
+uplo=L n=48 nrhs=1 batch=128 | cta 0.3036 | blocked 0.3611 # deep
+uplo=L n=48 nrhs=1 batch=512 | cta 0.4201 | blocked 0.4728 # deep
+uplo=L n=48 nrhs=1 batch=2048 | cta 1.183 | blocked 1.403 # deep
+uplo=L n=48 nrhs=1 batch=8192 | cta 4.605 | blocked 5.122 # deep
+uplo=L n=48 nrhs=1 batch=32768 | cta 18.10 | blocked 19.66 # deep
+uplo=L n=48 nrhs=2 batch=128 | cta 0.3168 | blocked 0.4243 # deep
+uplo=L n=48 nrhs=2 batch=512 | cta 0.4884 | blocked 0.6101 # deep
+uplo=L n=48 nrhs=2 batch=2048 | cta 1.653 | blocked 1.820 # deep
+uplo=L n=48 nrhs=2 batch=8192 | cta 6.250 | blocked 6.547 # deep
+uplo=L n=48 nrhs=2 batch=32768 | cta 25.02 | blocked 25.56 # deep
+uplo=L n=48 nrhs=3 batch=128 | blocked 0.4280 | cta 0.4967 # deep
+uplo=L n=48 nrhs=3 batch=512 | blocked 0.6088 | cta 0.6676 # deep
+uplo=L n=48 nrhs=3 batch=2048 | blocked 1.801 | cta 2.073 # deep
+uplo=L n=48 nrhs=3 batch=8192 | blocked 6.620 | cta 8.065 # deep
+uplo=L n=48 nrhs=3 batch=32768 | blocked 25.57 | cta 31.95 # deep
+uplo=L n=48 nrhs=4 batch=128 | blocked 0.4278 | cta 0.5151 # deep
+uplo=L n=48 nrhs=4 batch=512 | blocked 0.6077 | cta 0.7344 # deep
+uplo=L n=48 nrhs=4 batch=2048 | blocked 1.804 | cta 2.547 # deep
+uplo=L n=48 nrhs=4 batch=8192 | blocked 6.642 | cta 9.815 # deep
+uplo=L n=48 nrhs=4 batch=32768 | blocked 25.59 | cta 38.88 # deep
+uplo=L n=48 nrhs=8 batch=128 | blocked 0.4304 | cta 0.8911 # deep
+uplo=L n=48 nrhs=8 batch=512 | blocked 0.6070 | cta 1.208 # deep
+uplo=L n=48 nrhs=8 batch=2048 | blocked 1.826 | cta 5.133 # deep
+uplo=L n=48 nrhs=8 batch=8192 | blocked 6.606 | cta 16.55 # deep
+uplo=L n=48 nrhs=8 batch=32768 | blocked 25.65 | cta 66.53 # deep
+uplo=L n=48 nrhs=16 batch=128 | blocked 0.4324 # deep
+uplo=L n=48 nrhs=16 batch=512 | blocked 0.6230 # deep
+uplo=L n=48 nrhs=16 batch=2048 | blocked 1.799 # deep
+uplo=L n=48 nrhs=16 batch=8192 | blocked 6.784 # deep
+uplo=L n=48 nrhs=16 batch=32768 | blocked 25.64 # deep
+uplo=L n=48 nrhs=64 batch=128 | blocked 0.4443 # deep
+uplo=L n=48 nrhs=64 batch=512 | blocked 0.7850 # deep
+uplo=L n=48 nrhs=64 batch=2048 | blocked 2.759 # deep
+uplo=L n=48 nrhs=64 batch=8192 | blocked 10.54 # deep
+uplo=L n=56 nrhs=1 batch=128 | cta 0.3902 | blocked 0.5376 # deep
+uplo=L n=56 nrhs=1 batch=512 | cta 0.5791 | blocked 0.7230 # deep
+uplo=L n=56 nrhs=1 batch=2048 | cta 1.514 | blocked 2.115 # deep
+uplo=L n=56 nrhs=1 batch=8192 | cta 5.579 | blocked 7.091 # deep
+uplo=L n=56 nrhs=1 batch=32768 | cta 21.89 | blocked 26.77 # deep
+uplo=L n=56 nrhs=2 batch=128 | cta 0.4065 | blocked 0.5966 # deep
+uplo=L n=56 nrhs=2 batch=512 | cta 0.6598 | blocked 0.8561 # deep
+uplo=L n=56 nrhs=2 batch=2048 | cta 2.039 | blocked 2.481 # deep
+uplo=L n=56 nrhs=2 batch=8192 | cta 7.533 | blocked 8.449 # deep
+uplo=L n=56 nrhs=2 batch=32768 | cta 30.13 | blocked 32.49 # deep
+uplo=L n=56 nrhs=3 batch=128 | cta 0.6182 | blocked 0.6033 # deep
+uplo=L n=56 nrhs=3 batch=512 | cta 0.8736 | blocked 0.8579 # deep
+uplo=L n=56 nrhs=3 batch=2048 | blocked 2.500 | cta 2.593 # deep
+uplo=L n=56 nrhs=3 batch=8192 | blocked 8.546 | cta 9.699 # deep
+uplo=L n=56 nrhs=3 batch=32768 | blocked 32.53 | cta 38.44 # deep
+uplo=L n=56 nrhs=4 batch=128 | blocked 0.5986 | cta 0.6357 # deep
+uplo=L n=56 nrhs=4 batch=512 | blocked 0.8459 | cta 0.9436 # deep
+uplo=L n=56 nrhs=4 batch=2048 | blocked 2.509 | cta 3.109 # deep
+uplo=L n=56 nrhs=4 batch=8192 | blocked 8.575 | cta 11.81 # deep
+uplo=L n=56 nrhs=4 batch=32768 | blocked 32.52 | cta 46.46 # deep
+uplo=L n=56 nrhs=8 batch=128 | blocked 0.5988 | cta 1.074 # deep
+uplo=L n=56 nrhs=8 batch=512 | blocked 0.8625 | cta 1.536 # deep
+uplo=L n=56 nrhs=8 batch=2048 | blocked 2.495 | cta 5.446 # deep
+uplo=L n=56 nrhs=8 batch=8192 | blocked 8.614 | cta 20.06 # deep
+uplo=L n=56 nrhs=8 batch=32768 | blocked 32.66 | cta 79.65 # deep
+uplo=L n=56 nrhs=16 batch=128 | blocked 0.6081 # deep
+uplo=L n=56 nrhs=16 batch=512 | blocked 0.8738 # deep
+uplo=L n=56 nrhs=16 batch=2048 | blocked 2.458 # deep
+uplo=L n=56 nrhs=16 batch=8192 | blocked 8.742 # deep
+uplo=L n=56 nrhs=16 batch=32768 | blocked 32.90 # deep
+uplo=L n=56 nrhs=64 batch=128 | blocked 0.6940 # deep
+uplo=L n=56 nrhs=64 batch=512 | blocked 1.282 # deep
+uplo=L n=56 nrhs=64 batch=2048 | blocked 4.457 # deep
+uplo=L n=56 nrhs=64 batch=8192 | blocked 16.55 # deep
+uplo=L n=64 nrhs=1 batch=128 | cta 0.4264 | blocked 0.5483 # deep
+uplo=L n=64 nrhs=1 batch=512 | cta 0.6379 | blocked 0.7545 # deep
+uplo=L n=64 nrhs=1 batch=2048 | cta 1.771 | blocked 2.304 # deep
+uplo=L n=64 nrhs=1 batch=8192 | cta 6.506 | blocked 7.869 # deep
+uplo=L n=64 nrhs=2 batch=128 | cta 0.4428 | blocked 0.6080 # deep
+uplo=L n=64 nrhs=2 batch=512 | cta 0.7224 | blocked 0.8770 # deep
+uplo=L n=64 nrhs=2 batch=2048 | cta 2.395 | blocked 2.683 # deep
+uplo=L n=64 nrhs=2 batch=8192 | cta 8.921 | blocked 9.345 # deep
+uplo=L n=64 nrhs=3 batch=128 | blocked 0.6127 | cta 0.6872 # deep
+uplo=L n=64 nrhs=3 batch=512 | blocked 0.8853 | cta 0.9709 # deep
+uplo=L n=64 nrhs=3 batch=2048 | blocked 2.732 | cta 3.031 # deep
+uplo=L n=64 nrhs=3 batch=8192 | blocked 9.311 | cta 11.28 # deep
+uplo=L n=64 nrhs=4 batch=128 | blocked 0.6137 | cta 0.7152 # deep
+uplo=L n=64 nrhs=4 batch=512 | blocked 0.8781 | cta 1.055 # deep
+uplo=L n=64 nrhs=4 batch=2048 | blocked 2.714 | cta 3.872 # deep
+uplo=L n=64 nrhs=4 batch=8192 | blocked 9.239 | cta 13.49 # deep
+uplo=L n=64 nrhs=8 batch=128 | blocked 0.6100 | cta 1.208 # deep
+uplo=L n=64 nrhs=8 batch=512 | blocked 0.8916 | cta 1.731 # deep
+uplo=L n=64 nrhs=8 batch=2048 | blocked 2.720 | cta 6.563 # deep
+uplo=L n=64 nrhs=8 batch=8192 | blocked 9.286 | cta 22.97 # deep
+uplo=L n=64 nrhs=16 batch=128 | blocked 0.6193 # deep
+uplo=L n=64 nrhs=16 batch=512 | blocked 0.9066 # deep
+uplo=L n=64 nrhs=16 batch=2048 | blocked 2.624 # deep
+uplo=L n=64 nrhs=16 batch=8192 | blocked 9.513 # deep
+uplo=L n=64 nrhs=64 batch=128 | blocked 0.7082 # deep
+uplo=L n=64 nrhs=64 batch=512 | blocked 1.328 # deep
+uplo=L n=64 nrhs=64 batch=2048 | blocked 4.717 # deep
+uplo=L n=64 nrhs=64 batch=8192 | blocked 17.41 # deep
+uplo=L n=72 nrhs=4 batch=512 | cta 1.373 | blocked 1.387 # deep
+uplo=L n=80 nrhs=1 batch=128 | cta 0.6620 | blocked 0.7780 # deep
+uplo=L n=80 nrhs=1 batch=512 | cta 1.004 | blocked 1.118 # deep
+uplo=L n=80 nrhs=1 batch=2048 | cta 3.480 | blocked 3.969 # deep
+uplo=L n=80 nrhs=1 batch=8192 | cta 12.05 | blocked 13.42 # deep
+uplo=L n=80 nrhs=2 batch=128 | cta 0.6936 | blocked 0.9748 # deep
+uplo=L n=80 nrhs=2 batch=512 | cta 1.122 | blocked 1.514 # deep
+uplo=L n=80 nrhs=2 batch=2048 | cta 4.254 | blocked 5.170 # deep
+uplo=L n=80 nrhs=2 batch=8192 | cta 15.05 | blocked 17.64 # deep
+uplo=L n=80 nrhs=3 batch=128 | cta 0.9904 | blocked 0.9724 # deep
+uplo=L n=80 nrhs=3 batch=2048 | cta 5.080 | blocked 5.209 # deep
+uplo=L n=80 nrhs=3 batch=8192 | cta 18.20 | blocked 17.67 # deep
+uplo=L n=80 nrhs=4 batch=128 | blocked 0.9748 | cta 1.027 # deep
+uplo=L n=80 nrhs=4 batch=512 | cta 1.533 | blocked 1.500 # deep
+uplo=L n=80 nrhs=4 batch=2048 | blocked 5.174 | cta 6.034 # deep
+uplo=L n=80 nrhs=4 batch=8192 | blocked 17.67 | cta 21.14 # deep
+uplo=L n=80 nrhs=6 batch=512 | blocked 1.514 | cta 1.961 # deep
+uplo=L n=80 nrhs=8 batch=128 | blocked 0.9734 | cta 1.662 # deep
+uplo=L n=80 nrhs=8 batch=512 | blocked 1.523 | cta 2.395 # deep
+uplo=L n=80 nrhs=8 batch=2048 | blocked 5.208 | cta 9.247 # deep
+uplo=L n=80 nrhs=8 batch=8192 | blocked 17.55 | cta 34.75 # deep
+uplo=L n=80 nrhs=16 batch=128 | blocked 0.9809 # deep
+uplo=L n=80 nrhs=16 batch=512 | blocked 1.544 # deep
+uplo=L n=80 nrhs=16 batch=2048 | blocked 5.246 # deep
+uplo=L n=80 nrhs=16 batch=8192 | blocked 17.99 # deep
+uplo=L n=80 nrhs=64 batch=128 | blocked 1.069 # deep
+uplo=L n=80 nrhs=64 batch=512 | blocked 2.141 # deep
+uplo=L n=80 nrhs=64 batch=2048 | blocked 8.025 # deep
+uplo=L n=80 nrhs=64 batch=8192 | blocked 29.39 # deep
+uplo=L n=88 nrhs=4 batch=512 | cta 1.761 | blocked 1.755 # deep
+uplo=L n=96 nrhs=1 batch=128 | cta 0.8056 | blocked 0.9786 # deep
+uplo=L n=96 nrhs=1 batch=512 | cta 1.294 | blocked 1.478 # deep
+uplo=L n=96 nrhs=1 batch=2048 | cta 4.197 | blocked 5.144 # deep
+uplo=L n=96 nrhs=1 batch=8192 | cta 14.83 | blocked 16.99 # deep
+uplo=L n=96 nrhs=2 batch=128 | cta 0.8459 | blocked 1.175 # deep
+uplo=L n=96 nrhs=2 batch=512 | cta 1.416 | blocked 1.848 # deep
+uplo=L n=96 nrhs=2 batch=2048 | cta 5.135 | blocked 6.204 # deep
+uplo=L n=96 nrhs=2 batch=8192 | cta 18.25 | blocked 20.75 # deep
+uplo=L n=96 nrhs=3 batch=128 | blocked 1.172 | cta 1.208 # deep
+uplo=L n=96 nrhs=3 batch=512 | cta 1.784 | blocked 1.848 # deep
+uplo=L n=96 nrhs=3 batch=2048 | blocked 6.262 | cta 6.589 # deep
+uplo=L n=96 nrhs=3 batch=8192 | blocked 20.82 | cta 21.96 # deep
+uplo=L n=96 nrhs=4 batch=128 | blocked 1.172 | cta 1.252 # deep
+uplo=L n=96 nrhs=4 batch=512 | blocked 1.861 | cta 1.957 # deep
+uplo=L n=96 nrhs=4 batch=2048 | blocked 6.245 | cta 7.598 # deep
+uplo=L n=96 nrhs=4 batch=8192 | blocked 21.08 | cta 25.85 # deep
+uplo=L n=96 nrhs=8 batch=128 | blocked 1.178 | cta 2.039 # deep
+uplo=L n=96 nrhs=8 batch=512 | blocked 1.850 | cta 2.945 # deep
+uplo=L n=96 nrhs=8 batch=2048 | blocked 6.304 | cta 11.52 # deep
+uplo=L n=96 nrhs=8 batch=8192 | blocked 21.17 | cta 40.91 # deep
+uplo=L n=96 nrhs=16 batch=128 | blocked 1.182 # deep
+uplo=L n=96 nrhs=16 batch=512 | blocked 1.870 # deep
+uplo=L n=96 nrhs=16 batch=2048 | blocked 6.195 # deep
+uplo=L n=96 nrhs=16 batch=8192 | blocked 21.16 # deep
+uplo=L n=96 nrhs=64 batch=128 | blocked 1.404 # deep
+uplo=L n=96 nrhs=64 batch=512 | blocked 2.909 # deep
+uplo=L n=96 nrhs=64 batch=2048 | blocked 10.80 # deep
+uplo=L n=96 nrhs=64 batch=8192 | blocked 39.76 # deep
+uplo=L n=104 nrhs=4 batch=128 | cta 1.513 | blocked 1.562 # deep
+uplo=L n=104 nrhs=4 batch=512 | cta 2.486 | blocked 2.698 # deep
+uplo=L n=112 nrhs=1 batch=128 | cta 1.052 | blocked 1.220 # deep
+uplo=L n=112 nrhs=1 batch=512 | cta 1.922 | blocked 2.103 # deep
+uplo=L n=112 nrhs=1 batch=2048 | cta 6.225 | blocked 7.168 # deep
+uplo=L n=112 nrhs=1 batch=8192 | cta 24.38 | blocked 26.59 # deep
+uplo=L n=112 nrhs=2 batch=128 | cta 1.090 | blocked 1.587 # deep
+uplo=L n=112 nrhs=2 batch=512 | cta 2.078 | blocked 2.860 # deep
+uplo=L n=112 nrhs=2 batch=2048 | cta 7.349 | blocked 9.373 # deep
+uplo=L n=112 nrhs=2 batch=8192 | cta 28.71 | blocked 34.79 # deep
+uplo=L n=112 nrhs=3 batch=2048 | cta 8.887 | blocked 9.458 # deep
+uplo=L n=112 nrhs=3 batch=8192 | cta 33.08 | blocked 34.73 # deep
+uplo=L n=112 nrhs=4 batch=128 | cta 1.588 | blocked 1.603 # deep
+uplo=L n=112 nrhs=4 batch=512 | cta 2.699 | blocked 2.871 # deep
+uplo=L n=112 nrhs=4 batch=2048 | blocked 9.438 | cta 10.24 # deep
+uplo=L n=112 nrhs=4 batch=8192 | blocked 34.85 | cta 37.41 # deep
+uplo=L n=112 nrhs=6 batch=128 | blocked 1.605 | cta 2.042 # deep
+uplo=L n=112 nrhs=6 batch=512 | blocked 2.850 | cta 3.274 # deep
+uplo=L n=112 nrhs=8 batch=128 | blocked 1.603 | cta 2.506 # deep
+uplo=L n=112 nrhs=8 batch=512 | blocked 2.881 | cta 3.918 # deep
+uplo=L n=112 nrhs=8 batch=2048 | blocked 9.480 | cta 14.49 # deep
+uplo=L n=112 nrhs=8 batch=8192 | blocked 34.97 | cta 55.24 # deep
+uplo=L n=112 nrhs=16 batch=128 | blocked 1.610 # deep
+uplo=L n=112 nrhs=16 batch=512 | blocked 2.905 # deep
+uplo=L n=112 nrhs=16 batch=2048 | blocked 9.408 # deep
+uplo=L n=112 nrhs=16 batch=8192 | blocked 34.74 # deep
+uplo=L n=112 nrhs=64 batch=128 | blocked 1.866 # deep
+uplo=L n=112 nrhs=64 batch=512 | blocked 4.136 # deep
+uplo=L n=112 nrhs=64 batch=2048 | blocked 15.08 # deep
+uplo=L n=128 nrhs=1 batch=128 | cta 1.216 | blocked 1.440 # deep
+uplo=L n=128 nrhs=1 batch=512 | cta 2.269 | blocked 2.500 # deep
+uplo=L n=128 nrhs=1 batch=2048 | cta 7.238 | blocked 8.484 # deep
+uplo=L n=128 nrhs=2 batch=128 | cta 1.278 | blocked 1.825 # deep
+uplo=L n=128 nrhs=2 batch=512 | cta 2.449 | blocked 3.257 # deep
+uplo=L n=128 nrhs=2 batch=2048 | cta 8.810 | blocked 10.75 # deep
+uplo=L n=128 nrhs=3 batch=2048 | cta 10.80 | blocked 10.76 # deep
+uplo=L n=128 nrhs=4 batch=128 | cta 1.835 | blocked 1.817 # deep
+uplo=L n=128 nrhs=4 batch=512 | cta 3.166 | blocked 3.256 # deep
+uplo=L n=128 nrhs=4 batch=2048 | blocked 10.70 | cta 11.60 # deep
+uplo=L n=128 nrhs=6 batch=128 | blocked 1.805 | cta 2.342 # deep
+uplo=L n=128 nrhs=6 batch=512 | blocked 3.268 | cta 3.870 # deep
+uplo=L n=128 nrhs=8 batch=128 | blocked 1.821 | cta 2.903 # deep
+uplo=L n=128 nrhs=8 batch=512 | blocked 3.275 | cta 4.577 # deep
+uplo=L n=128 nrhs=8 batch=2048 | blocked 10.70 | cta 16.98 # deep
+uplo=L n=128 nrhs=16 batch=128 | blocked 1.828 # deep
+uplo=L n=128 nrhs=16 batch=512 | blocked 3.307 # deep
+uplo=L n=128 nrhs=16 batch=2048 | blocked 10.71 # deep
+uplo=L n=128 nrhs=64 batch=128 | blocked 2.252 # deep
+uplo=L n=128 nrhs=64 batch=512 | blocked 5.225 # deep
+uplo=L n=128 nrhs=64 batch=2048 | blocked 18.93 # deep
+uplo=L n=143 nrhs=4 batch=2048 | cta 15.44 | blocked 16.20 # deep
+uplo=L n=143 nrhs=8 batch=128 | cta 2.465 | blocked 2.569 # deep
+uplo=L n=160 nrhs=1 batch=128 | cta 1.816 | blocked 2.157 # deep
+uplo=L n=160 nrhs=1 batch=512 | cta 3.625 | blocked 3.958 # deep
+uplo=L n=160 nrhs=1 batch=2048 | cta 13.09 | blocked 14.48 # deep
+uplo=L n=160 nrhs=2 batch=128 | cta 1.863 | blocked 2.792 # deep
+uplo=L n=160 nrhs=2 batch=512 | cta 3.909 | blocked 5.240 # deep
+uplo=L n=160 nrhs=2 batch=2048 | cta 14.33 | blocked 18.07 # deep
+uplo=L n=160 nrhs=4 batch=128 | cta 2.020 | blocked 2.784 # deep
+uplo=L n=160 nrhs=4 batch=512 | cta 4.770 | blocked 5.225 # deep
+uplo=L n=160 nrhs=4 batch=2048 | cta 17.58 | blocked 18.04 # deep
+uplo=L n=160 nrhs=6 batch=512 | blocked 5.234 | cta 5.676 # deep
+uplo=L n=160 nrhs=6 batch=2048 | blocked 18.01 | cta 21.69 # deep
+uplo=L n=160 nrhs=8 batch=128 | cta 2.752 | blocked 2.784 # deep
+uplo=L n=160 nrhs=8 batch=512 | blocked 5.243 | cta 6.554 # deep
+uplo=L n=160 nrhs=8 batch=2048 | blocked 18.08 | cta 25.27 # deep
+uplo=L n=160 nrhs=11 batch=128 | blocked 2.819 # deep
+uplo=L n=160 nrhs=16 batch=128 | blocked 2.785 # deep
+uplo=L n=160 nrhs=16 batch=512 | blocked 5.317 # deep
+uplo=L n=160 nrhs=16 batch=2048 | blocked 18.01 # deep
+uplo=L n=160 nrhs=64 batch=128 | blocked 3.538 # deep
+uplo=L n=160 nrhs=64 batch=512 | blocked 8.360 # deep
+uplo=L n=160 nrhs=64 batch=2048 | blocked 30.57 # deep
+uplo=L n=192 nrhs=1 batch=128 | cta 2.392 | blocked 2.801 # deep
+uplo=L n=192 nrhs=1 batch=512 | cta 6.042 | blocked 6.451 # deep
+uplo=L n=192 nrhs=1 batch=2048 | cta 21.72 | blocked 23.59 # deep
+uplo=L n=192 nrhs=2 batch=128 | cta 2.437 | blocked 3.464 # deep
+uplo=L n=192 nrhs=2 batch=512 | cta 6.385 | blocked 8.104 # deep
+uplo=L n=192 nrhs=2 batch=2048 | cta 23.07 | blocked 28.27 # deep
+uplo=L n=192 nrhs=4 batch=128 | cta 2.661 | blocked 3.495 # deep
+uplo=L n=192 nrhs=4 batch=512 | cta 7.450 | blocked 8.077 # deep
+uplo=L n=192 nrhs=4 batch=2048 | cta 27.50 | blocked 28.49 # deep
+uplo=L n=192 nrhs=6 batch=512 | blocked 8.101 | cta 8.562 # deep
+uplo=L n=192 nrhs=6 batch=2048 | blocked 28.66 | cta 32.43 # deep
+uplo=L n=192 nrhs=8 batch=128 | cta 3.547 | blocked 3.471 # deep
+uplo=L n=192 nrhs=8 batch=512 | blocked 8.140 | cta 9.681 # deep
+uplo=L n=192 nrhs=8 batch=2048 | blocked 28.64 | cta 36.88 # deep
+uplo=L n=192 nrhs=11 batch=128 | blocked 3.519 # deep
+uplo=L n=192 nrhs=16 batch=128 | blocked 3.519 # deep
+uplo=L n=192 nrhs=16 batch=512 | blocked 8.103 # deep
+uplo=L n=192 nrhs=16 batch=2048 | blocked 28.66 # deep
+uplo=L n=192 nrhs=64 batch=128 | blocked 4.606 # deep
+uplo=L n=192 nrhs=64 batch=512 | blocked 12.64 # deep
+uplo=L n=192 nrhs=64 batch=2048 | blocked 47.39 # deep
+uplo=L n=224 nrhs=1 batch=128 | cta 3.448 | blocked 3.926 # deep
+uplo=L n=224 nrhs=1 batch=512 | cta 9.291 | blocked 9.841 # deep
+uplo=L n=224 nrhs=1 batch=2048 | cta 34.58 | blocked 36.83 # deep
+uplo=L n=224 nrhs=2 batch=128 | cta 3.492 | blocked 4.954 # deep
+uplo=L n=224 nrhs=2 batch=512 | cta 9.697 | blocked 12.18 # deep
+uplo=L n=224 nrhs=2 batch=2048 | cta 36.13 | blocked 43.49 # deep
+uplo=L n=224 nrhs=4 batch=128 | cta 3.783 | blocked 4.992 # deep
+uplo=L n=224 nrhs=4 batch=512 | cta 10.98 | blocked 12.17 # deep
+uplo=L n=224 nrhs=4 batch=2048 | cta 41.52 | blocked 43.84 # deep
+uplo=L n=224 nrhs=6 batch=512 | cta 12.33 | blocked 12.22 # deep
+uplo=L n=224 nrhs=6 batch=2048 | blocked 44.16 | cta 47.78 # deep
+uplo=L n=224 nrhs=8 batch=128 | cta 4.885 | blocked 5.013 # deep
+uplo=L n=224 nrhs=8 batch=512 | blocked 12.23 | cta 13.64 # deep
+uplo=L n=224 nrhs=8 batch=2048 | blocked 43.98 | cta 52.76 # deep
+uplo=L n=224 nrhs=11 batch=128 | blocked 5.027 # deep
+uplo=L n=224 nrhs=16 batch=128 | blocked 5.030 # deep
+uplo=L n=224 nrhs=16 batch=512 | blocked 12.15 # deep
+uplo=L n=224 nrhs=16 batch=2048 | blocked 43.88 # deep
+uplo=L n=224 nrhs=64 batch=128 | blocked 6.493 # deep
+uplo=L n=224 nrhs=64 batch=512 | blocked 18.38 # deep
+uplo=L n=224 nrhs=64 batch=2048 | blocked 69.84 # deep
+uplo=L n=256 nrhs=1 batch=128 | cta 4.319 | blocked 4.851 # deep
+uplo=L n=256 nrhs=1 batch=512 | cta 12.31 | blocked 12.93 # deep
+uplo=L n=256 nrhs=2 batch=128 | cta 4.378 | blocked 6.057 # deep
+uplo=L n=256 nrhs=2 batch=512 | cta 12.77 | blocked 15.90 # deep
+uplo=L n=256 nrhs=4 batch=128 | cta 4.749 | blocked 6.132 # deep
+uplo=L n=256 nrhs=4 batch=512 | cta 14.32 | blocked 15.89 # deep
+uplo=L n=256 nrhs=6 batch=512 | cta 15.86 | blocked 15.91 # deep
+uplo=L n=256 nrhs=8 batch=128 | cta 6.009 | blocked 6.134 # deep
+uplo=L n=256 nrhs=8 batch=512 | blocked 15.73 | cta 19.34 # deep
+uplo=L n=256 nrhs=11 batch=128 | blocked 6.139 # deep
+uplo=L n=256 nrhs=16 batch=128 | blocked 6.080 # deep
+uplo=L n=256 nrhs=16 batch=512 | blocked 15.99 # deep
+uplo=L n=256 nrhs=64 batch=128 | blocked 8.080 # deep
+uplo=L n=256 nrhs=64 batch=512 | blocked 24.02 # deep
+uplo=L n=288 nrhs=1 batch=128 | cta 5.719 | blocked 6.375 # deep
+uplo=L n=288 nrhs=1 batch=512 | cta 17.17 | blocked 18.04 # deep
+uplo=L n=288 nrhs=2 batch=128 | cta 5.813 | blocked 8.137 # deep
+uplo=L n=288 nrhs=2 batch=512 | cta 17.70 | blocked 21.84 # deep
+uplo=L n=288 nrhs=4 batch=128 | cta 6.134 | blocked 8.144 # deep
+uplo=L n=288 nrhs=4 batch=512 | cta 19.48 | blocked 21.85 # deep
+uplo=L n=288 nrhs=6 batch=512 | cta 21.42 | blocked 21.86 # deep
+uplo=L n=288 nrhs=8 batch=128 | cta 7.076 | blocked 8.060 # deep
+uplo=L n=288 nrhs=8 batch=512 | blocked 21.95 | cta 23.24 # deep
+uplo=L n=288 nrhs=11 batch=128 | blocked 8.171 # deep
+uplo=L n=288 nrhs=16 batch=128 | blocked 8.092 # deep
+uplo=L n=288 nrhs=16 batch=512 | blocked 21.78 # deep
+uplo=L n=288 nrhs=64 batch=128 | blocked 10.58 # deep
+uplo=L n=288 nrhs=64 batch=512 | blocked 32.24 # deep
+uplo=L n=320 nrhs=1 batch=128 | cta 7.019 | blocked 7.734 # deep
+uplo=L n=320 nrhs=1 batch=512 | cta 21.62 | blocked 22.62 # deep
+uplo=L n=320 nrhs=2 batch=128 | cta 7.157 | blocked 9.579 # deep
+uplo=L n=320 nrhs=2 batch=512 | cta 22.03 | blocked 26.75 # deep
+uplo=L n=320 nrhs=4 batch=128 | cta 7.529 | blocked 9.565 # deep
+uplo=L n=320 nrhs=4 batch=512 | cta 24.26 | blocked 27.02 # deep
+uplo=L n=320 nrhs=6 batch=512 | cta 26.50 | blocked 27.02 # deep
+uplo=L n=320 nrhs=8 batch=128 | cta 8.683 | blocked 9.577 # deep
+uplo=L n=320 nrhs=8 batch=512 | blocked 26.81 | cta 28.22 # deep
+uplo=L n=320 nrhs=11 batch=128 | blocked 9.591 # deep
+uplo=L n=320 nrhs=16 batch=128 | blocked 9.614 # deep
+uplo=L n=320 nrhs=16 batch=512 | blocked 26.89 # deep
+uplo=L n=320 nrhs=64 batch=128 | blocked 12.57 # deep
+uplo=L n=320 nrhs=64 batch=512 | blocked 39.73 # deep
+uplo=L n=384 nrhs=1 batch=128 | cta 10.85 | blocked 11.68 # deep
+uplo=L n=384 nrhs=1 batch=512 | cta 34.81 | blocked 36.05 # deep
+uplo=L n=384 nrhs=2 batch=128 | cta 11.00 | blocked 14.34 # deep
+uplo=L n=384 nrhs=2 batch=512 | cta 35.69 | blocked 42.53 # deep
+uplo=L n=384 nrhs=4 batch=128 | cta 11.50 | blocked 14.30 # deep
+uplo=L n=384 nrhs=4 batch=512 | cta 38.12 | blocked 42.40 # deep
+uplo=L n=384 nrhs=6 batch=512 | cta 40.94 | blocked 42.44 # deep
+uplo=L n=384 nrhs=8 batch=128 | cta 12.98 | blocked 14.35 # deep
+uplo=L n=384 nrhs=8 batch=512 | blocked 42.59 | cta 43.99 # deep
+uplo=L n=384 nrhs=11 batch=128 | blocked 14.34 # deep
+uplo=L n=384 nrhs=16 batch=128 | blocked 14.37 # deep
+uplo=L n=384 nrhs=16 batch=512 | blocked 42.18 # deep
+uplo=L n=384 nrhs=64 batch=128 | blocked 18.93 # deep
+uplo=L n=384 nrhs=64 batch=512 | blocked 60.77 # deep
+uplo=L n=415 nrhs=8 batch=512 | cta 54.19 | blocked 53.47 # deep
+uplo=L n=448 nrhs=1 batch=128 | cta 15.73 | blocked 16.74 # deep
+uplo=L n=448 nrhs=1 batch=512 | cta 52.42 | blocked 53.98 # deep
+uplo=L n=448 nrhs=2 batch=128 | cta 15.92 | blocked 20.18 # deep
+uplo=L n=448 nrhs=2 batch=512 | cta 52.87 | blocked 61.90 # deep
+uplo=L n=448 nrhs=4 batch=128 | cta 16.51 | blocked 20.14 # deep
+uplo=L n=448 nrhs=4 batch=512 | cta 56.49 | blocked 62.51 # deep
+uplo=L n=448 nrhs=8 batch=128 | cta 18.35 | blocked 20.20 # deep
+uplo=L n=448 nrhs=8 batch=512 | cta 62.88 | blocked 61.98 # deep
+uplo=L n=448 nrhs=11 batch=128 | blocked 20.17 # deep
+uplo=L n=448 nrhs=11 batch=512 | blocked 62.64 # deep
+uplo=L n=448 nrhs=16 batch=128 | blocked 20.16 # deep
+uplo=L n=448 nrhs=16 batch=512 | blocked 62.12 # deep
+uplo=L n=448 nrhs=64 batch=128 | blocked 26.09 # deep
+uplo=L n=448 nrhs=64 batch=512 | blocked 87.52 # deep
+uplo=L n=512 nrhs=1 batch=128 | cta 21.94 | blocked 23.11 # deep
+uplo=L n=512 nrhs=2 batch=128 | cta 22.19 | blocked 27.59 # deep
+uplo=L n=512 nrhs=4 batch=128 | cta 22.91 | blocked 27.51 # deep
+uplo=L n=512 nrhs=8 batch=128 | cta 25.10 | blocked 27.53 # deep
+uplo=L n=512 nrhs=11 batch=128 | blocked 27.55 # deep
+uplo=L n=512 nrhs=16 batch=128 | blocked 27.56 # deep
+uplo=L n=512 nrhs=64 batch=128 | blocked 35.70 # deep
+uplo=L n=572 nrhs=8 batch=128 | cta 33.35 | blocked 36.36 # deep
+uplo=L n=640 nrhs=1 batch=128 | cta 38.52 | blocked 40.30 # deep
+uplo=L n=640 nrhs=2 batch=128 | cta 38.48 | blocked 46.47 # deep
+uplo=L n=640 nrhs=4 batch=128 | cta 39.94 | blocked 46.90 # deep
+uplo=L n=640 nrhs=6 batch=128 | cta 41.56 | blocked 46.99 # deep
+uplo=L n=640 nrhs=8 batch=128 | blocked 46.50 # deep
+uplo=L n=640 nrhs=16 batch=128 | blocked 46.99 # deep
+uplo=L n=640 nrhs=64 batch=128 | blocked 59.80 # deep
+uplo=L n=768 nrhs=1 batch=128 | cta 62.40 | blocked 64.57 # deep
+uplo=L n=768 nrhs=2 batch=128 | cta 63.03 | blocked 74.12 # deep
+uplo=L n=768 nrhs=4 batch=128 | cta 64.30 | blocked 73.89 # deep
+uplo=L n=768 nrhs=6 batch=128 | cta 66.38 | blocked 73.91 # deep
+uplo=L n=768 nrhs=8 batch=128 | blocked 74.15 # deep
+uplo=L n=768 nrhs=16 batch=128 | blocked 74.01 # deep
+uplo=L n=768 nrhs=64 batch=128 | blocked 91.30 # deep
+uplo=U n=1 nrhs=1 batch=128 | tiny 0.01737 | cta 0.01902 | blocked 0.03181 # deep
+uplo=U n=1 nrhs=1 batch=512 | tiny 0.01697 | cta 0.01839 | blocked 0.03140 # deep
+uplo=U n=1 nrhs=1 batch=2048 | tiny 0.01646 | cta 0.02530 | blocked 0.05836 # deep
+uplo=U n=1 nrhs=1 batch=8192 | tiny 0.02568 | cta 0.1288 | blocked 0.2621 # deep
+uplo=U n=1 nrhs=1 batch=32768 | tiny 0.07906 | cta 0.4395 | blocked 0.9508 # deep
+uplo=U n=1 nrhs=2 batch=128 | tiny 0.01801 | cta 0.01922 | blocked 0.03196 # deep
+uplo=U n=1 nrhs=2 batch=512 | tiny 0.01828 | cta 0.02029 | blocked 0.03161 # deep
+uplo=U n=1 nrhs=2 batch=2048 | tiny 0.01792 | cta 0.03375 | blocked 0.05927 # deep
+uplo=U n=1 nrhs=2 batch=8192 | tiny 0.02771 | cta 0.1554 | blocked 0.2544 # deep
+uplo=U n=1 nrhs=2 batch=32768 | tiny 0.08151 | cta 0.5660 | blocked 0.9591 # deep
+uplo=U n=1 nrhs=4 batch=128 | tiny 0.02047 | cta 0.02379 | blocked 0.03201 # deep
+uplo=U n=1 nrhs=4 batch=512 | tiny 0.01992 | cta 0.02481 | blocked 0.03169 # deep
+uplo=U n=1 nrhs=4 batch=2048 | tiny 0.01976 | cta 0.05614 | blocked 0.05957 # deep
+uplo=U n=1 nrhs=4 batch=8192 | tiny 0.03108 | cta 0.2232 | blocked 0.2564 # deep
+uplo=U n=1 nrhs=4 batch=32768 | tiny 0.1022 | cta 0.8125 | blocked 0.9585 # deep
+uplo=U n=1 nrhs=6 batch=128 | cta 0.02761 | blocked 0.03141 # deep
+uplo=U n=1 nrhs=6 batch=512 | cta 0.02998 | blocked 0.03220 # deep
+uplo=U n=1 nrhs=6 batch=2048 | blocked 0.05902 | cta 0.08441 # deep
+uplo=U n=1 nrhs=6 batch=8192 | blocked 0.2543 | cta 0.2970 # deep
+uplo=U n=1 nrhs=6 batch=32768 | blocked 0.9630 | cta 1.068 # deep
+uplo=U n=1 nrhs=8 batch=128 | cta 0.03165 | blocked 0.03217 # deep
+uplo=U n=1 nrhs=8 batch=512 | blocked 0.03125 | cta 0.03428 # deep
+uplo=U n=1 nrhs=8 batch=2048 | blocked 0.05915 | cta 0.1077 # deep
+uplo=U n=1 nrhs=8 batch=8192 | blocked 0.2536 | cta 0.3619 # deep
+uplo=U n=1 nrhs=8 batch=32768 | blocked 0.9625 | cta 1.313 # deep
+uplo=U n=1 nrhs=11 batch=128 | blocked 0.03172 # deep
+uplo=U n=1 nrhs=16 batch=128 | blocked 0.03164 # deep
+uplo=U n=1 nrhs=16 batch=512 | blocked 0.03234 # deep
+uplo=U n=1 nrhs=16 batch=2048 | blocked 0.06009 # deep
+uplo=U n=1 nrhs=16 batch=8192 | blocked 0.2564 # deep
+uplo=U n=1 nrhs=16 batch=32768 | blocked 0.9504 # deep
+uplo=U n=1 nrhs=64 batch=128 | blocked 0.03203 # deep
+uplo=U n=1 nrhs=64 batch=512 | blocked 0.03887 # deep
+uplo=U n=1 nrhs=64 batch=2048 | blocked 0.09142 # deep
+uplo=U n=1 nrhs=64 batch=8192 | blocked 0.3797 # deep
+uplo=U n=1 nrhs=64 batch=32768 | blocked 1.464 # deep
+uplo=U n=2 nrhs=1 batch=128 | tiny 0.02437 | cta 0.02374 | blocked 0.03365 # deep
+uplo=U n=2 nrhs=1 batch=512 | cta 0.02322 | tiny 0.02401 | blocked 0.03313 # deep
+uplo=U n=2 nrhs=1 batch=2048 | tiny 0.02418 | cta 0.03754 | blocked 0.06288 # deep
+uplo=U n=2 nrhs=1 batch=8192 | tiny 0.04410 | cta 0.1080 | blocked 0.2007 # deep
+uplo=U n=2 nrhs=1 batch=32768 | tiny 0.1514 | cta 0.3787 | blocked 0.7474 # deep
+uplo=U n=2 nrhs=2 batch=128 | cta 0.02437 | tiny 0.02664 | blocked 0.03329 # deep
+uplo=U n=2 nrhs=2 batch=512 | tiny 0.02629 | cta 0.02568 | blocked 0.03309 # deep
+uplo=U n=2 nrhs=2 batch=2048 | tiny 0.02628 | cta 0.05466 | blocked 0.06263 # deep
+uplo=U n=2 nrhs=2 batch=8192 | tiny 0.04853 | cta 0.1703 | blocked 0.2004 # deep
+uplo=U n=2 nrhs=2 batch=32768 | tiny 0.1575 | cta 0.6411 | blocked 0.7563 # deep
+uplo=U n=2 nrhs=3 batch=128 | tiny 0.02946 | cta 0.03084 | blocked 0.03323 # deep
+uplo=U n=2 nrhs=4 batch=128 | tiny 0.03064 | cta 0.03159 | blocked 0.03343 # deep
+uplo=U n=2 nrhs=4 batch=512 | tiny 0.03059 | blocked 0.03385 | cta 0.03561 # deep
+uplo=U n=2 nrhs=4 batch=2048 | tiny 0.03015 | blocked 0.06261 | cta 0.09862 # deep
+uplo=U n=2 nrhs=4 batch=8192 | tiny 0.05620 | blocked 0.2008 | cta 0.3010 # deep
+uplo=U n=2 nrhs=4 batch=32768 | tiny 0.2087 | blocked 0.7591 | cta 1.166 # deep
+uplo=U n=2 nrhs=6 batch=128 | blocked 0.03349 | cta 0.03886 # deep
+uplo=U n=2 nrhs=6 batch=512 | blocked 0.03355 | cta 0.04475 # deep
+uplo=U n=2 nrhs=6 batch=2048 | blocked 0.06224 | cta 0.1613 # deep
+uplo=U n=2 nrhs=6 batch=8192 | blocked 0.2009 | cta 0.4692 # deep
+uplo=U n=2 nrhs=6 batch=32768 | blocked 0.7481 | cta 1.672 # deep
+uplo=U n=2 nrhs=8 batch=128 | blocked 0.03395 | cta 0.04545 # deep
+uplo=U n=2 nrhs=8 batch=512 | blocked 0.03311 | cta 0.05347 # deep
+uplo=U n=2 nrhs=8 batch=2048 | blocked 0.06181 | cta 0.2088 # deep
+uplo=U n=2 nrhs=8 batch=8192 | blocked 0.1982 | cta 0.6041 # deep
+uplo=U n=2 nrhs=8 batch=32768 | blocked 0.7575 | cta 2.210 # deep
+uplo=U n=2 nrhs=16 batch=128 | blocked 0.03320 # deep
+uplo=U n=2 nrhs=16 batch=512 | blocked 0.03404 # deep
+uplo=U n=2 nrhs=16 batch=2048 | blocked 0.06153 # deep
+uplo=U n=2 nrhs=16 batch=8192 | blocked 0.1999 # deep
+uplo=U n=2 nrhs=16 batch=32768 | blocked 0.7571 # deep
+uplo=U n=2 nrhs=64 batch=128 | blocked 0.03338 # deep
+uplo=U n=2 nrhs=64 batch=512 | blocked 0.03949 # deep
+uplo=U n=2 nrhs=64 batch=2048 | blocked 0.09463 # deep
+uplo=U n=2 nrhs=64 batch=8192 | blocked 0.3281 # deep
+uplo=U n=2 nrhs=64 batch=32768 | blocked 1.268 # deep
+uplo=U n=3 nrhs=1 batch=128 | cta 0.02876 | tiny 0.03133 | blocked 0.03461 # deep
+uplo=U n=3 nrhs=1 batch=512 | cta 0.02909 | tiny 0.03167 | blocked 0.03507 # deep
+uplo=U n=3 nrhs=1 batch=2048 | tiny 0.03117 | cta 0.04646 | blocked 0.06259 # deep
+uplo=U n=3 nrhs=1 batch=8192 | tiny 0.06241 | cta 0.1430 | blocked 0.1995 # deep
+uplo=U n=3 nrhs=1 batch=32768 | tiny 0.2092 | cta 0.5203 | blocked 0.7559 # deep
+uplo=U n=3 nrhs=2 batch=128 | cta 0.03033 | blocked 0.03557 | tiny 0.03565 # deep
+uplo=U n=3 nrhs=2 batch=512 | cta 0.03253 | blocked 0.03451 | tiny 0.03469 # deep
+uplo=U n=3 nrhs=2 batch=2048 | tiny 0.03531 | blocked 0.06304 | cta 0.07312 # deep
+uplo=U n=3 nrhs=2 batch=8192 | tiny 0.06906 | blocked 0.1991 | cta 0.2392 # deep
+uplo=U n=3 nrhs=2 batch=32768 | tiny 0.2344 | blocked 0.7546 | cta 0.9191 # deep
+uplo=U n=3 nrhs=3 batch=128 | blocked 0.03576 | tiny 0.03962 | cta 0.04046 # deep
+uplo=U n=3 nrhs=3 batch=512 | blocked 0.03534 | tiny 0.03893 | cta 0.04288 # deep
+uplo=U n=3 nrhs=4 batch=128 | blocked 0.03492 | tiny 0.04087 | cta 0.04106 # deep
+uplo=U n=3 nrhs=4 batch=512 | blocked 0.03518 | tiny 0.04122 | cta 0.04770 # deep
+uplo=U n=3 nrhs=4 batch=2048 | tiny 0.04045 | blocked 0.06237 | cta 0.1436 # deep
+uplo=U n=3 nrhs=4 batch=8192 | tiny 0.08065 | blocked 0.1984 | cta 0.4347 # deep
+uplo=U n=3 nrhs=4 batch=32768 | tiny 0.3081 | blocked 0.7542 | cta 1.722 # deep
+uplo=U n=3 nrhs=6 batch=2048 | blocked 0.06223 | cta 0.2372 # deep
+uplo=U n=3 nrhs=6 batch=8192 | blocked 0.2004 | cta 0.6974 # deep
+uplo=U n=3 nrhs=6 batch=32768 | blocked 0.7574 | cta 2.532 # deep
+uplo=U n=3 nrhs=8 batch=128 | blocked 0.03529 | cta 0.06373 # deep
+uplo=U n=3 nrhs=8 batch=512 | blocked 0.03534 | cta 0.07685 # deep
+uplo=U n=3 nrhs=8 batch=2048 | blocked 0.06220 | cta 0.3118 # deep
+uplo=U n=3 nrhs=8 batch=8192 | blocked 0.1982 | cta 0.9068 # deep
+uplo=U n=3 nrhs=8 batch=32768 | blocked 0.7480 | cta 3.290 # deep
+uplo=U n=3 nrhs=16 batch=128 | blocked 0.03572 # deep
+uplo=U n=3 nrhs=16 batch=512 | blocked 0.03543 # deep
+uplo=U n=3 nrhs=16 batch=2048 | blocked 0.06263 # deep
+uplo=U n=3 nrhs=16 batch=8192 | blocked 0.2002 # deep
+uplo=U n=3 nrhs=16 batch=32768 | blocked 0.7548 # deep
+uplo=U n=3 nrhs=64 batch=128 | blocked 0.03539 # deep
+uplo=U n=3 nrhs=64 batch=512 | blocked 0.04248 # deep
+uplo=U n=3 nrhs=64 batch=2048 | blocked 0.09533 # deep
+uplo=U n=3 nrhs=64 batch=8192 | blocked 0.3243 # deep
+uplo=U n=3 nrhs=64 batch=32768 | blocked 1.263 # deep
+uplo=U n=4 nrhs=1 batch=128 | cta 0.03369 | blocked 0.03657 | tiny 0.03953 # deep
+uplo=U n=4 nrhs=1 batch=512 | cta 0.03291 | blocked 0.03575 | tiny 0.03854 # deep
+uplo=U n=4 nrhs=1 batch=2048 | tiny 0.03895 | cta 0.05521 | blocked 0.06227 # deep
+uplo=U n=4 nrhs=1 batch=8192 | tiny 0.08148 | cta 0.1766 | blocked 0.1990 # deep
+uplo=U n=4 nrhs=1 batch=32768 | tiny 0.2766 | cta 0.6526 | blocked 0.7468 # deep
+uplo=U n=4 nrhs=2 batch=128 | cta 0.03419 | blocked 0.03585 | tiny 0.04376 # deep
+uplo=U n=4 nrhs=2 batch=512 | blocked 0.03607 | cta 0.03842 | tiny 0.04383 # deep
+uplo=U n=4 nrhs=2 batch=2048 | tiny 0.04293 | blocked 0.06164 | cta 0.08960 # deep
+uplo=U n=4 nrhs=2 batch=8192 | tiny 0.09123 | blocked 0.1994 | cta 0.3098 # deep
+uplo=U n=4 nrhs=2 batch=32768 | tiny 0.3147 | blocked 0.7529 | cta 1.198 # deep
+uplo=U n=4 nrhs=3 batch=128 | blocked 0.03640 | cta 0.04865 | tiny 0.04982 # deep
+uplo=U n=4 nrhs=4 batch=128 | blocked 0.03667 | cta 0.04939 | tiny 0.05250 # deep
+uplo=U n=4 nrhs=4 batch=512 | blocked 0.03645 | tiny 0.05208 | cta 0.05756 # deep
+uplo=U n=4 nrhs=4 batch=2048 | tiny 0.05160 | blocked 0.06252 | cta 0.1813 # deep
+uplo=U n=4 nrhs=4 batch=8192 | tiny 0.1058 | blocked 0.1972 | cta 0.5727 # deep
+uplo=U n=4 nrhs=4 batch=32768 | tiny 0.4070 | blocked 0.7543 | cta 2.272 # deep
+uplo=U n=4 nrhs=6 batch=2048 | blocked 0.06265 | cta 0.3158 # deep
+uplo=U n=4 nrhs=6 batch=8192 | blocked 0.1972 | cta 0.9116 # deep
+uplo=U n=4 nrhs=6 batch=32768 | blocked 0.7462 | cta 3.322 # deep
+uplo=U n=4 nrhs=8 batch=128 | blocked 0.03677 | cta 0.07858 # deep
+uplo=U n=4 nrhs=8 batch=512 | blocked 0.03669 | cta 0.09568 # deep
+uplo=U n=4 nrhs=8 batch=2048 | blocked 0.06157 | cta 0.4076 # deep
+uplo=U n=4 nrhs=8 batch=8192 | blocked 0.1973 | cta 1.203 # deep
+uplo=U n=4 nrhs=8 batch=32768 | blocked 0.7557 | cta 4.436 # deep
+uplo=U n=4 nrhs=16 batch=128 | blocked 0.03678 # deep
+uplo=U n=4 nrhs=16 batch=512 | blocked 0.03683 # deep
+uplo=U n=4 nrhs=16 batch=2048 | blocked 0.06256 # deep
+uplo=U n=4 nrhs=16 batch=8192 | blocked 0.1990 # deep
+uplo=U n=4 nrhs=16 batch=32768 | blocked 0.7547 # deep
+uplo=U n=4 nrhs=64 batch=128 | blocked 0.03763 # deep
+uplo=U n=4 nrhs=64 batch=512 | blocked 0.04401 # deep
+uplo=U n=4 nrhs=64 batch=2048 | blocked 0.09516 # deep
+uplo=U n=4 nrhs=64 batch=8192 | blocked 0.3274 # deep
+uplo=U n=4 nrhs=64 batch=32768 | blocked 1.259 # deep
+uplo=U n=5 nrhs=1 batch=128 | cta 0.03840 | blocked 0.03786 | tiny 0.04716 # deep
+uplo=U n=5 nrhs=1 batch=512 | cta 0.03822 | blocked 0.03762 | tiny 0.04655 # deep
+uplo=U n=5 nrhs=2 batch=128 | blocked 0.03786 | cta 0.03968 | tiny 0.05303 # deep
+uplo=U n=5 nrhs=4 batch=2048 | tiny 0.06271 | blocked 0.06280 | cta 0.2237 # deep
+uplo=U n=6 nrhs=1 batch=128 | blocked 0.03773 | cta 0.04193 | tiny 0.05511 # deep
+uplo=U n=6 nrhs=1 batch=512 | blocked 0.03752 | cta 0.04150 | tiny 0.05443 # deep
+uplo=U n=6 nrhs=1 batch=2048 | tiny 0.05511 | blocked 0.06207 | cta 0.07305 # deep
+uplo=U n=6 nrhs=1 batch=8192 | tiny 0.1219 | blocked 0.1989 | cta 0.2491 # deep
+uplo=U n=6 nrhs=1 batch=32768 | tiny 0.4663 | blocked 0.7528 | cta 0.9429 # deep
+uplo=U n=6 nrhs=2 batch=128 | blocked 0.03680 | cta 0.04244 | tiny 0.06130 # deep
+uplo=U n=6 nrhs=2 batch=512 | blocked 0.03738 | cta 0.04936 | tiny 0.06120 # deep
+uplo=U n=6 nrhs=2 batch=2048 | tiny 0.06145 | blocked 0.06229 | cta 0.1268 # deep
+uplo=U n=6 nrhs=2 batch=8192 | tiny 0.1364 | blocked 0.1990 | cta 0.4516 # deep
+uplo=U n=6 nrhs=2 batch=32768 | tiny 0.4798 | blocked 0.7503 | cta 1.751 # deep
+uplo=U n=6 nrhs=3 batch=2048 | blocked 0.06265 | tiny 0.07031 | cta 0.2205 # deep
+uplo=U n=6 nrhs=4 batch=128 | blocked 0.03760 | cta 0.06502 | tiny 0.07441 # deep
+uplo=U n=6 nrhs=4 batch=512 | blocked 0.03728 | tiny 0.07391 | cta 0.07792 # deep
+uplo=U n=6 nrhs=4 batch=2048 | blocked 0.06271 | tiny 0.07486 | cta 0.2525 # deep
+uplo=U n=6 nrhs=4 batch=8192 | tiny 0.1620 | blocked 0.2001 | cta 0.8601 # deep
+uplo=U n=6 nrhs=4 batch=32768 | tiny 0.6256 | blocked 0.7517 | cta 3.387 # deep
+uplo=U n=6 nrhs=6 batch=8192 | blocked 0.2002 | cta 1.349 # deep
+uplo=U n=6 nrhs=6 batch=32768 | blocked 0.7535 | cta 5.031 # deep
+uplo=U n=6 nrhs=8 batch=128 | blocked 0.03781 | cta 0.1099 # deep
+uplo=U n=6 nrhs=8 batch=512 | blocked 0.03782 | cta 0.1354 # deep
+uplo=U n=6 nrhs=8 batch=2048 | blocked 0.06179 | cta 0.6147 # deep
+uplo=U n=6 nrhs=8 batch=8192 | blocked 0.2004 | cta 1.752 # deep
+uplo=U n=6 nrhs=8 batch=32768 | blocked 0.7555 | cta 6.663 # deep
+uplo=U n=6 nrhs=16 batch=128 | blocked 0.03786 # deep
+uplo=U n=6 nrhs=16 batch=512 | blocked 0.03859 # deep
+uplo=U n=6 nrhs=16 batch=2048 | blocked 0.06313 # deep
+uplo=U n=6 nrhs=16 batch=8192 | blocked 0.1991 # deep
+uplo=U n=6 nrhs=16 batch=32768 | blocked 0.7582 # deep
+uplo=U n=6 nrhs=64 batch=128 | blocked 0.03885 # deep
+uplo=U n=6 nrhs=64 batch=512 | blocked 0.04658 # deep
+uplo=U n=6 nrhs=64 batch=2048 | blocked 0.09547 # deep
+uplo=U n=6 nrhs=64 batch=8192 | blocked 0.3282 # deep
+uplo=U n=6 nrhs=64 batch=32768 | blocked 1.252 # deep
+uplo=U n=7 nrhs=1 batch=2048 | tiny 0.06407 | blocked 0.06313 | cta 0.08329 # deep
+uplo=U n=7 nrhs=2 batch=2048 | blocked 0.06234 | tiny 0.07018 | cta 0.1440 # deep
+uplo=U n=7 nrhs=4 batch=8192 | tiny 0.1881 | blocked 0.1998 | cta 0.9887 # deep
+uplo=U n=7 nrhs=4 batch=32768 | tiny 0.7429 | blocked 0.7518 | cta 3.948 # deep
+uplo=U n=8 nrhs=1 batch=128 | blocked 0.03775 | cta 0.04805 | tiny 0.07037 # deep
+uplo=U n=8 nrhs=1 batch=512 | blocked 0.03852 | cta 0.04913 | tiny 0.07091 # deep
+uplo=U n=8 nrhs=1 batch=2048 | blocked 0.06385 | tiny 0.07285 | cta 0.09269 # deep
+uplo=U n=8 nrhs=1 batch=8192 | tiny 0.1672 | blocked 0.2023 | cta 0.3217 # deep
+uplo=U n=8 nrhs=1 batch=32768 | tiny 0.6367 | blocked 0.7463 | cta 1.210 # deep
+uplo=U n=8 nrhs=2 batch=128 | blocked 0.03847 | cta 0.05078 | tiny 0.08068 # deep
+uplo=U n=8 nrhs=2 batch=512 | blocked 0.03856 | cta 0.05948 | tiny 0.08011 # deep
+uplo=U n=8 nrhs=2 batch=2048 | blocked 0.06327 | tiny 0.08015 | cta 0.1638 # deep
+uplo=U n=8 nrhs=2 batch=8192 | tiny 0.1856 | blocked 0.2030 | cta 0.5926 # deep
+uplo=U n=8 nrhs=2 batch=32768 | tiny 0.6490 | blocked 0.7477 | cta 2.288 # deep
+uplo=U n=8 nrhs=3 batch=8192 | tiny 0.2031 | blocked 0.2034 | cta 0.8712 # deep
+uplo=U n=8 nrhs=3 batch=32768 | blocked 0.7548 | tiny 0.7919 | cta 3.405 # deep
+uplo=U n=8 nrhs=4 batch=128 | blocked 0.03834 | cta 0.07969 | tiny 0.09588 # deep
+uplo=U n=8 nrhs=4 batch=512 | blocked 0.03891 | tiny 0.09650 | cta 0.09829 # deep
+uplo=U n=8 nrhs=4 batch=2048 | blocked 0.06420 | tiny 0.09695 | cta 0.3313 # deep
+uplo=U n=8 nrhs=4 batch=8192 | blocked 0.2027 | tiny 0.2179 | cta 1.141 # deep
+uplo=U n=8 nrhs=4 batch=32768 | blocked 0.7548 | tiny 0.8500 | cta 4.502 # deep
+uplo=U n=8 nrhs=8 batch=128 | blocked 0.03830 | cta 0.1386 # deep
+uplo=U n=8 nrhs=8 batch=512 | blocked 0.03846 | cta 0.1742 # deep
+uplo=U n=8 nrhs=8 batch=2048 | blocked 0.06341 | cta 0.7654 # deep
+uplo=U n=8 nrhs=8 batch=8192 | blocked 0.2003 | cta 2.304 # deep
+uplo=U n=8 nrhs=8 batch=32768 | blocked 0.7525 | cta 8.784 # deep
+uplo=U n=8 nrhs=16 batch=128 | blocked 0.03833 # deep
+uplo=U n=8 nrhs=16 batch=512 | blocked 0.04063 # deep
+uplo=U n=8 nrhs=16 batch=2048 | blocked 0.06647 # deep
+uplo=U n=8 nrhs=16 batch=8192 | blocked 0.2024 # deep
+uplo=U n=8 nrhs=16 batch=32768 | blocked 0.7617 # deep
+uplo=U n=8 nrhs=64 batch=128 | blocked 0.04109 # deep
+uplo=U n=8 nrhs=64 batch=512 | blocked 0.05115 # deep
+uplo=U n=8 nrhs=64 batch=2048 | blocked 0.1143 # deep
+uplo=U n=8 nrhs=64 batch=8192 | blocked 0.3610 # deep
+uplo=U n=8 nrhs=64 batch=32768 | blocked 1.381 # deep
+uplo=U n=10 nrhs=1 batch=128 | cta 0.06396 | blocked 0.07787 | tiny 0.09678 # deep
+uplo=U n=10 nrhs=1 batch=512 | cta 0.07301 | blocked 0.08634 | tiny 0.09546 # deep
+uplo=U n=10 nrhs=1 batch=2048 | tiny 0.1127 | cta 0.1462 | blocked 0.1722 # deep
+uplo=U n=10 nrhs=2 batch=128 | cta 0.06595 | blocked 0.07703 | tiny 0.1077 # deep
+uplo=U n=10 nrhs=2 batch=2048 | tiny 0.1266 | blocked 0.1745 | cta 0.2373 # deep
+uplo=U n=10 nrhs=4 batch=2048 | tiny 0.1455 | blocked 0.1723 | cta 0.4396 # deep
+uplo=U n=10 nrhs=4 batch=8192 | tiny 0.5524 | blocked 0.6616 | cta 1.578 # deep
+uplo=U n=12 nrhs=1 batch=128 | cta 0.07209 | blocked 0.07909 | tiny 0.1124 # deep
+uplo=U n=12 nrhs=1 batch=512 | cta 0.08235 | blocked 0.08858 | tiny 0.1122 # deep
+uplo=U n=12 nrhs=1 batch=2048 | tiny 0.1368 | cta 0.1660 | blocked 0.1750 # deep
+uplo=U n=12 nrhs=1 batch=8192 | tiny 0.5217 | cta 0.6581 | blocked 0.6781 # deep
+uplo=U n=12 nrhs=1 batch=32768 | tiny 1.922 | cta 2.451 | blocked 2.551 # deep
+uplo=U n=12 nrhs=2 batch=128 | cta 0.07532 | blocked 0.07912 | tiny 0.1270 # deep
+uplo=U n=12 nrhs=2 batch=512 | blocked 0.08914 | cta 0.09833 | tiny 0.1268 # deep
+uplo=U n=12 nrhs=2 batch=2048 | tiny 0.1498 | blocked 0.1720 | cta 0.2705 # deep
+uplo=U n=12 nrhs=2 batch=8192 | tiny 0.5709 | blocked 0.6790 | cta 1.049 # deep
+uplo=U n=12 nrhs=2 batch=32768 | tiny 2.272 | blocked 2.516 | cta 4.068 # deep
+uplo=U n=12 nrhs=3 batch=128 | blocked 0.08019 | cta 0.1172 | tiny 0.1471 # deep
+uplo=U n=12 nrhs=3 batch=32768 | tiny 2.505 | blocked 2.529 | cta 5.720 # deep
+uplo=U n=12 nrhs=4 batch=128 | blocked 0.08065 | cta 0.1207 | tiny 0.1540 # deep
+uplo=U n=12 nrhs=4 batch=512 | blocked 0.08857 | tiny 0.1509 | cta 0.1555 # deep
+uplo=U n=12 nrhs=4 batch=2048 | tiny 0.1765 | blocked 0.1748 | cta 0.5234 # deep
+uplo=U n=12 nrhs=4 batch=8192 | tiny 0.6710 | blocked 0.6801 | cta 1.889 # deep
+uplo=U n=12 nrhs=4 batch=32768 | blocked 2.522 | tiny 2.641 | cta 7.288 # deep
+uplo=U n=12 nrhs=6 batch=2048 | blocked 0.1718 | cta 0.8924 # deep
+uplo=U n=12 nrhs=6 batch=8192 | blocked 0.6730 | cta 2.799 # deep
+uplo=U n=12 nrhs=8 batch=128 | blocked 0.07907 | cta 0.2079 # deep
+uplo=U n=12 nrhs=8 batch=512 | blocked 0.08954 | cta 0.2712 # deep
+uplo=U n=12 nrhs=8 batch=2048 | blocked 0.1741 | cta 1.108 # deep
+uplo=U n=12 nrhs=8 batch=8192 | blocked 0.6804 | cta 3.673 # deep
+uplo=U n=12 nrhs=8 batch=32768 | blocked 2.536 | cta 13.84 # deep
+uplo=U n=12 nrhs=16 batch=128 | blocked 0.08040 # deep
+uplo=U n=12 nrhs=16 batch=512 | blocked 0.09279 # deep
+uplo=U n=12 nrhs=16 batch=2048 | blocked 0.1763 # deep
+uplo=U n=12 nrhs=16 batch=8192 | blocked 0.6840 # deep
+uplo=U n=12 nrhs=16 batch=32768 | blocked 2.562 # deep
+uplo=U n=12 nrhs=64 batch=128 | blocked 0.08307 # deep
+uplo=U n=12 nrhs=64 batch=512 | blocked 0.1134 # deep
+uplo=U n=12 nrhs=64 batch=2048 | blocked 0.3167 # deep
+uplo=U n=12 nrhs=64 batch=8192 | blocked 1.192 # deep
+uplo=U n=12 nrhs=64 batch=32768 | blocked 4.211 # deep
+uplo=U n=14 nrhs=1 batch=128 | cta 0.08071 | blocked 0.08136 | tiny 0.1298 # deep
+uplo=U n=14 nrhs=1 batch=512 | cta 0.09146 | blocked 0.09116 | tiny 0.1283 # deep
+uplo=U n=14 nrhs=1 batch=2048 | tiny 0.1620 | blocked 0.1756 | cta 0.1850 # deep
+uplo=U n=14 nrhs=1 batch=8192 | tiny 0.6181 | blocked 0.6681 | cta 0.7178 # deep
+uplo=U n=14 nrhs=2 batch=128 | blocked 0.08273 | cta 0.08599 | tiny 0.1482 # deep
+uplo=U n=14 nrhs=2 batch=2048 | tiny 0.1762 | blocked 0.1734 | cta 0.3073 # deep
+uplo=U n=14 nrhs=2 batch=8192 | blocked 0.6491 | tiny 0.6734 | cta 1.173 # deep
+uplo=U n=14 nrhs=2 batch=32768 | blocked 2.575 | tiny 2.723 | cta 4.678 # deep
+uplo=U n=14 nrhs=4 batch=2048 | blocked 0.1756 | tiny 0.2083 | cta 0.6052 # deep
+uplo=U n=14 nrhs=4 batch=8192 | blocked 0.6662 | tiny 0.7963 | cta 2.152 # deep
+uplo=U n=16 nrhs=1 batch=128 | blocked 0.08375 | cta 0.09011 | tiny 0.1480 # deep
+uplo=U n=16 nrhs=1 batch=512 | blocked 0.09558 | cta 0.1037 | tiny 0.1484 # deep
+uplo=U n=16 nrhs=1 batch=2048 | blocked 0.1764 | tiny 0.1886 | cta 0.2053 # deep
+uplo=U n=16 nrhs=1 batch=8192 | blocked 0.6585 | tiny 0.7228 | cta 0.7819 # deep
+uplo=U n=16 nrhs=1 batch=32768 | tiny 2.677 | blocked 2.600 | cta 3.062 # deep
+uplo=U n=16 nrhs=2 batch=128 | blocked 0.08305 | cta 0.09378 | tiny 0.1677 # deep
+uplo=U n=16 nrhs=2 batch=512 | blocked 0.09538 | cta 0.1231 | tiny 0.1670 # deep
+uplo=U n=16 nrhs=2 batch=2048 | blocked 0.1767 | tiny 0.2080 | cta 0.3494 # deep
+uplo=U n=16 nrhs=2 batch=8192 | blocked 0.6598 | tiny 0.7984 | cta 1.325 # deep
+uplo=U n=16 nrhs=2 batch=32768 | blocked 2.598 | tiny 3.175 | cta 5.248 # deep
+uplo=U n=16 nrhs=4 batch=128 | blocked 0.08343 | cta 0.1524 | tiny 0.2004 # deep
+uplo=U n=16 nrhs=4 batch=512 | blocked 0.09536 | tiny 0.1986 | cta 0.1989 # deep
+uplo=U n=16 nrhs=4 batch=2048 | blocked 0.1759 | tiny 0.2399 | cta 0.6841 # deep
+uplo=U n=16 nrhs=4 batch=8192 | blocked 0.6602 | tiny 0.9265 | cta 2.424 # deep
+uplo=U n=16 nrhs=4 batch=32768 | blocked 2.571 | tiny 3.670 | cta 9.561 # deep
+uplo=U n=16 nrhs=8 batch=128 | blocked 0.08484 | cta 0.2744 # deep
+uplo=U n=16 nrhs=8 batch=512 | blocked 0.09599 | cta 0.3548 # deep
+uplo=U n=16 nrhs=8 batch=2048 | blocked 0.1766 | cta 1.464 # deep
+uplo=U n=16 nrhs=8 batch=8192 | blocked 0.6635 | cta 4.833 # deep
+uplo=U n=16 nrhs=8 batch=32768 | blocked 2.577 | cta 18.29 # deep
+uplo=U n=16 nrhs=16 batch=128 | blocked 0.08428 # deep
+uplo=U n=16 nrhs=16 batch=512 | blocked 0.10000 # deep
+uplo=U n=16 nrhs=16 batch=2048 | blocked 0.1824 # deep
+uplo=U n=16 nrhs=16 batch=8192 | blocked 0.6824 # deep
+uplo=U n=16 nrhs=16 batch=32768 | blocked 2.629 # deep
+uplo=U n=16 nrhs=64 batch=128 | blocked 0.08956 # deep
+uplo=U n=16 nrhs=64 batch=512 | blocked 0.1238 # deep
+uplo=U n=16 nrhs=64 batch=2048 | blocked 0.3411 # deep
+uplo=U n=16 nrhs=64 batch=8192 | blocked 1.283 # deep
+uplo=U n=16 nrhs=64 batch=32768 | blocked 4.538 # deep
+uplo=U n=18 nrhs=1 batch=128 | cta 0.1320 | blocked 0.2378 # deep
+uplo=U n=18 nrhs=1 batch=512 | cta 0.1468 | blocked 0.2499 # deep
+uplo=U n=18 nrhs=1 batch=2048 | cta 0.3463 | blocked 0.7451 # deep
+uplo=U n=18 nrhs=1 batch=8192 | cta 1.268 | blocked 2.312 # deep
+uplo=U n=18 nrhs=1 batch=32768 | cta 4.973 | blocked 8.580 # deep
+uplo=U n=18 nrhs=2 batch=128 | cta 0.1374 | blocked 0.2345 # deep
+uplo=U n=18 nrhs=2 batch=512 | cta 0.1706 | blocked 0.2496 # deep
+uplo=U n=18 nrhs=2 batch=2048 | cta 0.5056 | blocked 0.7353 # deep
+uplo=U n=18 nrhs=2 batch=8192 | cta 1.897 | blocked 2.306 # deep
+uplo=U n=18 nrhs=2 batch=32768 | cta 7.522 | blocked 8.604 # deep
+uplo=U n=18 nrhs=4 batch=128 | cta 0.2099 | blocked 0.2377 # deep
+uplo=U n=20 nrhs=1 batch=128 | cta 0.1407 | blocked 0.2399 # deep
+uplo=U n=20 nrhs=1 batch=512 | cta 0.1572 | blocked 0.2529 # deep
+uplo=U n=20 nrhs=1 batch=2048 | cta 0.3659 | blocked 0.7437 # deep
+uplo=U n=20 nrhs=1 batch=8192 | cta 1.369 | blocked 2.344 # deep
+uplo=U n=20 nrhs=1 batch=32768 | cta 5.316 | blocked 8.641 # deep
+uplo=U n=20 nrhs=2 batch=128 | cta 0.1461 | blocked 0.2371 # deep
+uplo=U n=20 nrhs=2 batch=512 | cta 0.1828 | blocked 0.2527 # deep
+uplo=U n=20 nrhs=2 batch=2048 | cta 0.5508 | blocked 0.7447 # deep
+uplo=U n=20 nrhs=2 batch=8192 | cta 2.068 | blocked 2.348 # deep
+uplo=U n=20 nrhs=2 batch=32768 | cta 8.192 | blocked 8.700 # deep
+uplo=U n=20 nrhs=3 batch=512 | cta 0.2536 | blocked 0.2507 # deep
+uplo=U n=20 nrhs=3 batch=2048 | blocked 0.7445 | cta 0.8359 # deep
+uplo=U n=20 nrhs=3 batch=8192 | blocked 2.345 | cta 2.789 # deep
+uplo=U n=20 nrhs=3 batch=32768 | blocked 8.597 | cta 10.94 # deep
+uplo=U n=20 nrhs=4 batch=128 | cta 0.2264 | blocked 0.2398 # deep
+uplo=U n=20 nrhs=4 batch=512 | blocked 0.2537 | cta 0.2833 # deep
+uplo=U n=20 nrhs=4 batch=2048 | blocked 0.7454 | cta 0.9828 # deep
+uplo=U n=20 nrhs=4 batch=8192 | blocked 2.353 | cta 3.500 # deep
+uplo=U n=20 nrhs=4 batch=32768 | blocked 8.748 | cta 13.90 # deep
+uplo=U n=20 nrhs=6 batch=128 | blocked 0.2399 | cta 0.3063 # deep
+uplo=U n=20 nrhs=8 batch=128 | blocked 0.2370 | cta 0.3803 # deep
+uplo=U n=20 nrhs=8 batch=512 | blocked 0.2547 | cta 0.4834 # deep
+uplo=U n=20 nrhs=8 batch=2048 | blocked 0.7573 | cta 1.994 # deep
+uplo=U n=20 nrhs=8 batch=8192 | blocked 2.335 | cta 6.528 # deep
+uplo=U n=20 nrhs=8 batch=32768 | blocked 8.777 | cta 25.30 # deep
+uplo=U n=20 nrhs=16 batch=128 | blocked 0.2375 # deep
+uplo=U n=20 nrhs=16 batch=512 | blocked 0.2555 # deep
+uplo=U n=20 nrhs=16 batch=2048 | blocked 0.7672 # deep
+uplo=U n=20 nrhs=16 batch=8192 | blocked 2.398 # deep
+uplo=U n=20 nrhs=16 batch=32768 | blocked 8.831 # deep
+uplo=U n=20 nrhs=64 batch=128 | blocked 0.2444 # deep
+uplo=U n=20 nrhs=64 batch=512 | blocked 0.3169 # deep
+uplo=U n=20 nrhs=64 batch=2048 | blocked 1.077 # deep
+uplo=U n=20 nrhs=64 batch=8192 | blocked 3.946 # deep
+uplo=U n=20 nrhs=64 batch=32768 | blocked 14.94 # deep
+uplo=U n=22 nrhs=2 batch=32768 | cta 8.873 | blocked 8.849 # deep
+uplo=U n=22 nrhs=4 batch=128 | cta 0.2412 | blocked 0.2398 # deep
+uplo=U n=24 nrhs=1 batch=128 | cta 0.1566 | blocked 0.2418 # deep
+uplo=U n=24 nrhs=1 batch=512 | cta 0.1808 | blocked 0.2623 # deep
+uplo=U n=24 nrhs=1 batch=2048 | cta 0.4465 | blocked 0.7912 # deep
+uplo=U n=24 nrhs=1 batch=8192 | cta 1.608 | blocked 2.436 # deep
+uplo=U n=24 nrhs=1 batch=32768 | cta 6.173 | blocked 8.962 # deep
+uplo=U n=24 nrhs=2 batch=128 | cta 0.1654 | blocked 0.2419 # deep
+uplo=U n=24 nrhs=2 batch=512 | cta 0.2121 | blocked 0.2625 # deep
+uplo=U n=24 nrhs=2 batch=2048 | cta 0.6677 | blocked 0.7889 # deep
+uplo=U n=24 nrhs=2 batch=8192 | cta 2.455 | blocked 2.440 # deep
+uplo=U n=24 nrhs=2 batch=32768 | blocked 9.075 | cta 9.650 # deep
+uplo=U n=24 nrhs=3 batch=128 | blocked 0.2421 | cta 0.2497 # deep
+uplo=U n=24 nrhs=3 batch=512 | blocked 0.2636 | cta 0.3015 # deep
+uplo=U n=24 nrhs=3 batch=2048 | blocked 0.7984 | cta 1.009 # deep
+uplo=U n=24 nrhs=3 batch=8192 | blocked 2.446 | cta 3.309 # deep
+uplo=U n=24 nrhs=4 batch=128 | blocked 0.2449 | cta 0.2609 # deep
+uplo=U n=24 nrhs=4 batch=512 | blocked 0.2644 | cta 0.3334 # deep
+uplo=U n=24 nrhs=4 batch=2048 | blocked 0.7890 | cta 1.185 # deep
+uplo=U n=24 nrhs=4 batch=8192 | blocked 2.449 | cta 4.163 # deep
+uplo=U n=24 nrhs=4 batch=32768 | blocked 9.066 | cta 16.47 # deep
+uplo=U n=24 nrhs=8 batch=128 | blocked 0.2425 | cta 0.4453 # deep
+uplo=U n=24 nrhs=8 batch=512 | blocked 0.2629 | cta 0.5667 # deep
+uplo=U n=24 nrhs=8 batch=2048 | blocked 0.8058 | cta 2.408 # deep
+uplo=U n=24 nrhs=8 batch=8192 | blocked 2.456 | cta 7.874 # deep
+uplo=U n=24 nrhs=8 batch=32768 | blocked 9.103 | cta 30.10 # deep
+uplo=U n=24 nrhs=16 batch=128 | blocked 0.2423 # deep
+uplo=U n=24 nrhs=16 batch=512 | blocked 0.2667 # deep
+uplo=U n=24 nrhs=16 batch=2048 | blocked 0.7395 # deep
+uplo=U n=24 nrhs=16 batch=8192 | blocked 2.507 # deep
+uplo=U n=24 nrhs=16 batch=32768 | blocked 9.214 # deep
+uplo=U n=24 nrhs=64 batch=128 | blocked 0.2545 # deep
+uplo=U n=24 nrhs=64 batch=512 | blocked 0.3305 # deep
+uplo=U n=24 nrhs=64 batch=2048 | blocked 1.139 # deep
+uplo=U n=24 nrhs=64 batch=8192 | blocked 4.113 # deep
+uplo=U n=24 nrhs=64 batch=32768 | blocked 15.40 # deep
+uplo=U n=26 nrhs=2 batch=8192 | blocked 2.763 | cta 2.901 # deep
+uplo=U n=28 nrhs=1 batch=128 | cta 0.1749 | blocked 0.2461 # deep
+uplo=U n=28 nrhs=1 batch=512 | cta 0.2210 | blocked 0.2879 # deep
+uplo=U n=28 nrhs=1 batch=2048 | cta 0.5747 | blocked 0.8826 # deep
+uplo=U n=28 nrhs=1 batch=8192 | cta 2.064 | blocked 2.749 # deep
+uplo=U n=28 nrhs=1 batch=32768 | cta 7.771 | blocked 10.01 # deep
+uplo=U n=28 nrhs=2 batch=128 | cta 0.1875 | blocked 0.2494 # deep
+uplo=U n=28 nrhs=2 batch=512 | cta 0.2563 | blocked 0.2870 # deep
+uplo=U n=28 nrhs=2 batch=2048 | cta 0.8440 | blocked 0.8940 # deep
+uplo=U n=28 nrhs=2 batch=8192 | blocked 2.756 | cta 3.039 # deep
+uplo=U n=28 nrhs=2 batch=32768 | blocked 10.12 | cta 11.82 # deep
+uplo=U n=28 nrhs=3 batch=128 | blocked 0.2470 | cta 0.2833 # deep
+uplo=U n=28 nrhs=3 batch=512 | blocked 0.2889 | cta 0.3602 # deep
+uplo=U n=28 nrhs=3 batch=2048 | blocked 0.8938 | cta 1.222 # deep
+uplo=U n=28 nrhs=4 batch=128 | blocked 0.2465 | cta 0.2927 # deep
+uplo=U n=28 nrhs=4 batch=512 | blocked 0.2878 | cta 0.3954 # deep
+uplo=U n=28 nrhs=4 batch=2048 | blocked 0.8842 | cta 1.439 # deep
+uplo=U n=28 nrhs=4 batch=8192 | blocked 2.751 | cta 5.043 # deep
+uplo=U n=28 nrhs=4 batch=32768 | blocked 10.14 | cta 19.80 # deep
+uplo=U n=28 nrhs=8 batch=128 | blocked 0.2498 | cta 0.5174 # deep
+uplo=U n=28 nrhs=8 batch=512 | blocked 0.2901 | cta 0.6763 # deep
+uplo=U n=28 nrhs=8 batch=2048 | blocked 0.8986 | cta 2.856 # deep
+uplo=U n=28 nrhs=8 batch=8192 | blocked 2.768 | cta 9.394 # deep
+uplo=U n=28 nrhs=8 batch=32768 | blocked 10.08 | cta 35.39 # deep
+uplo=U n=28 nrhs=16 batch=128 | blocked 0.2513 # deep
+uplo=U n=28 nrhs=16 batch=512 | blocked 0.2963 # deep
+uplo=U n=28 nrhs=16 batch=2048 | blocked 0.8360 # deep
+uplo=U n=28 nrhs=16 batch=8192 | blocked 2.785 # deep
+uplo=U n=28 nrhs=16 batch=32768 | blocked 10.25 # deep
+uplo=U n=28 nrhs=64 batch=128 | blocked 0.2597 # deep
+uplo=U n=28 nrhs=64 batch=512 | blocked 0.3534 # deep
+uplo=U n=28 nrhs=64 batch=2048 | blocked 1.233 # deep
+uplo=U n=28 nrhs=64 batch=8192 | blocked 4.423 # deep
+uplo=U n=28 nrhs=64 batch=32768 | blocked 16.43 # deep
+uplo=U n=32 nrhs=1 batch=128 | cta 0.1957 | blocked 0.2552 # deep
+uplo=U n=32 nrhs=1 batch=512 | cta 0.2555 | blocked 0.3088 # deep
+uplo=U n=32 nrhs=1 batch=2048 | cta 0.6865 | blocked 0.9641 # deep
+uplo=U n=32 nrhs=1 batch=8192 | cta 2.380 | blocked 2.929 # deep
+uplo=U n=32 nrhs=1 batch=32768 | cta 9.335 | blocked 11.10 # deep
+uplo=U n=32 nrhs=2 batch=128 | cta 0.2067 | blocked 0.2549 # deep
+uplo=U n=32 nrhs=2 batch=512 | cta 0.2966 | blocked 0.3090 # deep
+uplo=U n=32 nrhs=2 batch=2048 | cta 0.9739 | blocked 0.9484 # deep
+uplo=U n=32 nrhs=2 batch=8192 | blocked 2.926 | cta 3.497 # deep
+uplo=U n=32 nrhs=2 batch=32768 | blocked 11.07 | cta 13.85 # deep
+uplo=U n=32 nrhs=3 batch=128 | blocked 0.2522 | cta 0.3165 # deep
+uplo=U n=32 nrhs=3 batch=512 | blocked 0.3066 | cta 0.4112 # deep
+uplo=U n=32 nrhs=3 batch=2048 | blocked 0.9494 | cta 1.400 # deep
+uplo=U n=32 nrhs=4 batch=128 | blocked 0.2524 | cta 0.3278 # deep
+uplo=U n=32 nrhs=4 batch=512 | blocked 0.3088 | cta 0.4566 # deep
+uplo=U n=32 nrhs=4 batch=2048 | blocked 0.9643 | cta 1.688 # deep
+uplo=U n=32 nrhs=4 batch=8192 | blocked 2.890 | cta 5.722 # deep
+uplo=U n=32 nrhs=4 batch=32768 | blocked 11.08 | cta 22.97 # deep
+uplo=U n=32 nrhs=8 batch=128 | blocked 0.2559 | cta 0.5830 # deep
+uplo=U n=32 nrhs=8 batch=512 | blocked 0.3105 | cta 0.7772 # deep
+uplo=U n=32 nrhs=8 batch=2048 | blocked 0.9704 | cta 3.289 # deep
+uplo=U n=32 nrhs=8 batch=8192 | blocked 2.952 | cta 10.78 # deep
+uplo=U n=32 nrhs=8 batch=32768 | blocked 11.03 | cta 40.82 # deep
+uplo=U n=32 nrhs=16 batch=128 | blocked 0.2548 # deep
+uplo=U n=32 nrhs=16 batch=512 | blocked 0.3142 # deep
+uplo=U n=32 nrhs=16 batch=2048 | blocked 0.8916 # deep
+uplo=U n=32 nrhs=16 batch=8192 | blocked 3.029 # deep
+uplo=U n=32 nrhs=16 batch=32768 | blocked 11.24 # deep
+uplo=U n=32 nrhs=64 batch=128 | blocked 0.2635 # deep
+uplo=U n=32 nrhs=64 batch=512 | blocked 0.3818 # deep
+uplo=U n=32 nrhs=64 batch=2048 | blocked 1.349 # deep
+uplo=U n=32 nrhs=64 batch=8192 | blocked 4.596 # deep
+uplo=U n=32 nrhs=64 batch=32768 | blocked 17.61 # deep
+uplo=U n=34 nrhs=2 batch=8192 | cta 4.012 | blocked 4.962 # deep
+uplo=U n=34 nrhs=2 batch=32768 | cta 15.66 | blocked 18.98 # deep
+uplo=U n=36 nrhs=1 batch=128 | cta 0.2533 | blocked 0.3197 # deep
+uplo=U n=36 nrhs=1 batch=512 | cta 0.3044 | blocked 0.3632 # deep
+uplo=U n=36 nrhs=1 batch=2048 | cta 0.8260 | blocked 1.115 # deep
+uplo=U n=36 nrhs=1 batch=8192 | cta 3.162 | blocked 3.723 # deep
+uplo=U n=36 nrhs=1 batch=32768 | cta 12.48 | blocked 14.37 # deep
+uplo=U n=36 nrhs=2 batch=128 | cta 0.2679 | blocked 0.3835 # deep
+uplo=U n=36 nrhs=2 batch=512 | cta 0.3554 | blocked 0.5029 # deep
+uplo=U n=36 nrhs=2 batch=2048 | cta 1.168 | blocked 1.526 # deep
+uplo=U n=36 nrhs=2 batch=8192 | cta 4.451 | blocked 5.258 # deep
+uplo=U n=36 nrhs=2 batch=32768 | cta 17.66 | blocked 20.43 # deep
+uplo=U n=36 nrhs=3 batch=128 | blocked 0.3842 | cta 0.3960 # deep
+uplo=U n=36 nrhs=3 batch=512 | cta 0.4822 | blocked 0.4992 # deep
+uplo=U n=36 nrhs=3 batch=2048 | blocked 1.523 | cta 1.653 # deep
+uplo=U n=36 nrhs=3 batch=8192 | blocked 5.222 | cta 5.709 # deep
+uplo=U n=36 nrhs=3 batch=32768 | blocked 20.27 | cta 22.66 # deep
+uplo=U n=36 nrhs=4 batch=128 | blocked 0.3891 | cta 0.4149 # deep
+uplo=U n=36 nrhs=4 batch=512 | blocked 0.4998 | cta 0.5315 # deep
+uplo=U n=36 nrhs=4 batch=2048 | blocked 1.510 | cta 1.949 # deep
+uplo=U n=36 nrhs=4 batch=8192 | blocked 5.227 | cta 6.986 # deep
+uplo=U n=36 nrhs=4 batch=32768 | blocked 20.28 | cta 27.79 # deep
+uplo=U n=36 nrhs=8 batch=128 | blocked 0.3893 | cta 0.7063 # deep
+uplo=U n=36 nrhs=8 batch=512 | blocked 0.5074 | cta 0.9073 # deep
+uplo=U n=36 nrhs=8 batch=2048 | blocked 1.538 | cta 3.805 # deep
+uplo=U n=36 nrhs=8 batch=8192 | blocked 5.305 | cta 12.71 # deep
+uplo=U n=36 nrhs=8 batch=32768 | blocked 20.50 | cta 48.84 # deep
+uplo=U n=36 nrhs=16 batch=128 | blocked 0.3917 # deep
+uplo=U n=36 nrhs=16 batch=512 | blocked 0.5088 # deep
+uplo=U n=36 nrhs=16 batch=2048 | blocked 1.490 # deep
+uplo=U n=36 nrhs=16 batch=8192 | blocked 5.322 # deep
+uplo=U n=36 nrhs=16 batch=32768 | blocked 20.44 # deep
+uplo=U n=36 nrhs=64 batch=128 | blocked 0.3993 # deep
+uplo=U n=36 nrhs=64 batch=512 | blocked 0.6523 # deep
+uplo=U n=36 nrhs=64 batch=2048 | blocked 2.340 # deep
+uplo=U n=36 nrhs=64 batch=8192 | blocked 8.763 # deep
+uplo=U n=36 nrhs=64 batch=32768 | blocked 33.73 # deep
+uplo=U n=40 nrhs=1 batch=128 | cta 0.2727 | blocked 0.3239 # deep
+uplo=U n=40 nrhs=1 batch=512 | cta 0.3959 | blocked 0.4404 # deep
+uplo=U n=40 nrhs=1 batch=2048 | cta 1.100 | blocked 1.349 # deep
+uplo=U n=40 nrhs=1 batch=8192 | cta 4.407 | blocked 4.872 # deep
+uplo=U n=40 nrhs=1 batch=32768 | cta 17.79 | blocked 19.16 # deep
+uplo=U n=40 nrhs=2 batch=128 | cta 0.2900 | blocked 0.3897 # deep
+uplo=U n=40 nrhs=2 batch=512 | cta 0.4495 | blocked 0.5788 # deep
+uplo=U n=40 nrhs=2 batch=2048 | cta 1.497 | blocked 1.779 # deep
+uplo=U n=40 nrhs=2 batch=8192 | cta 5.834 | blocked 6.387 # deep
+uplo=U n=40 nrhs=2 batch=32768 | cta 23.55 | blocked 25.23 # deep
+uplo=U n=40 nrhs=3 batch=128 | blocked 0.3883 | cta 0.4297 # deep
+uplo=U n=40 nrhs=3 batch=512 | blocked 0.5720 | cta 0.5912 # deep
+uplo=U n=40 nrhs=3 batch=2048 | blocked 1.786 | cta 2.050 # deep
+uplo=U n=40 nrhs=3 batch=8192 | blocked 6.397 | cta 7.302 # deep
+uplo=U n=40 nrhs=3 batch=32768 | blocked 25.25 | cta 29.36 # deep
+uplo=U n=40 nrhs=4 batch=128 | blocked 0.3878 | cta 0.4448 # deep
+uplo=U n=40 nrhs=4 batch=512 | blocked 0.5781 | cta 0.6530 # deep
+uplo=U n=40 nrhs=4 batch=2048 | blocked 1.787 | cta 2.401 # deep
+uplo=U n=40 nrhs=4 batch=8192 | blocked 6.352 | cta 8.640 # deep
+uplo=U n=40 nrhs=4 batch=32768 | blocked 25.19 | cta 35.01 # deep
+uplo=U n=40 nrhs=8 batch=128 | blocked 0.3960 | cta 0.7729 # deep
+uplo=U n=40 nrhs=8 batch=512 | blocked 0.5810 | cta 1.059 # deep
+uplo=U n=40 nrhs=8 batch=2048 | blocked 1.781 | cta 4.425 # deep
+uplo=U n=40 nrhs=8 batch=8192 | blocked 6.442 | cta 15.04 # deep
+uplo=U n=40 nrhs=8 batch=32768 | blocked 25.02 | cta 57.56 # deep
+uplo=U n=40 nrhs=16 batch=128 | blocked 0.3995 # deep
+uplo=U n=40 nrhs=16 batch=512 | blocked 0.5931 # deep
+uplo=U n=40 nrhs=16 batch=2048 | blocked 1.727 # deep
+uplo=U n=40 nrhs=16 batch=8192 | blocked 6.524 # deep
+uplo=U n=40 nrhs=16 batch=32768 | blocked 25.51 # deep
+uplo=U n=40 nrhs=64 batch=128 | blocked 0.4083 # deep
+uplo=U n=40 nrhs=64 batch=512 | blocked 0.7319 # deep
+uplo=U n=40 nrhs=64 batch=2048 | blocked 2.605 # deep
+uplo=U n=40 nrhs=64 batch=8192 | blocked 9.863 # deep
+uplo=U n=48 nrhs=1 batch=128 | cta 0.3147 | blocked 0.3688 # deep
+uplo=U n=48 nrhs=1 batch=512 | cta 0.4400 | blocked 0.4868 # deep
+uplo=U n=48 nrhs=1 batch=2048 | cta 1.238 | blocked 1.462 # deep
+uplo=U n=48 nrhs=1 batch=8192 | cta 4.989 | blocked 5.485 # deep
+uplo=U n=48 nrhs=1 batch=32768 | cta 19.77 | blocked 21.29 # deep
+uplo=U n=48 nrhs=2 batch=128 | cta 0.3424 | blocked 0.4456 # deep
+uplo=U n=48 nrhs=2 batch=512 | cta 0.5017 | blocked 0.6230 # deep
+uplo=U n=48 nrhs=2 batch=2048 | cta 1.700 | blocked 1.869 # deep
+uplo=U n=48 nrhs=2 batch=8192 | cta 6.710 | blocked 6.993 # deep
+uplo=U n=48 nrhs=2 batch=32768 | cta 26.83 | blocked 27.34 # deep
+uplo=U n=48 nrhs=3 batch=128 | blocked 0.4364 | cta 0.5047 # deep
+uplo=U n=48 nrhs=3 batch=512 | blocked 0.6249 | cta 0.6834 # deep
+uplo=U n=48 nrhs=3 batch=2048 | blocked 1.855 | cta 2.340 # deep
+uplo=U n=48 nrhs=3 batch=8192 | blocked 7.003 | cta 8.484 # deep
+uplo=U n=48 nrhs=3 batch=32768 | blocked 27.15 | cta 33.47 # deep
+uplo=U n=48 nrhs=4 batch=128 | blocked 0.4301 | cta 0.5150 # deep
+uplo=U n=48 nrhs=4 batch=512 | blocked 0.6228 | cta 0.7448 # deep
+uplo=U n=48 nrhs=4 batch=2048 | blocked 1.854 | cta 2.753 # deep
+uplo=U n=48 nrhs=4 batch=8192 | blocked 7.003 | cta 10.17 # deep
+uplo=U n=48 nrhs=4 batch=32768 | blocked 27.40 | cta 40.69 # deep
+uplo=U n=48 nrhs=8 batch=128 | blocked 0.4362 | cta 0.9058 # deep
+uplo=U n=48 nrhs=8 batch=512 | blocked 0.6272 | cta 1.232 # deep
+uplo=U n=48 nrhs=8 batch=2048 | blocked 1.894 | cta 5.211 # deep
+uplo=U n=48 nrhs=8 batch=8192 | blocked 6.965 | cta 17.51 # deep
+uplo=U n=48 nrhs=8 batch=32768 | blocked 27.59 | cta 68.57 # deep
+uplo=U n=48 nrhs=16 batch=128 | blocked 0.4403 # deep
+uplo=U n=48 nrhs=16 batch=512 | blocked 0.6323 # deep
+uplo=U n=48 nrhs=16 batch=2048 | blocked 1.874 # deep
+uplo=U n=48 nrhs=16 batch=8192 | blocked 7.168 # deep
+uplo=U n=48 nrhs=16 batch=32768 | blocked 27.71 # deep
+uplo=U n=48 nrhs=64 batch=128 | blocked 0.4494 # deep
+uplo=U n=48 nrhs=64 batch=512 | blocked 0.7944 # deep
+uplo=U n=48 nrhs=64 batch=2048 | blocked 2.870 # deep
+uplo=U n=48 nrhs=64 batch=8192 | blocked 10.94 # deep
+uplo=U n=56 nrhs=1 batch=128 | cta 0.3995 | blocked 0.5380 # deep
+uplo=U n=56 nrhs=1 batch=512 | cta 0.6167 | blocked 0.7559 # deep
+uplo=U n=56 nrhs=1 batch=2048 | cta 1.886 | blocked 2.494 # deep
+uplo=U n=56 nrhs=1 batch=8192 | cta 7.521 | blocked 9.014 # deep
+uplo=U n=56 nrhs=1 batch=32768 | cta 30.07 | blocked 34.92 # deep
+uplo=U n=56 nrhs=2 batch=128 | cta 0.4243 | blocked 0.6107 # deep
+uplo=U n=56 nrhs=2 batch=512 | cta 0.6920 | blocked 0.8863 # deep
+uplo=U n=56 nrhs=2 batch=2048 | cta 2.383 | blocked 2.812 # deep
+uplo=U n=56 nrhs=2 batch=8192 | cta 9.538 | blocked 10.45 # deep
+uplo=U n=56 nrhs=2 batch=32768 | cta 38.28 | blocked 40.67 # deep
+uplo=U n=56 nrhs=3 batch=128 | cta 0.6178 | blocked 0.6044 # deep
+uplo=U n=56 nrhs=3 batch=512 | cta 0.8940 | blocked 0.8804 # deep
+uplo=U n=56 nrhs=3 batch=2048 | blocked 2.854 | cta 3.207 # deep
+uplo=U n=56 nrhs=3 batch=8192 | blocked 10.48 | cta 11.66 # deep
+uplo=U n=56 nrhs=3 batch=32768 | blocked 40.87 | cta 46.74 # deep
+uplo=U n=56 nrhs=4 batch=128 | blocked 0.6117 | cta 0.6498 # deep
+uplo=U n=56 nrhs=4 batch=512 | blocked 0.8887 | cta 0.9868 # deep
+uplo=U n=56 nrhs=4 batch=2048 | blocked 2.799 | cta 3.645 # deep
+uplo=U n=56 nrhs=4 batch=8192 | blocked 10.52 | cta 13.73 # deep
+uplo=U n=56 nrhs=4 batch=32768 | blocked 40.34 | cta 54.28 # deep
+uplo=U n=56 nrhs=8 batch=128 | blocked 0.6128 | cta 1.105 # deep
+uplo=U n=56 nrhs=8 batch=512 | blocked 0.8920 | cta 1.562 # deep
+uplo=U n=56 nrhs=8 batch=2048 | blocked 2.912 | cta 6.620 # deep
+uplo=U n=56 nrhs=8 batch=8192 | blocked 10.56 | cta 22.53 # deep
+uplo=U n=56 nrhs=8 batch=32768 | blocked 40.95 | cta 88.09 # deep
+uplo=U n=56 nrhs=16 batch=128 | blocked 0.6075 # deep
+uplo=U n=56 nrhs=16 batch=512 | blocked 0.8972 # deep
+uplo=U n=56 nrhs=16 batch=2048 | blocked 2.813 # deep
+uplo=U n=56 nrhs=16 batch=8192 | blocked 10.62 # deep
+uplo=U n=56 nrhs=16 batch=32768 | blocked 41.07 # deep
+uplo=U n=56 nrhs=64 batch=128 | blocked 0.6996 # deep
+uplo=U n=56 nrhs=64 batch=512 | blocked 1.322 # deep
+uplo=U n=56 nrhs=64 batch=2048 | blocked 4.843 # deep
+uplo=U n=56 nrhs=64 batch=8192 | blocked 18.54 # deep
+uplo=U n=64 nrhs=1 batch=128 | cta 0.4422 | blocked 0.5577 # deep
+uplo=U n=64 nrhs=1 batch=512 | cta 0.6617 | blocked 0.7725 # deep
+uplo=U n=64 nrhs=1 batch=2048 | cta 2.008 | blocked 2.479 # deep
+uplo=U n=64 nrhs=1 batch=8192 | cta 8.127 | blocked 9.453 # deep
+uplo=U n=64 nrhs=2 batch=128 | cta 0.4646 | blocked 0.6215 # deep
+uplo=U n=64 nrhs=2 batch=512 | cta 0.7485 | blocked 0.9029 # deep
+uplo=U n=64 nrhs=2 batch=2048 | cta 2.615 | blocked 2.859 # deep
+uplo=U n=64 nrhs=2 batch=8192 | cta 10.46 | blocked 10.82 # deep
+uplo=U n=64 nrhs=3 batch=128 | blocked 0.6221 | cta 0.6966 # deep
+uplo=U n=64 nrhs=3 batch=512 | blocked 0.9058 | cta 0.9899 # deep
+uplo=U n=64 nrhs=3 batch=2048 | blocked 2.907 | cta 3.525 # deep
+uplo=U n=64 nrhs=3 batch=8192 | blocked 10.87 | cta 12.88 # deep
+uplo=U n=64 nrhs=4 batch=128 | blocked 0.6154 | cta 0.7130 # deep
+uplo=U n=64 nrhs=4 batch=512 | blocked 0.9041 | cta 1.079 # deep
+uplo=U n=64 nrhs=4 batch=2048 | blocked 2.866 | cta 4.063 # deep
+uplo=U n=64 nrhs=4 batch=8192 | blocked 10.75 | cta 15.03 # deep
+uplo=U n=64 nrhs=8 batch=128 | blocked 0.6165 | cta 1.226 # deep
+uplo=U n=64 nrhs=8 batch=512 | blocked 0.9067 | cta 1.743 # deep
+uplo=U n=64 nrhs=8 batch=2048 | blocked 2.950 | cta 7.011 # deep
+uplo=U n=64 nrhs=8 batch=8192 | blocked 10.79 | cta 24.54 # deep
+uplo=U n=64 nrhs=16 batch=128 | blocked 0.6271 # deep
+uplo=U n=64 nrhs=16 batch=512 | blocked 0.9141 # deep
+uplo=U n=64 nrhs=16 batch=2048 | blocked 2.961 # deep
+uplo=U n=64 nrhs=16 batch=8192 | blocked 11.03 # deep
+uplo=U n=64 nrhs=64 batch=128 | blocked 0.7160 # deep
+uplo=U n=64 nrhs=64 batch=512 | blocked 1.354 # deep
+uplo=U n=64 nrhs=64 batch=2048 | blocked 4.900 # deep
+uplo=U n=64 nrhs=64 batch=8192 | blocked 18.78 # deep
+uplo=U n=72 nrhs=4 batch=512 | cta 1.628 | blocked 1.645 # deep
+uplo=U n=80 nrhs=1 batch=128 | cta 0.6746 | blocked 0.7820 # deep
+uplo=U n=80 nrhs=1 batch=512 | cta 1.195 | blocked 1.304 # deep
+uplo=U n=80 nrhs=1 batch=2048 | cta 3.947 | blocked 4.543 # deep
+uplo=U n=80 nrhs=1 batch=8192 | cta 15.82 | blocked 17.14 # deep
+uplo=U n=80 nrhs=2 batch=128 | cta 0.7028 | blocked 0.9722 # deep
+uplo=U n=80 nrhs=2 batch=512 | cta 1.310 | blocked 1.698 # deep
+uplo=U n=80 nrhs=2 batch=2048 | cta 4.719 | blocked 5.668 # deep
+uplo=U n=80 nrhs=2 batch=8192 | cta 18.75 | blocked 21.31 # deep
+uplo=U n=80 nrhs=3 batch=128 | cta 1.004 | blocked 0.9849 # deep
+uplo=U n=80 nrhs=3 batch=2048 | blocked 5.642 | cta 5.917 # deep
+uplo=U n=80 nrhs=3 batch=8192 | cta 21.58 | blocked 21.13 # deep
+uplo=U n=80 nrhs=4 batch=128 | blocked 0.9732 | cta 1.025 # deep
+uplo=U n=80 nrhs=4 batch=512 | cta 1.728 | blocked 1.702 # deep
+uplo=U n=80 nrhs=4 batch=2048 | blocked 5.625 | cta 6.489 # deep
+uplo=U n=80 nrhs=4 batch=8192 | blocked 21.12 | cta 24.54 # deep
+uplo=U n=80 nrhs=6 batch=512 | blocked 1.699 | cta 2.150 # deep
+uplo=U n=80 nrhs=8 batch=128 | blocked 0.9878 | cta 1.693 # deep
+uplo=U n=80 nrhs=8 batch=512 | blocked 1.703 | cta 2.565 # deep
+uplo=U n=80 nrhs=8 batch=2048 | blocked 5.657 | cta 9.740 # deep
+uplo=U n=80 nrhs=8 batch=8192 | blocked 21.21 | cta 38.44 # deep
+uplo=U n=80 nrhs=16 batch=128 | blocked 0.9949 # deep
+uplo=U n=80 nrhs=16 batch=512 | blocked 1.717 # deep
+uplo=U n=80 nrhs=16 batch=2048 | blocked 5.697 # deep
+uplo=U n=80 nrhs=16 batch=8192 | blocked 21.63 # deep
+uplo=U n=80 nrhs=64 batch=128 | blocked 1.091 # deep
+uplo=U n=80 nrhs=64 batch=512 | blocked 2.306 # deep
+uplo=U n=80 nrhs=64 batch=2048 | blocked 8.619 # deep
+uplo=U n=80 nrhs=64 batch=8192 | blocked 33.24 # deep
+uplo=U n=88 nrhs=4 batch=512 | cta 2.022 | blocked 2.013 # deep
+uplo=U n=96 nrhs=1 batch=128 | cta 0.8209 | blocked 0.9818 # deep
+uplo=U n=96 nrhs=1 batch=512 | cta 1.469 | blocked 1.648 # deep
+uplo=U n=96 nrhs=1 batch=2048 | cta 4.922 | blocked 5.856 # deep
+uplo=U n=96 nrhs=1 batch=8192 | cta 19.68 | blocked 21.79 # deep
+uplo=U n=96 nrhs=2 batch=128 | cta 0.8577 | blocked 1.173 # deep
+uplo=U n=96 nrhs=2 batch=512 | cta 1.613 | blocked 2.038 # deep
+uplo=U n=96 nrhs=2 batch=2048 | cta 5.884 | blocked 6.951 # deep
+uplo=U n=96 nrhs=2 batch=8192 | cta 23.22 | blocked 25.73 # deep
+uplo=U n=96 nrhs=3 batch=128 | cta 1.207 | blocked 1.174 # deep
+uplo=U n=96 nrhs=3 batch=512 | cta 1.969 | blocked 2.037 # deep
+uplo=U n=96 nrhs=3 batch=2048 | blocked 6.948 | cta 7.256 # deep
+uplo=U n=96 nrhs=3 batch=8192 | blocked 25.87 | cta 27.05 # deep
+uplo=U n=96 nrhs=4 batch=128 | blocked 1.188 | cta 1.267 # deep
+uplo=U n=96 nrhs=4 batch=512 | blocked 2.049 | cta 2.132 # deep
+uplo=U n=96 nrhs=4 batch=2048 | blocked 7.061 | cta 8.405 # deep
+uplo=U n=96 nrhs=4 batch=8192 | blocked 25.90 | cta 30.66 # deep
+uplo=U n=96 nrhs=8 batch=128 | blocked 1.191 | cta 2.070 # deep
+uplo=U n=96 nrhs=8 batch=512 | blocked 2.057 | cta 3.161 # deep
+uplo=U n=96 nrhs=8 batch=2048 | blocked 7.043 | cta 11.96 # deep
+uplo=U n=96 nrhs=8 batch=8192 | blocked 25.98 | cta 45.74 # deep
+uplo=U n=96 nrhs=16 batch=128 | blocked 1.200 # deep
+uplo=U n=96 nrhs=16 batch=512 | blocked 2.067 # deep
+uplo=U n=96 nrhs=16 batch=2048 | blocked 7.023 # deep
+uplo=U n=96 nrhs=16 batch=8192 | blocked 26.14 # deep
+uplo=U n=96 nrhs=64 batch=128 | blocked 1.418 # deep
+uplo=U n=96 nrhs=64 batch=512 | blocked 3.134 # deep
+uplo=U n=96 nrhs=64 batch=2048 | blocked 11.45 # deep
+uplo=U n=96 nrhs=64 batch=8192 | blocked 44.18 # deep
+uplo=U n=104 nrhs=4 batch=128 | cta 1.507 | blocked 1.564 # deep
+uplo=U n=104 nrhs=4 batch=512 | cta 2.763 | blocked 2.984 # deep
+uplo=U n=112 nrhs=1 batch=128 | cta 1.089 | blocked 1.243 # deep
+uplo=U n=112 nrhs=1 batch=512 | cta 2.098 | blocked 2.274 # deep
+uplo=U n=112 nrhs=1 batch=2048 | cta 7.137 | blocked 8.107 # deep
+uplo=U n=112 nrhs=1 batch=8192 | cta 28.47 | blocked 30.65 # deep
+uplo=U n=112 nrhs=2 batch=128 | cta 1.134 | blocked 1.624 # deep
+uplo=U n=112 nrhs=2 batch=512 | cta 2.275 | blocked 3.063 # deep
+uplo=U n=112 nrhs=2 batch=2048 | cta 8.247 | blocked 10.30 # deep
+uplo=U n=112 nrhs=2 batch=8192 | cta 32.72 | blocked 38.77 # deep
+uplo=U n=112 nrhs=3 batch=2048 | cta 10.27 | blocked 10.39 # deep
+uplo=U n=112 nrhs=3 batch=8192 | cta 36.98 | blocked 38.68 # deep
+uplo=U n=112 nrhs=4 batch=128 | cta 1.606 | blocked 1.624 # deep
+uplo=U n=112 nrhs=4 batch=512 | cta 2.874 | blocked 3.046 # deep
+uplo=U n=112 nrhs=4 batch=2048 | blocked 10.43 | cta 11.23 # deep
+uplo=U n=112 nrhs=4 batch=8192 | blocked 38.80 | cta 41.37 # deep
+uplo=U n=112 nrhs=6 batch=128 | blocked 1.622 | cta 2.080 # deep
+uplo=U n=112 nrhs=6 batch=512 | blocked 3.070 | cta 3.499 # deep
+uplo=U n=112 nrhs=8 batch=128 | blocked 1.608 | cta 2.522 # deep
+uplo=U n=112 nrhs=8 batch=512 | blocked 3.069 | cta 4.112 # deep
+uplo=U n=112 nrhs=8 batch=2048 | blocked 10.40 | cta 15.47 # deep
+uplo=U n=112 nrhs=8 batch=8192 | blocked 38.74 | cta 58.95 # deep
+uplo=U n=112 nrhs=16 batch=128 | blocked 1.632 # deep
+uplo=U n=112 nrhs=16 batch=512 | blocked 3.076 # deep
+uplo=U n=112 nrhs=16 batch=2048 | blocked 10.38 # deep
+uplo=U n=112 nrhs=16 batch=8192 | blocked 39.05 # deep
+uplo=U n=112 nrhs=64 batch=128 | blocked 1.862 # deep
+uplo=U n=112 nrhs=64 batch=512 | blocked 4.408 # deep
+uplo=U n=112 nrhs=64 batch=2048 | blocked 16.22 # deep
+uplo=U n=128 nrhs=1 batch=128 | cta 1.258 | blocked 1.465 # deep
+uplo=U n=128 nrhs=1 batch=512 | cta 2.546 | blocked 2.736 # deep
+uplo=U n=128 nrhs=1 batch=2048 | cta 8.420 | blocked 9.682 # deep
+uplo=U n=128 nrhs=2 batch=128 | cta 1.309 | blocked 1.844 # deep
+uplo=U n=128 nrhs=2 batch=512 | cta 2.704 | blocked 3.494 # deep
+uplo=U n=128 nrhs=2 batch=2048 | cta 10.13 | blocked 11.93 # deep
+uplo=U n=128 nrhs=3 batch=2048 | cta 12.02 | blocked 11.95 # deep
+uplo=U n=128 nrhs=4 batch=128 | cta 1.833 | blocked 1.823 # deep
+uplo=U n=128 nrhs=4 batch=512 | cta 3.410 | blocked 3.491 # deep
+uplo=U n=128 nrhs=4 batch=2048 | blocked 11.87 | cta 12.75 # deep
+uplo=U n=128 nrhs=6 batch=128 | blocked 1.847 | cta 2.413 # deep
+uplo=U n=128 nrhs=6 batch=512 | blocked 3.503 | cta 4.123 # deep
+uplo=U n=128 nrhs=8 batch=128 | blocked 1.849 | cta 2.958 # deep
+uplo=U n=128 nrhs=8 batch=512 | blocked 3.491 | cta 4.803 # deep
+uplo=U n=128 nrhs=8 batch=2048 | blocked 11.93 | cta 18.26 # deep
+uplo=U n=128 nrhs=16 batch=128 | blocked 1.831 # deep
+uplo=U n=128 nrhs=16 batch=512 | blocked 3.560 # deep
+uplo=U n=128 nrhs=16 batch=2048 | blocked 11.81 # deep
+uplo=U n=128 nrhs=64 batch=128 | blocked 2.272 # deep
+uplo=U n=128 nrhs=64 batch=512 | blocked 5.479 # deep
+uplo=U n=128 nrhs=64 batch=2048 | blocked 19.95 # deep
+uplo=U n=143 nrhs=4 batch=2048 | cta 18.83 | blocked 19.52 # deep
+uplo=U n=143 nrhs=8 batch=128 | cta 2.488 | blocked 2.586 # deep
+uplo=U n=160 nrhs=1 batch=128 | cta 1.855 | blocked 2.174 # deep
+uplo=U n=160 nrhs=1 batch=512 | cta 4.530 | blocked 4.854 # deep
+uplo=U n=160 nrhs=1 batch=2048 | cta 16.45 | blocked 17.86 # deep
+uplo=U n=160 nrhs=2 batch=128 | cta 1.889 | blocked 2.798 # deep
+uplo=U n=160 nrhs=2 batch=512 | cta 4.758 | blocked 6.091 # deep
+uplo=U n=160 nrhs=2 batch=2048 | cta 17.76 | blocked 21.37 # deep
+uplo=U n=160 nrhs=4 batch=128 | cta 2.045 | blocked 2.821 # deep
+uplo=U n=160 nrhs=4 batch=512 | cta 5.630 | blocked 6.103 # deep
+uplo=U n=160 nrhs=4 batch=2048 | cta 20.89 | blocked 21.19 # deep
+uplo=U n=160 nrhs=6 batch=512 | blocked 6.098 | cta 6.542 # deep
+uplo=U n=160 nrhs=6 batch=2048 | blocked 21.35 | cta 25.10 # deep
+uplo=U n=160 nrhs=8 batch=128 | cta 2.771 | blocked 2.791 # deep
+uplo=U n=160 nrhs=8 batch=512 | blocked 6.108 | cta 7.407 # deep
+uplo=U n=160 nrhs=8 batch=2048 | blocked 21.31 | cta 28.67 # deep
+uplo=U n=160 nrhs=11 batch=128 | blocked 2.827 # deep
+uplo=U n=160 nrhs=16 batch=128 | blocked 2.815 # deep
+uplo=U n=160 nrhs=16 batch=512 | blocked 6.175 # deep
+uplo=U n=160 nrhs=16 batch=2048 | blocked 21.43 # deep
+uplo=U n=160 nrhs=64 batch=128 | blocked 3.585 # deep
+uplo=U n=160 nrhs=64 batch=512 | blocked 9.168 # deep
+uplo=U n=160 nrhs=64 batch=2048 | blocked 34.36 # deep
+uplo=U n=192 nrhs=1 batch=128 | cta 2.479 | blocked 2.864 # deep
+uplo=U n=192 nrhs=1 batch=512 | cta 6.482 | blocked 6.919 # deep
+uplo=U n=192 nrhs=1 batch=2048 | cta 23.22 | blocked 25.06 # deep
+uplo=U n=192 nrhs=2 batch=128 | cta 2.523 | blocked 3.554 # deep
+uplo=U n=192 nrhs=2 batch=512 | cta 6.772 | blocked 8.474 # deep
+uplo=U n=192 nrhs=2 batch=2048 | cta 24.83 | blocked 29.93 # deep
+uplo=U n=192 nrhs=4 batch=128 | cta 2.677 | blocked 3.507 # deep
+uplo=U n=192 nrhs=4 batch=512 | cta 7.829 | blocked 8.486 # deep
+uplo=U n=192 nrhs=4 batch=2048 | cta 29.29 | blocked 30.27 # deep
+uplo=U n=192 nrhs=6 batch=512 | blocked 8.504 | cta 8.971 # deep
+uplo=U n=192 nrhs=6 batch=2048 | blocked 30.38 | cta 34.19 # deep
+uplo=U n=192 nrhs=8 batch=128 | cta 3.595 | blocked 3.514 # deep
+uplo=U n=192 nrhs=8 batch=512 | blocked 8.509 | cta 10.05 # deep
+uplo=U n=192 nrhs=8 batch=2048 | blocked 30.29 | cta 38.63 # deep
+uplo=U n=192 nrhs=11 batch=128 | blocked 3.553 # deep
+uplo=U n=192 nrhs=16 batch=128 | blocked 3.594 # deep
+uplo=U n=192 nrhs=16 batch=512 | blocked 8.489 # deep
+uplo=U n=192 nrhs=16 batch=2048 | blocked 30.36 # deep
+uplo=U n=192 nrhs=64 batch=128 | blocked 4.604 # deep
+uplo=U n=192 nrhs=64 batch=512 | blocked 13.06 # deep
+uplo=U n=192 nrhs=64 batch=2048 | blocked 48.66 # deep
+uplo=U n=224 nrhs=1 batch=128 | cta 3.562 | blocked 4.015 # deep
+uplo=U n=224 nrhs=1 batch=512 | cta 9.906 | blocked 10.44 # deep
+uplo=U n=224 nrhs=1 batch=2048 | cta 36.88 | blocked 39.09 # deep
+uplo=U n=224 nrhs=2 batch=128 | cta 3.625 | blocked 5.096 # deep
+uplo=U n=224 nrhs=2 batch=512 | cta 10.23 | blocked 12.72 # deep
+uplo=U n=224 nrhs=2 batch=2048 | cta 38.86 | blocked 46.19 # deep
+uplo=U n=224 nrhs=4 batch=128 | cta 3.811 | blocked 5.028 # deep
+uplo=U n=224 nrhs=4 batch=512 | cta 11.53 | blocked 12.74 # deep
+uplo=U n=224 nrhs=4 batch=2048 | cta 43.86 | blocked 46.19 # deep
+uplo=U n=224 nrhs=6 batch=512 | cta 12.77 | blocked 12.64 # deep
+uplo=U n=224 nrhs=6 batch=2048 | blocked 45.97 | cta 49.57 # deep
+uplo=U n=224 nrhs=8 batch=128 | cta 4.968 | blocked 5.091 # deep
+uplo=U n=224 nrhs=8 batch=512 | blocked 12.75 | cta 14.18 # deep
+uplo=U n=224 nrhs=8 batch=2048 | blocked 46.31 | cta 55.12 # deep
+uplo=U n=224 nrhs=11 batch=128 | blocked 5.103 # deep
+uplo=U n=224 nrhs=16 batch=128 | blocked 5.099 # deep
+uplo=U n=224 nrhs=16 batch=512 | blocked 12.70 # deep
+uplo=U n=224 nrhs=16 batch=2048 | blocked 46.40 # deep
+uplo=U n=224 nrhs=64 batch=128 | blocked 6.556 # deep
+uplo=U n=224 nrhs=64 batch=512 | blocked 18.96 # deep
+uplo=U n=224 nrhs=64 batch=2048 | blocked 71.33 # deep
+uplo=U n=256 nrhs=1 batch=128 | cta 4.521 | blocked 4.999 # deep
+uplo=U n=256 nrhs=1 batch=512 | cta 13.06 | blocked 13.66 # deep
+uplo=U n=256 nrhs=2 batch=128 | cta 4.575 | blocked 6.245 # deep
+uplo=U n=256 nrhs=2 batch=512 | cta 13.47 | blocked 16.57 # deep
+uplo=U n=256 nrhs=4 batch=128 | cta 4.866 | blocked 6.257 # deep
+uplo=U n=256 nrhs=4 batch=512 | cta 14.99 | blocked 16.57 # deep
+uplo=U n=256 nrhs=6 batch=512 | cta 16.42 | blocked 16.46 # deep
+uplo=U n=256 nrhs=8 batch=128 | cta 6.157 | blocked 6.250 # deep
+uplo=U n=256 nrhs=8 batch=512 | blocked 16.60 | cta 20.28 # deep
+uplo=U n=256 nrhs=11 batch=128 | blocked 6.188 # deep
+uplo=U n=256 nrhs=16 batch=128 | blocked 6.260 # deep
+uplo=U n=256 nrhs=16 batch=512 | blocked 16.72 # deep
+uplo=U n=256 nrhs=64 batch=128 | blocked 8.149 # deep
+uplo=U n=256 nrhs=64 batch=512 | blocked 24.77 # deep
+uplo=U n=288 nrhs=1 batch=128 | cta 5.980 | blocked 6.606 # deep
+uplo=U n=288 nrhs=1 batch=512 | cta 17.97 | blocked 18.81 # deep
+uplo=U n=288 nrhs=2 batch=128 | cta 5.971 | blocked 8.256 # deep
+uplo=U n=288 nrhs=2 batch=512 | cta 18.72 | blocked 22.86 # deep
+uplo=U n=288 nrhs=4 batch=128 | cta 6.327 | blocked 8.368 # deep
+uplo=U n=288 nrhs=4 batch=512 | cta 20.53 | blocked 22.60 # deep
+uplo=U n=288 nrhs=6 batch=512 | cta 22.50 | blocked 22.91 # deep
+uplo=U n=288 nrhs=8 batch=128 | cta 7.369 | blocked 8.369 # deep
+uplo=U n=288 nrhs=8 batch=512 | blocked 22.65 | cta 23.93 # deep
+uplo=U n=288 nrhs=11 batch=128 | blocked 8.311 # deep
+uplo=U n=288 nrhs=16 batch=128 | blocked 8.430 # deep
+uplo=U n=288 nrhs=16 batch=512 | blocked 22.98 # deep
+uplo=U n=288 nrhs=64 batch=128 | blocked 10.92 # deep
+uplo=U n=288 nrhs=64 batch=512 | blocked 32.81 # deep
+uplo=U n=320 nrhs=1 batch=128 | cta 7.287 | blocked 7.966 # deep
+uplo=U n=320 nrhs=1 batch=512 | cta 22.82 | blocked 23.82 # deep
+uplo=U n=320 nrhs=2 batch=128 | cta 7.369 | blocked 9.738 # deep
+uplo=U n=320 nrhs=2 batch=512 | cta 23.41 | blocked 28.17 # deep
+uplo=U n=320 nrhs=4 batch=128 | cta 7.770 | blocked 9.862 # deep
+uplo=U n=320 nrhs=4 batch=512 | cta 25.77 | blocked 28.20 # deep
+uplo=U n=320 nrhs=6 batch=512 | cta 27.46 | blocked 27.97 # deep
+uplo=U n=320 nrhs=8 batch=128 | cta 8.972 | blocked 9.862 # deep
+uplo=U n=320 nrhs=8 batch=512 | blocked 28.24 | cta 29.70 # deep
+uplo=U n=320 nrhs=11 batch=128 | blocked 9.796 # deep
+uplo=U n=320 nrhs=16 batch=128 | blocked 9.901 # deep
+uplo=U n=320 nrhs=16 batch=512 | blocked 28.43 # deep
+uplo=U n=320 nrhs=64 batch=128 | blocked 12.88 # deep
+uplo=U n=320 nrhs=64 batch=512 | blocked 41.06 # deep
+uplo=U n=384 nrhs=1 batch=128 | cta 11.23 | blocked 12.06 # deep
+uplo=U n=384 nrhs=1 batch=512 | cta 36.51 | blocked 37.77 # deep
+uplo=U n=384 nrhs=2 batch=128 | cta 11.32 | blocked 14.61 # deep
+uplo=U n=384 nrhs=2 batch=512 | cta 37.29 | blocked 44.08 # deep
+uplo=U n=384 nrhs=4 batch=128 | cta 11.87 | blocked 14.77 # deep
+uplo=U n=384 nrhs=4 batch=512 | cta 40.25 | blocked 44.11 # deep
+uplo=U n=384 nrhs=6 batch=512 | cta 42.88 | blocked 44.35 # deep
+uplo=U n=384 nrhs=8 batch=128 | cta 13.40 | blocked 14.78 # deep
+uplo=U n=384 nrhs=8 batch=512 | blocked 44.15 | cta 45.60 # deep
+uplo=U n=384 nrhs=11 batch=128 | blocked 14.65 # deep
+uplo=U n=384 nrhs=16 batch=128 | blocked 14.66 # deep
+uplo=U n=384 nrhs=16 batch=512 | blocked 43.88 # deep
+uplo=U n=384 nrhs=64 batch=128 | blocked 19.35 # deep
+uplo=U n=384 nrhs=64 batch=512 | blocked 61.96 # deep
+uplo=U n=415 nrhs=8 batch=512 | cta 56.69 | blocked 55.91 # deep
+uplo=U n=448 nrhs=1 batch=128 | cta 16.24 | blocked 17.19 # deep
+uplo=U n=448 nrhs=1 batch=512 | cta 54.91 | blocked 56.52 # deep
+uplo=U n=448 nrhs=2 batch=128 | cta 16.35 | blocked 20.52 # deep
+uplo=U n=448 nrhs=2 batch=512 | cta 55.88 | blocked 65.01 # deep
+uplo=U n=448 nrhs=4 batch=128 | cta 17.06 | blocked 20.75 # deep
+uplo=U n=448 nrhs=4 batch=512 | cta 58.79 | blocked 64.27 # deep
+uplo=U n=448 nrhs=8 batch=128 | cta 18.93 | blocked 20.77 # deep
+uplo=U n=448 nrhs=8 batch=512 | cta 65.29 | blocked 64.31 # deep
+uplo=U n=448 nrhs=11 batch=128 | blocked 20.54 # deep
+uplo=U n=448 nrhs=11 batch=512 | blocked 64.39 # deep
+uplo=U n=448 nrhs=16 batch=128 | blocked 20.54 # deep
+uplo=U n=448 nrhs=16 batch=512 | blocked 64.51 # deep
+uplo=U n=448 nrhs=64 batch=128 | blocked 26.67 # deep
+uplo=U n=448 nrhs=64 batch=512 | blocked 89.08 # deep
+uplo=U n=512 nrhs=1 batch=128 | cta 22.58 | blocked 23.64 # deep
+uplo=U n=512 nrhs=2 batch=128 | cta 22.67 | blocked 27.98 # deep
+uplo=U n=512 nrhs=4 batch=128 | cta 23.63 | blocked 28.32 # deep
+uplo=U n=512 nrhs=8 batch=128 | cta 25.57 | blocked 27.99 # deep
+uplo=U n=512 nrhs=11 batch=128 | blocked 28.06 # deep
+uplo=U n=512 nrhs=16 batch=128 | blocked 28.37 # deep
+uplo=U n=512 nrhs=64 batch=128 | blocked 36.43 # deep
+uplo=U n=572 nrhs=8 batch=128 | cta 34.52 | blocked 37.49 # deep
+uplo=U n=640 nrhs=1 batch=128 | cta 39.89 | blocked 41.64 # deep
+uplo=U n=640 nrhs=2 batch=128 | cta 40.16 | blocked 48.23 # deep
+uplo=U n=640 nrhs=4 batch=128 | cta 40.65 | blocked 47.65 # deep
+uplo=U n=640 nrhs=6 batch=128 | cta 42.87 | blocked 48.26 # deep
+uplo=U n=640 nrhs=8 batch=128 | blocked 47.67 # deep
+uplo=U n=640 nrhs=16 batch=128 | blocked 48.32 # deep
+uplo=U n=640 nrhs=64 batch=128 | blocked 60.99 # deep
+uplo=U n=768 nrhs=1 batch=128 | cta 63.57 | blocked 65.68 # deep
+uplo=U n=768 nrhs=2 batch=128 | cta 63.99 | blocked 74.91 # deep
+uplo=U n=768 nrhs=4 batch=128 | cta 66.13 | blocked 75.84 # deep
+uplo=U n=768 nrhs=6 batch=128 | cta 67.50 | blocked 74.91 # deep
+uplo=U n=768 nrhs=8 batch=128 | blocked 75.88 # deep
+uplo=U n=768 nrhs=16 batch=128 | blocked 74.99 # deep
+uplo=U n=768 nrhs=64 batch=128 | blocked 93.04 # deep
