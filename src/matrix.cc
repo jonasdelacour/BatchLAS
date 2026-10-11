@@ -1497,11 +1497,12 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     T* data_ptr = data_.data();
     int ld = ld_;
     int stride = stride_;
-    auto n = rows_; // Assuming square matrix
+    auto n = std::min(rows_, cols_);  // a tall or wide view has min(rows, cols) diagonal entries
     auto batch_size = batch_size_;
-    
+
     size_t total_elements = static_cast<size_t>(batch_size) * n;
-    
+    if (total_elements == 0) return ctx.get_event();
+
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);

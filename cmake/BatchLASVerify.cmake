@@ -5,6 +5,7 @@
 add_library(batchlas_verify SHARED "${PROJECT_SOURCE_DIR}/src/verify/engine.cc")
 add_library(batchlas::verify ALIAS batchlas_verify)
 batchlas_configure_component(batchlas_verify)
+target_link_libraries(batchlas_verify PUBLIC batchlas)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     target_link_libraries(batchlas_verify PUBLIC "$<BUILD_INTERFACE:${BATCHLAS_NETLIB_LINK_LIBRARIES}>")

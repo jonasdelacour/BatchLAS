@@ -40,7 +40,8 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 | Maxima | NaN-propagating everywhere: a NaN anywhere in a check fails it |
 | Items checked | `{0, batch/2, batch−1}` by default; an overload takes an explicit item list, `all_items(batch)` lists every item (saturating-batch tests) |
 | Tolerance | `c · f(n) · eps(T)` per check kind, one named entry per kind (below); no fixed per-type bounds |
-| Where checks run | the dense residuals and backward errors as SYCL kernels on the library's own queue ([device engine](#verification-device-engine)); generators, LAPACKE references and the O(input) scans (norms, `values_error`, `pivots_valid`, `pivot_ratio`) on the host |
+| Where checks run | the dense residuals and backward errors on a SYCL device ([device engine](#verification-device-engine)); LAPACKE references and the O(input) scans (norms, `values_error`, `pivots_valid`, `pivot_ratio`) on the host |
+| Library use | fills, transforms (`triangularize`, `hermitize`, `symmetrize`, `fill_identity`), `linalg::axpby_into`, `linalg::triangular_mask_into` and `norm` (Frobenius) are BatchLAS's own; no routed operation (gemm, potrf, ...) is called. Products, the componentwise backward error, reflector application and row interchanges are the engine's kernels, so no check runs through the op it judges |
 | Public API | no: internal, not installed |
 
 ## Layout
@@ -73,13 +74,13 @@ through the tables or routes under test (agent guide §8 rule 7).
 
 | Aspect | Rule |
 | --- | --- |
-| Lanes | two in-order queues per process, leaked: the first GPU and the first CPU device with fp64 on which a probe kernel runs (a build without that device's image fails the probe). A check above 2^24 multiply-adds runs on the GPU, the rest on the CPU device; with one lane, everything runs there. Under `ctest_gpus.sh` the GPU is the slot's |
-| Synchronization | one wait per check: uploads and downloads go through a pinned host arena that does not move within a check. Each wait costs ~1 ms on the CUDA adapter (threadripper02, an 8-byte copy or an empty kernel alike) and ~40 µs on the OpenCL CPU device, which is why small checks stay on the CPU |
+| Lanes | two in-order `batchlas::Queue`s per process, leaked: the first GPU and the first CPU device with fp64 on which a probe kernel runs (a build without that device's image fails the probe). A check above 2^24 multiply-adds runs on the GPU, the rest on the CPU device; with one lane, everything runs there. Under `ctest_gpus.sh` the GPU is the slot's |
+| Synchronization | one wait per check: operands are packed into shared USM of the lane's queue and results read back from it after the wait. Each wait costs ~1 ms on the CUDA adapter (threadripper02, an 8-byte copy or an empty kernel alike) and ~40 µs on the OpenCL CPU device, which is why small checks stay on the CPU |
 | Call pattern | check a batch with one call over its items (`all_items(batch)`), not one call per item: each call pays a wait. `syev_cta_fused_tests` (4099 items checked one call each) took 248 s on a GPU-only, several-waits engine against 2 s with host loops; one call over all items on this engine takes 4 s |
-| Data path | each checked item is packed on the host in its own precision (`ld` and `stride` read there), copied, and promoted on the device; `op()` and `Shape` are applied by an expand kernel, never by a host copy |
+| Data path | each checked item is packed and promoted on the host (`ld`, `inc` and `stride` read there) straight into the lane's shared USM; `Shape` is applied by the library transforms in place, `op()` by the product kernel's index map, never by a transposed copy |
 | Groups | items are processed together while the largest buffer stays under 2^25 elements |
-| Kernels | one work-item per output element, inner sums sequential in the host loops' order; complex arithmetic written out (`{re, im}`), no `std::complex` in device code |
-| Reductions | per-element partials, summed or `nanmax`ed on the host in column-major order: no device reduction or group algorithm |
+| Kernels | the engine's own: one work-item per output element, inner sums sequential; complex arithmetic written out (`{re, im}`), no `std::complex` in their device code |
+| Reductions | Frobenius norms by the library's `norm` (per item, into shared USM); the componentwise maximum is `nanmax`ed on the host from per-element ratios, so a NaN anywhere fails it |
 | Concurrency | one mutex around each check; a slot that grows waits for the queue before it is freed |
 
 ## Tolerance kinds

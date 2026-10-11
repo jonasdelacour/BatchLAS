@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
-// libbatchlas_verify: the checks of batchlas::verify as SYCL kernels on the library's own queue
-// (docs/design/verification.md#verification-device-engine). Checked items are packed on the host in
-// their own precision, promoted on the device, and every reduction is finished on the host in the
-// host loops' order from per-element partials, so no device reduction or group algorithm is used.
+// libbatchlas_verify: the checks of batchlas::verify on a SYCL device
+// (docs/design/verification.md#verification-device-engine). Checked items are packed and promoted
+// on the host into shared USM of the lane's queue; shapes, differences, masks and Frobenius norms
+// are library utilities; products, the componentwise backward error, reflector application and
+// row swaps are this file's kernels (a check cannot route through the ops it judges).
 #include <batchlas/verify/engine.hh>
 #include <batchlas/verify/scalar.hh>
+
+#include <batchlas/blas/extra.hh>
+#include <batchlas/blas/linalg-ops.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/sycl_interop.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -26,139 +32,65 @@
 namespace batchlas::verify::detail {
 namespace {
 
+using cd = std::complex<double>;
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 [[noreturn]] void bad(const char* who, const char* what) {
     throw std::invalid_argument(std::string("batchlas::verify::") + who + ": " + what);
 }
 
-// Written-out complex<double>: no std::complex in device code (Annex G __muldc3, and AdaptiveCpp).
+// Written-out complex<double> for this file's kernels (layout-compatible with std::complex<double>):
+// no std::complex arithmetic in device code (Annex G __muldc3, and AdaptiveCpp).
 struct zd {
     double re, im;
 };
 inline zd operator+(zd a, zd b) { return {a.re + b.re, a.im + b.im}; }
 inline zd operator-(zd a, zd b) { return {a.re - b.re, a.im - b.im}; }
 inline zd operator*(zd a, zd b) { return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re}; }
-inline zd operator*(zd a, double s) { return {a.re * s, a.im * s}; }
 inline double mag(double x) { return sycl::fabs(x); }
 inline double mag(zd x) { return sycl::hypot(x.re, x.im); }
 inline double conj(double x) { return x; }
 inline zd conj(zd x) { return {x.re, -x.im}; }
 inline double real_part(double x) { return x; }
 inline zd real_part(zd x) { return {x.re, 0.0}; }
-inline bool nan_of(double x) { return sycl::isnan(x); }
 
-template <class D> D make_d(double re, double im) {
-    if constexpr (std::is_same_v<D, double>) { (void)im; return re; }
-    else return zd{re, im};
-}
-template <class D> D make_d(std::complex<double> z) { return make_d<D>(z.real(), z.imag()); }
+template <class D> using K = std::conditional_t<std::is_same_v<D, double>, double, zd>;
+template <class D> K<D>* kp(D* p) { return reinterpret_cast<K<D>*>(p); }
+template <class D> const K<D>* kp(const D* p) { return reinterpret_cast<const K<D>*>(p); }
+template <class X> X kzero() { if constexpr (std::is_same_v<X, double>) return 0.0; else return zd{0, 0}; }
+template <class X> X kmake(cd z) { if constexpr (std::is_same_v<X, double>) return z.real(); else return zd{z.real(), z.imag()}; }
 
-inline double dquot(double num, double den) {
-    if (nan_of(num) || nan_of(den)) return kNaN;
-    return den > 0 ? num / den : num;
-}
-inline double hmax(double a, double b) { return nanmax(a, b); }
 inline double hquot(double num, double den) {
     if (std::isnan(num) || std::isnan(den)) return kNaN;
     return den > 0 ? num / den : num;
 }
 
-std::size_t elem_bytes(Dtype t) { return t == Dtype::f32 || t == Dtype::i32 ? 4 : t == Dtype::c64 ? 16 : 8; }
-
-template <class D> D load(const void* p, Dtype dt, std::size_t i) {
-    double re = 0, im = 0;
-    switch (dt) {
-        case Dtype::f32: re = static_cast<const float*>(p)[i]; break;
-        case Dtype::f64: re = static_cast<const double*>(p)[i]; break;
-        case Dtype::c32: re = static_cast<const float*>(p)[2 * i]; im = static_cast<const float*>(p)[2 * i + 1]; break;
-        case Dtype::c64: re = static_cast<const double*>(p)[2 * i]; im = static_cast<const double*>(p)[2 * i + 1]; break;
-        case Dtype::i32: re = static_cast<const std::int32_t*>(p)[i]; break;
-    }
-    return make_d<D>(re, im);
-}
-
-// shaped() of residuals.hh on a packed item (ld = its rows): only the named triangle is read.
-template <class D> D shaped(const void* raw, Dtype dt, std::size_t base, int ld, Shape s, int i, int j) {
-    const auto g = [&](int r, int c) { return load<D>(raw, dt, base + std::size_t(c) * std::size_t(ld) + std::size_t(r)); };
-    const D zero = make_d<D>(0, 0), one = make_d<D>(1, 0);
-    switch (s) {
-        case Shape::general: return g(i, j);
-        case Shape::lower: return i >= j ? g(i, j) : zero;
-        case Shape::upper: return i <= j ? g(i, j) : zero;
-        case Shape::unit_lower: return i == j ? one : (i > j ? g(i, j) : zero);
-        case Shape::unit_upper: return i == j ? one : (i < j ? g(i, j) : zero);
-        case Shape::hermitian_lower: return i == j ? real_part(g(i, i)) : (i > j ? g(i, j) : conj(g(j, i)));
-        case Shape::hermitian_upper: return i == j ? real_part(g(i, i)) : (i < j ? g(i, j) : conj(g(j, i)));
-        case Shape::symmetric_lower: return i >= j ? g(i, j) : g(j, i);
-        case Shape::symmetric_upper: return i <= j ? g(i, j) : g(j, i);
-    }
-    return zero;
-}
-
-inline bool masked(Shape s, int i, int j) {
-    const bool lo = s == Shape::lower || s == Shape::unit_lower || s == Shape::hermitian_lower || s == Shape::symmetric_lower;
-    const bool hi = s == Shape::upper || s == Shape::unit_upper || s == Shape::hermitian_upper || s == Shape::symmetric_upper;
-    return (lo && i < j) || (hi && i > j);
-}
-
-// One device's in-order queue, its device slots (grow-only) and a pinned host arena. A check enqueues
-// every copy and kernel and waits once: a synchronization costs ~1 ms on the CUDA adapter here.
+// One device's batchlas::Queue and its grow-only scratch slots, in shared USM of that queue's
+// context so the host packs straight into them and reads results back after the check's one wait
+// (a synchronization costs ~1 ms on the CUDA adapter here).
 // evidence: docs/design/verification.md#verification-device-engine
 class Lane {
 public:
-    explicit Lane(sycl::queue* q) : q_(q), slots_(16) {}
-    sycl::queue& q() { return *q_; }
+    explicit Lane(Queue* Q) : Q_(Q), slots_(24) {}
+    Queue& Q() { return *Q_; }
+    sycl::queue& q() { return sycl_queue(*Q_); }
 
     template <class X> X* slot(int id, std::size_t count) {
         auto& s = slots_.at(std::size_t(id));
         const std::size_t bytes = std::max<std::size_t>(count * sizeof(X), 1);
         if (s.second < bytes) {
-            q_->wait();  // queued work may still use the old slot
-            if (s.first) sycl::free(s.first, *q_);
-            s.first = sycl::malloc_device(bytes, *q_);
-            if (!s.first) throw std::runtime_error("batchlas::verify: device allocation failed");
+            q().wait();  // queued work may still use the old slot
+            if (s.first) sycl::free(s.first, q());
+            s.first = sycl::malloc_shared(bytes, q());
+            if (!s.first) throw std::runtime_error("batchlas::verify: allocation failed");
             s.second = bytes;
         }
         return static_cast<X*>(s.first);
     }
 
-    // The queue is idle between checks: fold last check's chunks into one.
-    void begin() {
-        if (chunks_.size() > 1) {
-            std::size_t total = 0;
-            for (auto& c : chunks_) {
-                total += c.second;
-                sycl::free(c.first, *q_);
-            }
-            chunks_.clear();
-            add_chunk(total);
-        }
-        used_ = 0;
-    }
-
-    // Pinned host memory that stays valid (and in place) until the next begin().
-    void* take(std::size_t bytes) {
-        bytes = (bytes + 63) & ~std::size_t(63);
-        if (chunks_.empty() || used_ + bytes > chunks_.back().second) {
-            add_chunk(std::max({bytes, std::size_t(1) << 20, chunks_.empty() ? 0 : 2 * chunks_.back().second}));
-            used_ = 0;
-        }
-        void* p = static_cast<unsigned char*>(chunks_.back().first) + used_;
-        used_ += bytes;
-        return p;
-    }
-
 private:
-    void add_chunk(std::size_t bytes) {
-        void* p = sycl::malloc_host(bytes, *q_);
-        if (!p) throw std::runtime_error("batchlas::verify: host staging allocation failed");
-        chunks_.emplace_back(p, bytes);
-    }
-    sycl::queue* q_;
+    Queue* Q_;
     std::vector<std::pair<void*, std::size_t>> slots_;
-    std::vector<std::pair<void*, std::size_t>> chunks_;
-    std::size_t used_ = 0;
 };
 
 // Checks above kGpuWork multiply-adds run on the first GPU, the rest on the first CPU device: both
@@ -174,26 +106,27 @@ public:
     std::mutex& mutex() { return mu_; }
     Lane& lane(double work) {
         Lane& l = gpu_ && (work > kGpuWork || !cpu_) ? *gpu_ : *cpu_;
-        l.begin();
+        l.Q().attach_to_current_thread();
         return l;
     }
 
 private:
-    static Lane* probe(sycl::info::device_type type) {
-        for (const auto& d : sycl::device::get_devices(type)) {
-            if (!d.has(sycl::aspect::fp64)) continue;
+    static Lane* probe(DeviceType type) {
+        for (const Device& d : Device::get_devices(type)) {
             try {
-                auto q = std::make_unique<sycl::queue>(d, sycl::property::queue::in_order{});
-                double* p = sycl::malloc_device<double>(1, *q);
-                q->single_task([=] { p[0] = 1.0; }).wait_and_throw();
-                sycl::free(p, *q);
-                return new Lane(q.release());
-            } catch (const sycl::exception&) {
+                auto Q = std::make_unique<Queue>(d, true);
+                sycl::queue& q = sycl_queue(*Q);
+                if (!q.get_device().has(sycl::aspect::fp64)) continue;
+                double* p = sycl::malloc_device<double>(1, q);
+                q.single_task([=] { p[0] = 1.0; }).wait_and_throw();
+                sycl::free(p, q);
+                return new Lane(Q.release());
+            } catch (const std::exception&) {
             }
         }
         return nullptr;
     }
-    Engine() : gpu_(probe(sycl::info::device_type::gpu)), cpu_(probe(sycl::info::device_type::cpu)) {
+    Engine() : gpu_(probe(DeviceType::GPU)), cpu_(probe(DeviceType::CPU)) {
         if (!gpu_ && !cpu_) throw std::runtime_error("batchlas::verify: no SYCL device with fp64 runs the verification kernels");
     }
     std::mutex mu_;
@@ -201,46 +134,71 @@ private:
     Lane* cpu_;
 };
 
-enum Slot { kRawA, kRawB, kRawC, kRawD, kA, kB, kC, kD, kR, kT, kP1, kP2, kP3, kV, kPiv, kAux };
+enum Slot { kA, kB, kC, kD, kE, kF, kR, kT, kU, kV, kW, kOut, kNorm, kPiv };
 
 void check_items(const Operand& o, std::span<const int> items, const char* who) {
     for (int b : items)
         if (b < 0 || b >= o.batch) bad(who, "batch item out of range");
 }
 
-// Packs rows x cols of each item in `items` back to back (ld = rows) in the operand's own precision
-// and copies them to `slot`.
-const void* upload(Lane& e, int slot, const Operand& o, std::span<const int> items, int rows, int cols) {
-    const std::size_t es = elem_bytes(o.dtype), per = std::size_t(rows) * std::size_t(cols) * es;
-    const std::size_t bytes = per * items.size();
-    auto* dst = e.slot<unsigned char>(slot, bytes);
-    if (bytes == 0) return dst;
-    auto* h = static_cast<unsigned char*>(e.take(bytes));
-    const auto* src = static_cast<const unsigned char*>(o.data);
-    for (std::size_t g = 0; g < items.size(); ++g) {
-        const long long base = static_cast<long long>(items[g]) * o.stride;
-        for (int c = 0; c < cols; ++c) {
-            unsigned char* out = h + g * per + std::size_t(c) * std::size_t(rows) * es;
-            const long long col = base + static_cast<long long>(c) * o.ld;
-            if (o.inc == 1) std::memcpy(out, src + std::size_t(col) * es, std::size_t(rows) * es);
-            else
-                for (int r = 0; r < rows; ++r)
-                    std::memcpy(out + std::size_t(r) * es, src + std::size_t(col + static_cast<long long>(r) * o.inc) * es, es);
-        }
+template <class D> D read_as(const Operand& o, long long off) {
+    double re = 0, im = 0;
+    switch (o.dtype) {
+        case Dtype::f32: re = static_cast<const float*>(o.data)[off]; break;
+        case Dtype::f64: re = static_cast<const double*>(o.data)[off]; break;
+        case Dtype::c32: re = static_cast<const float*>(o.data)[2 * off]; im = static_cast<const float*>(o.data)[2 * off + 1]; break;
+        case Dtype::c64: re = static_cast<const double*>(o.data)[2 * off]; im = static_cast<const double*>(o.data)[2 * off + 1]; break;
+        case Dtype::i32: re = static_cast<const std::int32_t*>(o.data)[off]; break;
     }
-    e.q().memcpy(dst, h, bytes);
-    return dst;
+    if constexpr (std::is_same_v<D, double>) { (void)im; return re; }
+    else return D(re, im);
 }
 
-// n doubles of device memory, copied to the arena: valid after the check's wait.
-struct Fetched {
-    const double* p;
-    std::size_t n;
-};
-Fetched fetch(Lane& e, const double* d, std::size_t n) {
-    auto* h = static_cast<double*>(e.take(std::max<std::size_t>(n, 1) * sizeof(double)));
-    if (n) e.q().memcpy(h, d, n * sizeof(double));
-    return {h, n};
+// The rows x cols top-left window of each item in `items`, promoted and packed (ld = rows).
+template <class D> D* pack(Lane& e, int slot, const Operand& o, std::span<const int> items, int rows, int cols) {
+    const std::size_t per = std::size_t(rows) * std::size_t(cols);
+    D* out = e.slot<D>(slot, per * items.size());
+    for (std::size_t g = 0; g < items.size(); ++g) {
+        const long long base = static_cast<long long>(items[g]) * o.stride;
+        for (int c = 0; c < cols; ++c)
+            for (int r = 0; r < rows; ++r)
+                out[g * per + std::size_t(c) * rows + r] =
+                    read_as<D>(o, base + static_cast<long long>(c) * o.ld + static_cast<long long>(r) * o.inc);
+    }
+    return out;
+}
+
+template <class D> MatrixView<D, MatrixFormat::Dense> mv(D* p, int rows, int cols, int g) {
+    return MatrixView<D, MatrixFormat::Dense>(p, rows, cols, std::max(rows, 1), std::max(rows * cols, 1), g);
+}
+
+// The Shape applied in place by the library's transforms (the unread triangle is overwritten).
+// Their Events are dropped throughout: the lane's queue is in-order and each check waits once.
+template <class D> void shape(Lane& e, D* p, int rows, int cols, int g, Shape s) {
+    if (s == Shape::general || rows == 0 || cols == 0) return;
+    const auto v = mv(p, rows, cols, g);
+    switch (s) {
+        case Shape::lower: (void)v.triangularize(e.Q(), Uplo::Lower, Diag::NonUnit); break;
+        case Shape::upper: (void)v.triangularize(e.Q(), Uplo::Upper, Diag::NonUnit); break;
+        case Shape::unit_lower: (void)v.triangularize(e.Q(), Uplo::Lower, Diag::Unit); break;
+        case Shape::unit_upper: (void)v.triangularize(e.Q(), Uplo::Upper, Diag::Unit); break;
+        case Shape::hermitian_lower:
+        case Shape::hermitian_upper: {
+            const Uplo u = s == Shape::hermitian_lower ? Uplo::Lower : Uplo::Upper;
+            if constexpr (std::is_same_v<D, double>) (void)v.symmetrize(e.Q(), u);  // real: hermitize is not instantiated
+            else (void)v.hermitize(e.Q(), u);
+            break;
+        }
+        case Shape::symmetric_lower: (void)v.symmetrize(e.Q(), Uplo::Lower); break;
+        case Shape::symmetric_upper: (void)v.symmetrize(e.Q(), Uplo::Upper); break;
+        case Shape::general: break;
+    }
+}
+
+template <class D> D* operand(Lane& e, int slot, const Operand& o, std::span<const int> items, Shape s) {
+    D* p = pack<D>(e, slot, o, items, o.rows, o.cols);
+    shape(e, p, o.rows, o.cols, int(items.size()), s);
+    return p;
 }
 
 template <class F> void launch(Lane& e, std::size_t n, F f) {
@@ -248,80 +206,53 @@ template <class F> void launch(Lane& e, std::size_t n, F f) {
     e.q().parallel_for(sycl::range<1>(n), [=](sycl::id<1> id) { f(std::size_t(id[0])); });
 }
 
-// out (g items of out_rows x out_cols, packed) = op(shaped(raw item)), raw packed with ld = src_rows.
-template <class D>
-D* expand(Lane& e, int slot, const void* raw, Dtype dt, int g, int src_rows, int src_cols, Shape s, Transpose t, int out_rows,
-          int out_cols) {
-    D* out = e.slot<D>(slot, std::size_t(g) * out_rows * out_cols);
-    const std::size_t per_out = std::size_t(out_rows) * out_cols, per_src = std::size_t(src_rows) * src_cols;
-    launch(e, std::size_t(g) * per_out, [=](std::size_t x) {
-        const std::size_t it = x / per_out, rc = x % per_out;
-        const int i = int(rc % std::size_t(out_rows)), j = int(rc / std::size_t(out_rows));
-        const std::size_t base = it * per_src;
-        D v;
-        if (t == Transpose::NoTrans) v = shaped<D>(raw, dt, base, src_rows, s, i, j);
-        else {
-            v = shaped<D>(raw, dt, base, src_rows, s, j, i);
-            if (t == Transpose::ConjTrans) v = conj(v);
-        }
-        out[x] = v;
-    });
-    return out;
+// op(X)(i, l) of a packed rows x cols item.
+template <class X> X op_at(const X* p, int rows, Transpose t, int i, int l) {
+    if (t == Transpose::NoTrans) return p[std::size_t(l) * rows + i];
+    const X x = p[std::size_t(i) * rows + l];
+    return t == Transpose::ConjTrans ? conj(x) : x;
 }
 
-template <class D> D* expand(Lane& e, int raw_slot, int slot, const Operand& o, std::span<const int> items, Shape s, Transpose t,
-                             int out_rows, int out_cols) {
-    const void* raw = upload(e, raw_slot, o, items, o.rows, o.cols);
-    return expand<D>(e, slot, raw, o.dtype, int(items.size()), o.rows, o.cols, s, t, out_rows, out_cols);
-}
-
-// R = P Q per item, the l sum in order.
-template <class D> D* product(Lane& e, int slot, const D* P, const D* Q, int g, int m, int kk, int n) {
+// R = op(P) op(Q) per item (packed m x n), the inner sum in order.
+template <class D> D* product(Lane& e, int slot, const D* P, int pr, int pc, Transpose tp, const D* Q, int qr, int qc, Transpose tq, int g) {
+    const int m = tp == Transpose::NoTrans ? pr : pc, kk = tp == Transpose::NoTrans ? pc : pr;
+    const int n = tq == Transpose::NoTrans ? qc : qr;
     D* R = e.slot<D>(slot, std::size_t(g) * m * n);
-    const std::size_t per = std::size_t(m) * n;
+    const auto *p = kp(P), *q = kp(Q);
+    auto* r = kp(R);
+    const std::size_t per = std::size_t(m) * n, sp = std::size_t(pr) * pc, sq = std::size_t(qr) * qc;
     launch(e, std::size_t(g) * per, [=](std::size_t x) {
         const std::size_t it = x / per, rc = x % per;
         const int i = int(rc % std::size_t(m)), j = int(rc / std::size_t(m));
-        const D* p = P + it * std::size_t(m) * kk;
-        const D* q = Q + it * std::size_t(kk) * n + std::size_t(j) * kk;
-        D acc = make_d<D>(0, 0);
-        for (int l = 0; l < kk; ++l) acc = acc + p[std::size_t(l) * m + i] * q[l];
-        R[x] = acc;
+        auto acc = kzero<K<D>>();
+        for (int l = 0; l < kk; ++l) acc = acc + op_at(p + it * sp, pr, tp, i, l) * op_at(q + it * sq, qr, tq, l, j);
+        r[x] = acc;
     });
     return R;
 }
 
-// diff2 = |R - a T|^2 and tgt2 = |T|^2 per element; masked elements contribute 0. A null T is the identity.
-template <class D> void partials(Lane& e, const D* R, const D* T, D a, int g, int m, int n, Shape mask, double*& diff2, double*& tgt2) {
-    const std::size_t total = std::size_t(g) * m * n, per = std::size_t(m) * n;
-    double* d2 = e.slot<double>(kP1, total);
-    double* t2 = e.slot<double>(kP2, total);
-    launch(e, total, [=](std::size_t x) {
-        const std::size_t rc = x % per;
-        const int i = int(rc % std::size_t(m)), j = int(rc / std::size_t(m));
-        if (masked(mask, i, j)) { d2[x] = 0; t2[x] = 0; return; }
-        const D z = T ? T[x] : make_d<D>(i == j ? 1 : 0, 0);
-        const double d = mag(R[x] - a * z), t = mag(z);
-        d2[x] = d * d;
-        t2[x] = t * t;
-    });
-    diff2 = d2;
-    tgt2 = t2;
+// Frobenius norm of each item of a packed m x n batch, into norms[0, g) (valid after the wait).
+template <class D> void frob(Lane& e, D* p, int m, int n, int g, double* norms) {
+    if (std::size_t(m) * n == 0) { std::fill(norms, norms + g, 0.0); return; }
+    (void)batchlas::norm(e.Q(), mv(p, m, n, g), NormType::Frobenius, Span<double>(norms, std::size_t(g)));
 }
 
-template <class D> double* sumsq(Lane& e, int slot, const D* M, std::size_t total) {
-    double* s = e.slot<double>(slot, total);
-    launch(e, total, [=](std::size_t x) { const double t = mag(M[x]); s[x] = t * t; });
-    return s;
-}
-
-// Host sums per item, in column-major order (the host loops' order).
-std::vector<double> per_item_sums(const Fetched& v, int g) {
-    std::vector<double> s(std::size_t(g), 0.0);
-    const std::size_t per = g ? v.n / std::size_t(g) : 0;
-    for (int it = 0; it < g; ++it)
-        for (std::size_t x = 0; x < per; ++x) s[std::size_t(it)] += v.p[std::size_t(it) * per + x];
-    return s;
+// R := R - a T (T null: the identity), both masked to `mask`'s triangle; then ||R||_F and ||T||_F per item.
+template <class D> void difference(Lane& e, D* R, D* T, D a, int m, int n, int g, Shape mask, double* num, double* den) {
+    if (std::size_t(m) * n * g == 0) { std::fill(num, num + g, 0.0); std::fill(den, den + g, 0.0); return; }
+    if (!T) {
+        T = e.slot<D>(kU, std::size_t(g) * m * n);
+        (void)mv(T, m, n, g).fill_identity(e.Q());
+    }
+    const auto r = mv(R, m, n, g), t = mv(T, m, n, g);
+    (void)linalg::axpby_into(e.Q(), D(1), r, -a, t, r);
+    if (mask == Shape::lower || mask == Shape::upper) {
+        const Uplo u = mask == Shape::lower ? Uplo::Lower : Uplo::Upper;
+        (void)linalg::triangular_mask_into(e.Q(), r, r, u);
+        (void)linalg::triangular_mask_into(e.Q(), t, t, u);
+    }
+    frob(e, R, m, n, g, num);
+    frob(e, T, m, n, g, den);
 }
 
 // Items processed together: as many as keep the largest buffer under 2^25 elements.
@@ -332,21 +263,7 @@ std::vector<std::span<const int>> groups(std::span<const int> items, std::size_t
     return out;
 }
 
-// sqrt(sum diff2) / sqrt(sum tgt2) per item of a Frobenius ratio.
-template <class D> double frob_ratio(Lane& e, const D* R, const D* T, D a, int g, int m, int n, Shape mask, double worst,
-                                     const std::vector<bool>* nan_items = nullptr) {
-    double *d2, *t2;
-    partials(e, R, T, a, g, m, n, mask, d2, t2);
-    const std::size_t total = std::size_t(g) * m * n;
-    const Fetched f2 = fetch(e, d2, total), ft = fetch(e, t2, total);
-    e.q().wait();
-    const auto num = per_item_sums(f2, g), den = per_item_sums(ft, g);
-    for (int it = 0; it < g; ++it)
-        worst = hmax(worst, nan_items && (*nan_items)[std::size_t(it)] ? kNaN : hquot(std::sqrt(num[std::size_t(it)]), std::sqrt(den[std::size_t(it)])));
-    return worst;
-}
-
-template <class F> auto dispatch(bool complex, F f) { return complex ? f(zd{}) : f(double{}); }
+template <class F> auto dispatch(bool complex, F f) { return complex ? f(cd{}) : f(double{}); }
 
 std::vector<std::int32_t> read_pivots(const Operand& p, int item, int count) {
     std::vector<std::int32_t> out(static_cast<std::size_t>(count));
@@ -355,90 +272,92 @@ std::vector<std::int32_t> read_pivots(const Operand& p, int item, int count) {
     return out;
 }
 
-// Applies the row swaps of each item (k in [0, count), in `forward` order or reversed) to M (m x n).
+// 0-based pivots of each item of `grp` (count each, identity for an item with one out of [1, range]).
+std::vector<std::int32_t> pivots(const Operand& piv, std::span<const int> grp, int count, int range, std::vector<bool>& nan_items) {
+    std::vector<std::int32_t> p0;
+    nan_items.assign(grp.size(), false);
+    for (std::size_t it = 0; it < grp.size(); ++it) {
+        const auto p = read_pivots(piv, grp[it], count);
+        for (int k = 0; k < count; ++k)
+            if (p[std::size_t(k)] < 1 || p[std::size_t(k)] > range) { nan_items[it] = true; break; }
+        for (int k = 0; k < count; ++k) p0.push_back(nan_items[it] ? k : p[std::size_t(k)] - 1);
+    }
+    return p0;
+}
+
+// The row interchanges k <-> piv[k] of each item of M (m x n), k in [0, count), in order or reversed.
 template <class D> void row_swaps(Lane& e, D* M, const std::vector<std::int32_t>& piv0, int g, int m, int n, int count, bool forward) {
     auto* piv = e.slot<std::int32_t>(kPiv, piv0.size());
-    if (!piv0.empty()) {
-        void* h = e.take(piv0.size() * sizeof(std::int32_t));
-        std::memcpy(h, piv0.data(), piv0.size() * sizeof(std::int32_t));
-        e.q().memcpy(piv, h, piv0.size() * sizeof(std::int32_t));
-    }
+    std::copy(piv0.begin(), piv0.end(), piv);
+    auto* mm = kp(M);
     launch(e, std::size_t(g) * n, [=](std::size_t x) {
         const std::size_t it = x / std::size_t(n);
-        const int c = int(x % std::size_t(n));
-        D* col = M + it * std::size_t(m) * n + std::size_t(c) * m;
+        auto* col = mm + it * std::size_t(m) * n + (x % std::size_t(n)) * m;
         const std::int32_t* p = piv + it * std::size_t(count);
         for (int s = 0; s < count; ++s) {
             const int k = forward ? s : count - 1 - s, ip = p[k];
-            if (ip != k) { const D t = col[k]; col[k] = col[ip]; col[ip] = t; }
+            if (ip != k) { const auto t = col[k]; col[k] = col[ip]; col[ip] = t; }
         }
     });
 }
 
-// x <- H_0 ... H_{k-1} x for each column of X (m x cols per item): reflector i below F's diagonal.
-template <class D> void apply_q(Lane& e, D* X, const void* rawF, Dtype fdt, const void* rawTau, Dtype tdt, int g, int m, int n, int k,
-                                int cols) {
+// x <- H_0 ... H_{k-1} x for each column of X (m x cols per item); reflector i below F's (m x n) diagonal.
+template <class D> void apply_q(Lane& e, D* X, const D* F, const D* tau, int g, int m, int n, int k, int cols) {
+    auto* xx = kp(X);
+    const auto *f = kp(F), *t = kp(tau);
     launch(e, std::size_t(g) * cols, [=](std::size_t x) {
         const std::size_t it = x / std::size_t(cols);
-        const int j = int(x % std::size_t(cols));
-        D* v = X + it * std::size_t(m) * cols + std::size_t(j) * m;
-        const std::size_t fb = it * std::size_t(m) * n, tb = it * std::size_t(k);
+        auto* v = xx + it * std::size_t(m) * cols + (x % std::size_t(cols)) * m;
+        const auto* fi = f + it * std::size_t(m) * n;
         for (int i = k - 1; i >= 0; --i) {
-            D s = v[i];
-            for (int r = i + 1; r < m; ++r) s = s + conj(load<D>(rawF, fdt, fb + std::size_t(i) * m + r)) * v[r];
-            s = s * load<D>(rawTau, tdt, tb + i);
+            auto s = v[i];
+            for (int r = i + 1; r < m; ++r) s = s + conj(fi[std::size_t(i) * m + r]) * v[r];
+            s = s * t[it * std::size_t(k) + i];
             v[i] = v[i] - s;
-            for (int r = i + 1; r < m; ++r) v[r] = v[r] - s * load<D>(rawF, fdt, fb + std::size_t(i) * m + r);
+            for (int r = i + 1; r < m; ++r) v[r] = v[r] - s * fi[std::size_t(i) * m + r];
         }
     });
 }
 
-template <class D> D* fill_identity(Lane& e, int slot, int g, int m, int n) {
-    D* out = e.slot<D>(slot, std::size_t(g) * m * n);
-    const std::size_t per = std::size_t(m) * n;
-    launch(e, std::size_t(g) * per, [=](std::size_t x) {
-        const std::size_t rc = x % per;
-        out[x] = make_d<D>(rc % std::size_t(m) == rc / std::size_t(m) ? 1 : 0, 0);
-    });
-    return out;
-}
-
-// The componentwise ratio (or denominator) per element of each item; host nanmax.
-template <class D> double componentwise_core(Lane& e, const D* opA, const D* opB, const D* C0, const D* C, int g, int m, int kk, int n,
-                                             Shape sc, D alpha, D beta, bool c0_real_diag, bool den_only, double worst) {
-    const std::size_t per = std::size_t(m) * n, total = std::size_t(g) * per;
-    double* out = e.slot<double>(kP1, total);
-    const double aa = mag(alpha), ab = mag(beta);
+// The componentwise ratio (or denominator) per element of each item, nanmax'ed on the host.
+template <class D> double componentwise_core(Lane& e, const D* A, int ar, int ac, Transpose ta, const D* B, int br, int bc, Transpose tb,
+                                             const D* C0, const D* C, int g, Shape sc, cd alpha, cd beta, bool c0_real_diag, bool den_only) {
+    const int m = ta == Transpose::NoTrans ? ar : ac, kk = ta == Transpose::NoTrans ? ac : ar, n = tb == Transpose::NoTrans ? bc : br;
+    const std::size_t per = std::size_t(m) * n, total = std::size_t(g) * per, sa = std::size_t(ar) * ac, sb = std::size_t(br) * bc;
+    double* out = e.slot<double>(kOut, total);
+    using X = K<D>;
+    const X al = kmake<X>(alpha), be = kmake<X>(beta);
+    const double aa = std::abs(alpha), ab = std::abs(beta);
+    const auto *a = kp(A), *b = kp(B), *c0 = kp(C0), *c = kp(C);
     launch(e, total, [=](std::size_t x) {
         const std::size_t it = x / per, rc = x % per;
         const int i = int(rc % std::size_t(m)), j = int(rc / std::size_t(m));
-        if (masked(sc, i, j)) { out[x] = 0; return; }
-        const D* a = opA + it * std::size_t(m) * kk;
-        const D* b = opB + it * std::size_t(kk) * n + std::size_t(j) * kk;
-        D acc = make_d<D>(0, 0);
+        const bool lo = sc == Shape::lower, hi = sc == Shape::upper;
+        if ((lo && i < j) || (hi && i > j)) { out[x] = 0; return; }
+        auto acc = kzero<X>();
         double magsum = 0;
         for (int l = 0; l < kk; ++l) {
-            const D al = a[std::size_t(l) * m + i];
-            acc = acc + al * b[l];
-            magsum += mag(al) * mag(b[l]);
+            const X u = op_at(a + it * sa, ar, ta, i, l), w = op_at(b + it * sb, br, tb, l, j);
+            acc = acc + u * w;
+            magsum += mag(u) * mag(w);
         }
-        D want = alpha * acc;
+        X want = al * acc;
         double den = aa * magsum;
-        if (C0) {
-            D z = C0[x];
+        if (c0) {
+            X z = c0[x];
             if (c0_real_diag && i == j) z = real_part(z);
-            want = want + beta * z;
+            want = want + be * z;
             den += ab * mag(z);
         }
-        out[x] = den_only ? den : dquot(mag(C[x] - want), den);
+        if (den_only) { out[x] = den; return; }
+        const double num = mag(c[x] - want);
+        out[x] = sycl::isnan(num) || sycl::isnan(den) ? kNaN : (den > 0 ? num / den : num);
     });
-    const Fetched f = fetch(e, out, total);
     e.q().wait();
-    for (std::size_t x = 0; x < f.n; ++x) worst = hmax(worst, f.p[x]);
+    double worst = 0;
+    for (std::size_t x = 0; x < total; ++x) worst = nanmax(worst, out[x]);
     return worst;
 }
-
-inline Shape mask_of(Uplo u) { return u == Uplo::Lower ? Shape::lower : Shape::upper; }
 
 }  // namespace
 
@@ -454,13 +373,15 @@ double potrf(const Operand& A0, const Operand& F, bool upper, bool complex, std:
         double worst = 0;
         for (auto grp : groups(items, std::size_t(n) * n)) {
             const int g = int(grp.size());
-            const void* rawF = upload(e, kRawB, F, grp, n, n);
             const Shape s = upper ? Shape::upper : Shape::lower;
-            D* X = expand<D>(e, kA, rawF, F.dtype, g, n, n, s, upper ? Transpose::ConjTrans : Transpose::NoTrans, n, n);
-            D* Y = expand<D>(e, kB, rawF, F.dtype, g, n, n, s, upper ? Transpose::NoTrans : Transpose::ConjTrans, n, n);
-            D* R = product<D>(e, kR, X, Y, g, n, n, n);
-            D* T = expand<D>(e, kRawA, kT, A0, grp, Shape::general, Transpose::NoTrans, n, n);
-            worst = frob_ratio<D>(e, R, T, make_d<D>(1, 0), g, n, n, s, worst);
+            D* f = operand<D>(e, kA, F, grp, s);
+            D* R = upper ? product(e, kR, f, n, n, Transpose::ConjTrans, f, n, n, Transpose::NoTrans, g)
+                         : product(e, kR, f, n, n, Transpose::NoTrans, f, n, n, Transpose::ConjTrans, g);
+            D* T = operand<D>(e, kT, A0, grp, Shape::general);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference(e, R, T, D(1), n, n, g, s, nm, nm + g);
+            e.q().wait();
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, hquot(nm[it], nm[g + it]));
         }
         return worst;
     });
@@ -477,14 +398,15 @@ double similarity(const Operand& A0, const Operand& Q, const Operand& B, bool co
         double worst = 0;
         for (auto grp : groups(items, std::size_t(n) * n)) {
             const int g = int(grp.size());
-            const void* rawQ = upload(e, kRawB, Q, grp, n, n);
-            D* Qd = expand<D>(e, kA, rawQ, Q.dtype, g, n, n, Shape::general, Transpose::NoTrans, n, n);
-            D* Qh = expand<D>(e, kB, rawQ, Q.dtype, g, n, n, Shape::general, Transpose::ConjTrans, n, n);
-            D* Bd = expand<D>(e, kRawC, kC, B, grp, Shape::general, Transpose::NoTrans, n, n);
-            D* QB = product<D>(e, kD, Qd, Bd, g, n, n, n);
-            D* R = product<D>(e, kR, QB, Qh, g, n, n, n);
-            D* T = expand<D>(e, kRawA, kT, A0, grp, Shape::general, Transpose::NoTrans, n, n);
-            worst = frob_ratio<D>(e, R, T, make_d<D>(1, 0), g, n, n, Shape::general, worst);
+            D* q = operand<D>(e, kA, Q, grp, Shape::general);
+            D* b = operand<D>(e, kB, B, grp, Shape::general);
+            D* qb = product(e, kD, q, n, n, Transpose::NoTrans, b, n, n, Transpose::NoTrans, g);
+            D* R = product(e, kR, qb, n, n, Transpose::NoTrans, q, n, n, Transpose::ConjTrans, g);
+            D* T = operand<D>(e, kT, A0, grp, Shape::general);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference(e, R, T, D(1), n, n, g, Shape::general, nm, nm + g);
+            e.q().wait();
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, hquot(nm[it], nm[g + it]));
         }
         return worst;
     });
@@ -503,22 +425,19 @@ double getrf(const Operand& A0, const Operand& F, const Operand& piv, bool compl
         double worst = 0;
         for (auto grp : groups(items, std::size_t(m) * n)) {
             const int g = int(grp.size());
-            std::vector<std::int32_t> p0;
-            std::vector<bool> nan_items(grp.size(), false);
-            for (std::size_t it = 0; it < grp.size(); ++it) {
-                auto p = read_pivots(piv, grp[it], mn);
-                for (int k = 0; k < mn; ++k) {
-                    if (p[std::size_t(k)] < 1 || p[std::size_t(k)] > m) { nan_items[it] = true; break; }
-                }
-                for (int k = 0; k < mn; ++k) p0.push_back(nan_items[it] ? k : p[std::size_t(k)] - 1);
-            }
-            D* PA = expand<D>(e, kRawA, kT, A0, grp, Shape::general, Transpose::NoTrans, m, n);
-            row_swaps<D>(e, PA, p0, g, m, n, mn, true);
-            const void* rawF = upload(e, kRawB, F, grp, m, n);
-            D* L = expand<D>(e, kA, rawF, F.dtype, g, m, n, Shape::unit_lower, Transpose::NoTrans, m, mn);
-            D* U = expand<D>(e, kB, rawF, F.dtype, g, m, n, Shape::upper, Transpose::NoTrans, mn, n);
-            D* R = product<D>(e, kR, L, U, g, m, mn, n);
-            worst = frob_ratio<D>(e, R, PA, make_d<D>(1, 0), g, m, n, Shape::general, worst, &nan_items);
+            std::vector<bool> nan_items;
+            const auto p0 = pivots(piv, grp, mn, m, nan_items);
+            D* PA = operand<D>(e, kT, A0, grp, Shape::general);
+            row_swaps(e, PA, p0, g, m, n, mn, true);
+            D* L = pack<D>(e, kA, F, grp, m, mn);
+            shape(e, L, m, mn, g, Shape::unit_lower);
+            D* U = pack<D>(e, kB, F, grp, mn, n);
+            shape(e, U, mn, n, g, Shape::upper);
+            D* R = product(e, kR, L, m, mn, Transpose::NoTrans, U, mn, n, Transpose::NoTrans, g);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference(e, R, PA, D(1), m, n, g, Shape::general, nm, nm + g);
+            e.q().wait();
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, nan_items[std::size_t(it)] ? kNaN : hquot(nm[it], nm[g + it]));
         }
         return worst;
     });
@@ -537,13 +456,16 @@ double qr(const Operand& A0, const Operand& F, const Operand& tau, bool complex,
         double worst = 0;
         for (auto grp : groups(items, std::size_t(m) * n)) {
             const int g = int(grp.size());
-            const void* rawF = upload(e, kRawB, F, grp, m, n);
-            const void* rawT = upload(e, kRawC, tau, grp, k, 1);
+            D* f = pack<D>(e, kA, F, grp, m, n);
+            D* t = pack<D>(e, kB, tau, grp, k, 1);
             // Column j of R: rows r <= j, which also satisfy r < k (j < n, and k = m when m <= n).
-            D* X = expand<D>(e, kR, rawF, F.dtype, g, m, n, Shape::upper, Transpose::NoTrans, m, n);
-            apply_q<D>(e, X, rawF, F.dtype, rawT, tau.dtype, g, m, n, k, n);
-            D* T = expand<D>(e, kRawA, kT, A0, grp, Shape::general, Transpose::NoTrans, m, n);
-            worst = frob_ratio<D>(e, X, T, make_d<D>(1, 0), g, m, n, Shape::general, worst);
+            D* X = operand<D>(e, kR, F, grp, Shape::upper);
+            apply_q(e, X, f, t, g, m, n, k, n);
+            D* T = operand<D>(e, kT, A0, grp, Shape::general);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference(e, X, T, D(1), m, n, g, Shape::general, nm, nm + g);
+            e.q().wait();
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, hquot(nm[it], nm[g + it]));
         }
         return worst;
     });
@@ -559,14 +481,14 @@ std::vector<double> form_q(const Operand& F, const Operand& tau, bool complex, i
     Lane& e = eng.lane(2.0 * m * cols * k);
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
-        const void* rawF = upload(e, kRawB, F, one, m, n);
-        const void* rawT = upload(e, kRawC, tau, one, k, 1);
-        D* X = fill_identity<D>(e, kR, 1, m, cols);
-        apply_q<D>(e, X, rawF, F.dtype, rawT, tau.dtype, 1, m, n, k, cols);
-        const std::size_t total = std::size_t(m) * cols * (sizeof(D) / sizeof(double));
-        const Fetched f = fetch(e, reinterpret_cast<const double*>(X), total);
+        D* f = pack<D>(e, kA, F, one, m, n);
+        D* t = pack<D>(e, kB, tau, one, k, 1);
+        D* X = e.slot<D>(kR, std::size_t(m) * cols);
+        if (std::size_t(m) * cols) (void)mv(X, m, cols, 1).fill_identity(e.Q());
+        apply_q(e, X, f, t, 1, m, n, k, cols);
         e.q().wait();
-        return std::vector<double>(f.p, f.p + f.n);
+        const auto* x = reinterpret_cast<const double*>(X);
+        return std::vector<double>(x, x + std::size_t(m) * cols * (sizeof(D) / sizeof(double)));
     });
 }
 
@@ -579,20 +501,23 @@ double qr_reconstruction(const Operand& A0, const Operand& Q, const Operand& R, 
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
         double worst = 0;
-        for (auto grp : groups(items, std::size_t(std::max(m, R.rows)) * std::max(n, k))) {
+        for (auto grp : groups(items, std::size_t(std::max(m, k)) * std::max(n, k))) {
             const int g = int(grp.size());
-            D* Qd = expand<D>(e, kRawA, kA, Q, grp, Shape::general, Transpose::NoTrans, m, k);
-            const void* rawR = upload(e, kRawB, R, grp, R.rows, n);
-            D* Rd = expand<D>(e, kB, rawR, R.dtype, g, R.rows, n, Shape::upper, Transpose::NoTrans, k, n);
-            D* P = product<D>(e, kR, Qd, Rd, g, m, k, n);
-            D* T = expand<D>(e, kRawC, kT, A0, grp, Shape::general, Transpose::NoTrans, m, n);
-            worst = frob_ratio<D>(e, P, T, make_d<D>(1, 0), g, m, n, Shape::general, worst);
+            D* q = operand<D>(e, kA, Q, grp, Shape::general);
+            D* r = pack<D>(e, kB, R, grp, k, n);
+            shape(e, r, k, n, g, Shape::upper);
+            D* P = product(e, kR, q, m, k, Transpose::NoTrans, r, k, n, Transpose::NoTrans, g);
+            D* T = operand<D>(e, kT, A0, grp, Shape::general);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference(e, P, T, D(1), m, n, g, Shape::general, nm, nm + g);
+            e.q().wait();
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, hquot(nm[it], nm[g + it]));
         }
         return worst;
     });
 }
 
-double solve(const Operand& A, Shape shape, Transpose trans, const Operand* piv, const Operand& X, const Operand& B0, bool complex,
+double solve(const Operand& A, Shape shape_a, Transpose trans, const Operand* piv, const Operand& X, const Operand& B0, bool complex,
              std::span<const int> items, double full_limit) {
     check_items(A, items, "solve_residual");
     check_items(X, items, "solve_residual");
@@ -602,79 +527,58 @@ double solve(const Operand& A, Shape shape, Transpose trans, const Operand* piv,
     auto& eng = Engine::get();
     std::lock_guard<std::mutex> lock(eng.mutex());
     const bool nt = trans == Transpose::NoTrans;
-    const int m = nt ? A.rows : A.cols, k = nt ? A.cols : A.rows, nc = X.cols;
+    const int ar = A.rows, ac = A.cols, m = nt ? ar : ac, k = nt ? ac : ar, nc = X.cols;
     const bool full = double(m) * double(k) * double(nc) <= full_limit;
     const int nv = full ? nc : 8;
-    Lane& e = eng.lane((double(m) * k * nv + double(k) * nc * nv + (piv ? double(A.rows) * A.rows * A.rows : 0.0)) * double(items.size()));
+    Lane& e = eng.lane((double(m) * k * nv + double(k) * nc * nv + (piv ? double(ar) * ar * ar : 0.0)) * double(items.size()));
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
-        // Probe columns: factor_bench's seeded draws, rounded to A's precision as draw<T> rounds them.
-        std::vector<D> V;
-        if (!full) {
-            Rng rng(4242);
-            V.resize(std::size_t(nc) * nv);
-            for (D& v : V) {
-                const double re = rng.next(), im = rng.next();
-                const bool single = A.dtype == Dtype::f32 || A.dtype == Dtype::c32;
-                const bool cx = A.dtype == Dtype::c32 || A.dtype == Dtype::c64;
-                v = make_d<D>(single ? double(float(re)) : re, cx ? (single ? double(float(im)) : im) : 0.0);
-            }
-        }
         double worst = 0;
         for (auto grp : groups(items, std::size_t(std::max(m, k)) * std::max({m, k, nc}))) {
             const int g = int(grp.size());
             std::vector<bool> nan_items(grp.size(), false);
             D* M;
             if (piv) {
-                const int n = A.rows;
-                const void* rawF = upload(e, kRawA, A, grp, n, n);
-                D* L = expand<D>(e, kA, rawF, A.dtype, g, n, n, Shape::unit_lower, Transpose::NoTrans, n, n);
-                D* U = expand<D>(e, kB, rawF, A.dtype, g, n, n, Shape::upper, Transpose::NoTrans, n, n);
-                D* LU = product<D>(e, kD, L, U, g, n, n, n);
-                std::vector<std::int32_t> p0;
-                for (std::size_t it = 0; it < grp.size(); ++it) {
-                    auto p = read_pivots(*piv, grp[it], n);
-                    for (int q = 0; q < n; ++q)
-                        if (p[std::size_t(q)] < 1 || p[std::size_t(q)] > n) { nan_items[it] = true; break; }
-                    for (int q = 0; q < n; ++q) p0.push_back(nan_items[it] ? q : p[std::size_t(q)] - 1);
-                }
-                row_swaps<D>(e, LU, p0, g, n, n, n, false);
-                M = e.slot<D>(kA, std::size_t(g) * n * n);
-                const std::size_t per = std::size_t(n) * n;
-                launch(e, std::size_t(g) * per, [=](std::size_t x) {
-                    const std::size_t it = x / per, rc = x % per;
-                    const std::size_t r = rc % std::size_t(n), l = rc / std::size_t(n);
-                    const D* src = LU + it * per;
-                    M[x] = trans == Transpose::NoTrans ? src[l * n + r] : trans == Transpose::ConjTrans ? conj(src[r * n + l]) : src[r * n + l];
-                });
+                const auto p0 = pivots(*piv, grp, ar, ar, nan_items);
+                D* L = operand<D>(e, kA, A, grp, Shape::unit_lower);
+                D* U = operand<D>(e, kB, A, grp, Shape::upper);
+                M = product(e, kD, L, ar, ar, Transpose::NoTrans, U, ar, ar, Transpose::NoTrans, g);
+                row_swaps(e, M, p0, g, ar, ar, ar, false);
             } else {
-                M = expand<D>(e, kRawA, kA, A, grp, shape, trans, m, k);
+                M = operand<D>(e, kD, A, grp, shape_a);
             }
-            D* Xd = expand<D>(e, kRawB, kB, X, grp, Shape::general, Transpose::NoTrans, k, nc);
-            D* Bd = identity ? fill_identity<D>(e, kC, g, m, nc) : expand<D>(e, kRawC, kC, B0, grp, Shape::general, Transpose::NoTrans, m, nc);
-            D *xv = Xd, *bv = Bd;
+            D* x = operand<D>(e, kE, X, grp, Shape::general);
+            D* b;
+            if (identity) {
+                b = e.slot<D>(kF, std::size_t(g) * m * nc);
+                if (std::size_t(m) * nc) (void)mv(b, m, nc, g).fill_identity(e.Q());
+            } else {
+                b = operand<D>(e, kF, B0, grp, Shape::general);
+            }
+            D *xv = x, *bv = b;
             if (!full) {
-                std::vector<D> Vg;
-                for (int it = 0; it < g; ++it) Vg.insert(Vg.end(), V.begin(), V.end());
-                D* Vd = e.slot<D>(kV, Vg.size());
-                void* h = e.take(Vg.size() * sizeof(D));
-                std::memcpy(h, Vg.data(), Vg.size() * sizeof(D));
-                e.q().memcpy(Vd, h, Vg.size() * sizeof(D));
-                xv = product<D>(e, kD, Xd, Vd, g, k, nc, nv);
-                bv = product<D>(e, kT, Bd, Vd, g, m, nc, nv);
+                // Probe columns: factor_bench's seeded draws, rounded to A's precision as draw<T> rounds them.
+                D* V = e.slot<D>(kV, std::size_t(g) * nc * nv);
+                Rng rng(4242);
+                const bool single = A.dtype == Dtype::f32 || A.dtype == Dtype::c32, cx = A.dtype == Dtype::c32 || A.dtype == Dtype::c64;
+                for (std::size_t z = 0; z < std::size_t(nc) * nv; ++z) {
+                    const double re = rng.next(), im = rng.next();
+                    const cd w(single ? double(float(re)) : re, cx ? (single ? double(float(im)) : im) : 0.0);
+                    if constexpr (std::is_same_v<D, double>) V[z] = w.real();
+                    else V[z] = w;
+                }
+                for (int it = 1; it < g; ++it) std::copy(V, V + std::size_t(nc) * nv, V + std::size_t(it) * nc * nv);
+                xv = product(e, kW, x, k, nc, Transpose::NoTrans, V, nc, nv, Transpose::NoTrans, g);
+                bv = product(e, kT, b, m, nc, Transpose::NoTrans, V, nc, nv, Transpose::NoTrans, g);
             }
-            D* R = product<D>(e, kR, M, xv, g, m, k, nv);
-            double *d2, *t2;
-            partials(e, R, bv, make_d<D>(1, 0), g, m, nv, Shape::general, d2, t2);
-            const Fetched fnum = fetch(e, d2, std::size_t(g) * m * nv);
-            const Fetched fnx = fetch(e, sumsq(e, kP2, xv, std::size_t(g) * k * nv), std::size_t(g) * k * nv);
-            const Fetched fna = fetch(e, sumsq(e, kP3, M, std::size_t(g) * m * k), std::size_t(g) * m * k);
+            D* R = product(e, kR, M, ar, ac, trans, xv, k, nv, Transpose::NoTrans, g);
+            double* nm = e.slot<double>(kNorm, 4 * std::size_t(g));
+            difference(e, R, bv, D(1), m, nv, g, Shape::general, nm, nm + g);
+            frob(e, M, ar, ac, g, nm + 2 * g);
+            frob(e, xv, k, nv, g, nm + 3 * g);
             e.q().wait();
-            const auto num = per_item_sums(fnum, g), nx = per_item_sums(fnx, g), na = per_item_sums(fna, g);
-            for (int it = 0; it < g; ++it) {
-                const std::size_t u = std::size_t(it);
-                worst = hmax(worst, nan_items[u] ? kNaN : hquot(std::sqrt(num[u]), std::sqrt(na[u]) * std::sqrt(nx[u])));
-            }
+            for (int it = 0; it < g; ++it)
+                worst = nanmax(worst, nan_items[std::size_t(it)] ? kNaN : hquot(nm[it], nm[2 * g + it] * nm[3 * g + it]));
         }
         return worst;
     });
@@ -685,7 +589,7 @@ double componentwise(const Operand& A, Shape sa, Transpose ta, const Operand& B,
                      bool denominator_only) {
     check_items(A, items, "gemm_backward_error");
     check_items(B, items, "gemm_backward_error");
-    const bool use_c0 = beta != std::complex<double>(0);
+    const bool use_c0 = beta != cd(0);
     if (use_c0) check_items(*C0, items, "gemm_backward_error");
     if (!denominator_only) check_items(*C, items, "gemm_backward_error");
     auto& eng = Engine::get();
@@ -698,11 +602,12 @@ double componentwise(const Operand& A, Shape sa, Transpose ta, const Operand& B,
         double worst = 0;
         for (auto grp : groups(items, std::size_t(std::max(m, kk)) * std::max(kk, n))) {
             const int g = int(grp.size());
-            D* opA = expand<D>(e, kRawA, kA, A, grp, sa, ta, m, kk);
-            D* opB = expand<D>(e, kRawB, kB, B, grp, sb, tb, kk, n);
-            D* c0 = use_c0 ? expand<D>(e, kRawC, kC, *C0, grp, Shape::general, Transpose::NoTrans, m, n) : nullptr;
-            D* c = denominator_only ? nullptr : expand<D>(e, kRawD, kD, *C, grp, Shape::general, Transpose::NoTrans, m, n);
-            worst = componentwise_core<D>(e, opA, opB, c0, c, g, m, kk, n, sc, make_d<D>(alpha), make_d<D>(beta), false, denominator_only, worst);
+            D* a = operand<D>(e, kA, A, grp, sa);
+            D* b = operand<D>(e, kB, B, grp, sb);
+            D* c0 = use_c0 ? operand<D>(e, kC, *C0, grp, Shape::general) : nullptr;
+            D* c = denominator_only ? nullptr : operand<D>(e, kD, *C, grp, Shape::general);
+            worst = nanmax(worst, componentwise_core(e, a, A.rows, A.cols, ta, b, B.rows, B.cols, tb, c0, c, g, sc, alpha, beta, false,
+                                                     denominator_only));
         }
         return worst;
     });
@@ -713,7 +618,7 @@ double rank2k(const Operand& A, const Operand& B, Transpose trans, const Operand
     check_items(A, items, "rank2k_backward_error");
     check_items(B, items, "rank2k_backward_error");
     check_items(C, items, "rank2k_backward_error");
-    const bool use_c0 = beta != std::complex<double>(0);
+    const bool use_c0 = beta != cd(0);
     if (use_c0) check_items(*C0, items, "rank2k_backward_error");
     auto& eng = Engine::get();
     std::lock_guard<std::mutex> lock(eng.mutex());
@@ -722,31 +627,34 @@ double rank2k(const Operand& A, const Operand& B, Transpose trans, const Operand
     Lane& e = eng.lane(2.0 * n * k * n * double(items.size()));
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
-        const D a1 = make_d<D>(alpha), a2 = hermitian ? conj(a1) : a1;
+        using X = K<D>;
+        const X a1 = kmake<X>(alpha), a2 = hermitian ? conj(a1) : a1;
         double worst = 0;
         for (auto grp : groups(items, std::size_t(n) * std::max(2 * k, n))) {
             const int g = int(grp.size());
-            D* opA = expand<D>(e, kRawA, kA, A, grp, Shape::general, trans, n, k);
-            D* opB = expand<D>(e, kRawB, kB, B, grp, Shape::general, trans, n, k);
+            const auto* a = kp(operand<D>(e, kA, A, grp, Shape::general));
+            const auto* b = kp(operand<D>(e, kB, B, grp, Shape::general));
             // [op(A) op(B)] . [a1 back(op(B)); a2 back(op(A))] has exactly the rank-2k denominator.
             D* P = e.slot<D>(kR, std::size_t(g) * n * 2 * k);
             D* Q = e.slot<D>(kT, std::size_t(g) * 2 * k * n);
-            const std::size_t per = std::size_t(n) * k;
+            auto *p = kp(P), *q = kp(Q);
+            const int ar = A.rows, br = B.rows;
+            const std::size_t per = std::size_t(n) * k, sa = std::size_t(A.rows) * A.cols, sb = std::size_t(B.rows) * B.cols;
             launch(e, std::size_t(g) * per, [=](std::size_t x) {
                 const std::size_t it = x / per, rc = x % per;
                 const int i = int(rc % std::size_t(n)), l = int(rc / std::size_t(n));
-                const D va = opA[x], vb = opB[x];
-                D* p = P + it * std::size_t(n) * 2 * k;
-                D* q = Q + it * std::size_t(2 * k) * n;
-                p[std::size_t(l) * n + i] = va;
-                p[std::size_t(k + l) * n + i] = vb;
-                q[std::size_t(i) * 2 * k + l] = a1 * (hermitian ? conj(vb) : vb);
-                q[std::size_t(i) * 2 * k + k + l] = a2 * (hermitian ? conj(va) : va);
+                const X va = op_at(a + it * sa, ar, trans, i, l), vb = op_at(b + it * sb, br, trans, i, l);
+                X* pp = p + it * std::size_t(n) * 2 * k;
+                X* qq = q + it * std::size_t(2 * k) * n;
+                pp[std::size_t(l) * n + i] = va;
+                pp[std::size_t(k + l) * n + i] = vb;
+                qq[std::size_t(i) * 2 * k + l] = a1 * (hermitian ? conj(vb) : vb);
+                qq[std::size_t(i) * 2 * k + k + l] = a2 * (hermitian ? conj(va) : va);
             });
-            D* c0 = use_c0 ? expand<D>(e, kRawC, kC, *C0, grp, Shape::general, Transpose::NoTrans, n, n) : nullptr;
-            D* c = expand<D>(e, kRawD, kD, C, grp, Shape::general, Transpose::NoTrans, n, n);
-            worst = componentwise_core<D>(e, P, Q, c0, c, g, n, 2 * k, n, mask_of(uplo), make_d<D>(1, 0), make_d<D>(beta), hermitian, false,
-                                          worst);
+            D* c0 = use_c0 ? operand<D>(e, kC, *C0, grp, Shape::general) : nullptr;
+            D* c = operand<D>(e, kD, C, grp, Shape::general);
+            worst = nanmax(worst, componentwise_core(e, P, n, 2 * k, Transpose::NoTrans, Q, 2 * k, n, Transpose::NoTrans, c0, c, g,
+                                                     uplo == Uplo::Lower ? Shape::lower : Shape::upper, cd(1), beta, hermitian, false));
         }
         return worst;
     });
@@ -761,26 +669,25 @@ double trsm(const Operand& A, Shape s, Transpose ta, bool left, const Operand& X
     Lane& e = eng.lane(double(m) * na * n * double(items.size()));
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
-        const D a = make_d<D>(alpha);
         double worst = 0;
         for (auto grp : groups(items, std::size_t(std::max(na, m)) * std::max(na, n))) {
             const int g = int(grp.size());
-            D* opA = expand<D>(e, kRawA, kA, A, grp, s, ta, na, na);
-            D* Xd = expand<D>(e, kRawB, kB, X, grp, Shape::general, Transpose::NoTrans, m, n);
-            D* Bd = expand<D>(e, kRawC, kC, B0, grp, Shape::general, Transpose::NoTrans, m, n);
-            D* R = left ? product<D>(e, kR, opA, Xd, g, m, na, n) : product<D>(e, kR, Xd, opA, g, m, na, n);
-            double *d2, *t2;
-            partials(e, R, Bd, a, g, m, n, Shape::general, d2, t2);
-            const std::size_t total = std::size_t(g) * m * n;
-            const Fetched fnum = fetch(e, d2, total), fnb = fetch(e, t2, total);
-            const Fetched fA = fetch(e, sumsq(e, kP3, opA, std::size_t(g) * na * na), std::size_t(g) * na * na);
-            const Fetched fX = fetch(e, sumsq(e, kV, Xd, total), total);
+            D* a = operand<D>(e, kA, A, grp, s);
+            D* x = operand<D>(e, kB, X, grp, Shape::general);
+            D* b = operand<D>(e, kC, B0, grp, Shape::general);
+            D* R = left ? product(e, kR, a, na, na, ta, x, m, n, Transpose::NoTrans, g)
+                        : product(e, kR, x, m, n, Transpose::NoTrans, a, na, na, ta, g);
+            double* nm = e.slot<double>(kNorm, 4 * std::size_t(g));
+            const cd al = alpha;
+            D ad;
+            if constexpr (std::is_same_v<D, double>) ad = al.real();
+            else ad = al;
+            difference(e, R, b, ad, m, n, g, Shape::general, nm, nm + g);
+            frob(e, a, na, na, g, nm + 2 * g);
+            frob(e, x, m, n, g, nm + 3 * g);
             e.q().wait();
-            const auto num = per_item_sums(fnum, g), nb = per_item_sums(fnb, g), nA = per_item_sums(fA, g), nX = per_item_sums(fX, g);
-            for (int it = 0; it < g; ++it) {
-                const std::size_t u = std::size_t(it);
-                worst = hmax(worst, hquot(std::sqrt(num[u]), std::sqrt(nA[u]) * std::sqrt(nX[u]) + std::abs(alpha) * std::sqrt(nb[u])));
-            }
+            for (int it = 0; it < g; ++it)
+                worst = nanmax(worst, hquot(nm[it], nm[2 * g + it] * nm[3 * g + it] + std::abs(alpha) * nm[g + it]));
         }
         return worst;
     });
@@ -797,15 +704,12 @@ double orthogonality(const Operand& Q, bool complex, std::span<const int> items)
         double worst = 0;
         for (auto grp : groups(items, std::size_t(std::max(m, c)) * c)) {
             const int g = int(grp.size());
-            const void* raw = upload(e, kRawA, Q, grp, m, c);
-            D* Qh = expand<D>(e, kA, raw, Q.dtype, g, m, c, Shape::general, Transpose::ConjTrans, c, m);
-            D* Qd = expand<D>(e, kB, raw, Q.dtype, g, m, c, Shape::general, Transpose::NoTrans, m, c);
-            D* G = product<D>(e, kR, Qh, Qd, g, c, m, c);
-            double *d2, *t2;
-            partials<D>(e, G, nullptr, make_d<D>(1, 0), g, c, c, Shape::general, d2, t2);
-            const Fetched f = fetch(e, d2, std::size_t(g) * c * c);
+            D* q = operand<D>(e, kA, Q, grp, Shape::general);
+            D* G = product(e, kR, q, m, c, Transpose::ConjTrans, q, m, c, Transpose::NoTrans, g);
+            double* nm = e.slot<double>(kNorm, 2 * std::size_t(g));
+            difference<D>(e, G, nullptr, D(1), c, c, g, Shape::general, nm, nm + g);
             e.q().wait();
-            for (double s : per_item_sums(f, g)) worst = hmax(worst, std::sqrt(s));
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, nm[it]);
         }
         return worst;
     });
@@ -816,30 +720,28 @@ double eigen(const Operand& A, const Operand& V, const Operand& w, bool complex,
     auto& eng = Engine::get();
     std::lock_guard<std::mutex> lock(eng.mutex());
     const int n = V.rows, nv = V.cols;
-    Lane& e = eng.lane(double(n) * n * nv * double(items.size()));
+    Lane& e = eng.lane(double(n) * nv * (n + nv) * double(items.size()));
     return dispatch(complex, [&](auto tag) {
         using D = decltype(tag);
         double worst = 0;
         for (auto grp : groups(items, std::size_t(n) * std::max(n, nv))) {
             const int g = int(grp.size());
-            D* full = expand<D>(e, kRawA, kA, A, grp, Shape::hermitian_lower, Transpose::NoTrans, n, n);
-            D* Vd = expand<D>(e, kRawB, kB, V, grp, Shape::general, Transpose::NoTrans, n, nv);
-            D* lam = expand<D>(e, kRawC, kC, w, grp, Shape::general, Transpose::NoTrans, nv, 1);
-            D* R = product<D>(e, kR, full, Vd, g, n, n, nv);
-            D* T = e.slot<D>(kT, std::size_t(g) * n * nv);
-            const std::size_t per = std::size_t(n) * nv;
-            launch(e, std::size_t(g) * per, [=](std::size_t x) {
-                const std::size_t it = x / per, j = (x % per) / std::size_t(n);
-                if constexpr (std::is_same_v<D, double>) T[x] = Vd[x] * lam[it * nv + j];
-                else T[x] = Vd[x] * lam[it * nv + j].re;
-            });
-            double *d2, *t2;
-            partials(e, R, T, make_d<D>(1, 0), g, n, nv, Shape::general, d2, t2);
-            const Fetched fnum = fetch(e, d2, std::size_t(g) * per);
-            const Fetched fden = fetch(e, sumsq(e, kP3, full, std::size_t(g) * n * n), std::size_t(g) * n * n);
+            D* a = operand<D>(e, kA, A, grp, Shape::hermitian_lower);
+            D* v = operand<D>(e, kB, V, grp, Shape::general);
+            // diag(w) per item, written by the host; V diag(w) is then one more product.
+            D* W = e.slot<D>(kC, std::size_t(g) * nv * nv);
+            std::fill(W, W + std::size_t(g) * nv * nv, D(0));
+            for (int it = 0; it < g; ++it)
+                for (int j = 0; j < nv; ++j)
+                    W[std::size_t(it) * nv * nv + std::size_t(j) * (nv + 1)] =
+                        D(read_as<cd>(w, static_cast<long long>(grp[std::size_t(it)]) * w.stride + static_cast<long long>(j) * w.inc).real());
+            D* R = product(e, kR, a, n, n, Transpose::NoTrans, v, n, nv, Transpose::NoTrans, g);
+            D* T = product(e, kT, v, n, nv, Transpose::NoTrans, W, nv, nv, Transpose::NoTrans, g);
+            double* nm = e.slot<double>(kNorm, 3 * std::size_t(g));
+            difference(e, R, T, D(1), n, nv, g, Shape::general, nm, nm + g);
+            frob(e, a, n, n, g, nm + 2 * g);
             e.q().wait();
-            const auto num = per_item_sums(fnum, g), den = per_item_sums(fden, g);
-            for (int it = 0; it < g; ++it) worst = hmax(worst, hquot(std::sqrt(num[std::size_t(it)]), std::sqrt(den[std::size_t(it)])));
+            for (int it = 0; it < g; ++it) worst = nanmax(worst, hquot(nm[it], nm[2 * g + it]));
         }
         return worst;
     });
