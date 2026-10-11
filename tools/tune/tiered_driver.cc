@@ -201,6 +201,7 @@ private:
     void record(Job& j, const CellRecord& r, Tier tier);
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
+    bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
     void refine(Job& j);
 };
 
@@ -236,8 +237,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
-    // A custom tiered run is a sample: the named cells only, every candidate, no refinement.
-    if (o_.tier == Tier::custom) j->next.clear();
+    // A custom or --only-named run is a sample: the named cells only, every candidate, no refinement.
+    if (named_only()) j->next.clear();
     else j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
@@ -456,7 +457,7 @@ std::size_t TieredRun::stage(Job& j) {
 // Runs without sq_; no other thread touches j meanwhile (its queue is empty and nothing of it runs).
 void TieredRun::advance(Job& j) {
     for (;;) {
-        if (j.capped || o_.tier == Tier::custom) j.next.clear();
+        if (j.capped || named_only()) j.next.clear();
         else refine(j);
         if (!j.next.empty() && over_budget()) budget_left_ += j.next.size(), j.next.clear();
         if (j.next.empty()) break;
@@ -610,7 +611,7 @@ int TieredRun::go() {
         }
         // Refinement cells follow the lattice cells measured now, at their mean estimate.
         bool history = false;
-        const double ratio = refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
+        const double ratio = named_only() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
         j->est_refine_cells = ratio * double(n_measure);
         const double s = n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;

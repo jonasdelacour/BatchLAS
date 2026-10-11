@@ -80,7 +80,8 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
   today's kernels holds it (it then outranks the old record by date). If every cell agrees or is
   settled, one line per stale family is appended (`"why": "<n> cells agree, <m> re-measured at
   deep"`, `"at"`: HEAD); otherwise nothing is written and the unsettled cells are printed as
-  `--remeasure-keys` lines, to be re-measured at deep.
+  `--remeasure-keys` lines, to be re-measured at deep with
+  `batchlas_tune <op> --tier deep --remeasure-keys FILE --only-named`.
 
 A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
 and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one

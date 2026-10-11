@@ -31,6 +31,7 @@ struct TieredOpts {
     std::map<std::string, std::vector<std::string>> grid;
     // --remeasure-keys, "op.dtype" -> cells: measured in round 0 at this tier whatever the ledger holds
     std::map<std::string, std::set<CellKey>> remeasure;
+    bool only_named = false;  // round 0 is exactly the remeasure cells: no lattice, no refinement (tier custom always)
 };
 
 struct RunIdentity {
