@@ -1,0 +1,1411 @@
+# op=syev device=sm_120 batchlas=f4f8ea54 kernels=46acb45b family_kernels=cta:382add1e,cta_fused:b1f1f66c,jacobi:0064e149,blocked:551a9581,two_stage:67966141,vendor:3af7cbad date=2026-10-09
+# source=ledger:benchmarks/results/tuning/ledger/syev.sm_120.jsonl tiers=deep:1146,coarse:0,preview:0,custom:0,converted:0,transcribed:262
+# keys: dtype:exact jobz:exact n:log:3 batch:log
+dtype=float jobz=N n=1 batch=128 | cta_fused 0.008213 | jacobi 0.008243 | vendor 0.01168 | blocked 0.01393 | two_stage 0.02195 | cta 0.02783 # deep
+dtype=float jobz=N n=1 batch=512 | cta_fused 0.008303 | jacobi 0.008312 | vendor 0.01211 | blocked 0.01437 | two_stage 0.02229 | cta 0.02874 # deep
+dtype=float jobz=N n=1 batch=2048 | cta_fused 0.008182 | jacobi 0.008197 | vendor 0.01337 | blocked 0.01505 | two_stage 0.02356 | cta 0.03076 # deep
+dtype=float jobz=N n=1 batch=8192 | cta_fused 0.008512 | jacobi 0.008503 | blocked 0.01718 | vendor 0.02104 | two_stage 0.03029 | cta 0.03577 # deep
+dtype=float jobz=N n=1 batch=32768 | cta_fused 0.01002 | jacobi 0.009755 | blocked 0.03049 | vendor 0.05465 | cta 0.06167 | two_stage 0.06718 # deep
+dtype=float jobz=N n=2 batch=128 | jacobi 0.009118 | cta_fused 0.009665 | blocked 0.02392 | cta 0.04638 | vendor 0.1157 | two_stage 0.1431 # deep
+dtype=float jobz=N n=2 batch=512 | jacobi 0.009084 | cta_fused 0.009609 | vendor 0.01455 | blocked 0.01780 | cta 0.03176 | two_stage 0.1442 # deep
+dtype=float jobz=N n=2 batch=2048 | cta_fused 0.009629 | jacobi 0.009424 | vendor 0.01758 | blocked 0.01931 | cta 0.03574 | two_stage 0.1693 # deep
+dtype=float jobz=N n=2 batch=8192 | jacobi 0.009555 | cta_fused 0.01020 | blocked 0.02569 | vendor 0.03580 | cta 0.04314 | two_stage 0.1881 # deep
+dtype=float jobz=N n=2 batch=32768 | jacobi 0.01139 | cta_fused 0.01198 | blocked 0.05274 | cta 0.07034 | vendor 0.1118 | two_stage 0.4055 # deep
+dtype=float jobz=N n=3 batch=128 | jacobi 0.01273 | cta_fused 0.01321 | vendor 0.01706 | blocked 0.01990 | cta 0.03059 | two_stage 0.1557 # deep
+dtype=float jobz=N n=3 batch=512 | jacobi 0.01281 | cta_fused 0.01326 | vendor 0.01806 | blocked 0.02071 | cta 0.03421 | two_stage 0.1609 # deep
+dtype=float jobz=N n=3 batch=2048 | jacobi 0.01280 | cta_fused 0.01328 | blocked 0.02137 | vendor 0.02156 | cta 0.03421 | two_stage 0.1773 # deep
+dtype=float jobz=N n=3 batch=8192 | cta_fused 0.01355 | jacobi 0.01323 | blocked 0.03383 | cta 0.03961 | vendor 0.05293 | two_stage 0.2255 # deep
+dtype=float jobz=N n=3 batch=32768 | jacobi 0.01583 | cta_fused 0.01692 | cta 0.07176 | blocked 0.08519 | vendor 0.1814 | two_stage 0.9893 # deep
+dtype=float jobz=N n=4 batch=128 | jacobi 0.01537 | cta_fused 0.01770 | vendor 0.02078 | blocked 0.02128 | cta 0.03365 | two_stage 0.1514 # deep
+dtype=float jobz=N n=4 batch=512 | jacobi 0.01671 | cta_fused 0.01877 | blocked 0.02188 | vendor 0.02416 | cta 0.03614 | two_stage 0.1660 # deep
+dtype=float jobz=N n=4 batch=2048 | jacobi 0.01563 | cta_fused 0.01834 | blocked 0.02296 | vendor 0.02695 | cta 0.03712 | two_stage 0.1838 # deep
+dtype=float jobz=N n=4 batch=8192 | jacobi 0.01594 | cta_fused 0.01842 | blocked 0.03706 | cta 0.04438 | vendor 0.07387 | two_stage 0.2700 # deep
+dtype=float jobz=N n=4 batch=32768 | jacobi 0.01851 | cta_fused 0.02200 | cta 0.07189 | blocked 0.1058 | vendor 0.2376 | two_stage 0.6473 # deep
+dtype=float jobz=N n=5 batch=128 | cta_fused 0.02131 | vendor 0.02369 | blocked 0.02405 | jacobi 0.02462 | cta 0.03923 | two_stage 0.1772 # deep
+dtype=float jobz=N n=5 batch=512 | cta_fused 0.02196 | blocked 0.02435 | vendor 0.02453 | jacobi 0.02532 | cta 0.03778 | two_stage 0.1831 # deep
+dtype=float jobz=N n=5 batch=2048 | cta_fused 0.02147 | jacobi 0.02505 | blocked 0.02597 | vendor 0.02951 | cta 0.04182 | two_stage 0.2119 # deep
+dtype=float jobz=N n=5 batch=8192 | cta_fused 0.02439 | jacobi 0.02826 | blocked 0.05116 | cta 0.05482 | vendor 0.08020 | two_stage 0.7664 # deep
+dtype=float jobz=N n=5 batch=32768 | cta_fused 0.04134 | jacobi 0.04932 | cta 0.09229 | blocked 0.1390 | vendor 0.2693 | two_stage 0.7665 # deep
+dtype=float jobz=N n=6 batch=128 | cta_fused 0.02450 | blocked 0.02592 | vendor 0.02688 | jacobi 0.02775 | cta 0.04058 | two_stage 0.1699 # deep
+dtype=float jobz=N n=6 batch=512 | cta_fused 0.02500 | blocked 0.02640 | jacobi 0.02927 | vendor 0.03225 | cta 0.04141 | two_stage 0.1845 # deep
+dtype=float jobz=N n=6 batch=2048 | cta_fused 0.02508 | jacobi 0.02802 | blocked 0.02903 | vendor 0.03334 | cta 0.04536 | two_stage 0.2209 # deep
+dtype=float jobz=N n=6 batch=8192 | cta_fused 0.02661 | jacobi 0.03000 | cta 0.05211 | blocked 0.05260 | vendor 0.09723 | two_stage 0.3332 # deep
+dtype=float jobz=N n=6 batch=32768 | cta_fused 0.05038 | jacobi 0.05745 | cta 0.1045 | blocked 0.1550 | vendor 0.3507 | two_stage 0.8596 # deep
+dtype=float jobz=N n=7 batch=128 | cta_fused 0.02829 | blocked 0.03015 | vendor 0.03243 | jacobi 0.04062 | cta 0.04316 | two_stage 0.1740 # deep
+dtype=float jobz=N n=7 batch=512 | cta_fused 0.02833 | blocked 0.03041 | vendor 0.03280 | jacobi 0.04013 | cta 0.04205 | two_stage 0.1912 # deep
+dtype=float jobz=N n=8 batch=128 | blocked 0.03212 | cta_fused 0.03471 | vendor 0.03958 | cta 0.04827 | jacobi 0.04979 | two_stage 0.1932 # deep
+dtype=float jobz=N n=8 batch=512 | blocked 0.03231 | cta_fused 0.03462 | vendor 0.04626 | cta 0.04731 | jacobi 0.05081 | two_stage 0.1752 # deep
+dtype=float jobz=N n=8 batch=2048 | cta_fused 0.03403 | blocked 0.03466 | cta 0.04950 | jacobi 0.05010 | vendor 0.05011 | two_stage 0.1994 # deep
+dtype=float jobz=N n=8 batch=8192 | cta_fused 0.03853 | jacobi 0.05408 | cta 0.06150 | blocked 0.06931 | vendor 0.1723 | two_stage 0.8779 # deep
+dtype=float jobz=N n=8 batch=32768 | cta_fused 0.08720 | jacobi 0.1207 | cta 0.1492 | blocked 0.2242 | vendor 0.6466 | two_stage 1.587 # deep
+dtype=float jobz=N n=9 batch=128 | cta_fused 0.03447 | blocked 0.03515 | vendor 0.04482 | cta 0.04867 | jacobi 0.06220 | two_stage 0.1887 # deep
+dtype=float jobz=N n=9 batch=512 | cta_fused 0.03467 | blocked 0.03519 | vendor 0.04658 | cta 0.04843 | jacobi 0.06208 | two_stage 0.1926 # deep
+dtype=float jobz=N n=9 batch=2048 | cta_fused 0.03687 | blocked 0.04050 | cta 0.05225 | vendor 0.05829 | jacobi 0.06406 | two_stage 0.2393 # deep
+dtype=float jobz=N n=9 batch=8192 | cta_fused 0.05115 | cta 0.07656 | jacobi 0.07703 | blocked 0.08603 | vendor 0.1991 | two_stage 0.8975 # deep
+dtype=float jobz=N n=9 batch=32768 | cta_fused 0.1659 | cta 0.2424 | jacobi 0.2854 | blocked 0.3060 | vendor 0.7680 | two_stage 1.281 # deep
+dtype=float jobz=N n=10 batch=128 | cta_fused 0.03868 | blocked 0.03888 | vendor 0.04370 | cta 0.05074 | jacobi 0.06399 | two_stage 0.1819 # deep
+dtype=float jobz=N n=10 batch=512 | blocked 0.03874 | cta_fused 0.04216 | vendor 0.04841 | cta 0.05325 | jacobi 0.06727 | two_stage 0.2029 # deep
+dtype=float jobz=N n=10 batch=2048 | cta_fused 0.04119 | blocked 0.04224 | cta 0.05646 | vendor 0.06073 | jacobi 0.06701 | two_stage 0.2369 # deep
+dtype=float jobz=N n=12 batch=128 | blocked 0.04366 | vendor 0.04713 | cta_fused 0.04984 | cta 0.06132 | jacobi 0.09258 | two_stage 0.1899 # deep
+dtype=float jobz=N n=12 batch=512 | blocked 0.04396 | vendor 0.05026 | cta_fused 0.05193 | cta 0.06244 | jacobi 0.09551 | two_stage 0.2002 # deep
+dtype=float jobz=N n=12 batch=2048 | blocked 0.04822 | cta_fused 0.05245 | cta 0.06620 | vendor 0.07315 | jacobi 0.09547 | two_stage 0.2379 # deep
+dtype=float jobz=N n=12 batch=8192 | cta_fused 0.07774 | cta 0.1039 | blocked 0.1082 | jacobi 0.1281 | vendor 0.2286 | two_stage 0.5003 # deep
+dtype=float jobz=N n=12 batch=32768 | cta_fused 0.2598 | cta 0.3493 | blocked 0.3948 | jacobi 0.4929 | vendor 0.8919 | two_stage 1.702 # deep
+dtype=float jobz=N n=16 batch=128 | blocked 0.05658 | vendor 0.06206 | cta_fused 0.07067 | cta 0.08358 | jacobi 0.1553 | two_stage 0.2115 # deep
+dtype=float jobz=N n=16 batch=512 | blocked 0.05615 | vendor 0.06760 | cta_fused 0.07196 | cta 0.08351 | jacobi 0.1543 | two_stage 0.2185 # deep
+dtype=float jobz=N n=16 batch=2048 | blocked 0.06267 | cta_fused 0.07506 | cta 0.08864 | vendor 0.1160 | jacobi 0.1599 | two_stage 0.2786 # deep
+dtype=float jobz=N n=16 batch=8192 | cta_fused 0.1198 | cta 0.1481 | blocked 0.1495 | jacobi 0.2334 | vendor 0.3690 | two_stage 0.6254 # deep
+dtype=float jobz=N n=16 batch=32768 | cta_fused 0.4254 | cta 0.5539 | blocked 0.6010 | jacobi 0.9925 | vendor 1.575 | two_stage 2.339 # deep
+dtype=float jobz=N n=18 batch=8192 | blocked 0.2183 | cta_fused 0.2549 | cta 0.2755 | jacobi 0.6483 | two_stage 0.7550 | vendor 1.600 # deep
+dtype=float jobz=N n=18 batch=32768 | blocked 0.8019 | cta_fused 0.9572 | cta 1.056 | jacobi 2.343 | two_stage 3.255 | vendor 6.303 # deep
+dtype=float jobz=N n=20 batch=128 | blocked 0.06759 | cta_fused 0.08008 | vendor 0.09039 | cta 0.09079 | two_stage 0.2114 | jacobi 0.2413 # deep
+dtype=float jobz=N n=20 batch=512 | blocked 0.06722 | cta_fused 0.08041 | cta 0.09097 | vendor 0.1184 | jacobi 0.2436 | two_stage 0.7286 # deep
+dtype=float jobz=N n=20 batch=2048 | blocked 0.07995 | cta_fused 0.09524 | cta 0.1094 | jacobi 0.2634 | two_stage 0.3064 | vendor 0.3998 # deep
+dtype=float jobz=N n=20 batch=8192 | blocked 0.2441 | cta_fused 0.3023 | cta 0.3187 | two_stage 0.8264 | jacobi 0.8413 | vendor 1.567 # deep
+dtype=float jobz=N n=20 batch=32768 | blocked 0.9232 | cta_fused 1.164 | cta 1.254 | jacobi 3.145 | two_stage 3.621 | vendor 6.337 # deep
+dtype=float jobz=N n=24 batch=128 | blocked 0.08133 | vendor 0.1027 | cta_fused 0.1066 | cta 0.1261 | two_stage 0.2263 | jacobi 0.3628 # deep
+dtype=float jobz=N n=24 batch=512 | blocked 0.08281 | cta_fused 0.1088 | cta 0.1188 | vendor 0.1492 | two_stage 0.2346 | jacobi 0.3723 # deep
+dtype=float jobz=N n=24 batch=2048 | blocked 0.10000 | cta_fused 0.1329 | cta 0.1472 | two_stage 0.3554 | jacobi 0.4101 | vendor 0.5223 # deep
+dtype=float jobz=N n=24 batch=8192 | blocked 0.3035 | cta_fused 0.4057 | cta 0.4192 | jacobi 1.282 | two_stage 1.514 | vendor 1.884 # deep
+dtype=float jobz=N n=24 batch=32768 | blocked 1.226 | cta_fused 1.527 | cta 1.668 | two_stage 3.952 | jacobi 4.935 | vendor 7.725 # deep
+dtype=float jobz=N n=25 batch=128 | blocked 0.08616 | vendor 0.1061 | cta_fused 0.1164 | cta 0.1268 | two_stage 0.2365 | jacobi 0.4108 # deep
+dtype=float jobz=N n=25 batch=512 | blocked 0.08625 | cta_fused 0.1169 | cta 0.1271 | vendor 0.1567 | two_stage 0.2454 | jacobi 0.4160 # deep
+dtype=float jobz=N n=25 batch=2048 | blocked 0.1037 | cta_fused 0.1422 | cta 0.1569 | two_stage 0.3609 | jacobi 0.4540 | vendor 0.5328 # deep
+dtype=float jobz=N n=25 batch=8192 | blocked 0.3313 | cta_fused 0.4644 | cta 0.4823 | jacobi 1.477 | two_stage 1.581 | vendor 2.077 # deep
+dtype=float jobz=N n=25 batch=32768 | blocked 1.325 | cta_fused 1.690 | cta 1.849 | two_stage 4.211 | jacobi 5.520 | vendor 8.168 # deep
+dtype=float jobz=N n=28 batch=128 | blocked 0.09580 | vendor 0.1127 | cta_fused 0.1307 | cta 0.1403 | two_stage 0.2451 | jacobi 0.4629 # deep
+dtype=float jobz=N n=28 batch=512 | blocked 0.09645 | cta_fused 0.1329 | cta 0.1424 | vendor 0.1764 | two_stage 0.2620 | jacobi 0.4673 # deep
+dtype=float jobz=N n=28 batch=2048 | blocked 0.1161 | cta_fused 0.1619 | cta 0.1765 | two_stage 0.3975 | jacobi 0.5068 | vendor 0.5852 # deep
+dtype=float jobz=N n=28 batch=8192 | blocked 0.3802 | cta_fused 0.5535 | cta 0.5800 | two_stage 1.196 | jacobi 1.727 | vendor 2.386 # deep
+dtype=float jobz=N n=28 batch=32768 | blocked 1.523 | cta_fused 2.115 | cta 2.300 | two_stage 5.271 | jacobi 6.523 | vendor 9.571 # deep
+dtype=float jobz=N n=32 batch=128 | blocked 0.1105 | vendor 0.1233 | cta_fused 0.1584 | cta 0.1733 | two_stage 0.2663 | jacobi 0.6264 # deep
+dtype=float jobz=N n=32 batch=512 | blocked 0.1099 | cta_fused 0.1593 | cta 0.1686 | vendor 0.2219 | two_stage 0.2789 | jacobi 0.6290 # deep
+dtype=float jobz=N n=32 batch=2048 | blocked 0.1371 | cta_fused 0.2040 | cta 0.2170 | two_stage 0.4431 | jacobi 0.6959 | vendor 0.7543 # deep
+dtype=float jobz=N n=32 batch=8192 | blocked 0.4460 | cta_fused 0.6746 | cta 0.6943 | two_stage 1.892 | jacobi 2.307 | vendor 2.911 # deep
+dtype=float jobz=N n=32 batch=32768 | blocked 1.896 | cta_fused 2.708 | cta 2.928 | two_stage 5.778 | jacobi 9.084 | vendor 12.37 # deep
+dtype=float jobz=N n=33 batch=128 | vendor 0.1727 | blocked 0.2214 | two_stage 0.2712 # deep
+dtype=float jobz=N n=33 batch=512 | blocked 0.2422 | two_stage 0.2912 | vendor 0.3287 # deep
+dtype=float jobz=N n=33 batch=2048 | blocked 0.3945 | two_stage 0.5017 | vendor 1.030 # deep
+dtype=float jobz=N n=33 batch=8192 | blocked 1.305 | two_stage 1.547 | vendor 3.901 # deep
+dtype=float jobz=N n=33 batch=32768 | blocked 5.447 | two_stage 6.481 | vendor 16.16 # deep
+dtype=float jobz=N n=40 batch=128 | vendor 0.2126 | blocked 0.2627 | two_stage 0.3015 # deep
+dtype=float jobz=N n=40 batch=512 | blocked 0.2868 | two_stage 0.3378 | vendor 0.3640 # deep
+dtype=float jobz=N n=40 batch=2048 | blocked 0.4956 | two_stage 0.6807 | vendor 1.149 # deep
+dtype=float jobz=N n=40 batch=8192 | blocked 1.764 | two_stage 2.425 | vendor 4.461 # deep
+dtype=float jobz=N n=40 batch=32768 | blocked 7.807 | two_stage 10.19 | vendor 19.31 # deep
+dtype=float jobz=N n=48 batch=128 | vendor 0.2263 | blocked 0.3211 | two_stage 0.4464 # deep
+dtype=float jobz=N n=48 batch=512 | blocked 0.3551 | vendor 0.4144 | two_stage 0.4968 # deep
+dtype=float jobz=N n=48 batch=2048 | blocked 0.6818 | two_stage 1.095 | vendor 1.372 # deep
+dtype=float jobz=N n=48 batch=8192 | blocked 2.436 | two_stage 3.946 | vendor 5.311 # deep
+dtype=float jobz=N n=48 batch=32768 | blocked 10.76 | two_stage 16.29 | vendor 23.05 # deep
+dtype=float jobz=N n=64 batch=128 | vendor 0.2791 | blocked 0.4326 | two_stage 0.7140 # deep
+dtype=float jobz=N n=64 batch=512 | blocked 0.4902 | vendor 0.5297 | two_stage 0.8518 # deep
+dtype=float jobz=N n=64 batch=2048 | blocked 1.085 | vendor 1.869 | two_stage 1.916 # deep
+dtype=float jobz=N n=64 batch=8192 | blocked 3.970 | two_stage 7.044 | vendor 7.532 # deep
+dtype=float jobz=N n=64 batch=32768 | blocked 17.79 | two_stage 29.32 | vendor 32.26 # deep
+dtype=float jobz=N n=96 batch=128 | vendor 0.5687 | blocked 0.7123 | two_stage 2.299 # deep
+dtype=float jobz=N n=96 batch=512 | blocked 0.9214 | vendor 1.578 | two_stage 2.212 # deep
+dtype=float jobz=N n=96 batch=2048 | blocked 2.710 | two_stage 5.164 | vendor 5.896 # deep
+dtype=float jobz=N n=96 batch=8192 | blocked 10.93 | two_stage 18.40 | vendor 23.89 # deep
+dtype=float jobz=N n=96 batch=32768 | blocked 47.37 | two_stage 77.51 | vendor 98.77 # deep
+dtype=float jobz=N n=128 batch=128 | vendor 0.7426 | blocked 1.009 | two_stage 4.041 # deep
+dtype=float jobz=N n=128 batch=512 | blocked 1.541 | vendor 2.128 | two_stage 4.033 # deep
+dtype=float jobz=N n=128 batch=2048 | blocked 5.193 | vendor 8.335 | two_stage 9.468 # deep
+dtype=float jobz=N n=128 batch=8192 | blocked 22.61 | vendor 34.43 | two_stage 36.00 # deep
+dtype=float jobz=N n=128 batch=32768 | blocked 91.92 | vendor 137.2 | two_stage 146.8 # deep
+dtype=float jobz=N n=157 batch=128 | blocked 2.313 | vendor 2.748 | two_stage 5.209 # deep
+dtype=float jobz=N n=192 batch=128 | blocked 2.299 | vendor 3.343 | two_stage 5.547 # deep
+dtype=float jobz=N n=192 batch=512 | blocked 3.954 | two_stage 7.677 | vendor 10.03 # deep
+dtype=float jobz=N n=192 batch=2048 | blocked 14.78 | two_stage 23.94 | vendor 41.61 # deep
+dtype=float jobz=N n=192 batch=8192 | blocked 58.74 | two_stage 93.12 | vendor 162.1 # deep
+dtype=float jobz=N n=256 batch=128 | blocked 4.027 | vendor 4.499 | two_stage 9.156 # deep
+dtype=float jobz=N n=256 batch=512 | blocked 7.541 | two_stage 13.63 | vendor 14.34 # deep
+dtype=float jobz=N n=256 batch=2048 | blocked 28.78 | two_stage 46.86 | vendor 58.35 # deep
+dtype=float jobz=N n=256 batch=8192 | blocked 112.4 | two_stage 185.8 | vendor 227.7 # deep
+dtype=float jobz=N n=257 batch=128 | blocked 4.749 | vendor 10.67 | two_stage 11.15 # deep
+dtype=float jobz=N n=257 batch=512 | blocked 10.53 | two_stage 17.12 | vendor 26.90 # deep
+dtype=float jobz=N n=257 batch=2048 | blocked 41.74 | two_stage 51.65 | vendor 165.0 # deep
+dtype=float jobz=N n=320 batch=128 | blocked 6.423 | vendor 13.75 | two_stage 14.73 # deep
+dtype=float jobz=N n=320 batch=512 | blocked 13.48 | two_stage 23.49 | vendor 42.76 # deep
+dtype=float jobz=N n=320 batch=2048 | blocked 55.54 | two_stage 78.29 | vendor 256.3 # deep
+dtype=float jobz=N n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=float jobz=N n=321 batch=128 | blocked 7.348 | vendor 13.73 | two_stage 16.31 # deep
+dtype=float jobz=N n=321 batch=512 | blocked 16.93 | two_stage 26.05 | vendor 47.19 # deep
+dtype=float jobz=N n=321 batch=2048 | blocked 69.30 | two_stage 85.37 | vendor 269.7 # deep
+dtype=float jobz=N n=321 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=384 batch=128 | blocked 9.741 | vendor 16.00 | two_stage 19.99 # deep
+dtype=float jobz=N n=384 batch=512 | blocked 24.04 | two_stage 34.76 | vendor 73.96 # deep
+dtype=float jobz=N n=384 batch=2048 | blocked 97.92 | two_stage 119.7 | vendor 371.9 # deep
+dtype=float jobz=N n=384 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=448 batch=128 | blocked 13.72 | vendor 21.33 | two_stage 26.30 # deep
+dtype=float jobz=N n=448 batch=512 | blocked 41.79 | two_stage 48.63 | vendor 117.1 # deep
+dtype=float jobz=N n=448 batch=2048 | blocked 171.1 | two_stage 171.8 | vendor 530.4 # deep
+dtype=float jobz=N n=448 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=449 batch=128 | blocked 14.89 | vendor 22.03 | two_stage 27.47 # deep
+dtype=float jobz=N n=449 batch=512 | blocked 46.95 | two_stage 52.33 | vendor 122.6 # deep
+dtype=float jobz=N n=449 batch=2048 | two_stage 181.3 | blocked 189.4 | vendor 538.7 # deep
+dtype=float jobz=N n=449 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=479 batch=512 | two_stage 56.39 | blocked 58.65 | vendor 134.9 # deep
+dtype=float jobz=N n=512 batch=128 | blocked 17.89 | vendor 26.66 | two_stage 33.57 # deep
+dtype=float jobz=N n=512 batch=512 | two_stage 63.05 | blocked 66.85 | vendor 150.0 # deep
+dtype=float jobz=N n=512 batch=2048 | two_stage 230.5 | blocked 277.1 | vendor 663.3 # deep
+dtype=float jobz=N n=512 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=513 batch=128 | blocked 32.04 | vendor 35.13 | two_stage 35.92 # deep
+dtype=float jobz=N n=513 batch=512 | two_stage 69.21 | blocked 78.62 | vendor 179.2 # deep
+dtype=float jobz=N n=513 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=573 batch=128 | blocked 40.64 | vendor 41.84 | two_stage 43.26 # deep
+dtype=float jobz=N n=640 batch=128 | two_stage 51.68 | vendor 53.38 | blocked 53.87 # deep
+dtype=float jobz=N n=640 batch=512 | two_stage 107.5 | blocked 162.8 | vendor 303.0 # deep
+dtype=float jobz=N n=640 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=640 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=768 batch=128 | two_stage 75.17 | blocked 87.13 | vendor 90.63 # deep
+dtype=float jobz=N n=768 batch=512 | two_stage 162.6 | blocked 307.1 | vendor 465.3 # deep
+dtype=float jobz=N n=768 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=768 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1024 batch=128 | two_stage 139.5 | vendor 192.3 | blocked 212.1 # deep
+dtype=float jobz=N n=1024 batch=512 | two_stage 309.4 | blocked 830.6 | vendor 899.2 # deep
+dtype=float jobz=N n=1024 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1024 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1025 batch=128 | two_stage 146.8 | blocked 225.0 | vendor 225.6 # deep
+dtype=float jobz=N n=1025 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1025 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1536 batch=128 | two_stage 350.9 | vendor 636.2 | blocked 880.4 # deep
+dtype=float jobz=N n=1536 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1536 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=1536 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=2048 batch=128 | two_stage 687.4 | vendor 1305 | blocked 2068 # deep
+dtype=float jobz=N n=2048 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=2048 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=2048 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=4096 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=4096 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=N n=4096 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=1 batch=128 | jacobi 0.008353 | cta_fused 0.008753 | vendor 0.01172 | cta 0.04827 | blocked 0.04886 | two_stage 0.06589 # deep
+dtype=float jobz=V n=1 batch=512 | cta_fused 0.008733 | jacobi 0.008498 | vendor 0.01160 | cta 0.04778 | blocked 0.04933 | two_stage 0.05702 # deep
+dtype=float jobz=V n=1 batch=2048 | jacobi 0.008242 | cta_fused 0.008618 | vendor 0.01302 | blocked 0.04883 | cta 0.04906 | two_stage 0.05875 # deep
+dtype=float jobz=V n=1 batch=8192 | jacobi 0.008603 | cta_fused 0.009033 | vendor 0.02143 | cta 0.04861 | blocked 0.04945 | two_stage 0.05678 # deep
+dtype=float jobz=V n=1 batch=32768 | jacobi 0.01026 | cta_fused 0.01119 | vendor 0.05740 | cta 0.07675 | blocked 0.07693 | two_stage 0.1005 # deep
+dtype=float jobz=V n=2 batch=128 | jacobi 0.009264 | cta_fused 0.01093 | vendor 0.01346 | cta 0.05411 | blocked 0.08402 | two_stage 0.1955 # deep
+dtype=float jobz=V n=2 batch=512 | jacobi 0.009174 | cta_fused 0.01087 | vendor 0.01402 | cta 0.05388 | blocked 0.08438 | two_stage 0.2188 # deep
+dtype=float jobz=V n=2 batch=2048 | jacobi 0.01003 | cta_fused 0.01118 | vendor 0.01718 | cta 0.05836 | blocked 0.09250 | two_stage 0.2223 # deep
+dtype=float jobz=V n=2 batch=8192 | jacobi 0.01018 | cta_fused 0.01165 | vendor 0.03603 | cta 0.05811 | blocked 0.1231 | two_stage 0.2780 # deep
+dtype=float jobz=V n=2 batch=32768 | jacobi 0.01158 | cta_fused 0.01405 | cta 0.08719 | vendor 0.1156 | blocked 0.2688 | two_stage 0.5775 # deep
+dtype=float jobz=V n=3 batch=128 | jacobi 0.01344 | cta_fused 0.01645 | vendor 0.02029 | cta 0.06882 | blocked 0.08864 | two_stage 0.2524 # deep
+dtype=float jobz=V n=3 batch=512 | jacobi 0.01333 | cta_fused 0.01648 | vendor 0.01779 | cta 0.06404 | blocked 0.09084 | two_stage 0.2555 # deep
+dtype=float jobz=V n=3 batch=2048 | jacobi 0.01379 | cta_fused 0.01662 | vendor 0.02165 | cta 0.06027 | blocked 0.08914 | two_stage 0.2485 # deep
+dtype=float jobz=V n=3 batch=8192 | jacobi 0.01414 | cta_fused 0.01754 | vendor 0.05453 | cta 0.06211 | blocked 0.1360 | two_stage 0.7687 # deep
+dtype=float jobz=V n=3 batch=32768 | jacobi 0.01661 | cta_fused 0.02162 | cta 0.09300 | vendor 0.1879 | blocked 0.4201 | two_stage 0.7276 # deep
+dtype=float jobz=V n=4 batch=128 | jacobi 0.01622 | cta_fused 0.02275 | vendor 0.02303 | cta 0.05992 | blocked 0.1005 | two_stage 0.2447 # deep
+dtype=float jobz=V n=4 batch=512 | jacobi 0.01728 | cta_fused 0.02311 | vendor 0.02461 | cta 0.05452 | blocked 0.09129 | two_stage 0.2607 # deep
+dtype=float jobz=V n=4 batch=2048 | jacobi 0.01585 | cta_fused 0.02223 | vendor 0.02762 | cta 0.05315 | blocked 0.09247 | two_stage 0.2617 # deep
+dtype=float jobz=V n=4 batch=8192 | jacobi 0.01639 | cta_fused 0.02275 | cta 0.06067 | vendor 0.07583 | blocked 0.1367 | two_stage 0.7724 # deep
+dtype=float jobz=V n=4 batch=32768 | jacobi 0.01927 | cta_fused 0.03213 | cta 0.09872 | vendor 0.2450 | blocked 0.4243 | two_stage 0.8286 # deep
+dtype=float jobz=V n=6 batch=128 | jacobi 0.03151 | cta_fused 0.03461 | vendor 0.03640 | cta 0.08928 | blocked 0.1300 | two_stage 0.3502 # deep
+dtype=float jobz=V n=6 batch=512 | jacobi 0.03007 | cta_fused 0.03191 | vendor 0.03576 | cta 0.05928 | blocked 0.08472 | two_stage 0.2527 # deep
+dtype=float jobz=V n=6 batch=2048 | jacobi 0.02943 | cta_fused 0.03307 | vendor 0.03532 | cta 0.06361 | blocked 0.09194 | two_stage 0.2735 # deep
+dtype=float jobz=V n=6 batch=8192 | jacobi 0.03133 | cta_fused 0.03466 | cta 0.06760 | vendor 0.1005 | blocked 0.1486 | two_stage 0.9080 # deep
+dtype=float jobz=V n=6 batch=32768 | jacobi 0.06477 | cta_fused 0.08971 | cta 0.1438 | blocked 0.3460 | vendor 0.3683 | two_stage 1.209 # deep
+dtype=float jobz=V n=7 batch=128 | vendor 0.03587 | cta_fused 0.03900 | jacobi 0.04309 | cta 0.1019 | blocked 0.1090 | two_stage 0.7286 # deep
+dtype=float jobz=V n=7 batch=512 | vendor 0.03364 | cta_fused 0.03637 | jacobi 0.04209 | cta 0.06384 | blocked 0.08444 | two_stage 0.2534 # deep
+dtype=float jobz=V n=7 batch=2048 | cta_fused 0.03741 | vendor 0.04290 | jacobi 0.04341 | cta 0.06648 | blocked 0.09314 | two_stage 0.2869 # deep
+dtype=float jobz=V n=7 batch=8192 | cta_fused 0.04075 | jacobi 0.04734 | cta 0.07587 | vendor 0.1305 | blocked 0.1487 | two_stage 0.9202 # deep
+dtype=float jobz=V n=8 batch=128 | vendor 0.04530 | cta_fused 0.04739 | jacobi 0.05233 | cta 0.08208 | blocked 0.08624 | two_stage 0.2450 # deep
+dtype=float jobz=V n=8 batch=512 | cta_fused 0.04747 | vendor 0.04740 | jacobi 0.05227 | cta 0.07428 | blocked 0.08701 | two_stage 0.2686 # deep
+dtype=float jobz=V n=8 batch=2048 | cta_fused 0.04772 | jacobi 0.05239 | vendor 0.05358 | cta 0.07788 | blocked 0.09558 | two_stage 0.7054 # deep
+dtype=float jobz=V n=8 batch=8192 | cta_fused 0.05319 | jacobi 0.05565 | cta 0.08603 | blocked 0.1537 | vendor 0.1741 | two_stage 0.4542 # deep
+dtype=float jobz=V n=8 batch=32768 | jacobi 0.1299 | cta_fused 0.1483 | cta 0.2018 | blocked 0.4961 | vendor 0.6465 | two_stage 1.451 # deep
+dtype=float jobz=V n=9 batch=128 | cta_fused 0.04791 | vendor 0.04655 | jacobi 0.06530 | cta 0.07174 | blocked 0.08729 | two_stage 0.7135 # deep
+dtype=float jobz=V n=9 batch=512 | cta_fused 0.04897 | vendor 0.04972 | jacobi 0.06673 | cta 0.07275 | blocked 0.09549 | two_stage 0.6966 # deep
+dtype=float jobz=V n=9 batch=2048 | cta_fused 0.05160 | vendor 0.06253 | jacobi 0.06893 | cta 0.07891 | blocked 0.1019 | two_stage 0.7182 # deep
+dtype=float jobz=V n=9 batch=8192 | cta_fused 0.09473 | cta 0.1085 | jacobi 0.1259 | blocked 0.1920 | vendor 0.2122 | two_stage 0.5468 # deep
+dtype=float jobz=V n=9 batch=32768 | cta_fused 0.3044 | cta 0.3169 | jacobi 0.3733 | blocked 0.6478 | vendor 0.7795 | two_stage 1.704 # deep
+dtype=float jobz=V n=10 batch=128 | vendor 0.04935 | cta_fused 0.05672 | jacobi 0.07073 | cta 0.1028 | blocked 0.1371 | two_stage 0.8074 # deep
+dtype=float jobz=V n=10 batch=512 | vendor 0.05075 | cta_fused 0.05776 | jacobi 0.07120 | cta 0.07530 | blocked 0.1049 | two_stage 0.3325 # deep
+dtype=float jobz=V n=10 batch=8192 | cta_fused 0.1059 | cta 0.1188 | jacobi 0.1426 | vendor 0.2066 | blocked 0.2438 | two_stage 0.6299 # deep
+dtype=float jobz=V n=10 batch=32768 | cta 0.3848 | cta_fused 0.3787 | jacobi 0.4584 | vendor 0.7995 | blocked 0.8457 | two_stage 1.885 # deep
+dtype=float jobz=V n=12 batch=128 | vendor 0.05238 | cta_fused 0.07332 | cta 0.08494 | jacobi 0.09880 | blocked 0.1294 | two_stage 0.3032 # deep
+dtype=float jobz=V n=12 batch=512 | vendor 0.05357 | cta_fused 0.07392 | cta 0.08539 | jacobi 0.1006 | blocked 0.1346 | two_stage 0.2886 # deep
+dtype=float jobz=V n=12 batch=2048 | cta_fused 0.07545 | vendor 0.07981 | cta 0.08501 | jacobi 0.1033 | blocked 0.1442 | two_stage 0.8732 # deep
+dtype=float jobz=V n=12 batch=8192 | cta 0.1513 | cta_fused 0.1607 | jacobi 0.2204 | vendor 0.2599 | blocked 0.3376 | two_stage 0.6685 # deep
+dtype=float jobz=V n=12 batch=32768 | cta 0.4728 | cta_fused 0.5428 | jacobi 0.6814 | vendor 1.007 | blocked 1.194 | two_stage 2.149 # deep
+dtype=float jobz=V n=14 batch=2048 | cta_fused 0.09132 | cta 0.09958 | vendor 0.1045 | jacobi 0.1346 | blocked 0.1755 | two_stage 0.8527 # deep
+dtype=float jobz=V n=16 batch=128 | vendor 0.06446 | cta_fused 0.1032 | cta 0.1067 | blocked 0.1552 | jacobi 0.1634 | two_stage 0.3112 # deep
+dtype=float jobz=V n=16 batch=512 | vendor 0.06818 | cta 0.1028 | cta_fused 0.1036 | blocked 0.1531 | jacobi 0.1656 | two_stage 0.7866 # deep
+dtype=float jobz=V n=16 batch=2048 | cta 0.1117 | cta_fused 0.1090 | vendor 0.1307 | jacobi 0.1723 | blocked 0.2050 | two_stage 0.4008 # deep
+dtype=float jobz=V n=16 batch=8192 | cta 0.2141 | cta_fused 0.2613 | jacobi 0.3832 | vendor 0.4254 | blocked 0.4941 | two_stage 1.420 # deep
+dtype=float jobz=V n=16 batch=32768 | cta 0.7630 | cta_fused 0.8809 | jacobi 1.264 | vendor 1.702 | blocked 1.842 | two_stage 3.408 # deep
+dtype=float jobz=V n=18 batch=512 | cta 0.1121 | cta_fused 0.1127 | vendor 0.1324 | blocked 0.2103 | jacobi 0.2258 | two_stage 0.3974 # deep
+dtype=float jobz=V n=20 batch=128 | vendor 0.09582 | cta 0.1218 | cta_fused 0.1243 | blocked 0.2026 | jacobi 0.2556 | two_stage 0.3248 # deep
+dtype=float jobz=V n=20 batch=512 | cta 0.1233 | cta_fused 0.1268 | vendor 0.1268 | blocked 0.2148 | jacobi 0.2672 | two_stage 0.3429 # deep
+dtype=float jobz=V n=20 batch=2048 | cta 0.1502 | cta_fused 0.1986 | blocked 0.2983 | vendor 0.4349 | two_stage 0.4841 | jacobi 0.5213 # deep
+dtype=float jobz=V n=20 batch=8192 | cta 0.4718 | cta_fused 0.6704 | blocked 0.8918 | jacobi 1.357 | two_stage 1.738 | vendor 1.765 # deep
+dtype=float jobz=V n=20 batch=32768 | cta 1.705 | cta_fused 2.270 | blocked 3.307 | two_stage 4.519 | jacobi 5.226 | vendor 6.499 # deep
+dtype=float jobz=V n=24 batch=128 | vendor 0.1081 | cta 0.1619 | cta_fused 0.1664 | blocked 0.2438 | two_stage 0.3613 | jacobi 0.3895 # deep
+dtype=float jobz=V n=24 batch=512 | cta 0.1530 | vendor 0.1632 | cta_fused 0.1729 | blocked 0.2476 | two_stage 0.3785 | jacobi 0.4013 # deep
+dtype=float jobz=V n=24 batch=2048 | cta 0.1884 | cta_fused 0.2562 | blocked 0.3285 | vendor 0.5315 | jacobi 0.8047 | two_stage 1.043 # deep
+dtype=float jobz=V n=24 batch=8192 | cta 0.6449 | cta_fused 0.9073 | blocked 1.097 | two_stage 1.656 | jacobi 2.109 | vendor 2.309 # deep
+dtype=float jobz=V n=24 batch=32768 | cta 2.391 | cta_fused 3.027 | blocked 4.124 | two_stage 6.415 | jacobi 7.987 | vendor 8.266 # deep
+dtype=float jobz=V n=25 batch=128 | vendor 0.1126 | cta 0.1608 | cta_fused 0.1816 | blocked 0.2451 | two_stage 0.3576 | jacobi 0.4433 # deep
+dtype=float jobz=V n=25 batch=512 | cta 0.1643 | vendor 0.1710 | cta_fused 0.1852 | blocked 0.2597 | two_stage 0.3842 | jacobi 0.4522 # deep
+dtype=float jobz=V n=25 batch=2048 | cta 0.2066 | cta_fused 0.2788 | blocked 0.3461 | vendor 0.5578 | jacobi 0.8790 | two_stage 1.170 # deep
+dtype=float jobz=V n=25 batch=8192 | cta 0.6390 | cta_fused 0.8923 | blocked 1.054 | two_stage 1.708 | vendor 2.110 | jacobi 2.283 # deep
+dtype=float jobz=V n=25 batch=32768 | cta 2.668 | cta_fused 3.341 | blocked 4.408 | two_stage 6.770 | vendor 8.668 | jacobi 8.788 # deep
+dtype=float jobz=V n=28 batch=128 | vendor 0.1177 | cta 0.1713 | cta_fused 0.2024 | blocked 0.2639 | two_stage 0.3753 | jacobi 0.4933 # deep
+dtype=float jobz=V n=28 batch=512 | cta 0.1783 | vendor 0.1950 | cta_fused 0.2064 | blocked 0.2850 | two_stage 0.4074 | jacobi 0.5054 # deep
+dtype=float jobz=V n=28 batch=2048 | cta 0.2322 | cta_fused 0.3454 | blocked 0.4089 | vendor 0.6337 | two_stage 0.6485 | jacobi 1.019 # deep
+dtype=float jobz=V n=28 batch=8192 | cta 0.7908 | cta_fused 1.179 | blocked 1.270 | two_stage 2.363 | vendor 2.553 | jacobi 2.600 # deep
+dtype=float jobz=V n=28 batch=32768 | cta 3.559 | cta_fused 4.598 | blocked 5.654 | two_stage 8.337 | jacobi 10.60 | vendor 10.93 # deep
+dtype=float jobz=V n=32 batch=128 | vendor 0.1342 | cta 0.2105 | cta_fused 0.2523 | blocked 0.3246 | two_stage 0.4251 | jacobi 0.6835 # deep
+dtype=float jobz=V n=32 batch=512 | cta 0.2121 | vendor 0.2474 | cta_fused 0.2566 | blocked 0.3405 | two_stage 0.4560 | jacobi 0.6975 # deep
+dtype=float jobz=V n=32 batch=2048 | cta 0.2843 | cta_fused 0.4555 | blocked 0.4898 | vendor 0.8093 | two_stage 0.8526 | jacobi 1.392 # deep
+dtype=float jobz=V n=32 batch=8192 | cta 1.038 | cta_fused 1.613 | blocked 1.632 | two_stage 2.443 | vendor 3.506 | jacobi 3.686 # deep
+dtype=float jobz=V n=32 batch=32768 | cta 4.498 | cta_fused 5.872 | blocked 7.007 | two_stage 10.17 | vendor 13.71 | jacobi 14.40 # deep
+dtype=float jobz=V n=33 batch=128 | vendor 0.3593 | blocked 0.4212 | two_stage 1.044 # deep
+dtype=float jobz=V n=33 batch=512 | blocked 0.5051 | two_stage 0.4933 | vendor 0.7097 # deep
+dtype=float jobz=V n=33 batch=2048 | blocked 0.8567 | two_stage 1.026 | vendor 2.188 # deep
+dtype=float jobz=V n=33 batch=8192 | blocked 2.776 | two_stage 3.059 | vendor 8.257 # deep
+dtype=float jobz=V n=33 batch=32768 | blocked 12.52 | two_stage 13.29 | vendor 37.43 # deep
+dtype=float jobz=V n=36 batch=512 | vendor 0.4978 | blocked 0.5335 | two_stage 0.5351 # deep
+dtype=float jobz=V n=40 batch=128 | vendor 0.2791 | blocked 0.5024 | two_stage 0.5160 # deep
+dtype=float jobz=V n=40 batch=512 | vendor 0.5363 | blocked 0.5879 | two_stage 0.6096 # deep
+dtype=float jobz=V n=40 batch=2048 | blocked 1.087 | two_stage 1.351 | vendor 1.784 # deep
+dtype=float jobz=V n=40 batch=8192 | blocked 3.942 | two_stage 4.478 | vendor 7.281 # deep
+dtype=float jobz=V n=40 batch=32768 | blocked 16.69 | two_stage 17.84 | vendor 30.00 # deep
+dtype=float jobz=V n=48 batch=128 | vendor 0.2936 | blocked 0.6018 | two_stage 0.7120 # deep
+dtype=float jobz=V n=48 batch=512 | vendor 0.6110 | blocked 0.7222 | two_stage 0.8685 # deep
+dtype=float jobz=V n=48 batch=2048 | blocked 1.414 | two_stage 1.916 | vendor 2.117 # deep
+dtype=float jobz=V n=48 batch=8192 | blocked 5.552 | two_stage 7.197 | vendor 9.155 # deep
+dtype=float jobz=V n=48 batch=32768 | blocked 23.07 | two_stage 28.03 | vendor 36.71 # deep
+dtype=float jobz=V n=64 batch=128 | vendor 0.3756 | blocked 0.8323 | two_stage 1.087 # deep
+dtype=float jobz=V n=64 batch=512 | vendor 0.8265 | blocked 1.016 | two_stage 1.411 # deep
+dtype=float jobz=V n=64 batch=2048 | blocked 2.279 | vendor 3.169 | two_stage 3.462 # deep
+dtype=float jobz=V n=64 batch=8192 | blocked 9.332 | two_stage 13.21 | vendor 13.97 # deep
+dtype=float jobz=V n=64 batch=32768 | blocked 39.26 | two_stage 53.33 | vendor 56.94 # deep
+dtype=float jobz=V n=78 batch=512 | blocked 1.462 | vendor 1.658 | two_stage 2.524 # deep
+dtype=float jobz=V n=96 batch=128 | vendor 0.6920 | blocked 1.328 | two_stage 2.609 # deep
+dtype=float jobz=V n=96 batch=512 | blocked 1.881 | vendor 1.988 | two_stage 3.339 # deep
+dtype=float jobz=V n=96 batch=2048 | blocked 5.328 | vendor 7.764 | two_stage 8.896 # deep
+dtype=float jobz=V n=96 batch=8192 | blocked 23.55 | vendor 33.29 | two_stage 34.66 # deep
+dtype=float jobz=V n=96 batch=32768 | blocked 97.03 | vendor 130.0 | two_stage 139.6 # deep
+dtype=float jobz=V n=111 batch=512 | vendor 2.392 | blocked 4.155 | two_stage 4.798 # deep
+dtype=float jobz=V n=128 batch=128 | vendor 0.9202 | blocked 1.819 | two_stage 4.043 # deep
+dtype=float jobz=V n=128 batch=512 | vendor 2.841 | blocked 2.983 | two_stage 5.819 # deep
+dtype=float jobz=V n=128 batch=2048 | blocked 10.01 | vendor 11.97 | two_stage 16.68 # deep
+dtype=float jobz=V n=128 batch=8192 | blocked 44.38 | vendor 51.33 | two_stage 67.92 # deep
+dtype=float jobz=V n=128 batch=32768 | blocked 176.3 | vendor 197.3 | two_stage 268.2 # deep
+dtype=float jobz=V n=157 batch=512 | vendor 9.453 # deep
+dtype=float jobz=V n=192 batch=128 | vendor 3.706 | blocked 4.094 | two_stage 7.860 # deep
+dtype=float jobz=V n=192 batch=512 | blocked 7.552 | vendor 12.11 | two_stage 13.59 # deep
+dtype=float jobz=V n=192 batch=2048 | blocked 28.31 | two_stage 46.26 | vendor 49.83 # deep
+dtype=float jobz=V n=192 batch=8192 | blocked 117.0 | two_stage 188.3 | vendor 199.9 # deep
+dtype=float jobz=V n=256 batch=128 | vendor 5.143 | blocked 6.597 | two_stage 13.17 # deep
+dtype=float jobz=V n=256 batch=512 | blocked 13.74 | vendor 17.87 | two_stage 25.63 # deep
+dtype=float jobz=V n=256 batch=2048 | blocked 50.60 | vendor 71.19 | two_stage 90.74 # deep
+dtype=float jobz=V n=256 batch=8192 | blocked 209.0 | vendor 288.8 | two_stage 375.9 # deep
+dtype=float jobz=V n=257 batch=128 | vendor 10.99 # deep
+dtype=float jobz=V n=257 batch=512 | vendor 30.10 # deep
+dtype=float jobz=V n=257 batch=2048 | vendor 174.1 # deep
+dtype=float jobz=V n=287 batch=128 | vendor 12.82 # deep
+dtype=float jobz=V n=287 batch=512 | vendor 39.72 # deep
+dtype=float jobz=V n=287 batch=2048 | vendor 234.5 # deep
+dtype=float jobz=V n=320 batch=128 | blocked 12.27 | vendor 13.81 | two_stage 24.11 # deep
+dtype=float jobz=V n=320 batch=512 | blocked 27.96 | vendor 48.91 | two_stage 49.96 # deep
+dtype=float jobz=V n=320 batch=2048 | blocked 108.5 | two_stage 177.4 | vendor 285.3 # deep
+dtype=float jobz=V n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=float jobz=V n=321 batch=128 | vendor 14.51 # deep
+dtype=float jobz=V n=321 batch=512 | vendor 52.73 # deep
+dtype=float jobz=V n=321 batch=2048 | vendor 297.9 # deep
+dtype=float jobz=V n=321 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=float jobz=V n=351 batch=128 | vendor 16.29 # deep
+dtype=float jobz=V n=351 batch=512 | vendor 68.14 # deep
+dtype=float jobz=V n=351 batch=2048 | vendor 337.0 # deep
+dtype=float jobz=V n=384 batch=128 | blocked 17.51 | vendor 17.56 | two_stage 32.64 # deep
+dtype=float jobz=V n=384 batch=512 | blocked 43.98 | two_stage 74.42 | vendor 81.68 # deep
+dtype=float jobz=V n=384 batch=2048 | blocked 171.0 | two_stage 270.2 | vendor 411.7 # deep
+dtype=float jobz=V n=384 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=float jobz=V n=448 batch=128 | blocked 23.72 | vendor 24.08 | two_stage 43.40 # deep
+dtype=float jobz=V n=448 batch=512 | blocked 68.68 | two_stage 106.5 | vendor 130.9 # deep
+dtype=float jobz=V n=448 batch=2048 | blocked 272.6 | two_stage 398.2 | vendor 583.7 # deep
+dtype=float jobz=V n=448 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=float jobz=V n=449 batch=128 | vendor 24.90 # deep
+dtype=float jobz=V n=449 batch=512 | vendor 131.6 # deep
+dtype=float jobz=V n=449 batch=2048 | vendor 575.5 # deep
+dtype=float jobz=V n=449 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=479 batch=128 | vendor 26.89 # deep
+dtype=float jobz=V n=479 batch=512 | vendor 154.0 # deep
+dtype=float jobz=V n=479 batch=2048 | vendor 658.8 # deep
+dtype=float jobz=V n=512 batch=128 | blocked 29.93 | vendor 29.35 | two_stage 57.52 # deep
+dtype=float jobz=V n=512 batch=512 | blocked 101.6 | two_stage 145.9 | vendor 172.8 # deep
+dtype=float jobz=V n=512 batch=2048 | blocked 389.6 | two_stage 527.3 | vendor 708.7 # deep
+dtype=float jobz=V n=512 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=513 batch=128 | vendor 39.45 # deep
+dtype=float jobz=V n=513 batch=512 | vendor 202.0 # deep
+dtype=float jobz=V n=513 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=573 batch=512 | vendor 261.6 # deep
+dtype=float jobz=V n=640 batch=128 | vendor 59.96 | blocked 74.07 | two_stage 96.08 # deep
+dtype=float jobz=V n=640 batch=512 | blocked 216.2 | two_stage 256.0 | vendor 326.3 # deep
+dtype=float jobz=V n=640 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=640 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=768 batch=128 | vendor 96.89 | blocked 116.4 | two_stage 143.5 # deep
+dtype=float jobz=V n=768 batch=512 | blocked 391.1 | two_stage 417.6 | vendor 508.9 # deep
+dtype=float jobz=V n=768 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=768 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=887 batch=512 | vendor 740.3 # deep
+dtype=float jobz=V n=1024 batch=128 | vendor 219.3 | blocked 259.7 | two_stage 277.7 # deep
+dtype=float jobz=V n=1024 batch=512 | two_stage 928.8 | blocked 989.3 | vendor 1027 # deep
+dtype=float jobz=V n=1024 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=1024 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=float jobz=V n=1025 batch=128 | vendor 230.6 # deep
+dtype=float jobz=V n=1025 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=1025 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=1536 batch=128 | vendor 634.6 | two_stage 888.4 | blocked 982.9 # deep
+dtype=float jobz=V n=1536 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=1536 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=1536 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=2048 batch=128 | vendor 1403 | two_stage 1922 | blocked 2292 # deep
+dtype=float jobz=V n=2048 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=2048 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=2048 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=4096 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=4096 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=float jobz=V n=4096 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=N n=1 batch=128 | jacobi 0.008238 | cta_fused 0.008573 | vendor 0.01471 | blocked 0.01627 | two_stage 0.02481 | cta 0.02934 # deep
+dtype=double jobz=N n=1 batch=512 | cta_fused 0.008463 | jacobi 0.008262 | blocked 0.01586 | vendor 0.01947 | two_stage 0.02378 | cta 0.02851 # deep
+dtype=double jobz=N n=1 batch=2048 | cta_fused 0.008478 | jacobi 0.008272 | blocked 0.01848 | two_stage 0.02703 | cta 0.03719 | vendor 0.04459 # deep
+dtype=double jobz=N n=1 batch=8192 | cta_fused 0.008823 | jacobi 0.008593 | blocked 0.03123 | cta 0.03658 | two_stage 0.04644 | vendor 0.1358 # deep
+dtype=double jobz=N n=1 batch=32768 | jacobi 0.01018 | cta_fused 0.01060 | cta 0.06297 | blocked 0.08409 | two_stage 0.1200 | vendor 0.4982 # deep
+dtype=double jobz=N n=2 batch=128 | jacobi 0.01203 | cta_fused 0.01382 | vendor 0.01994 | cta 0.03345 | blocked 0.05702 | two_stage 0.1843 # deep
+dtype=double jobz=N n=2 batch=512 | jacobi 0.01210 | cta_fused 0.01417 | vendor 0.02648 | cta 0.03449 | blocked 0.05876 | two_stage 0.1961 # deep
+dtype=double jobz=N n=2 batch=2048 | jacobi 0.01167 | cta_fused 0.01335 | cta 0.03525 | vendor 0.07412 | blocked 0.1226 | two_stage 0.3107 # deep
+dtype=double jobz=N n=2 batch=8192 | jacobi 0.01333 | cta_fused 0.01517 | cta 0.04202 | vendor 0.2183 | blocked 0.4432 | two_stage 0.9094 # deep
+dtype=double jobz=N n=2 batch=32768 | jacobi 0.02435 | cta_fused 0.03461 | cta 0.08307 | vendor 0.8362 | blocked 1.707 | two_stage 3.764 # deep
+dtype=double jobz=N n=3 batch=128 | jacobi 0.03058 | cta_fused 0.03538 | vendor 0.03828 | cta 0.05228 | blocked 0.08351 | two_stage 0.2317 # deep
+dtype=double jobz=N n=3 batch=512 | jacobi 0.03156 | cta_fused 0.03609 | vendor 0.04880 | cta 0.05068 | blocked 0.08369 | two_stage 0.2396 # deep
+dtype=double jobz=N n=3 batch=2048 | jacobi 0.02986 | cta_fused 0.03459 | cta 0.05082 | vendor 0.1321 | blocked 0.1865 | two_stage 0.4328 # deep
+dtype=double jobz=N n=3 batch=8192 | jacobi 0.03638 | cta_fused 0.04436 | cta 0.06592 | vendor 0.4386 | blocked 0.7020 | two_stage 1.863 # deep
+dtype=double jobz=N n=3 batch=32768 | jacobi 0.1093 | cta_fused 0.1495 | cta 0.1871 | vendor 1.654 | blocked 2.695 | two_stage 5.503 # deep
+dtype=double jobz=N n=4 batch=128 | jacobi 0.03670 | vendor 0.05211 | cta_fused 0.06090 | cta 0.07264 | blocked 0.1096 | two_stage 0.2477 # deep
+dtype=double jobz=N n=4 batch=512 | jacobi 0.03709 | cta_fused 0.06139 | vendor 0.06359 | cta 0.07333 | blocked 0.1106 | two_stage 0.2814 # deep
+dtype=double jobz=N n=4 batch=2048 | jacobi 0.03655 | cta_fused 0.06031 | cta 0.07573 | vendor 0.1803 | blocked 0.2535 | two_stage 0.5544 # deep
+dtype=double jobz=N n=4 batch=8192 | jacobi 0.04491 | cta_fused 0.07957 | cta 0.1031 | vendor 0.6035 | blocked 0.9605 | two_stage 1.827 # deep
+dtype=double jobz=N n=4 batch=32768 | jacobi 0.1402 | cta_fused 0.2632 | cta 0.2982 | vendor 2.282 | blocked 3.712 | two_stage 7.269 # deep
+dtype=double jobz=N n=6 batch=128 | jacobi 0.08729 | vendor 0.09620 | cta_fused 0.1046 | cta 0.1165 | blocked 0.1655 | two_stage 0.3251 # deep
+dtype=double jobz=N n=6 batch=512 | jacobi 0.08941 | cta_fused 0.1069 | vendor 0.1130 | cta 0.1165 | blocked 0.1672 | two_stage 0.3616 # deep
+dtype=double jobz=N n=6 batch=2048 | jacobi 0.08752 | cta_fused 0.1062 | cta 0.1189 | vendor 0.3662 | blocked 0.3856 | two_stage 0.7866 # deep
+dtype=double jobz=N n=6 batch=8192 | jacobi 0.1819 | cta_fused 0.2449 | cta 0.2698 | vendor 1.152 | blocked 1.466 | two_stage 3.202 # deep
+dtype=double jobz=N n=6 batch=32768 | jacobi 0.7107 | cta_fused 0.9670 | cta 1.020 | vendor 4.578 | blocked 5.821 | two_stage 10.85 # deep
+dtype=double jobz=N n=7 batch=128 | vendor 0.1223 | jacobi 0.1277 | cta_fused 0.1336 | cta 0.1457 | blocked 0.1989 | two_stage 0.3568 # deep
+dtype=double jobz=N n=7 batch=512 | cta_fused 0.1314 | jacobi 0.1294 | cta 0.1450 | vendor 0.1483 | blocked 0.1998 | two_stage 0.4082 # deep
+dtype=double jobz=N n=8 batch=128 | vendor 0.1622 | jacobi 0.1696 | cta_fused 0.1767 | cta 0.1880 | blocked 0.2279 | two_stage 0.3891 # deep
+dtype=double jobz=N n=8 batch=512 | cta_fused 0.1755 | jacobi 0.1712 | cta 0.1870 | vendor 0.2026 | blocked 0.2280 | two_stage 0.4356 # deep
+dtype=double jobz=N n=8 batch=2048 | jacobi 0.1702 | cta_fused 0.1762 | cta 0.1887 | blocked 0.5272 | vendor 0.6849 | two_stage 1.008 # deep
+dtype=double jobz=N n=8 batch=8192 | jacobi 0.3694 | cta_fused 0.4257 | cta 0.4526 | blocked 2.049 | vendor 2.327 | two_stage 4.179 # deep
+dtype=double jobz=N n=8 batch=32768 | jacobi 1.452 | cta_fused 1.663 | cta 1.722 | blocked 8.005 | vendor 9.103 | two_stage 14.05 # deep
+dtype=double jobz=N n=9 batch=128 | vendor 0.1988 | cta_fused 0.2057 | jacobi 0.2122 | cta 0.2180 | blocked 0.2560 | two_stage 0.4115 # deep
+dtype=double jobz=N n=9 batch=512 | cta_fused 0.2114 | jacobi 0.2127 | cta 0.2204 | vendor 0.2455 | blocked 0.2575 | two_stage 0.4849 # deep
+dtype=double jobz=N n=9 batch=2048 | jacobi 0.2606 | cta_fused 0.2942 | cta 0.3075 | blocked 0.6003 | vendor 0.8987 | two_stage 1.132 # deep
+dtype=double jobz=N n=9 batch=8192 | jacobi 0.9410 | cta_fused 1.066 | cta 1.091 | blocked 2.357 | vendor 2.883 | two_stage 4.091 # deep
+dtype=double jobz=N n=9 batch=32768 | jacobi 3.372 | cta_fused 4.075 | cta 4.124 | blocked 9.254 | vendor 11.16 | two_stage 16.30 # deep
+dtype=double jobz=N n=12 batch=128 | vendor 0.2153 | jacobi 0.3222 | cta_fused 0.3242 | cta 0.3355 | blocked 0.3426 | two_stage 0.4972 # deep
+dtype=double jobz=N n=12 batch=512 | cta_fused 0.3264 | jacobi 0.3250 | cta 0.3372 | blocked 0.3444 | vendor 0.3513 | two_stage 0.9809 # deep
+dtype=double jobz=N n=12 batch=2048 | jacobi 0.4055 | cta_fused 0.4621 | cta 0.4779 | blocked 0.8096 | vendor 1.310 | two_stage 1.471 # deep
+dtype=double jobz=N n=12 batch=8192 | jacobi 1.493 | cta_fused 1.662 | cta 1.688 | blocked 3.167 | vendor 4.537 | two_stage 5.929 # deep
+dtype=double jobz=N n=12 batch=32768 | jacobi 5.558 | cta_fused 6.426 | cta 6.479 | blocked 12.62 | vendor 17.83 | two_stage 21.88 # deep
+dtype=double jobz=N n=14 batch=512 | blocked 0.4047 | jacobi 0.4287 | cta_fused 0.4397 | cta 0.4485 | vendor 0.4883 | two_stage 1.153 # deep
+dtype=double jobz=N n=16 batch=128 | vendor 0.2926 | blocked 0.4605 | jacobi 0.5447 | cta_fused 0.5611 | cta 0.5752 | two_stage 1.130 # deep
+dtype=double jobz=N n=16 batch=512 | blocked 0.4584 | jacobi 0.5432 | cta_fused 0.5587 | cta 0.5691 | vendor 0.6115 | two_stage 0.8375 # deep
+dtype=double jobz=N n=16 batch=2048 | jacobi 0.6776 | cta_fused 0.8112 | cta 0.8252 | blocked 1.087 | two_stage 1.923 | vendor 2.284 # deep
+dtype=double jobz=N n=16 batch=8192 | jacobi 2.565 | cta_fused 2.970 | cta 2.994 | blocked 4.329 | two_stage 7.828 | vendor 8.507 # deep
+dtype=double jobz=N n=16 batch=32768 | jacobi 9.426 | cta_fused 11.31 | cta 11.37 | blocked 17.03 | two_stage 29.03 | vendor 33.23 # deep
+dtype=double jobz=N n=18 batch=2048 | blocked 1.341 | cta 1.794 | jacobi 1.944 | two_stage 2.162 | cta_fused 2.245 | vendor 2.959 # deep
+dtype=double jobz=N n=18 batch=8192 | blocked 5.142 | jacobi 5.778 | cta 6.893 | cta_fused 6.902 | two_stage 8.383 | vendor 10.77 # deep
+dtype=double jobz=N n=18 batch=32768 | blocked 20.40 | jacobi 22.24 | cta_fused 26.97 | cta 27.04 | two_stage 33.16 | vendor 41.94 # deep
+dtype=double jobz=N n=20 batch=128 | vendor 0.5013 | blocked 0.5811 | two_stage 0.7584 | cta_fused 0.7698 | cta 0.7877 | jacobi 0.8808 # deep
+dtype=double jobz=N n=20 batch=512 | blocked 0.5849 | cta_fused 0.7781 | cta 0.7931 | jacobi 0.8984 | vendor 0.9595 | two_stage 1.201 # deep
+dtype=double jobz=N n=20 batch=2048 | blocked 1.498 | cta 2.074 | two_stage 2.386 | jacobi 2.508 | cta_fused 2.618 | vendor 3.149 # deep
+dtype=double jobz=N n=20 batch=8192 | blocked 5.732 | jacobi 7.377 | cta 7.877 | cta_fused 7.915 | two_stage 9.647 | vendor 11.74 # deep
+dtype=double jobz=N n=20 batch=32768 | blocked 22.76 | jacobi 28.77 | cta_fused 31.17 | cta 31.19 | two_stage 36.81 | vendor 45.89 # deep
+dtype=double jobz=N n=24 batch=128 | vendor 0.5490 | blocked 0.7094 | cta_fused 1.057 | cta 1.072 | two_stage 1.320 | jacobi 1.324 # deep
+dtype=double jobz=N n=24 batch=512 | blocked 0.7212 | cta_fused 1.080 | cta 1.097 | vendor 1.145 | two_stage 1.186 | jacobi 1.369 # deep
+dtype=double jobz=N n=24 batch=2048 | blocked 1.849 | cta 2.953 | two_stage 3.065 | cta_fused 3.509 | jacobi 3.762 | vendor 3.825 # deep
+dtype=double jobz=N n=24 batch=8192 | blocked 7.000 | jacobi 11.02 | cta_fused 11.10 | cta 11.23 | two_stage 11.55 | vendor 14.20 # deep
+dtype=double jobz=N n=24 batch=32768 | blocked 27.94 | cta_fused 43.13 | jacobi 43.35 | cta 43.51 | two_stage 44.69 | vendor 56.55 # deep
+dtype=double jobz=N n=25 batch=128 | vendor 0.5870 | blocked 0.7481 | cta_fused 1.192 | cta 1.211 | two_stage 1.447 | jacobi 1.470 # deep
+dtype=double jobz=N n=25 batch=512 | blocked 0.7491 | two_stage 1.113 | cta_fused 1.200 | cta 1.216 | vendor 1.277 | jacobi 1.502 # deep
+dtype=double jobz=N n=25 batch=2048 | blocked 1.933 | two_stage 3.044 | cta 3.222 | jacobi 3.995 | cta_fused 4.000 | vendor 4.297 # deep
+dtype=double jobz=N n=25 batch=8192 | blocked 7.375 | two_stage 11.99 | jacobi 12.06 | cta 12.29 | cta_fused 12.31 | vendor 16.13 # deep
+dtype=double jobz=N n=25 batch=32768 | blocked 29.15 | two_stage 46.43 | jacobi 46.53 | cta_fused 48.13 | cta 48.39 | vendor 63.67 # deep
+dtype=double jobz=N n=28 batch=128 | vendor 0.6738 | blocked 0.8411 | two_stage 1.045 | cta_fused 1.447 | cta 1.469 | jacobi 1.654 # deep
+dtype=double jobz=N n=28 batch=512 | blocked 0.8450 | two_stage 1.425 | cta_fused 1.458 | cta 1.476 | vendor 1.517 | jacobi 1.682 # deep
+dtype=double jobz=N n=28 batch=2048 | blocked 2.161 | two_stage 3.634 | cta 3.998 | jacobi 4.744 | cta_fused 5.090 | vendor 5.212 # deep
+dtype=double jobz=N n=28 batch=8192 | blocked 8.230 | two_stage 13.29 | jacobi 13.84 | cta 15.50 | cta_fused 15.59 | vendor 19.79 # deep
+dtype=double jobz=N n=28 batch=32768 | blocked 32.67 | two_stage 52.10 | jacobi 54.12 | cta_fused 61.13 | cta 61.35 | vendor 78.04 # deep
+dtype=double jobz=N n=32 batch=128 | vendor 0.7067 | blocked 0.9716 | two_stage 1.525 | cta_fused 1.855 | cta 1.874 | jacobi 2.249 # deep
+dtype=double jobz=N n=32 batch=512 | blocked 0.9658 | vendor 1.711 | cta_fused 1.847 | cta 1.874 | two_stage 1.930 | jacobi 2.263 # deep
+dtype=double jobz=N n=32 batch=2048 | blocked 2.533 | two_stage 4.355 | cta 5.192 | vendor 6.159 | jacobi 6.361 | cta_fused 6.668 # deep
+dtype=double jobz=N n=32 batch=8192 | blocked 9.656 | two_stage 15.29 | jacobi 18.77 | cta 20.25 | cta_fused 20.41 | vendor 23.87 # deep
+dtype=double jobz=N n=32 batch=32768 | blocked 38.04 | two_stage 59.84 | jacobi 73.03 | cta_fused 80.05 | cta 80.07 | vendor 94.33 # deep
+dtype=double jobz=N n=33 batch=128 | vendor 0.9635 | blocked 1.167 | two_stage 1.193 # deep
+dtype=double jobz=N n=33 batch=512 | blocked 1.537 | two_stage 1.910 | vendor 2.328 # deep
+dtype=double jobz=N n=33 batch=2048 | blocked 5.237 | two_stage 6.769 | vendor 8.231 # deep
+dtype=double jobz=N n=33 batch=8192 | blocked 20.10 | two_stage 24.57 | vendor 31.72 # deep
+dtype=double jobz=N n=33 batch=32768 | blocked 80.01 | two_stage 96.10 | vendor 125.5 # deep
+dtype=double jobz=N n=40 batch=128 | vendor 1.195 | blocked 1.408 | two_stage 1.558 # deep
+dtype=double jobz=N n=40 batch=512 | blocked 1.869 | two_stage 2.414 | vendor 2.907 # deep
+dtype=double jobz=N n=40 batch=2048 | blocked 6.390 | two_stage 8.499 | vendor 10.43 # deep
+dtype=double jobz=N n=40 batch=8192 | blocked 24.63 | two_stage 31.35 | vendor 40.26 # deep
+dtype=double jobz=N n=40 batch=32768 | blocked 98.83 | two_stage 124.6 | vendor 160.9 # deep
+dtype=double jobz=N n=48 batch=128 | vendor 1.407 | blocked 1.727 | two_stage 2.249 # deep
+dtype=double jobz=N n=48 batch=512 | blocked 2.301 | two_stage 3.576 | vendor 3.770 # deep
+dtype=double jobz=N n=48 batch=2048 | blocked 7.864 | two_stage 10.96 | vendor 13.75 # deep
+dtype=double jobz=N n=48 batch=8192 | blocked 29.98 | two_stage 40.95 | vendor 53.04 # deep
+dtype=double jobz=N n=48 batch=32768 | blocked 120.1 | two_stage 164.1 | vendor 212.7 # deep
+dtype=double jobz=N n=64 batch=128 | vendor 1.898 | blocked 2.313 | two_stage 3.603 # deep
+dtype=double jobz=N n=64 batch=512 | blocked 3.121 | two_stage 5.185 | vendor 5.506 # deep
+dtype=double jobz=N n=64 batch=2048 | blocked 10.83 | two_stage 16.35 | vendor 20.88 # deep
+dtype=double jobz=N n=64 batch=8192 | blocked 42.00 | two_stage 62.69 | vendor 82.73 # deep
+dtype=double jobz=N n=64 batch=32768 | blocked 166.7 | two_stage 247.8 | vendor 328.5 # deep
+dtype=double jobz=N n=78 batch=128 | blocked 2.892 | vendor 3.735 | two_stage 4.906 # deep
+dtype=double jobz=N n=96 batch=128 | blocked 3.699 | vendor 4.815 | two_stage 6.696 # deep
+dtype=double jobz=N n=96 batch=512 | blocked 7.239 | two_stage 11.86 | vendor 15.63 # deep
+dtype=double jobz=N n=96 batch=2048 | blocked 26.03 | two_stage 38.23 | vendor 58.55 # deep
+dtype=double jobz=N n=96 batch=8192 | blocked 97.64 | two_stage 143.4 | vendor 232.7 # deep
+dtype=double jobz=N n=128 batch=128 | blocked 5.508 | vendor 6.780 | two_stage 10.39 # deep
+dtype=double jobz=N n=128 batch=512 | blocked 12.21 | two_stage 19.85 | vendor 22.63 # deep
+dtype=double jobz=N n=128 batch=2048 | blocked 44.76 | two_stage 65.52 | vendor 87.50 # deep
+dtype=double jobz=N n=128 batch=8192 | blocked 175.9 | two_stage 257.1 | vendor 345.1 # deep
+dtype=double jobz=N n=192 batch=128 | blocked 12.56 | vendor 16.65 | two_stage 21.69 # deep
+dtype=double jobz=N n=192 batch=512 | blocked 31.85 | two_stage 46.61 | vendor 54.59 # deep
+dtype=double jobz=N n=192 batch=2048 | blocked 117.1 | two_stage 157.5 | vendor 228.2 # deep
+dtype=double jobz=N n=256 batch=128 | blocked 21.87 | vendor 27.30 | two_stage 39.17 # deep
+dtype=double jobz=N n=256 batch=512 | blocked 58.86 | two_stage 85.62 | vendor 97.27 # deep
+dtype=double jobz=N n=256 batch=2048 | blocked 221.9 | two_stage 302.0 | vendor 406.6 # deep
+dtype=double jobz=N n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=N n=257 batch=128 | blocked 27.50 | vendor 32.14 | two_stage 50.50 # deep
+dtype=double jobz=N n=257 batch=512 | blocked 69.03 | two_stage 101.5 | vendor 110.6 # deep
+dtype=double jobz=N n=257 batch=2048 | blocked 257.9 | two_stage 346.6 | vendor 456.3 # deep
+dtype=double jobz=N n=257 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=N n=320 batch=128 | blocked 38.16 | vendor 41.76 | two_stage 66.95 # deep
+dtype=double jobz=N n=320 batch=512 | blocked 106.0 | two_stage 147.2 | vendor 160.4 # deep
+dtype=double jobz=N n=320 batch=2048 | blocked 411.3 | two_stage 522.9 | vendor 663.7 # deep
+dtype=double jobz=N n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=N n=321 batch=128 | blocked 39.34 | vendor 44.05 | two_stage 67.99 # deep
+dtype=double jobz=N n=321 batch=512 | blocked 117.4 | two_stage 161.3 | vendor 170.5 # deep
+dtype=double jobz=N n=321 batch=2048 | blocked 449.4 | two_stage 568.9 | vendor 701.1 # deep
+dtype=double jobz=N n=321 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=384 batch=128 | blocked 52.74 | vendor 56.37 | two_stage 88.95 # deep
+dtype=double jobz=N n=384 batch=512 | blocked 168.6 | two_stage 215.6 | vendor 231.1 # deep
+dtype=double jobz=N n=384 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=448 batch=128 | blocked 73.20 | vendor 75.58 | two_stage 117.1 # deep
+dtype=double jobz=N n=448 batch=512 | blocked 266.1 | two_stage 307.8 | vendor 324.0 # deep
+dtype=double jobz=N n=448 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=448 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=449 batch=128 | blocked 77.63 | vendor 81.61 | two_stage 123.6 # deep
+dtype=double jobz=N n=449 batch=512 | blocked 290.6 | two_stage 338.2 | vendor 358.3 # deep
+dtype=double jobz=N n=449 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=449 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=512 batch=128 | blocked 104.4 | vendor 105.6 | two_stage 156.6 # deep
+dtype=double jobz=N n=512 batch=512 | blocked 384.7 | two_stage 408.0 | vendor 435.0 # deep
+dtype=double jobz=N n=512 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=512 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=513 batch=128 | vendor 117.8 | blocked 137.5 | two_stage 167.1 # deep
+dtype=double jobz=N n=513 batch=512 | blocked 405.3 | two_stage 435.8 | vendor 484.6 # deep
+dtype=double jobz=N n=513 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=513 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=640 batch=128 | vendor 183.5 | blocked 215.2 | two_stage 241.6 # deep
+dtype=double jobz=N n=640 batch=512 | blocked 698.5 | two_stage 697.1 | vendor 770.1 # deep
+dtype=double jobz=N n=640 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=640 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=768 batch=128 | vendor 293.6 | blocked 343.5 | two_stage 357.5 # deep
+dtype=double jobz=N n=768 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=768 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1024 batch=128 | vendor 583.3 | two_stage 689.0 | blocked 750.1 # deep
+dtype=double jobz=N n=1024 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1024 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1024 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1025 batch=128 | vendor 673.3 | two_stage 734.3 | blocked 802.8 # deep
+dtype=double jobz=N n=1025 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1025 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1025 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1536 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1536 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=1536 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=2048 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=2048 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=2048 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=4096 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=4096 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=N n=4096 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=double jobz=V n=1 batch=128 | jacobi 0.008348 | cta_fused 0.008713 | vendor 0.01413 | blocked 0.04785 | cta 0.05387 | two_stage 0.05539 # deep
+dtype=double jobz=V n=1 batch=512 | jacobi 0.008342 | cta_fused 0.008683 | vendor 0.01919 | cta 0.04731 | blocked 0.04855 | two_stage 0.05512 # deep
+dtype=double jobz=V n=1 batch=2048 | cta_fused 0.008092 | jacobi 0.008272 | vendor 0.04468 | blocked 0.04877 | cta 0.04990 | two_stage 0.05752 # deep
+dtype=double jobz=V n=1 batch=8192 | jacobi 0.008242 | cta_fused 0.008603 | cta 0.04612 | blocked 0.04771 | two_stage 0.05447 | vendor 0.1345 # deep
+dtype=double jobz=V n=1 batch=32768 | jacobi 0.01022 | cta_fused 0.01114 | cta 0.07407 | blocked 0.07443 | two_stage 0.1079 | vendor 0.5060 # deep
+dtype=double jobz=V n=2 batch=128 | jacobi 0.01214 | cta_fused 0.01553 | vendor 0.02014 | cta 0.05696 | blocked 0.09899 | two_stage 0.2318 # deep
+dtype=double jobz=V n=2 batch=512 | jacobi 0.01190 | cta_fused 0.01506 | vendor 0.02610 | cta 0.05613 | blocked 0.1049 | two_stage 0.2476 # deep
+dtype=double jobz=V n=2 batch=2048 | jacobi 0.01217 | cta_fused 0.01515 | cta 0.05893 | vendor 0.07496 | blocked 0.1710 | two_stage 0.3191 # deep
+dtype=double jobz=V n=2 batch=8192 | jacobi 0.01317 | cta_fused 0.01711 | cta 0.07153 | vendor 0.2233 | blocked 0.4333 | two_stage 0.8618 # deep
+dtype=double jobz=V n=2 batch=32768 | jacobi 0.02550 | cta_fused 0.04688 | cta 0.1148 | vendor 0.8440 | blocked 1.460 | two_stage 3.497 # deep
+dtype=double jobz=V n=3 batch=128 | jacobi 0.03176 | cta_fused 0.03834 | vendor 0.04059 | cta 0.09552 | blocked 0.1135 | two_stage 0.7151 # deep
+dtype=double jobz=V n=3 batch=512 | jacobi 0.03210 | cta_fused 0.03955 | vendor 0.05080 | cta 0.06697 | blocked 0.09567 | two_stage 0.2923 # deep
+dtype=double jobz=V n=3 batch=2048 | jacobi 0.03122 | cta_fused 0.03893 | cta 0.06777 | vendor 0.1320 | blocked 0.1621 | two_stage 0.9491 # deep
+dtype=double jobz=V n=3 batch=8192 | jacobi 0.03914 | cta_fused 0.04859 | cta 0.08447 | blocked 0.4263 | vendor 0.4440 | two_stage 1.268 # deep
+dtype=double jobz=V n=3 batch=32768 | jacobi 0.1138 | cta_fused 0.1583 | cta 0.2228 | blocked 1.500 | vendor 1.676 | two_stage 4.025 # deep
+dtype=double jobz=V n=4 batch=128 | jacobi 0.04005 | vendor 0.05687 | cta_fused 0.06807 | cta 0.1013 | blocked 0.1046 | two_stage 0.2925 # deep
+dtype=double jobz=V n=4 batch=512 | jacobi 0.03985 | vendor 0.06746 | cta_fused 0.06751 | cta 0.09928 | blocked 0.1084 | two_stage 0.3179 # deep
+dtype=double jobz=V n=4 batch=2048 | jacobi 0.03944 | cta_fused 0.06702 | cta 0.1010 | blocked 0.1784 | vendor 0.1878 | two_stage 0.5105 # deep
+dtype=double jobz=V n=4 batch=8192 | jacobi 0.04894 | cta_fused 0.08591 | cta 0.1201 | blocked 0.4520 | vendor 0.6220 | two_stage 1.513 # deep
+dtype=double jobz=V n=4 batch=32768 | jacobi 0.1534 | cta_fused 0.2807 | cta 0.3485 | blocked 1.616 | vendor 2.367 | two_stage 5.415 # deep
+dtype=double jobz=V n=6 batch=128 | jacobi 0.09840 | vendor 0.1034 | cta_fused 0.1194 | cta 0.1425 | blocked 0.1546 | two_stage 0.3312 # deep
+dtype=double jobz=V n=6 batch=512 | jacobi 0.09838 | vendor 0.1202 | cta_fused 0.1208 | cta 0.1434 | blocked 0.1607 | two_stage 0.3940 # deep
+dtype=double jobz=V n=6 batch=2048 | jacobi 0.09800 | cta_fused 0.1195 | cta 0.1458 | blocked 0.2301 | vendor 0.3707 | two_stage 0.6547 # deep
+dtype=double jobz=V n=6 batch=8192 | jacobi 0.2053 | cta_fused 0.2758 | cta 0.3096 | blocked 0.6199 | vendor 1.216 | two_stage 1.998 # deep
+dtype=double jobz=V n=6 batch=32768 | jacobi 0.8191 | cta_fused 1.075 | cta 1.141 | blocked 2.280 | vendor 4.747 | two_stage 7.399 # deep
+dtype=double jobz=V n=7 batch=128 | vendor 0.1335 | jacobi 0.1438 | cta_fused 0.1504 | cta 0.1928 | blocked 0.2011 | two_stage 0.3869 # deep
+dtype=double jobz=V n=7 batch=512 | jacobi 0.1418 | cta_fused 0.1463 | vendor 0.1554 | cta 0.1697 | blocked 0.1877 | two_stage 0.4251 # deep
+dtype=double jobz=V n=7 batch=2048 | jacobi 0.1437 | cta_fused 0.1489 | cta 0.1742 | blocked 0.2629 | vendor 0.4831 | two_stage 0.7398 # deep
+dtype=double jobz=V n=8 batch=128 | vendor 0.1784 | jacobi 0.1937 | cta_fused 0.1964 | blocked 0.2127 | cta 0.2176 | two_stage 0.3999 # deep
+dtype=double jobz=V n=8 batch=512 | cta_fused 0.1955 | jacobi 0.1940 | vendor 0.2116 | cta 0.2133 | blocked 0.2175 | two_stage 0.4502 # deep
+dtype=double jobz=V n=8 batch=2048 | cta_fused 0.1954 | jacobi 0.1926 | cta 0.2149 | blocked 0.2902 | vendor 0.6890 | two_stage 0.8595 # deep
+dtype=double jobz=V n=8 batch=8192 | jacobi 0.4223 | cta_fused 0.4670 | cta 0.5035 | blocked 0.8171 | vendor 2.442 | two_stage 2.530 # deep
+dtype=double jobz=V n=8 batch=32768 | jacobi 1.676 | cta_fused 1.834 | cta 1.920 | blocked 3.102 | vendor 9.606 | two_stage 9.689 # deep
+dtype=double jobz=V n=9 batch=128 | vendor 0.2136 | cta_fused 0.2357 | jacobi 0.2407 | cta 0.2615 | blocked 0.2615 | two_stage 0.4539 # deep
+dtype=double jobz=V n=9 batch=512 | cta_fused 0.2441 | jacobi 0.2441 | cta 0.2589 | vendor 0.2616 | blocked 0.2691 | two_stage 0.5240 # deep
+dtype=double jobz=V n=9 batch=2048 | jacobi 0.2988 | cta_fused 0.3329 | cta 0.3529 | blocked 0.4288 | vendor 0.9581 | two_stage 1.219 # deep
+dtype=double jobz=V n=9 batch=8192 | jacobi 1.099 | cta_fused 1.283 | cta 1.297 | blocked 1.558 | vendor 3.064 | two_stage 3.577 # deep
+dtype=double jobz=V n=9 batch=32768 | jacobi 3.905 | cta_fused 4.620 | cta 4.629 | blocked 5.656 | vendor 11.86 | two_stage 12.48 # deep
+dtype=double jobz=V n=12 batch=128 | vendor 0.2323 | cta_fused 0.3730 | jacobi 0.3813 | cta 0.3924 | blocked 0.4117 | two_stage 0.5824 # deep
+dtype=double jobz=V n=12 batch=512 | cta_fused 0.3711 | vendor 0.3692 | jacobi 0.3827 | cta 0.3847 | blocked 0.4128 | two_stage 1.004 # deep
+dtype=double jobz=V n=12 batch=2048 | jacobi 0.4755 | cta_fused 0.5188 | cta 0.5400 | blocked 0.6699 | two_stage 1.393 | vendor 1.395 # deep
+dtype=double jobz=V n=12 batch=8192 | jacobi 1.851 | cta_fused 1.983 | cta 2.001 | blocked 2.473 | vendor 4.889 | two_stage 5.117 # deep
+dtype=double jobz=V n=12 batch=32768 | jacobi 6.543 | cta_fused 7.108 | cta 7.145 | blocked 9.040 | two_stage 17.14 | vendor 18.77 # deep
+dtype=double jobz=V n=14 batch=512 | cta 0.5060 | cta_fused 0.5014 | jacobi 0.5097 | blocked 0.5017 | vendor 0.5171 | two_stage 0.7801 # deep
+dtype=double jobz=V n=16 batch=128 | vendor 0.3078 | blocked 0.6280 | cta_fused 0.6349 | cta 0.6388 | jacobi 0.6534 | two_stage 0.8538 # deep
+dtype=double jobz=V n=16 batch=512 | cta 0.6438 | cta_fused 0.6405 | blocked 0.6549 | vendor 0.6574 | jacobi 0.6606 | two_stage 0.9215 # deep
+dtype=double jobz=V n=16 batch=2048 | jacobi 0.8102 | cta_fused 0.8941 | cta 0.9121 | blocked 1.069 | two_stage 1.846 | vendor 2.405 # deep
+dtype=double jobz=V n=16 batch=8192 | jacobi 3.227 | cta_fused 3.473 | cta 3.493 | blocked 4.079 | two_stage 6.971 | vendor 9.033 # deep
+dtype=double jobz=V n=16 batch=32768 | jacobi 11.54 | cta_fused 12.59 | cta 12.72 | blocked 15.27 | two_stage 24.77 | vendor 35.54 # deep
+dtype=double jobz=V n=18 batch=2048 | cta 2.010 | blocked 2.243 | cta_fused 2.299 | jacobi 2.605 | vendor 3.210 | two_stage 3.409 # deep
+dtype=double jobz=V n=18 batch=8192 | cta 7.808 | cta_fused 7.851 | jacobi 7.793 | blocked 8.502 | two_stage 11.02 | vendor 11.78 # deep
+dtype=double jobz=V n=18 batch=32768 | cta 30.50 | cta_fused 30.94 | jacobi 30.27 | blocked 33.28 | two_stage 41.38 | vendor 46.35 # deep
+dtype=double jobz=V n=20 batch=128 | vendor 0.5186 | cta 0.8894 | cta_fused 0.8921 | blocked 0.9283 | jacobi 1.033 | two_stage 1.459 # deep
+dtype=double jobz=V n=20 batch=512 | cta 0.9083 | cta_fused 0.9086 | blocked 0.9784 | vendor 1.043 | jacobi 1.060 | two_stage 1.734 # deep
+dtype=double jobz=V n=20 batch=2048 | cta 2.320 | blocked 2.467 | cta_fused 2.696 | jacobi 3.265 | vendor 3.463 | two_stage 3.688 # deep
+dtype=double jobz=V n=20 batch=8192 | cta 9.022 | cta_fused 9.025 | blocked 9.488 | jacobi 10.10 | two_stage 12.25 | vendor 12.93 # deep
+dtype=double jobz=V n=20 batch=32768 | cta 35.40 | cta_fused 35.75 | blocked 37.37 | jacobi 39.49 | two_stage 46.23 | vendor 51.13 # deep
+dtype=double jobz=V n=24 batch=128 | vendor 0.5995 | blocked 1.217 | cta 1.221 | cta_fused 1.228 | two_stage 1.394 | jacobi 1.584 # deep
+dtype=double jobz=V n=24 batch=512 | cta 1.249 | cta_fused 1.250 | blocked 1.280 | vendor 1.260 | jacobi 1.623 | two_stage 1.676 # deep
+dtype=double jobz=V n=24 batch=2048 | cta 3.337 | blocked 3.405 | cta_fused 3.611 | vendor 4.288 | two_stage 4.390 | jacobi 4.995 # deep
+dtype=double jobz=V n=24 batch=8192 | cta 12.55 | cta_fused 12.89 | blocked 12.99 | jacobi 15.41 | vendor 15.99 | two_stage 16.36 # deep
+dtype=double jobz=V n=24 batch=32768 | cta 48.48 | cta_fused 48.42 | blocked 50.82 | jacobi 59.46 | two_stage 62.31 | vendor 63.01 # deep
+dtype=double jobz=V n=25 batch=128 | vendor 0.6338 | blocked 1.346 | cta 1.381 | cta_fused 1.386 | two_stage 1.456 | jacobi 1.759 # deep
+dtype=double jobz=V n=25 batch=512 | cta 1.393 | cta_fused 1.399 | blocked 1.399 | vendor 1.409 | jacobi 1.781 | two_stage 1.877 # deep
+dtype=double jobz=V n=25 batch=2048 | cta 3.612 | blocked 3.624 | cta_fused 4.093 | vendor 4.770 | two_stage 4.843 | jacobi 5.284 # deep
+dtype=double jobz=V n=25 batch=8192 | cta 13.98 | cta_fused 13.97 | blocked 14.06 | jacobi 16.69 | two_stage 17.93 | vendor 18.03 # deep
+dtype=double jobz=V n=25 batch=32768 | cta 54.73 | cta_fused 54.68 | blocked 55.27 | jacobi 64.58 | two_stage 69.37 | vendor 71.51 # deep
+dtype=double jobz=V n=28 batch=128 | vendor 0.7073 | blocked 1.583 | cta 1.641 | cta_fused 1.656 | jacobi 1.972 | two_stage 2.007 # deep
+dtype=double jobz=V n=28 batch=512 | cta 1.662 | cta_fused 1.673 | blocked 1.642 | vendor 1.653 | jacobi 1.999 | two_stage 2.438 # deep
+dtype=double jobz=V n=28 batch=2048 | cta 4.400 | blocked 4.433 | cta_fused 5.088 | vendor 5.711 | two_stage 5.886 | jacobi 6.292 # deep
+dtype=double jobz=V n=28 batch=8192 | cta 17.41 | cta_fused 17.27 | blocked 17.19 | jacobi 19.32 | two_stage 20.75 | vendor 21.74 # deep
+dtype=double jobz=V n=28 batch=32768 | cta 68.82 | cta_fused 68.66 | blocked 68.29 | jacobi 76.08 | two_stage 81.41 | vendor 87.19 # deep
+dtype=double jobz=V n=30 batch=512 | vendor 1.757 | cta 1.904 | cta_fused 1.922 | blocked 1.923 | jacobi 2.317 | two_stage 2.623 # deep
+dtype=double jobz=V n=30 batch=8192 | cta_fused 19.85 | blocked 19.31 | cta 19.91 | jacobi 22.18 | two_stage 23.22 | vendor 23.47 # deep
+dtype=double jobz=V n=30 batch=32768 | cta 78.78 | cta_fused 78.59 | blocked 76.90 | jacobi 87.63 | two_stage 90.36 | vendor 94.22 # deep
+dtype=double jobz=V n=32 batch=128 | vendor 0.7809 | blocked 2.031 | cta 2.120 | cta_fused 2.143 | two_stage 2.595 | jacobi 2.741 # deep
+dtype=double jobz=V n=32 batch=512 | vendor 1.921 | blocked 2.113 | cta 2.131 | cta_fused 2.158 | two_stage 2.513 | jacobi 2.750 # deep
+dtype=double jobz=V n=32 batch=2048 | cta 5.696 | blocked 5.619 | cta_fused 6.614 | vendor 6.800 | two_stage 6.860 | jacobi 8.490 # deep
+dtype=double jobz=V n=32 batch=8192 | blocked 21.79 | cta_fused 22.67 | cta 22.94 | two_stage 25.97 | jacobi 26.50 | vendor 26.63 # deep
+dtype=double jobz=V n=32 batch=32768 | blocked 85.83 | cta_fused 89.90 | cta 90.08 | two_stage 100.1 | jacobi 103.5 | vendor 106.4 # deep
+dtype=double jobz=V n=33 batch=128 | two_stage 1.210 | blocked 1.314 | vendor 1.323 # deep
+dtype=double jobz=V n=33 batch=512 | blocked 1.862 | two_stage 2.065 | vendor 3.232 # deep
+dtype=double jobz=V n=33 batch=2048 | blocked 5.797 | two_stage 6.983 | vendor 11.30 # deep
+dtype=double jobz=V n=33 batch=8192 | blocked 22.32 | two_stage 25.16 | vendor 43.99 # deep
+dtype=double jobz=V n=33 batch=32768 | blocked 88.40 | two_stage 97.00 | vendor 172.3 # deep
+dtype=double jobz=V n=36 batch=128 | two_stage 1.351 | vendor 1.339 | blocked 1.487 # deep
+dtype=double jobz=V n=40 batch=128 | vendor 1.470 | two_stage 1.691 | blocked 1.699 # deep
+dtype=double jobz=V n=40 batch=512 | blocked 2.542 | two_stage 3.304 | vendor 3.696 # deep
+dtype=double jobz=V n=40 batch=2048 | blocked 7.903 | two_stage 9.320 | vendor 13.42 # deep
+dtype=double jobz=V n=40 batch=8192 | blocked 30.77 | two_stage 35.28 | vendor 52.20 # deep
+dtype=double jobz=V n=40 batch=32768 | blocked 121.6 | two_stage 137.4 | vendor 205.2 # deep
+dtype=double jobz=V n=48 batch=128 | vendor 1.654 | blocked 2.241 | two_stage 2.537 # deep
+dtype=double jobz=V n=48 batch=512 | blocked 3.378 | two_stage 4.270 | vendor 4.641 # deep
+dtype=double jobz=V n=48 batch=2048 | blocked 10.72 | two_stage 13.45 | vendor 17.05 # deep
+dtype=double jobz=V n=48 batch=8192 | blocked 41.83 | two_stage 51.22 | vendor 66.85 # deep
+dtype=double jobz=V n=48 batch=32768 | blocked 166.2 | two_stage 203.4 | vendor 266.7 # deep
+dtype=double jobz=V n=64 batch=128 | vendor 2.305 | blocked 3.493 | two_stage 5.082 # deep
+dtype=double jobz=V n=64 batch=512 | blocked 5.423 | vendor 6.842 | two_stage 7.543 # deep
+dtype=double jobz=V n=64 batch=2048 | blocked 17.74 | two_stage 23.62 | vendor 25.58 # deep
+dtype=double jobz=V n=64 batch=8192 | blocked 70.83 | two_stage 92.57 | vendor 102.6 # deep
+dtype=double jobz=V n=64 batch=32768 | blocked 277.9 | two_stage 361.1 | vendor 404.7 # deep
+dtype=double jobz=V n=78 batch=128 | blocked 3.308 | vendor 4.755 | two_stage 5.240 # deep
+dtype=double jobz=V n=96 batch=128 | blocked 4.404 | vendor 5.953 | two_stage 8.006 # deep
+dtype=double jobz=V n=96 batch=512 | blocked 9.732 | two_stage 15.27 | vendor 19.63 # deep
+dtype=double jobz=V n=96 batch=2048 | blocked 34.65 | two_stage 49.99 | vendor 75.00 # deep
+dtype=double jobz=V n=96 batch=8192 | blocked 136.6 | two_stage 194.3 | vendor 296.6 # deep
+dtype=double jobz=V n=128 batch=128 | blocked 7.153 | vendor 8.801 | two_stage 13.69 # deep
+dtype=double jobz=V n=128 batch=512 | blocked 16.83 | two_stage 27.09 | vendor 30.15 # deep
+dtype=double jobz=V n=128 batch=2048 | blocked 62.24 | two_stage 91.93 | vendor 115.9 # deep
+dtype=double jobz=V n=128 batch=8192 | blocked 248.2 | two_stage 367.4 | vendor 465.6 # deep
+dtype=double jobz=V n=192 batch=128 | blocked 15.66 | vendor 20.76 | two_stage 26.87 # deep
+dtype=double jobz=V n=192 batch=512 | blocked 43.27 | two_stage 66.31 | vendor 70.23 # deep
+dtype=double jobz=V n=192 batch=2048 | blocked 161.2 | two_stage 235.1 | vendor 289.0 # deep
+dtype=double jobz=V n=256 batch=128 | blocked 27.51 | vendor 35.35 | two_stage 51.06 # deep
+dtype=double jobz=V n=256 batch=512 | blocked 82.77 | vendor 131.6 | two_stage 133.2 # deep
+dtype=double jobz=V n=256 batch=2048 | blocked 315.8 | two_stage 487.2 | vendor 540.0 # deep
+dtype=double jobz=V n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=257 batch=128 | blocked 34.71 | vendor 39.79 | two_stage 61.74 # deep
+dtype=double jobz=V n=257 batch=512 | blocked 106.0 | vendor 143.9 | two_stage 162.3 # deep
+dtype=double jobz=V n=257 batch=2048 | blocked 406.4 | vendor 586.8 | two_stage 588.8 # deep
+dtype=double jobz=V n=257 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=320 batch=128 | blocked 50.00 | vendor 54.37 | two_stage 90.43 # deep
+dtype=double jobz=V n=320 batch=512 | blocked 161.0 | vendor 211.9 | two_stage 246.8 # deep
+dtype=double jobz=V n=320 batch=2048 | blocked 639.9 | vendor 879.0 | two_stage 940.4 # deep
+dtype=double jobz=V n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=321 batch=128 | blocked 54.66 | vendor 57.90 | two_stage 95.96 # deep
+dtype=double jobz=V n=321 batch=512 | blocked 177.0 | vendor 223.4 | two_stage 268.0 # deep
+dtype=double jobz=V n=321 batch=2048 | blocked 693.4 | vendor 918.9 | two_stage 1002 # deep
+dtype=double jobz=V n=321 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=384 batch=128 | blocked 74.78 | vendor 77.04 | two_stage 130.3 # deep
+dtype=double jobz=V n=384 batch=512 | blocked 274.6 | vendor 326.7 | two_stage 392.2 # deep
+dtype=double jobz=V n=384 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=448 batch=128 | blocked 106.6 | vendor 108.0 | two_stage 184.9 # deep
+dtype=double jobz=V n=448 batch=512 | blocked 391.3 | vendor 449.4 | two_stage 558.5 # deep
+dtype=double jobz=V n=448 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=448 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=double jobz=V n=449 batch=128 | blocked 114.4 | vendor 114.0 | two_stage 192.9 # deep
+dtype=double jobz=V n=449 batch=512 | blocked 421.3 | vendor 475.5 | two_stage 604.4 # deep
+dtype=double jobz=V n=449 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=449 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=512 batch=128 | blocked 140.6 | vendor 149.4 | two_stage 242.7 # deep
+dtype=double jobz=V n=512 batch=512 | blocked 549.1 | vendor 624.3 | two_stage 764.6 # deep
+dtype=double jobz=V n=512 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=512 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=513 batch=128 | vendor 163.9 | blocked 174.1 | two_stage 269.9 # deep
+dtype=double jobz=V n=513 batch=512 | blocked 586.5 | vendor 676.9 | two_stage 886.7 # deep
+dtype=double jobz=V n=513 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=513 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=640 batch=128 | vendor 266.6 | blocked 290.7 | two_stage 452.5 # deep
+dtype=double jobz=V n=640 batch=512 | blocked 1013 | vendor 1094 | two_stage 1543 # deep
+dtype=double jobz=V n=640 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=640 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=768 batch=128 | vendor 421.0 | blocked 465.3 | two_stage 718.0 # deep
+dtype=double jobz=V n=768 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=768 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1024 batch=128 | vendor 886.3 | blocked 1060 | two_stage 1550 # deep
+dtype=double jobz=V n=1024 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1024 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1024 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1025 batch=128 | vendor 919.4 | blocked 1074 | two_stage 1671 # deep
+dtype=double jobz=V n=1025 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1025 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1025 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1536 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1536 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=1536 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=2048 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=2048 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=2048 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=4096 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=4096 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=double jobz=V n=4096 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=N n=1 batch=128 | cta_fused 0.008273 | jacobi 0.008438 | vendor 0.01244 | blocked 0.01762 | two_stage 0.02258 | cta 0.03198 # deep
+dtype=cfloat jobz=N n=1 batch=512 | cta_fused 0.008223 | jacobi 0.008223 | vendor 0.01242 | blocked 0.01692 | two_stage 0.02137 | cta 0.02915 # deep
+dtype=cfloat jobz=N n=1 batch=2048 | jacobi 0.008258 | cta_fused 0.008623 | vendor 0.01540 | blocked 0.01874 | two_stage 0.02500 | cta 0.03459 # deep
+dtype=cfloat jobz=N n=1 batch=8192 | cta_fused 0.008603 | jacobi 0.008508 | blocked 0.02089 | vendor 0.02401 | cta 0.03725 | two_stage 0.03907 # deep
+dtype=cfloat jobz=N n=1 batch=32768 | jacobi 0.009800 | cta_fused 0.01039 | blocked 0.03406 | cta 0.06481 | vendor 0.06796 | two_stage 0.1001 # deep
+dtype=cfloat jobz=N n=2 batch=128 | jacobi 0.009905 | cta_fused 0.01042 | vendor 0.01735 | blocked 0.02699 | cta 0.04592 | two_stage 0.1457 # deep
+dtype=cfloat jobz=N n=2 batch=512 | jacobi 0.009855 | cta_fused 0.01018 | vendor 0.01835 | blocked 0.02155 | cta 0.03748 | two_stage 0.1536 # deep
+dtype=cfloat jobz=N n=2 batch=2048 | cta_fused 0.01012 | jacobi 0.009945 | blocked 0.02366 | vendor 0.02825 | cta 0.04692 | two_stage 0.1830 # deep
+dtype=cfloat jobz=N n=2 batch=8192 | cta_fused 0.01104 | jacobi 0.01089 | blocked 0.02987 | cta 0.05649 | vendor 0.06590 | two_stage 0.2569 # deep
+dtype=cfloat jobz=N n=2 batch=32768 | jacobi 0.01193 | cta_fused 0.01272 | blocked 0.05665 | cta 0.07572 | vendor 0.2205 | two_stage 0.8642 # deep
+dtype=cfloat jobz=N n=3 batch=128 | cta_fused 0.01594 | jacobi 0.01566 | blocked 0.02414 | vendor 0.02444 | cta 0.03979 | two_stage 0.1635 # deep
+dtype=cfloat jobz=N n=3 batch=512 | cta_fused 0.01615 | jacobi 0.01613 | blocked 0.02437 | vendor 0.02554 | cta 0.03548 | two_stage 0.1598 # deep
+dtype=cfloat jobz=N n=3 batch=2048 | cta_fused 0.01617 | jacobi 0.01592 | blocked 0.02542 | cta 0.03946 | vendor 0.04430 | two_stage 0.2153 # deep
+dtype=cfloat jobz=N n=3 batch=8192 | cta_fused 0.01645 | jacobi 0.01610 | blocked 0.03718 | cta 0.04363 | vendor 0.1149 | two_stage 0.3615 # deep
+dtype=cfloat jobz=N n=3 batch=32768 | jacobi 0.01949 | cta_fused 0.02129 | cta 0.07243 | blocked 0.09159 | vendor 0.4051 | two_stage 0.9536 # deep
+dtype=cfloat jobz=N n=4 batch=128 | cta_fused 0.02116 | jacobi 0.02085 | blocked 0.02600 | vendor 0.03117 | cta 0.03577 | two_stage 0.1566 # deep
+dtype=cfloat jobz=N n=4 batch=512 | cta_fused 0.02215 | jacobi 0.02214 | blocked 0.02634 | vendor 0.03490 | cta 0.04169 | two_stage 0.1980 # deep
+dtype=cfloat jobz=N n=4 batch=2048 | cta_fused 0.02158 | jacobi 0.02113 | blocked 0.02795 | cta 0.04027 | vendor 0.05522 | two_stage 0.2122 # deep
+dtype=cfloat jobz=N n=4 batch=8192 | cta_fused 0.02261 | jacobi 0.02226 | blocked 0.04361 | cta 0.04858 | vendor 0.1521 | two_stage 0.4393 # deep
+dtype=cfloat jobz=N n=4 batch=32768 | jacobi 0.02752 | cta_fused 0.03041 | cta 0.08240 | blocked 0.1076 | vendor 0.5343 | two_stage 1.240 # deep
+dtype=cfloat jobz=N n=5 batch=32768 | cta_fused 0.05719 | jacobi 0.09612 | cta 0.1127 | blocked 0.1561 | vendor 0.6407 | two_stage 1.511 # deep
+dtype=cfloat jobz=N n=6 batch=128 | cta_fused 0.03198 | blocked 0.03461 | vendor 0.04485 | cta 0.04579 | jacobi 0.04863 | two_stage 0.1791 # deep
+dtype=cfloat jobz=N n=6 batch=512 | cta_fused 0.03382 | blocked 0.03516 | cta 0.04870 | vendor 0.04931 | jacobi 0.05164 | two_stage 0.1981 # deep
+dtype=cfloat jobz=N n=6 batch=2048 | cta_fused 0.03251 | blocked 0.03947 | jacobi 0.04891 | cta 0.05495 | vendor 0.08517 | two_stage 0.2696 # deep
+dtype=cfloat jobz=N n=6 batch=8192 | cta_fused 0.03433 | jacobi 0.05220 | blocked 0.06289 | cta 0.06379 | vendor 0.2320 | two_stage 0.9568 # deep
+dtype=cfloat jobz=N n=6 batch=32768 | cta_fused 0.07380 | jacobi 0.1294 | cta 0.1331 | blocked 0.1796 | vendor 0.8147 | two_stage 1.841 # deep
+dtype=cfloat jobz=N n=8 batch=128 | cta_fused 0.04236 | blocked 0.04312 | cta 0.05684 | vendor 0.06173 | jacobi 0.09178 | two_stage 0.2090 # deep
+dtype=cfloat jobz=N n=8 batch=512 | cta_fused 0.04502 | blocked 0.04589 | cta 0.06256 | vendor 0.06559 | jacobi 0.09294 | two_stage 0.2174 # deep
+dtype=cfloat jobz=N n=8 batch=2048 | cta_fused 0.04322 | blocked 0.05218 | cta 0.06967 | jacobi 0.09230 | vendor 0.1224 | two_stage 0.3194 # deep
+dtype=cfloat jobz=N n=8 batch=8192 | cta_fused 0.04702 | cta 0.08243 | blocked 0.08671 | jacobi 0.1001 | vendor 0.3370 | two_stage 0.7108 # deep
+dtype=cfloat jobz=N n=8 batch=32768 | cta_fused 0.1148 | cta 0.1939 | blocked 0.2687 | jacobi 0.2751 | vendor 1.310 | two_stage 2.303 # deep
+dtype=cfloat jobz=N n=9 batch=128 | cta_fused 0.04718 | blocked 0.04828 | cta 0.06290 | vendor 0.06819 | jacobi 0.1265 | two_stage 0.1789 # deep
+dtype=cfloat jobz=N n=9 batch=512 | cta_fused 0.04785 | blocked 0.05214 | cta 0.06790 | vendor 0.06872 | jacobi 0.1266 | two_stage 0.2261 # deep
+dtype=cfloat jobz=N n=9 batch=2048 | cta_fused 0.04940 | blocked 0.05973 | cta 0.07782 | jacobi 0.1330 | vendor 0.1374 | two_stage 0.3210 # deep
+dtype=cfloat jobz=N n=9 batch=8192 | cta_fused 0.09900 | cta 0.1186 | blocked 0.1221 | jacobi 0.2892 | vendor 0.3816 | two_stage 0.7745 # deep
+dtype=cfloat jobz=N n=9 batch=32768 | cta_fused 0.3124 | cta 0.3273 | blocked 0.3818 | jacobi 0.9149 | vendor 1.530 | two_stage 2.688 # deep
+dtype=cfloat jobz=N n=10 batch=128 | cta_fused 0.05317 | blocked 0.05343 | cta 0.06924 | vendor 0.08002 | jacobi 0.1532 | two_stage 0.1963 # deep
+dtype=cfloat jobz=N n=10 batch=32768 | cta 0.3586 | cta_fused 0.3485 | blocked 0.4108 | jacobi 1.078 | vendor 1.604 | two_stage 2.989 # deep
+dtype=cfloat jobz=N n=12 batch=128 | blocked 0.06395 | cta_fused 0.06870 | vendor 0.08023 | cta 0.08282 | two_stage 0.1997 | jacobi 0.2143 # deep
+dtype=cfloat jobz=N n=12 batch=512 | cta_fused 0.06785 | blocked 0.06681 | vendor 0.08265 | cta 0.08918 | jacobi 0.2144 | two_stage 0.7076 # deep
+dtype=cfloat jobz=N n=12 batch=2048 | cta_fused 0.07075 | blocked 0.07847 | cta 0.1052 | vendor 0.1678 | jacobi 0.2254 | two_stage 0.3814 # deep
+dtype=cfloat jobz=N n=12 batch=8192 | cta_fused 0.1458 | blocked 0.1658 | cta 0.1672 | vendor 0.4982 | jacobi 0.5058 | two_stage 1.391 # deep
+dtype=cfloat jobz=N n=12 batch=32768 | cta 0.4611 | cta_fused 0.4632 | blocked 0.5182 | jacobi 1.593 | vendor 1.990 | two_stage 3.853 # deep
+dtype=cfloat jobz=N n=14 batch=128 | blocked 0.07630 | vendor 0.08368 | cta_fused 0.08510 | cta 0.09924 | two_stage 0.2102 | jacobi 0.2975 # deep
+dtype=cfloat jobz=N n=14 batch=512 | blocked 0.07914 | cta_fused 0.08578 | vendor 0.08753 | cta 0.1097 | jacobi 0.3001 | two_stage 0.7194 # deep
+dtype=cfloat jobz=N n=16 batch=128 | vendor 0.08131 | blocked 0.08782 | cta_fused 0.1030 | cta 0.1218 | jacobi 0.3880 | two_stage 0.7022 # deep
+dtype=cfloat jobz=N n=16 batch=512 | vendor 0.08967 | blocked 0.09456 | cta_fused 0.1037 | cta 0.1402 | two_stage 0.2902 | jacobi 0.3901 # deep
+dtype=cfloat jobz=N n=16 batch=2048 | cta_fused 0.1078 | blocked 0.1078 | cta 0.1546 | vendor 0.1947 | jacobi 0.4103 | two_stage 0.4628 # deep
+dtype=cfloat jobz=N n=16 batch=8192 | cta_fused 0.2259 | blocked 0.2345 | cta 0.2534 | vendor 0.6122 | jacobi 0.9413 | two_stage 1.313 # deep
+dtype=cfloat jobz=N n=16 batch=32768 | cta 0.7806 | cta_fused 0.7850 | blocked 0.8224 | vendor 2.691 | jacobi 3.260 | two_stage 5.309 # deep
+dtype=cfloat jobz=N n=18 batch=128 | cta_fused 0.1004 | blocked 0.09799 | cta 0.1363 | vendor 0.1531 | two_stage 0.2271 | jacobi 0.5010 # deep
+dtype=cfloat jobz=N n=18 batch=512 | cta_fused 0.1011 | blocked 0.1033 | cta 0.1393 | two_stage 0.2759 | vendor 0.3326 | jacobi 0.5050 # deep
+dtype=cfloat jobz=N n=18 batch=2048 | blocked 0.1708 | cta_fused 0.1983 | cta 0.2179 | two_stage 0.7185 | vendor 0.9453 | jacobi 0.9846 # deep
+dtype=cfloat jobz=N n=18 batch=8192 | blocked 0.4130 | cta 0.4904 | cta_fused 0.5074 | two_stage 1.710 | jacobi 2.736 | vendor 3.427 # deep
+dtype=cfloat jobz=N n=18 batch=32768 | blocked 1.450 | cta 1.675 | cta_fused 1.846 | two_stage 5.655 | jacobi 10.45 | vendor 13.47 # deep
+dtype=cfloat jobz=N n=20 batch=128 | blocked 0.1116 | cta_fused 0.1196 | cta 0.1403 | vendor 0.1583 | two_stage 0.2381 | jacobi 0.6122 # deep
+dtype=cfloat jobz=N n=20 batch=512 | cta_fused 0.1199 | blocked 0.1201 | cta 0.1626 | two_stage 0.2935 | vendor 0.3265 | jacobi 0.6148 # deep
+dtype=cfloat jobz=N n=20 batch=2048 | blocked 0.2007 | cta_fused 0.2310 | cta 0.2531 | two_stage 0.5733 | vendor 0.9946 | jacobi 1.246 # deep
+dtype=cfloat jobz=N n=20 batch=8192 | blocked 0.4789 | cta 0.5762 | cta_fused 0.5937 | two_stage 1.964 | jacobi 3.315 | vendor 3.815 # deep
+dtype=cfloat jobz=N n=20 batch=32768 | blocked 1.769 | cta 2.099 | cta_fused 2.275 | two_stage 6.326 | jacobi 12.88 | vendor 16.03 # deep
+dtype=cfloat jobz=N n=24 batch=128 | blocked 0.1383 | cta_fused 0.1529 | vendor 0.1627 | cta 0.1842 | two_stage 0.2666 | jacobi 0.8426 # deep
+dtype=cfloat jobz=N n=24 batch=512 | cta_fused 0.1543 | blocked 0.1503 | cta 0.2092 | two_stage 0.3415 | vendor 0.3485 | jacobi 0.8585 # deep
+dtype=cfloat jobz=N n=24 batch=2048 | blocked 0.2534 | cta_fused 0.3028 | cta 0.3274 | two_stage 0.6423 | vendor 1.114 | jacobi 1.744 # deep
+dtype=cfloat jobz=N n=24 batch=8192 | blocked 0.6221 | cta 0.7625 | cta_fused 0.7780 | two_stage 1.979 | vendor 4.259 | jacobi 4.623 # deep
+dtype=cfloat jobz=N n=24 batch=32768 | blocked 2.375 | cta 2.916 | cta_fused 3.077 | two_stage 8.504 | vendor 17.91 | jacobi 18.45 # deep
+dtype=cfloat jobz=N n=25 batch=128 | blocked 0.1488 | cta_fused 0.1656 | vendor 0.1841 | cta 0.1932 | two_stage 0.2935 | jacobi 0.9386 # deep
+dtype=cfloat jobz=N n=25 batch=512 | cta_fused 0.1633 | blocked 0.1593 | cta 0.2168 | two_stage 0.3541 | vendor 0.3848 | jacobi 0.9426 # deep
+dtype=cfloat jobz=N n=25 batch=2048 | blocked 0.2699 | cta_fused 0.3246 | cta 0.3486 | two_stage 0.6709 | vendor 1.215 | jacobi 1.962 # deep
+dtype=cfloat jobz=N n=25 batch=8192 | blocked 0.6865 | cta 0.8448 | cta_fused 0.8798 | two_stage 2.609 | vendor 5.124 | jacobi 5.357 # deep
+dtype=cfloat jobz=N n=25 batch=32768 | blocked 2.616 | cta 3.218 | cta_fused 3.388 | two_stage 9.131 | vendor 20.58 | jacobi 21.19 # deep
+dtype=cfloat jobz=N n=26 batch=512 | blocked 0.1650 | cta_fused 0.1734 | cta 0.2241 | vendor 0.3574 | two_stage 0.6710 | jacobi 1.006 # deep
+dtype=cfloat jobz=N n=28 batch=128 | blocked 0.1693 | vendor 0.1832 | cta_fused 0.1977 | cta 0.2188 | two_stage 0.2821 | jacobi 1.218 # deep
+dtype=cfloat jobz=N n=28 batch=512 | blocked 0.1816 | cta_fused 0.1969 | cta 0.2507 | vendor 0.3906 | two_stage 0.7439 | jacobi 1.222 # deep
+dtype=cfloat jobz=N n=28 batch=2048 | blocked 0.3168 | cta_fused 0.3813 | cta 0.4129 | two_stage 1.184 | vendor 1.232 | jacobi 2.515 # deep
+dtype=cfloat jobz=N n=28 batch=8192 | blocked 0.8026 | cta 0.9994 | cta_fused 1.021 | two_stage 2.876 | vendor 5.084 | jacobi 6.822 # deep
+dtype=cfloat jobz=N n=28 batch=32768 | blocked 3.037 | cta 3.813 | cta_fused 3.983 | two_stage 10.23 | vendor 20.95 | jacobi 27.13 # deep
+dtype=cfloat jobz=N n=30 batch=128 | blocked 0.1840 | vendor 0.1858 | cta_fused 0.2164 | cta 0.2400 | two_stage 0.7569 | jacobi 1.306 # deep
+dtype=cfloat jobz=N n=32 batch=128 | vendor 0.1837 | blocked 0.2021 | cta_fused 0.2428 | cta 0.2709 | two_stage 0.7501 | jacobi 1.514 # deep
+dtype=cfloat jobz=N n=32 batch=512 | blocked 0.2252 | cta_fused 0.2452 | cta 0.3269 | vendor 0.4146 | two_stage 0.4452 | jacobi 1.507 # deep
+dtype=cfloat jobz=N n=32 batch=2048 | blocked 0.3833 | cta_fused 0.5012 | cta 0.5070 | two_stage 0.8339 | vendor 1.351 | jacobi 3.238 # deep
+dtype=cfloat jobz=N n=32 batch=8192 | blocked 0.9595 | cta 1.256 | cta_fused 1.308 | two_stage 3.184 | vendor 5.323 | jacobi 8.723 # deep
+dtype=cfloat jobz=N n=32 batch=32768 | blocked 3.787 | cta 4.985 | cta_fused 5.267 | two_stage 11.70 | vendor 23.58 | jacobi 35.31 # deep
+dtype=cfloat jobz=N n=33 batch=128 | vendor 0.2386 | two_stage 0.3140 | blocked 0.3351 # deep
+dtype=cfloat jobz=N n=33 batch=512 | blocked 0.3899 | two_stage 0.4276 | vendor 0.4328 # deep
+dtype=cfloat jobz=N n=33 batch=2048 | blocked 0.8261 | vendor 1.073 | two_stage 1.145 # deep
+dtype=cfloat jobz=N n=33 batch=8192 | blocked 2.262 | two_stage 3.229 | vendor 4.058 # deep
+dtype=cfloat jobz=N n=33 batch=32768 | blocked 9.607 | two_stage 12.92 | vendor 17.78 # deep
+dtype=cfloat jobz=N n=36 batch=512 | blocked 0.4043 | vendor 0.4044 | two_stage 0.5159 # deep
+dtype=cfloat jobz=N n=40 batch=128 | vendor 0.2208 | blocked 0.3969 | two_stage 0.4095 # deep
+dtype=cfloat jobz=N n=40 batch=512 | vendor 0.3741 | blocked 0.4633 | two_stage 0.5921 # deep
+dtype=cfloat jobz=N n=40 batch=2048 | blocked 1.044 | vendor 1.205 | two_stage 1.406 # deep
+dtype=cfloat jobz=N n=40 batch=8192 | blocked 3.090 | vendor 4.939 | two_stage 5.308 # deep
+dtype=cfloat jobz=N n=40 batch=32768 | blocked 12.90 | vendor 21.14 | two_stage 22.15 # deep
+dtype=cfloat jobz=N n=48 batch=128 | vendor 0.2308 | blocked 0.4926 | two_stage 0.7545 # deep
+dtype=cfloat jobz=N n=48 batch=512 | vendor 0.4400 | blocked 0.5850 | two_stage 1.069 # deep
+dtype=cfloat jobz=N n=48 batch=2048 | blocked 1.392 | vendor 1.495 | two_stage 2.263 # deep
+dtype=cfloat jobz=N n=48 batch=8192 | blocked 4.327 | vendor 6.078 | two_stage 8.440 # deep
+dtype=cfloat jobz=N n=48 batch=32768 | blocked 17.83 | vendor 25.59 | two_stage 34.94 # deep
+dtype=cfloat jobz=N n=55 batch=2048 | vendor 1.721 | blocked 2.737 | two_stage 3.509 # deep
+dtype=cfloat jobz=N n=64 batch=128 | vendor 0.2787 | blocked 0.6682 | two_stage 1.181 # deep
+dtype=cfloat jobz=N n=64 batch=512 | vendor 0.5677 | blocked 0.8558 | two_stage 1.687 # deep
+dtype=cfloat jobz=N n=64 batch=2048 | vendor 2.029 | blocked 2.285 | two_stage 4.042 # deep
+dtype=cfloat jobz=N n=64 batch=8192 | blocked 7.529 | vendor 8.525 | two_stage 15.02 # deep
+dtype=cfloat jobz=N n=64 batch=32768 | blocked 31.07 | vendor 36.27 | two_stage 62.80 # deep
+dtype=cfloat jobz=N n=78 batch=512 | blocked 1.207 | vendor 2.275 | two_stage 3.200 # deep
+dtype=cfloat jobz=N n=78 batch=2048 | blocked 3.632 | two_stage 7.220 | vendor 8.863 # deep
+dtype=cfloat jobz=N n=96 batch=128 | vendor 1.004 | blocked 1.121 | two_stage 2.814 # deep
+dtype=cfloat jobz=N n=96 batch=512 | blocked 1.707 | vendor 2.802 | two_stage 4.270 # deep
+dtype=cfloat jobz=N n=96 batch=2048 | blocked 5.475 | two_stage 10.45 | vendor 11.41 # deep
+dtype=cfloat jobz=N n=96 batch=8192 | blocked 20.49 | two_stage 38.93 | vendor 45.24 # deep
+dtype=cfloat jobz=N n=128 batch=128 | vendor 1.344 | blocked 1.749 | two_stage 4.898 # deep
+dtype=cfloat jobz=N n=128 batch=512 | blocked 2.993 | vendor 3.895 | two_stage 7.294 # deep
+dtype=cfloat jobz=N n=128 batch=2048 | blocked 11.42 | vendor 16.21 | two_stage 19.74 # deep
+dtype=cfloat jobz=N n=128 batch=8192 | blocked 44.96 | vendor 66.23 | two_stage 76.94 # deep
+dtype=cfloat jobz=N n=157 batch=128 | blocked 4.109 | vendor 4.856 | two_stage 7.369 # deep
+dtype=cfloat jobz=N n=192 batch=128 | blocked 4.516 | vendor 5.542 | two_stage 8.653 # deep
+dtype=cfloat jobz=N n=192 batch=512 | blocked 9.545 | vendor 15.14 | two_stage 15.44 # deep
+dtype=cfloat jobz=N n=192 batch=2048 | blocked 34.02 | two_stage 49.71 | vendor 89.63 # deep
+dtype=cfloat jobz=N n=192 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=N n=256 batch=128 | blocked 7.829 | vendor 7.841 | two_stage 14.17 # deep
+dtype=cfloat jobz=N n=256 batch=512 | blocked 20.05 | two_stage 29.27 | vendor 32.05 # deep
+dtype=cfloat jobz=N n=256 batch=2048 | blocked 69.29 | two_stage 98.25 | vendor 160.9 # deep
+dtype=cfloat jobz=N n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=N n=257 batch=128 | vendor 10.98 | blocked 11.84 | two_stage 19.70 # deep
+dtype=cfloat jobz=N n=257 batch=512 | blocked 29.28 | two_stage 35.90 | vendor 39.20 # deep
+dtype=cfloat jobz=N n=257 batch=2048 | blocked 99.51 | two_stage 104.4 | vendor 192.9 # deep
+dtype=cfloat jobz=N n=257 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=N n=320 batch=128 | vendor 14.39 | blocked 17.31 | two_stage 26.54 # deep
+dtype=cfloat jobz=N n=320 batch=512 | blocked 45.32 | two_stage 51.54 | vendor 60.92 # deep
+dtype=cfloat jobz=N n=320 batch=2048 | blocked 155.0 | two_stage 164.4 | vendor 307.7 # deep
+dtype=cfloat jobz=N n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=N n=321 batch=128 | vendor 15.06 | blocked 18.17 | two_stage 27.73 # deep
+dtype=cfloat jobz=N n=321 batch=512 | blocked 50.70 | two_stage 55.88 | vendor 66.95 # deep
+dtype=cfloat jobz=N n=321 batch=2048 | blocked 176.1 | two_stage 179.3 | vendor 325.2 # deep
+dtype=cfloat jobz=N n=321 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=384 batch=128 | vendor 19.17 | blocked 24.92 | two_stage 36.21 # deep
+dtype=cfloat jobz=N n=384 batch=512 | blocked 72.95 | two_stage 74.08 | vendor 98.63 # deep
+dtype=cfloat jobz=N n=384 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=384 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=415 batch=512 | two_stage 89.81 | blocked 103.8 | vendor 125.5 # deep
+dtype=cfloat jobz=N n=448 batch=128 | vendor 28.83 | blocked 34.49 | two_stage 47.13 # deep
+dtype=cfloat jobz=N n=448 batch=512 | two_stage 106.5 | blocked 114.0 | vendor 150.2 # deep
+dtype=cfloat jobz=N n=448 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=448 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=449 batch=128 | vendor 30.22 | blocked 35.23 | two_stage 49.63 # deep
+dtype=cfloat jobz=N n=449 batch=512 | two_stage 111.1 | blocked 120.3 | vendor 158.9 # deep
+dtype=cfloat jobz=N n=449 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=449 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=512 batch=128 | vendor 39.59 | blocked 49.59 | two_stage 61.18 # deep
+dtype=cfloat jobz=N n=512 batch=512 | two_stage 134.9 | blocked 180.4 | vendor 200.7 # deep
+dtype=cfloat jobz=N n=512 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=512 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=513 batch=128 | vendor 45.73 | blocked 57.07 | two_stage 60.29 # deep
+dtype=cfloat jobz=N n=513 batch=512 | two_stage 144.7 | blocked 187.6 | vendor 228.3 # deep
+dtype=cfloat jobz=N n=513 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=513 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=640 batch=128 | vendor 79.89 | two_stage 91.41 | blocked 107.5 # deep
+dtype=cfloat jobz=N n=640 batch=512 | two_stage 226.0 | blocked 381.5 | vendor 396.8 # deep
+dtype=cfloat jobz=N n=640 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=640 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=701 batch=128 | vendor 104.0 | two_stage 112.1 | blocked 139.7 # deep
+dtype=cfloat jobz=N n=768 batch=128 | two_stage 134.7 | vendor 137.4 | blocked 182.7 # deep
+dtype=cfloat jobz=N n=768 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=768 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=768 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1024 batch=128 | two_stage 250.3 | vendor 303.0 | blocked 455.1 # deep
+dtype=cfloat jobz=N n=1024 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1024 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1024 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1025 batch=128 | two_stage 259.8 | vendor 324.8 | blocked 453.3 # deep
+dtype=cfloat jobz=N n=1025 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1025 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1025 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1536 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1536 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=1536 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=2048 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=2048 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=2048 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=4096 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=4096 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=N n=4096 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cfloat jobz=V n=1 batch=128 | jacobi 0.008363 | cta_fused 0.009124 | vendor 0.01163 | blocked 0.04795 | cta 0.05579 | two_stage 0.05720 # deep
+dtype=cfloat jobz=V n=1 batch=512 | jacobi 0.008372 | cta_fused 0.009053 | vendor 0.01181 | blocked 0.04979 | two_stage 0.05622 | cta 0.05964 # deep
+dtype=cfloat jobz=V n=1 batch=2048 | jacobi 0.008353 | cta_fused 0.009169 | vendor 0.01499 | blocked 0.05077 | cta 0.06064 | two_stage 0.06161 # deep
+dtype=cfloat jobz=V n=1 batch=8192 | jacobi 0.008863 | cta_fused 0.009454 | vendor 0.02481 | blocked 0.05069 | cta 0.06025 | two_stage 0.08250 # deep
+dtype=cfloat jobz=V n=1 batch=32768 | jacobi 0.01077 | cta_fused 0.01278 | vendor 0.07076 | blocked 0.07741 | cta 0.08273 | two_stage 0.1342 # deep
+dtype=cfloat jobz=V n=2 batch=128 | jacobi 0.01057 | cta_fused 0.01264 | vendor 0.01751 | cta 0.06905 | blocked 0.09282 | two_stage 0.2168 # deep
+dtype=cfloat jobz=V n=2 batch=512 | jacobi 0.01035 | cta_fused 0.01213 | vendor 0.01806 | cta 0.06681 | blocked 0.09111 | two_stage 0.2259 # deep
+dtype=cfloat jobz=V n=2 batch=2048 | jacobi 0.01157 | cta_fused 0.01259 | vendor 0.02782 | cta 0.08025 | blocked 0.1007 | two_stage 0.2361 # deep
+dtype=cfloat jobz=V n=2 batch=8192 | jacobi 0.009494 | cta_fused 0.01096 | vendor 0.06724 | cta 0.07689 | blocked 0.1452 | two_stage 0.3697 # deep
+dtype=cfloat jobz=V n=2 batch=32768 | jacobi 0.01303 | cta_fused 0.02024 | cta 0.1223 | vendor 0.2245 | blocked 0.3192 | two_stage 0.8623 # deep
+dtype=cfloat jobz=V n=3 batch=128 | jacobi 0.01818 | cta_fused 0.02082 | vendor 0.02769 | cta 0.09406 | blocked 0.1082 | two_stage 0.2642 # deep
+dtype=cfloat jobz=V n=3 batch=512 | jacobi 0.01748 | cta_fused 0.02059 | vendor 0.02581 | cta 0.06762 | blocked 0.09856 | two_stage 0.2583 # deep
+dtype=cfloat jobz=V n=3 batch=2048 | jacobi 0.01782 | cta_fused 0.02121 | vendor 0.04525 | cta 0.07115 | blocked 0.1451 | two_stage 0.2913 # deep
+dtype=cfloat jobz=V n=3 batch=8192 | jacobi 0.01763 | cta_fused 0.02096 | cta 0.06239 | vendor 0.1168 | blocked 0.3191 | two_stage 0.8253 # deep
+dtype=cfloat jobz=V n=3 batch=32768 | jacobi 0.02295 | cta_fused 0.03799 | cta 0.1015 | vendor 0.4163 | blocked 1.037 | two_stage 1.330 # deep
+dtype=cfloat jobz=V n=4 batch=128 | jacobi 0.02491 | cta_fused 0.02935 | vendor 0.03504 | cta 0.07040 | blocked 0.09044 | two_stage 0.2578 # deep
+dtype=cfloat jobz=V n=4 batch=512 | jacobi 0.02539 | cta_fused 0.02895 | vendor 0.03587 | cta 0.06654 | blocked 0.09219 | two_stage 0.2538 # deep
+dtype=cfloat jobz=V n=4 batch=2048 | jacobi 0.02474 | cta_fused 0.02789 | vendor 0.05721 | cta 0.06644 | blocked 0.1430 | two_stage 0.3291 # deep
+dtype=cfloat jobz=V n=4 batch=8192 | jacobi 0.02619 | cta_fused 0.02895 | cta 0.07422 | vendor 0.1561 | blocked 0.3230 | two_stage 0.5221 # deep
+dtype=cfloat jobz=V n=4 batch=32768 | jacobi 0.03321 | cta_fused 0.05901 | cta 0.1168 | vendor 0.5412 | blocked 1.042 | two_stage 1.573 # deep
+dtype=cfloat jobz=V n=5 batch=128 | cta_fused 0.03638 | vendor 0.03838 | jacobi 0.04514 | cta 0.09342 | blocked 0.1010 | two_stage 0.2643 # deep
+dtype=cfloat jobz=V n=5 batch=512 | cta_fused 0.03541 | vendor 0.03790 | jacobi 0.04452 | cta 0.06815 | blocked 0.09283 | two_stage 0.2427 # deep
+dtype=cfloat jobz=V n=5 batch=2048 | cta_fused 0.03529 | jacobi 0.04424 | cta 0.06757 | vendor 0.07007 | blocked 0.1479 | two_stage 0.3147 # deep
+dtype=cfloat jobz=V n=5 batch=8192 | cta_fused 0.03868 | jacobi 0.04827 | cta 0.07873 | vendor 0.1857 | blocked 0.3148 | two_stage 0.5940 # deep
+dtype=cfloat jobz=V n=5 batch=32768 | cta_fused 0.1115 | jacobi 0.1360 | cta 0.1540 | vendor 0.6612 | blocked 1.051 | two_stage 1.831 # deep
+dtype=cfloat jobz=V n=6 batch=128 | cta_fused 0.04449 | vendor 0.04882 | jacobi 0.05883 | cta 0.08667 | blocked 0.09100 | two_stage 0.2612 # deep
+dtype=cfloat jobz=V n=6 batch=512 | cta_fused 0.04323 | vendor 0.05030 | jacobi 0.06048 | cta 0.07408 | blocked 0.09823 | two_stage 0.2594 # deep
+dtype=cfloat jobz=V n=6 batch=2048 | cta_fused 0.04432 | jacobi 0.05813 | cta 0.07820 | vendor 0.08854 | blocked 0.1421 | two_stage 0.7291 # deep
+dtype=cfloat jobz=V n=6 batch=8192 | cta_fused 0.04717 | jacobi 0.06340 | cta 0.09008 | vendor 0.2370 | blocked 0.3173 | two_stage 0.6214 # deep
+dtype=cfloat jobz=V n=6 batch=32768 | cta_fused 0.1437 | jacobi 0.1873 | cta 0.1972 | vendor 0.8473 | blocked 1.127 | two_stage 2.355 # deep
+dtype=cfloat jobz=V n=8 batch=128 | cta_fused 0.05984 | vendor 0.06586 | cta 0.08762 | blocked 0.09540 | jacobi 0.1127 | two_stage 0.2569 # deep
+dtype=cfloat jobz=V n=8 batch=512 | cta_fused 0.05947 | vendor 0.06774 | cta 0.08430 | blocked 0.1021 | jacobi 0.1134 | two_stage 0.2844 # deep
+dtype=cfloat jobz=V n=8 batch=2048 | cta_fused 0.06076 | cta 0.09265 | jacobi 0.1127 | vendor 0.1266 | blocked 0.1543 | two_stage 0.8299 # deep
+dtype=cfloat jobz=V n=8 batch=8192 | cta_fused 0.06832 | cta 0.1181 | jacobi 0.1264 | vendor 0.3563 | blocked 0.3635 | two_stage 0.8655 # deep
+dtype=cfloat jobz=V n=8 batch=32768 | cta_fused 0.2151 | cta 0.2880 | jacobi 0.3907 | vendor 1.268 | blocked 1.295 | two_stage 2.682 # deep
+dtype=cfloat jobz=V n=9 batch=128 | vendor 0.07103 | cta_fused 0.07552 | cta 0.09777 | blocked 0.1056 | jacobi 0.1523 | two_stage 0.2665 # deep
+dtype=cfloat jobz=V n=9 batch=512 | vendor 0.07119 | cta_fused 0.07433 | cta 0.1005 | blocked 0.1138 | jacobi 0.1536 | two_stage 0.7153 # deep
+dtype=cfloat jobz=V n=9 batch=2048 | cta_fused 0.09378 | cta 0.1096 | vendor 0.1462 | jacobi 0.1633 | blocked 0.1708 | two_stage 0.4125 # deep
+dtype=cfloat jobz=V n=9 batch=8192 | cta 0.1791 | cta_fused 0.2210 | vendor 0.3975 | blocked 0.4173 | jacobi 0.4658 | two_stage 1.347 # deep
+dtype=cfloat jobz=V n=9 batch=32768 | cta 0.4854 | cta_fused 0.7396 | jacobi 1.430 | vendor 1.464 | blocked 1.489 | two_stage 3.354 # deep
+dtype=cfloat jobz=V n=12 batch=128 | vendor 0.08324 | cta_fused 0.1045 | cta 0.1137 | blocked 0.1378 | jacobi 0.2667 | two_stage 0.7726 # deep
+dtype=cfloat jobz=V n=12 batch=512 | vendor 0.08948 | cta_fused 0.1050 | cta 0.1281 | blocked 0.1658 | jacobi 0.2719 | two_stage 0.3241 # deep
+dtype=cfloat jobz=V n=12 batch=2048 | cta_fused 0.1305 | cta 0.1452 | vendor 0.1829 | blocked 0.2595 | jacobi 0.2875 | two_stage 0.4940 # deep
+dtype=cfloat jobz=V n=12 batch=8192 | cta 0.2666 | cta_fused 0.3263 | vendor 0.5698 | blocked 0.7201 | jacobi 0.8405 | two_stage 1.299 # deep
+dtype=cfloat jobz=V n=12 batch=32768 | cta 0.7931 | cta_fused 1.168 | vendor 2.219 | jacobi 2.604 | blocked 2.763 | two_stage 4.587 # deep
+dtype=cfloat jobz=V n=16 batch=128 | vendor 0.08529 | cta_fused 0.1503 | cta 0.1655 | blocked 0.2215 | two_stage 0.3248 | jacobi 0.4828 # deep
+dtype=cfloat jobz=V n=16 batch=512 | vendor 0.09375 | cta_fused 0.1534 | cta 0.1841 | blocked 0.2559 | two_stage 0.3755 | jacobi 0.4888 # deep
+dtype=cfloat jobz=V n=16 batch=2048 | cta_fused 0.1891 | cta 0.2119 | vendor 0.2172 | blocked 0.3616 | jacobi 0.5258 | two_stage 0.6033 # deep
+dtype=cfloat jobz=V n=16 batch=8192 | cta 0.4154 | cta_fused 0.4702 | vendor 0.6813 | blocked 0.9561 | jacobi 1.559 | two_stage 2.014 # deep
+dtype=cfloat jobz=V n=16 batch=32768 | cta 1.364 | cta_fused 1.795 | vendor 2.888 | blocked 4.059 | jacobi 4.999 | two_stage 6.165 # deep
+dtype=cfloat jobz=V n=18 batch=512 | cta 0.2079 | cta_fused 0.2376 | blocked 0.2868 | vendor 0.3521 | jacobi 0.6533 | two_stage 0.6663 # deep
+dtype=cfloat jobz=V n=18 batch=2048 | cta 0.3151 | blocked 0.4909 | cta_fused 0.5248 | two_stage 0.8256 | vendor 0.9890 | jacobi 1.790 # deep
+dtype=cfloat jobz=V n=20 batch=128 | vendor 0.1629 | cta_fused 0.2099 | cta 0.2104 | blocked 0.2766 | two_stage 0.3602 | jacobi 0.7814 # deep
+dtype=cfloat jobz=V n=20 batch=512 | cta 0.2375 | cta_fused 0.2668 | blocked 0.3321 | vendor 0.3441 | two_stage 0.7815 | jacobi 0.7932 # deep
+dtype=cfloat jobz=V n=20 batch=2048 | cta 0.3592 | blocked 0.5940 | cta_fused 0.5986 | two_stage 0.8302 | vendor 1.056 | jacobi 2.295 # deep
+dtype=cfloat jobz=V n=20 batch=8192 | cta 1.030 | blocked 1.835 | cta_fused 2.058 | two_stage 2.598 | vendor 4.380 | jacobi 6.938 # deep
+dtype=cfloat jobz=V n=20 batch=32768 | cta 3.594 | blocked 7.029 | cta_fused 7.421 | two_stage 9.028 | vendor 15.52 | jacobi 27.32 # deep
+dtype=cfloat jobz=V n=24 batch=128 | vendor 0.1681 | cta 0.2635 | cta_fused 0.2678 | blocked 0.3167 | two_stage 0.8104 | jacobi 1.095 # deep
+dtype=cfloat jobz=V n=24 batch=512 | cta 0.2997 | cta_fused 0.3397 | vendor 0.3669 | blocked 0.3839 | two_stage 0.8424 | jacobi 1.119 # deep
+dtype=cfloat jobz=V n=24 batch=2048 | cta 0.4692 | blocked 0.6799 | cta_fused 0.7736 | two_stage 1.022 | vendor 1.140 | jacobi 3.238 # deep
+dtype=cfloat jobz=V n=24 batch=8192 | cta 1.394 | blocked 2.191 | cta_fused 2.641 | two_stage 3.178 | vendor 5.158 | jacobi 9.876 # deep
+dtype=cfloat jobz=V n=24 batch=32768 | cta 5.209 | blocked 8.700 | cta_fused 9.393 | two_stage 11.49 | vendor 18.97 | jacobi 38.49 # deep
+dtype=cfloat jobz=V n=25 batch=128 | vendor 0.1897 | cta 0.2788 | cta_fused 0.2872 | blocked 0.3337 | two_stage 0.8181 | jacobi 1.221 # deep
+dtype=cfloat jobz=V n=25 batch=512 | cta 0.3151 | cta_fused 0.3617 | blocked 0.3957 | vendor 0.4118 | two_stage 0.9700 | jacobi 1.233 # deep
+dtype=cfloat jobz=V n=25 batch=2048 | cta 0.4991 | blocked 0.7116 | cta_fused 0.8268 | two_stage 1.099 | vendor 1.279 | jacobi 3.633 # deep
+dtype=cfloat jobz=V n=25 batch=8192 | cta 1.404 | blocked 2.062 | cta_fused 2.698 | two_stage 3.626 | vendor 4.900 | jacobi 11.14 # deep
+dtype=cfloat jobz=V n=25 batch=32768 | cta 5.589 | blocked 8.899 | cta_fused 9.965 | two_stage 13.08 | vendor 20.99 | jacobi 43.95 # deep
+dtype=cfloat jobz=V n=28 batch=128 | vendor 0.1918 | cta 0.3149 | cta_fused 0.3369 | blocked 0.3839 | two_stage 0.9247 | jacobi 1.572 # deep
+dtype=cfloat jobz=V n=28 batch=512 | cta 0.3592 | vendor 0.4190 | cta_fused 0.4220 | blocked 0.4599 | two_stage 0.5431 | jacobi 1.586 # deep
+dtype=cfloat jobz=V n=28 batch=2048 | cta 0.5825 | blocked 0.8208 | cta_fused 0.9562 | two_stage 1.149 | vendor 1.331 | jacobi 4.642 # deep
+dtype=cfloat jobz=V n=28 batch=8192 | cta 1.659 | blocked 2.499 | cta_fused 2.969 | two_stage 4.114 | vendor 5.147 | jacobi 14.26 # deep
+dtype=cfloat jobz=V n=28 batch=32768 | cta 7.095 | blocked 11.46 | cta_fused 12.16 | two_stage 15.70 | vendor 23.52 | jacobi 56.63 # deep
+dtype=cfloat jobz=V n=32 batch=128 | vendor 0.2003 | cta 0.3874 | cta_fused 0.4199 | blocked 0.4772 | two_stage 0.6036 | jacobi 1.993 # deep
+dtype=cfloat jobz=V n=32 batch=512 | cta 0.4519 | vendor 0.4486 | cta_fused 0.5152 | blocked 0.5734 | two_stage 0.6114 | jacobi 1.995 # deep
+dtype=cfloat jobz=V n=32 batch=2048 | cta 0.7091 | blocked 0.9759 | cta_fused 1.170 | two_stage 1.314 | vendor 1.472 | jacobi 5.928 # deep
+dtype=cfloat jobz=V n=32 batch=8192 | cta 2.138 | blocked 2.974 | cta_fused 3.896 | two_stage 4.479 | vendor 5.843 | jacobi 18.39 # deep
+dtype=cfloat jobz=V n=32 batch=32768 | cta 8.827 | blocked 13.23 | cta_fused 14.33 | two_stage 18.27 | vendor 24.95 | jacobi 72.90 # deep
+dtype=cfloat jobz=V n=33 batch=128 | vendor 0.3736 | two_stage 0.5379 | blocked 0.6295 # deep
+dtype=cfloat jobz=V n=33 batch=512 | blocked 0.7628 | vendor 0.7479 | two_stage 0.8299 # deep
+dtype=cfloat jobz=V n=33 batch=2048 | blocked 1.573 | two_stage 1.557 | vendor 2.326 # deep
+dtype=cfloat jobz=V n=33 batch=8192 | blocked 4.980 | two_stage 5.997 | vendor 9.328 # deep
+dtype=cfloat jobz=V n=33 batch=32768 | blocked 21.78 | two_stage 23.34 | vendor 44.21 # deep
+dtype=cfloat jobz=V n=36 batch=512 | vendor 0.5437 | blocked 0.8237 | two_stage 0.9735 # deep
+dtype=cfloat jobz=V n=40 batch=128 | vendor 0.2681 | two_stage 0.6976 | blocked 0.7371 # deep
+dtype=cfloat jobz=V n=40 batch=512 | vendor 0.5891 | blocked 0.9441 | two_stage 1.007 # deep
+dtype=cfloat jobz=V n=40 batch=2048 | blocked 2.001 | vendor 2.014 | two_stage 2.383 # deep
+dtype=cfloat jobz=V n=40 batch=8192 | blocked 6.788 | vendor 8.743 | two_stage 8.848 # deep
+dtype=cfloat jobz=V n=40 batch=32768 | blocked 28.65 | two_stage 35.72 | vendor 36.83 # deep
+dtype=cfloat jobz=V n=44 batch=2048 | vendor 2.283 | blocked 2.361 | two_stage 3.113 # deep
+dtype=cfloat jobz=V n=48 batch=128 | vendor 0.3223 | blocked 0.9148 | two_stage 1.057 # deep
+dtype=cfloat jobz=V n=48 batch=512 | vendor 0.6901 | blocked 1.184 | two_stage 1.596 # deep
+dtype=cfloat jobz=V n=48 batch=2048 | vendor 2.422 | blocked 2.621 | two_stage 3.783 # deep
+dtype=cfloat jobz=V n=48 batch=8192 | blocked 9.533 | vendor 11.26 | two_stage 14.10 # deep
+dtype=cfloat jobz=V n=48 batch=32768 | blocked 38.52 | vendor 45.00 | two_stage 56.10 # deep
+dtype=cfloat jobz=V n=64 batch=128 | vendor 0.4005 | blocked 1.266 | two_stage 1.783 # deep
+dtype=cfloat jobz=V n=64 batch=512 | vendor 0.9520 | blocked 1.695 | two_stage 2.635 # deep
+dtype=cfloat jobz=V n=64 batch=2048 | vendor 3.873 | blocked 4.259 | two_stage 6.914 # deep
+dtype=cfloat jobz=V n=64 batch=8192 | blocked 15.93 | vendor 17.20 | two_stage 26.38 # deep
+dtype=cfloat jobz=V n=64 batch=32768 | blocked 66.23 | vendor 71.36 | two_stage 107.9 # deep
+dtype=cfloat jobz=V n=78 batch=512 | blocked 2.428 | vendor 3.026 | two_stage 4.513 # deep
+dtype=cfloat jobz=V n=78 batch=2048 | blocked 7.394 | vendor 12.12 | two_stage 12.18 # deep
+dtype=cfloat jobz=V n=96 batch=128 | vendor 1.235 | blocked 2.063 | two_stage 3.936 # deep
+dtype=cfloat jobz=V n=96 batch=512 | blocked 3.313 | vendor 3.651 | two_stage 6.447 # deep
+dtype=cfloat jobz=V n=96 batch=2048 | blocked 10.37 | vendor 15.37 | two_stage 17.57 # deep
+dtype=cfloat jobz=V n=96 batch=8192 | blocked 42.10 | vendor 65.29 | two_stage 71.22 # deep
+dtype=cfloat jobz=V n=128 batch=128 | vendor 1.656 | blocked 3.078 | two_stage 6.376 # deep
+dtype=cfloat jobz=V n=128 batch=512 | blocked 5.482 | vendor 5.586 | two_stage 11.25 # deep
+dtype=cfloat jobz=V n=128 batch=2048 | blocked 20.06 | vendor 23.40 | two_stage 34.42 # deep
+dtype=cfloat jobz=V n=128 batch=8192 | blocked 81.13 | vendor 96.23 | two_stage 138.1 # deep
+dtype=cfloat jobz=V n=192 batch=128 | vendor 6.323 | blocked 7.806 | two_stage 13.80 # deep
+dtype=cfloat jobz=V n=192 batch=512 | blocked 16.36 | vendor 19.20 | two_stage 30.42 # deep
+dtype=cfloat jobz=V n=192 batch=2048 | blocked 56.14 | two_stage 102.9 | vendor 106.0 # deep
+dtype=cfloat jobz=V n=192 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=256 batch=128 | vendor 9.208 | blocked 12.64 | two_stage 25.70 # deep
+dtype=cfloat jobz=V n=256 batch=512 | blocked 32.08 | vendor 39.26 | two_stage 65.58 # deep
+dtype=cfloat jobz=V n=256 batch=2048 | blocked 103.5 | vendor 179.5 | two_stage 226.7 # deep
+dtype=cfloat jobz=V n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=257 batch=128 | vendor 12.48 # deep
+dtype=cfloat jobz=V n=257 batch=512 | vendor 43.89 # deep
+dtype=cfloat jobz=V n=257 batch=2048 | vendor 211.8 # deep
+dtype=cfloat jobz=V n=257 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=287 batch=512 | vendor 60.84 # deep
+dtype=cfloat jobz=V n=287 batch=2048 | vendor 274.5 # deep
+dtype=cfloat jobz=V n=320 batch=128 | vendor 16.66 | blocked 31.31 | two_stage 49.78 # deep
+dtype=cfloat jobz=V n=320 batch=512 | blocked 75.48 | vendor 74.93 | two_stage 118.4 # deep
+dtype=cfloat jobz=V n=320 batch=2048 | blocked 248.0 | vendor 357.3 | two_stage 412.5 # deep
+dtype=cfloat jobz=V n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=321 batch=128 | vendor 17.65 # deep
+dtype=cfloat jobz=V n=321 batch=512 | vendor 77.94 # deep
+dtype=cfloat jobz=V n=321 batch=2048 | vendor 373.5 # deep
+dtype=cfloat jobz=V n=321 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=351 batch=512 | vendor 94.40 # deep
+dtype=cfloat jobz=V n=384 batch=128 | vendor 22.90 | blocked 44.10 | two_stage 70.65 # deep
+dtype=cfloat jobz=V n=384 batch=512 | blocked 116.5 | vendor 117.2 | two_stage 179.2 # deep
+dtype=cfloat jobz=V n=384 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=384 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=448 batch=128 | vendor 34.51 | blocked 59.44 | two_stage 103.2 # deep
+dtype=cfloat jobz=V n=448 batch=512 | blocked 165.6 | vendor 175.0 | two_stage 277.2 # deep
+dtype=cfloat jobz=V n=448 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=448 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=449 batch=128 | vendor 36.56 # deep
+dtype=cfloat jobz=V n=449 batch=512 | vendor 177.6 # deep
+dtype=cfloat jobz=V n=449 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=449 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=479 batch=512 | vendor 223.9 # deep
+dtype=cfloat jobz=V n=512 batch=128 | vendor 47.35 | blocked 79.91 | two_stage 120.8 # deep
+dtype=cfloat jobz=V n=512 batch=512 | blocked 247.7 | vendor 248.7 | two_stage 340.8 # deep
+dtype=cfloat jobz=V n=512 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=512 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cfloat jobz=V n=513 batch=128 | vendor 55.52 # deep
+dtype=cfloat jobz=V n=513 batch=512 | vendor 273.4 # deep
+dtype=cfloat jobz=V n=513 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=513 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=640 batch=128 | vendor 94.82 | blocked 160.8 | two_stage 217.9 # deep
+dtype=cfloat jobz=V n=640 batch=512 | vendor 443.2 | blocked 489.1 | two_stage 620.7 # deep
+dtype=cfloat jobz=V n=640 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=640 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=768 batch=128 | vendor 157.5 | blocked 254.5 | two_stage 328.5 # deep
+dtype=cfloat jobz=V n=768 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=768 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=768 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1024 batch=128 | vendor 353.5 | blocked 578.1 | two_stage 589.9 # deep
+dtype=cfloat jobz=V n=1024 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1024 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1024 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1025 batch=128 | vendor 359.8 # deep
+dtype=cfloat jobz=V n=1025 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1025 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1025 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1536 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1536 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=1536 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=2048 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=2048 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=2048 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=4096 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=4096 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cfloat jobz=V n=4096 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=N n=1 batch=128 | jacobi 0.008293 | vendor 0.008303 | cta_fused 0.008548 | blocked 0.01861 | cta 0.03077 | two_stage 0.03326 # deep
+dtype=cdouble jobz=N n=1 batch=512 | cta_fused 0.008202 | jacobi 0.008182 | vendor 0.008298 | blocked 0.01831 | cta 0.02867 | two_stage 0.06454 # deep
+dtype=cdouble jobz=N n=1 batch=2048 | cta_fused 0.008693 | jacobi 0.008462 | vendor 0.008883 | blocked 0.02275 | cta 0.03466 | two_stage 0.1857 # deep
+dtype=cdouble jobz=N n=1 batch=8192 | jacobi 0.008608 | vendor 0.008418 | cta_fused 0.008888 | blocked 0.03478 | cta 0.03860 | two_stage 0.6509 # deep
+dtype=cdouble jobz=N n=1 batch=32768 | vendor 0.008258 | jacobi 0.01039 | cta_fused 0.01073 | cta 0.06658 | blocked 0.08697 | two_stage 2.642 # deep
+dtype=cdouble jobz=N n=2 batch=128 | cta_fused 0.01493 | jacobi 0.01604 | vendor 0.03784 | cta 0.03974 | blocked 0.06033 | two_stage 0.1957 # deep
+dtype=cdouble jobz=N n=2 batch=512 | cta_fused 0.01597 | jacobi 0.01703 | cta 0.03816 | vendor 0.04478 | blocked 0.06127 | two_stage 0.2309 # deep
+dtype=cdouble jobz=N n=2 batch=2048 | cta_fused 0.01505 | jacobi 0.01636 | cta 0.03757 | vendor 0.09241 | blocked 0.1266 | two_stage 0.4194 # deep
+dtype=cdouble jobz=N n=2 batch=8192 | cta_fused 0.01646 | jacobi 0.01956 | cta 0.04573 | vendor 0.2829 | blocked 0.4496 | two_stage 1.291 # deep
+dtype=cdouble jobz=N n=2 batch=32768 | cta_fused 0.03671 | jacobi 0.05014 | cta 0.08804 | vendor 1.035 | blocked 1.711 | two_stage 4.704 # deep
+dtype=cdouble jobz=N n=3 batch=128 | cta_fused 0.04585 | jacobi 0.05905 | cta 0.07298 | vendor 0.08034 | blocked 0.09409 | two_stage 0.2482 # deep
+dtype=cdouble jobz=N n=3 batch=512 | cta_fused 0.04559 | jacobi 0.05920 | cta 0.06792 | vendor 0.07732 | blocked 0.09731 | two_stage 0.7590 # deep
+dtype=cdouble jobz=N n=3 batch=2048 | cta_fused 0.04508 | jacobi 0.05892 | cta 0.06943 | blocked 0.2014 | vendor 0.2066 | two_stage 0.6333 # deep
+dtype=cdouble jobz=N n=3 batch=8192 | cta_fused 0.05773 | jacobi 0.08349 | cta 0.09013 | blocked 0.7184 | vendor 0.7469 | two_stage 1.910 # deep
+dtype=cdouble jobz=N n=3 batch=32768 | cta_fused 0.1992 | cta 0.2488 | jacobi 0.2833 | blocked 2.749 | vendor 2.868 | two_stage 6.909 # deep
+dtype=cdouble jobz=N n=4 batch=128 | vendor 0.07553 | cta_fused 0.08111 | jacobi 0.09295 | cta 0.09571 | blocked 0.1296 | two_stage 0.7642 # deep
+dtype=cdouble jobz=N n=4 batch=512 | cta_fused 0.08149 | jacobi 0.09317 | vendor 0.1086 | cta 0.1089 | blocked 0.1352 | two_stage 0.9158 # deep
+dtype=cdouble jobz=N n=4 batch=2048 | cta_fused 0.08115 | jacobi 0.09335 | cta 0.1117 | blocked 0.2777 | vendor 0.3101 | two_stage 0.8984 # deep
+dtype=cdouble jobz=N n=4 batch=8192 | cta_fused 0.1092 | jacobi 0.1401 | cta 0.1486 | blocked 0.9947 | vendor 1.181 | two_stage 3.321 # deep
+dtype=cdouble jobz=N n=4 batch=32768 | cta_fused 0.3988 | cta 0.4467 | jacobi 0.4916 | blocked 3.829 | vendor 4.566 | two_stage 10.63 # deep
+dtype=cdouble jobz=N n=6 batch=128 | vendor 0.1263 | cta_fused 0.1369 | cta 0.1554 | blocked 0.2049 | jacobi 0.2832 | two_stage 0.3849 # deep
+dtype=cdouble jobz=N n=6 batch=512 | cta_fused 0.1388 | cta 0.1761 | vendor 0.1855 | blocked 0.2154 | jacobi 0.2914 | two_stage 0.5434 # deep
+dtype=cdouble jobz=N n=6 batch=2048 | cta_fused 0.1384 | cta 0.1800 | jacobi 0.2889 | blocked 0.4339 | vendor 0.5526 | two_stage 1.823 # deep
+dtype=cdouble jobz=N n=6 batch=8192 | cta_fused 0.3299 | cta 0.3808 | jacobi 0.7964 | blocked 1.579 | vendor 2.107 | two_stage 5.173 # deep
+dtype=cdouble jobz=N n=6 batch=32768 | cta_fused 1.292 | cta 1.373 | jacobi 3.168 | blocked 6.251 | vendor 8.351 | two_stage 18.32 # deep
+dtype=cdouble jobz=N n=8 batch=128 | vendor 0.1901 | cta_fused 0.2341 | cta 0.2571 | blocked 0.2910 | two_stage 0.4842 | jacobi 0.6064 # deep
+dtype=cdouble jobz=N n=8 batch=512 | cta_fused 0.2350 | vendor 0.2722 | cta 0.2833 | blocked 0.3030 | jacobi 0.6080 | two_stage 0.8901 # deep
+dtype=cdouble jobz=N n=8 batch=2048 | cta_fused 0.2344 | cta 0.2862 | blocked 0.6017 | jacobi 0.6062 | vendor 0.8131 | two_stage 1.862 # deep
+dtype=cdouble jobz=N n=8 batch=8192 | cta_fused 0.5802 | cta 0.6480 | jacobi 1.704 | blocked 2.224 | vendor 3.168 | two_stage 7.208 # deep
+dtype=cdouble jobz=N n=8 batch=32768 | cta_fused 2.270 | cta 2.385 | jacobi 6.703 | blocked 8.682 | vendor 12.42 | two_stage 26.54 # deep
+dtype=cdouble jobz=N n=9 batch=128 | vendor 0.2587 | cta_fused 0.2819 | cta 0.3030 | blocked 0.3313 | jacobi 0.8108 | two_stage 0.9013 # deep
+dtype=cdouble jobz=N n=9 batch=512 | cta_fused 0.2890 | cta 0.3339 | blocked 0.3431 | vendor 0.4472 | jacobi 0.8149 | two_stage 1.238 # deep
+dtype=cdouble jobz=N n=9 batch=2048 | cta_fused 0.4045 | cta 0.4672 | blocked 0.7294 | jacobi 1.283 | vendor 1.471 | two_stage 2.082 # deep
+dtype=cdouble jobz=N n=9 batch=8192 | cta_fused 1.488 | cta 1.543 | blocked 2.779 | vendor 4.681 | jacobi 4.851 | two_stage 7.749 # deep
+dtype=cdouble jobz=N n=9 batch=32768 | cta 5.763 | cta_fused 5.675 | blocked 10.84 | vendor 18.25 | jacobi 18.42 | two_stage 29.99 # deep
+dtype=cdouble jobz=N n=12 batch=128 | vendor 0.3707 | cta_fused 0.4447 | blocked 0.4600 | cta 0.4734 | two_stage 0.6675 | jacobi 1.481 # deep
+dtype=cdouble jobz=N n=12 batch=512 | cta_fused 0.4459 | blocked 0.4792 | cta 0.5115 | vendor 0.6513 | two_stage 1.114 | jacobi 1.486 # deep
+dtype=cdouble jobz=N n=12 batch=2048 | cta_fused 0.6508 | cta 0.7301 | blocked 1.011 | vendor 2.153 | jacobi 2.382 | two_stage 3.329 # deep
+dtype=cdouble jobz=N n=12 batch=8192 | cta_fused 2.384 | cta 2.457 | blocked 3.833 | vendor 7.540 | jacobi 8.739 | two_stage 10.84 # deep
+dtype=cdouble jobz=N n=12 batch=32768 | cta 9.362 | cta_fused 9.244 | blocked 15.20 | vendor 29.76 | jacobi 34.40 | two_stage 42.39 # deep
+dtype=cdouble jobz=N n=14 batch=512 | cta_fused 0.5763 | blocked 0.5709 | cta 0.6496 | vendor 0.8038 | two_stage 1.487 | jacobi 2.128 # deep
+dtype=cdouble jobz=N n=14 batch=8192 | cta 3.152 | cta_fused 3.065 | blocked 4.610 | vendor 10.02 | jacobi 12.36 | two_stage 13.06 # deep
+dtype=cdouble jobz=N n=16 batch=128 | vendor 0.4266 | blocked 0.6441 | cta_fused 0.7458 | cta 0.7728 | two_stage 1.345 | jacobi 2.791 # deep
+dtype=cdouble jobz=N n=16 batch=512 | blocked 0.6657 | cta_fused 0.7398 | vendor 0.8176 | cta 0.8229 | two_stage 1.414 | jacobi 2.771 # deep
+dtype=cdouble jobz=N n=16 batch=2048 | cta_fused 1.106 | cta 1.207 | blocked 1.411 | vendor 2.807 | two_stage 3.972 | jacobi 4.525 # deep
+dtype=cdouble jobz=N n=16 batch=8192 | cta 4.207 | cta_fused 4.125 | blocked 5.400 | vendor 10.76 | two_stage 15.35 | jacobi 16.83 # deep
+dtype=cdouble jobz=N n=16 batch=32768 | cta 15.98 | cta_fused 15.75 | blocked 21.12 | vendor 42.29 | two_stage 58.77 | jacobi 65.24 # deep
+dtype=cdouble jobz=N n=18 batch=2048 | blocked 2.108 | cta 2.580 | cta_fused 2.882 | vendor 3.744 | two_stage 4.771 | jacobi 12.68 # deep
+dtype=cdouble jobz=N n=18 batch=8192 | blocked 7.753 | cta_fused 9.386 | cta 9.456 | vendor 14.18 | two_stage 17.41 | jacobi 43.54 # deep
+dtype=cdouble jobz=N n=18 batch=32768 | blocked 30.44 | cta 36.98 | cta_fused 37.05 | vendor 55.89 | two_stage 67.68 | jacobi 166.5 # deep
+dtype=cdouble jobz=N n=20 batch=128 | vendor 0.6417 | blocked 0.8503 | cta_fused 1.024 | cta 1.068 | two_stage 1.202 | jacobi 4.651 # deep
+dtype=cdouble jobz=N n=20 batch=512 | blocked 0.8890 | cta_fused 1.034 | cta 1.151 | vendor 1.232 | two_stage 2.196 | jacobi 4.703 # deep
+dtype=cdouble jobz=N n=20 batch=2048 | blocked 2.437 | cta 3.151 | cta_fused 3.427 | vendor 4.087 | two_stage 5.311 | jacobi 15.92 # deep
+dtype=cdouble jobz=N n=20 batch=8192 | blocked 8.863 | cta_fused 11.15 | cta 11.41 | vendor 15.45 | two_stage 19.47 | jacobi 54.46 # deep
+dtype=cdouble jobz=N n=20 batch=32768 | blocked 34.66 | cta_fused 43.27 | cta 43.37 | vendor 60.84 | two_stage 76.24 | jacobi 209.7 # deep
+dtype=cdouble jobz=N n=24 batch=128 | vendor 0.7071 | blocked 1.056 | two_stage 1.357 | cta_fused 1.408 | cta 1.461 | jacobi 6.490 # deep
+dtype=cdouble jobz=N n=24 batch=512 | blocked 1.118 | cta_fused 1.439 | vendor 1.512 | cta 1.584 | two_stage 2.194 | jacobi 6.663 # deep
+dtype=cdouble jobz=N n=24 batch=2048 | blocked 3.104 | cta 4.352 | cta_fused 4.774 | vendor 5.112 | two_stage 6.358 | jacobi 22.57 # deep
+dtype=cdouble jobz=N n=24 batch=8192 | blocked 11.22 | cta_fused 15.44 | cta 15.79 | vendor 19.38 | two_stage 24.03 | jacobi 77.35 # deep
+dtype=cdouble jobz=N n=24 batch=32768 | blocked 44.29 | cta_fused 60.50 | cta 60.67 | vendor 77.44 | two_stage 94.58 | jacobi 301.8 # deep
+dtype=cdouble jobz=N n=25 batch=128 | vendor 0.7934 | blocked 1.123 | two_stage 1.395 | cta_fused 1.530 | cta 1.586 | jacobi 7.142 # deep
+dtype=cdouble jobz=N n=25 batch=512 | blocked 1.169 | cta_fused 1.543 | cta 1.692 | vendor 1.738 | two_stage 2.653 | jacobi 7.232 # deep
+dtype=cdouble jobz=N n=25 batch=2048 | blocked 3.277 | cta 4.624 | cta_fused 5.136 | vendor 5.889 | two_stage 6.905 | jacobi 24.89 # deep
+dtype=cdouble jobz=N n=25 batch=8192 | blocked 11.95 | cta_fused 16.60 | cta 16.89 | vendor 22.52 | two_stage 25.43 | jacobi 85.80 # deep
+dtype=cdouble jobz=N n=25 batch=32768 | blocked 46.64 | cta_fused 64.74 | cta 64.78 | vendor 89.06 | two_stage 99.20 | jacobi 331.1 # deep
+dtype=cdouble jobz=N n=28 batch=128 | vendor 0.8051 | blocked 1.293 | two_stage 1.792 | cta_fused 1.846 | cta 1.907 | jacobi 9.478 # deep
+dtype=cdouble jobz=N n=28 batch=512 | blocked 1.347 | cta_fused 1.863 | vendor 1.882 | cta 2.030 | two_stage 2.556 | jacobi 9.578 # deep
+dtype=cdouble jobz=N n=28 batch=2048 | blocked 3.785 | cta 5.550 | cta_fused 6.223 | vendor 6.548 | two_stage 7.815 | jacobi 33.00 # deep
+dtype=cdouble jobz=N n=28 batch=8192 | blocked 13.77 | cta_fused 20.10 | cta 20.44 | vendor 25.25 | two_stage 29.14 | jacobi 113.6 # deep
+dtype=cdouble jobz=N n=28 batch=32768 | blocked 53.71 | cta_fused 78.70 | cta 78.78 | vendor 99.97 | two_stage 113.2 | jacobi 437.5 # deep
+dtype=cdouble jobz=N n=32 batch=128 | vendor 0.9177 | blocked 1.535 | two_stage 1.811 | cta_fused 2.399 | cta 2.466 | jacobi 11.90 # deep
+dtype=cdouble jobz=N n=32 batch=512 | blocked 1.590 | vendor 2.087 | cta_fused 2.407 | cta 2.594 | two_stage 2.968 | jacobi 11.97 # deep
+dtype=cdouble jobz=N n=32 batch=2048 | blocked 4.566 | cta 7.327 | vendor 7.571 | cta_fused 8.329 | two_stage 9.015 | jacobi 42.02 # deep
+dtype=cdouble jobz=N n=32 batch=8192 | blocked 16.67 | cta_fused 27.13 | cta 27.36 | vendor 29.70 | two_stage 34.20 | jacobi 145.7 # deep
+dtype=cdouble jobz=N n=32 batch=32768 | blocked 64.81 | cta 106.0 | cta_fused 106.1 | vendor 117.5 | two_stage 132.9 | jacobi 560.9 # deep
+dtype=cdouble jobz=N n=33 batch=128 | vendor 1.487 | two_stage 1.832 | blocked 1.952 # deep
+dtype=cdouble jobz=N n=33 batch=512 | blocked 2.458 | vendor 3.731 | two_stage 3.821 # deep
+dtype=cdouble jobz=N n=33 batch=2048 | blocked 8.365 | two_stage 11.67 | vendor 13.41 # deep
+dtype=cdouble jobz=N n=33 batch=8192 | blocked 29.89 | two_stage 43.92 | vendor 52.38 # deep
+dtype=cdouble jobz=N n=33 batch=32768 | blocked 118.8 | two_stage 172.4 | vendor 208.0 # deep
+dtype=cdouble jobz=N n=40 batch=128 | vendor 1.725 | blocked 2.390 | two_stage 2.671 # deep
+dtype=cdouble jobz=N n=40 batch=512 | blocked 3.133 | vendor 4.628 | two_stage 5.056 # deep
+dtype=cdouble jobz=N n=40 batch=2048 | blocked 10.74 | two_stage 16.40 | vendor 16.81 # deep
+dtype=cdouble jobz=N n=40 batch=8192 | blocked 38.73 | two_stage 63.44 | vendor 65.88 # deep
+dtype=cdouble jobz=N n=40 batch=32768 | blocked 155.1 | two_stage 253.3 | vendor 263.9 # deep
+dtype=cdouble jobz=N n=48 batch=128 | vendor 2.002 | blocked 2.990 | two_stage 4.639 # deep
+dtype=cdouble jobz=N n=48 batch=512 | blocked 4.079 | vendor 5.882 | two_stage 7.400 # deep
+dtype=cdouble jobz=N n=48 batch=2048 | blocked 14.05 | vendor 21.30 | two_stage 24.07 # deep
+dtype=cdouble jobz=N n=48 batch=8192 | blocked 50.58 | vendor 83.08 | two_stage 92.06 # deep
+dtype=cdouble jobz=N n=48 batch=32768 | blocked 202.2 | vendor 332.9 | two_stage 367.8 # deep
+dtype=cdouble jobz=N n=64 batch=128 | vendor 2.811 | blocked 4.292 | two_stage 7.435 # deep
+dtype=cdouble jobz=N n=64 batch=512 | blocked 6.052 | vendor 8.220 | two_stage 12.68 # deep
+dtype=cdouble jobz=N n=64 batch=2048 | blocked 21.71 | vendor 30.88 | two_stage 41.22 # deep
+dtype=cdouble jobz=N n=64 batch=8192 | blocked 79.92 | vendor 122.9 | two_stage 159.2 # deep
+dtype=cdouble jobz=N n=64 batch=32768 | blocked 316.3 | vendor 487.3 | two_stage 625.9 # deep
+dtype=cdouble jobz=N n=78 batch=128 | blocked 5.485 | vendor 6.680 | two_stage 11.56 # deep
+dtype=cdouble jobz=N n=96 batch=128 | blocked 7.335 | vendor 8.386 | two_stage 15.15 # deep
+dtype=cdouble jobz=N n=96 batch=512 | blocked 14.25 | vendor 26.18 | two_stage 29.62 # deep
+dtype=cdouble jobz=N n=96 batch=2048 | blocked 51.20 | two_stage 96.47 | vendor 97.99 # deep
+dtype=cdouble jobz=N n=96 batch=8192 | blocked 194.7 | two_stage 375.5 | vendor 394.8 # deep
+dtype=cdouble jobz=N n=128 batch=128 | blocked 11.33 | vendor 11.57 | two_stage 25.54 # deep
+dtype=cdouble jobz=N n=128 batch=512 | blocked 25.49 | vendor 37.38 | two_stage 52.40 # deep
+dtype=cdouble jobz=N n=128 batch=2048 | blocked 95.37 | vendor 143.4 | two_stage 177.2 # deep
+dtype=cdouble jobz=N n=128 batch=8192 | blocked 366.3 | vendor 597.6 | two_stage 686.1 # deep
+dtype=cdouble jobz=N n=157 batch=128 | vendor 16.90 | blocked 18.82 | two_stage 37.93 # deep
+dtype=cdouble jobz=N n=192 batch=128 | vendor 23.81 | blocked 27.51 | two_stage 58.22 # deep
+dtype=cdouble jobz=N n=192 batch=512 | blocked 72.58 | vendor 83.35 | two_stage 133.1 # deep
+dtype=cdouble jobz=N n=192 batch=2048 | blocked 265.9 | vendor 350.4 | two_stage 457.8 # deep
+dtype=cdouble jobz=N n=192 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=N n=256 batch=128 | vendor 42.04 | blocked 49.52 | two_stage 108.0 # deep
+dtype=cdouble jobz=N n=256 batch=512 | blocked 139.0 | vendor 163.4 | two_stage 261.2 # deep
+dtype=cdouble jobz=N n=256 batch=2048 | blocked 516.9 | vendor 664.3 | two_stage 930.0 # deep
+dtype=cdouble jobz=N n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=N n=257 batch=128 | vendor 46.49 | blocked 68.51 | two_stage 133.6 # deep
+dtype=cdouble jobz=N n=257 batch=512 | vendor 175.0 | blocked 183.5 | two_stage 295.8 # deep
+dtype=cdouble jobz=N n=257 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=N n=287 batch=512 | blocked 216.2 | vendor 218.0 | two_stage 350.7 # deep
+dtype=cdouble jobz=N n=320 batch=128 | vendor 71.41 | blocked 101.8 | two_stage 186.1 # deep
+dtype=cdouble jobz=N n=320 batch=512 | blocked 274.8 | vendor 281.3 | two_stage 439.2 # deep
+dtype=cdouble jobz=N n=320 batch=8192 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=N n=320 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=N n=321 batch=128 | vendor 76.68 | blocked 105.8 | two_stage 194.2 # deep
+dtype=cdouble jobz=N n=321 batch=512 | blocked 302.5 | vendor 301.4 | two_stage 476.1 # deep
+dtype=cdouble jobz=N n=321 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=321 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=384 batch=128 | vendor 110.9 | blocked 145.2 | two_stage 258.2 # deep
+dtype=cdouble jobz=N n=384 batch=512 | blocked 414.6 | vendor 444.1 | two_stage 648.0 # deep
+dtype=cdouble jobz=N n=384 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=384 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=448 batch=128 | vendor 159.7 | blocked 200.3 | two_stage 345.2 # deep
+dtype=cdouble jobz=N n=448 batch=512 | blocked 611.6 | vendor 649.3 | two_stage 933.1 # deep
+dtype=cdouble jobz=N n=448 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=448 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=449 batch=128 | vendor 169.2 | blocked 213.6 | two_stage 366.6 # deep
+dtype=cdouble jobz=N n=449 batch=512 | blocked 668.9 | vendor 688.3 | two_stage 995.5 # deep
+dtype=cdouble jobz=N n=449 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=449 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=512 batch=128 | vendor 224.0 | blocked 273.5 | two_stage 457.3 # deep
+dtype=cdouble jobz=N n=512 batch=512 | blocked 846.9 | vendor 908.8 | two_stage 1267 # deep
+dtype=cdouble jobz=N n=512 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=512 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=513 batch=128 | vendor 240.9 | blocked 327.5 | two_stage 480.3 # deep
+dtype=cdouble jobz=N n=513 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=513 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=640 batch=128 | vendor 400.2 | blocked 528.0 | two_stage 724.5 # deep
+dtype=cdouble jobz=N n=640 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=640 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=640 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=768 batch=128 | vendor 644.4 | blocked 816.0 | two_stage 1086 # deep
+dtype=cdouble jobz=N n=768 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=768 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=768 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1024 batch=128 | vendor 1365 | blocked 1685 | two_stage 2153 # deep
+dtype=cdouble jobz=N n=1024 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1024 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1024 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1025 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1025 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1025 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1536 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1536 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=1536 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=2048 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=2048 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=2048 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=4096 batch=128 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=4096 batch=512 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=4096 batch=2048 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=4096 batch=8192 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=N n=4096 batch=32768 | two_stage - | vendor - | blocked - # transcribed
+dtype=cdouble jobz=V n=1 batch=128 | jacobi 0.008438 | vendor 0.008598 | cta_fused 0.009284 | blocked 0.04747 | two_stage 0.05578 | cta 0.05793 # deep
+dtype=cdouble jobz=V n=1 batch=512 | jacobi 0.008452 | vendor 0.008498 | cta_fused 0.009184 | cta 0.05490 | blocked 0.05749 | two_stage 0.07645 # deep
+dtype=cdouble jobz=V n=1 batch=2048 | jacobi 0.008518 | vendor 0.008733 | cta_fused 0.009274 | blocked 0.05073 | cta 0.06031 | two_stage 0.1994 # deep
+dtype=cdouble jobz=V n=1 batch=8192 | vendor 0.008458 | jacobi 0.008813 | cta_fused 0.01006 | blocked 0.05182 | cta 0.06734 | two_stage 0.6625 # deep
+dtype=cdouble jobz=V n=1 batch=32768 | vendor 0.009053 | jacobi 0.01169 | cta_fused 0.01485 | blocked 0.07835 | cta 0.08414 | two_stage 2.620 # deep
+dtype=cdouble jobz=V n=2 batch=128 | jacobi 0.01867 | cta_fused 0.01956 | vendor 0.04108 | cta 0.06296 | blocked 0.09764 | two_stage 0.2154 # deep
+dtype=cdouble jobz=V n=2 batch=512 | jacobi 0.01842 | cta_fused 0.01919 | vendor 0.04799 | cta 0.06407 | blocked 0.09301 | two_stage 0.2324 # deep
+dtype=cdouble jobz=V n=2 batch=2048 | cta_fused 0.01839 | jacobi 0.01789 | cta 0.06579 | vendor 0.1006 | blocked 0.1050 | two_stage 0.3840 # deep
+dtype=cdouble jobz=V n=2 batch=8192 | cta_fused 0.02055 | jacobi 0.02157 | cta 0.07048 | blocked 0.1618 | vendor 0.3038 | two_stage 0.9525 # deep
+dtype=cdouble jobz=V n=2 batch=32768 | jacobi 0.06070 | cta_fused 0.06501 | cta 0.1203 | blocked 0.3328 | vendor 1.094 | two_stage 3.606 # deep
+dtype=cdouble jobz=V n=3 batch=128 | cta_fused 0.05728 | vendor 0.06455 | jacobi 0.06775 | cta 0.08364 | blocked 0.1304 | two_stage 0.7366 # deep
+dtype=cdouble jobz=V n=3 batch=512 | cta_fused 0.05724 | jacobi 0.06800 | vendor 0.08476 | cta 0.08830 | blocked 0.1910 | two_stage 0.8174 # deep
+dtype=cdouble jobz=V n=3 batch=2048 | cta_fused 0.05513 | jacobi 0.06706 | cta 0.09394 | vendor 0.2105 | blocked 0.4123 | two_stage 0.5840 # deep
+dtype=cdouble jobz=V n=3 batch=8192 | cta_fused 0.06849 | jacobi 0.09556 | cta 0.1151 | vendor 0.7716 | blocked 1.318 | two_stage 1.536 # deep
+dtype=cdouble jobz=V n=3 batch=32768 | cta_fused 0.2361 | cta 0.3092 | jacobi 0.3203 | vendor 2.934 | two_stage 4.840 | blocked 5.056 # deep
+dtype=cdouble jobz=V n=4 batch=128 | vendor 0.08295 | cta_fused 0.09792 | jacobi 0.1135 | cta 0.1246 | blocked 0.1534 | two_stage 0.7505 # deep
+dtype=cdouble jobz=V n=4 batch=512 | cta_fused 0.09717 | jacobi 0.1137 | vendor 0.1159 | cta 0.1376 | blocked 0.2212 | two_stage 0.4549 # deep
+dtype=cdouble jobz=V n=4 batch=2048 | cta_fused 0.09636 | jacobi 0.1128 | cta 0.1391 | vendor 0.3232 | blocked 0.4508 | two_stage 0.9014 # deep
+dtype=cdouble jobz=V n=4 batch=8192 | cta_fused 0.1283 | jacobi 0.1691 | cta 0.1820 | vendor 1.212 | blocked 1.376 | two_stage 2.267 # deep
+dtype=cdouble jobz=V n=4 batch=32768 | cta_fused 0.4698 | cta 0.5507 | jacobi 0.6015 | vendor 4.712 | blocked 5.353 | two_stage 7.681 # deep
+dtype=cdouble jobz=V n=6 batch=128 | vendor 0.1359 | cta_fused 0.1749 | cta 0.2009 | blocked 0.2283 | jacobi 0.3581 | two_stage 0.3951 # deep
+dtype=cdouble jobz=V n=6 batch=512 | cta_fused 0.1732 | vendor 0.1944 | cta 0.2198 | blocked 0.3023 | jacobi 0.3594 | two_stage 0.5919 # deep
+dtype=cdouble jobz=V n=6 batch=2048 | cta_fused 0.1747 | cta 0.2242 | jacobi 0.3602 | blocked 0.5441 | vendor 0.5772 | two_stage 1.336 # deep
+dtype=cdouble jobz=V n=6 batch=8192 | cta_fused 0.4234 | cta 0.4870 | jacobi 1.404 | blocked 1.707 | vendor 2.202 | two_stage 4.246 # deep
+dtype=cdouble jobz=V n=6 batch=32768 | cta_fused 1.641 | cta 1.724 | jacobi 3.980 | blocked 6.527 | vendor 8.546 | two_stage 13.90 # deep
+dtype=cdouble jobz=V n=8 batch=128 | vendor 0.1990 | cta_fused 0.2876 | cta 0.3169 | blocked 0.3364 | two_stage 0.5004 | jacobi 0.7675 # deep
+dtype=cdouble jobz=V n=8 batch=512 | cta_fused 0.2868 | vendor 0.2831 | cta 0.3407 | blocked 0.4160 | jacobi 0.7645 | two_stage 0.8596 # deep
+dtype=cdouble jobz=V n=8 batch=2048 | cta_fused 0.2852 | cta 0.3500 | blocked 0.6820 | jacobi 0.7618 | vendor 0.8475 | two_stage 1.751 # deep
+dtype=cdouble jobz=V n=8 batch=8192 | cta_fused 0.7206 | cta 0.8058 | blocked 2.110 | jacobi 2.943 | vendor 3.281 | two_stage 5.861 # deep
+dtype=cdouble jobz=V n=8 batch=32768 | cta_fused 2.841 | cta 2.975 | blocked 8.206 | jacobi 8.641 | vendor 12.96 | two_stage 20.96 # deep
+dtype=cdouble jobz=V n=9 batch=128 | vendor 0.3142 | blocked 0.3933 | cta_fused 0.3949 | cta 0.4120 | jacobi 1.015 | two_stage 1.052 # deep
+dtype=cdouble jobz=V n=9 batch=512 | cta_fused 0.3996 | cta 0.4381 | blocked 0.4782 | vendor 0.4833 | two_stage 0.9757 | jacobi 1.031 # deep
+dtype=cdouble jobz=V n=9 batch=2048 | cta_fused 0.5709 | cta 0.6236 | blocked 0.8876 | vendor 1.571 | two_stage 2.291 | jacobi 2.298 # deep
+dtype=cdouble jobz=V n=9 batch=8192 | cta 2.186 | cta_fused 2.225 | blocked 3.139 | vendor 5.084 | jacobi 6.224 | two_stage 7.425 # deep
+dtype=cdouble jobz=V n=9 batch=32768 | cta 7.867 | cta_fused 7.924 | blocked 11.96 | vendor 19.74 | jacobi 23.82 | two_stage 26.42 # deep
+dtype=cdouble jobz=V n=12 batch=128 | vendor 0.3957 | cta_fused 0.6097 | cta 0.6176 | blocked 0.6276 | two_stage 0.7617 | jacobi 1.914 # deep
+dtype=cdouble jobz=V n=12 batch=512 | cta_fused 0.6084 | cta 0.6549 | vendor 0.7004 | blocked 0.7250 | two_stage 1.242 | jacobi 1.915 # deep
+dtype=cdouble jobz=V n=12 batch=2048 | cta_fused 0.8867 | cta 0.9566 | blocked 1.406 | vendor 2.327 | two_stage 2.943 | jacobi 4.394 # deep
+dtype=cdouble jobz=V n=12 batch=8192 | cta 3.411 | cta_fused 3.447 | blocked 4.975 | vendor 8.215 | two_stage 10.02 | jacobi 11.68 # deep
+dtype=cdouble jobz=V n=12 batch=32768 | cta 12.32 | cta_fused 12.30 | blocked 18.87 | vendor 31.81 | two_stage 37.96 | jacobi 44.36 # deep
+dtype=cdouble jobz=V n=14 batch=512 | cta_fused 0.7691 | cta 0.8272 | vendor 0.8776 | blocked 0.9527 | two_stage 1.540 | jacobi 2.763 # deep
+dtype=cdouble jobz=V n=16 batch=128 | vendor 0.4563 | cta 0.9654 | cta_fused 0.9721 | blocked 1.031 | two_stage 1.132 | jacobi 3.593 # deep
+dtype=cdouble jobz=V n=16 batch=512 | vendor 0.8973 | cta_fused 0.9826 | cta 1.036 | blocked 1.171 | two_stage 1.701 | jacobi 3.636 # deep
+dtype=cdouble jobz=V n=16 batch=2048 | cta_fused 1.433 | cta 1.521 | blocked 2.296 | vendor 2.998 | two_stage 4.266 | jacobi 8.277 # deep
+dtype=cdouble jobz=V n=16 batch=8192 | cta 5.610 | cta_fused 5.652 | blocked 8.326 | vendor 11.59 | two_stage 15.04 | jacobi 22.33 # deep
+dtype=cdouble jobz=V n=16 batch=32768 | cta 20.83 | cta_fused 20.47 | blocked 32.10 | vendor 46.15 | two_stage 56.55 | jacobi 85.82 # deep
+dtype=cdouble jobz=V n=18 batch=2048 | cta 4.294 | blocked 4.343 | vendor 4.366 | two_stage 5.768 | cta_fused 5.838 | jacobi 27.59 # deep
+dtype=cdouble jobz=V n=20 batch=128 | vendor 0.6898 | two_stage 1.435 | blocked 1.522 | cta 1.659 | cta_fused 1.674 | jacobi 6.005 # deep
+dtype=cdouble jobz=V n=20 batch=512 | vendor 1.418 | cta_fused 1.734 | cta 1.765 | blocked 1.786 | two_stage 2.644 | jacobi 11.84 # deep
+dtype=cdouble jobz=V n=20 batch=2048 | vendor 4.784 | blocked 5.020 | cta 5.064 | cta_fused 6.749 | two_stage 6.765 | jacobi 35.10 # deep
+dtype=cdouble jobz=V n=20 batch=8192 | cta 17.21 | vendor 18.24 | blocked 18.33 | two_stage 23.69 | cta_fused 24.78 | jacobi 128.5 # deep
+dtype=cdouble jobz=V n=20 batch=32768 | cta 65.71 | blocked 72.45 | vendor 72.60 | two_stage 91.04 | cta_fused 97.56 | jacobi 515.3 # deep
+dtype=cdouble jobz=V n=22 batch=2048 | vendor 5.447 | blocked 5.648 | cta 5.809 | two_stage 7.456 | cta_fused 7.857 | jacobi 41.61 # deep
+dtype=cdouble jobz=V n=24 batch=128 | vendor 0.7798 | blocked 1.928 | cta 2.202 | cta_fused 2.222 | two_stage 2.279 | jacobi 8.488 # deep
+dtype=cdouble jobz=V n=24 batch=512 | vendor 1.773 | blocked 2.224 | cta_fused 2.328 | cta 2.350 | two_stage 3.423 | jacobi 16.79 # deep
+dtype=cdouble jobz=V n=24 batch=2048 | blocked 6.295 | vendor 6.142 | cta 6.767 | two_stage 8.623 | cta_fused 9.014 | jacobi 50.63 # deep
+dtype=cdouble jobz=V n=24 batch=8192 | cta 23.13 | blocked 23.21 | vendor 23.47 | two_stage 31.47 | cta_fused 32.95 | jacobi 184.9 # deep
+dtype=cdouble jobz=V n=24 batch=32768 | cta 87.60 | blocked 90.56 | vendor 92.79 | two_stage 120.4 | cta_fused 128.1 | jacobi 733.5 # deep
+dtype=cdouble jobz=V n=25 batch=128 | vendor 0.8672 | blocked 2.060 | cta 2.379 | cta_fused 2.385 | two_stage 2.416 | jacobi 9.386 # deep
+dtype=cdouble jobz=V n=25 batch=512 | vendor 2.036 | blocked 2.339 | cta_fused 2.475 | cta 2.506 | two_stage 3.657 | jacobi 18.56 # deep
+dtype=cdouble jobz=V n=25 batch=2048 | blocked 6.640 | vendor 6.969 | cta 7.167 | two_stage 9.059 | cta_fused 9.562 | jacobi 55.79 # deep
+dtype=cdouble jobz=V n=25 batch=8192 | cta 24.75 | blocked 24.80 | vendor 26.95 | two_stage 34.27 | cta_fused 35.34 | jacobi 205.4 # deep
+dtype=cdouble jobz=V n=25 batch=32768 | cta 94.54 | blocked 97.34 | vendor 107.1 | two_stage 132.9 | cta_fused 137.8 | jacobi 817.4 # deep
+dtype=cdouble jobz=V n=28 batch=128 | vendor 0.9209 | two_stage 2.307 | blocked 2.454 | cta 2.777 | cta_fused 2.810 | jacobi 12.30 # deep
+dtype=cdouble jobz=V n=28 batch=512 | vendor 2.212 | blocked 2.756 | cta_fused 2.899 | cta 2.929 | two_stage 3.776 | jacobi 24.20 # deep
+dtype=cdouble jobz=V n=28 batch=2048 | blocked 7.865 | vendor 7.802 | cta 8.315 | two_stage 10.71 | cta_fused 11.20 | jacobi 72.73 # deep
+dtype=cdouble jobz=V n=28 batch=8192 | cta 29.14 | blocked 29.49 | vendor 30.38 | two_stage 40.53 | cta_fused 41.43 | jacobi 268.2 # deep
+dtype=cdouble jobz=V n=28 batch=32768 | cta 112.4 | blocked 116.1 | vendor 121.8 | two_stage 158.1 | cta_fused 162.5 | jacobi 1073 # deep
+dtype=cdouble jobz=V n=30 batch=2048 | blocked 8.811 | vendor 8.901 | cta 9.636 | two_stage 12.21 | cta_fused 13.13 | jacobi 80.89 # deep
+dtype=cdouble jobz=V n=32 batch=128 | vendor 1.055 | blocked 3.141 | two_stage 3.294 | cta 3.535 | cta_fused 3.582 | jacobi 15.73 # deep
+dtype=cdouble jobz=V n=32 batch=512 | vendor 2.575 | blocked 3.468 | cta_fused 3.684 | cta 3.704 | two_stage 5.002 | jacobi 31.33 # deep
+dtype=cdouble jobz=V n=32 batch=2048 | vendor 9.216 | blocked 9.840 | cta 10.59 | two_stage 13.28 | cta_fused 14.33 | jacobi 93.43 # deep
+dtype=cdouble jobz=V n=32 batch=8192 | blocked 37.38 | vendor 36.70 | cta 38.28 | two_stage 50.27 | cta_fused 53.98 | jacobi 346.6 # deep
+dtype=cdouble jobz=V n=32 batch=32768 | cta 147.0 | blocked 146.1 | vendor 146.5 | two_stage 195.5 | cta_fused 210.7 | jacobi 1388 # deep
+dtype=cdouble jobz=V n=33 batch=128 | two_stage 2.108 | vendor 2.375 | blocked 2.829 # deep
+dtype=cdouble jobz=V n=33 batch=512 | blocked 3.948 | two_stage 4.253 | vendor 6.706 # deep
+dtype=cdouble jobz=V n=33 batch=2048 | blocked 12.62 | two_stage 13.39 | vendor 24.40 # deep
+dtype=cdouble jobz=V n=33 batch=8192 | blocked 46.06 | two_stage 51.18 | vendor 97.15 # deep
+dtype=cdouble jobz=V n=33 batch=32768 | blocked 180.3 | two_stage 197.3 | vendor 381.3 # deep
+dtype=cdouble jobz=V n=36 batch=128 | vendor 2.257 | two_stage 2.569 | blocked 3.252 # deep
+dtype=cdouble jobz=V n=40 batch=128 | vendor 2.368 | two_stage 3.647 | blocked 3.662 # deep
+dtype=cdouble jobz=V n=40 batch=512 | blocked 5.455 | vendor 6.870 | two_stage 6.902 # deep
+dtype=cdouble jobz=V n=40 batch=2048 | blocked 17.88 | two_stage 21.61 | vendor 25.24 # deep
+dtype=cdouble jobz=V n=40 batch=8192 | blocked 65.77 | two_stage 81.47 | vendor 99.50 # deep
+dtype=cdouble jobz=V n=40 batch=32768 | blocked 258.1 | two_stage 318.3 | vendor 391.9 # deep
+dtype=cdouble jobz=V n=48 batch=128 | vendor 2.713 | blocked 4.616 | two_stage 5.324 # deep
+dtype=cdouble jobz=V n=48 batch=512 | blocked 7.050 | vendor 8.266 | two_stage 10.71 # deep
+dtype=cdouble jobz=V n=48 batch=2048 | blocked 23.08 | vendor 30.56 | two_stage 33.21 # deep
+dtype=cdouble jobz=V n=48 batch=8192 | blocked 85.62 | vendor 120.6 | two_stage 126.5 # deep
+dtype=cdouble jobz=V n=48 batch=32768 | blocked 340.1 | vendor 481.6 | two_stage 501.2 # deep
+dtype=cdouble jobz=V n=64 batch=128 | vendor 3.781 | blocked 6.801 | two_stage 10.41 # deep
+dtype=cdouble jobz=V n=64 batch=512 | blocked 10.65 | vendor 12.11 | two_stage 19.02 # deep
+dtype=cdouble jobz=V n=64 batch=2048 | blocked 36.41 | vendor 45.87 | two_stage 61.46 # deep
+dtype=cdouble jobz=V n=64 batch=8192 | blocked 137.9 | vendor 184.1 | two_stage 239.0 # deep
+dtype=cdouble jobz=V n=64 batch=32768 | blocked 540.2 | vendor 727.0 | two_stage 933.2 # deep
+dtype=cdouble jobz=V n=78 batch=128 | blocked 7.933 | vendor 9.027 | two_stage 13.64 # deep
+dtype=cdouble jobz=V n=96 batch=128 | blocked 10.84 | vendor 11.58 | two_stage 20.19 # deep
+dtype=cdouble jobz=V n=96 batch=512 | blocked 21.87 | vendor 37.91 | two_stage 44.37 # deep
+dtype=cdouble jobz=V n=96 batch=2048 | blocked 79.38 | vendor 143.7 | two_stage 152.9 # deep
+dtype=cdouble jobz=V n=96 batch=8192 | blocked 301.8 | vendor 589.0 | two_stage 590.8 # deep
+dtype=cdouble jobz=V n=128 batch=128 | blocked 17.29 | vendor 18.29 | two_stage 36.95 # deep
+dtype=cdouble jobz=V n=128 batch=512 | blocked 39.99 | vendor 64.35 | two_stage 85.62 # deep
+dtype=cdouble jobz=V n=128 batch=2048 | blocked 146.7 | vendor 246.6 | two_stage 300.4 # deep
+dtype=cdouble jobz=V n=128 batch=8192 | blocked 573.7 | vendor 1038 | two_stage 1182 # deep
+dtype=cdouble jobz=V n=157 batch=128 | vendor 26.80 | blocked 31.47 | two_stage 58.57 # deep
+dtype=cdouble jobz=V n=192 batch=128 | vendor 37.58 | blocked 45.51 | two_stage 92.36 # deep
+dtype=cdouble jobz=V n=192 batch=512 | blocked 123.6 | vendor 139.1 | two_stage 246.1 # deep
+dtype=cdouble jobz=V n=192 batch=2048 | blocked 459.2 | vendor 569.5 | two_stage 890.7 # deep
+dtype=cdouble jobz=V n=192 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=V n=256 batch=128 | vendor 72.51 | blocked 81.84 | two_stage 180.3 # deep
+dtype=cdouble jobz=V n=256 batch=512 | blocked 241.4 | vendor 284.7 | two_stage 523.9 # deep
+dtype=cdouble jobz=V n=256 batch=2048 | blocked 914.9 | vendor 1121 | two_stage 1959 # deep
+dtype=cdouble jobz=V n=256 batch=32768 | blocked - | vendor - | two_stage - # transcribed
+dtype=cdouble jobz=V n=257 batch=128 | vendor 76.86 | blocked 125.2 | two_stage 231.2 # deep
+dtype=cdouble jobz=V n=257 batch=512 | vendor 296.6 | blocked 334.6 | two_stage 626.1 # deep
+dtype=cdouble jobz=V n=257 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=320 batch=128 | vendor 118.3 | blocked 184.5 | two_stage 351.2 # deep
+dtype=cdouble jobz=V n=320 batch=512 | vendor 473.0 | blocked 500.9 | two_stage 1003 # deep
+dtype=cdouble jobz=V n=320 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=320 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=321 batch=128 | vendor 127.0 | blocked 196.7 | two_stage 373.5 # deep
+dtype=cdouble jobz=V n=321 batch=512 | vendor 495.9 | blocked 537.9 | two_stage 1063 # deep
+dtype=cdouble jobz=V n=321 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=321 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=351 batch=512 | vendor 600.3 | blocked 626.3 | two_stage 1262 # deep
+dtype=cdouble jobz=V n=384 batch=128 | vendor 187.2 | blocked 270.6 | two_stage 522.7 # deep
+dtype=cdouble jobz=V n=384 batch=512 | blocked 773.3 | vendor 758.0 | two_stage 1587 # deep
+dtype=cdouble jobz=V n=384 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=384 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=448 batch=128 | vendor 274.3 | blocked 377.3 | two_stage 757.9 # deep
+dtype=cdouble jobz=V n=448 batch=512 | blocked 1107 | vendor 1089 | two_stage 2354 # deep
+dtype=cdouble jobz=V n=448 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=448 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=449 batch=128 | vendor 282.2 | blocked 389.5 | two_stage 780.2 # deep
+dtype=cdouble jobz=V n=449 batch=512 | vendor 1137 | blocked 1196 | two_stage 2520 # deep
+dtype=cdouble jobz=V n=449 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=449 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=479 batch=512 | vendor 1326 | blocked 1368 | two_stage 2860 # deep
+dtype=cdouble jobz=V n=512 batch=128 | vendor 386.8 | blocked 495.9 | two_stage 1039 # deep
+dtype=cdouble jobz=V n=512 batch=512 | blocked 1532 | vendor 1558 | two_stage 3371 # deep
+dtype=cdouble jobz=V n=512 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=512 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=513 batch=128 | vendor 402.5 | blocked 572.0 | two_stage 1129 # deep
+dtype=cdouble jobz=V n=513 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=513 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=640 batch=128 | vendor 689.9 | blocked 936.4 | two_stage 1935 # deep
+dtype=cdouble jobz=V n=640 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=640 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=640 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=768 batch=128 | vendor 1110 | blocked 1434 | two_stage 3131 # deep
+dtype=cdouble jobz=V n=768 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=768 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=768 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1024 batch=128 | vendor 2374 | blocked 2929 | two_stage 6694 # deep
+dtype=cdouble jobz=V n=1024 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1024 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1024 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1025 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1025 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1025 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1536 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1536 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=1536 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=2048 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=2048 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=2048 batch=32768 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=4096 batch=128 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=4096 batch=512 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=4096 batch=2048 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=4096 batch=8192 | vendor - | blocked - | two_stage - # transcribed
+dtype=cdouble jobz=V n=4096 batch=32768 | vendor - | blocked - | two_stage - # transcribed
