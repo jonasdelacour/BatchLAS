@@ -9,7 +9,11 @@
 /* Tuning tab only; everything shared lives in benchviz.css. */
 html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page */
 :root { --t-deep: var(--accent); --t-coarse: color-mix(in srgb, var(--accent) 55%, var(--surface));
-  --t-preview: color-mix(in srgb, var(--accent) 25%, var(--surface)); --t-custom: var(--warn); --t-transcribed: var(--hair-2); }
+  --t-preview: color-mix(in srgb, var(--accent) 25%, var(--surface)); --t-custom: var(--warn);
+  --t-converted: color-mix(in srgb, var(--warn) 45%, var(--surface)); --t-transcribed: var(--hair-2); }
+.fam { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.fam.stale { color: var(--warn); }
+textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resize: vertical; }
 .tierbar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--sunken); margin: 2px 0 5px; }
 .tierbar i { display: block; height: 100%; }
 .mx td { vertical-align: top; min-width: 150px; }
@@ -39,7 +43,7 @@ html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page *
 .prog { height: 4px; background: var(--sunken); border-radius: 2px; overflow: hidden; min-width: 80px; }
 .prog i { display: block; height: 100%; background: var(--accent); }
 .planlist { max-height: 220px; overflow: auto; font: 12px/1.6 var(--mono); color: var(--ink-2); background: var(--sunken); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
-.tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tiers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 .tiers label { display: flex; flex-direction: column; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px; cursor: pointer; }
 .tiers input { position: absolute; opacity: 0; pointer-events: none; }
 .tiers b { font-size: 13px; } .tiers span { font-size: 11px; color: var(--muted); }
@@ -97,6 +101,9 @@ html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page *
       <div><label class="fl" for="dwait">Wait for a busy GPU [min]</label><input class="field num" id="dwait" type="number" min="0" value="60"></div>
     </div>
     <label class="fl"><input type="checkbox" id="dexcl"> Exclusive GPUs <span class="muted">— also refuse a GPU that only holds another user's idle context</span></label>
+    <div class="lbl">Cells to measure again <span class="hint">one <span class="mono">&lt;op&gt; &lt;dtype&gt; &lt;name=v,...&gt;</span> per line (<span class="mono">--remeasure-keys</span>); tier custom measures only these</span></div>
+    <textarea class="field" id="dkeys" placeholder="potrf float uplo=L,n=64,batch=128"></textarea>
+    <label class="fl" id="ddirtyl" hidden><input type="checkbox" id="ddirty"> Allow a dirty tree <span class="muted">— this checkout has uncommitted changes to tracked files; the run is stamped <span class="mono">-dirty</span> and never reaches <span class="mono">tuned/</span></span></label>
     <div class="lbl">Name</div>
     <input class="field" id="dname" placeholder="tier-date-time">
     <div class="planlist" id="dplan" hidden></div>
@@ -111,7 +118,7 @@ html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page *
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
-const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", preview: "--t-preview", custom: "--t-custom", transcribed: "--t-transcribed" };
+const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", preview: "--t-preview", custom: "--t-custom", converted: "--t-converted", transcribed: "--t-transcribed" };
 const PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#e377c2", "#bcbd22", "#17becf", "#8c564b", "#393b79"];
 const VENDOR = "#7f7f7f";
 let meta = null, ST = null, RUN = null, route = { page: "status" }, device = null, es = null, built = null;
@@ -145,7 +152,7 @@ function tierBar(tiers, total) {
     `<i style="width:${(100 * tiers[t] / total).toFixed(2)}%;background:var(${TIER_VAR[t]})" title="${t}: ${tiers[t]}"></i>`).join("")}</div>`;
 }
 function tierLegend() {
-  return `<div class="legend">${meta.tierOrder.slice(0, 4).map(t => `<span><i style="background:var(${TIER_VAR[t]})"></i>${t}</span>`).join("")}</div>`;
+  return `<div class="legend">${meta.tierOrder.map(t => `<span><i style="background:var(${TIER_VAR[t]})"></i>${t}</span>`).join("")}</div>`;
 }
 
 // ---------------------------------------------------------------- theme
@@ -169,11 +176,16 @@ $("device").onchange = (e) => { device = e.target.value; try { localStorage.setI
 
 async function loadStatus() {
   ST = await getJ("/api/tune/status");
+  // /meta reads no ledger, so the candidate lists arrive with the status.
+  if (ST.error) { patch($("view"), `<div class="empty">${esc(ST.error)}</div>`); return; }
+  meta.ops = ST.ops;
+  $("dops").querySelectorAll("label.opc").forEach(l => { const o = ST.ops.find(x => x.name === l.querySelector("input").value); if (o) l.title = o.cands.join(" "); });
   const devs = ST.devices.filter(d => ST.rows.some(r => r.device === d && r.best));
   const all = devs.length ? devs : ST.devices;
   let saved = null; try { saved = localStorage.getItem("bv-tune-device"); } catch (e) {}
-  if (!device || !all.includes(device)) device = all.includes(saved) ? saved : all.slice().sort((a, b) =>
-    ST.rows.filter(r => r.device === b).reduce((s, r) => s + r.best, 0) - ST.rows.filter(r => r.device === a).reduce((s, r) => s + r.best, 0))[0];
+  // Default: the device with the most measured records (converted and transcribed ones are not measurements here).
+  const measured = (d) => ST.rows.filter(r => r.device === d).reduce((s, r) => s + r.best - r.tiers.converted - r.tiers.transcribed, 0);
+  if (!device || !all.includes(device)) device = all.includes(saved) ? saved : all.slice().sort((a, b) => measured(b) - measured(a))[0];
   patch($("device"), ST.devices.map(d => `<option ${d === device ? "selected" : ""}>${esc(d)}</option>`).join(""));
   render();
 }
@@ -233,9 +245,11 @@ function render() {
 // ---------------------------------------------------------------- status matrix
 function buildStatus() {
   $("view").innerHTML = `<div class="head"><h1>Tuning status</h1><span class="muted" id="st-dev"></span></div>
-    <p class="lede">The best record of every cell in the tuning ledger, judged against the kernel sources in this checkout, next to
-      the table shipped in <span class="mono">tuned/</span>. A record is kept until a higher tier measures its cell; a stale one
-      (its winner's kernels changed) is measured again by the next run of any tier. Click a cell for its winner map.</p>
+    <p class="lede">The best record of every cell in the ledger <span class="mono">&lt;op&gt;.&lt;device&gt;.jsonl</span>, read as
+      <span class="mono">sweep_to_table.py</span> reads it (rehash lines applied, <span class="mono">-dirty</span> runs left out) and judged
+      against the kernel sources in this checkout, next to the table <span class="mono">tuned/&lt;op&gt;.&lt;device&gt;.txt</span>. A record is
+      kept until a higher tier measures its cell; a stale one (its winner's kernels changed) is measured again by the next run of any
+      tier. A family marked ! changed since its table was written. Click a cell for its winner map.</p>
     <div class="panel stats" id="st-stats"></div>
     <div class="sec"><h2>Operations × precision</h2><span class="sp-grow"></span><div id="st-leg"></div></div>
     <div class="panel"><div style="overflow-x:auto" id="st-mx"></div></div>`;
@@ -246,30 +260,52 @@ function updateStatus() {
   const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
   const best = sum(r => r.best), deep = sum(r => r.tiers.deep), stale = sum(r => r.stale), partial = sum(r => r.partial);
   const bad = sum(r => r.audits.mismatch), audited = sum(r => r.audits.ok + r.audits.mismatch + r.audits.inconclusive);
+  const files = Object.values(ST.files).filter(f => f.device === device);
   const ledgers = rows.filter(r => r.best).length;
-  const behind = rows.filter(r => r.best && (!r.table || r.table.source !== "ledger" || r.table.date < r.newest)).length;
+  const behind = files.filter(f => f.ledger && (!f.table || f.table.source !== "ledger" || rows.some(r => r.op === f.op && r.table && r.table.behind))).length;
+  const kstale = files.filter(f => f.families.some(famChanged)).length;
   patch($("st-stats"), `
-    <div><div class="k">Cells with a current record</div><div class="v">${best.toLocaleString()}</div><div class="f">${ledgers} of ${meta.ops.length * 4} op × precision ledgers</div></div>
+    <div><div class="k">Cells with a current record</div><div class="v">${best.toLocaleString()}</div><div class="f">${ledgers} of ${rows.length} op × precision ledgers</div></div>
     <div><div class="k">Deep</div><div class="v">${pct(deep, best)}</div><div class="f">${tierLegend()}</div></div>
     <div><div class="k">Stale · partly stale</div><div class="v" ${stale + partial ? 'style="color:var(--warn)"' : ""}>${stale}<small> · ${partial}</small></div><div class="f">stale: no current record; partly: a losing family changed. The next run re-measures both within its size cap</div></div>
     <div><div class="k">Audit mismatches</div><div class="v" ${bad ? 'style="color:var(--bad)"' : ""}>${bad}<small> / ${audited}</small></div><div class="f">fresh process vs warm worker</div></div>
-    <div><div class="k">Tables behind the ledger</div><div class="v" ${behind ? 'style="color:var(--warn)"' : ""}>${behind}</div><div class="f">not written from it, or older</div></div>`);
+    <div><div class="k">Tables behind · stale kernels</div><div class="v" ${behind + kstale ? 'style="color:var(--warn)"' : ""}>${behind}<small> · ${kstale}</small></div><div class="f">behind: the header does not name the ledger's newest run; stale: a family's sources changed since the table</div></div>`);
   const dts = meta.dtypes;
-  patch($("st-mx"), `<table class="mx"><thead><tr><th>Operation</th>${dts.map(t => `<th>${PREC[t][0]}</th>`).join("")}</tr></thead><tbody>${meta.ops.map(o =>
-    `<tr><td><span class="mono">${o.name}</span><span class="sub2 mono">${esc(o.keys.split(" ").map(k => k.split(":")[0]).join(" "))}</span></td>${dts.map(t => statusCell(o.name, t)).join("")}</tr>`).join("")}</tbody></table>`);
+  patch($("st-mx"), `<table class="mx"><thead><tr><th>Operation</th><th>Kernel families</th>${dts.map(t => `<th>${PREC[t][0]}</th>`).join("")}</tr></thead><tbody>${meta.ops.map(o =>
+    `<tr><td><span class="mono">${o.name}</span><span class="sub2 mono">${esc(o.keys.split(" ").map(k => k.split(":")[0]).join(" "))}</span></td>${famCell(o.name)}${dts.map(t => statusCell(o.name, t)).join("")}</tr>`).join("")}</tbody></table>`);
+}
+// A family is stale when the sources' hash v2 differs from the table header's family_kernels.
+const famChanged = (x) => x.table && x.now && x.table !== x.now;
+const famStale = (x) => Object.values(x.stale).reduce((a, b) => a + b, 0);
+function famTip(x) {
+  const n = famStale(x);
+  return `${x.name}: table ${x.table || "—"}, sources now ${x.now || "—"}` + (famChanged(x) ? ", changed since the table" : "") +
+    (n ? `\nledger keys stale in it (re-raced by the next run): ${Object.entries(x.stale).map(([d, k]) => `${d} ${k}`).join(", ")}` : "");
+}
+function famCell(op) {
+  const f = ST.files[`${op}.${device}`];
+  if (!f) return `<td class="muted">—</td>`;
+  const fams = f.families.map(x => `<span class="fam ${famChanged(x) ? "stale" : ""}" title="${esc(famTip(x))}">${esc(x.name)}${famChanged(x) ? "!" : ""}</span>`).join(" ");
+  const notes = [f.error ? `<span class="badge bad" title="${esc(f.error)}">ledger unreadable</span>` : "",
+    f.warnings.length ? `<span class="badge warn" title="${esc(f.warnings.join("\n"))}">${f.warnings.length} warning${f.warnings.length > 1 ? "s" : ""}</span>` : "",
+    f.table_warnings.length ? `<span class="badge warn" title="${esc(f.table_warnings.join("\n"))}">retune</span>` : "",
+    f.ledger ? "" : `<span class="badge warn">no ledger</span>`, f.table ? "" : `<span class="badge warn">no table</span>`].join("");
+  return `<td style="min-width:120px">${fams}<span class="sub2">${notes}</span></td>`;
 }
 function statusCell(op, dtype) {
   const r = ST.rows.find(x => x.op === op && x.dtype === dtype && x.device === device);
   if (!r) return `<td class="muted">—</td>`;
   const tbl = r.table, age = r.age_days == null ? "" : r.age_days < 1 ? "today" : `${Math.floor(r.age_days)} d ago`;
   const tblText = !tbl ? `<span class="badge warn">no table</span>` : tbl.source === "ledger"
-    ? `<span class="muted">table ${esc(tbl.date)}</span>${r.newest && tbl.date < r.newest ? ` <span class="badge warn" title="the ledger has records newer than the table">behind</span>` : ""}`
+    ? `<span class="muted">table ${tbl.rows} rows</span>${tbl.behind ? ` <span class="badge warn" title="the table header does not name the ledger's newest run: regenerate it">behind</span>` : ""}`
     : `<span class="muted">table ${esc(tbl.source)}${tbl.date ? " " + esc(tbl.date) : ""}</span>`;
-  if (!r.best) return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'"><span class="muted">no ledger</span><span class="sub2">${tblText}</span></td>`;
-  const badges = [r.stale ? `<span class="badge warn" title="records whose winner's kernels changed">${r.stale} stale</span>` : "",
+  const err = r.error ? `<span class="badge bad" title="${esc(r.error)}">refused</span>` : "";
+  if (!r.best) return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'"><span class="muted">${r.cells ? `no current record (${r.cells} stale)` : "no ledger"}</span><span class="sub2">${err}${tblText}</span></td>`;
+  const badges = [r.stale ? `<span class="badge warn" title="keys with no usable record: the winner's kernels changed">${r.stale} stale</span>` : "",
     r.partial ? `<span class="badge warn" title="a losing family's kernels changed; only it is raced again">${r.partial} partial</span>` : "",
-    r.audits.mismatch ? `<span class="badge bad" title="fresh-process audit disagreed">${r.audits.mismatch} audit</span>` : ""].join("");
-  return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'" title="${esc(Object.entries(r.tiers).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(", "))}; ${r.runs} runs">
+    r.audits.mismatch ? `<span class="badge bad" title="fresh-process audit disagreed">${r.audits.mismatch} audit</span>` : "", err].join("");
+  const mix = (o) => Object.entries(o).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(", ") || "none";
+  return `<td class="cell" onclick="location.hash='#/op/${op}/${dtype}'" title="${esc(`best records: ${mix(r.tiers)}\nthe next table's rows: ${mix(r.rows)}\nshipped rows: ${tbl ? mix(tbl.tiers) : "no table"}\n${r.runs} runs`)}">
     ${tierBar(r.tiers, r.best)}<span class="big">${r.best.toLocaleString()}</span> <span class="muted num">· ${pct(r.refined, r.best)} refined · ${age}</span>
     <span class="sub2">${badges}${tblText}</span></td>`;
 }
@@ -285,6 +321,8 @@ function buildOp() {
       <span class="muted num" id="op-count"></span></div>
     <p class="lede" id="op-lede"></p>
     <div class="panel stats" id="op-stats"></div>
+    <div class="sec"><h2>Kernel families</h2><span class="sp-grow"></span><span class="muted">hash v2 of each family's sources</span></div>
+    <div class="panel"><div class="scroll" id="op-fams"></div></div>
     <div class="sec"><h2>Winner map</h2><span class="sp-grow"></span><div class="seg" id="op-mode"></div></div>
     <div class="panel map"><div class="ctl" id="op-ctl"></div><div id="op-svg"><div class="empty">Loading…</div></div><div class="legend" id="op-leg" style="margin-top:10px"></div></div>
     <div class="panel detail" id="op-detail" hidden></div>
@@ -339,9 +377,20 @@ function drawOp() {
   const wins = {}; cells.forEach(c => { const f = c[3] >= 0 ? family(v.cands[c[3]]) : "none"; wins[f] = (wins[f] || 0) + 1; });
   const top = Object.entries(wins).sort((a, b) => b[1] - a[1]);
   text($("op-count"), `${cells.length.toLocaleString()} cells on ${device}`);
-  patch($("op-lede"), `Each cell's best record from <span class="mono">${esc(v.op)}.${esc(v.dtype)}.${esc(v.device)}</span>: ${v.cands.length} candidates in ${fams.length} families,
-    keys <span class="mono">${esc(v.keys.map(k => k.name).join(" "))}</span>. Shipped table: ${v.table ? `${esc(v.table.source)}, ${esc(v.table.date)}, ${v.table.rows} rows` : "none"}.
-    ${v.table_error ? `<span style="color:var(--warn)">${esc(v.table_error)}</span>` : ""}`);
+  const t = v.table, sync = !t ? "" : t.differ == null ? "" : t.differ
+    ? ` <span style="color:var(--warn)">${t.differ} rows differ from the ledger: regenerate it with <span class="mono">sweep_to_table.py --op ${esc(v.op)} --device ${esc(v.device)}</span></span>`
+    : " Its rows equal the ledger's (as <span class=\"mono\">--check</span> judges, with the header's hashes).";
+  const next = t && v.next_rows !== t.rows ? ` <span style="color:var(--warn)">Written now, with today's kernel hashes, it would hold ${v.next_rows} ${esc(v.dtype)} rows: stale records drop out.</span>` : "";
+  patch($("op-lede"), `Each ${esc(v.dtype)} cell's best record from <span class="mono">${esc(v.op)}.${esc(v.device)}.jsonl</span>: ${v.cands.length} candidates in ${fams.length} families,
+    keys <span class="mono">${esc(v.keys.map(k => k.name).join(" "))}</span>. Shipped table: ${t ? `${esc(t.source)}, ${esc(t.date)}, ${t.rows} ${esc(v.dtype)} rows` : "none"}.${sync}${next}
+    ${v.table_error ? `<span style="color:var(--warn)">${esc(v.table_error)}</span>` : ""}${v.error ? ` <span style="color:var(--bad)">${esc(v.error)}</span>` : ""}`);
+  const hashed = cells.some(c => !["converted", "transcribed"].includes(v.tiers[c[1]]));
+  patch($("op-fams"), v.family_status.length ? `<table><thead><tr><th>Family</th><th>Table header</th><th>Sources now</th><th>State</th><th class="r">${esc(v.dtype)} keys stale in it</th></tr></thead><tbody>${v.family_status.map(x => {
+      const n = x.stale[v.dtype] || 0, state = !fams.includes(x.name) ? `not a ${v.dtype} candidate` : famChanged(x) ? (n ? "changed: retune" : !hashed ? "changed; this ledger's records carry no hash (converted or transcribed)"
+          : "changed; the ledger's records are current (rehashed or re-measured): regenerate the table")
+        : !x.table ? "not in the table" : n ? "table current; older records in the ledger" : "current";
+      return `<tr><td class="mono" style="color:${famColor(fams, x.name)}">${esc(x.name)}</td><td class="mono">${esc(x.table || "—")}</td><td class="mono">${esc(x.now || "—")}</td>
+        <td${famChanged(x) ? ' style="color:var(--warn)"' : ""}>${esc(state)}</td><td class="r num">${n || ""}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty">No families.</div>`);
   patch($("op-stats"), `
     <div><div class="k">Cells</div><div class="v">${cells.length.toLocaleString()}</div><div class="f">${tierBar(tiers, cells.length)}${Object.entries(tiers).map(([t, n]) => `${t} ${n}`).join(" · ")}</div></div>
     <div><div class="k">Refined</div><div class="v">${pct(cells.filter(c => c[2] > 0).length, cells.length)}</div><div class="f">cells added between lattice points</div></div>
@@ -399,6 +448,8 @@ function drawMap(pool, ix) {
       if (tier === "coarse") h += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--surface)" pointer-events="none"/>`;
       else if (tier === "preview") h += `<circle cx="${cx}" cy="${cy}" r="${r * 1.3}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
       else if (tier === "custom") h += `<path d="M${cx - r} ${cy - r}L${cx + r} ${cy + r}M${cx + r} ${cy - r}L${cx - r} ${cy + r}" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+      else if (tier === "converted") h += `<path d="M${cx} ${cy - r * 1.3}L${cx + r * 1.3} ${cy}L${cx} ${cy + r * 1.3}L${cx - r * 1.3} ${cy}Z" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+      else if (tier === "transcribed") h += `<path d="M${cx - r * 1.3} ${cy}h${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
       if (c[5]) h += `<path d="M${x0 + cw - 1 - Math.min(cw, ch) * .35} ${y0 + 1}h${Math.min(cw, ch) * .35}v${Math.min(cw, ch) * .35}z" fill="var(--warn)" pointer-events="none"/>`;
     });
   });
@@ -413,7 +464,7 @@ function drawMap(pool, ix) {
   else {
     const present = [...new Set(pool.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
     patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") +
-      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
+      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, ◇ converted, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
   }
 }
 
@@ -446,7 +497,7 @@ function drawDiff(changed, ix) {
   const v = OPV;
   patch($("op-dsum"), changed.length ? `${changed.length} cells pick a different candidate than the shipped table` : "");
   if (!v.table) { patch($("op-diff"), `<div class="empty">No shipped table for ${esc(v.op)} ${esc(v.dtype)} on ${esc(v.device)}: every cell is new.</div>`); return; }
-  if (!changed.length) { patch($("op-diff"), `<div class="empty">The table <span class="mono">sweep_to_table.py --ledger</span> would write now picks what the shipped one picks at every measured cell.</div>`); return; }
+  if (!changed.length) { patch($("op-diff"), `<div class="empty">The table <span class="mono">sweep_to_table.py</span> would write now picks what the shipped one picks at every measured cell.</div>`); return; }
   const rows = changed.slice().sort((a, b) => ((a[8] ?? 1) - (b[8] ?? 1)) * diffSort).slice(0, 400);
   patch($("op-diff"), `<table><thead><tr><th>Cell</th><th>Tier</th><th>Table picks</th><th>Ledger picks</th>
     <th class="r s" onclick="diffSort=-diffSort;drawOp()">Predicted ${diffSort > 0 ? "↑" : "↓"}</th></tr></thead><tbody>${rows.map(c =>
@@ -454,7 +505,7 @@ function drawDiff(changed, ix) {
       <td>${esc(v.tiers[c[1]])}</td><td class="route">${esc(v.cands[c[7]])}</td><td class="route">${esc(v.cands[c[9]])}</td>
       <td class="r"><span class="sp ${c[8] == null ? "" : c[8] >= 1 ? "win" : "lose"}">${fmtX(c[8])}</span></td></tr>`).join("")}</tbody></table>
     <p class="msg" style="padding:0 14px 12px">The table's pick is the first entry of its nearest row that this cell's record did not refuse; the ledger's is the same
-      lookup in the table <span class="mono">sweep_to_table.py --ledger</span> would write now. Predicted = the table pick's median over the ledger pick's, both from the
+      lookup in the table <span class="mono">sweep_to_table.py</span> would write now. Predicted = the table pick's median over the ledger pick's, both from the
       cell's own record; above 1× the new table is faster there. A race calls two candidates within 3% a tie and keeps the
       earlier one, so a change can read as low as 0.971×.${changed.length > 400 ? ` Showing 400 of ${changed.length}.` : ""}</p>`);
 }
@@ -545,11 +596,12 @@ function buildDrawer() {
   $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip on" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
   for (const id of ["dtypes", "dgpus"]) $(id).onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
   $("dall").onclick = () => { const bs = [...$("dops").querySelectorAll("input")], on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
-  for (const id of ["dtier", "dops", "dexcl"]) $(id).onchange = estimate;
-  for (const id of ["dmax", "dbudget", "dwait"]) $(id).oninput = estimate;
+  for (const id of ["dtier", "dops", "dexcl", "ddirty"]) $(id).onchange = estimate;
+  for (const id of ["dmax", "dbudget", "dwait", "dkeys"]) $(id).oninput = estimate;
   $("dledger").textContent = meta.ledger;
+  $("ddirtyl").hidden = !meta.dirty;
   $("dbin").innerHTML = meta.binary ? `<div class="buildok">Measures with <code>${esc(meta.binary)}</code></div>`
-    : `<div class="buildwarn">No build has <code>tools/tune/batchlas_tune</code>; build the <code>batchlas_tune</code> target first.</div>`;
+    : `<div class="buildwarn">${esc(meta.binary_problem || "No batchlas_tune build")}. Planning and runs need it; the views do not.</div>`;
 }
 function fillDrawer(q) {
   $("dtier").querySelectorAll("input").forEach(i => i.checked = i.value === q.tier);
@@ -558,28 +610,36 @@ function fillDrawer(q) {
   $("dgpus").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (q.devices || []).includes(+b.dataset.g)));
   $("dmax").value = q.max_dim || ""; $("dbudget").value = q.budget_h || ""; $("dwait").value = q.guard_wait_s ? Math.round(q.guard_wait_s / 60) : "";
   $("dexcl").checked = q.allow_idle_foreign === false; $("dname").value = "";
+  $("dkeys").value = q.remeasure_keys || ""; $("ddirty").checked = !!q.allow_dirty;
 }
 function runBody() {
+  // With no GPU visible to nvidia-smi, --plan cannot read a compute capability: plan the viewed device's ledger.
   return { tier: ($("dtier").querySelector("input:checked") || {}).value, ops: [...$("dops").querySelectorAll("input:checked")].map(i => i.value),
     dtypes: [...$("dtypes").querySelectorAll(".chip.on")].map(b => b.dataset.t), devices: [...$("dgpus").querySelectorAll(".chip.on")].map(b => +b.dataset.g),
+    device_key: meta.gpus.length ? null : device,
     max_dim: +$("dmax").value || null, budget_h: +$("dbudget").value || null, guard_wait_s: $("dwait").value === "" ? null : 60 * +$("dwait").value,
-    allow_idle_foreign: !$("dexcl").checked, name: $("dname").value.trim() };
+    allow_idle_foreign: !$("dexcl").checked, allow_dirty: meta.dirty && $("ddirty").checked, remeasure_keys: $("dkeys").value.trim(),
+    name: $("dname").value.trim() };
 }
 let estSeq = 0, estTimer = null;
 function estimate() {
   clearTimeout(estTimer);
   const b = runBody();
   if (!b.ops.length || !b.dtypes.length || !b.devices.length) { $("estimate").textContent = "Pick an op, a precision and a GPU."; $("dstart").disabled = true; $("dplan").hidden = true; return; }
-  $("dstart").disabled = !meta.binary; $("estimate").textContent = "planning…";
+  if (b.tier === "custom" && !b.remeasure_keys) { $("estimate").textContent = "Tier custom measures exactly the cells listed above: list at least one."; $("dstart").disabled = true; $("dplan").hidden = true; return; }
+  // The tuner plans from a dirty tree but refuses to measure from one without --allow-dirty.
+  const blocked = meta.dirty && !b.allow_dirty;
+  $("dstart").disabled = true; $("estimate").textContent = "planning…";
   estTimer = setTimeout(async () => {
     const seq = ++estSeq, e = await post("/api/tune/plan", b);
     if (seq !== estSeq) return;
     if (e.error) { $("estimate").textContent = [].concat(e.error).join(" "); $("dplan").hidden = true; return; }
     const t = e.total, ng = b.devices.length;
-    $("estimate").innerHTML = `<b>${t.cells.toLocaleString()}</b> cells + ~${t.refine_cells.toLocaleString()} refinement · about <b>${dur(t.est_total_s / ng)}</b> on ${ng} GPU${ng > 1 ? "s" : ""}`;
+    $("estimate").innerHTML = `<b>${t.cells.toLocaleString()}</b> cells + ~${t.refine_cells.toLocaleString()} refinement · about <b>${dur(t.est_total_s / ng)}</b> on ${ng} GPU${ng > 1 ? "s" : ""}` +
+      (blocked ? ` · <span style="color:var(--warn)">uncommitted changes: commit them, or allow a dirty tree</span>` : "");
     $("dplan").hidden = false;
     $("dplan").innerHTML = e.jobs.map(j => `${esc(j.op.padEnd(6))} ${esc(j.dtype.padEnd(7))} ${String(j.measure).padStart(6)} / ${String(j.cells).padEnd(6)} ~${String(j.refine_cells).padEnd(5)} ${dur(j.est_s + j.est_refine_s).padStart(8)}  <span class="muted">${esc(j.mix)}</span>`).join("<br>");
-    $("dstart").disabled = !t.cells;
+    $("dstart").disabled = !t.cells || !meta.binary || blocked;
   }, 500);
 }
 $("dstart").onclick = async () => {
@@ -594,7 +654,7 @@ $("dstart").onclick = async () => {
 (async () => {
   parseHash();
   meta = await getJ("/api/tune/meta");
-  meta.tierOrder = ["deep", "coarse", "preview", "custom", "transcribed"];
+  meta.tierOrder = meta.tier_order;
   buildDrawer();
   watchRun();
   await loadStatus();

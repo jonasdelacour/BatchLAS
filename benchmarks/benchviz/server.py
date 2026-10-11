@@ -347,15 +347,25 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ tuning tab
     def _tune_get(self, what: str, q: dict):
+        # sweep_to_table reports a bad ledger or key with SystemExit, which would end the handler thread.
+        try:
+            return self._tune_get_1(what, q)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except (Exception, SystemExit) as e:  # noqa: B902
+            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    def _tune_get_1(self, what: str, q: dict):
         import tuning
         arg = lambda k: q.get(k, [""])[0]  # noqa: E731
         if what == "meta":
             from runner import detect_gpus
-            binary = tuning.tuner_binary(self.build_dirs)
-            return self._json({"read_only": self.read_only, "ops": tuning.tuner_ops(), "dtypes": tuning.DTYPES,
-                               "tiers": tuning.TIER_NOTES, "gpus": detect_gpus(), "ledger": str(self.ledgers.root),
-                               "tuned": str(self.ledgers.tuned), "binary": str(binary) if binary else None,
-                               "builds": [build_info(d) for d in self.build_dirs]})
+            binary, why = tuning.find_tuner(self.build_dirs)
+            return self._json({"read_only": self.read_only, "ops": self.ledgers.ops(load=False), "dtypes": tuning.DTYPES,
+                               "tiers": tuning.TIER_NOTES, "tier_order": tuning.TIERS, "gpus": detect_gpus(),
+                               "ledger": str(self.ledgers.root), "tuned": str(self.ledgers.tuned),
+                               "binary": str(binary) if binary else None, "binary_problem": why,
+                               "dirty": tuning.tree_dirty(), "builds": [build_info(d) for d in self.build_dirs]})
         if what == "status":
             return self._json(self.ledgers.status())
         if what == "op":
@@ -374,9 +384,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _tune_post(self, what: str, b: dict):
         import tuning
-        binary = tuning.tuner_binary(self.build_dirs)
+        binary, why = tuning.find_tuner(self.build_dirs) if what in ("plan", "run") else (None, None)
         if what in ("plan", "run") and binary is None:
-            return self._json({"error": "no build has tools/tune/batchlas_tune; build the batchlas_tune target"}, 400)
+            return self._json({"error": why}, 400)
         if what == "plan":
             try:
                 return self._json(tuning.plan(binary, b, self.ledgers.root))

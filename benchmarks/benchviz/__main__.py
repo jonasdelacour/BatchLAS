@@ -277,20 +277,28 @@ def cmd_info(a):
 
 def cmd_serve(a):
     import server
-    server.serve(Path(a.root), a.host, a.port, default_build_dirs(), read_only=a.read_only, token=a.token or "",
+    builds = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
+    server.serve(Path(a.root), a.host, a.port, builds, read_only=a.read_only, token=a.token or "",
                  ledger=Path(a.ledger), tuned=Path(a.tuned) if a.tuned else None)
 
 
 def cmd_tune(a):
     """Plan or start a tuning run exactly as the Tuning tab would; the page watches it either way."""
     import tuning as t
-    binary = t.tuner_binary([Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs())
+    binary, why = t.find_tuner([Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs())
     if binary is None:
-        raise SystemExit("no build has tools/tune/batchlas_tune; build the batchlas_tune target")
-    req = {"ops": list(t.stt.OP_BY_NAME) if a.ops == "all" else _csv_list(a.ops, t.stt.OP_BY_NAME),
-           "dtypes": _csv_list(a.dtype, t.DTYPES), "tier": a.tier, "devices": [int(g) for g in a.devices.split(",")],
+        raise SystemExit(why)
+    ops = t.spec_ops()
+    req = {"ops": ops if a.ops == "all" else _csv_list(a.ops, ops),
+           "dtypes": _csv_list(a.dtype, t.DTYPES), "tier": a.tier,
+           "devices": [int(g) for g in a.devices.split(",") if g.strip()], "device_key": a.device_key,
            "max_dim": a.max_dim, "budget_h": a.budget, "allow_idle_foreign": not a.exclusive,
-           "guard_wait_s": a.guard_wait}
+           "allow_dirty": a.allow_dirty, "guard_wait_s": a.guard_wait,
+           "remeasure_keys": Path(a.remeasure_keys).read_text() if a.remeasure_keys else ""}
+    try:
+        t.run_argv(binary, req, Path(a.ledger), Path(os.devnull), plan=a.plan)
+    except ValueError as e:
+        raise SystemExit(str(e))
     if a.plan:
         p = t.plan(binary, req, Path(a.ledger))
         if p.get("error"):
@@ -386,13 +394,20 @@ def main():
     s.add_argument("--token", help="require this secret as ?t=<token> in the link (then kept in a cookie)")
     s.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="the tuning ledger root (default: %(default)s)")
     s.add_argument("--tuned", help="the tables the Tuning tab diffs against (default: the checkout's tuned/)")
+    s.add_argument("--build-dir", action="append", help="build trees for runs and batchlas_tune (repeatable; "
+                   "default: this checkout's build/, then the main checkout's)")
     s.set_defaults(fn=cmd_serve)
 
     tu = sub.add_parser("tune", parents=[common], help="plan or start a batchlas_tune run the Tuning tab watches")
     tu.add_argument("--ops", default="all", help="comma list or 'all'")
     tu.add_argument("--dtype", default="float,double,cfloat,cdouble")
-    tu.add_argument("--tier", required=True, choices=["preview", "coarse", "deep"])
-    tu.add_argument("--devices", default="0", help="GPU indices, e.g. 0,1,2,3")
+    tu.add_argument("--tier", required=True, choices=["preview", "coarse", "deep", "custom"],
+                    help="custom measures exactly the --remeasure-keys cells (a rehash sample)")
+    tu.add_argument("--devices", default="0", help="GPU indices, e.g. 0,1,2,3 ('' with --plan --device-key)")
+    tu.add_argument("--device-key", help="--plan: the device whose ledger is planned against (sm_120), no GPU query")
+    tu.add_argument("--remeasure-keys", help="file of '<op> <dtype> <name=v,...>' lines measured again in round 0")
+    tu.add_argument("--allow-dirty", action="store_true",
+                    help="measure from a tree with uncommitted changes (stamped -dirty, never reaches tuned/)")
     tu.add_argument("--max-dim", type=int, default=2048, help="largest matrix dimension measured (default 2048)")
     tu.add_argument("--budget", type=float, help="cap refinement time [h]")
     tu.add_argument("--guard-wait", type=int, default=3600, help="seconds to wait for a busy GPU (default 3600)")
