@@ -30,7 +30,7 @@
 #include "../src/extensions/sytrd_sb2st_hh.hh"
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -204,7 +204,7 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                 scale = std::max(std::sqrt(scale), Real(1));
 
                 // Q must be orthogonal.
-                const double orth = batchlas::verify::orthogonality(batchlas::verify::view(Q.data(), n, n, n));
+                const double orth = MatrixView<T, MatrixFormat::Dense>::orthogonality(ctx, MatrixView<T, MatrixFormat::Dense>(Q.data(), n, n, n));
                 EXPECT_LT(orth, tol) << "n=" << n << " kd=" << kd << " b=" << b;
 
                 // Q^H A Q must be tridiagonal, with diag == d and |subdiag| == e.

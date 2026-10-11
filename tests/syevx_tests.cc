@@ -12,7 +12,6 @@
 #include <batchlas/settings.hh>
 #include "test_utils.hh"
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
 #include <optional>
 #include <tuple>
 #include <cstdlib>
@@ -42,8 +41,7 @@ Spectrum LapackeSpectrum(const MatrixView<T, MatrixFormat::Dense>& A) {
     Spectrum s;
     s.w.resize(static_cast<size_t>(A.batch_size()));
     for (int b = 0; b < A.batch_size(); ++b) {
-        auto a = verify::copy_item(A, b);
-        EXPECT_TRUE(verify::eigenvalues(A.rows(), a, s.w[b])) << "LAPACKE reference failed, item " << b;
+        EXPECT_TRUE(verify::eigenvalues(A, b, s.w[b])) << "LAPACKE reference failed, item " << b;
         for (double l : s.w[b]) s.norm2 = verify::nanmax(s.norm2, std::fabs(l));
     }
     return s;
@@ -68,7 +66,7 @@ void ExpectValues(const T* W, int stride, const std::vector<std::vector<double>>
     for (size_t b = 0; b < want.size(); ++b) {
         if (want[b].empty()) continue;
         const VectorView<T> w(const_cast<T*>(W) + b * stride, static_cast<int>(want[b].size()), 1);
-        err = verify::nanmax(err, verify::values_error(w, {want[b]}, norm2));
+        err = verify::nanmax(err, MatrixView<T, MatrixFormat::Dense>::values_error(w, {want[b]}, norm2));
     }
     if (slack) EXPECT_VERIFY_SLACK(T, verify::Check::values, n, err, *slack);
     else EXPECT_VERIFY(T, verify::Check::values, n, err);
@@ -77,20 +75,21 @@ void ExpectValues(const T* W, int stride, const std::vector<std::vector<double>>
 // For every item with count[b] > 0: columns [0, count[b]) of V and the values at W + b * stride are
 // eigenpairs of the ORIGINAL A (eigen_residual, n = the order; orthogonality_rotations, n = count[b]).
 template <typename T>
-void ExpectPairs(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& V, const T* W,
+void ExpectPairs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& V, const T* W,
                  int stride, const std::vector<int>& count, std::optional<verify::Slack> slack = std::nullopt) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const int n = A.rows();
     for (int b = 0; b < A.batch_size(); ++b) {
         const int k = count[static_cast<size_t>(b)];
         if (k <= 0) continue;
         SCOPED_TRACE(::testing::Message() << "item " << b << ", " << k << " pairs");
-        const auto Ab = verify::view(A.data_ptr() + static_cast<long long>(b) * A.stride(), n, n, A.ld());
-        const auto Vb = verify::view(V.data_ptr() + static_cast<long long>(b) * V.stride(), n, k, V.ld());
+        const MV Ab(A.data_ptr() + static_cast<long long>(b) * A.stride(), n, n, A.ld());
+        const MV Vb(V.data_ptr() + static_cast<long long>(b) * V.stride(), n, k, V.ld());
         const VectorView<T> w(const_cast<T*>(W) + static_cast<long long>(b) * stride, k, 1);
-        const double resid = verify::eigen_residual(Ab, Vb, w);
+        const double resid = MV::eigen_residual(ctx, Ab, Vb, w);
         if (slack) EXPECT_VERIFY_SLACK(T, verify::Check::eigen_residual, n, resid, *slack);
         else EXPECT_VERIFY(T, verify::Check::eigen_residual, n, resid);
-        EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, k, verify::orthogonality(Vb));
+        EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, k, MV::orthogonality(ctx, Vb));
     }
 }
 
@@ -314,7 +313,7 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     // Closed form; the Ritz-value checks of V became eigen_residual + orthogonality_rotations.
     const std::vector<std::vector<double>> want(batch, ClosedForm(expected, 0, neig));
     ExpectValues(W.data(), neig, want, MaxAbs(expected), n);
-    ExpectPairs(dense.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
+    ExpectPairs(*ctx, dense.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
 }
 
 TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
@@ -487,7 +486,7 @@ TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
     }
 
     // Against A after the call: also proves syevx left A unmodified.
-    ExpectPairs(A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
+    ExpectPairs(*ctx, A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
 }
 
 INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
@@ -538,10 +537,11 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
 
     // Residual against the ORIGINAL A: this is what proves the back-transform. Rotation-kind
     // orthogonality counts the vectors checked: n = neig (verification.md).
-    const auto items = verify::all_items(batch);
+    using MV = MatrixView<float, MatrixFormat::Dense>;
+    const auto items = V.view().all_items();
     const VectorView<float> w(W, neig, batch);
-    EXPECT_VERIFY(float, verify::Check::eigen_residual, n, verify::eigen_residual(A.view(), V.view(), w, items));
-    EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, neig, verify::orthogonality(V.view(), items));
+    EXPECT_VERIFY(float, verify::Check::eigen_residual, n, MV::eigen_residual(*ctx, A.view(), V.view(), w, items));
+    EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, neig, MV::orthogonality(*ctx, V.view(), items));
 }
 
 TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
@@ -627,7 +627,7 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
     }
 
     if (!want_vectors) return;
-    ExpectPairs(A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
+    ExpectPairs(*ctx, A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
 }
 
 TEST_P(SyevxFilteredTest, MatchesReferenceSyev) {
@@ -733,7 +733,7 @@ TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
     }
     // The load-bearing check: column j must be an eigenvector for W[j], not for some other
     // member of the returned block.
-    ExpectPairs(A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
+    ExpectPairs(*ctx, A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1032,9 +1032,9 @@ void CheckAgainstReference(const std::vector<float>& W, const Spectrum& ref, int
 }
 
 // Every returned pair against the ORIGINAL A rather than anything the solver produced.
-void CheckResiduals(const Matrix<float, MatrixFormat::Dense>& A, const Matrix<float, MatrixFormat::Dense>& V,
+void CheckResiduals(Queue& ctx, const Matrix<float, MatrixFormat::Dense>& A, const Matrix<float, MatrixFormat::Dense>& V,
                     const std::vector<float>& W, int batch, int neig, std::optional<verify::Slack> slack = std::nullopt) {
-    ExpectPairs(A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig), slack);
+    ExpectPairs(ctx, A.view(), V.view(), W.data(), neig, std::vector<int>(batch, neig), slack);
 }
 
 // Unshifted diag(A)^{-1} approximates A^{-1} and is rejected for the largest end;
@@ -1063,7 +1063,7 @@ TEST_P(SyevxJacobiTest, DenseMatchesReferenceSyev) {
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
-    CheckResiduals(A, V, run.W, batch, neig);
+    CheckResiduals(*ctx, A, V, run.W, batch, neig);
 }
 
 TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
@@ -1084,7 +1084,7 @@ TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
     // Residual against the dense original: the CSR view is a conversion of it, so
     // this also checks that the CSR diagonal search found the right entries.
-    CheckResiduals(A, V, run.W, batch, neig);
+    CheckResiduals(*ctx, A, V, run.W, batch, neig);
 }
 
 // A structurally sparse matrix whose diagonal entries are not the first entry of
@@ -1108,7 +1108,7 @@ TEST_P(SyevxJacobiTest, CsrWithUnsortedDiagonalPosition) {
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
     CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
-    CheckResiduals(A, V, run.W, batch, neig);
+    CheckResiduals(*ctx, A, V, run.W, batch, neig);
 }
 
 INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest, SyevxJacobiTest, ::testing::Values(true, false),
@@ -1647,7 +1647,7 @@ TEST(SyevxDirectRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
     }
     ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, expected)), MaxAbs(lam), n);
     // W's stride is the capacity, deliberately larger than the count.
-    ExpectPairs(A.view(), V.view(), run.W.data(), capacity, std::vector<int>(batch, expected));
+    ExpectPairs(*ctx, A.view(), V.view(), run.W.data(), capacity, std::vector<int>(batch, expected));
 }
 
 TEST(SyevxDirectRangeTest, ValueRangeEmptyAndFullIntervals) {
@@ -1938,7 +1938,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
     }
     ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, expected)), MaxAbs(lam), n);
     ExpectUnusedColumnsAreZero(V, n, batch, capacity, run.m);
-    ExpectPairs(A.view(), V.view(), run.W.data(), capacity, std::vector<int>(batch, expected));
+    ExpectPairs(*ctx, A.view(), V.view(), run.W.data(), capacity, std::vector<int>(batch, expected));
 }
 
 // The shape the whole per-item-count machinery exists for: one call in which the
@@ -1984,7 +1984,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     ExpectUnusedColumnsAreZero(V, n, batch, n, run.m);
 
     // Residuals on the valid prefix only, against the ORIGINAL A.
-    ExpectPairs(A.view(), V.view(), run.W.data(), n, expected);
+    ExpectPairs(*ctx, A.view(), V.view(), run.W.data(), n, expected);
 }
 
 TEST(SyevxDirectSubsetRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
@@ -2387,7 +2387,7 @@ TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
     }
 
     ExpectValues(run.W.data(), k, want, W_ref.norm2, c.n);
-    if (want_vectors) CheckResiduals(A, V, run.W, c.batch, k);
+    if (want_vectors) CheckResiduals(*ctx, A, V, run.W, c.batch, k);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -2933,7 +2933,7 @@ TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
     }
     ExpectValues(W_host.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, q - p + 1)), MaxAbs(lam), n);
     // Pairs over the valid prefix only: W's stride is the capacity, its count m[b].
-    ExpectPairs(A.view(), V.view(), W_host.data(), capacity, count);
+    ExpectPairs(*ctx, A.view(), V.view(), W_host.data(), capacity, count);
 }
 
 // An index block through the public entry point, and the `m`-less overload

@@ -238,9 +238,8 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             // sv_max_abs_err is not like for like. evidence: docs/perf/gesvd.md#gesvd-defect-c-an-accuracy-harness-that-could-not-see-relative-error
             double sv_max_abs_err = std::numeric_limits<double>::quiet_NaN();
             {
-                auto a_host = batchlas::verify::copy_item(Ab_ref, 0);
                 std::vector<double> s_ref;
-                if (batchlas::verify::singular_values(n, n, a_host, s_ref)) {
+                if (batchlas::verify::singular_values(Ab_ref, 0, s_ref)) {
                     sv_max_abs_err = max_abs_singular_error(s_ref.data(), sb, n);
                 }
             }

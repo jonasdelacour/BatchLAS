@@ -9,7 +9,7 @@
 #include <chrono>
 #include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -40,21 +40,6 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
     }
     
-    // Reference norms from the verification library (promoted to double, read through ld and stride).
-    // The infinity norm is the one norm of the transpose; only moduli enter, so no conjugate.
-    static double expected_frobenius_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int b) {
-        return batchlas::verify::frobenius(mat.view(), b);
-    }
-    static double expected_one_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int b) {
-        return batchlas::verify::one_norm(mat.view(), b);
-    }
-    static double expected_max_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int b) {
-        return batchlas::verify::max_abs(mat.view(), b);
-    }
-    static double expected_inf_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int b) {
-        return batchlas::verify::inf_norm(mat.view(), b);
-    }
-
     // Small helper to map NormType to a string for readable failure messages
     static const char* norm_name(NormType t) {
         switch (t) {
@@ -124,20 +109,42 @@ protected:
 // Typed tests for different scalar types
 TYPED_TEST_SUITE(NormTest, NormTestTypes);
 
-// Test all norm types with a random matrix
+// The random matrix's signs on closed-form moduli |a_ij| = 5 (i+1)(j+1)(b+1), exact in every T: a
+// complex entry is (+-3 +-4i) or (+-4 +-3i) times (i+1)(j+1)(b+1), so |re| + |im| != |a|. With
+// S1(n) = n(n+1)/2 and S2(n) = n(n+1)(2n+1)/6, per item: Frobenius 5 (b+1) sqrt(S2(rows) S2(cols)),
+// One 5 (b+1) cols S1(rows), Inf 5 (b+1) rows S1(cols), Max 5 (b+1) rows cols.
 TYPED_TEST(NormTest, RandomMatrixAllNorms) {
     using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
     const int rows = 5, cols = 4, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 123);
+    auto A = mat.view();
+    for (int b = 0; b < batch_size; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) {
+                const T r = A(i, j, b);
+                const real_t m = real_t((i + 1) * (j + 1) * (b + 1));
+                if constexpr (is_std_complex_v<T>) {
+                    const bool wide = std::abs(r.real()) >= std::abs(r.imag());
+                    const real_t re = (r.real() < 0 ? -m : m) * real_t(wide ? 4 : 3);
+                    const real_t im = (r.imag() < 0 ? -m : m) * real_t(wide ? 3 : 4);
+                    A(i, j, b) = T(re, im);
+                } else {
+                    A(i, j, b) = r < 0 ? -5 * m : 5 * m;
+                }
+            }
 
-    auto expected_fn = [this, &mat](NormType ntype, int b) -> double {
+    auto s1 = [](int n) { return n * (n + 1) / 2.0; };
+    auto s2 = [](int n) { return n * (n + 1) * (2 * n + 1) / 6.0; };
+    auto expected_fn = [&](NormType ntype, int b) -> double {
+        const double c = 5.0 * (b + 1);
         switch (ntype) {
-            case NormType::Frobenius: return this->expected_frobenius_norm(mat, b);
-            case NormType::One:       return this->expected_one_norm(mat, b);
-            case NormType::Inf:       return this->expected_inf_norm(mat, b);
-            case NormType::Max:       return this->expected_max_norm(mat, b);
-            default : std::cerr << "Unsupported norm type for random matrix" << std::endl; return 0.0;
+            case NormType::Frobenius: return c * std::sqrt(s2(rows) * s2(cols));
+            case NormType::One:       return c * cols * s1(rows);
+            case NormType::Inf:       return c * rows * s1(cols);
+            case NormType::Max:       return c * rows * cols;
+            default: std::cerr << "Unsupported norm type for random matrix" << std::endl; return 0.0;
         }
         return 0.0;
     };

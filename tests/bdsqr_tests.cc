@@ -20,7 +20,6 @@
 #include "test_utils.hh"
 
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>

@@ -127,7 +127,7 @@ TYPED_TEST(SyevCtaFusedTest, EigenvectorsAllSizesBothTrianglesResidualAndOrtho) 
 							  W[static_cast<std::size_t>(b) * n + i])
 						<< "eigenvalues not ascending at i=" << i;
 				}
-				test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, b);
+				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, b);
 			}
 		}
 	}
@@ -152,7 +152,7 @@ TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 		.wait();
 
 	// Every item against LAPACKE in double (not a BatchLAS syev on this queue).
-	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_fused, n, false, verify::all_items(batch));
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_fused, n, false, A0.view().all_items());
 
 	// jobz == NoEigenVectors must leave A alone (unlike syev_cta, which leaves
 	// the reduction's reflectors behind).
@@ -215,7 +215,7 @@ TYPED_TEST(SyevCtaFusedTest, NearDegenerateSpectrum) {
 
 	syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-	test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, batchlas::verify::all_items(batch));
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, A0.view().all_items());
 }
 
 // Descending order and the work-group multiplier are both wired through to the
@@ -249,7 +249,7 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 					<< "eigenvalues not descending at i=" << i;
 			}
 		}
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, 0);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, 0);
 	}
 }
 
@@ -284,7 +284,7 @@ TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
 
 		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, batchlas::verify::all_items(batch));
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, A0.view().all_items());
 	}
 }
 
@@ -319,7 +319,7 @@ TYPED_TEST(SyevCtaFusedTest, RaggedTailBatch) {
 			for (int b : {0, 1, batch - 2, batch - 1}) {
 				SCOPED_TRACE(::testing::Message() << "item " << b);
 				EXPECT_EQ(info[static_cast<std::size_t>(b)], 0);
-				test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, b);
+				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, b);
 			}
 		}
 	}

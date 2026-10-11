@@ -12,7 +12,6 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
-#include <batchlas/verify/residuals.hh>
 #include "../src/select/vendor.hh"
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
@@ -72,21 +71,18 @@ void ExpectPinRefused(Queue& ctx, const char* word, int m, int n, int k, Transpo
 // that factor * bound * (largest denominator over the checked items) is at most the old absolute tolerance.
 template <typename T>
 constexpr double old_vendor_tolerance() {  // the old test_utils::tolerance vendor-comparison bound
-    if constexpr (batchlas::verify::is_complex<T>::value) return std::is_same_v<batchlas::verify::real_t<T>, float> ? 2e-5 : 2e-10;
+    if constexpr (batchlas::is_std_complex_v<T>) return std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10;
     else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
 }
 
 template <typename T, class VA, class VB, class VC0, class VC>
-::testing::AssertionResult GemmMatchesDefinition(const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
+::testing::AssertionResult GemmMatchesDefinition(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
                                                  const VC& C, T alpha, T beta, int k, double old_scale = 100) {
-    using batchlas::verify::Shape;
-    const double err = batchlas::verify::gemm_backward_error(
-        A, Shape::general, ta, B, Shape::general, tb, C0, C, Shape::general, batchlas::verify::up(alpha),
-        batchlas::verify::up(beta), batchlas::verify::all_items(C.batch_size()));
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const double err = MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta), C.all_items());
     double den = 0;
-    for (int item : batchlas::verify::all_items(C.batch_size()))
-        den = std::max(den, batchlas::verify::gemm_max_denominator(A, Shape::general, ta, B, Shape::general, tb, C0,
-                                                                   batchlas::verify::up(alpha), batchlas::verify::up(beta), item));
+    for (int item : C.all_items())
+        den = std::max(den, MV::gemm_max_denominator(ctx, A, ta, B, tb, C0, MV::up(alpha), MV::up(beta), item));
     const double old_tol = old_vendor_tolerance<T>() * old_scale;
     const batchlas::verify::Slack slack{
         std::min(1.0, old_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),
@@ -96,17 +92,16 @@ template <typename T, class VA, class VB, class VC0, class VC>
 
 // Small-integer data makes every product and sum exact, so the answer must be bit-exact.
 template <typename T, class VA, class VB, class VC0, class VC>
-void ExpectGemmExact(const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, T alpha, T beta) {
-    using batchlas::verify::Shape;
-    EXPECT_EQ(batchlas::verify::gemm_backward_error(A, Shape::general, ta, B, Shape::general, tb, C0, C, Shape::general,
-                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta)),
-              0.0);
+void ExpectGemmExact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, T alpha,
+                     T beta) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    EXPECT_EQ(MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta)), 0.0);
 }
 
-// Item b of M over its active extent, as a host view (the library takes no heterogeneous view).
+// Item b of M over its active extent, as a single-item view (the checks take no heterogeneous view).
 template <typename T>
 auto ActiveItem(const Matrix<T>& M, int b, int rows, int cols) {
-    return batchlas::verify::view(M.view().data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
+    return MatrixView<T, MatrixFormat::Dense>(M.view().data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
 }
 
 // Everything of the parent outside the rows [r0, r0 + m) x columns [0, n) sub-block is bit for bit as it was:
@@ -155,7 +150,7 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
     }
     ctx.wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), transA, B.view(), transB, C0.view(), C.view(), alpha, beta, k, old_scale));
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), transA, B.view(), transB, C0.view(), C.view(), alpha, beta, k, old_scale));
 }
 
 } // namespace
@@ -337,7 +332,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
             this->ctx->wait();
         }
         for (int b = 0; b < batch; ++b)
-            ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans, ActiveItem(B, b, br[b], bc[b]),
+            ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans, ActiveItem(B, b, br[b], bc[b]),
                                                           Transpose::NoTrans, ActiveItem(C0, b, cr[b], cc[b]), ActiveItem(C, b, cr[b], cc[b]),
                                                           alpha, beta, ac[b]))
                 << "item " << b;
@@ -420,7 +415,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
         ASSERT_EQ(C.rows(b), c_rows[b]);
         ASSERT_EQ(C.cols(b), c_cols[b]);
         if (c_rows[b] == 0 || c_cols[b] == 0) continue;
-        ExpectGemmExact<ScalarType>(ActiveItem(A, b, a_rows[b], a_cols[b]), Transpose::NoTrans, ActiveItem(B, b, b_rows[b], b_cols[b]),
+        ExpectGemmExact<ScalarType>(*(this->ctx), ActiveItem(A, b, a_rows[b], a_cols[b]), Transpose::NoTrans, ActiveItem(B, b, b_rows[b], b_cols[b]),
                                     Transpose::NoTrans, ActiveItem(C0, b, c_rows[b], c_cols[b]), ActiveItem(C, b, c_rows[b], c_cols[b]),
                                     ScalarType(1), ScalarType(0));
     }
@@ -490,7 +485,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
     // Item 1 has an empty inner dimension: C is only scaled by beta. Small integers, so all exact.
     for (int b = 0; b < batch_size; ++b) {
         if (c_rows[b] == 0 || c_cols[b] == 0) continue;
-        ExpectGemmExact<ScalarType>(ActiveItem(A, b, a_rows[b], a_cols[b]), Transpose::NoTrans, ActiveItem(B, b, b_rows[b], b_cols[b]),
+        ExpectGemmExact<ScalarType>(*(this->ctx), ActiveItem(A, b, a_rows[b], a_cols[b]), Transpose::NoTrans, ActiveItem(B, b, b_rows[b], b_cols[b]),
                                     Transpose::NoTrans, ActiveItem(C0, b, c_rows[b], c_cols[b]), ActiveItem(C, b, c_rows[b], c_cols[b]), alpha, beta);
     }
 }
@@ -514,7 +509,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
                       {.alpha = ScalarType(1), .beta = ScalarType(0)});
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
                                                   ScalarType(1), ScalarType(0), size, 50));
 }
 
@@ -539,7 +534,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
                                                   ScalarType(1), ScalarType(1), size, 75));
 }
 
@@ -645,7 +640,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::Trans, B.view(), Transpose::Trans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::Trans, B.view(), Transpose::Trans, C0.view(), C.view(),
                                                   ScalarType(1), ScalarType(1), k, 50));
 }
 
@@ -880,7 +875,7 @@ void Run128x128Compare(Queue& ctx, int m, int n, int k, int batch_size, ScalarTy
         (void)gemm(ctx, A.view(), B.view(), C.view(), {.alpha = alpha, .beta = beta});
     }
     ctx.wait();
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
                                                   alpha, beta, k));
 }
 
@@ -969,7 +964,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
                                                   ScalarType(2), ScalarType(-1), size));
 }
 
@@ -1000,7 +995,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
                                                   ScalarType(2), ScalarType(-1), k));
 }
 
@@ -1027,7 +1022,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(A.view(), Transpose::ConjTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::ConjTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
                                                   ScalarType(1), ScalarType(0), k, 50));
 }
 
@@ -1084,7 +1079,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
                                                   ScalarType(2), ScalarType(-1), k));
     ExpectOutsideUnchanged(PC, PC0, r0, m, n);
     }
@@ -1115,7 +1110,7 @@ TYPED_TEST(GemmTest, Forced128x128K8SubViewStagedEpilogue) {
                        {.alpha = ScalarType(2), .beta = ScalarType(-1)});
         }
         this->ctx->wait();
-        ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
+        ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
                                                       ScalarType(2), ScalarType(-1), k));
         ExpectOutsideUnchanged(PC, PC0, r0, m, n);
     }
@@ -1151,7 +1146,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg)
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
                                                   ScalarType(2), ScalarType(-1), k));
     ExpectOutsideUnchanged(PC, PC0, r0, m, n);
     }
@@ -1190,7 +1185,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedL
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), Asub(PA), Transpose::NoTrans, Bsub(PB), Transpose::NoTrans, Csub(PC0), Csub(PC),
                                                   ScalarType(2), ScalarType(-1), k));
     ExpectOutsideUnchanged(PC, PC0, r0, m, n);
 }
@@ -1260,7 +1255,7 @@ void RunForcedWideTransposedCheck(Queue& ctx,
     }
     ctx.wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(Av(PA), transA, Bv(PB), transB, Cv(PC0), Cv(PC), ScalarType(2), beta, transA == Transpose::NoTrans ? a_cols : a_rows));
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, Av(PA), transA, Bv(PB), transB, Cv(PC0), Cv(PC), ScalarType(2), beta, transA == Transpose::NoTrans ? a_cols : a_rows));
     ExpectOutsideUnchanged(PC, PC0, row_offset, m, n);
 }
 
@@ -1373,7 +1368,7 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
             (void)gemm(*(this->ctx), sub(PA, m, k), sub(PB, k, n), sub(PC, m, n), opts);
         }
         this->ctx->wait();
-        ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(sub(PA, m, k), Transpose::NoTrans, sub(PB, k, n), Transpose::NoTrans, sub(PC0, m, n),
+        ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), sub(PA, m, k), Transpose::NoTrans, sub(PB, k, n), Transpose::NoTrans, sub(PC0, m, n),
                                                       sub(PC, m, n), ScalarType(2), ScalarType(0), k));
         ExpectOutsideUnchanged(PC, PC0, off, m, n);
     }

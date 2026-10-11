@@ -8,8 +8,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include "test_utils.hh"
 
-#include <batchlas/verify/norms.hh>
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/blas/extra.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -274,9 +273,10 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+	using MV = MatrixView<Real, MatrixFormat::Dense>;
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view()));
 	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(A0.view(), Q.view(), Tri.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0.view(), Q.view(), Tri.view()));
 }
 
 TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
@@ -325,16 +325,17 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 				dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(Aoutv(r, k, 0)) - double(a_ref[static_cast<std::size_t>(r + k * n)])));
 			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
 		}
-		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / batchlas::verify::frobenius(A0.view(), 0));
+		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / norm(*this->ctx, A0.view().template astype<double>().view())[0]);
 		// Reference agreement (absolute elementwise difference vs the independent host sytd2), borrowing the factorization kind's bound.
 		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_refl);
 	}
 
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
 
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+	using MV = MatrixView<Real, MatrixFormat::Dense>;
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view()));
 	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(A0.view(), Q.view(), Tri.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0.view(), Q.view(), Tri.view()));
 }
 #endif
 

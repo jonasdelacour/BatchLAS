@@ -37,8 +37,8 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q, Transpose::NoTrans));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q, Transpose::NoTrans));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q.view())));
 }
 
 TYPED_TEST(OrmqrTest, BatchedMatrices) {
@@ -59,8 +59,8 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(A0, A, Q, Transpose::NoTrans));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, batchlas::verify::orthogonality(Q.view()));
+    EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q, Transpose::NoTrans));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q.view())));
 }
 
 // The two routing regressions that lived here (an unmatched forced provider whose size and

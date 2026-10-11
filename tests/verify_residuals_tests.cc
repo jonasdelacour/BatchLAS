@@ -1,9 +1,10 @@
-// Host-only tests of batchlas::verify residuals (docs/design/verification.md#verification-acceptance).
+// Tests of MatrixView's verification checks (docs/design/verification.md#verification-acceptance).
 // Every "exact" input is built from small integers and dyadic scalars, so the host reference is
 // exact in every dtype and an exact result scores 0. Unread triangles and padding hold large finite
 // poison, so a check that reads them fails the exact case.
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <gtest/gtest.h>
@@ -13,6 +14,7 @@
 #include <complex>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -24,39 +26,44 @@ using batchlas::Transpose;
 using batchlas::Uplo;
 using batchlas::VectorView;
 using batchlas::verify::Check;
-using batchlas::verify::Shape;
-using batchlas::verify::conj;
-using batchlas::verify::make;
-using batchlas::verify::promoted_t;
-using batchlas::verify::real_t;
-using batchlas::verify::up;
 
 namespace {
 
 using cfloat = std::complex<float>;
 using cdouble = std::complex<double>;
 using Dtypes = ::testing::Types<float, double, cfloat, cdouble>;
+template <class T> using MV = MatrixView<T, MatrixFormat::Dense>;
+template <class T> using promoted_t = typename MV<T>::promoted_type;
+template <class T> using real_t = batchlas::float_t<T>;
+
+// Leaked: static destruction after the SYCL runtime is gone hangs.
+batchlas::Queue& ctx() {
+    static auto* q = new batchlas::Queue();
+    return *q;
+}
 
 constexpr int kB = 5;
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
+// Uniform [-1, 1] draws for the integer-valued cases, read from a filled Matrix.
+constexpr int kDraws = 4096;
 
-template <class E> E poison() { return make<E>(3.0e3, -2.0e3); }
-template <class E> E bump() { return make<E>(500.0, -300.0); }
+template <class E> E poison() { return MV<E>::make(3.0e3, -2.0e3); }
+template <class E> E bump() { return MV<E>::make(500.0, -300.0); }
 template <class T> T down(const promoted_t<T>& x) {
     const cdouble z(x);
-    return make<T>(z.real(), z.imag());
+    return MV<T>::make(z.real(), z.imag());
 }
-template <class T> T rand_int(batchlas::verify::Rng& rng, double amp) {
-    const double re = std::round(amp * rng.next());
-    const double im = std::round(amp * rng.next());
-    return make<T>(re, im);
+template <class T> T rand_int(const double*& rng, double amp) {
+    const double re = std::round(amp * *rng++);
+    const double im = std::round(amp * *rng++);
+    return MV<T>::make(re, im);
 }
-template <class T> promoted_t<T> alpha_of() { return up(make<T>(0.5, 0.5)); }
-template <class T> promoted_t<T> beta_of() { return up(make<T>(-2.0, 1.0)); }
+template <class T> promoted_t<T> alpha_of() { return MV<T>::up(MV<T>::make(0.5, 0.5)); }
+template <class T> promoted_t<T> beta_of() { return MV<T>::up(MV<T>::make(-2.0, 1.0)); }
 template <class T> T phase(int k) {
-    if constexpr (batchlas::verify::is_complex<T>::value) {
+    if constexpr (batchlas::is_std_complex_v<T>) {
         const int q = ((k % 4) + 4) % 4;
-        return make<T>(q == 0 ? 1.0 : q == 2 ? -1.0 : 0.0, q == 1 ? 1.0 : q == 3 ? -1.0 : 0.0);
+        return MV<T>::make(q == 0 ? 1.0 : q == 2 ? -1.0 : 0.0, q == 1 ? 1.0 : q == 3 ? -1.0 : 0.0);
     } else {
         return T((k % 2 == 0) ? 1 : -1);
     }
@@ -130,7 +137,7 @@ template <class C> void last_item_only_fails() {
 }
 template <class C> void nan_fails() {
     C c;
-    c.out().at(kB / 2, c.hot_r, c.hot_c) = make<typename std::remove_reference_t<decltype(c.out())>::value_type>(kNaN, 0.0);
+    c.out().at(kB / 2, c.hot_r, c.hot_c) = MV<typename std::remove_reference_t<decltype(c.out())>::value_type>::make(kNaN, 0.0);
     expect_fails(c);
 }
 
@@ -160,27 +167,28 @@ template <class T> struct PotrfCase {
 
     explicit PotrfCase(Uplo u = Uplo::Lower) : hot_r(u == Uplo::Lower ? n - 1 : 0), hot_c(u == Uplo::Lower ? 0 : n - 1), uplo(u) {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(11);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 11);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             std::vector<D> L(n * n, D(0));
             for (int j = 0; j < n; ++j) {
-                L[j * n + j] = up(make<T>(2.0 + std::round(2.0 * rng.next() + 2.0), 0.0));
-                for (int i = j + 1; i < n; ++i) L[j * n + i] = up(rand_int<T>(rng, 3.0));
+                L[j * n + j] = MV<T>::up(MV<T>::make(2.0 + std::round(2.0 * *rng++ + 2.0), 0.0));
+                for (int i = j + 1; i < n; ++i) L[j * n + i] = MV<T>::up(rand_int<T>(rng, 3.0));
             }
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     D acc = D(0);
-                    for (int k = 0; k < n; ++k) acc += L[k * n + i] * conj(L[k * n + j]);
+                    for (int k = 0; k < n; ++k) acc += L[k * n + i] * MV<T>::conj(L[k * n + j]);
                     A0.ex(b, i, j) = down<T>(acc);
                     if (u == Uplo::Lower && i >= j) F.ex(b, i, j) = down<T>(L[j * n + i]);
-                    if (u == Uplo::Upper && i <= j) F.ex(b, i, j) = down<T>(conj(L[i * n + j]));
+                    if (u == Uplo::Upper && i <= j) F.ex(b, i, j) = down<T>(MV<T>::conj(L[i * n + j]));
                 }
         }
         A0.store();
         F.store();
     }
     Batched<T>& out() { return F; }
-    double value() { return batchlas::verify::potrf_residual(A0.mview(), F.mview(), uplo); }
+    double value() { return MV<T>::potrf_residual(ctx(), A0.mview(), F.mview(), uplo); }
 };
 
 template <class T> struct PotrfUpperCase : PotrfCase<T> {
@@ -199,19 +207,20 @@ template <class T> struct SimilarityCase {
 
     SimilarityCase() {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(66);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 66);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < n; ++j) Q.ex(b, (5 * j + b) % n, j) = phase<T>(j + b);
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < n; ++j) {
-                    if (Q.ex(b, i, j) == poison<T>()) Q.ex(b, i, j) = make<T>(0.0, 0.0);
+                    if (Q.ex(b, i, j) == poison<T>()) Q.ex(b, i, j) = MV<T>::make(0.0, 0.0);
                     B.ex(b, i, j) = rand_int<T>(rng, 3.0);
                 }
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     D acc = D(0);
                     for (int k = 0; k < n; ++k)
-                        for (int l = 0; l < n; ++l) acc += up(Q.ex(b, i, k)) * up(B.ex(b, k, l)) * conj(up(Q.ex(b, j, l)));
+                        for (int l = 0; l < n; ++l) acc += MV<T>::up(Q.ex(b, i, k)) * MV<T>::up(B.ex(b, k, l)) * MV<T>::conj(MV<T>::up(Q.ex(b, j, l)));
                     A0.ex(b, i, j) = down<T>(acc);
                 }
         }
@@ -220,7 +229,7 @@ template <class T> struct SimilarityCase {
         B.store();
     }
     Batched<T>& out() { return B; }
-    double value() { return batchlas::verify::similarity_residual(A0.mview(), Q.mview(), B.mview()); }
+    double value() { return MV<T>::similarity_residual(ctx(), A0.mview(), Q.mview(), B.mview()); }
 };
 
 // ------------------------------------------------------------------ getrf
@@ -238,16 +247,17 @@ template <class T> struct GetrfCase {
           A0(Batched<T>::matrix(m_, n_)), F(Batched<T>::matrix(m_, n_)), pstride(2 * std::min(m_, n_) + 3) {
         using D = promoted_t<T>;
         piv.assign(static_cast<std::size_t>(pstride * kB), -99);
-        batchlas::verify::Rng rng(22);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 22);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             std::vector<D> LU(m * n, D(0));
             std::vector<D> L(m * mn, D(0)), U(mn * n, D(0));
             for (int k = 0; k < mn; ++k) {
                 L[k * m + k] = D(1);
-                for (int i = k + 1; i < m; ++i) L[k * m + i] = up(rand_int<T>(rng, 2.0));
+                for (int i = k + 1; i < m; ++i) L[k * m + i] = MV<T>::up(rand_int<T>(rng, 2.0));
             }
             for (int j = 0; j < n; ++j)
-                for (int k = 0; k <= std::min(j, mn - 1); ++k) U[j * mn + k] = up(k == j ? make<T>(5.0, 1.0) : rand_int<T>(rng, 3.0));
+                for (int k = 0; k <= std::min(j, mn - 1); ++k) U[j * mn + k] = MV<T>::up(k == j ? MV<T>::make(5.0, 1.0) : rand_int<T>(rng, 3.0));
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i) {
                     for (int k = 0; k < mn; ++k) LU[j * m + i] += L[k * m + i] * U[j * mn + k];
@@ -255,7 +265,7 @@ template <class T> struct GetrfCase {
                 }
             std::vector<int> ip(mn);
             for (int k = 0; k < mn; ++k) {
-                ip[k] = k + int((rng.next() * 0.5 + 0.5) * double(m - k)) % (m - k);
+                ip[k] = k + int((*rng++ * 0.5 + 0.5) * double(m - k)) % (m - k);
                 piv[static_cast<std::size_t>(b * pstride + k * pinc)] = ip[k] + 1;
             }
             for (int k = mn - 1; k >= 0; --k)
@@ -268,7 +278,7 @@ template <class T> struct GetrfCase {
     }
     VectorView<std::int32_t> pview() { return VectorView<std::int32_t>(piv.data(), mn, kB, pinc, pstride); }
     Batched<T>& out() { return F; }
-    double value() { return batchlas::verify::getrf_residual(A0.mview(), F.mview(), pview()); }
+    double value() { return MV<T>::getrf_residual(ctx(), A0.mview(), F.mview(), pview()); }
 };
 
 // ------------------------------------------------------------------ geqrf
@@ -284,27 +294,28 @@ template <class T> struct QrCase {
 
     QrCase() {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(33);
-        const T t = batchlas::verify::is_complex<T>::value ? make<T>(0.25, 0.25) : make<T>(0.5, 0.0);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 33);
+        const double* rng = draws.data().data();
+        const T t = batchlas::is_std_complex_v<T> ? MV<T>::make(0.25, 0.25) : MV<T>::make(0.5, 0.0);
         for (int b = 0; b < kB; ++b) {
             for (int i = 0; i < k; ++i) {
                 tau.ex(b, i, 0) = t;
                 const int avail = m - i - 1;
-                for (int r = i + 1; r < m; ++r) F.ex(b, r, i) = make<T>(0.0, 0.0);
-                const int s = int((rng.next() * 0.5 + 0.5) * double(avail)) % avail;
+                for (int r = i + 1; r < m; ++r) F.ex(b, r, i) = MV<T>::make(0.0, 0.0);
+                const int s = int((*rng++ * 0.5 + 0.5) * double(avail)) % avail;
                 for (int q = 0; q < 3; ++q) F.ex(b, i + 1 + (s + q) % avail, i) = phase<T>(i + b + q);
             }
             for (int j = 0; j < n; ++j)
-                for (int r = 0; r <= j; ++r) F.ex(b, r, j) = r == j ? make<T>(4.0, -1.0) : rand_int<T>(rng, 3.0);
+                for (int r = 0; r <= j; ++r) F.ex(b, r, j) = r == j ? MV<T>::make(4.0, -1.0) : rand_int<T>(rng, 3.0);
             for (int j = 0; j < n; ++j) {
                 std::vector<D> x(m, D(0));
-                for (int r = 0; r <= j; ++r) x[r] = up(F.ex(b, r, j));
+                for (int r = 0; r <= j; ++r) x[r] = MV<T>::up(F.ex(b, r, j));
                 for (int i = k - 1; i >= 0; --i) {
                     D s = x[i];
-                    for (int r = i + 1; r < m; ++r) s += conj(up(F.ex(b, r, i))) * x[r];
-                    s *= up(t);
+                    for (int r = i + 1; r < m; ++r) s += MV<T>::conj(MV<T>::up(F.ex(b, r, i))) * x[r];
+                    s *= MV<T>::up(t);
                     x[i] -= s;
-                    for (int r = i + 1; r < m; ++r) x[r] -= s * up(F.ex(b, r, i));
+                    for (int r = i + 1; r < m; ++r) x[r] -= s * MV<T>::up(F.ex(b, r, i));
                 }
                 for (int r = 0; r < m; ++r) A0.ex(b, r, j) = down<T>(x[r]);
             }
@@ -314,7 +325,7 @@ template <class T> struct QrCase {
         tau.store();
     }
     Batched<T>& out() { return F; }
-    double value() { return batchlas::verify::qr_residual(A0.mview(), F.mview(), tau.vview()); }
+    double value() { return MV<T>::qr_residual(ctx(), A0.mview(), F.mview(), tau.vview()); }
 };
 
 // ------------------------------------------------------------------ solve
@@ -329,7 +340,8 @@ template <class T> struct SolveCase {
 
     SolveCase() {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(44);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 44);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) A0.ex(b, i, j) = rand_int<T>(rng, 4.0);
@@ -338,7 +350,7 @@ template <class T> struct SolveCase {
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < n; ++i) {
                     D acc = D(0);
-                    for (int l = 0; l < n; ++l) acc += up(A0.ex(b, i, l)) * up(X.ex(b, l, j));
+                    for (int l = 0; l < n; ++l) acc += MV<T>::up(A0.ex(b, i, l)) * MV<T>::up(X.ex(b, l, j));
                     B0.ex(b, i, j) = down<T>(acc);
                 }
         }
@@ -347,7 +359,7 @@ template <class T> struct SolveCase {
         B0.store();
     }
     Batched<T>& out() { return X; }
-    double value() { return batchlas::verify::detail::solve_residual(A0.mview(), X.mview(), B0.mview(), {}, limit); }
+    double value() { return MV<T>::solve_residual(ctx(), A0.mview(), Transpose::NoTrans, X.mview(), B0.mview(), {}, limit); }
 };
 
 // getri: A0 = D P (unit phases times a permutation), X = A0^{-1} = P^T D^{-1}, B0 empty.
@@ -361,12 +373,12 @@ template <class T> struct InverseCase {
     InverseCase() {
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < n; ++j)
-                for (int r = 0; r < n; ++r) A0.ex(b, r, j) = X.ex(b, r, j) = make<T>(0.0, 0.0);
+                for (int r = 0; r < n; ++r) A0.ex(b, r, j) = X.ex(b, r, j) = MV<T>::make(0.0, 0.0);
             for (int j = 0; j < n; ++j) {
                 const int i = (3 * j + b) % n;
                 const T d = phase<T>(i + j + b);
                 A0.ex(b, i, j) = d;
-                X.ex(b, j, i) = down<T>(promoted_t<T>(1) / up(d));
+                X.ex(b, j, i) = down<T>(promoted_t<T>(1) / MV<T>::up(d));
             }
         }
         A0.store();
@@ -375,62 +387,21 @@ template <class T> struct InverseCase {
     Batched<T>& out() { return X; }
     double value() {
         MatrixView<T, MatrixFormat::Dense> none(nullptr, 0, 0, 1, 0, kB);
-        return batchlas::verify::solve_residual(A0.mview(), X.mview(), none);
+        return MV<T>::solve_residual(ctx(), A0.mview(), X.mview(), none);
     }
 };
 
 // ------------------------------------------------------------------ gemm family
 
-// The logical matrix a Shape describes, built independently of the library's reader.
-template <class T> std::vector<T> logical(Shape s, int rows, int cols, batchlas::verify::Rng& rng) {
-    std::vector<T> M(rows * cols, make<T>(0.0, 0.0));
-    for (int j = 0; j < cols; ++j)
-        for (int i = 0; i < rows; ++i) M[j * rows + i] = rand_int<T>(rng, 3.0);
-    for (int j = 0; j < cols; ++j)
-        for (int i = 0; i < rows; ++i) {
-            T& x = M[j * rows + i];
-            switch (s) {
-                case Shape::general: break;
-                case Shape::lower: if (i < j) x = T(0); break;
-                case Shape::upper: if (i > j) x = T(0); break;
-                case Shape::unit_lower: x = i == j ? T(1) : (i < j ? T(0) : x); break;
-                case Shape::unit_upper: x = i == j ? T(1) : (i > j ? T(0) : x); break;
-                case Shape::hermitian_lower: case Shape::hermitian_upper:
-                    if (i == j) x = make<T>(cdouble(up(x)).real(), 0.0);
-                    if (i < j) x = down<T>(conj(up(M[i * rows + j])));
-                    break;
-                case Shape::symmetric_lower: case Shape::symmetric_upper:
-                    if (i < j) x = M[i * rows + j];
-                    break;
-            }
-        }
-    return M;
-}
-
-// Which elements a Shape reads; the rest of the stored operand is poison.
-bool stored(Shape s, int i, int j) {
-    switch (s) {
-        case Shape::general: return true;
-        case Shape::lower: case Shape::hermitian_lower: case Shape::symmetric_lower: return i >= j;
-        case Shape::upper: case Shape::hermitian_upper: case Shape::symmetric_upper: return i <= j;
-        case Shape::unit_lower: return i > j;
-        case Shape::unit_upper: return i < j;
-    }
-    return true;
-}
-
 template <class T> promoted_t<T> op_at(const std::vector<T>& M, int rows, Transpose t, int i, int j) {
-    if (t == Transpose::NoTrans) return up(M[j * rows + i]);
-    const auto x = up(M[i * rows + j]);
-    return t == Transpose::ConjTrans ? conj(x) : x;
+    if (t == Transpose::NoTrans) return MV<T>::up(M[j * rows + i]);
+    const auto x = MV<T>::up(M[i * rows + j]);
+    return t == Transpose::ConjTrans ? MV<T>::conj(x) : x;
 }
 
 struct GemmConfig {
-    Shape sa;
-    Transpose ta;
-    Shape sb;
-    Transpose tb;
-    Shape sc;
+    Transpose ta, tb;
+    std::optional<Uplo> c_triangle;
     int m, n, k;
     bool zero_beta = false;
 };
@@ -441,34 +412,35 @@ template <class T> struct GemmCase {
     GemmConfig g;
     int bound_n, hot_r, hot_c;
     Batched<T> A, B, C0, C;
-    std::vector<std::vector<T>> la, lb;  // logical op operands per item
+    std::vector<std::vector<T>> la, lb;  // operands per item, packed
     promoted_t<T> alpha = alpha_of<T>(), beta = beta_of<T>();
 
-    // Default: syrk-like, C's strict upper triangle unchecked (sc = lower), op(A) = A^H.
-    explicit GemmCase(GemmConfig cfg = {Shape::general, Transpose::ConjTrans, Shape::general, Transpose::NoTrans, Shape::lower, 7, 7, 6})
-        : g(cfg), bound_n(cfg.k), hot_r(cfg.sc == Shape::upper ? 0 : cfg.m - 1), hot_c(cfg.sc == Shape::upper ? cfg.n - 1 : 0),
+    // Default: syrk-like, C's strict upper triangle unchecked (c_triangle = Lower), op(A) = A^H.
+    explicit GemmCase(GemmConfig cfg = {Transpose::ConjTrans, Transpose::NoTrans, Uplo::Lower, 7, 7, 6})
+        : g(cfg), bound_n(cfg.k), hot_r(cfg.c_triangle == Uplo::Upper ? 0 : cfg.m - 1), hot_c(cfg.c_triangle == Uplo::Upper ? cfg.n - 1 : 0),
           A(Batched<T>::matrix(cfg.ta == Transpose::NoTrans ? cfg.m : cfg.k, cfg.ta == Transpose::NoTrans ? cfg.k : cfg.m)),
           B(Batched<T>::matrix(cfg.tb == Transpose::NoTrans ? cfg.k : cfg.n, cfg.tb == Transpose::NoTrans ? cfg.n : cfg.k)),
           C0(Batched<T>::matrix(cfg.m, cfg.n)), C(Batched<T>::matrix(cfg.m, cfg.n)) {
         using D = promoted_t<T>;
         if (g.zero_beta) beta = D(0);
-        batchlas::verify::Rng rng(55);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 55);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
-            const auto a = logical<T>(g.sa, A.rows, A.cols, rng);
-            const auto bb = logical<T>(g.sb, B.rows, B.cols, rng);
-            la.push_back(a);
-            lb.push_back(bb);
             for (int j = 0; j < A.cols; ++j)
-                for (int i = 0; i < A.rows; ++i) A.ex(b, i, j) = stored(g.sa, i, j) ? a[j * A.rows + i] : poison<T>();
+                for (int i = 0; i < A.rows; ++i) A.ex(b, i, j) = rand_int<T>(rng, 3.0);
             for (int j = 0; j < B.cols; ++j)
-                for (int i = 0; i < B.rows; ++i) B.ex(b, i, j) = stored(g.sb, i, j) ? bb[j * B.rows + i] : poison<T>();
+                for (int i = 0; i < B.rows; ++i) B.ex(b, i, j) = rand_int<T>(rng, 3.0);
+            la.push_back(A.exact[b]);
+            lb.push_back(B.exact[b]);
+            const auto& a = la.back();
+            const auto& bb = lb.back();
             for (int j = 0; j < g.n; ++j)
                 for (int i = 0; i < g.m; ++i) {
-                    C0.ex(b, i, j) = g.zero_beta ? make<T>(kNaN, kNaN) : rand_int<T>(rng, 3.0);
+                    C0.ex(b, i, j) = g.zero_beta ? MV<T>::make(kNaN, kNaN) : rand_int<T>(rng, 3.0);
                     D acc = D(0);
                     for (int l = 0; l < g.k; ++l) acc += op_at(a, A.rows, g.ta, i, l) * op_at(bb, B.rows, g.tb, l, j);
-                    const bool sel = g.sc == Shape::general || (g.sc == Shape::lower ? i >= j : i <= j);
-                    C.ex(b, i, j) = sel ? down<T>(alpha * acc + (g.zero_beta ? D(0) : beta * up(C0.ex(b, i, j)))) : poison<T>();
+                    const bool sel = !g.c_triangle || (*g.c_triangle == Uplo::Lower ? i >= j : i <= j);
+                    C.ex(b, i, j) = sel ? down<T>(alpha * acc + (g.zero_beta ? D(0) : beta * MV<T>::up(C0.ex(b, i, j)))) : poison<T>();
                 }
         }
         A.store();
@@ -477,10 +449,9 @@ template <class T> struct GemmCase {
         C.store();
     }
     Batched<T>& out() { return C; }
-    double value(Shape sa_read) {
-        return batchlas::verify::gemm_backward_error(A.mview(), sa_read, g.ta, B.mview(), g.sb, g.tb, C0.mview(), C.mview(), g.sc, alpha, beta);
+    double value() {
+        return MV<T>::gemm_backward_error(ctx(), A.mview(), g.ta, B.mview(), g.tb, C0.mview(), C.mview(), alpha, beta, {}, g.c_triangle);
     }
-    double value() { return value(g.sa); }
 };
 
 template <class T> struct GemvCase {
@@ -493,7 +464,8 @@ template <class T> struct GemvCase {
 
     GemvCase() {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(66);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 66);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < ac; ++j)
                 for (int i = 0; i < ar; ++i) A.ex(b, i, j) = rand_int<T>(rng, 3.0);
@@ -501,8 +473,8 @@ template <class T> struct GemvCase {
             for (int i = 0; i < ac; ++i) {
                 y0.ex(b, i, 0) = rand_int<T>(rng, 3.0);
                 D acc = D(0);
-                for (int l = 0; l < ar; ++l) acc += conj(up(A.ex(b, l, i))) * up(x.ex(b, l, 0));
-                y.ex(b, i, 0) = down<T>(alpha * acc + beta * up(y0.ex(b, i, 0)));
+                for (int l = 0; l < ar; ++l) acc += MV<T>::conj(MV<T>::up(A.ex(b, l, i))) * MV<T>::up(x.ex(b, l, 0));
+                y.ex(b, i, 0) = down<T>(alpha * acc + beta * MV<T>::up(y0.ex(b, i, 0)));
             }
         }
         A.store();
@@ -512,7 +484,7 @@ template <class T> struct GemvCase {
     }
     Batched<T>& out() { return y; }
     double value() {
-        return batchlas::verify::gemv_backward_error(A.mview(), Transpose::ConjTrans, x.vview(), y0.vview(), y.vview(), alpha, beta);
+        return MV<T>::gemv_backward_error(ctx(), A.mview(), Transpose::ConjTrans, x.vview(), y0.vview(), y.vview(), alpha, beta);
     }
 };
 
@@ -532,22 +504,26 @@ template <class T> struct TrsmCase {
         : side(s), uplo(u), ta(t), diag(d), na(6), xr(s == Side::Left ? 6 : 4), xc(s == Side::Left ? 4 : 6), bound_n(6),
           hot_r(xr - 1), hot_c(xc - 1), A(Batched<T>::matrix(6, 6)), X(Batched<T>::matrix(xr, xc)), B0(Batched<T>::matrix(xr, xc)) {
         using D = promoted_t<T>;
-        const Shape sh = u == Uplo::Lower ? (d == Diag::Unit ? Shape::unit_lower : Shape::lower) : (d == Diag::Unit ? Shape::unit_upper : Shape::upper);
-        batchlas::verify::Rng rng(77);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 77);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
-            auto a = logical<T>(sh, na, na, rng);
-            if (d == Diag::NonUnit)
-                for (int i = 0; i < na; ++i) a[i * na + i] = make<T>(3.0, 1.0);
-            la.push_back(a);
+            // A unit diagonal and the other triangle are not read: they stay poison in A, not in a.
+            std::vector<T> a(na * na, T(0));
             for (int j = 0; j < na; ++j)
-                for (int i = 0; i < na; ++i) A.ex(b, i, j) = stored(sh, i, j) ? a[j * na + i] : poison<T>();
+                for (int i = 0; i < na; ++i) {
+                    const bool tri = u == Uplo::Lower ? i > j : i < j;
+                    if (tri) a[j * na + i] = rand_int<T>(rng, 3.0);
+                    if (i == j) a[j * na + i] = d == Diag::Unit ? T(1) : MV<T>::make(3.0, 1.0);
+                    A.ex(b, i, j) = tri || (i == j && d == Diag::NonUnit) ? a[j * na + i] : poison<T>();
+                }
+            la.push_back(a);
             for (int j = 0; j < xc; ++j)
                 for (int i = 0; i < xr; ++i) X.ex(b, i, j) = rand_int<T>(rng, 3.0);
             for (int j = 0; j < xc; ++j)
                 for (int i = 0; i < xr; ++i) {
                     D acc = D(0);
                     for (int l = 0; l < na; ++l)
-                        acc += s == Side::Left ? op_at(a, na, t, i, l) * up(X.ex(b, l, j)) : up(X.ex(b, i, l)) * op_at(a, na, t, l, j);
+                        acc += s == Side::Left ? op_at(a, na, t, i, l) * MV<T>::up(X.ex(b, l, j)) : MV<T>::up(X.ex(b, i, l)) * op_at(a, na, t, l, j);
                     B0.ex(b, i, j) = down<T>(acc / alpha);
                 }
         }
@@ -556,7 +532,7 @@ template <class T> struct TrsmCase {
         B0.store();
     }
     Batched<T>& out() { return X; }
-    double value() { return batchlas::verify::trsm_residual(A.mview(), side, uplo, ta, diag, X.mview(), B0.mview(), alpha); }
+    double value() { return MV<T>::trsm_residual(ctx(), A.mview(), side, uplo, ta, diag, X.mview(), B0.mview(), alpha); }
 };
 
 template <class T> struct TrsmRightCase : TrsmCase<T> {
@@ -586,14 +562,15 @@ template <class T> struct SpmmCase {
         vals.assign(static_cast<std::size_t>(mstride * kB), poison<T>());
         cols.assign(static_cast<std::size_t>(mstride * kB), 1 << 20);
         offs.assign(static_cast<std::size_t>(ostride * kB), -7);
-        batchlas::verify::Rng rng(88);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 88);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
-            std::vector<T> dense(am * ak, make<T>(0.0, 0.0));
+            std::vector<T> dense(am * ak, MV<T>::make(0.0, 0.0));
             int p = 0;
             for (int r = 0; r < am; ++r) {
                 offs[b * ostride + r] = p;
                 for (int c = 0; c < ak; ++c)
-                    if (rng.next() > 0.0 || c == (r + b) % ak) {
+                    if (*rng++ > 0.0 || c == (r + b) % ak) {
                         dense[c * am + r] = rand_int<T>(rng, 3.0);
                         vals[b * mstride + p] = dense[c * am + r];
                         cols[b * mstride + p] = c;
@@ -610,7 +587,7 @@ template <class T> struct SpmmCase {
                     C0.ex(b, i, j) = rand_int<T>(rng, 3.0);
                     D acc = D(0);
                     for (int l = 0; l < ck; ++l) acc += op_at(dense, am, ta, i, l) * op_at(bq, B.rows, tb, l, j);
-                    C.ex(b, i, j) = down<T>(alpha * acc + beta * up(C0.ex(b, i, j)));
+                    C.ex(b, i, j) = down<T>(alpha * acc + beta * MV<T>::up(C0.ex(b, i, j)));
                 }
         }
         B.store();
@@ -621,7 +598,7 @@ template <class T> struct SpmmCase {
         return MatrixView<T, MatrixFormat::CSR>(vals.data(), offs.data(), cols.data(), am, ak, batchlas::NonZeros{nnz_max}, mstride, ostride, kB);
     }
     Batched<T>& out() { return C; }
-    double value() { return batchlas::verify::spmm_backward_error(aview(), ta, B.mview(), tb, C0.mview(), C.mview(), alpha, beta); }
+    double value() { return MV<T>::spmm_backward_error(ctx(), aview(), ta, B.mview(), tb, C0.mview(), C.mview(), alpha, beta); }
 };
 
 template <class T> struct SpmmTransCase : SpmmCase<T> {
@@ -633,7 +610,7 @@ template <class T> struct SpmmTransCase : SpmmCase<T> {
 // Sylvester Hadamard H16 / 4 with unit phases on the rows: unitary, entries +-1/4 or +-i/4.
 template <class T> T hadamard(int i, int j, int b) {
     const int h = __builtin_popcount(unsigned(i & j)) % 2 == 0 ? 1 : -1;
-    return down<T>(up(phase<T>(i + b)) * (0.25 * h));
+    return down<T>(MV<T>::up(phase<T>(i + b)) * (0.25 * h));
 }
 
 template <class T> struct OrthoCase {
@@ -650,7 +627,7 @@ template <class T> struct OrthoCase {
         Q.store();
     }
     Batched<T>& out() { return Q; }
-    double value() { return batchlas::verify::orthogonality(Q.mview()); }
+    double value() { return MV<T>::orthogonality(ctx(), Q.mview()); }
 };
 
 template <class T> struct EigenCase {
@@ -672,7 +649,7 @@ template <class T> struct EigenCase {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     D acc = D(0);
-                    for (int l = 0; l < n; ++l) acc += up(V.ex(b, i, l)) * double(w.ex(b, l, 0)) * conj(up(V.ex(b, j, l)));
+                    for (int l = 0; l < n; ++l) acc += MV<T>::up(V.ex(b, i, l)) * double(w.ex(b, l, 0)) * MV<T>::conj(MV<T>::up(V.ex(b, j, l)));
                     A.ex(b, i, j) = i >= j ? down<T>(acc) : poison<T>();
                 }
         }
@@ -681,7 +658,7 @@ template <class T> struct EigenCase {
         w.store();
     }
     Batched<T>& out() { return V; }
-    double value() { return batchlas::verify::eigen_residual(A.mview(), V.mview(), w.vview()); }
+    double value() { return MV<T>::eigen_residual(ctx(), A.mview(), V.mview(), w.vview()); }
 };
 
 template <class T> struct ValuesCase {
@@ -700,7 +677,7 @@ template <class T> struct ValuesCase {
         w.store();
     }
     Batched<R>& out() { return w; }
-    double value() { return batchlas::verify::values_error(w.vview(), ref, 1.0); }
+    double value() { return MV<T>::values_error(w.vview(), ref, 1.0); }
 };
 
 }  // namespace
@@ -756,37 +733,36 @@ TYPED_TEST(SolveResidual, ProbeColumnsSeeAWrongEntry) {
     expect_fails(c);
 }
 
-TYPED_TEST(GemmBackwardError, ShapesExactIsSmall) {
+TYPED_TEST(GemmBackwardError, VariantsExactIsSmall) {
     const GemmConfig cases[] = {
-        {Shape::hermitian_lower, Transpose::NoTrans, Shape::general, Transpose::Trans, Shape::general, 6, 5, 6},
-        {Shape::symmetric_upper, Transpose::NoTrans, Shape::general, Transpose::NoTrans, Shape::general, 6, 5, 6},
-        {Shape::unit_upper, Transpose::ConjTrans, Shape::general, Transpose::NoTrans, Shape::general, 6, 4, 6},
-        {Shape::lower, Transpose::Trans, Shape::general, Transpose::NoTrans, Shape::general, 6, 4, 6},
-        {Shape::general, Transpose::NoTrans, Shape::unit_lower, Transpose::ConjTrans, Shape::general, 5, 6, 6},
-        {Shape::general, Transpose::NoTrans, Shape::hermitian_upper, Transpose::NoTrans, Shape::upper, 6, 6, 6},
-        {Shape::general, Transpose::ConjTrans, Shape::general, Transpose::NoTrans, Shape::general, 5, 4, 7, true},
+        {Transpose::NoTrans, Transpose::Trans, std::nullopt, 6, 5, 6},
+        {Transpose::NoTrans, Transpose::NoTrans, Uplo::Upper, 6, 6, 6},
+        {Transpose::ConjTrans, Transpose::NoTrans, std::nullopt, 5, 4, 7, true},
     };
     for (const GemmConfig& g : cases) {
         GemmCase<TypeParam> c(g);
-        SCOPED_TRACE(int(g.sa) * 100 + int(g.sb) * 10 + int(g.sc));
+        SCOPED_TRACE(int(g.ta) * 100 + int(g.tb) * 10 + (g.c_triangle ? int(*g.c_triangle) : 9));
         expect_small(c);
     }
 }
 
-TYPED_TEST(GemmBackwardError, WrongShapeFails) {
-    GemmCase<TypeParam> c({Shape::hermitian_lower, Transpose::NoTrans, Shape::general, Transpose::NoTrans, Shape::general, 6, 5, 6});
-    EXPECT_GT(c.value(Shape::hermitian_upper), bound_of(c) * 100);
-    EXPECT_GT(c.value(Shape::general), bound_of(c) * 100);
+// C holds poison outside its triangle: a check over all of C must see it.
+TYPED_TEST(GemmBackwardError, WrongTriangleFails) {
+    for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
+        GemmCase<TypeParam> c({Transpose::ConjTrans, Transpose::NoTrans, u, 7, 7, 6});
+        c.g.c_triangle = std::nullopt;
+        expect_fails(c);
+        c.g.c_triangle = u == Uplo::Lower ? Uplo::Upper : Uplo::Lower;
+        expect_fails(c);
+    }
 }
 
 TEST(GemmBackwardError, ZeroDenominatorUsesNumerator) {
     std::vector<double> z(8, 0.0), c(8, 0.0);
     MatrixView<double, MatrixFormat::Dense> Z(z.data(), 2, 2, 2, 4, 1), C(c.data(), 2, 2, 2, 4, 1);
-    EXPECT_EQ(batchlas::verify::gemm_backward_error(Z, Shape::general, Transpose::NoTrans, Z, Shape::general, Transpose::NoTrans, Z, C,
-                                                    Shape::general, 1.0, 1.0), 0.0);
+    EXPECT_EQ(MV<double>::gemm_backward_error(ctx(), Z, Transpose::NoTrans, Z, Transpose::NoTrans, Z, C, 1.0, 1.0), 0.0);
     c[3] = 0.25;
-    EXPECT_EQ(batchlas::verify::gemm_backward_error(Z, Shape::general, Transpose::NoTrans, Z, Shape::general, Transpose::NoTrans, Z, C,
-                                                    Shape::general, 1.0, 1.0), 0.25);
+    EXPECT_EQ(MV<double>::gemm_backward_error(ctx(), Z, Transpose::NoTrans, Z, Transpose::NoTrans, Z, C, 1.0, 1.0), 0.25);
 }
 
 // A = [1 -2; 3 4], B = [1 0; -1 2], C0 = [5 -6; 0 1], alpha 2, beta -1, in item 1 of a padded batch
@@ -801,20 +777,17 @@ TEST(GemmMaxDenominator, KnownValues) {
     fill(a, {1, 3, -2, 4});
     fill(b, {1, -1, 0, 2});
     fill(c0, {5, 0, -6, 1});
-    const auto A = batchlas::verify::view(a.data(), 2, 2, 3, 7, 2), B = batchlas::verify::view(b.data(), 2, 2, 3, 7, 2),
-               C0 = batchlas::verify::view(c0.data(), 2, 2, 3, 7, 2);
-    using batchlas::verify::gemm_max_denominator;
-    const auto g = Shape::general;
-    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 17.0);
-    // Unit lower triangle of A: [1 0; 3 1] gives [7 6; 8 5]; op(A) = A^T: [13 18; 12 17].
-    EXPECT_EQ(gemm_max_denominator(A, Shape::unit_lower, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 8.0);
-    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::Trans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1), 18.0);
+    const MV<double> A(a.data(), 2, 2, 3, 7, 2), B(b.data(), 2, 2, 3, 7, 2), C0(c0.data(), 2, 2, 3, 7, 2);
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1), 17.0);
+    // B A: |B||A| = [1 2; 7 10] gives [7 10; 14 21]; op(A) = A^T: [13 18; 12 17].
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), B, Transpose::NoTrans, A, Transpose::NoTrans, C0, 2.0, -1.0, 1), 21.0);
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::Trans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1), 18.0);
     // beta == 0 never reads C0 (NaN there is ignored); a NaN in A is the result.
     c0[7 + 3 + 1] = std::nan("");
-    EXPECT_EQ(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, 0.0, 1), 16.0);
-    EXPECT_TRUE(std::isnan(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, -1.0, 1)));
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, 1), 16.0);
+    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1)));
     a[7] = std::nan("");
-    EXPECT_TRUE(std::isnan(gemm_max_denominator(A, g, Transpose::NoTrans, B, g, Transpose::NoTrans, C0, 2.0, 0.0, 1)));
+    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, 1)));
 }
 
 TYPED_TEST(SpmmBackwardError, BadColumnIsNan) {
@@ -833,16 +806,8 @@ TEST(Residuals, ExplicitItemsAreTheOnesRead) {
     PotrfCase<double> c;
     c.F.at(1, c.hot_r, c.hot_c) += 500.0;  // item 1 is not a default item
     EXPECT_LT(c.value(), bound_of(c) / 100);
-    const std::vector<int> all = batchlas::verify::all_items(kB);
-    EXPECT_GT(batchlas::verify::potrf_residual(c.A0.mview(), c.F.mview(), Uplo::Lower, all), bound_of(c) * 100);
-}
-
-TEST(Residuals, HeterogeneousViewThrows) {
-    PotrfCase<double> c;
-    std::vector<int> rows(kB, 4);
-    batchlas::KernelMatrixView<double, MatrixFormat::Dense> F(c.F.buf.data(), c.F.rows, c.F.cols, c.F.ld, int(c.F.stride), kB);
-    F.active_rows_ = rows.data();
-    EXPECT_THROW(batchlas::verify::potrf_residual(c.A0.mview(), F, Uplo::Lower), std::invalid_argument);
+    const std::vector<int> all = c.F.mview().all_items();
+    EXPECT_GT(MV<double>::potrf_residual(ctx(), c.A0.mview(), c.F.mview(), Uplo::Lower, all), bound_of(c) * 100);
 }
 
 TEST(PivotsValid, RangeAndLayout) {
@@ -850,13 +815,13 @@ TEST(PivotsValid, RangeAndLayout) {
     for (int b = 0; b < 3; ++b)
         for (int k = 0; k < 4; ++k) p[b * 11 + 2 * k] = 1 + (k + b) % 5;
     VectorView<std::int32_t> v(p.data(), 4, 3, 2, 11);
-    EXPECT_TRUE(batchlas::verify::pivots_valid(v, 5));
-    EXPECT_FALSE(batchlas::verify::pivots_valid(v, 4));
+    EXPECT_TRUE(MV<double>::pivots_valid(v, 5));
+    EXPECT_FALSE(MV<double>::pivots_valid(v, 4));
     p[2 * 11 + 2 * 3] = 0;  // last item, last pivot
-    EXPECT_FALSE(batchlas::verify::pivots_valid(v, 5));
+    EXPECT_FALSE(MV<double>::pivots_valid(v, 5));
     p[2 * 11 + 2 * 3] = 3;
     VectorView<std::int32_t> natural(p.data(), 4, 3, 1, 11);  // inc 1 reads the zero padding
-    EXPECT_FALSE(batchlas::verify::pivots_valid(natural, 5));
+    EXPECT_FALSE(MV<double>::pivots_valid(natural, 5));
 }
 
 // ------------------------------------------------------------------ known values
@@ -865,9 +830,9 @@ TEST(PivotsValid, RangeAndLayout) {
 
 namespace {
 
-template <class T> T delta() { return make<T>(0.5, -0.25); }
-template <class T> double nrm2(const T& x) { return std::norm(cdouble(up(x))); }
-template <class T> double mod(const T& x) { return std::abs(cdouble(up(x))); }
+template <class T> T delta() { return MV<T>::make(0.5, -0.25); }
+template <class T> double nrm2(const T& x) { return std::norm(cdouble(MV<T>::up(x))); }
+template <class T> double mod(const T& x) { return std::abs(cdouble(MV<T>::up(x))); }
 
 template <class C> void expect_value(C& c, double expected) {
     const double v = c.value();
@@ -887,13 +852,13 @@ template <class T> void potrf_known(Uplo u) {
     PotrfCase<T> c(u);
     const int n = c.n, b = kB - 1;
     const T d = delta<T>();
-    const cdouble l(up(c.F.ex(b, n - 1, n - 1)));
+    const cdouble l(MV<T>::up(c.F.ex(b, n - 1, n - 1)));
     c.F.at(b, n - 1, n - 1) += d;
     double den = 0;
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i)
             if (u == Uplo::Lower ? i >= j : i <= j) den += nrm2(c.A0.ex(b, i, j));
-    expect_value(c, std::abs(std::norm(l + cdouble(up(d))) - std::norm(l)) / std::sqrt(den));
+    expect_value(c, std::abs(std::norm(l + cdouble(MV<T>::up(d))) - std::norm(l)) / std::sqrt(den));
 }
 
 template <class C> void trsm_known() {
@@ -996,10 +961,7 @@ template <class T> void gemm_known(const GemmConfig& g) {
 }  // namespace
 
 TYPED_TEST(GemmBackwardError, KnownValue) {
-    gemm_known<TypeParam>({Shape::general, Transpose::ConjTrans, Shape::general, Transpose::NoTrans, Shape::lower, 7, 7, 6});
-}
-TYPED_TEST(GemmBackwardError, HermitianKnownValue) {
-    gemm_known<TypeParam>({Shape::hermitian_lower, Transpose::NoTrans, Shape::unit_upper, Transpose::ConjTrans, Shape::general, 6, 6, 6});
+    gemm_known<TypeParam>({Transpose::ConjTrans, Transpose::NoTrans, Uplo::Lower, 7, 7, 6});
 }
 
 TYPED_TEST(GemvBackwardError, KnownValue) {
@@ -1026,13 +988,13 @@ TYPED_TEST(SpmmBackwardError, KnownValue) {
     expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * mod(c.C0.ex(b, i0, j0))));
 }
 
-// Column c += d e_r: (Q^H Q)(a, c) and (c, a) move by d conj(Q(r, a)) and its conjugate for a != c,
-// and (c, c) by 2 Re(conj(q) d) + |d|^2.
+// Column c += d e_r: (Q^H Q)(a, c) and (c, a) move by d MV<T>::conj(Q(r, a)) and its conjugate for a != c,
+// and (c, c) by 2 Re(MV<T>::conj(q) d) + |d|^2.
 TYPED_TEST(Orthogonality, KnownValue) {
     OrthoCase<TypeParam> c;
     const int b = kB - 1, r = c.m - 1, col = c.k - 1;
     const TypeParam d = delta<TypeParam>();
-    const cdouble q(up(c.Q.ex(b, r, col))), dd(up(d));
+    const cdouble q(MV<TypeParam>::up(c.Q.ex(b, r, col))), dd(MV<TypeParam>::up(d));
     double off = 0;
     for (int a = 0; a < c.k; ++a)
         if (a != col) off += nrm2(c.Q.ex(b, r, a));
@@ -1047,7 +1009,7 @@ TYPED_TEST(EigenResidual, KnownValue) {
     const int b = kB - 1, n = c.n, i0 = n - 1, j0 = 0;
     const TypeParam d = delta<TypeParam>();
     c.V.at(b, i0, j0) += d;
-    auto full = [&](int r, int s) { return r >= s ? cdouble(up(c.A.ex(b, r, s))) : std::conj(cdouble(up(c.A.ex(b, s, r)))); };
+    auto full = [&](int r, int s) { return r >= s ? cdouble(MV<TypeParam>::up(c.A.ex(b, r, s))) : std::conj(cdouble(MV<TypeParam>::up(c.A.ex(b, s, r)))); };
     double hit = 0, a2 = 0;
     for (int r = 0; r < n; ++r) {
         hit += std::norm(full(r, i0) - (r == i0 ? double(c.w.ex(b, j0, 0)) : 0.0));
@@ -1059,23 +1021,23 @@ TYPED_TEST(EigenResidual, KnownValue) {
 TYPED_TEST(ValuesError, KnownValue) {
     ValuesCase<TypeParam> c;
     c.w.at(kB - 1, c.n - 1, 0) += real_t<TypeParam>(0.5);
-    EXPECT_DOUBLE_EQ(batchlas::verify::values_error(c.w.vview(), c.ref, 4.0), 0.125);
+    EXPECT_DOUBLE_EQ(MV<TypeParam>::values_error(c.w.vview(), c.ref, 4.0), 0.125);
 }
 
 // ------------------------------------------------------------------ form_q, qr_reconstruction
 
 namespace {
 
-template <class T> T unit_tau() { return batchlas::verify::is_complex<T>::value ? make<T>(0.25, 0.25) : make<T>(0.5, 0.0); }
+template <class T> T unit_tau() { return batchlas::is_std_complex_v<T> ? MV<T>::make(0.25, 0.25) : MV<T>::make(0.5, 0.0); }
 
 // QrCase's reflectors; F's diagonal and upper triangle stay poison, which form_q must not read.
-template <class T> void unit_reflectors(Batched<T>& F, Batched<T>& tau, int k, batchlas::verify::Rng& rng) {
+template <class T> void unit_reflectors(Batched<T>& F, Batched<T>& tau, int k, const double*& rng) {
     for (int b = 0; b < kB; ++b)
         for (int i = 0; i < k; ++i) {
             tau.ex(b, i, 0) = unit_tau<T>();
             const int avail = F.rows - i - 1;
-            for (int r = i + 1; r < F.rows; ++r) F.ex(b, r, i) = make<T>(0.0, 0.0);
-            const int s = int((rng.next() * 0.5 + 0.5) * double(avail)) % avail;
+            for (int r = i + 1; r < F.rows; ++r) F.ex(b, r, i) = MV<T>::make(0.0, 0.0);
+            const int s = int((*rng++ * 0.5 + 0.5) * double(avail)) % avail;
             for (int q = 0; q < 3; ++q) F.ex(b, i + 1 + (s + q) % avail, i) = phase<T>(i + b + q);
         }
 }
@@ -1089,12 +1051,12 @@ template <class T> std::vector<promoted_t<T>> q_by_rows(Batched<T>& F, Batched<T
     for (int j = 0; j < k; ++j) {
         std::vector<D> v(m, D(0));
         v[j] = D(1);
-        for (int i = j + 1; i < m; ++i) v[i] = up(F.ex(b, i, j));
-        const D t = up(tau.ex(b, j, 0));
+        for (int i = j + 1; i < m; ++i) v[i] = MV<T>::up(F.ex(b, i, j));
+        const D t = MV<T>::up(tau.ex(b, j, 0));
         for (int r = 0; r < m; ++r) {
             D w = D(0);
             for (int i = 0; i < m; ++i) w += Q[i * m + r] * v[i];
-            for (int i = 0; i < m; ++i) Q[i * m + r] -= t * w * conj(v[i]);
+            for (int i = 0; i < m; ++i) Q[i * m + r] -= t * w * MV<T>::conj(v[i]);
         }
     }
     return Q;
@@ -1109,7 +1071,8 @@ template <class T> struct FormQCase {
     std::vector<std::vector<promoted_t<T>>> ref;
 
     FormQCase() {
-        batchlas::verify::Rng rng(99);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 99);
+        const double* rng = draws.data().data();
         unit_reflectors(F, tau, k, rng);
         for (int b = 0; b < kB; ++b) ref.push_back(q_by_rows(F, tau, b, k));
         F.store();
@@ -1118,11 +1081,11 @@ template <class T> struct FormQCase {
     Batched<T>& out() { return F; }
     double value() {
         double worst = 0;
-        for (int b : batchlas::verify::default_items(kB)) {
-            const auto Q = batchlas::verify::form_q(F.mview(), tau.vview(), b, cols);
-            if (int(Q.size()) != m * cols) return kNaN;
+        for (int b : F.mview().default_items()) {
+            auto Q = MV<T>::form_q(ctx(), F.mview(), tau.vview(), b, cols);
+            if (Q.rows() != m || Q.cols() != cols) return kNaN;
             for (int j = 0; j < cols; ++j)
-                for (int i = 0; i < m; ++i) worst = batchlas::verify::nanmax(worst, std::abs(cdouble(Q[j * m + i] - ref[b][j * m + i])));
+                for (int i = 0; i < m; ++i) worst = batchlas::verify::nanmax(worst, std::abs(cdouble(Q(i, j, 0) - ref[b][j * m + i])));
         }
         return worst;
     }
@@ -1139,7 +1102,8 @@ template <class T> struct QrReconCase {
 
     QrReconCase() {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(111);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 111);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < k; ++j)
                 for (int i = 0; i < m; ++i) Q.ex(b, i, j) = hadamard<T>(i, (j + 3 * b) % m, b);
@@ -1148,7 +1112,7 @@ template <class T> struct QrReconCase {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i) {
                     D acc = D(0);
-                    for (int r = 0; r <= j && r < k; ++r) acc += up(Q.ex(b, i, r)) * up(R.ex(b, r, j));
+                    for (int r = 0; r <= j && r < k; ++r) acc += MV<T>::up(Q.ex(b, i, r)) * MV<T>::up(R.ex(b, r, j));
                     A0.ex(b, i, j) = down<T>(acc);
                 }
         }
@@ -1158,8 +1122,7 @@ template <class T> struct QrReconCase {
     }
     Batched<T>& out() { return R; }
     double value() {
-        const auto a0 = batchlas::verify::view(static_cast<const T*>(A0.buf.data()), m, n, A0.ld, int(A0.stride), kB);
-        return batchlas::verify::qr_reconstruction(a0, Q.mview(), R.mview());
+        return MV<T>::qr_reconstruction(ctx(), A0.mview(), Q.mview(), R.mview());
     }
 };
 
@@ -1187,13 +1150,13 @@ TYPED_TEST(FormQ, PerturbedTauFails) {
 // m = 3, one reflector v = (1, 1, -1 + i) (real: -1) at ld 4, tau t: Q = I - t v v^H, by hand.
 TYPED_TEST(FormQ, KnownValue) {
     using T = TypeParam;
-    constexpr bool cx = batchlas::verify::is_complex<T>::value;
-    std::vector<T> f(8, poison<T>()), t{make<T>(0.5, 0.25)};
-    f[1] = make<T>(1.0, 0.0);
-    f[2] = make<T>(-1.0, 1.0);
-    const auto Q = batchlas::verify::form_q(batchlas::verify::view(static_cast<const T*>(f.data()), 3, 1, 4), VectorView<T>(t.data(), 1, 1), 0, 3);
-    ASSERT_EQ(Q.size(), 9u);
-    const auto at = [&](int i, int j) { return cdouble(Q[j * 3 + i]); };
+    constexpr bool cx = batchlas::is_std_complex_v<T>;
+    std::vector<T> f(8, poison<T>()), t{MV<T>::make(0.5, 0.25)};
+    f[1] = MV<T>::make(1.0, 0.0);
+    f[2] = MV<T>::make(-1.0, 1.0);
+    auto Q = MV<T>::form_q(ctx(), MV<T>(f.data(), 3, 1, 4, 4, 1), VectorView<T>(t.data(), 1, 1), 0, 3);
+    ASSERT_EQ(Q.rows() * Q.cols(), 9);
+    const auto at = [&](int i, int j) { return cdouble(Q(i, j, 0)); };
     EXPECT_EQ(at(0, 0), cx ? cdouble(0.5, -0.25) : cdouble(0.5));
     EXPECT_EQ(at(1, 0), cx ? cdouble(-0.5, -0.25) : cdouble(-0.5));
     EXPECT_EQ(at(2, 0), cx ? cdouble(0.75, -0.25) : cdouble(0.5));
@@ -1230,10 +1193,10 @@ TYPED_TEST(QrReconstruction, CompactRAccepted) {
         for (int j = 0; j < c.n; ++j)
             for (int r = 0; r < c.k; ++r) R.ex(b, r, j) = c.R.ex(b, r, j);
     R.store();
-    const double v = batchlas::verify::qr_reconstruction(c.A0.mview(), c.Q.mview(), R.mview());
+    const double v = MV<TypeParam>::qr_reconstruction(ctx(), c.A0.mview(), c.Q.mview(), R.mview());
     EXPECT_LT(v, bound_of(c) / 100);
     Batched<TypeParam> short_r = Batched<TypeParam>::matrix(c.k - 1, c.n);
-    EXPECT_THROW(batchlas::verify::qr_reconstruction(c.A0.mview(), c.Q.mview(), short_r.mview()), std::invalid_argument);
+    EXPECT_THROW(MV<TypeParam>::qr_reconstruction(ctx(), c.A0.mview(), c.Q.mview(), short_r.mview()), std::invalid_argument);
 }
 
 // ------------------------------------------------------------------ structured solve
@@ -1241,7 +1204,6 @@ TYPED_TEST(QrReconstruction, CompactRAccepted) {
 namespace {
 
 struct SolveConfig {
-    Shape sa;
     Transpose ta;
     int m, k;  // op(A) is m x k
 };
@@ -1256,23 +1218,24 @@ template <class T> struct StructSolveCase {
     std::vector<std::vector<T>> la;
     double limit = double(1 << 28);
 
-    explicit StructSolveCase(SolveConfig cfg = {Shape::unit_lower, Transpose::ConjTrans, 7, 7})
+    explicit StructSolveCase(SolveConfig cfg = {Transpose::ConjTrans, 7, 7})
         : g(cfg), bound_n(std::max(cfg.m, cfg.k)), hot_r(cfg.k - 1),
           A(Batched<T>::matrix(cfg.ta == Transpose::NoTrans ? cfg.m : cfg.k, cfg.ta == Transpose::NoTrans ? cfg.k : cfg.m)),
           X(Batched<T>::matrix(cfg.k, nrhs)), B0(Batched<T>::matrix(cfg.m, nrhs)) {
         using D = promoted_t<T>;
-        batchlas::verify::Rng rng(121);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 121);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
-            const auto a = logical<T>(g.sa, A.rows, A.cols, rng);
-            la.push_back(a);
             for (int j = 0; j < A.cols; ++j)
-                for (int i = 0; i < A.rows; ++i) A.ex(b, i, j) = stored(g.sa, i, j) ? a[j * A.rows + i] : poison<T>();
+                for (int i = 0; i < A.rows; ++i) A.ex(b, i, j) = rand_int<T>(rng, 3.0);
+            la.push_back(A.exact[b]);
+            const auto& a = la.back();
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < g.k; ++i) X.ex(b, i, j) = rand_int<T>(rng, 4.0);
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < g.m; ++i) {
                     D acc = D(0);
-                    for (int l = 0; l < g.k; ++l) acc += op_at(a, A.rows, g.ta, i, l) * up(X.ex(b, l, j));
+                    for (int l = 0; l < g.k; ++l) acc += op_at(a, A.rows, g.ta, i, l) * MV<T>::up(X.ex(b, l, j));
                     B0.ex(b, i, j) = down<T>(acc);
                 }
         }
@@ -1281,51 +1244,45 @@ template <class T> struct StructSolveCase {
         B0.store();
     }
     Batched<T>& out() { return X; }
-    double value(Shape sa, Transpose ta) {
-        return batchlas::verify::detail::solve_residual(A.mview(), sa, ta, X.mview(), B0.mview(), {}, limit);
-    }
-    double value() { return value(g.sa, g.ta); }
+    double value(Transpose ta) { return MV<T>::solve_residual(ctx(), A.mview(), ta, X.mview(), B0.mview(), {}, limit); }
+    double value() { return value(g.ta); }
 };
 
 }  // namespace
 
 VERIFY_RESIDUAL_SUITE(StructuredSolveResidual, StructSolveCase)
 
-TYPED_TEST(StructuredSolveResidual, ShapesExactIsSmall) {
+TYPED_TEST(StructuredSolveResidual, TransposesExactIsSmall) {
     const SolveConfig cases[] = {
-        {Shape::general, Transpose::Trans, 6, 5},       {Shape::general, Transpose::ConjTrans, 5, 7},
-        {Shape::symmetric_lower, Transpose::NoTrans, 6, 6}, {Shape::hermitian_upper, Transpose::Trans, 6, 6},
-        {Shape::upper, Transpose::NoTrans, 6, 6},       {Shape::lower, Transpose::ConjTrans, 6, 6},
-        {Shape::unit_upper, Transpose::Trans, 6, 6},    {Shape::general, Transpose::NoTrans, 7, 4},
+        {Transpose::Trans, 6, 5}, {Transpose::ConjTrans, 5, 7}, {Transpose::NoTrans, 7, 4}, {Transpose::NoTrans, 6, 6},
     };
     for (const SolveConfig& g : cases) {
         StructSolveCase<TypeParam> c(g);
-        SCOPED_TRACE(int(g.sa) * 10 + int(g.ta));
+        SCOPED_TRACE(int(g.ta) * 100 + g.m * 10 + g.k);
         expect_small(c);
         c.limit = 0.0;
         EXPECT_LT(c.value(), bound_of(c));
     }
 }
 
-TYPED_TEST(StructuredSolveResidual, WrongStructureFails) {
-    StructSolveCase<TypeParam> c({Shape::lower, Transpose::Trans, 6, 6});
-    EXPECT_GT(c.value(Shape::lower, Transpose::NoTrans), bound_of(c) * 100);
-    EXPECT_GT(c.value(Shape::upper, Transpose::Trans), bound_of(c) * 100);
-    EXPECT_GT(c.value(Shape::general, Transpose::Trans), bound_of(c) * 100);
-    if constexpr (batchlas::verify::is_complex<TypeParam>::value) {
-        StructSolveCase<TypeParam> h({Shape::general, Transpose::ConjTrans, 6, 5});
-        EXPECT_GT(h.value(Shape::general, Transpose::Trans), bound_of(h) * 100);
+TYPED_TEST(StructuredSolveResidual, WrongTransposeFails) {
+    StructSolveCase<TypeParam> c({Transpose::Trans, 6, 6});
+    EXPECT_GT(c.value(Transpose::NoTrans), bound_of(c) * 100);
+    if constexpr (batchlas::is_std_complex_v<TypeParam>) {
+        StructSolveCase<TypeParam> h({Transpose::ConjTrans, 6, 5});
+        EXPECT_GT(h.value(Transpose::Trans), bound_of(h) * 100);
     }
 }
 
 TYPED_TEST(StructuredSolveResidual, PublicOverloadIsGeneralNoTrans) {
-    StructSolveCase<TypeParam> c({Shape::general, Transpose::NoTrans, 7, 4});
-    EXPECT_EQ(batchlas::verify::solve_residual(c.A.mview(), c.X.mview(), c.B0.mview()),
-              batchlas::verify::solve_residual(c.A.mview(), Shape::general, Transpose::NoTrans, c.X.mview(), c.B0.mview()));
+    StructSolveCase<TypeParam> c({Transpose::NoTrans, 7, 4});
+    using M = MV<TypeParam>;
+    EXPECT_EQ(M::solve_residual(ctx(), c.A.mview(), c.X.mview(), c.B0.mview()),
+              M::solve_residual(ctx(), c.A.mview(), Transpose::NoTrans, c.X.mview(), c.B0.mview()));
     c.X.at(kB - 1, 0, 0) += delta<TypeParam>();
-    const double v = batchlas::verify::solve_residual(c.A.mview(), c.X.mview(), c.B0.mview());
+    const double v = M::solve_residual(ctx(), c.A.mview(), c.X.mview(), c.B0.mview());
     EXPECT_GT(v, 0.0);
-    EXPECT_EQ(v, batchlas::verify::solve_residual(c.A.mview(), Shape::general, Transpose::NoTrans, c.X.mview(), c.B0.mview()));
+    EXPECT_EQ(v, M::solve_residual(ctx(), c.A.mview(), Transpose::NoTrans, c.X.mview(), c.B0.mview()));
 }
 
 TYPED_TEST(StructuredSolveResidual, ProbeColumnsSeeAWrongEntry) {
@@ -1340,13 +1297,13 @@ TYPED_TEST(StructuredSolveResidual, ProbeColumnsSeeAWrongEntry) {
 TYPED_TEST(StructuredSolveResidual, InverseOfConjTransposedUnitary) {
     InverseCase<TypeParam> c;
     MatrixView<TypeParam, MatrixFormat::Dense> none(nullptr, 0, 0, 1, 0, kB);
-    EXPECT_LT(batchlas::verify::solve_residual(c.A0.mview(), Shape::general, Transpose::ConjTrans, c.A0.mview(), none), bound_of(c) / 100);
-    EXPECT_GT(batchlas::verify::solve_residual(c.A0.mview(), Shape::general, Transpose::NoTrans, c.A0.mview(), none), bound_of(c) * 100);
+    EXPECT_LT(MV<TypeParam>::solve_residual(ctx(), c.A0.mview(), Transpose::ConjTrans, c.A0.mview(), none), bound_of(c) / 100);
+    EXPECT_GT(MV<TypeParam>::solve_residual(ctx(), c.A0.mview(), Transpose::NoTrans, c.A0.mview(), none), bound_of(c) * 100);
 }
 
 // X(i0, j0) += d moves column j0 of op(A) X by d op(A)(:, i0); the denominator is ||A|| ||X + d||.
 TYPED_TEST(StructuredSolveResidual, KnownValue) {
-    StructSolveCase<TypeParam> c({Shape::hermitian_lower, Transpose::ConjTrans, 6, 6});
+    StructSolveCase<TypeParam> c({Transpose::ConjTrans, 6, 6});
     const int b = kB - 1, i0 = c.g.k - 1, j0 = c.nrhs - 1;
     const TypeParam d = delta<TypeParam>();
     const double x2 = nrm2(c.X.ex(b, i0, j0)), xp2 = nrm2(c.X.ex(b, i0, j0) + d);
@@ -1381,7 +1338,7 @@ template <class T> struct Rank2kCase {
     // op(X)(j, l) taken back: conjugated for her2k, plain for syr2k.
     promoted_t<T> back(const std::vector<T>& M, int j, int l) const {
         const auto x = op_at(M, g.trans == Transpose::NoTrans ? n : k, g.trans, j, l);
-        return g.herm ? conj(x) : x;
+        return g.herm ? MV<T>::conj(x) : x;
     }
 
     explicit Rank2kCase(Rank2kConfig cfg = {true, Transpose::NoTrans, Uplo::Lower})
@@ -1391,8 +1348,9 @@ template <class T> struct Rank2kCase {
           C0(Batched<T>::matrix(n, n)), C(Batched<T>::matrix(n, n)) {
         using D = promoted_t<T>;
         beta = g.zero_beta ? D(0) : g.herm ? D(-2.0) : beta_of<T>();
-        const D alpha2 = g.herm ? conj(alpha) : alpha;
-        batchlas::verify::Rng rng(131);
+        const D alpha2 = g.herm ? MV<T>::conj(alpha) : alpha;
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 131);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             for (int j = 0; j < A.cols; ++j)
                 for (int i = 0; i < A.rows; ++i) {
@@ -1405,13 +1363,13 @@ template <class T> struct Rank2kCase {
                 for (int i = 0; i < n; ++i) {
                     if (g.uplo == Uplo::Lower ? i < j : i > j) continue;
                     // A Hermitian C0's diagonal imaginary part is not read: poison it.
-                    C0.ex(b, i, j) = g.zero_beta ? make<T>(kNaN, kNaN) : g.herm && i == j ? make<T>(std::round(3.0 * rng.next()), 1000.0) : rand_int<T>(rng, 3.0);
+                    C0.ex(b, i, j) = g.zero_beta ? MV<T>::make(kNaN, kNaN) : g.herm && i == j ? MV<T>::make(std::round(3.0 * *rng++), 1000.0) : rand_int<T>(rng, 3.0);
                     D s1 = D(0), s2 = D(0);
                     for (int l = 0; l < k; ++l) {
                         s1 += op_at(la[b], A.rows, g.trans, i, l) * back(lb[b], j, l);
                         s2 += op_at(lb[b], B.rows, g.trans, i, l) * back(la[b], j, l);
                     }
-                    D c0 = g.zero_beta ? D(0) : up(C0.ex(b, i, j));
+                    D c0 = g.zero_beta ? D(0) : MV<T>::up(C0.ex(b, i, j));
                     if (g.herm && i == j) c0 = D(std::real(c0));
                     C.ex(b, i, j) = down<T>(alpha * s1 + alpha2 * s2 + beta * c0);
                 }
@@ -1423,7 +1381,7 @@ template <class T> struct Rank2kCase {
     }
     Batched<T>& out() { return C; }
     double value(bool herm, Uplo uplo) {
-        return batchlas::verify::rank2k_backward_error(A.mview(), B.mview(), g.trans, C0.mview(), C.mview(), uplo, alpha, beta, herm);
+        return MV<T>::rank2k_backward_error(ctx(), A.mview(), B.mview(), g.trans, C0.mview(), C.mview(), uplo, alpha, beta, herm);
     }
     double value() { return value(g.herm, g.uplo); }
 };
@@ -1455,7 +1413,7 @@ TYPED_TEST(Rank2kBackwardError, WrongTriangleFails) {
 }
 
 TYPED_TEST(Rank2kBackwardError, WrongVariantFails) {
-    if constexpr (batchlas::verify::is_complex<TypeParam>::value) {
+    if constexpr (batchlas::is_std_complex_v<TypeParam>) {
         Rank2kCase<TypeParam> s({false, Transpose::NoTrans, Uplo::Lower, true});
         EXPECT_GT(s.value(true, Uplo::Lower), bound_of(s) * 100);
         Rank2kCase<TypeParam> h({true, Transpose::NoTrans, Uplo::Lower, true});
@@ -1468,20 +1426,20 @@ TYPED_TEST(Rank2kBackwardError, WrongVariantFails) {
 
 TYPED_TEST(Rank2kBackwardError, InvalidCombinationsThrow) {
     Rank2kCase<TypeParam> c;
-    if constexpr (batchlas::verify::is_complex<TypeParam>::value) {
+    if constexpr (batchlas::is_std_complex_v<TypeParam>) {
         Rank2kCase<TypeParam> t({false, Transpose::Trans, Uplo::Lower});
-        EXPECT_THROW(batchlas::verify::rank2k_backward_error(t.A.mview(), t.B.mview(), Transpose::Trans, t.C0.mview(), t.C.mview(), Uplo::Lower,
+        EXPECT_THROW(MV<TypeParam>::rank2k_backward_error(ctx(), t.A.mview(), t.B.mview(), Transpose::Trans, t.C0.mview(), t.C.mview(), Uplo::Lower,
                                                              t.alpha, promoted_t<TypeParam>(1.0), true),
                      std::invalid_argument);
-        EXPECT_THROW(batchlas::verify::rank2k_backward_error(t.A.mview(), t.B.mview(), Transpose::ConjTrans, t.C0.mview(), t.C.mview(), Uplo::Lower,
+        EXPECT_THROW(MV<TypeParam>::rank2k_backward_error(ctx(), t.A.mview(), t.B.mview(), Transpose::ConjTrans, t.C0.mview(), t.C.mview(), Uplo::Lower,
                                                              t.alpha, t.beta, false),
                      std::invalid_argument);
-        EXPECT_THROW(batchlas::verify::rank2k_backward_error(c.A.mview(), c.B.mview(), Transpose::NoTrans, c.C0.mview(), c.C.mview(), Uplo::Lower,
+        EXPECT_THROW(MV<TypeParam>::rank2k_backward_error(ctx(), c.A.mview(), c.B.mview(), Transpose::NoTrans, c.C0.mview(), c.C.mview(), Uplo::Lower,
                                                              c.alpha, beta_of<TypeParam>(), true),
                      std::invalid_argument);
     }
     Batched<TypeParam> wide = Batched<TypeParam>::matrix(c.n, c.n + 1);
-    EXPECT_THROW(batchlas::verify::rank2k_backward_error(c.A.mview(), c.B.mview(), Transpose::NoTrans, c.C0.mview(), wide.mview(), Uplo::Lower,
+    EXPECT_THROW(MV<TypeParam>::rank2k_backward_error(ctx(), c.A.mview(), c.B.mview(), Transpose::NoTrans, c.C0.mview(), wide.mview(), Uplo::Lower,
                                                          c.alpha, c.beta, true),
                  std::invalid_argument);
 }
@@ -1514,7 +1472,7 @@ TYPED_TEST(Rank2kBackwardError, HermitianDiagonalKnownValue) {
     c.C.at(b, i0, i0) += d;
     double mag = 0;
     for (int l = 0; l < c.k; ++l) mag += 2.0 * std::abs(cdouble(op_at(c.la[b], c.A.rows, c.g.trans, i0, l))) * std::abs(cdouble(op_at(c.lb[b], c.B.rows, c.g.trans, i0, l)));
-    expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * std::abs(cdouble(up(c.C0.ex(b, i0, i0))).real())));
+    expect_value(c, mod(d) / (mod(c.alpha) * mag + mod(c.beta) * std::abs(cdouble(MV<TypeParam>::up(c.C0.ex(b, i0, i0))).real())));
 }
 
 // ------------------------------------------------------------------ LU solve from factors
@@ -1534,19 +1492,20 @@ template <class T> struct LuSolveCase {
 
     promoted_t<T> op_m(int b, int i, int j) const {
         if (trans == Transpose::NoTrans) return M[b][j * n + i];
-        return trans == Transpose::ConjTrans ? conj(M[b][i * n + j]) : M[b][i * n + j];
+        return trans == Transpose::ConjTrans ? MV<T>::conj(M[b][i * n + j]) : M[b][i * n + j];
     }
 
     explicit LuSolveCase(Transpose t = Transpose::ConjTrans) : trans(t) {
         using D = promoted_t<T>;
         piv.assign(static_cast<std::size_t>(pstride * kB), -99);
-        batchlas::verify::Rng rng(141);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 141);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b) {
             std::vector<D> L(n * n, D(0)), U(n * n, D(0)), A(n * n, D(0));
             for (int j = 0; j < n; ++j) {
                 L[j * n + j] = D(1);
-                for (int i = j + 1; i < n; ++i) L[j * n + i] = up(rand_int<T>(rng, 2.0));
-                for (int i = 0; i <= j; ++i) U[j * n + i] = up(i == j ? make<T>(5.0, 1.0) : rand_int<T>(rng, 3.0));
+                for (int i = j + 1; i < n; ++i) L[j * n + i] = MV<T>::up(rand_int<T>(rng, 2.0));
+                for (int i = 0; i <= j; ++i) U[j * n + i] = MV<T>::up(i == j ? MV<T>::make(5.0, 1.0) : rand_int<T>(rng, 3.0));
             }
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
@@ -1555,7 +1514,7 @@ template <class T> struct LuSolveCase {
                 }
             std::vector<int> ip(n);
             for (int k = 0; k < n; ++k) {
-                ip[k] = k + int((rng.next() * 0.5 + 0.5) * double(n - k)) % (n - k);
+                ip[k] = k + int((*rng++ * 0.5 + 0.5) * double(n - k)) % (n - k);
                 piv[static_cast<std::size_t>(b * pstride + k * pinc)] = ip[k] + 1;
             }
             for (int k = n - 1; k >= 0; --k)
@@ -1566,7 +1525,7 @@ template <class T> struct LuSolveCase {
             for (int j = 0; j < nrhs; ++j)
                 for (int i = 0; i < n; ++i) {
                     D acc = D(0);
-                    for (int l = 0; l < n; ++l) acc += op_m(b, i, l) * up(X.ex(b, l, j));
+                    for (int l = 0; l < n; ++l) acc += op_m(b, i, l) * MV<T>::up(X.ex(b, l, j));
                     B0.ex(b, i, j) = down<T>(acc);
                 }
         }
@@ -1576,7 +1535,7 @@ template <class T> struct LuSolveCase {
     }
     VectorView<std::int32_t> pview() { return VectorView<std::int32_t>(piv.data(), n, kB, pinc, pstride); }
     Batched<T>& out() { return F; }
-    double value() { return batchlas::verify::lu_solve_residual(F.mview(), pview(), trans, X.mview(), B0.mview()); }
+    double value() { return MV<T>::lu_solve_residual(ctx(), F.mview(), pview(), trans, X.mview(), B0.mview()); }
 };
 
 }  // namespace
@@ -1639,23 +1598,23 @@ TYPED_TEST(LuSolveResidual, InverseFromFactors) {
     Batched<T> Xi = Batched<T>::matrix(n, n);
     for (int b = 0; b < kB; ++b) {
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) c.F.ex(b, i, j) = i == j ? phase<T>(i + 2 * b + 1) : make<T>(0.0, 0.0);
+            for (int i = 0; i < n; ++i) c.F.ex(b, i, j) = i == j ? phase<T>(i + 2 * b + 1) : MV<T>::make(0.0, 0.0);
         auto& Mb = c.M[b];
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) Mb[j * n + i] = up(c.F.ex(b, i, j));
+            for (int i = 0; i < n; ++i) Mb[j * n + i] = MV<TypeParam>::up(c.F.ex(b, i, j));
         for (int k = n - 1; k >= 0; --k) {
             const int ip = c.piv[static_cast<std::size_t>(b * c.pstride + k * c.pinc)] - 1;
             for (int col = 0; col < n; ++col) std::swap(Mb[col * n + k], Mb[col * n + ip]);
         }
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) Xi.ex(b, i, j) = down<T>(conj(c.op_m(b, j, i)));
+            for (int i = 0; i < n; ++i) Xi.ex(b, i, j) = down<T>(MV<TypeParam>::conj(c.op_m(b, j, i)));
     }
     c.F.store();
     Xi.store();
     MatrixView<T, MatrixFormat::Dense> none(nullptr, 0, 0, 1, 0, kB);
-    EXPECT_LT(batchlas::verify::lu_solve_residual(c.F.mview(), c.pview(), c.trans, Xi.mview(), none), bound_of(c) / 100);
+    EXPECT_LT(MV<TypeParam>::lu_solve_residual(ctx(), c.F.mview(), c.pview(), c.trans, Xi.mview(), none), bound_of(c) / 100);
     Xi.at(kB - 1, n - 1, 0) += bump<T>();
-    EXPECT_GT(batchlas::verify::lu_solve_residual(c.F.mview(), c.pview(), c.trans, Xi.mview(), none), bound_of(c) * 100);
+    EXPECT_GT(MV<TypeParam>::lu_solve_residual(ctx(), c.F.mview(), c.pview(), c.trans, Xi.mview(), none), bound_of(c) * 100);
 }
 
 // ------------------------------------------------------------------ pivot ratio
@@ -1669,19 +1628,20 @@ template <class T> struct PivotCase {
     Batched<T> F = Batched<T>::matrix(n, n);
 
     PivotCase() {
-        batchlas::verify::Rng rng(151);
+        const auto draws = batchlas::Matrix<double>::Random(kDraws, 1, false, 1, 151);
+        const double* rng = draws.data().data();
         for (int b = 0; b < kB; ++b)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T u = down<T>(up(phase<T>(j + b)) * 4.0);
+                    const T u = down<T>(MV<T>::up(phase<T>(j + b)) * 4.0);
                     if (i < j) F.ex(b, i, j) = rand_int<T>(rng, 5.0);
                     else if (i == j) F.ex(b, i, j) = u;
-                    else F.ex(b, i, j) = down<T>(up(rand_int<T>(rng, 2.0)) / up(u));
+                    else F.ex(b, i, j) = down<T>(MV<T>::up(rand_int<T>(rng, 2.0)) / MV<T>::up(u));
                 }
         F.store();
     }
-    void set_a(int b, int i, int j, T a) { F.at(b, i, j) = down<T>(up(a) / up(F.ex(b, j, j))); }
-    double value() { return batchlas::verify::pivot_ratio(F.mview()); }
+    void set_a(int b, int i, int j, T a) { F.at(b, i, j) = down<T>(MV<T>::up(a) / MV<T>::up(F.ex(b, j, j))); }
+    double value() { return MV<T>::pivot_ratio(F.mview()); }
 };
 
 template <class T> void expect_ratio_fails(double v) {
@@ -1702,8 +1662,8 @@ TYPED_TEST(PivotRatio, ExactPasses) {
 
 TYPED_TEST(PivotRatio, KnownValue) {
     PivotCase<TypeParam> c;
-    c.set_a(kB - 1, c.n - 1, 0, make<TypeParam>(5.0, -2.0));
-    EXPECT_EQ(c.value(), batchlas::verify::is_complex<TypeParam>::value ? 7.0 / 4.0 : 5.0 / 4.0);
+    c.set_a(kB - 1, c.n - 1, 0, MV<TypeParam>::make(5.0, -2.0));
+    EXPECT_EQ(c.value(), batchlas::is_std_complex_v<TypeParam> ? 7.0 / 4.0 : 5.0 / 4.0);
 }
 
 TYPED_TEST(PivotRatio, PerturbedElementFails) {
@@ -1728,35 +1688,35 @@ TYPED_TEST(PivotRatio, LastItemOnlyFails) {
 }
 TYPED_TEST(PivotRatio, NanFails) {
     PivotCase<TypeParam> c;
-    c.F.at(kB / 2, 3, 2) = make<TypeParam>(kNaN, 0.0);
+    c.F.at(kB / 2, 3, 2) = MV<TypeParam>::make(kNaN, 0.0);
     EXPECT_TRUE(std::isnan(c.value()));
 }
 
 // |a| = 3.54 < |U(k,k)| = 4 but cabs1(a) = 5 > 4: a modulus pivot rule passes, cabs1 does not.
 TYPED_TEST(PivotRatio, ModulusPivotFails) {
-    if constexpr (batchlas::verify::is_complex<TypeParam>::value) {
+    if constexpr (batchlas::is_std_complex_v<TypeParam>) {
         PivotCase<TypeParam> c;
-        c.set_a(kB - 1, 4, 1, make<TypeParam>(2.5, 2.5));
+        c.set_a(kB - 1, 4, 1, MV<TypeParam>::make(2.5, 2.5));
         EXPECT_EQ(c.value(), 1.25);
     }
 }
 
 // U(0,0) = 2 + 2i (cabs1 4, modulus 2.83) and L(n-1,0) U(0,0) = 3 - i: the ratio is 4 / 4, not 4 / 2.83.
 TYPED_TEST(PivotRatio, DenominatorIsCabs1) {
-    if constexpr (batchlas::verify::is_complex<TypeParam>::value) {
+    if constexpr (batchlas::is_std_complex_v<TypeParam>) {
         PivotCase<TypeParam> c;
         const int b = kB - 1;
-        c.F.ex(b, 0, 0) = make<TypeParam>(2.0, 2.0);
+        c.F.ex(b, 0, 0) = MV<TypeParam>::make(2.0, 2.0);
         c.F.at(b, 0, 0) = c.F.ex(b, 0, 0);
-        for (int i = 1; i < c.n; ++i) c.F.at(b, i, 0) = make<TypeParam>(0.0, 0.0);
-        c.set_a(b, c.n - 1, 0, make<TypeParam>(3.0, -1.0));
+        for (int i = 1; i < c.n; ++i) c.F.at(b, i, 0) = MV<TypeParam>::make(0.0, 0.0);
+        c.set_a(b, c.n - 1, 0, MV<TypeParam>::make(3.0, -1.0));
         EXPECT_EQ(c.value(), 1.0);
     }
 }
 
 TYPED_TEST(PivotRatio, ZeroPivotColumnSkipped) {
     PivotCase<TypeParam> c;
-    c.F.at(kB - 1, 2, 2) = make<TypeParam>(0.0, 0.0);
+    c.F.at(kB - 1, 2, 2) = MV<TypeParam>::make(0.0, 0.0);
     c.F.at(kB - 1, 4, 2) = bump<TypeParam>();
     EXPECT_LE(c.value(), 1.0);
 }

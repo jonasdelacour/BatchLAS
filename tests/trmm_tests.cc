@@ -9,7 +9,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include "../src/select/vendor.hh"
 
 using namespace batchlas;
@@ -32,15 +31,14 @@ TYPED_TEST_SUITE(TrmmTest, TrmmTestTypes);
 
 // Componentwise error of C = op(A) B (Left) or B op(A) (Right), A read as its triangle; k = A's order.
 template <typename T>
-double trmm_error(const Matrix<T>& A, const Matrix<T>& B, const Matrix<T>& C, Side side, Uplo uplo, Transpose trans, Diag diag) {
-    using verify::Shape;
-    const bool unit = diag == Diag::Unit;
-    const Shape tri = uplo == Uplo::Lower ? (unit ? Shape::unit_lower : Shape::lower) : (unit ? Shape::unit_upper : Shape::upper);
+double trmm_error(Queue& ctx, const Matrix<T>& A, const Matrix<T>& B, const Matrix<T>& C, Side side, Uplo uplo, Transpose trans,
+                  Diag diag) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    auto tri = A.clone();
+    tri.view().triangularize(ctx, uplo, diag).wait();
     if (side == Side::Left)
-        return verify::gemm_backward_error(A.view(), tri, trans, B.view(), Shape::general, Transpose::NoTrans, C.view(), C.view(),
-                                           Shape::general, verify::promoted_t<T>(1), verify::promoted_t<T>(0));
-    return verify::gemm_backward_error(B.view(), Shape::general, Transpose::NoTrans, A.view(), tri, trans, C.view(), C.view(),
-                                       Shape::general, verify::promoted_t<T>(1), verify::promoted_t<T>(0));
+        return MV::gemm_backward_error(ctx, tri.view(), trans, B.view(), Transpose::NoTrans, C.view(), C.view(), 1.0, 0.0);
+    return MV::gemm_backward_error(ctx, B.view(), Transpose::NoTrans, tri.view(), trans, C.view(), C.view(), 1.0, 0.0);
 }
 
 TYPED_TEST(TrmmTest, AllCombinations) {
@@ -70,7 +68,7 @@ TYPED_TEST(TrmmTest, AllCombinations) {
                              C.view(),
                              {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
 
-                    EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(A, B, C, side, uplo, trans, diag))
+                    EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(*(this->ctx), A, B, C, side, uplo, trans, diag))
                         << "Failed combination: trans=" << static_cast<int>(trans)
                         << ", side=" << static_cast<int>(side)
                         << ", uplo=" << static_cast<int>(uplo)
@@ -159,7 +157,7 @@ TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
                                  {.side = side, .uplo = uplo, .trans = trans, .diag = diag})
                                 .wait();
 
-                            EXPECT_VERIFY(T, verify::Check::blas, k, trmm_error(A_poisoned, B, C, side, uplo, trans, diag))
+                            EXPECT_VERIFY(T, verify::Check::blas, k, trmm_error(*(this->ctx), A_poisoned, B, C, side, uplo, trans, diag))
                                 << "trmm read storage it must not touch: " << route << " route, "
                                 << shape.rows << "x" << shape.cols << " batch " << shape.batch
                                 << " side=" << (side == Side::Left ? "Left" : "Right")

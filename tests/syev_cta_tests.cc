@@ -130,7 +130,7 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 	auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n*batch));
 	// Every item against LAPACKE in double (not a BatchLAS syev on this queue).
-	const auto all = verify::all_items(batch);
+	const auto all = A0.view().all_items();
 
 	for (auto scheme : kCtaUpdateSchemes) {
 		SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
@@ -167,7 +167,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 
 		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n);
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -194,7 +194,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 
 		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n);
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -221,7 +221,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
 		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n, /*sorted_copy=*/true);
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 
@@ -260,7 +260,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 		// Compare as a multiset (CTA may intentionally skip internal sorting here).
 		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_cta, n, /*sorted_copy=*/true);
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_cta.view(), W_cta, n);
 	}
 	if (dbg) std::cerr << "[cta-test] CTA done" << std::endl;
 }
@@ -288,7 +288,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_N32_Stre
 		auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta.view(), JobType::EigenVectors, p));
 		syev_cta<B, Scalar>(*this->ctx, A_cta.view(), W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_cta.view(), W_cta, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_cta.view(), W_cta, n);
 	}
 }
 

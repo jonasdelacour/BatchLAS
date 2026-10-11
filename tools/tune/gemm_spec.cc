@@ -3,7 +3,7 @@
 // (docs/developer/agent-guide.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
 // max(1, --ld-pad) (an odd ld fails every aligned leg, as the parent-ld panel updates do);
 // layout=packed cells are contiguous with the allocator's aligned bases. Verification is
-// batchlas::verify::gemm_backward_error (docs/design/verification.md) on the default items, over
+// MatrixView::gemm_backward_error (docs/design/verification.md) on the default items, over
 // every row of up to 64 sampled columns (always the first and last), so a lost tile edge or an
 // ignored transpose is caught.
 //
@@ -14,9 +14,6 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/items.hh>
-#include <batchlas/verify/residuals.hh>
-#include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/gemm/choice.hh"
@@ -62,18 +59,15 @@ struct GemmProblem {
           br(tb_ == Transpose::NoTrans ? k_ : n_), bc(tb_ == Transpose::NoTrans ? n_ : k_),
           lda(ar + pad), ldb(br + pad), ldc(m_ + pad),
           sa(std::size_t(lda) * std::size_t(ac)), sb(std::size_t(ldb) * std::size_t(bc)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(batchlas::verify::make<T>(1.25, -0.5)),
-          beta(batchlas::verify::make<T>(1.0, 0.0)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(MV::make(1.25, -0.5)), beta(MV::make(1.0, 0.0)),
           A(sa * std::size_t(batch_)), B(sb * std::size_t(batch_)), C0(sc * std::size_t(batch_)),
           C(sc * std::size_t(batch_)), Av(A.data(), ar, ac, lda, int(sa), batch_),
           Bv(B.data(), br, bc, ldb, int(sb), batch_), C0v(C0.data(), m_, n_, ldc, int(sc), batch_),
           Cv(C.data(), m_, n_, ldc, int(sc), batch_) {
-        batchlas::verify::Rng rg(777);
-        for (auto* v : {&A, &B, &C0})
-            for (std::size_t i = 0; i < v->size(); ++i) {
-                const double re = rg.next();
-                (*v)[i] = batchlas::verify::make<T>(re, rg.next());
-            }
+        (void)Av.fill_random(q, false, 777);
+        (void)Bv.fill_random(q, false, 778);
+        (void)C0v.fill_random(q, false, 779);
+        q.wait();
     }
     void reset() {  // beta = 1 accumulates into C
         (void)MV::copy(q, Cv, C0v);
@@ -94,15 +88,14 @@ struct GemmProblem {
     // once per item. op(B)'s column j is B's row j when B is transposed: gather rows then.
     std::pair<double, int> verify() {
         using V = MatrixView<T, MatrixFormat::Dense>;
-        using batchlas::verify::Shape;
         std::vector<int> cols;
         for (int i = 0; i < std::min(n, kMaxCheckedCols); ++i)
             cols.push_back(n <= kMaxCheckedCols ? i : int(std::int64_t(i) * (n - 1) / (kMaxCheckedCols - 1)));
         const int nc = int(cols.size());
         const bool bt = tb != Transpose::NoTrans;
-        std::vector<T> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
+        UnifiedVector<T> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
         double worst = 0;
-        for (int b : batchlas::verify::default_items(batch)) {
+        for (int b : Cv.default_items()) {
             const std::size_t ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;
             for (int i = 0; i < nc; ++i) {
                 const std::size_t j = std::size_t(cols[std::size_t(i)]), ii = std::size_t(i);
@@ -115,11 +108,9 @@ struct GemmProblem {
                 }
             }
             worst = batchlas::verify::nanmax(
-                worst, batchlas::verify::gemm_backward_error(
-                           V(A.data() + std::size_t(b) * sa, ar, ac, lda), Shape::general, ta,
-                           bt ? V(bs.data(), nc, k, nc) : V(bs.data(), k, nc, k), Shape::general, tb,
-                           V(c0s.data(), m, nc, m), V(cs.data(), m, nc, m), Shape::general,
-                           batchlas::verify::up(alpha), batchlas::verify::up(beta)));
+                worst, V::gemm_backward_error(q, V(A.data() + std::size_t(b) * sa, ar, ac, lda), ta,
+                                              bt ? V(bs.data(), nc, k, nc) : V(bs.data(), k, nc, k), tb, V(c0s.data(), m, nc, m),
+                                              V(cs.data(), m, nc, m), V::up(alpha), V::up(beta)));
         }
         return {worst, 0};
     }

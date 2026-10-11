@@ -24,7 +24,6 @@
 #include "eigen_verify.hh"
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
@@ -43,12 +42,12 @@ inline U conj_if(const U& x) {
 
 // ||A0 Z - Z diag(w)||_F / ||A0||_F for every item (Z overwrote A; A0 is the saved input).
 template <typename T>
-void expect_residual(const Matrix<T, MatrixFormat::Dense>& A0, const Matrix<T, MatrixFormat::Dense>& Z,
+void expect_residual(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& A0, const Matrix<T, MatrixFormat::Dense>& Z,
                      UnifiedVector<typename base_type<T>::type>& w, int n, const char* what) {
     using Real = typename base_type<T>::type;
     const VectorView<Real> wv(w, n, Z.batch_size());
-    EXPECT_VERIFY(T, batchlas::verify::Check::eigen_residual, n,
-                  batchlas::verify::eigen_residual(A0.view(), Z.view(), wv, batchlas::verify::all_items(Z.batch_size())))
+    const double resid = MatrixView<T, MatrixFormat::Dense>::eigen_residual(ctx, A0.view(), Z.view(), wv, Z.view().all_items());
+    EXPECT_VERIFY(T, batchlas::verify::Check::eigen_residual, n, resid)
         << what << " n=" << n;
 }
 
@@ -105,8 +104,7 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        test_utils::expect_eigenpairs<T>(Aref.view(), A0.view(), w, n,
-                                         batchlas::verify::all_items(batch));
+        test_utils::expect_eigenpairs<T>(ctx, Aref.view(), A0.view(), w, n, A0.view().all_items());
     }
 }
 
@@ -141,7 +139,7 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        expect_residual(Aref, A0, w, n, "two-stage");
+        expect_residual(ctx, Aref, A0, w, n, "two-stage");
     }
 }
 
@@ -171,7 +169,7 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
                            Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        expect_residual(Aref, A0, w, n, "blocked");
+        expect_residual(ctx, Aref, A0, w, n, "blocked");
     }
 }
 

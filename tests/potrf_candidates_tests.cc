@@ -14,7 +14,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/potrf_native.hh"
@@ -65,11 +64,11 @@ std::vector<T> make_hpd(int n, unsigned seed) {
     std::uniform_real_distribution<R> d(R(0.1), R(1));
     std::vector<T> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = verify::make<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const T v = MatrixView<T, MatrixFormat::Dense>::make((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = verify::make<T>(double(std::real(v)), -double(std::imag(v)));
+            A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -105,7 +104,7 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
     p.uplo = uplo;
     p.ld = n + 3;
     p.stride = p.ld * n + 5;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, verify::make<T>(R(-999), R(777)));
+    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777)));
     p.ptrs = UnifiedVector<T*>(batch, nullptr);
     p.ref.resize(batch);
     for (int b = 0; b < batch; ++b) {
@@ -118,20 +117,26 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
     return p;
 }
 
-// ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper) over the factored triangle.
+// ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper) over the factored triangle,
+// worst over the first and last item (packed in that order).
 template <typename T>
-double residual(const Prob<T>& p, int b) {
-    return verify::potrf_residual(verify::view(p.ref[b].data(), p.n, p.n, p.n),
-                                  verify::view(p.buf.data() + static_cast<size_t>(b) * p.stride, p.n, p.n, p.ld), p.uplo);
+double residual(Queue& ctx, const Prob<T>& p) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const std::vector<int> items{0, p.batch - 1};
+    Matrix<T> a(p.n, p.n, 2);
+    for (int g = 0; g < 2; ++g)
+        std::copy(p.ref[items[g]].begin(), p.ref[items[g]].end(), a.data().data() + static_cast<size_t>(g) * p.n * p.n);
+    const auto f = MV(const_cast<T*>(p.buf.data()), p.n, p.n, p.ld, p.stride, p.batch).template astype<T>(items);
+    return MV::potrf_residual(ctx, a.view(), f.view(), p.uplo, a.view().all_items());
 }
 
 // info, the residual of the first and last item, and every element the factor must not
 // touch -- the other triangle, the ld padding and the inter-item gap -- bit for bit.
 template <typename T>
-void expect_factored(const Prob<T>& p, const std::vector<int32_t>& info, const std::string& what,
+void expect_factored(Queue& ctx, const Prob<T>& p, const std::vector<int32_t>& info, const std::string& what,
                      bool other_triangle_is_scratch = false) {
     for (int b = 0; b < p.batch; ++b) ASSERT_EQ(info[b], 0) << what << " b=" << b;
-    for (int b : {0, p.batch - 1}) EXPECT_VERIFY(T, verify::Check::factorization, p.n, residual(p, b)) << what << " b=" << b;
+    EXPECT_VERIFY(T, verify::Check::factorization, p.n, residual(ctx, p)) << what << " b=0 and " << p.batch - 1;
     for (size_t e = 0; e < p.before.size(); ++e) {
         const int b = static_cast<int>(e / p.stride);
         const int r = static_cast<int>(e % p.stride);
@@ -340,7 +345,7 @@ TYPED_TEST(PotrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             if (lim == 0 && std::holds_alternative<pc::Vendor>(c)) {
                 // Vendor compiled out: bare `vendor` is a class word, so it runs Auto (§12).
                 auto p = make_prob<T>(8, 2, uplo, 11u);
-                expect_factored(p, this->run_pinned(c, p), this->name(c, uplo, 8) + " (vendor-free fallback)");
+                expect_factored(*this->ctx, p, this->run_pinned(c, p), this->name(c, uplo, 8) + " (vendor-free fallback)");
                 continue;
             }
             if (lim == 0) {
@@ -366,7 +371,7 @@ TYPED_TEST(PotrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             for (int n : runs) {
                 auto p = make_prob<T>(n, n > 256 ? 2 : 3, uplo, 1000u + 31u * n);
                 ASSERT_TRUE(this->pin_accepted(c, p.view(), uplo)) << this->name(c, uplo, n);
-                expect_factored(p, this->run_pinned(c, p), this->name(c, uplo, n), clobbers_other(c, uplo));
+                expect_factored(*this->ctx, p, this->run_pinned(c, p), this->name(c, uplo, n), clobbers_other(c, uplo));
             }
         }
     }
@@ -412,7 +417,7 @@ TYPED_TEST(PotrfCandidates, SaturatingBatchIsBitIdentical) {
             for (int n : {std::min(lim, 17), blocked ? cta + 5 : std::min(lim, 96)}) {
                 auto p = make_prob<T>(n, kBatch, uplo, 777u, /*identical=*/true);
                 const auto info = this->run_pinned(c, p);
-                expect_factored(p, info, this->name(c, uplo, n));
+                expect_factored(*this->ctx, p, info, this->name(c, uplo, n));
                 for (int b = 1; b < kBatch; ++b)
                     for (int j = 0; j < n; ++j)
                         for (int i = 0; i < n; ++i)
@@ -453,7 +458,7 @@ TYPED_TEST(PotrfCandidates, CanRunEqualsLaunch) {
             Matrix<T, MatrixFormat::Dense> A(n, n, 4);
             A.fill(T{});
             for (int b = 0; b < 4; ++b)
-                for (int i = 0; i < n; ++i) A(i, i, b) = verify::make<T>(R(2), R(0));
+                for (int i = 0; i < n; ++i) A(i, i, b) = MatrixView<T, MatrixFormat::Dense>::make(R(2), R(0));
             UnifiedVector<int> act(4);
             for (int b = 0; b < 4; ++b) act[b] = n - b;
             auto V = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -499,10 +504,10 @@ TYPED_TEST(PotrfCandidates, ExactWorkspaceInAPoisonedArena) {
                         ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                             << what << ": wrote " << i << " bytes past the sized workspace";
                     if (pass_info) {
-                        expect_factored(p, std::vector<int32_t>(info.begin(), info.end()), what,
+                        expect_factored(*this->ctx, p, std::vector<int32_t>(info.begin(), info.end()), what,
                                         clobbers_other(c, uplo));
                     } else {
-                        expect_factored(p, std::vector<int32_t>(p.batch, 0), what, clobbers_other(c, uplo));
+                        expect_factored(*this->ctx, p, std::vector<int32_t>(p.batch, 0), what, clobbers_other(c, uplo));
                     }
                 }
             }
@@ -635,7 +640,7 @@ TYPED_TEST(PotrfCandidates, ClassWordsAndSpellingsSelectTheirChoice) {
             const bool fell_back = std::string(word) == "vendor" && !batchlas::select::solver_vendor_available<B>;
             EXPECT_EQ(err.find("pinned \"vendor\", but no vendor candidate") != std::string::npos, fell_back)
                 << what << ": " << err;
-            expect_factored(p, info, what);
+            expect_factored(*this->ctx, p, info, what);
         }
     }
 }
@@ -664,7 +669,7 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
         // Vendor-free, Auto skips the vendor entry and lands where `native` does.
         const char* auto_pick = batchlas::select::solver_vendor_available<B> ? "vendor" : r.native;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), auto_pick) << "auto, n=" << r.n;
-        expect_factored(a, info, "auto");
+        expect_factored(*this->ctx, a, info, "auto");
         auto p = make_prob<T>(r.n, 128, Uplo::Lower, 22u);
         EXPECT_EQ(traced_choice([&] {
                       const Pin pin("potrf", "native");
@@ -672,7 +677,7 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
                   }),
                   r.native)
             << "native, n=" << r.n;
-        expect_factored(p, info, "native");
+        expect_factored(*this->ctx, p, info, "native");
         ++checked;
     }
     if (sm120) EXPECT_EQ(checked, 2) << "no sm_120 rows for " << dtype;
@@ -707,7 +712,7 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
               }, &err),
               "vendor");
     EXPECT_NE(err.find("pinned \"native\", but no native candidate"), std::string::npos) << err;
-    expect_factored(p, info, "native fallback", /*other_triangle_is_scratch=*/true);
+    expect_factored(*this->ctx, p, info, "native fallback", /*other_triangle_is_scratch=*/true);
 }
 
 // §5.3: a ScopedPin wins over BATCHLAS_POTRF_ROUTE, and nested pins restore the outer one.
@@ -728,7 +733,7 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
                   info = this->run_auto(p);
               }),
               "cta");
-    expect_factored(p, info, "cta over env tiny");
+    expect_factored(*this->ctx, p, info, "cta over env tiny");
 
     auto q = make_prob<T>(n, 2, Uplo::Lower, 32u);
     std::string got = traced_choice([&] {
@@ -736,7 +741,7 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
         info = this->run_auto(q);
     });
     EXPECT_NE(got, "tiny");
-    expect_factored(q, info, "auto over env tiny");
+    expect_factored(*this->ctx, q, info, "auto over env tiny");
 
     const Pin outer("potrf", C{pc::Cta{}});
     {
@@ -821,7 +826,7 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
                                  " batch=" + std::to_string(r.batch);
         const char* want = batchlas::select::solver_vendor_available<B> ? r.expect : r.vf;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
-        expect_factored(p, info, what, r.uplo == Uplo::Upper && std::string(want) == "vendor");
+        expect_factored(*this->ctx, p, info, what, r.uplo == Uplo::Upper && std::string(want) == "vendor");
         ++checked;
     }
     if (dev == "sm_120" || (dev == "sm_89" && dtype == "float")) EXPECT_GT(checked, 0) << dev << " " << dtype;

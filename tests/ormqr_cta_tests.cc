@@ -103,7 +103,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 			throw;
 		}
 
-		EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, test_utils::ormqr_apply_error(A_fact, tau_view, C0, C_cta, side, trans))
+		EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, test_utils::ormqr_apply_error(*this->ctx, A_fact, tau_view, C0, C_cta, side, trans))
 			<< "side " << int(side) << " trans " << int(trans);
 		return true;
 	};

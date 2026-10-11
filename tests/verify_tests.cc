@@ -1,10 +1,9 @@
-// Host-only tests of batchlas::verify (docs/design/verification.md): scalars, norms, items, tolerances, inputs.
+// Tests of batchlas::verify (docs/design/verification.md): tolerances, LAPACKE references, and
+// MatrixView's verification scalars and item lists.
 
-#include <batchlas/verify/items.hh>
-#include <batchlas/verify/norms.hh>
+#include <batchlas/blas/matrix.hh>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
-#include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <gtest/gtest-spi.h>
@@ -20,6 +19,7 @@
 #include <complex>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -30,6 +30,7 @@ using batchlas::verify::Check;
 
 namespace {
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
+template <class T> using MV = MatrixView<T, MatrixFormat::Dense>;
 }
 
 TEST(Scalar, NanmaxPropagates) {
@@ -45,73 +46,29 @@ TEST(Scalar, EpsIsUnitRoundoff) {
     EXPECT_EQ(batchlas::verify::eps<std::complex<double>>(), std::ldexp(1.0, -53));
 }
 
-TEST(Scalar, RngMatchesFactorBench) {
-    // First four next() values of Rng(12345), recorded from a copy of the Rng struct in
-    // benchmarks/factor_bench.cc as of commit b4e9c1b2.
-    batchlas::verify::Rng rng(12345);
-    EXPECT_EQ(rng.next(), 0x1.0fc129b8p-1);
-    EXPECT_EQ(rng.next(), -0x1.d47befbp-3);
-    EXPECT_EQ(rng.next(), -0x1.5068e7bp-2);
-    EXPECT_EQ(rng.next(), 0x1.4d723aap-1);
-}
-
 TEST(Scalar, MakeAndPromote) {
-    EXPECT_EQ(batchlas::verify::make<float>(1.5, 7.0), 1.5f);
-    const auto z = batchlas::verify::make<std::complex<float>>(1.5, -2.0);
-    EXPECT_EQ(batchlas::verify::up(z), std::complex<double>(1.5, -2.0));
-    EXPECT_EQ(batchlas::verify::abs(std::complex<double>(3.0, 4.0)), 5.0);
-    EXPECT_EQ(batchlas::verify::conj(std::complex<double>(3.0, 4.0)), std::complex<double>(3.0, -4.0));
+    using CF = MV<std::complex<float>>;
+    EXPECT_EQ(MV<float>::make(1.5, 7.0), 1.5f);
+    const auto z = CF::make(1.5, -2.0);
+    static_assert(std::is_same_v<decltype(z), const std::complex<float>>);
+    EXPECT_EQ(CF::up(z), std::complex<double>(1.5, -2.0));
+    static_assert(std::is_same_v<decltype(MV<float>::up(1.0f)), double>);
+    EXPECT_EQ(MV<std::complex<double>>::conj(std::complex<double>(3.0, 4.0)), std::complex<double>(3.0, -4.0));
     // conj and make keep the working type: a test builds T-valued data with them.
-    static_assert(std::is_same_v<decltype(batchlas::verify::conj(1.0f)), float>);
-    EXPECT_EQ(batchlas::verify::conj(std::complex<float>(3.0f, 4.0f)), std::complex<float>(3.0f, -4.0f));
-    EXPECT_EQ(batchlas::verify::make<std::complex<float>>(std::complex<double>(0.5, -0.25)), std::complex<float>(0.5f, -0.25f));
-    EXPECT_EQ(batchlas::verify::make<double>(std::complex<double>(0.5, -0.25)), 0.5);
+    static_assert(std::is_same_v<decltype(MV<float>::conj(1.0f)), float>);
+    EXPECT_EQ(CF::conj(std::complex<float>(3.0f, 4.0f)), std::complex<float>(3.0f, -4.0f));
+    EXPECT_EQ(CF::make(0.5, -0.25), std::complex<float>(0.5f, -0.25f));
+    EXPECT_EQ(MV<double>::make(0.5, -0.25), 0.5);
 }
 
 TEST(Items, DefaultIncludesLastAndMiddle) {
-    using batchlas::verify::default_items;
-    EXPECT_EQ(default_items(1), (std::vector<int>{0}));
-    EXPECT_EQ(default_items(2), (std::vector<int>{0, 1}));
-    EXPECT_EQ(default_items(9), (std::vector<int>{0, 4, 8}));
-    EXPECT_EQ(batchlas::verify::all_items(3), (std::vector<int>{0, 1, 2}));
-}
-
-TEST(Norms, ReadThroughLdAndStride) {
-    constexpr int rows = 3, cols = 2, ld = 5, stride = 17, batch = 3;
-    std::vector<double> buf(stride * batch, 1e30);
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < cols; ++j)
-            for (int i = 0; i < rows; ++i) buf[b * stride + j * ld + i] = (b + 1) * (i + 1) * (j == 0 ? 1.0 : -1.0);
-    MatrixView<double, MatrixFormat::Dense> A(buf.data(), rows, cols, ld, stride, batch);
-
-    // Item 2 holds 3*(1,2,3) and -3*(1,2,3): sum of squares 2 * 9 * 14.
-    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 2), std::sqrt(2.0 * 9.0 * 14.0));
-    EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(A, 2), 9.0);
-    EXPECT_DOUBLE_EQ(batchlas::verify::one_norm(A, 2), 18.0);
-    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 2), 18.0);  // row 3: 9 + |-9|
-    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 0), 6.0);
-
-    buf[2 * stride + 1 * ld + 2] = kNaN;
-    EXPECT_TRUE(std::isnan(batchlas::verify::frobenius(A, 2)));
-    EXPECT_TRUE(std::isnan(batchlas::verify::max_abs(A, 2)));
-    EXPECT_TRUE(std::isnan(batchlas::verify::one_norm(A, 2)));
-    EXPECT_TRUE(std::isnan(batchlas::verify::inf_norm(A, 2)));
-    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 0), std::sqrt(2.0 * 14.0));
-}
-
-TEST(Norms, ComplexUsesModulus) {
-    std::vector<std::complex<float>> buf{{3.0f, 4.0f}, {0.0f, 0.0f}, {0.0f, -12.0f}, {5.0f, 0.0f}};
-    MatrixView<std::complex<float>, MatrixFormat::Dense> A(buf.data(), 2, 2, 2, 4, 1);
-    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 0), std::sqrt(25.0 + 144.0 + 25.0));
-    EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(A, 0), 12.0);
-    EXPECT_DOUBLE_EQ(batchlas::verify::one_norm(A, 0), 12.0 + 5.0);
-    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 0), 5.0 + 12.0);  // row 0: |3+4i| + |-12i|
-}
-
-TEST(Norms, KernelViewAccepted) {
-    std::vector<double> buf{1.0, 2.0, 99.0, 3.0, 4.0, 99.0};
-    batchlas::KernelMatrixView<double, MatrixFormat::Dense> A(buf.data(), 2, 2, 3, 6, 1);
-    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 0), std::sqrt(30.0));
+    std::vector<double> buf(9, 0.0);
+    const auto batch_of = [&](int b) { return MV<double>(buf.data(), 1, 1, 1, 1, b); };
+    EXPECT_EQ(batch_of(1).default_items(), (std::vector<int>{0}));
+    EXPECT_EQ(batch_of(2).default_items(), (std::vector<int>{0, 1}));
+    EXPECT_EQ(batch_of(9).default_items(), (std::vector<int>{0, 4, 8}));
+    EXPECT_EQ(batch_of(3).all_items(), (std::vector<int>{0, 1, 2}));
+    EXPECT_EQ(batchlas::VectorView<double>(buf.data(), 2, 3, 1, 3).all_items(), (std::vector<int>{0, 1, 2}));
 }
 
 TEST(Tolerance, BoundAndPass) {
@@ -246,8 +203,8 @@ TEST(ExpectVerify, FailureNamesValueBoundKindAndN) {
 }
 
 TEST(Scalar, Cabs1AndFinite) {
-    using batchlas::verify::cabs1;
-    using batchlas::verify::finite;
+    const auto cabs1 = [](auto x) { return MV<decltype(x)>::cabs1(x); };
+    const auto finite = [](auto x) { return MV<decltype(x)>::finite(x); };
     EXPECT_EQ(cabs1(-2.5f), 2.5);
     EXPECT_EQ(cabs1(-2.5), 2.5);
     EXPECT_EQ(cabs1(std::complex<float>(3.0f, -4.0f)), 7.0);
@@ -262,53 +219,21 @@ TEST(Scalar, Cabs1AndFinite) {
     EXPECT_TRUE(std::isnan(cabs1(std::complex<float>(0.0f, float(kNaN)))));
 }
 
-TEST(View, LayoutAndDefaultStride) {
-    std::vector<double> buf(40, 1e30);
-    const auto v = batchlas::verify::view(buf.data(), 3, 2, 5, 0, 2);
-    EXPECT_EQ(v.rows(), 3);
-    EXPECT_EQ(v.cols(), 2);
-    EXPECT_EQ(v.ld(), 5);
-    EXPECT_EQ(v.stride(), 10);
-    EXPECT_EQ(v.batch_size(), 2);
-    const auto w = batchlas::verify::view(buf.data(), 3, 2, 5, 17, 2);
-    EXPECT_EQ(w.stride(), 17);
-    EXPECT_EQ(batchlas::verify::view(buf.data(), 4, 4, 4).batch_size(), 1);
-    EXPECT_THROW(batchlas::verify::view(buf.data(), 6, 2, 5), std::invalid_argument);
-    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, -1), std::invalid_argument);
-    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, 0, 0), std::invalid_argument);
-    // Overlapping items, and ld * cols beyond int, are rejected; one item may have any stride.
-    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, 9, 2), std::invalid_argument);
-    EXPECT_EQ(batchlas::verify::view(buf.data(), 3, 2, 5, 9, 1).stride(), 9);
-    EXPECT_THROW(batchlas::verify::view(buf.data(), 50000, 50000, 50000), std::invalid_argument);
-}
-
-// 8200 items of 64 x 64 exceed the engine's 2^25-element group, so the check runs in two groups;
+// 8200 items of 64 x 64 exceed the checks' 2^25-element group, so the check runs in two groups;
 // a finite poison in the second group must still be seen (a wrong group offset reads group one twice).
 TEST(Engine, SecondGroupKeepsItsItemIndices) {
+    batchlas::Queue ctx;
     constexpr int n = 64, batch = 8200, poisoned = 8195;
     std::vector<float> buf(static_cast<std::size_t>(n) * n * batch, 0.0f);
     for (int b = 0; b < batch; ++b)
         for (int i = 0; i < n; ++i) buf[static_cast<std::size_t>(b) * n * n + static_cast<std::size_t>(i) * n + i] = 1.0f;
     MatrixView<float, MatrixFormat::Dense> Q(buf.data(), n, n, n, n * n, batch);
-    const auto all = batchlas::verify::all_items(batch);
-    EXPECT_EQ(batchlas::verify::orthogonality(Q, all), 0.0);
+    const auto all = Q.all_items();
+    EXPECT_EQ(MV<float>::orthogonality(ctx, Q, all), 0.0);
     buf[static_cast<std::size_t>(poisoned) * n * n + 5 * n + 3] = 1e3f;
-    EXPECT_GT(batchlas::verify::orthogonality(Q, all), 1e3);
+    EXPECT_GT(MV<float>::orthogonality(ctx, Q, all), 1e3);
     const int clean[] = {0, batch / 2, batch - 1};
-    EXPECT_EQ(batchlas::verify::orthogonality(Q, clean), 0.0);
-}
-
-TEST(View, ConstOverloadFeedsTheChecks) {
-    constexpr int ld = 4, stride = 11, batch = 3;
-    std::vector<std::complex<float>> buf(stride * batch, {1e30f, -1e30f});
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < 2; ++j)
-            for (int i = 0; i < 3; ++i) buf[b * stride + j * ld + i] = {float(b + 1), float(i - j)};
-    const std::complex<float>* cbuf = buf.data();
-    const auto v = batchlas::verify::view(cbuf, 3, 2, ld, stride, batch);
-    // Item 2: six real parts 3, imaginary parts (0, 1, 2) and (-1, 0, 1).
-    EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(v, 2), std::sqrt(54.0 + 7.0));
-    EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(v, 2), std::abs(std::complex<double>(3.0, 2.0)));
+    EXPECT_EQ(MV<float>::orthogonality(ctx, Q, clean), 0.0);
 }
 
 namespace {
@@ -316,13 +241,13 @@ namespace {
 using cfloat = std::complex<float>;
 using cdouble = std::complex<double>;
 
-template <class T> T sentinel() { return batchlas::verify::make<T>(-777.0, -555.0); }
+template <class T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
 
 }  // namespace
 
 // ---------------------------------------------------------------------------- reference.hh
 
-TEST(Reference, CopyItemIsPackedAndPromoted) {
+TEST(Reference, AstypeItemIsPackedAndPromoted) {
     constexpr int m = 3, n = 2, ld = 5, batch = 2;
     constexpr long long stride = 17;
     std::vector<float> buf(stride * batch, sentinel<float>());
@@ -330,11 +255,16 @@ TEST(Reference, CopyItemIsPackedAndPromoted) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) buf[b * stride + j * ld + i] = float(100 * b + 10 * j + i);
     MatrixView<float, MatrixFormat::Dense> A(buf.data(), m, n, ld, stride, batch);
-    const auto d = batchlas::verify::copy_item(A, 1);
-    static_assert(std::is_same_v<decltype(d), const std::vector<double>>);
-    ASSERT_EQ(d.size(), std::size_t(m * n));
+    const int one = 1;
+    auto d = A.astype<double>(std::span<const int>(&one, 1));
+    static_assert(std::is_same_v<decltype(d), batchlas::Matrix<double, MatrixFormat::Dense>>);
+    ASSERT_EQ(d.rows(), m);
+    ASSERT_EQ(d.cols(), n);
+    ASSERT_EQ(d.batch_size(), 1);
     for (int j = 0; j < n; ++j)
-        for (int i = 0; i < m; ++i) EXPECT_EQ(d[j * m + i], double(100 + 10 * j + i));
+        for (int i = 0; i < m; ++i) EXPECT_EQ(d.data()[j * m + i], double(100 + 10 * j + i));
+    const int bad = batch;
+    EXPECT_THROW(A.astype<double>(std::span<const int>(&bad, 1)), std::out_of_range);
 }
 
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
@@ -416,19 +346,16 @@ namespace {
 template <class T> void getrf_pivots_of_permutation() {
     const int p[4] = {2, 0, 3, 1};
     std::vector<T> a(16, T(0));
-    for (int j = 0; j < 4; ++j) a[j * 4 + p[j]] = batchlas::verify::make<T>(1.0, -1.0);
+    for (int j = 0; j < 4; ++j) a[j * 4 + p[j]] = MV<T>::make(1.0, -1.0);
     std::vector<std::int32_t> ipiv;
     ASSERT_TRUE(batchlas::verify::getrf_pivots(4, 4, a, ipiv));
     const std::vector<std::int32_t> want{3, 3, 4, 4};
     EXPECT_EQ(ipiv, want);
-    EXPECT_EQ(a[0], batchlas::verify::make<T>(1.0, -1.0));
+    EXPECT_EQ(a[0], MV<T>::make(1.0, -1.0));
 }
 }  // namespace
 
 TEST(Reference, GetrfPivotsInWorkingPrecision) {
-    static_assert(std::is_same_v<decltype(batchlas::verify::copy_item_native(
-                                     std::declval<const MatrixView<float, MatrixFormat::Dense>&>(), 0)),
-                                 std::vector<float>>);
     getrf_pivots_of_permutation<float>();
     getrf_pivots_of_permutation<double>();
     getrf_pivots_of_permutation<cfloat>();
@@ -464,9 +391,9 @@ TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
         }
     const std::vector<std::int32_t> single{2, 2, 3};
     std::vector<std::int32_t> ipiv;
-    ASSERT_TRUE(batchlas::verify::getrf_pivots(batchlas::verify::view(buf.data(), 3, 3, ld, stride, 2), 1, ipiv));
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(MV<float>(buf.data(), 3, 3, ld, stride, 2), 1, ipiv));
     EXPECT_EQ(ipiv, single);
-    ASSERT_TRUE(batchlas::verify::getrf_pivots(batchlas::verify::view(cbuf.data(), 3, 3, ld, stride, 2), 1, ipiv));
+    ASSERT_TRUE(batchlas::verify::getrf_pivots(MV<cfloat>(cbuf.data(), 3, 3, ld, stride, 2), 1, ipiv));
     EXPECT_EQ(ipiv, single);
 }
 
@@ -476,24 +403,25 @@ namespace {
 template <class T> void lu_convention_matches_lapack() {
     constexpr int n = 8, ld = 11;
     std::vector<T> a0(ld * n, sentinel<T>()), eye(ld * n, sentinel<T>());
-    batchlas::verify::Rng rng(17);
+    batchlas::Queue ctx;
+    auto r = batchlas::Matrix<T>::Random(n, n, false, 1, 17);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            const double re = rng.next(), im = rng.next();
-            a0[j * ld + i] = batchlas::verify::make<T>(re, im);
+            a0[j * ld + i] = r(i, j, 0);
             eye[j * ld + i] = T(i == j ? 1 : 0);
         }
-    const auto A0 = batchlas::verify::view(static_cast<const T*>(a0.data()), n, n, ld);
-    auto f = batchlas::verify::copy_item_native(A0, 0);
+    const MV<T> A0(a0.data(), n, n, ld, ld * n, 1);
+    auto native = A0.template astype<T>();
+    std::vector<T> f(native.data().begin(), native.data().end());
     std::vector<std::int32_t> ipiv;
     ASSERT_TRUE(batchlas::verify::getrf_pivots(n, n, f, ipiv));
     int swaps = 0;
     for (int k = 0; k < n; ++k) swaps += ipiv[k] != k + 1;
     ASSERT_GE(swaps, 2) << "no interchanges to pin";
     const batchlas::VectorView<std::int32_t> p(ipiv.data(), n, 1);
-    const double r = batchlas::verify::lu_solve_residual(batchlas::verify::view(static_cast<const T*>(f.data()), n, n, n), p,
-                                                         batchlas::Transpose::NoTrans, batchlas::verify::view(eye.data(), n, n, ld), A0);
-    EXPECT_TRUE(batchlas::verify::within<T>(Check::solve, n, r)) << "residual " << r;
+    const double res = MV<T>::lu_solve_residual(ctx, MV<T>(f.data(), n, n, n, n * n, 1), p, batchlas::Transpose::NoTrans,
+                                                MV<T>(eye.data(), n, n, ld, ld * n, 1), A0);
+    EXPECT_TRUE(batchlas::verify::within<T>(Check::solve, n, res)) << "residual " << res;
 }
 }  // namespace
 
@@ -521,18 +449,17 @@ TEST(Reference, GeqrfTauKnownReflector) {
 }
 
 TEST(Reference, GeqrfTauFeedsQrResidual) {
+    batchlas::Queue ctx;
     for (const auto& [m, n] : {std::pair{7, 5}, std::pair{4, 6}}) {
-        std::vector<cdouble> a0(static_cast<std::size_t>(m) * n);
-        batchlas::verify::Rng rng(5);
-        for (auto& x : a0) x = cdouble(rng.next(), rng.next());
+        auto r = batchlas::Matrix<cdouble>::Random(m, n, false, 1, 5);
+        std::vector<cdouble> a0(r.data().begin(), r.data().end());
         auto a = a0;
         std::vector<cdouble> tau;
         ASSERT_TRUE(batchlas::verify::geqrf_tau(m, n, a, tau));
         ASSERT_EQ(tau.size(), std::size_t(std::min(m, n)));
-        const auto A0 = batchlas::verify::view(static_cast<const cdouble*>(a0.data()), m, n, m);
-        const auto F = batchlas::verify::view(static_cast<const cdouble*>(a.data()), m, n, m);
+        const MV<cdouble> A0(a0.data(), m, n, m, m * n, 1), F(a.data(), m, n, m, m * n, 1);
         const batchlas::VectorView<cdouble> t(tau.data(), std::min(m, n), 1);
-        EXPECT_LT(batchlas::verify::qr_residual(A0, F, t), 1e-14);
+        EXPECT_LT(MV<cdouble>::qr_residual(ctx, A0, F, t), 1e-14);
     }
 }
 
@@ -557,7 +484,7 @@ TEST(Reference, WithoutLapackeReturnsFalse) {
     EXPECT_FALSE(batchlas::verify::tridiagonal_eigenvalues(d, e));
     std::vector<float> f(4, 1.0f);
     EXPECT_FALSE(batchlas::verify::getrf_pivots(2, 2, f, ipiv));
-    EXPECT_FALSE(batchlas::verify::getrf_pivots(batchlas::verify::view(f.data(), 2, 2, 2), 0, ipiv));
+    EXPECT_FALSE(batchlas::verify::getrf_pivots(MV<float>(f.data(), 2, 2, 2, 4, 1), 0, ipiv));
     std::vector<double> tau;
     EXPECT_FALSE(batchlas::verify::geqrf_tau(2, 2, a, tau));
     // Empty input too: a reference that is not there never reads as a pass.

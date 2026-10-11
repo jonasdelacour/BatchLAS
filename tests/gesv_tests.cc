@@ -15,7 +15,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/getrf_native.hh"
@@ -37,9 +37,9 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 using verify::Check;
-using verify::make;
-using verify::up;
-using verify::Rng;
+
+template <typename T>
+using MV = MatrixView<T, MatrixFormat::Dense>;
 
 template <typename T, Backend B>
 struct GesvConfig {
@@ -82,7 +82,7 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
     p.lda = n + ld_pad;  p.stra = p.lda * n + stride_pad;
     p.ldb = n + ld_pad;  p.strb = p.ldb * nrhs + stride_pad;
 
-    const T poison = make<T>(-9.75e3, 4.5e3);
+    const T poison = MV<T>::make(-9.75e3, 4.5e3);
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
@@ -90,13 +90,13 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
     p.piv = UnifiedVector<int64_t>(static_cast<size_t>(n) * batch, int64_t(0));
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(0));
 
-    Rng rg(seed);
+    const Matrix<T> rnd = Matrix<T>::Random(n, n + nrhs, false, batch, seed);  // A, then B; the pad keeps its poison
     for (int bi = 0; bi < batch; ++bi) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                const double re = rg.next(), im = rg.next();
-                T v = make<T>(re, im);
-                if (i == j) v = make<T>(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
+                const double re = double(std::real(rnd(i, j, bi)));
+                T v = rnd(i, j, bi);
+                if (i == j) v = MV<T>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
                 // A whole zero COLUMN, not a zero diagonal entry: partial pivoting
                 // finds a nonzero pivot for a merely small diagonal, so only a zero
                 // column makes U exactly singular at a predictable step.
@@ -106,7 +106,7 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
         }
         for (int k = 0; k < nrhs; ++k)
             for (int i = 0; i < n; ++i)
-                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = make<T>(rg.next(), rg.next());
+                p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = rnd(i, n + k, bi);
     }
     p.a0.assign(p.a.begin(), p.a.end());
     p.b0.assign(p.b.begin(), p.b.end());
@@ -127,11 +127,11 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
 
 // ||A x - b||_F / (||A||_F ||x||_F) for ONE batch item, in double.
 template <typename T>
-double solve_residual(const Sys<T>& p, int item) {
+double solve_residual(Queue& ctx, const Sys<T>& p, int item) {
     const int items[] = {item};
-    return verify::solve_residual(verify::view(p.a0.data(), p.n, p.n, p.lda, p.stra, p.batch),
-                                  verify::view(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                                  verify::view(p.b0.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return MV<T>::solve_residual(ctx, MV<T>(const_cast<T*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
+                                 MV<T>(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                 MV<T>(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // Every element of the working buffer that no correct kernel may touch: the ld pad
@@ -213,7 +213,7 @@ TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
                 for (int k = 0; k < n; ++k)
                     moved |= reinterpret_cast<const int*>(p.piv.data())[size_t(item) * n + k] != k + 1;
                 EXPECT_TRUE(moved) << "n=" << n << ": identity interchanges, so a dropped row swap would go unseen";
-                const double r = solve_residual(p, item);
+                const double r = solve_residual(*this->ctx, p, item);
                 EXPECT_VERIFY(T, Check::solve, n, r)
                     << "n=" << n << " nrhs=" << nrhs << " item=" << item;
             }
@@ -271,7 +271,7 @@ TYPED_TEST(GesvTest, TinyInfoReportsExactSingularityAndLeavesXFinite) {
                 << "n=" << n << ": the zero column is " << (n / 2) << ", 1-based " << (n / 2 + 1);
         }
         for (size_t i = 0; i < p.b.size(); ++i) {
-            ASSERT_TRUE(verify::finite(up(p.b[i]))) << "X is not finite at element " << i;
+            ASSERT_TRUE(MV<T>::finite(p.b[i])) << "X is not finite at element " << i;
         }
     }
 }
@@ -315,7 +315,7 @@ TYPED_TEST(GesvTest, TinyPackedLaunchCoversEveryBatchItem) {
             for (int bi = 0; bi < batch; ++bi) {
                 ASSERT_EQ(p.info[bi], 0)
                     << "item " << bi << " of " << batch << " was not written (n=" << n << ")";
-                EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, bi))
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual(*this->ctx, p, bi))
                     << "item " << bi << " of " << batch;
             }
         }
@@ -380,8 +380,8 @@ TYPED_TEST(GesvTest, PublicGesvSolvesAndMatchesTheTinyTier) {
 
         for (int item : {0, p.batch - 1}) {
             EXPECT_EQ(p.info[item], 0);
-            EXPECT_VERIFY(T, Check::solve, n, solve_residual(p, item)) << "public, n=" << n;
-            EXPECT_VERIFY(T, Check::solve, n, solve_residual(q, item)) << "tiny, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(*this->ctx, p, item)) << "public, n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual(*this->ctx, q, item)) << "tiny, n=" << n;
         }
         // The pivot lists must agree exactly: both arms run the same getrf recurrence.
         for (size_t i = 0; i < p.piv.size(); ++i) ASSERT_EQ(p.piv[i], q.piv[i]) << i;

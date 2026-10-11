@@ -3,7 +3,6 @@
 // bit-for-bit comparison with the direct driver, never assumed from the pin being accepted.
 // Ports the RouteSpmm.* cases of route_vocabulary_tests that still describe behaviour.
 #include <gtest/gtest.h>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/spmm.hh>
@@ -89,7 +88,7 @@ struct Problem {
     std::size_t boff = 0, coff = 0;
     UnifiedVector<T> val, mem;
     UnifiedVector<int> ro, ci;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
 
     Csr<T> A() { return {val.data(), ro.data(), ci.data(), s.m, s.k, NonZeros{cap}, vstride, ostride, s.batch}; }
     Dense<T> B() { return {mem.data() + boff, b_rows, b_cols, ldb, sb, s.batch}; }
@@ -100,7 +99,7 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
+    return Dense<T>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -108,8 +107,8 @@ Problem<T> make(const Spec& s) {
     using R = RealOf<T>;
     Problem<T> p;
     p.s = s;
-    p.alpha = batchlas::verify::make<T>(R(1.25), R(-0.5));
-    p.beta = batchlas::verify::make<T>(R(-0.75), R(0.25));
+    p.alpha = Dense<T>::make(R(1.25), R(-0.5));
+    p.beta = Dense<T>::make(R(-0.75), R(0.25));
     const bool an = s.ta == Transpose::NoTrans, bn = s.tb == Transpose::NoTrans;
     p.out_rows = an ? s.m : s.k;
     p.red_rows = an ? s.k : s.m;
@@ -143,14 +142,14 @@ Problem<T> make(const Spec& s) {
     p.ci.resize(p.val.size());
     p.ro.resize(std::size_t(p.ostride) * std::max(1, s.batch));
     std::vector<T> vals_rep(std::size_t(p.vstride) * reps);
-    for (auto& v : vals_rep) v = batchlas::verify::make<T>(u(gen), u(gen));
+    for (auto& v : vals_rep) v = Dense<T>::make(u(gen), u(gen));
     for (int b = 0; b < s.batch; ++b) {
         const int r = b % reps;
         const int nnz = int(cols[r].size());
         for (int i = 0; i < p.ostride; ++i) p.ro[std::size_t(b) * p.ostride + i] = i <= s.m ? rows[r][i] : p.cap;
         for (int q = 0; q < p.vstride; ++q) {
             const std::size_t at = std::size_t(b) * p.vstride + q;
-            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : batchlas::verify::make<T>(R(1e6), R(-1e6));
+            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : Dense<T>::make(R(1e6), R(-1e6));
             p.ci[at] = q < nnz ? cols[r][q] : 0;
         }
     }
@@ -160,8 +159,8 @@ Problem<T> make(const Spec& s) {
     for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<T>();
     std::vector<T> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
         crep(std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs) * reps);
-    for (auto& v : brep) v = batchlas::verify::make<T>(u(gen), u(gen));
-    for (auto& v : crep) v = batchlas::verify::make<T>(u(gen), u(gen));
+    for (auto& v : brep) v = Dense<T>::make(u(gen), u(gen));
+    for (auto& v : crep) v = Dense<T>::make(u(gen), u(gen));
     for (int b = 0; b < s.batch; ++b) {
         const std::size_t r = std::size_t(b % reps);
         for (int j = 0; j < p.b_cols; ++j)
@@ -171,25 +170,25 @@ Problem<T> make(const Spec& s) {
             for (int i = 0; i < p.out_rows; ++i)
                 p.mem[p.cidx(b, i, j)] = crep[(r * std::max(1, s.nrhs) + j) * std::max(1, p.out_rows) + i];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
 // C = alpha op(A) op(B) + beta C judged componentwise by the library (duplicate columns sum, slots
 // above an item's nnz are unread), on every item; every other element of the shared buffer bit for bit.
 template <typename T>
-void expect_correct(const Problem<T>& p, const std::string& what) {
+void expect_correct(Queue& ctx, const Problem<T>& p, const std::string& what) {
     const Spec& s = p.s;
     {
-        using namespace batchlas::verify;
         Problem<T>& q = const_cast<Problem<T>&>(p);
         const Dense<T> B0(q.mem0.data() + p.boff, p.b_rows, p.b_cols, p.ldb, p.sb, s.batch);
         const Dense<T> C0(q.mem0.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
         const Dense<T> C1(q.mem.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
-        const std::vector<int> all = all_items(s.batch);
-        const double err = spmm_backward_error(q.A(), s.ta, B0, s.tb, C0, C1, up(p.alpha), up(p.beta), all);
-        if (!pass<T>(Check::blas, p.red_rows, err))
-            ADD_FAILURE() << what << ": backward error " << err << " exceeds " << bound<T>(Check::blas, p.red_rows);
+        const double err = Dense<T>::spmm_backward_error(ctx, q.A(), s.ta, B0, s.tb, C0, C1, Dense<T>::up(p.alpha),
+                                                         Dense<T>::up(p.beta), C1.all_items());
+        if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, p.red_rows, err))
+            ADD_FAILURE() << what << ": backward error " << err << " exceeds "
+                          << batchlas::verify::bound<T>(batchlas::verify::Check::blas, p.red_rows);
     }
     std::vector<char> in_c(p.mem.size(), 0);
     for (int b = 0; b < s.batch; ++b)
@@ -353,11 +352,11 @@ TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
                             const std::string want = this->auto_choice(q);
                             EXPECT_EQ(want, "direct") << what << ": Auto took a vendor can_run refuses";
                             EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                            expect_correct(p, what + " (refused vendor pin: Auto)");
+                            expect_correct(*this->ctx, p, what + " (refused vendor pin: Auto)");
                             continue;
                         }
                         ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                        expect_correct(p, what);
+                        expect_correct(*this->ctx, p, what);
                         ++ran;
                         if (::testing::Test::HasFatalFailure()) return;
                     }
@@ -384,7 +383,7 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 const std::string what = name(c, s);
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(c, pinned); }), select::to_string(c)) << what;
                 this->direct(c, direct);
-                expect_correct(pinned, what);
+                expect_correct(*this->ctx, pinned, what);
                 if (std::holds_alternative<sp::Vendor>(c)) {
                     auto again = make<T>(s);
                     this->direct(c, again);
@@ -426,7 +425,7 @@ TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 auto p = make<T>(s);
                 const std::string what = name(c, s);
                 this->run_pinned(c, p);
-                expect_correct(p, what);
+                expect_correct(*this->ctx, p, what);
                 if (ta != Transpose::NoTrans || std::holds_alternative<sp::Vendor>(c)) continue;
                 for (int b = kPeriod; b < kBatch; ++b)
                     for (int j = 0; j < s.nrhs; ++j)
@@ -448,7 +447,7 @@ TYPED_TEST(SpmmCandidates, ZeroExtentsAreAccepted) {
                 auto p = make<T>(s);
                 const std::string what = name(c, s);
                 ASSERT_TRUE(this->pin_accepted(c, p)) << what;
-                expect_correct(p, what);
+                expect_correct(*this->ctx, p, what);
             }
 }
 
@@ -463,7 +462,7 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
     {
         auto p = make<T>(s);
         ASSERT_TRUE(this->pin_accepted(direct, p)) << "the control shape";
-        expect_correct(p, "control");
+        expect_correct(*this->ctx, p, "control");
     }
     struct Bad { const char* what; int a_rows, a_cols, b_rows, b_cols, c_rows, c_cols, ab, bb, cb, ostride; };
     const Bad cases[] = {{"opA cols != opB rows", 8, 6, 5, 3, 8, 3, 3, 3, 3, 11},
@@ -537,11 +536,11 @@ TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
                 // A refused `vendor` pin is the class word's fallback to Auto, not an error (§5.3).
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(C{sp::Vendor{}}, p); }), refused ? "direct" : "vendor")
                     << what;
-                expect_correct(p, what);
+                expect_correct(*this->ctx, p, what);
                 auto q = make<T>(s);
                 const std::string got = this->auto_choice(q);
                 if (refused) EXPECT_EQ(got, "direct") << label(s);
-                expect_correct(q, "auto " + label(s));
+                expect_correct(*this->ctx, q, "auto " + label(s));
             }
 }
 
@@ -640,7 +639,7 @@ TYPED_TEST(SpmmCandidates, ClassWordsAndSpellings) {
                 EXPECT_EQ(err.find("spmm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
                 EXPECT_FALSE(threw) << what;
-                expect_correct(p, what);
+                expect_correct(*this->ctx, p, what);
             }
     }
 }
@@ -661,7 +660,7 @@ TYPED_TEST(SpmmCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "vendor");
-    expect_correct(p, "vendor over env cta");
+    expect_correct(*this->ctx, p, "vendor over env cta");
     const Pin outer("spmm", C{sp::Direct{}});
     {
         const Pin inner("spmm", C{sp::Vendor{}});
@@ -670,7 +669,7 @@ TYPED_TEST(SpmmCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make<T>(s);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "direct") << "the inner pin did not restore the outer";
-    expect_correct(r, "outer direct");
+    expect_correct(*this->ctx, r, "outer direct");
 }
 
 // The old preferred() clause, read back through Auto on the shipped tables (RouteSpmm's
@@ -698,7 +697,7 @@ TYPED_TEST(SpmmCandidates, AutoReadsTheTranscribedTables) {
                 bool threw = false;
                 EXPECT_EQ(this->auto_choice(p, &threw), want) << label(s) << " on " << tables.front()->file;
                 EXPECT_FALSE(threw) << label(s);
-                expect_correct(p, "auto " + label(s));
+                expect_correct(*this->ctx, p, "auto " + label(s));
             }
 }
 
@@ -759,7 +758,7 @@ TYPED_TEST(SpmmCandidates, TraceKeyIsKeyOf) {
         const std::string want = std::string("transA=") + (ta == Transpose::NoTrans ? "N" : "T") +
                                  " transB=T m=13 nrhs=5 batch=2 -> direct";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_correct(p, line);
+        expect_correct(*this->ctx, p, line);
     }
 }
 
@@ -773,7 +772,7 @@ TYPED_TEST(SpmmCandidates, DirectHasNoGpuGate) {
             Spec s{12, 10, 2, 8, ta, tb};
             auto p = make<T>(s);
             ASSERT_TRUE(this->pin_accepted(C{sp::Direct{}}, p)) << label(s);
-            expect_correct(p, "cpu direct " + label(s));
+            expect_correct(*this->ctx, p, "cpu direct " + label(s));
         }
     auto p = make<T>(Spec{12, 10, 2, 8});
     EXPECT_EQ(this->auto_choice(p), "direct");

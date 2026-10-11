@@ -3,7 +3,6 @@
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct
 // kernel call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/syrk.hh>
@@ -85,7 +84,7 @@ struct Prob {
     T alpha = T(1.25), beta = T(-0.75);
     Region a, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     UnifiedVector<T*> aptr, cptr;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
@@ -122,44 +121,41 @@ Prob<T> make_prob(const Spec& s) {
             for (int i = 0; i < s.n; ++i)
                 if (p.ref(i, j)) p.mem[p.ci(it, i, j)] = it < reps ? u(gen) : p.mem[p.ci(r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
-// Componentwise backward error over C's triangle of C = alpha op(A) op(A)^T + beta C0, through the
-// library, from the pristine copy.
+// Worst componentwise backward error over C's triangle of C = alpha op(A) op(A)^T + beta C0 on
+// @p items, through the library, from the pristine copy.
 template <typename T>
-double rel_error(const Prob<T>& p, int it) {
-    using namespace batchlas::verify;
+double rel_error(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
-    const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
-    const auto C0 = batchlas::verify::view(p.mem0.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
-    const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const MV A0(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+    const MV C0(p.mem0.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     const bool nt = s.trans == Transpose::NoTrans;
-    const int one[] = {it};
-    return gemm_backward_error(A0, Shape::general, nt ? Transpose::NoTrans : Transpose::Trans, A0, Shape::general,
-                               nt ? Transpose::Trans : Transpose::NoTrans, C0, C1, s.uplo == Uplo::Lower ? Shape::lower : Shape::upper,
-                               up(p.alpha), up(p.beta), one);
+    return MV::gemm_backward_error(ctx, A0, nt ? Transpose::NoTrans : Transpose::Trans, A0,
+                                   nt ? Transpose::Trans : Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items,
+                                   s.uplo);
 }
 
 // The checked items' triangles against the host reference, every element outside them bit for
 // bit (A, the pads, C's other triangle), and for a repeating batch every item's C bit-identical
 // to its representative's.
 template <typename T>
-::testing::AssertionResult correct(const Prob<T>& p, bool record = true) {
+::testing::AssertionResult correct(Queue& ctx, const Prob<T>& p, bool record = true) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double e = rel_error(p, it);
-        // record = false: results expected to be wrong must not enter the calibration.
-        if (!(record ? batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e)
-                     : batchlas::verify::within<T>(batchlas::verify::Check::blas, s.k, e)))
-            return ::testing::AssertionFailure() << "item " << it << " backward error " << e << " exceeds "
-                                                 << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
-    }
+    const double e = rel_error(ctx, p, items);
+    // record = false: results expected to be wrong must not enter the calibration.
+    if (!(record ? batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e)
+                 : batchlas::verify::within<T>(batchlas::verify::Check::blas, s.k, e)))
+        return ::testing::AssertionFailure() << "worst backward error over " << items.size() << " items " << e << " exceeds "
+                                             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     std::vector<char> owned(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -394,7 +390,7 @@ TYPED_TEST(SyrkCandidates, PinnedCandidatesStraddleTheirLimits) {
                     auto p = make_prob<T>(s);
                     const bool want = this->expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) EXPECT_TRUE(correct(p)) << name(c, s);
+                    if (want) EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
                     else EXPECT_TRUE(untouched(p)) << name(c, s) << ": a refused pin wrote";
                 }
 }
@@ -414,7 +410,7 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                     auto p = make_prob<T>(s);
                     const bool want = this->expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) EXPECT_TRUE(correct(p)) << name(c, s);
+                    if (want) EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
                 }
                 auto p = make_prob<T>(s);
                 const bool no_native = !TestFixture::kFloat && s.n > 128;
@@ -425,7 +421,7 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                 const std::string got = this->auto_choice(p);
                 if (t == Transpose::ConjTrans)
                     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : (s.n <= 128 ? "gram" : "triangular")) << label(s);
-                EXPECT_TRUE(correct(p)) << "auto " << label(s) << " -> " << got;
+                EXPECT_TRUE(correct(*this->ctx, p)) << "auto " << label(s) << " -> " << got;
             }
 }
 
@@ -459,7 +455,7 @@ TYPED_TEST(SyrkCandidates, SaturatingBatchIsBitIdentical) {
             if (!this->expect_runs(c, s)) continue;
             auto p = make_prob<T>(s);
             this->run_pinned(c, p);
-            EXPECT_TRUE(correct(p)) << name(c, s);
+            EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
         }
     }
 }
@@ -481,7 +477,7 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
                 auto d = make_prob<T>(s);
                 std::string why;
                 const bool launched = this->direct(c, d, &why);
-                const bool right = launched && correct(d, false);
+                const bool right = launched && correct(*this->ctx, d, false);
                 EXPECT_EQ(accepted, right) << name(c, s) << (launched ? "" : " (direct: " + why + ")");
             }
     }
@@ -500,7 +496,7 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
         at.period = 1;
         auto p = make_prob<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        EXPECT_TRUE(correct(p)) << name(c, at);
+        EXPECT_TRUE(correct(*this->ctx, p)) << name(c, at);
         auto d = make_prob<T>(at);
         EXPECT_TRUE(this->direct(c, d)) << name(c, at) << ": the direct launch at the ceiling";
         Spec past = at;
@@ -518,7 +514,7 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     auto p = make_prob<T>(past);
     if constexpr (TestFixture::kVendor) {
         EXPECT_EQ(this->auto_choice(p), "vendor");
-        EXPECT_TRUE(correct(p)) << "auto past the grid ceiling";
+        EXPECT_TRUE(correct(*this->ctx, p)) << "auto past the grid ceiling";
     } else {
         const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
@@ -684,7 +680,7 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("syrk pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            EXPECT_TRUE(correct(p)) << what;
+            EXPECT_TRUE(correct(*this->ctx, p)) << what;
         }
     // gram is a spelling at n <= 128, and `native` there is gram (the row's first).
     auto p = make_prob<T>(Spec{96, 20, 3});
@@ -693,7 +689,7 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
                   this->run(p);
               }),
               "gram");
-    EXPECT_TRUE(correct(p));
+    EXPECT_TRUE(correct(*this->ctx, p));
     auto q = make_prob<T>(Spec{96, 20, 3});
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("syrk", std::string_view("native"));
@@ -718,7 +714,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               select::to_string(other));
-    EXPECT_TRUE(correct(p));
+    EXPECT_TRUE(correct(*this->ctx, p));
     const Pin outer("syrk", other);
     {
         const Pin inner("syrk", C{sk::Gram{}});
@@ -727,7 +723,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_prob<T>(Spec{48, 8, 2});
     EXPECT_EQ(traced_choice([&] { this->run(r); }), select::to_string(other)) << "the inner pin did not restore";
-    EXPECT_TRUE(correct(r));
+    EXPECT_TRUE(correct(*this->ctx, r));
 }
 
 // Auto against the transcribed table, on each side of every threshold the old rule read:
@@ -763,7 +759,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
                 continue;
             }
             EXPECT_EQ(this->auto_choice(p), want) << label(s);
-            EXPECT_TRUE(correct(p)) << "auto " << label(s);
+            EXPECT_TRUE(correct(*this->ctx, p)) << "auto " << label(s);
         }
 }
 
@@ -800,7 +796,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     for (const auto& k : probes) {
         auto p = make_prob<T>(Spec{k.n, k.k, k.batch, Uplo::Upper, k.t});
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe";
-        EXPECT_TRUE(correct(p)) << k.field;
+        EXPECT_TRUE(correct(*this->ctx, p)) << k.field;
     }
 }
 
@@ -812,7 +808,7 @@ TYPED_TEST(SyrkCandidates, TraceLineCarriesTheKey) {
         const std::string line = traced_line([&] { this->run(p); });
         const std::string key = std::string("form=wide trans=") + trans_s(t) + " n=12 k=37 batch=5 ->";
         EXPECT_NE(line.find(key), std::string::npos) << line;
-        EXPECT_TRUE(correct(p));
+        EXPECT_TRUE(correct(*this->ctx, p));
     }
 }
 
@@ -836,7 +832,7 @@ TYPED_TEST(SyrkCandidates, VendorFreeLastResort) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), want) << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        EXPECT_TRUE(correct(p)) << label(s);
+        EXPECT_TRUE(correct(*this->ctx, p)) << label(s);
     }
 }
 
@@ -965,7 +961,7 @@ TYPED_TEST(SyrkCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        EXPECT_TRUE(correct(p));
+        EXPECT_TRUE(correct(*this->ctx, p));
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

@@ -2,7 +2,6 @@
 // docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
@@ -79,7 +78,7 @@ struct Prob {
     T alpha = T(1.5), beta = T(-0.75);
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     UnifiedVector<T*> aptr, bptr, cptr;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
@@ -122,7 +121,7 @@ Prob<T> make_prob(const Spec& s) {
                 p.mem[p.at(p.c, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.c, r, i, j)];
             }
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
@@ -130,7 +129,7 @@ Prob<T> make_prob(const Spec& s) {
 // its referenced triangle), every element outside C bit for bit, and for a repeating batch
 // every item bit-identical to its representative.
 template <typename T>
-void expect_symm(const Prob<T>& p, const std::string& what) {
+void expect_symm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
     const int k = s.k();
     std::vector<int> items;
@@ -142,23 +141,19 @@ void expect_symm(const Prob<T>& p, const std::string& what) {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
     // A mirrored from its referenced triangle by the library; operands and C0 from the pristine copy.
-    using namespace batchlas::verify;
-    auto at0 = [&](const Region& g) {
-        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
-    };
-    const auto A0 = at0(p.a), B0 = at0(p.b), C0 = at0(p.c);
-    const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
-    const Shape sym = s.uplo == Uplo::Lower ? Shape::symmetric_lower : Shape::symmetric_upper;
-    for (int it : items) {
-        const int one[] = {it};
-        const double err = s.side == Side::Left
-            ? gemm_backward_error(A0, sym, Transpose::NoTrans, B0, Shape::general, Transpose::NoTrans, C0, C1, Shape::general,
-                                  up(p.alpha), up(p.beta), one)
-            : gemm_backward_error(B0, Shape::general, Transpose::NoTrans, A0, sym, Transpose::NoTrans, C0, C1, Shape::general,
-                                  up(p.alpha), up(p.beta), one);
-        ASSERT_TRUE(pass<T>(Check::blas, k, err))
-            << what << " item " << it << " backward error " << err << " exceeds " << bound<T>(Check::blas, k);
-    }
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    auto at0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
+    const MV B0 = at0(p.b), C0 = at0(p.c);
+    const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
+    MV::copy(ctx, A0.view(), at0(p.a)).wait();
+    A0.view().symmetrize(ctx, s.uplo).wait();
+    const double err = s.side == Side::Left
+        ? MV::gemm_backward_error(ctx, A0.view(), Transpose::NoTrans, B0, Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items)
+        : MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items);
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k, err))
+        << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
+        << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k);
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -369,11 +364,11 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
                         auto q = make_prob<T>(s);
                         const std::string want = this->auto_choice(q);
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                        expect_symm(p, what + " (vendor-free: Auto)");
+                        expect_symm(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_symm(p, what);
+                    expect_symm(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -385,7 +380,7 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
             auto p = make_prob<T>(s);
             const bool ok = this->pin_accepted(C{sy::Expand{}}, p);
             EXPECT_EQ(ok, cap == bytes) << label(s) << " budget " << cap << " of " << bytes;
-            if (ok) expect_symm(p, label(s) + " at the exact budget");
+            if (ok) expect_symm(*this->ctx, p, label(s) + " at the exact budget");
         }
     }
 }
@@ -402,7 +397,7 @@ TYPED_TEST(SymmCandidates, EveryCombinationOnEveryCandidate) {
                     s.seed = 77u + m;
                     auto p = make_prob<T>(s);
                     this->run_pinned(c, p);
-                    expect_symm(p, name(c, s));
+                    expect_symm(*this->ctx, p, name(c, s));
                     if (::testing::Test::HasFatalFailure()) return;
                 }
     }
@@ -424,7 +419,7 @@ TYPED_TEST(SymmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_symm(pinned, what);
+                expect_symm(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's code; element " << e;
@@ -446,7 +441,7 @@ TYPED_TEST(SymmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             s.seed = 777u + m;
             auto p = make_prob<T>(s);
             this->run_pinned(c, p);
-            expect_symm(p, name(c, s));
+            expect_symm(*this->ctx, p, name(c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
     }
@@ -682,7 +677,7 @@ TYPED_TEST(SymmCandidates, ClassWordsAndSpellings) {
             EXPECT_EQ(got, spelling) << what;
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("symm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns) << what << ": " << err;
-            expect_symm(p, what);
+            expect_symm(*this->ctx, p, what);
         }
 }
 
@@ -701,7 +696,7 @@ TYPED_TEST(SymmCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "expand");
-    expect_symm(p, "expand over env bogus");
+    expect_symm(*this->ctx, p, "expand over env bogus");
     const Pin outer("symm", std::string_view("bogus"));
     {
         const Pin inner("symm", C{sy::Expand{}});
@@ -732,7 +727,7 @@ TYPED_TEST(SymmCandidates, AutoReadsTheTranscribedTable) {
             auto p = make_prob<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), TestFixture::auto_expect(old_auto<T>(c.m, c.n, c.batch)))
                 << label(s);
-            expect_symm(p, "auto " + label(s));
+            expect_symm(*this->ctx, p, "auto " + label(s));
         }
 }
 
@@ -769,7 +764,7 @@ TYPED_TEST(SymmCandidates, AutoReadsEveryKeyField) {
             s.seed = 43u;
             auto p = make_prob<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row, " << label(s);
-            expect_symm(p, std::string("the ") + k.field + " row");
+            expect_symm(*this->ctx, p, std::string("the ") + k.field + " row");
         }
 }
 
@@ -783,7 +778,7 @@ TYPED_TEST(SymmCandidates, TraceKeyIsCsShape) {
         const std::string form = 2 * std::min(m, n) >= std::max(m, n) ? "sq" : (m > n ? "tall" : "wide");
         const std::string want = "form=" + form + " m=" + std::to_string(m) + " n=" + std::to_string(n) + " batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_symm(p, line);
+        expect_symm(*this->ctx, p, line);
     }
 }
 
@@ -807,7 +802,7 @@ TYPED_TEST(SymmCandidates, VendorFreeLastResortIsExpand) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "expand") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_symm(p, "vendor-only table, " + label(s));
+        expect_symm(*this->ctx, p, "vendor-only table, " + label(s));
     }
 }
 
@@ -900,7 +895,7 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_symm(p, "cpu vendor");
+        expect_symm(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

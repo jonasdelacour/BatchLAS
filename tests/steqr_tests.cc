@@ -3,7 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 #include "test_utils.hh"
 #include "eigen_verify.hh"
@@ -30,8 +30,7 @@ std::vector<std::vector<double>> lapacke_spectra(const MatrixView<Real, MatrixFo
     std::vector<std::vector<double>> w(static_cast<std::size_t>(A.batch_size()));
     norm2 = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
-        auto a = verify::copy_item(A, b);
-        if (!verify::eigenvalues(A.rows(), a, w[static_cast<std::size_t>(b)])) return {};
+        if (!verify::eigenvalues(A, b, w[static_cast<std::size_t>(b)])) return {};
         for (double l : w[static_cast<std::size_t>(b)]) norm2 = verify::nanmax(norm2, std::fabs(l));
     }
     return w;
@@ -53,18 +52,19 @@ void expect_values(const VectorView<Real>& w, const std::vector<std::vector<doub
         if constexpr (verify::have_reference) FAIL() << "host LAPACKE reference failed (info != 0)";
         else GTEST_SKIP() << "no host LAPACKE reference in this build";
     }
-    const double err = verify::values_error(w, ref, norm2, items);
+    const double err = MatrixView<Real, MatrixFormat::Dense>::values_error(w, ref, norm2, items);
     if (slack) EXPECT_VERIFY_SLACK(Real, verify::Check::values, n, err, *slack);
     else EXPECT_VERIFY(Real, verify::Check::values, n, err);
 }
 
 // (A, V, w) an eigendecomposition with orthonormal V (eigen_residual, orthogonality_rotations).
 template <typename Real>
-void expect_pairs(const MatrixView<Real, MatrixFormat::Dense>& A, const MatrixView<Real, MatrixFormat::Dense>& V,
+void expect_pairs(Queue& ctx, const MatrixView<Real, MatrixFormat::Dense>& A, const MatrixView<Real, MatrixFormat::Dense>& V,
                   const VectorView<Real>& w, std::span<const int> items = {}) {
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
     const int n = V.cols();
-    EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, verify::eigen_residual(A, V, w, items));
-    EXPECT_VERIFY(Real, verify::Check::orthogonality_rotations, n, verify::orthogonality(V, items));
+    EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(ctx, A, V, w, items));
+    EXPECT_VERIFY(Real, verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, V, items));
 }
 
 // float only: the closed-form checks' old 1e-5 absolute (both types) is 0.16 x the kind's float
@@ -146,7 +146,7 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
     double norm2 = 0;
     const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.end()), batch, norm2);
     expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
-    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
+    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
 }
 
 TYPED_TEST(SteqrTest, BatchedMatrices) {
@@ -184,8 +184,8 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
 
     double norm2 = 0;
     const auto ref = repeated(expected, batch, norm2);
-    expect_values(VectorView<float_type>(c), ref, norm2, n, std::nullopt, verify::all_items(batch));
-    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(c));
+    expect_values(VectorView<float_type>(c), ref, norm2, n, std::nullopt, dense_A.view().all_items());
+    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(c));
 }
 
 
@@ -222,8 +222,8 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     // Diagonal and off-diagonal are uniform [0, 1) (||T||_2 ~ 2.5): the kind's bound is 11x the old
     // absolute 500 machine eps (1000 u), so the Slack keeps the old power.
     expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n,
-                  verify::Slack{0.1, "old bound 500 machine eps absolute = 1000 u, ||T||_2 ~ 2.5"}, verify::all_items(batch));
-    expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), verify::all_items(batch));
+                  verify::Slack{0.1, "old bound 500 machine eps absolute = 1000 u, ||T||_2 ~ 2.5"}, dense_A.view().all_items());
+    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), dense_A.view().all_items());
 }
 
 TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
@@ -279,8 +279,8 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
         UnifiedVector<float_type> w_cta(n * batch), w_ref(n * batch);
         for (int i = 0; i < n * batch; ++i) w_cta[i] = evals_cta(i % n, i / n), w_ref[i] = evals_ref(i % n, i / n);
         test_utils::expect_eigenvalues_agree<float_type>(w_cta, w_ref, n, batch);
-        expect_pairs(dense_A.view(), eigvects_ref.view(), VectorView<float_type>(evals_ref));
-        expect_pairs(dense_A.view(), eigvects_cta.view(), VectorView<float_type>(evals_cta));
+        expect_pairs(*this->ctx, dense_A.view(), eigvects_ref.view(), VectorView<float_type>(evals_ref));
+        expect_pairs(*this->ctx, dense_A.view(), eigvects_cta.view(), VectorView<float_type>(evals_cta));
     }
 }
 
@@ -328,7 +328,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
 
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
-        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
     }
 }
 
@@ -375,11 +375,11 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
 
         double norm2 = 0;
         const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.begin() + n), batch, norm2);
-        const auto all = verify::all_items(batch);
+        const auto all = eigvects.view().all_items();
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16), all);
 
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -418,9 +418,9 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
         SCOPED_TRACE(::testing::Message() << "n " << n);
         double norm2 = 0;
         const auto ref = lapacke_spectra(dense_A.view(), norm2);
-        const auto all = verify::all_items(batch);
+        const auto all = eigvects.view().all_items();
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, all);
-        expect_pairs(dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -480,7 +480,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
         for (double l : d) norm2 = verify::nanmax(norm2, std::fabs(l));
         ref[b] = std::move(d);
     }
-    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, verify::all_items(batch));
+    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, eigvects.view().all_items());
 }
 
 namespace {
@@ -625,7 +625,7 @@ void stress_run_case(Queue& ctx,
         std::sort(ste.begin() + j * n, ste.begin() + (j + 1) * n);
         std::sort(cta.begin() + j * n, cta.begin() + (j + 1) * n);
     }
-    const auto all = verify::all_items(batch);
+    const auto all = dense_A.view().all_items();
     if (check_steqr_against_ref) expect_values(VectorView<Real>(ste.data(), n, batch), ref, norm2, n, std::nullopt, all);
     if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, std::nullopt, all);
 }
@@ -755,7 +755,8 @@ void expect_converged_items_right(Vector<Real>& w, const UnifiedVector<int32_t>&
             norm2 = verify::nanmax(norm2, std::fabs(ref[b][i]));
         }
         const int item[] = {b};
-        EXPECT_VERIFY(Real, verify::Check::values, n, verify::values_error(VectorView<Real>(w), ref, norm2, item))
+        using MV = MatrixView<Real, MatrixFormat::Dense>;
+        EXPECT_VERIFY(Real, verify::Check::values, n, MV::values_error(VectorView<Real>(w), ref, norm2, item))
             << "item " << b << " reported info == 0";
     }
 }
@@ -1057,7 +1058,7 @@ namespace {
 // (eigen_residual) and ||Z^T Z - I||_F (orthogonality_rotations). `why` receives the three
 // measured values and their bounds for the failure message.
 template <typename Real>
-bool tridiag_item_ok(const std::vector<long double>& hd, const std::vector<long double>& he,
+bool tridiag_item_ok(Queue& ctx, const std::vector<long double>& hd, const std::vector<long double>& he,
                      const std::vector<long double>& ref, Vector<Real>& evals, const Real* Z, int b,
                      std::string& why) {
     using batchlas::verify::Check;
@@ -1070,12 +1071,15 @@ bool tridiag_item_ok(const std::vector<long double>& hd, const std::vector<long 
         tnorm = std::max(tnorm, static_cast<double>(std::fabs(hd[i]) + (i > 0 ? std::fabs(he[i - 1]) : 0.0L) +
                                                     (i < n - 1 ? std::fabs(he[i]) : 0.0L)));
     }
-    const auto Zv = batchlas::verify::view(Z, n, n, n);
+    using MD = MatrixView<double, MatrixFormat::Dense>;
+    const auto Zd = MatrixView<Real, MatrixFormat::Dense>(const_cast<Real*>(Z), n, n, n).template astype<double>();
     const VectorView<Real> w(&evals(0, b), n, 1, 1, n);
+    std::vector<double> wd(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) wd[i] = evals(i, b);
     const std::vector<std::vector<double>> r{std::vector<double>(ref.begin(), ref.end())};
-    const double ev_err = batchlas::verify::values_error(w, r, tnorm);
-    const double res = batchlas::verify::eigen_residual(batchlas::verify::view(T.data(), n, n, n), Zv, w);
-    const double orth = batchlas::verify::orthogonality(Zv);
+    const double ev_err = MatrixView<Real, MatrixFormat::Dense>::values_error(w, r, tnorm);
+    const double res = MD::eigen_residual(ctx, MD(T.data(), n, n, n), Zd.view(), VectorView<double>(wd.data(), n));
+    const double orth = MD::orthogonality(ctx, Zd.view());
     why = "eigenvalue error " + std::to_string(ev_err) + " (bound " +
           std::to_string(batchlas::verify::bound<Real>(Check::values, n)) + "), residual " + std::to_string(res) +
           " (bound " + std::to_string(batchlas::verify::bound<Real>(Check::eigen_residual, n)) + "), orthogonality " +
@@ -1200,7 +1204,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
                 for (int b = 0; b < batch && bad_items < 8; ++b) {
                     const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
                     std::string why;
-                    const bool ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                    const bool ok = info[b] == 0 && tridiag_item_ok(*this->ctx, hd[b], he[b], ref[b], evals, Z, b, why);
                     if (!ok) ++bad_items;
                     EXPECT_TRUE(ok) << tag << " item " << b << " (kind " << b % 5 << "): info " << info[b] << ", "
                                     << why;
@@ -1266,7 +1270,7 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
                 std::string why = "the NaN item reported no failure";
                 if (!poisoned(b)) {
                     const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
-                    ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                    ok = info[b] == 0 && tridiag_item_ok(*this->ctx, hd[b], he[b], ref[b], evals, Z, b, why);
                 } else {
                     ok = info[b] > 0;
                 }
@@ -1332,7 +1336,7 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                     if (!checked(b)) continue;
                     const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
                     std::string why;
-                    const bool ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                    const bool ok = info[b] == 0 && tridiag_item_ok(*this->ctx, hd[b], he[b], ref[b], evals, Z, b, why);
                     if (!ok) ++bad_items;
                     EXPECT_TRUE(ok) << "n=" << n << " mult=" << mult << " batch=" << batch << " item " << b
                                     << ": info " << info[b] << ", " << why;

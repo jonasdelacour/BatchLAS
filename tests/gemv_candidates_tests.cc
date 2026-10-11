@@ -16,7 +16,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/gemv/choice.hh"
@@ -82,7 +81,7 @@ struct Problem {
     std::size_t a_off = 0, x_off = 0, y_off = 0;
     int lda = 0, sa = 0, incx = 2, sx = 0, incy = 3, sy = 0;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
 
     MVof<T> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
     VectorView<T> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
@@ -94,7 +93,7 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -102,8 +101,8 @@ Problem<T> make_problem(const Spec& s) {
     using R = RealOf<T>;
     Problem<T> p;
     p.s = s;
-    p.alpha = batchlas::verify::make<T>(R(1.5), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : batchlas::verify::make<T>(R(-0.75), R(0.25));
+    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
+    p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     p.lda = s.m + 3;
     p.sa = p.lda * std::max(s.n, 1) + 5;
     p.sx = p.incx * std::max(s.red(), 1) + 7;
@@ -118,21 +117,21 @@ Problem<T> make_problem(const Spec& s) {
         const int r = it % reps;
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.xi(r, i)];
+                p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.xi(r, i)];
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? batchlas::verify::make<T>(u(gen), u(gen)) : p.mem[p.yi(r, i)];
+                p.mem[p.yi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.yi(r, i)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
 // y = alpha op(A) x + beta y against a double host reference on the checked items, every element
 // outside y's footprint bit for bit, and a repeating batch bit-identical to its representative.
 template <typename T>
-void expect_gemv(const Problem<T>& p, const std::string& what) {
+void expect_gemv(Queue& ctx, const Problem<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
@@ -151,14 +150,10 @@ void expect_gemv(const Problem<T>& p, const std::string& what) {
         const VectorView<T> X0(at0(p.x_off), s.red(), s.batch, Inc{p.incx}, Stride{p.sx});
         const VectorView<T> Y0(at0(p.y_off), s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
         const VectorView<T> Y1(const_cast<T*>(p.mem.data()) + p.y_off, s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
-        for (int it : items) {
-            const int one[] = {it};
-            const double err = batchlas::verify::gemv_backward_error(A0, s.trans, X0, Y0, Y1, batchlas::verify::up(p.alpha),
-                                                                      batchlas::verify::up(p.beta), one);
-            ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.red(), err))
-                << what << " item " << it << " backward error " << err << " exceeds "
-                << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
-        }
+        const double err = MVof<T>::gemv_backward_error(ctx, A0, s.trans, X0, Y0, Y1, MVof<T>::up(p.alpha), MVof<T>::up(p.beta), items);
+        ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.red(), err))
+            << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
+            << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
     }
     std::vector<char> iny(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
@@ -378,7 +373,7 @@ TYPED_TEST(GemvCandidates, PinnedCandidatesStraddleTheirLimits) {
                         auto q = make_problem<T>(s);
                         const std::string want = this->auto_choice(q);
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                        expect_gemv(p, what + " (vendor-free: Auto)");
+                        expect_gemv(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     if (!TestFixture::expect_runs(c, t)) {
@@ -387,7 +382,7 @@ TYPED_TEST(GemvCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_gemv(p, what);
+                    expect_gemv(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -410,7 +405,7 @@ TYPED_TEST(GemvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_gemv(pinned, what);
+                expect_gemv(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's driver; element " << e;
@@ -435,7 +430,7 @@ TYPED_TEST(GemvCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         s.seed = 777u + k.m;
         auto p = make_problem<T>(s);
         this->run_pinned(k.c, p);
-        expect_gemv(p, name(k.c, s));
+        expect_gemv(*this->ctx, p, name(k.c, s));
         if (::testing::Test::HasFatalFailure()) return;
     }
 }
@@ -647,7 +642,7 @@ TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
                 const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
                 EXPECT_EQ(err.find("gemv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
-                expect_gemv(p, what);
+                expect_gemv(*this->ctx, p, what);
             }
     }
 }
@@ -667,7 +662,7 @@ TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "direct");
-    expect_gemv(p, "direct over env cta");
+    expect_gemv(*this->ctx, p, "direct over env cta");
     const Spec st{Transpose::Trans, 9, 4, 2};
     const Pin outer("gemv", C{gv::Cta{}});
     {
@@ -677,7 +672,7 @@ TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_problem<T>(st);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_gemv(r, "outer cta");
+    expect_gemv(*this->ctx, r, "outer cta");
 }
 
 // Auto against the shipped transcribed table (sm_89 and sm_120 hold identical rows; any other
@@ -711,7 +706,7 @@ TYPED_TEST(GemvCandidates, AutoReadsTheTranscribedTable) {
             if (want == "vendor" && !TestFixture::vendor_launch_ok()) continue;  // known-defects #13
             EXPECT_EQ(traced_choice([&] { this->run(p); }), want)
                 << label(s) << " out=" << r.out << " red=" << r.red;
-            expect_gemv(p, "auto " + label(s));
+            expect_gemv(*this->ctx, p, "auto " + label(s));
             if (::testing::Test::HasFatalFailure()) return;
         }
 }
@@ -745,7 +740,7 @@ TYPED_TEST(GemvCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_problem<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_gemv(p, std::string("the ") + k.field + " row");
+        expect_gemv(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -760,7 +755,7 @@ TYPED_TEST(GemvCandidates, TraceKeyOutRedFollowTrans) {
         const std::string want = t == Transpose::NoTrans ? "trans=N out=64 red=48 batch=5 ->"
                                                          : "trans=T out=48 red=64 batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_gemv(p, line);
+        expect_gemv(*this->ctx, p, line);
     }
 }
 
@@ -778,7 +773,7 @@ TYPED_TEST(GemvCandidates, VendorFreeLastResortIsDirect) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "direct") << trans_s(t);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_gemv(p, std::string("vendor-only table ") + trans_s(t));
+        expect_gemv(*this->ctx, p, std::string("vendor-only table ") + trans_s(t));
     }
 }
 
@@ -800,7 +795,7 @@ TYPED_TEST(GemvCandidates, OrthoCallerShapes) {
                 p.beta = t == Transpose::NoTrans ? T(1) : T(0);
                 p.s.beta_zero = t != Transpose::NoTrans;
                 this->run_pinned(c, p);
-                expect_gemv(p, name(c, s) + " (ortho shape)");
+                expect_gemv(*this->ctx, p, name(c, s) + " (ortho shape)");
                 ++ran;
             }
     EXPECT_GT(ran, 0);
@@ -889,14 +884,14 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
                   }),
                   batchlas::select::level3_vendor_available<B> ? "vendor" : "direct")
             << trans_s(t);
-        expect_gemv(p, std::string("cpu auto ") + trans_s(t));
+        expect_gemv(*this->ctx, p, std::string("cpu auto ") + trans_s(t));
         auto d = make_problem<T>(s);
         {
             const Pin pin("gemv", C{gv::Direct{}});
             (void)gemv<B, T>(*this->ctx, d.A(), d.X(), d.Y(), d.alpha, d.beta, t);
             this->ctx->wait();
         }
-        expect_gemv(d, std::string("cpu direct ") + trans_s(t));
+        expect_gemv(*this->ctx, d, std::string("cpu direct ") + trans_s(t));
     }
 }
 

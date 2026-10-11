@@ -1,4 +1,4 @@
-// potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the batchlas::verify
+// potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the MatrixView::potrf_residual
 // factorization residual (docs/design/verification.md), every candidates<T>() entry pinned through
 // the public potrf.
 
@@ -6,7 +6,6 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/potrf/choice.hh"
@@ -57,7 +56,7 @@ struct PotrfProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        return {batchlas::verify::potrf_residual(A0v, Av, uplo), bad};
+        return {MV::potrf_residual(q, A0v, Av, uplo), bad};
     }
 };
 

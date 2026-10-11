@@ -17,7 +17,6 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
@@ -91,11 +90,11 @@ protected:
                 for (int i = 0; i < m; ++i) {
                     std::complex<double> acc(0.0, 0.0);
                     for (int t = 0; t < k; ++t) {
-                        const std::complex<double> u = batchlas::verify::up(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
-                        const std::complex<double> v = batchlas::verify::up(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
+                        const std::complex<double> u = MatrixView<Scalar, MatrixFormat::Dense>::up(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
+                        const std::complex<double> v = MatrixView<Scalar, MatrixFormat::Dense>::up(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
                         acc += u * static_cast<double>(s[b * k + t]) * v;
                     }
-                    const std::complex<double> a = batchlas::verify::up(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
+                    const std::complex<double> a = MatrixView<Scalar, MatrixFormat::Dense>::up(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
                     num += std::norm(a - acc);
                     den += std::norm(a);
                 }
@@ -106,10 +105,10 @@ protected:
     }
 
     // ||M^H M - I||_F over the leading `cols` columns of an ld x cols block, worst over the batch.
-    static double col_orthogonality(int rows, int cols, int batch,
+    static double col_orthogonality(Queue& ctx, int rows, int cols, int batch,
                                     const Scalar* M, int64_t stride, int ld) {
         const MatrixView<Scalar, MatrixFormat::Dense> V(const_cast<Scalar*>(M), rows, cols, ld, static_cast<int>(stride), batch);
-        return batchlas::verify::orthogonality(V, batchlas::verify::all_items(batch));
+        return MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, V, V.all_items());
     }
 
     // Runs gesvdj_cta on a caller-provided A and validates the factorisation.
@@ -153,7 +152,7 @@ protected:
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
 
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(ctx, m, m, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
             << "U orthogonality m=" << m << " n=" << n;
 
@@ -164,11 +163,11 @@ protected:
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * n + static_cast<size_t>(j) * n + i] =
-                        batchlas::verify::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        MatrixView<Scalar, MatrixFormat::Dense>::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, col_orthogonality(ctx, n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
             << "V orthogonality m=" << m << " n=" << n;
     }
 
@@ -221,7 +220,7 @@ protected:
                   static_cast<double>(recon_tol()))
             << "thin reconstruction m=" << m << " n=" << n;
 
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, m, k, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
             << "thin U orthogonality m=" << m << " n=" << n;
 
@@ -232,11 +231,11 @@ protected:
             for (int j = 0; j < k; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * k + static_cast<size_t>(j) * n + i] =
-                        batchlas::verify::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        MatrixView<Scalar, MatrixFormat::Dense>::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
-        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
             << "thin V orthogonality m=" << m << " n=" << n;
     }
 
@@ -263,7 +262,6 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // The 33..64 band.
 //
 // Above 32 the kernel keeps P = 32 lanes and grows the tile capacity C to 64,
@@ -277,7 +275,6 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
 // Sizes that are not multiples of 32 matter most here: they exercise the
 // padding in the second row-slot, where an off-by-one in `row < RR` silently
 // mixes a pad row into a dot product.
-// ---------------------------------------------------------------------------
 
 TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
     if (TestFixture::max_dim_with_vectors() < 64) {
@@ -574,9 +571,9 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
             // phase of a singular vector is not determined.
             std::complex<double> acc(0.0, 0.0);
             for (int i = 0; i < m; ++i) {
-                acc += std::conj(batchlas::verify::up(
+                acc += std::conj(MatrixView<Scalar, MatrixFormat::Dense>::up(
                            U_thin.view().data_ptr()[b * U_thin.view().stride() + static_cast<size_t>(c) * U_thin.view().ld() + i]))
-                     * batchlas::verify::up(
+                     * MatrixView<Scalar, MatrixFormat::Dense>::up(
                            U_all.view().data_ptr()[b * U_all.view().stride() + static_cast<size_t>(c) * U_all.view().ld() + i]);
             }
             EXPECT_NEAR(std::abs(acc), 1.0, 1e-3) << "U column " << c << " differs at b=" << b;

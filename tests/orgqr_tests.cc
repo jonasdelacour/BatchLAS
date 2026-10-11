@@ -18,7 +18,6 @@ struct OrgqrConfig {
 };
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
 
@@ -45,7 +44,8 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
-    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), verify::orthogonality(A.view()));
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A.view()));
 }
 
 TYPED_TEST(OrgqrTest, BatchedMatrices) {
@@ -64,8 +64,8 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
-    const auto all = verify::all_items(batch);
-    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), verify::orthogonality(A.view(), all));
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A.view(), A.view().all_items()));
 }
 
 
@@ -86,24 +86,11 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
 //     structurally unfalsifiable here. trsm_native.cc records that exact
 //     failure: the 6-arg MatrixView constructor defaults stride to ld*cols, after
 //     which every batch item but the first reads the wrong matrix.
-//
 //   * m == n ONLY. orgqr's whole point is the first n columns of an m x n Q.
-//
-// The oracle is a host multiply-back in double, computed here from the input this
-// file generated -- never the vendor, because a vendor reference is inert in the
-// vendor-free build this campaign exists for.
+// The oracle is MatrixView's promoted-precision check on the input this file generated,
+// never the vendor: a vendor reference is inert in the vendor-free build.
 // ===========================================================================
 namespace orgqr_wp5 {
-
-template <typename T>
-double orth(const T* Q, int m, int n, int ld) {
-    return verify::orthogonality(verify::view(Q, m, n, ld)) / std::sqrt(double(n));
-}
-
-template <typename T>
-double recon(const T* Q, const T* F, const T* A0, int m, int n, int ld) {
-    return verify::qr_reconstruction(verify::view(A0, m, n, ld), verify::view(Q, m, n, ld), verify::view(F, m, n, ld));
-}
 
 inline verify::Slack recon_slack(int m, int n) {
     return {double(m + n) / (16.0 * m), "kept from this file's 0.5 (m+n) eps tolerance"};
@@ -128,50 +115,40 @@ TYPED_TEST(OrgqrTest, QIsOrthonormalAndReconstructsAAtEveryBatchItem) {
     for (const S& s : shapes) {
         const int ld = s.m + 5;
         const int stride = ld * s.n + 11;
-        UnifiedVector<T> buf(static_cast<size_t>(stride) * s.batch, verify::make<T>(-9.75e3, 4.5e3));
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        UnifiedVector<T> buf(static_cast<size_t>(stride) * s.batch, MV::make(-9.75e3, 4.5e3));
         UnifiedVector<T*> ptrs(static_cast<size_t>(s.batch), nullptr);
-        verify::Rng rg(4242u + 13u * unsigned(s.m) + unsigned(s.n));
-        for (int b = 0; b < s.batch; ++b)
-            for (int j = 0; j < s.n; ++j)
-                for (int i = 0; i < s.m; ++i)
-                    buf[static_cast<size_t>(b) * stride + static_cast<size_t>(j) * ld + i] =
-                        verify::make<T>(rg.next(), rg.next());
-        const std::vector<T> A0(buf.begin(), buf.end());
-
-        MatrixView<T, MatrixFormat::Dense> V(buf.data(), s.m, s.n, ld, stride, s.batch,
-                                             ptrs.data());
-        UnifiedVector<T> tau(static_cast<size_t>(std::min(s.m, s.n)) * s.batch,
-                             verify::make<T>(-12345.0, -12345.0));
+        MV V(buf.data(), s.m, s.n, ld, stride, s.batch, ptrs.data());
+        const auto R = Matrix<T, MatrixFormat::Dense>::Random(s.m, s.n, false, s.batch, 4242u + 13u * unsigned(s.m) + unsigned(s.n));
+        MV::copy(*this->ctx, V, R.view()).wait();
+        UnifiedVector<T> A0(buf);
+        UnifiedVector<T> tau(static_cast<size_t>(std::min(s.m, s.n)) * s.batch, MV::make(-12345.0, -12345.0));
 
         UnifiedVector<std::byte> wg(std::max<size_t>(
             1, geqrf_buffer_size<B, T>(*this->ctx, V, tau.to_span())));
         (void)geqrf<B, T>(*this->ctx, V, tau.to_span(), wg.to_span());
         this->ctx->wait();
-        const std::vector<T> F(buf.begin(), buf.end());   // orgqr overwrites it
+        UnifiedVector<T> F(buf);   // orgqr overwrites it
 
         UnifiedVector<std::byte> wo(std::max<size_t>(
             1, orgqr_buffer_size<B, T>(*this->ctx, V, tau.to_span())));
         (void)orgqr<B, T>(*this->ctx, V, tau.to_span(), wo.to_span());
         this->ctx->wait();
 
-        for (int b = 0; b < s.batch; ++b) {
-            const size_t off = static_cast<size_t>(b) * stride;
-            const double o = orth<T>(buf.data() + off, s.m, s.n, ld);
-            EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, s.m, o * std::sqrt(double(s.n)), orth_slack(s.m, s.n))
-                << "Q is not orthonormal at b=" << b << " (m=" << s.m << " n=" << s.n << ")";
-            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, s.m,
-                                recon<T>(buf.data() + off, F.data() + off, A0.data() + off, s.m, s.n, ld),
-                                recon_slack(s.m, s.n))
-                << "Q R != A at b=" << b << " (m=" << s.m << " n=" << s.n
-                << ") -- Q is orthonormal but it is not THIS A's Q";
-        }
+        const MV A0v(A0.data(), s.m, s.n, ld, stride, s.batch), Fv(F.data(), s.m, s.n, ld, stride, s.batch);
+        EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, s.m, MV::orthogonality(*this->ctx, V, V.all_items()),
+                            orth_slack(s.m, s.n))
+            << "Q is not orthonormal (m=" << s.m << " n=" << s.n << ")";
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, s.m,
+                            MV::qr_reconstruction(*this->ctx, A0v, V, Fv, V.all_items()), recon_slack(s.m, s.n))
+            << "Q R != A (m=" << s.m << " n=" << s.n << ") -- Q is orthonormal but it is not THIS A's Q";
         // A broadcast of item 0 over the batch would pass every check above.
         if (s.batch > 1) {
             bool differ = false;
             for (int j = 0; j < s.n && !differ; ++j)
                 for (int i = 0; i < s.m && !differ; ++i)
-                    if (verify::abs(verify::up(buf[static_cast<size_t>(j) * ld + i]) -
-                              verify::up(buf[static_cast<size_t>(s.batch - 1) * stride +
+                    if (std::abs(MV::up(buf[static_cast<size_t>(j) * ld + i]) -
+                              MV::up(buf[static_cast<size_t>(s.batch - 1) * stride +
                                       static_cast<size_t>(j) * ld + i])) > 0.0)
                         differ = true;
             EXPECT_TRUE(differ) << "the first and last batch items' Q are identical, so this "

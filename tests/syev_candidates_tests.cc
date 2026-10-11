@@ -16,7 +16,6 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/syev/choice.hh"
@@ -92,7 +91,7 @@ struct Eig {
 
 template <typename T>
 T poison() {
-    return batchlas::verify::make<T>(cd(-9.0e3, 7.0e3));
+    return MVof<T>::make(-9.0e3, 7.0e3);
 }
 
 // Graded spectrum +-10^[-2, 2] and a dense complex Householder Q, built in double on the host.
@@ -126,7 +125,7 @@ Eig<T> make_eig(const Spec& s) {
                 cd a = 0;
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
-                p.mem[p.at(it, i, j)] = batchlas::verify::make<T>(a);
+                p.mem[p.at(it, i, j)] = MVof<T>::make(a.real(), a.imag());
             }
         std::sort(lam.begin(), lam.end());
         p.lambda.push_back(lam);
@@ -144,7 +143,7 @@ Eig<T> make_eig(const Spec& s) {
 // A's n x n footprint (LAPACK lets jobz = N destroy A), and a repeating batch bit-identical to
 // its representatives.
 template <typename T>
-void expect_solved(const Eig<T>& p, const std::string& what) {
+void expect_solved(Queue& ctx, const Eig<T>& p, const std::string& what) {
     const Spec& s = p.s;
     const int n = s.n;
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
@@ -157,7 +156,7 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
     double scale = 0;
     for (int it : items)
         for (double l : p.lambda[it]) scale = verify::nanmax(scale, std::fabs(l));
-    const double werr = verify::values_error(w, p.lambda, scale, items);
+    const double werr = MVof<T>::values_error(w, p.lambda, scale, items);
     ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::values, n, werr)) << what;
     if (s.jobz == JobType::EigenVectors) {
         // eigen_residual mirrors the lower triangle: rebuild it from whichever triangle A stored.
@@ -166,12 +165,12 @@ void expect_solved(const Eig<T>& p, const std::string& what) {
             for (int j = 0; j < n; ++j)
                 for (int i = j; i < n; ++i) {
                     const T v = p.mem0[p.stored(i, j) ? p.at(it, i, j) : p.at(it, j, i)];
-                    lower[std::size_t(it) * n * n + std::size_t(j) * n + i] = p.stored(i, j) ? v : batchlas::verify::conj(v);
+                    lower[std::size_t(it) * n * n + std::size_t(j) * n + i] = p.stored(i, j) ? v : MVof<T>::conj(v);
                 }
         const MVof<T> A0(lower.data(), n, n, n, n * n, items.back() + 1);
         const MVof<T> V(const_cast<T*>(p.mem.data()), n, n, p.ld, p.stride, s.batch);
-        const double resid = verify::eigen_residual(A0, V, w, items);
-        const double ortho = verify::orthogonality(V, items);
+        const double resid = MVof<T>::eigen_residual(ctx, A0, V, w, items);
+        const double ortho = MVof<T>::orthogonality(ctx, V, items);
         ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::eigen_residual, n, resid)) << what;
         ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality_rotations, n, ortho)) << what;
     }
@@ -350,7 +349,7 @@ TYPED_TEST(SyevCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     this->run_pinned(c, p);
-                    expect_solved(p, name(c, s));
+                    expect_solved(*this->ctx, p, name(c, s));
                 }
 }
 
@@ -376,7 +375,7 @@ TYPED_TEST(SyevCandidates, OtherTriangleIsNeverRead) {
                 s.seed = 17u + n;
                 auto p = make_eig<T>(s);
                 this->run_pinned(c, p);
-                expect_solved(p, "poisoned other triangle, " + name(c, s));
+                expect_solved(*this->ctx, p, "poisoned other triangle, " + name(c, s));
             }
 }
 
@@ -409,7 +408,7 @@ TYPED_TEST(SyevCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             Spec s{n, 1024, JobType::EigenVectors, Uplo::Lower, 4, 5u};
             auto p = make_eig<T>(s);
             this->run_pinned(c, p);
-            expect_solved(p, name(c, s));
+            expect_solved(*this->ctx, p, name(c, s));
         }
 }
 
@@ -449,7 +448,7 @@ TYPED_TEST(SyevCandidates, ExactWorkspaceInAPoisonedArena) {
             this->ctx->wait();
             for (std::size_t i = need; i < arena.size(); ++i)
                 ASSERT_EQ(arena[i], std::byte{0xA5}) << name(c, s) << " wrote past the workspace at +" << i - need;
-            expect_solved(p, name(c, s));
+            expect_solved(*this->ctx, p, name(c, s));
             if (need > 0) {
                 auto r = make_eig<T>(s);
                 UnifiedVector<std::byte> small(need - 1);
@@ -546,7 +545,7 @@ TYPED_TEST(SyevCandidates, ClassWordsAndSpellings) {
             });
             const std::string what = std::string(word) + " via " + (*var ? var : "ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            expect_solved(p, what);
+            expect_solved(*this->ctx, p, what);
         }
 }
 
@@ -560,7 +559,7 @@ TYPED_TEST(SyevCandidates, PinPrecedence) {
     const Pin pin("syev", C{sy::CtaFused{}});
     auto c = make_eig<T>(s);
     EXPECT_EQ(traced_choice([&] { this->run(c); }), "cta_fused");
-    expect_solved(c, "cta_fused over the variable");
+    expect_solved(*this->ctx, c, "cta_fused over the variable");
 }
 
 // key_of's fields reach choose(): a synthetic table whose first entry changes with jobz, n and
@@ -589,7 +588,7 @@ TYPED_TEST(SyevCandidates, AutoReadsEveryKeyField) {
         Spec s{k.n, k.batch, k.j};
         auto p = make_eig<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -621,7 +620,7 @@ TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
         Spec s{n, 3, JobType::EigenVectors};
         auto p = make_eig<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), expect) << label(s);
-        expect_solved(p, "auto " + label(s));
+        expect_solved(*this->ctx, p, "auto " + label(s));
     }
 }
 
@@ -642,7 +641,7 @@ TYPED_TEST(SyevCandidates, VendorFreeLastResortIsBlocked) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "blocked") << n;
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_solved(p, "vendor-only table, n " + std::to_string(n));
+        expect_solved(*this->ctx, p, "vendor-only table, n " + std::to_string(n));
     }
 }
 
@@ -733,7 +732,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::solver_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_solved(p, "cpu vendor");
+        expect_solved(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

@@ -2,10 +2,11 @@
 // Pass/fail bounds: c(kind) * f(n) * eps, c calibrated (docs/design/verification.md#verification-calibration).
 #pragma once
 
-#include <batchlas/verify/scalar.hh>
+#include <batchlas/blas/enums.hh>
 
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -13,6 +14,15 @@
 #include <string>
 
 namespace batchlas::verify {
+
+/// Unit roundoff of T's real type: 2^-24 for float, 2^-53 for double.
+template <class T> constexpr double eps() { return std::numeric_limits<float_t<T>>::epsilon() * 0.5; }
+
+/// max(a, b), NaN if either is NaN (std::max drops a NaN second argument, so a poisoned value would pass).
+inline double nanmax(double a, double b) {
+    if (std::isnan(a) || std::isnan(b)) return std::numeric_limits<double>::quiet_NaN();
+    return a > b ? a : b;
+}
 
 /// orthogonality: Q from Householder reflectors or a direct orthogonalization (geqrf, orgqr, form_q, ortho);
 /// orthogonality_rotations: eigen- and singular vectors from an iterative solver (Jacobi, QR iteration,
@@ -51,7 +61,7 @@ inline const char* kind_name(Check kind) {
 }
 
 template <class T> constexpr const char* dtype_name() {
-    if constexpr (is_complex<T>::value) return std::is_same_v<real_t<T>, float> ? "cfloat" : "cdouble";
+    if constexpr (is_std_complex_v<T>) return std::is_same_v<float_t<T>, float> ? "cfloat" : "cdouble";
     else return std::is_same_v<T, float> ? "float" : "double";
 }
 

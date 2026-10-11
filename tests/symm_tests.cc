@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <string>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include "../src/ops/symm/choice.hh"
 
 // The forced-route tests pin through select::ScopedPin (docs/design/flat-kernel-selection.md §12).
@@ -29,16 +28,17 @@ TYPED_TEST_SUITE(SymmTest, SymmTestTypes);
 // C against alpha A B + beta C0 (Side::Left) or alpha B A + beta C0, with A the symmetric matrix the `uplo`
 // triangle of its storage describes, in double on every item (Check::blas, k = the order of A).
 template <typename T, class VA, class VB, class VC0, class VC>
-void expect_symm_matches(const VA& A, const VB& B, const VC0& C0, const VC& C, Side side, Uplo uplo, T alpha, T beta, int n) {
-    const auto sym = uplo == Uplo::Lower ? batchlas::verify::Shape::symmetric_lower : batchlas::verify::Shape::symmetric_upper;
-    const auto general = batchlas::verify::Shape::general;
-    const auto items = batchlas::verify::all_items(C.batch_size());
+void expect_symm_matches(Queue& ctx, const VA& A, const VB& B, const VC0& C0, const VC& C, Side side, Uplo uplo, T alpha, T beta,
+                         int n) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    Matrix<T, MatrixFormat::Dense> As(A.rows(), A.cols(), A.batch_size());
+    MV::copy(ctx, As.view(), A).wait();
+    As.view().symmetrize(ctx, uplo).wait();
+    const auto items = C.all_items();
     const double err =
         side == Side::Left
-            ? batchlas::verify::gemm_backward_error(A, sym, Transpose::NoTrans, B, general, Transpose::NoTrans, C0, C, general,
-                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta), items)
-            : batchlas::verify::gemm_backward_error(B, general, Transpose::NoTrans, A, sym, Transpose::NoTrans, C0, C, general,
-                                                    batchlas::verify::up(alpha), batchlas::verify::up(beta), items);
+            ? MV::gemm_backward_error(ctx, As.view(), Transpose::NoTrans, B, Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items)
+            : MV::gemm_backward_error(ctx, B, Transpose::NoTrans, As.view(), Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items);
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
         << "n=" << n << ", side=" << static_cast<int>(side) << ", uplo=" << static_cast<int>(uplo);
 }
@@ -73,7 +73,7 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
                      C.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
-            expect_symm_matches(A.view(), B.view(), C0.view(), C.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(*(this->ctx), A.view(), B.view(), C0.view(), C.view(), side, uplo, alpha, beta, n);
         }
     }
 }
@@ -114,7 +114,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
                                     {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
 
-            expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
         }
     }
 }
@@ -169,7 +169,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
 
-                expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+                expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
             }
         }
     }
@@ -206,7 +206,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
             }
             ctx.wait();
 
-            expect_symm_matches(A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
         }
     }
 }

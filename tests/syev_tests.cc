@@ -23,7 +23,7 @@ struct SyevConfig {
 };
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
 template <typename Config>
@@ -144,7 +144,7 @@ void expect_converged_items_exact(const UnifiedVector<typename base_type<T>::typ
             scale = verify::nanmax(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
         }
         const int item[] = {b};
-        worst = verify::nanmax(worst, verify::values_error(w, ref, scale, item));
+        worst = verify::nanmax(worst, MatrixView<T, MatrixFormat::Dense>::values_error(w, ref, scale, item));
     }
     EXPECT_VERIFY(T, verify::Check::values, n, worst);
 }

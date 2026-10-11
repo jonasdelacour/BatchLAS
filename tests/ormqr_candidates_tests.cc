@@ -17,7 +17,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/ormqr/choice.hh"
@@ -109,8 +108,8 @@ Apply<T> make_apply(const Spec& s) {
     p.a = {0, s.m, s.k, s.m + 3, (s.m + 3) * s.k + 5};
     const int cr = s.side == Side::Left ? s.m : s.q, cc = s.side == Side::Left ? s.q : s.m;
     p.c = {std::size_t(p.a.stride) * s.batch + 11, cr, cc, cr + 2, (cr + 2) * cc + 7};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, verify::make<T>(-999, 777));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, verify::make<T>(0, 0));
+    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, MVof<T>::make(-999, 777));
+    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, MVof<T>::make(0, 0));
     p.aptr = UnifiedVector<T*>(s.batch, nullptr);
     p.cptr = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
@@ -126,62 +125,53 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                const T v = i > j ? verify::make<T>(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
-                                  : verify::make<T>(300, -200);
+                const T v = i > j ? MVof<T>::make(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
+                                  : MVof<T>::make(300, -200);
                 p.mem[p.ai(it, i, j)] = v;
-                if (i > j) norm2 += std::norm(verify::up(v));
+                if (i > j) norm2 += std::norm(MVof<T>::up(v));
             }
             if (it != r) {
                 p.tau[std::size_t(it) * s.k + j] = p.tau[std::size_t(r) * s.k + j];
                 continue;
             }
             const cd t = (1.0 + std::polar(1.0, theta)) / norm2;
-            p.tau[std::size_t(it) * s.k + j] = verify::make<T>(t.real(), t.imag());
+            p.tau[std::size_t(it) * s.k + j] = MVof<T>::make(t.real(), t.imag());
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
-                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : verify::make<T>(u(gen), u(gen));
+                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : MVof<T>::make(u(gen), u(gen));
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }
 
-// Q = H_0 ... H_{k-1} (m x m) of one item, formed by batchlas::verify from the stored reflectors and tau.
+// Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item, with
+// Q = H_0 ... H_{k-1} (m x m) formed by MatrixView::form_q from the stored reflectors and tau.
 template <typename T>
-std::vector<verify::promoted_t<T>> reflector_q(const Apply<T>& p, int it) {
+double apply_error(Queue& ctx, const Apply<T>& p, int it) {
     const Spec& s = p.s;
-    const auto F = verify::view(p.mem0.data() + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
-    return verify::form_q(F, VectorView<T>(const_cast<T*>(p.tau.data()), s.k, s.batch, 1, s.k), it, s.m);
-}
-
-// Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item.
-template <typename T>
-double apply_error(const Apply<T>& p, int it) {
-    const Spec& s = p.s;
-    using D = verify::promoted_t<T>;
-    auto Q = reflector_q(p, it);
-    const auto Qv = verify::view(Q.data(), s.m, s.m, s.m);
-    const auto C0 = verify::view(p.mem0.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
-    const auto C = verify::view(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld);
-    const int item[] = {0};
+    using D = typename MVof<T>::promoted_type;
+    T* m0 = const_cast<T*>(p.mem0.data());
+    const MVof<T> F(m0 + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
+    const auto Q = MVof<T>::form_q(ctx, F, VectorView<T>(p.tau.data(), s.k, s.batch, 1, s.k), it, s.m);
+    const auto C0 = MVof<T>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    const auto C = MVof<T>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
     if (s.side == Side::Left)
-        return verify::gemm_backward_error(Qv, verify::Shape::general, s.trans, C0, verify::Shape::general, Transpose::NoTrans, C0, C,
-                                           verify::Shape::general, D(1), D(0), item);
-    return verify::gemm_backward_error(C0, verify::Shape::general, Transpose::NoTrans, Qv, verify::Shape::general, s.trans, C0, C,
-                                       verify::Shape::general, D(1), D(0), item);
+        return MVof<D>::gemm_backward_error(ctx, Q.view(), s.trans, C0.view(), Transpose::NoTrans, C0.view(), C.view(), D(1), D(0));
+    return MVof<D>::gemm_backward_error(ctx, C0.view(), Transpose::NoTrans, Q.view(), s.trans, C0.view(), C.view(), D(1), D(0));
 }
 
 // The checked items against the reference, every element outside C's footprint bit for bit,
 // and, for a repeating batch, every item bit-identical to its representative.
 template <typename T>
-void expect_applied(const Apply<T>& p, const std::string& what) {
+void expect_applied(Queue& ctx, const Apply<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
-        const double err = apply_error(p, it);
+        const double err = apply_error(ctx, p, it);
         ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
     }
     std::vector<char> inc(p.mem.size(), 0);
@@ -376,7 +366,7 @@ TYPED_TEST(OrmqrCandidates, PinnedCandidatesStraddleTheirLimits) {
                 continue;
             }
             this->run_pinned(c, p);
-            expect_applied(p, name(c, s));
+            expect_applied(*this->ctx, p, name(c, s));
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -410,7 +400,7 @@ TYPED_TEST(OrmqrCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             if (!this->expect_runs(c, s.trans)) continue;
             auto p = make_apply<T>(s);
             this->run_pinned(c, p);
-            expect_applied(p, name(c, s) + " saturating");
+            expect_applied(*this->ctx, p, name(c, s) + " saturating");
         }
 }
 
@@ -460,7 +450,7 @@ TYPED_TEST(OrmqrCandidates, BufferSizeIsTheChosenFamilysAndRuns) {
             EXPECT_EQ(this->size(p), want) << name(c, s);
         }
         this->run_pinned(c, p);
-        expect_applied(p, name(c, s) + " exact workspace");
+        expect_applied(*this->ctx, p, name(c, s) + " exact workspace");
     }
     auto p = make_apply<T>(s);
     const std::string pick = this->auto_choice(p);
@@ -480,7 +470,7 @@ TYPED_TEST(OrmqrCandidates, OutOfOrderQueueIsSequenced) {
         auto p = make_apply<T>(s);
         const Pin pin("ormqr", c);
         this->run(p, &ooo);
-        expect_applied(p, name(c, s) + " out-of-order queue");
+        expect_applied(*this->ctx, p, name(c, s) + " out-of-order queue");
     }
 }
 
@@ -514,7 +504,7 @@ TYPED_TEST(OrmqrCandidates, ComplexTransIsRefusedUnderEveryPin) {
             if (!kCx<T>) {
                 if (c && !this->expect_runs(*c, s.trans)) continue;
                 this->run(p);
-                expect_applied(p, what);
+                expect_applied(*this->ctx, p, what);
                 continue;
             }
             for (int call = 0; call < 2; ++call) {
@@ -566,7 +556,7 @@ TYPED_TEST(OrmqrCandidates, ClassWordsAndSpellings) {
             }, &err);
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_ORMQR_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            expect_applied(p, what);
+            expect_applied(*this->ctx, p, what);
         }
     if constexpr (TestFixture::kVendor) {
         auto p = make_apply<T>(s);
@@ -608,7 +598,7 @@ TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
         auto p = make_apply<T>(s);
         if (!TestFixture::defined(s.trans)) continue;
         EXPECT_EQ(this->auto_choice(p), "blocked") << label(s);
-        expect_applied(p, "auto " + label(s));
+        expect_applied(*this->ctx, p, "auto " + label(s));
     }
 }
 
@@ -681,7 +671,7 @@ TYPED_TEST(OrmqrCandidates, VendorFreeLastResortIsBlocked) {
     const std::string got = traced_choice([&] { this->run(p); }, &all);
     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked");
     if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-    expect_applied(p, "vendor-only table");
+    expect_applied(*this->ctx, p, "vendor-only table");
 }
 
 // The coverage row (§5.6): the real backend (the old builder left it AUTO), m/n/k from A, side,
@@ -762,7 +752,7 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::factorization_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_applied(p, "cpu vendor");
+        expect_applied(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

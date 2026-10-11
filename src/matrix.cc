@@ -117,7 +117,9 @@ inline T csr_random_make_diagonal(csr_random_real_t<T> value) {
 template <typename T>
 inline T csr_random_scalar(std::uint64_t seed, std::uint64_t stream_id) {
     oneapi::dpl::uniform_real_distribution<csr_random_real_t<T>> dist(csr_random_real_t<T>(-1), csr_random_real_t<T>(1));
-    oneapi::dpl::minstd_rand engine(static_cast<std::uint32_t>(seed), static_cast<std::uint32_t>(stream_id));
+    // Two draws per complex element: stream 2k, so element k's imaginary part is not element k+1's real one.
+    oneapi::dpl::minstd_rand engine(static_cast<std::uint32_t>(seed),
+                                    static_cast<std::uint32_t>(is_std_complex_v<T> ? 2 * stream_id : stream_id));
     const auto r0 = dist(engine);
     if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
         return T(r0, dist(engine));
@@ -880,7 +882,7 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
             size_t j = remainder / n;               // column index
             
             oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-            oneapi::dpl::minstd_rand engine(seed, remainder);
+            oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * remainder : remainder);
             T rand_value;
             if constexpr (std::is_same_v<T, std::complex<float>> || 
                           std::is_same_v<T, std::complex<double>>) {
@@ -1100,7 +1102,7 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
         if (idx >= total_elements) return;
         
         oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-        oneapi::dpl::minstd_rand engine(seed, idx);
+        oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * idx : idx);  // two draws per complex element
         auto r1 = dist(engine);
         if constexpr (std::is_same_v<T, std::complex<float>> ||
                       std::is_same_v<T, std::complex<double>>) {
@@ -1164,7 +1166,7 @@ namespace {
 template <typename T>
 T seeded_uniform(unsigned int seed, std::uint64_t flat) {
     oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-    oneapi::dpl::minstd_rand engine(seed, flat);
+    oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * flat : flat);
     const auto re = dist(engine);
     if constexpr (is_std_complex_v<T>) {
         const auto im = dist(engine);

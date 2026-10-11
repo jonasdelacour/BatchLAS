@@ -15,7 +15,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/scalar.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/gesvd_native.hh"
 #include "../src/ops/gesvd/choice.hh"
@@ -89,7 +89,7 @@ struct Svd {
 
     Svd(const Spec& sp)
         : s(sp), k(std::min(sp.m, sp.n)), ld(sp.m + sp.ldpad), stride(std::int64_t(sp.m + sp.ldpad) * sp.n + sp.gap),
-          a(std::size_t(stride) * sp.batch + 1, batchlas::verify::make<T>(cd(-321.0, 123.0))),
+          a(std::size_t(stride) * sp.batch + 1, MVof<T>::make(-321.0, 123.0)),
           U(sp.ju == SvdVectors::None ? 1 : sp.m, sp.ju == SvdVectors::All ? sp.m : (sp.ju == SvdVectors::Thin ? k : 1),
             sp.batch),
           Vh(sp.jv == SvdVectors::All ? sp.n : (sp.jv == SvdVectors::Thin ? k : 1), sp.jv == SvdVectors::None ? 1 : sp.n,
@@ -147,7 +147,7 @@ Svd<T> make_svd(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) {
                 const bool unreferenced = s.poison && ((s.herm == 'L' && i < j) || (s.herm == 'U' && i > j));
-                p.a[p.ai(b, i, j)] = unreferenced ? batchlas::verify::make<T>(cd(4.0e3, -2.0e3)) : batchlas::verify::make<T>(f[j * s.m + i]);
+                p.a[p.ai(b, i, j)] = unreferenced ? MVof<T>::make(4.0e3, -2.0e3) : MVof<T>::make(f[j * s.m + i].real(), f[j * s.m + i].imag());
             }
         p.full.push_back(std::move(f));
         p.sigma.push_back(std::move(sig));
@@ -172,7 +172,7 @@ void expect_solved(Svd<T>& p, const std::string& what) {
             for (int i = 0; i < s.m; ++i) {
                 cd acc = 0;
                 for (int l = 0; l < p.k; ++l)
-                    acc += batchlas::verify::up(p.U(i, l, b)) * double(p.sv[std::size_t(b) * p.k + l]) * batchlas::verify::up(p.Vh(l, j, b));
+                    acc += MVof<T>::up(p.U(i, l, b)) * double(p.sv[std::size_t(b) * p.k + l]) * MVof<T>::up(p.Vh(l, j, b));
                 worst = batchlas::verify::nanmax(worst, std::abs(acc - p.full[b][j * s.m + i]));
             }
     EXPECT_LE(worst, tol * 10) << what << ": reconstruction";

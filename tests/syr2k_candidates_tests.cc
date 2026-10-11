@@ -3,7 +3,6 @@
 // kernel trace or a bit-for-bit comparison with the direct vendor call, never assumed from the
 // pin being accepted.
 #include <gtest/gtest.h>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/syr2k.hh>
@@ -85,7 +84,7 @@ struct Prob {
     T alpha = T(1.25), beta = T(-0.5);
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
     MVof<T> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch}; }
@@ -126,14 +125,14 @@ Prob<T> make_prob(const Spec& s) {
             for (int i = 0; i < s.n; ++i)
                 if (p.referenced(i, j)) p.mem[p.idx(p.c, it, i, j)] = it < reps ? u(gen) : p.mem[p.idx(p.c, r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
 // The referenced triangle against a double reference; every other element bit for bit; for a
 // repeating batch, every item bit-identical to its representative.
 template <typename T>
-void expect_syr2k(const Prob<T>& p, const std::string& what) {
+void expect_syr2k(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
@@ -141,15 +140,15 @@ void expect_syr2k(const Prob<T>& p, const std::string& what) {
     else items = {0, 1, s.batch / 2, s.batch - 1};
     // rank2k_backward_error: componentwise over the triangle, inner dimension 2k, from the pristine copy.
     const int nr = s.n, k2 = 2 * s.k;
-    for (int it : items) {
-        const auto A0 = batchlas::verify::view(p.mem0.data() + p.a.off + std::size_t(it) * p.a.stride, p.a.rows, p.a.cols, p.a.ld, p.a.stride, 1);
-        const auto B0 = batchlas::verify::view(p.mem0.data() + p.b.off + std::size_t(it) * p.b.stride, p.b.rows, p.b.cols, p.b.ld, p.b.stride, 1);
-        const auto C0 = batchlas::verify::view(p.mem0.data() + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
-        const auto C1 = batchlas::verify::view(p.mem.data() + p.c.off + std::size_t(it) * p.c.stride, nr, nr, p.c.ld, p.c.stride, 1);
-        const double err = batchlas::verify::rank2k_backward_error(A0, B0, s.trans, C0, C1, s.uplo, batchlas::verify::up(p.alpha),
-                                                                   batchlas::verify::up(p.beta), false);
+    {
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        const MV A0(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+        const MV B0(p.mem0.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+        const MV C0(p.mem0.data() + p.c.off, nr, nr, p.c.ld, p.c.stride, s.batch);
+        const MV C1(p.mem.data() + p.c.off, nr, nr, p.c.ld, p.c.stride, s.batch);
+        const double err = MV::rank2k_backward_error(ctx, A0, B0, s.trans, C0, C1, s.uplo, MV::up(p.alpha), MV::up(p.beta), false, items);
         ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k2, err))
-            << what << " item " << it << " backward error " << err << " exceeds "
+            << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k2);
     }
     std::vector<char> out(p.mem.size(), 0);
@@ -300,7 +299,7 @@ protected:
         const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
         auto p = make_prob<T>(s);
         const std::string got = traced_choice([&] { run(p); });
-        expect_syr2k(p, "auto " + label(s));
+        expect_syr2k(*this->ctx, p, "auto " + label(s));
         return got;
     }
 };
@@ -322,7 +321,7 @@ TYPED_TEST(Syr2kCandidates, PinnedCandidatesStraddleTheirLimits) {
                     if (TestFixture::vendor_word_falls_back(c)) continue;
                     const bool want = TestFixture::expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) expect_syr2k(p, name(c, s));
+                    if (want) expect_syr2k(*this->ctx, p, name(c, s));
                 }
 }
 
@@ -340,14 +339,14 @@ TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
                 auto p = make_prob<T>(s);
                 const bool want = TestFixture::expect_runs(c, s);
                 EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                if (want) expect_syr2k(p, name(c, s));
+                if (want) expect_syr2k(*this->ctx, p, name(c, s));
             }
             if (t != Transpose::ConjTrans) continue;
             const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
             auto p = make_prob<T>(s);
             if constexpr (TestFixture::kVendor) {
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor") << label(s);
-                expect_syr2k(p, "auto " + label(s));
+                expect_syr2k(*this->ctx, p, "auto " + label(s));
             } else {
                 EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
             }
@@ -409,7 +408,7 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
                           Spec{Uplo::Upper, Transpose::Trans, 200, 53, 1024, 3, false, 6u}}) {
         auto p = make_prob<T>(s);
         this->run_pinned(C{s2::Triangular{}}, p);
-        expect_syr2k(p, name(C{s2::Triangular{}}, s));
+        expect_syr2k(*this->ctx, p, name(C{s2::Triangular{}}, s));
     }
 }
 
@@ -640,7 +639,7 @@ TYPED_TEST(Syr2kCandidates, ClassWordsAndSpellings) {
         const std::string what = "'" + std::string(w.word) + (w.env ? "' via BATCHLAS_SYR2K_ROUTE" : "' via ScopedPin");
         EXPECT_EQ(got, w.pick) << what;
         if (got != "<no route>") EXPECT_EQ(err.find("but no ") != std::string::npos, w.warns) << what << ": " << err;
-        if (got == w.pick && got != "<no route>") expect_syr2k(p, what);
+        if (got == w.pick && got != "<no route>") expect_syr2k(*this->ctx, p, what);
     }
 }
 
@@ -660,7 +659,7 @@ TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "triangular");
-    expect_syr2k(p, "triangular over env vendor");
+    expect_syr2k(*this->ctx, p, "triangular over env vendor");
     const Pin outer("syr2k", C{s2::Triangular{}});
     {
         const Pin inner("syr2k", C{s2::Vendor{}});
@@ -729,7 +728,7 @@ TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
         const Spec s{Uplo::Lower, k.t, k.n, k.k, k.batch, 0, false, 43u};
         auto p = make_prob<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe";
-        expect_syr2k(p, std::string("the ") + k.field + " probe");
+        expect_syr2k(*this->ctx, p, std::string("the ") + k.field + " probe");
     }
 }
 
@@ -742,7 +741,7 @@ TYPED_TEST(Syr2kCandidates, TraceKeyKFollowsTrans) {
         auto p = make_prob<T>(s);
         const std::string line = traced_line([&] { this->run(p); });
         EXPECT_NE(line.find("n=12 k=37 batch=5 ->"), std::string::npos) << line;
-        expect_syr2k(p, line);
+        expect_syr2k(*this->ctx, p, line);
     }
 }
 
@@ -767,7 +766,7 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
     const std::string got = traced_choice([&] { this->run(p); }, &all);
     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "triangular");
     if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-    expect_syr2k(p, "vendor-only table");
+    expect_syr2k(*this->ctx, p, "vendor-only table");
 }
 
 // Nothing runnable vendor-free (double) throws NoRouteError and records the coverage miss row.
@@ -889,7 +888,7 @@ TYPED_TEST(Syr2kCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_syr2k(p, "cpu vendor");
+        expect_syr2k(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

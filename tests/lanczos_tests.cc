@@ -205,14 +205,14 @@ TEST_F(LanczosTestBase, LanczosTest) {
     std::vector<std::vector<double>> top(batch_size);
     double scale = 0;
     for (int b = 0; b < batch_size; ++b) {
-        auto a = verify::copy_item(A_dense, b);
         std::vector<double> spectrum;
-        ASSERT_TRUE(verify::eigenvalues(rows, a, spectrum)) << "LAPACKE reference failed, item " << b;
+        ASSERT_TRUE(verify::eigenvalues(A_dense, b, spectrum)) << "LAPACKE reference failed, item " << b;
         top[b].assign(spectrum.rbegin(), spectrum.rbegin() + neig);
         for (double l : spectrum) scale = verify::nanmax(scale, std::fabs(l));
     }
     const VectorView<float> w(W_data.data(), neig, batch_size, 1, rows);
-    EXPECT_VERIFY(float, verify::Check::values, rows, verify::values_error(w, top, scale, verify::all_items(batch_size)));
+    const double err = MatrixView<float, MatrixFormat::Dense>::values_error(w, top, scale, A_dense.all_items());
+    EXPECT_VERIFY(float, verify::Check::values, rows, err);
 }
 
 TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
@@ -244,7 +244,7 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     }
     // ||A||_2 = 12, so the kind's bound is 9e-4 absolute: 9x the old 1e-4.
     test_utils::expect_eigenvalues_match_lapacke<float>(
-        dense.view(), W, n, /*sorted_copy=*/true, verify::all_items(batch),
+        dense.view(), W, n, /*sorted_copy=*/true, dense.view().all_items(),
         verify::Slack{0.11, "old bound 1e-4 absolute (10x test_utils::tolerance<float>), ||A||_2 = 12"});
 
     // verify eigenvectors A*v = lambda*v

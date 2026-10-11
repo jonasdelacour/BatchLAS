@@ -22,7 +22,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 // The only non-BatchLAS oracle here (verify::getrf_pivots): both tiers share lu_cabs1, so only
 // TinyPivotsMatchLapackeOnUnstructuredData sees a defect in the pivot METRIC itself.
 #include <batchlas/verify/reference.hh>
@@ -52,17 +52,15 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 
-// Scale by a real factor without naming .real()/.imag() on a type without them.
 template <class T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
 template <class R> inline std::complex<R> scale(std::complex<R> v, double f) {
     return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
 }
 
 using verify::Check;
-using verify::make;
 using verify::nanmax;
-using verify::up;
-using verify::Rng;
+template <typename T>
+using MVof = MatrixView<T, MatrixFormat::Dense>;
 
 // The fixtures hold raw pointers at padded ld and odd strides; these hand one item to the library.
 template <class T>
@@ -70,25 +68,22 @@ VectorView<int32_t> pivots_of(const int* ipiv, int count) {
     return VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(ipiv)), count, 1);
 }
 template <class T>
-double factor_residual(const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
-    return verify::getrf_residual(verify::view(A0, m, n, ld), verify::view(F, m, n, ld),
-                                  pivots_of<T>(ipiv, std::min(m, n)));
+double factor_residual(Queue& ctx, const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
+    return MVof<T>::getrf_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld), MVof<T>(const_cast<T*>(F), m, n, ld), pivots_of<T>(ipiv, std::min(m, n)));
 }
 template <class T>
-double solve_residual(const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
-    return verify::solve_residual(verify::view(A0, n, n, lda), verify::Shape::general, op,
-                                  verify::view(X, n, nrhs, ldb), verify::view(B0, n, nrhs, ldb));
+double solve_residual(Queue& ctx, const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
+    return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb), MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
 }
 template <class T>
-double inverse_residual(const T* A0, const T* C, int n, int lda, int ldc) {
-    return verify::solve_residual(verify::view(A0, n, n, lda), verify::view(C, n, n, ldc),
-                                  verify::view(static_cast<const T*>(nullptr), 0, 0, 1));
+double inverse_residual(Queue& ctx, const T* A0, const T* C, int n, int lda, int ldc) {
+    return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), MVof<T>(const_cast<T*>(C), n, n, ldc), MVof<T>(nullptr, 0, 0, 1));
 }
 template <class T>
-double lu_solve_residual(const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf, int ldb,
-                         Transpose op) {
-    return verify::lu_solve_residual(verify::view(F, n, n, ldf), pivots_of<T>(ipiv, n), op,
-                                     verify::view(X, n, nrhs, ldb), verify::view(B0, n, nrhs, ldb));
+double lu_solve_residual(Queue& ctx, const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf,
+                         int ldb, Transpose op) {
+    return MVof<T>::lu_solve_residual(ctx, MVof<T>(const_cast<T*>(F), n, n, ldf), pivots_of<T>(ipiv, n), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb),
+                                      MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
 }
 
 bool verbose() {
@@ -131,7 +126,7 @@ void alloc(Lu<T>& p, int n, int batch, int ld_pad, int stride_pad) {
     p.n = n; p.batch = batch;
     p.ld = n + ld_pad;
     p.stride = p.ld * n + stride_pad;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, make<T>(-9.75e3, 4.5e3));
+    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
     p.ptrs = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
     p.piv = UnifiedVector<int64_t>(static_cast<size_t>(n) * batch, int64_t(0));
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(0));
@@ -143,18 +138,18 @@ template <typename T>
 Lu<T> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pad = 11) {
     Lu<T> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    Rng rg(seed);
+    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = make<T>(rg.next(), rg.next());
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = R(i, j, b);
     p.a0.assign(p.buf.begin(), p.buf.end());
     poison(p);
     return p;
 }
 
 // THE MATRIX WITH A KNOWN-EXACT PIVOT SEQUENCE. A strictly column-diagonally-
-// dominant B (|B(k,k)| = 4n, |B(i,k)| <= 1) whose rows are then permuted: column
+// dominant B (4n <= |B(k,k)| < 4n+1, |B(i,k)| <= 1) whose rows are then permuted: column
 // dominance survives elimination, so the winner at step k is known exactly and the
 // expected interchange list is pure integer bookkeeping. cond(A) is O(1), which is
 // why every getrs and getri residual runs on it too.
@@ -163,7 +158,7 @@ Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
                              int ld_pad = 5, int stride_pad = 11) {
     Lu<T> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    Rng rg(seed);
+    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
 
     // sigma: B's row r ends up at position sigma[r]. A CYCLIC SHIFT and not a
     // reversal: a reversal is its own inverse, so every test of a permutation
@@ -175,10 +170,9 @@ Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
         for (int r = 0; r < n; ++r) {
             const int dst = sigma[r];
             for (int j = 0; j < n; ++j) {
-                const double re = rg.next();
-                const double im = rg.next();
-                T v = make<T>(re, im);
-                if (j == r) v = make<T>(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
+                T v = R(r, j, b);
+                const double re = std::real(MVof<T>::up(v));
+                if (j == r) v = MVof<T>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0) + re, 0.0);
                 p.buf[size_t(b) * p.stride + size_t(j) * p.ld + dst] = v;
             }
         }
@@ -222,13 +216,13 @@ Rhs<T> make_rhs(int n, int nrhs, int batch, unsigned seed,
     r.n = n; r.nrhs = nrhs; r.batch = batch;
     r.ld = n + ld_pad;
     r.stride = r.ld * nrhs + stride_pad;
-    r.buf = UnifiedVector<T>(size_t(r.stride) * batch, make<T>(-9.75e3, 4.5e3));
+    r.buf = UnifiedVector<T>(size_t(r.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
     r.ptrs = UnifiedVector<T*>(size_t(batch), nullptr);
-    Rng rg(seed);
+    const auto R = Matrix<T>::Random(n, nrhs, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i)
-                r.buf[size_t(b) * r.stride + size_t(j) * r.ld + i] = make<T>(rg.next(), rg.next());
+                r.buf[size_t(b) * r.stride + size_t(j) * r.ld + i] = R(i, j, b);
     r.b0.assign(r.buf.begin(), r.buf.end());
     return r;
 }
@@ -370,7 +364,7 @@ protected:
 // batch stride cannot move it. The distinctness assertion is what makes "the
 // kernel broadcast item 0 over the batch" a failure rather than a pass.
 template <typename T>
-void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
+void check_factor(Queue& ctx, const Lu<T>& p, const char* what, bool check_L = true) {
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
         const int* ip = piv_item(p, b);
@@ -382,11 +376,11 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
 
         for (int j = 0; j < p.n; ++j)
             for (int i = 0; i < p.n; ++i)
-                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(MVof<T>::finite(MVof<T>::up(F[size_t(j) * p.ld + i])))
                     << what << ": F(" << i << "," << j << ") is not finite at b=" << b;
 
         if (check_L) {
-            const double ratio = verify::pivot_ratio(verify::view(F, p.n, p.n, p.ld));
+            const double ratio = MVof<T>::pivot_ratio(MVof<T>(const_cast<T*>(F), p.n, p.n, p.ld));
             EXPECT_LE(ratio, verify::pivot_ratio_bound<T>())
                 << what << ": cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) reached " << ratio
                 << " > 1 at b=" << b
@@ -403,9 +397,9 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
         }
     }
     const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.piv.data())), p.n, p.batch, 1, p.n);
-    const double res = verify::getrf_residual(verify::view(p.a0.data(), p.n, p.n, p.ld, p.stride, p.batch),
-                                              verify::view(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch), piv,
-                                              verify::all_items(p.batch));
+    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.n, p.n, p.ld, p.stride, p.batch);
+    const double res = MVof<T>::getrf_residual(ctx, A0, MVof<T>(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch), piv,
+                                               A0.all_items());
     if (verbose())
         std::printf("[verbose] %-34s n=%4d batch=%d  ||PA-LU||=%.4e  tol=%.4e\n",
                     what, p.n, p.batch, res, verify::bound<T>(Check::factorization, p.n));
@@ -418,7 +412,7 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
         bool differ = false;
         for (int j = 0; j < p.n && !differ; ++j)
             for (int i = 0; i < p.n && !differ; ++i)
-                if (verify::abs(up(f0[size_t(j) * p.ld + i]) - up(fl[size_t(j) * p.ld + i])) > 0.0)
+                if (std::abs(MVof<T>::up(f0[size_t(j) * p.ld + i]) - MVof<T>::up(fl[size_t(j) * p.ld + i])) > 0.0)
                     differ = true;
         EXPECT_TRUE(differ) << what << ": the first and last batch items' factors are identical, "
                                "so this shape cannot see a batch-stride defect";
@@ -507,20 +501,20 @@ Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
                              int ld_pad = 5, int stride_pad = 11) {
     Lu<T> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    Rng rg(seed);
+    const auto R = Matrix<T>::Random(n, n + 1, false, batch, seed);   // column n: the pivot offsets
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 T v;
-                if (i == j)      v = make<T>(4.0 * double(n), 0.0);
-                else if (i < j)  v = make<T>(rg.next(), rg.next());                 // U
-                else             v = scale(make<T>(rg.next(), rg.next()), 0.25);    // L
+                if (i == j)      v = MVof<T>::make(4.0 * double(n), 0.0);
+                else if (i < j)  v = R(i, j, b);                 // U
+                else             v = scale(R(i, j, b), 0.25);    // L
                 p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = v;
             }
         int* ip = reinterpret_cast<int*>(p.piv.data()) + size_t(b) * n;
         for (int k = 0; k < n; ++k) {
             const int span = n - k;
-            const int off = int(std::fabs(rg.next()) * double(span)) % span;
+            const int off = int(std::fabs(std::real(MVof<T>::up(R(k, n, b)))) * double(span)) % span;
             ip[k] = k + off + 1;                       // 1-BASED, in [k+1, n]
         }
         if (b == 0) p.expect_piv.assign(ip, ip + n);
@@ -539,7 +533,7 @@ void check_rhs_pad_intact(const Rhs<T>& r, const char* what) {
             const bool live = (col < r.nrhs) && (row < r.n);
             if (live) continue;
             const size_t k = size_t(b) * r.stride + j;
-            ASSERT_EQ(verify::abs(up(r.buf[k]) - up(r.b0[k])), 0.0)
+            ASSERT_EQ(std::abs(MVof<T>::up(r.buf[k]) - MVof<T>::up(r.b0[k])), 0.0)
                 << what << ": the RHS PAD was written at b=" << b << " offset " << j
                 << " (ld=" << r.ld << ", n=" << r.n << ", nrhs=" << r.nrhs
                 << ", stride=" << r.stride << ")";
@@ -556,7 +550,7 @@ void check_items_differ(const Rhs<T>& r, const char* what) {
     const T* xl = r.buf.data() + size_t(r.batch - 1) * r.stride;
     for (int c = 0; c < r.nrhs && !differ; ++c)
         for (int i = 0; i < r.n && !differ; ++i)
-            if (verify::abs(up(x0[size_t(c) * r.ld + i]) - up(xl[size_t(c) * r.ld + i])) > 0.0)
+            if (std::abs(MVof<T>::up(x0[size_t(c) * r.ld + i]) - MVof<T>::up(xl[size_t(c) * r.ld + i])) > 0.0)
                 differ = true;
     EXPECT_TRUE(differ) << what << ": the first and last batch items' solutions are identical, "
                            "so this shape cannot see a batch-stride defect";
@@ -654,12 +648,12 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         const int m = r.m, n = r.n, batch = 2, k = std::min(m, n);
         const int ld = m + 3;
         const int stride = ld * n + 5;
-        UnifiedVector<T> buf(size_t(stride) * batch, make<T>(-9.75e3, 4.5e3));
-        Rng rg(unsigned(r.bytes % 9973) + 17u);
+        UnifiedVector<T> buf(size_t(stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
+        const auto R = Matrix<T>::Random(m, n, false, batch, unsigned(r.bytes % 9973) + 17u);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i)
-                    buf[size_t(b) * stride + size_t(j) * ld + i] = make<T>(rg.next(), rg.next());
+                    buf[size_t(b) * stride + size_t(j) * ld + i] = R(i, j, b);
         std::vector<T> a0(buf.begin(), buf.end());
         UnifiedVector<int> piv(size_t(k) * batch, -12345);
         UnifiedVector<int32_t> info(size_t(batch), 0);
@@ -678,7 +672,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         if (!resident) continue;
 
         for (int b = 0; b < batch; ++b) {
-            const double res = factor_residual<T>(a0.data() + size_t(b) * stride,
+            const double res = factor_residual<T>(*this->ctx, a0.data() + size_t(b) * stride,
                                                  buf.data() + size_t(b) * stride,
                                                  piv.data() + size_t(b) * k, m, n, ld);
             EXPECT_VERIFY(T, Check::factorization, std::max(m, n), res)
@@ -776,7 +770,7 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
                 << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
             this->ctx->wait();
 
-            const double res = lu_solve_residual<T>(
+            const double res = lu_solve_residual<T>(*this->ctx, 
                 p.buf.data(), reinterpret_cast<const int*>(p.piv.data()),
                 rhs.buf.data(), rhs.b0.data(), n, nrhs, p.ld, rhs.ld, op);
             if (verbose())
@@ -812,7 +806,7 @@ TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
         ++ran;
         auto rnd = make_random<T>(n, 3, 991u + unsigned(n));
         this->run_cta(rnd);
-        check_factor(rnd, "cta/random");
+        check_factor(*this->ctx, rnd, "cta/random");
         for (int b = 0; b < rnd.batch; ++b) ASSERT_EQ(rnd.info[b], 0) << "n=" << n << " b=" << b;
 
         auto dom = make_dominant_permuted<T>(n, 3, 7717u + unsigned(n));
@@ -822,7 +816,7 @@ TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
         ASSERT_GE(non_diagonal_pivots(dom, 0), n / 2)
             << "n=" << n << ": the dominant-permuted construction produced a near-identity "
                "pivot list, so the elementwise pivot oracle is vacuous";
-        check_factor(dom, "cta/dominant-permuted");
+        check_factor(*this->ctx, dom, "cta/dominant-permuted");
         for (int b = 0; b < dom.batch; ++b) ASSERT_EQ(dom.info[b], 0);
         if (this->HasFailure()) return;
     }
@@ -836,7 +830,7 @@ TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
     for (int n : {5, 31, 32, 33, 64, 96, 100, 129}) {
         auto rnd = make_random<T>(n, 3, 2311u + unsigned(n));
         this->run_blocked(rnd);
-        check_factor(rnd, "blocked/random");
+        check_factor(*this->ctx, rnd, "blocked/random");
         for (int b = 0; b < rnd.batch; ++b) ASSERT_EQ(rnd.info[b], 0) << "n=" << n << " b=" << b;
 
         auto dom = make_dominant_permuted<T>(n, 3, 5501u + unsigned(n));
@@ -844,7 +838,7 @@ TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
         ASSERT_GE(non_diagonal_pivots(dom, 0), n / 2)
             << "n=" << n << ": the dominant-permuted construction produced a near-identity "
                "pivot list, so the elementwise pivot oracle is vacuous";
-        check_factor(dom, "blocked/dominant-permuted");
+        check_factor(*this->ctx, dom, "blocked/dominant-permuted");
         for (int b = 0; b < dom.batch; ++b) ASSERT_EQ(dom.info[b], 0);
         if (this->HasFailure()) return;
     }
@@ -898,7 +892,7 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
 
             auto p = make_random<T>(n, 3, 4441u + unsigned(n));
             this->run_blocked(p);
-            check_factor(p, a.env);
+            check_factor(*this->ctx, p, a.env);
             for (int b = 0; b < p.batch; ++b)
                 ASSERT_EQ(p.info[b], 0) << a.env << " n=" << n << " b=" << b;
 
@@ -942,7 +936,7 @@ TYPED_TEST(LuTest, RightInterchangeSpellingsAgreeBitForBit) {
             const ScopedEnvVar pin("BATCHLAS_GETRF_RIGHT_LASWP", spelling);
             auto p = make_random<T>(n, 37, 5557u + unsigned(n));
             this->run_blocked(p);
-            check_factor(p, spelling);
+            check_factor(*this->ctx, p, spelling);
             for (int b = 0; b < p.batch; ++b)
                 ASSERT_EQ(p.info[b], 0) << spelling << " n=" << n << " b=" << b;
             facs.emplace_back(p.buf.data(), p.buf.data() + p.buf.size());
@@ -1002,7 +996,7 @@ TYPED_TEST(LuTest, BlockWidthStraddleIsQueriedNotAssumed) {
         auto dom = make_dominant_permuted<T>(n, 2, 313u + unsigned(n));
         this->run_blocked(dom);
         ASSERT_GE(non_diagonal_pivots(dom, 0), n / 2);
-        check_factor(dom, "blocked/straddle");
+        check_factor(*this->ctx, dom, "blocked/straddle");
         for (int b = 0; b < dom.batch; ++b) ASSERT_EQ(dom.info[b], 0) << "n=" << n;
         if (this->HasFailure()) return;
     }
@@ -1028,12 +1022,12 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
         const int m = pass ? m_big : m_small;
         const int n = nbw, batch = 2, k = std::min(m, n);
         const int ld = m + 3, stride = ld * n + 5;
-        UnifiedVector<T> buf(size_t(stride) * batch, make<T>(-9.75e3, 4.5e3));
-        Rng rg(4441u + unsigned(pass));
+        UnifiedVector<T> buf(size_t(stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
+        const auto R = Matrix<T>::Random(m, n, false, batch, 4441u + unsigned(pass));
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i)
-                    buf[size_t(b) * stride + size_t(j) * ld + i] = make<T>(rg.next(), rg.next());
+                    buf[size_t(b) * stride + size_t(j) * ld + i] = R(i, j, b);
         std::vector<T> a0(buf.begin(), buf.end());
         UnifiedVector<int> piv(size_t(k) * batch, -12345);
         UnifiedVector<int32_t> info(size_t(batch), 0);
@@ -1053,10 +1047,10 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
             const int* ip = piv.data() + size_t(b) * k;
             for (int s = 0; s < k; ++s)
                 ASSERT_TRUE(ip[s] >= s + 1 && ip[s] <= m) << "ipiv[" << s << "] = " << ip[s];
-            EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(a0.data() + size_t(b) * stride,
+            EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(*this->ctx, a0.data() + size_t(b) * stride,
                                         buf.data() + size_t(b) * stride, ip, m, n, ld))
                 << (resident ? "resident" : "global") << " leaf, b=" << b;
-            EXPECT_LE(verify::pivot_ratio(verify::view(buf.data() + size_t(b) * stride, m, n, ld)),
+            EXPECT_LE(MVof<T>::pivot_ratio(MVof<T>(const_cast<T*>(buf.data() + size_t(b) * stride), m, n, ld)),
                       verify::pivot_ratio_bound<T>())
                 << (resident ? "resident" : "global") << " leaf, b=" << b;
         }
@@ -1104,12 +1098,12 @@ Panel<T> make_panel(int m, int ncols, int batch, unsigned seed, int piv_base = 0
     p.stride = p.ld * ncols + 7;
     p.piv_base = piv_base;
     p.piv_stride = piv_base + ncols + 4;
-    p.buf = UnifiedVector<T>(size_t(p.stride) * batch, make<T>(-9.75e3, 4.5e3));
-    Rng rg(seed);
+    p.buf = UnifiedVector<T>(size_t(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
+    const auto R = Matrix<T>::Random(m, ncols, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < ncols; ++j)
             for (int i = 0; i < m; ++i)
-                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = make<T>(rg.next(), rg.next());
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = R(i, j, b);
     p.a0.assign(p.buf.begin(), p.buf.end());
     p.piv = UnifiedVector<int>(size_t(p.piv_stride) * batch, -12345);
     p.info = UnifiedVector<int32_t>(size_t(batch), 0);
@@ -1192,10 +1186,10 @@ TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
                         << ": ipiv[" << s << "] = " << ip[size_t(s)]
                         << " is outside [s+1, m] -- not a 1-based interchange list";
                 EXPECT_VERIFY(T, Check::factorization, std::max(m, ncols),
-                    factor_residual<T>(p.src_of(b), reg_fac.data() + size_t(b) * p.stride,
+                    factor_residual<T>(*this->ctx, p.src_of(b), reg_fac.data() + size_t(b) * p.stride,
                                        ip.data(), m, ncols, p.ld))
                     << "register leaf m=" << m << " ncols=" << ncols << " b=" << b;
-                EXPECT_LE(verify::pivot_ratio(verify::view(reg_fac.data() + size_t(b) * p.stride, m, ncols, p.ld)),
+                EXPECT_LE(MVof<T>::pivot_ratio(MVof<T>(const_cast<T*>(reg_fac.data() + size_t(b) * p.stride), m, ncols, p.ld)),
                           verify::pivot_ratio_bound<T>())
                     << "register leaf m=" << m << " ncols=" << ncols << " b=" << b
                     << ": a row with a LARGER cabs1 than the chosen pivot was left below it";
@@ -1205,8 +1199,8 @@ TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
             bool differ = false;
             for (int j = 0; j < ncols && !differ; ++j)
                 for (int i = 0; i < m; ++i)
-                    if (verify::abs(up(reg_fac[size_t(0) * p.stride + size_t(j) * p.ld + i]) -
-                             up(reg_fac[size_t(batch - 1) * p.stride + size_t(j) * p.ld + i])) >
+                    if (std::abs(MVof<T>::up(reg_fac[size_t(0) * p.stride + size_t(j) * p.ld + i]) -
+                             MVof<T>::up(reg_fac[size_t(batch - 1) * p.stride + size_t(j) * p.ld + i])) >
                         0.0) { differ = true; break; }
             EXPECT_TRUE(differ) << "m=" << m << " ncols=" << ncols
                                 << ": items 0 and " << batch - 1 << " are identical, so this "
@@ -1238,9 +1232,9 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
     // columns to the LEFT are untouched, so rows 0..col-1 are eliminated normally.
     for (int b = 0; b < batch; ++b)
         for (int i = col; i < m; ++i)
-            p.a0[size_t(b) * p.stride + size_t(col) * p.ld + i] = make<T>(1.0 / 1024.0, 0.0);
+            p.a0[size_t(b) * p.stride + size_t(col) * p.ld + i] = MVof<T>::make(1.0 / 1024.0, 0.0);
     for (int b = 0; b < batch; ++b)
-        p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = make<T>(64.0, -64.0);
+        p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = MVof<T>::make(64.0, -64.0);
     repanel(p);
 
     ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
@@ -1255,7 +1249,7 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
             << " (got " << ip[col] << "). The winner is " << (row / 32)
             << " sub-groups down the work-group, so a butterfly-only argmax cannot find it";
         const auto lp = panel_local_piv(ip, ncols, p.piv_base);
-        EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(p.src_of(b), p.fac_of(b), lp.data(), m, ncols, p.ld))
+        EXPECT_VERIFY(T, Check::factorization, m, factor_residual<T>(*this->ctx, p.src_of(b), p.fac_of(b), lp.data(), m, ncols, p.ld))
             << "b=" << b;
     }
 }
@@ -1315,7 +1309,7 @@ TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
     const int bad = 2;   // NOT item 0: a wrong batch stride cannot move item 0
     for (int j : {c1, c2})
         for (int i = 0; i < m; ++i)
-            p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = make<T>(0.0, 0.0);
+            p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = MVof<T>::make(0.0, 0.0);
     repanel(p);
 
     ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
@@ -1331,7 +1325,7 @@ TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
         const T* F = p.fac_of(b);
         for (int j = 0; j < ncols; ++j)
             for (int i = 0; i < m; ++i)
-                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(MVof<T>::finite(MVof<T>::up(F[size_t(j) * p.ld + i])))
                     << "b=" << b << " left F(" << i << "," << j << ") non-finite; a failed "
                        "item must stay finite, as LAPACK's and cuBLAS's do";
     }
@@ -1379,7 +1373,7 @@ TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
                              "tautology";
 
     // And the entry point refuses exactly what the predicate refuses.
-    UnifiedVector<T> buf(size_t(64) * 8, make<T>(1.0, 0.0));
+    UnifiedVector<T> buf(size_t(64) * 8, MVof<T>::make(1.0, 0.0));
     UnifiedVector<int> piv(size_t(64) * 1, -1);
     UnifiedVector<int32_t> info(size_t(1), 0);
     auto call = [&](int m, int n) {
@@ -1400,10 +1394,10 @@ TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
     // CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES, because regs x work-group <= 65,536 is not
     // the gate -- registers are owned per sub-partition.
     // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
-    UnifiedVector<T> tall(std::size_t(cap + 3) * 32, make<T>(1.0, 0.0));
+    UnifiedVector<T> tall(std::size_t(cap + 3) * 32, MVof<T>::make(1.0, 0.0));
     UnifiedVector<int> tall_piv(std::size_t(cap + 32), -1);
     UnifiedVector<int32_t> tall_info(std::size_t(1), 0);
-    for (int i = 0; i < 32; ++i) tall[std::size_t(i) * (cap + 3) + i] = make<T>(2.0, 0.5);
+    for (int i = 0; i < 32; ++i) tall[std::size_t(i) * (cap + 3) + i] = MVof<T>::make(2.0, 0.5);
     ASSERT_TRUE(sycl_getrf::getrf_panel_reg_fits<T>(cap, 32, max_wg))
         << "the advertised cap is not accepted by the predicate, so the launch below "
            "would be vacuous";
@@ -1442,7 +1436,7 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
 
             auto p = make_random<T>(n, 3, 2281u + unsigned(n));
             this->run_blocked(p);
-            check_factor(p, arm ? "blocked(leaf=reg)" : "blocked(leaf=slm)");
+            check_factor(*this->ctx, p, arm ? "blocked(leaf=reg)" : "blocked(leaf=slm)");
             for (int b = 0; b < p.batch; ++b)
                 ASSERT_EQ(p.info[b], 0) << "n=" << n << " arm=" << arm << " b=" << b;
 
@@ -1459,8 +1453,8 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
         ASSERT_EQ(facs[1].size(), facs[0].size());
         double worst = 0.0, scale = 0.0;
         for (std::size_t i = 0; i < facs[0].size(); ++i) {
-            worst = nanmax(worst, verify::abs(up(facs[1][i]) - up(facs[0][i])));
-            scale = nanmax(scale, verify::abs(up(facs[0][i])));
+            worst = nanmax(worst, std::abs(MVof<T>::up(facs[1][i]) - MVof<T>::up(facs[0][i])));
+            scale = nanmax(scale, std::abs(MVof<T>::up(facs[0][i])));
         }
         // RELATIVE, and generous: the two kernels run the same operations in the same
         // order, so the only legitimate difference is a contracted multiply-subtract.
@@ -1511,7 +1505,7 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
     const int bad = 2;                   // NOT item 0: a wrong batch stride cannot move item 0
     for (int j : {c1, c2})
         for (int i = 0; i < n; ++i)
-            p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = make<T>(0.0, 0.0);
+            p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = MVof<T>::make(0.0, 0.0);
     p.expect_piv.clear();                // the zero columns change the sequence
     poison(p);
 
@@ -1528,13 +1522,13 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
+                ASSERT_TRUE(MVof<T>::finite(MVof<T>::up(F[size_t(j) * p.ld + i])))
                     << "item " << b << " left F(" << i << "," << j << ") non-finite; a failed "
                        "item must stay finite, as LAPACK's and cuBLAS's do";
         // A failure in one item must not corrupt the others.
         if (b != bad) {
             const int* ip = piv_item(p, b);
-            EXPECT_VERIFY(T, Check::factorization, n, factor_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld))
+            EXPECT_VERIFY(T, Check::factorization, n, factor_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld))
                 << "healthy item " << b;
         }
     }
@@ -1546,7 +1540,7 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
         auto q = make_dominant_permuted<T>(nc, 3, 6611u);
         for (int j : {cc1, cc2})
             for (int i = 0; i < nc; ++i)
-                q.a0[size_t(1) * q.stride + size_t(j) * q.ld + i] = make<T>(0.0, 0.0);
+                q.a0[size_t(1) * q.stride + size_t(j) * q.ld + i] = MVof<T>::make(0.0, 0.0);
         q.expect_piv.clear();
         poison(q);
         this->run_cta(q);
@@ -1600,7 +1594,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
         auto p = make_random<T>(n, batch, 3u);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
-                p.a0[size_t(b) * p.stride + size_t(zc) * p.ld + i] = make<T>(0.0, 0.0);
+                p.a0[size_t(b) * p.stride + size_t(zc) * p.ld + i] = MVof<T>::make(0.0, 0.0);
         p.expect_piv.clear();
         poison(p);                                   // stage the matrix ONCE
         auto V = view_of(p);
@@ -1646,7 +1640,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
         auto p = make_random<T>(n, batch, 17u);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
-                p.a0[size_t(b) * p.stride + size_t(zc) * p.ld + i] = make<T>(0.0, 0.0);
+                p.a0[size_t(b) * p.stride + size_t(zc) * p.ld + i] = MVof<T>::make(0.0, 0.0);
         p.expect_piv.clear();
         poison(p);
         auto V = view_of(p);
@@ -1702,7 +1696,7 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
 
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
-        const double diag = verify::cabs1(up(F[size_t(c) * p.ld + c]));
+        const double diag = MVof<T>::cabs1(MVof<T>::up(F[size_t(c) * p.ld + c]));
         // ANTI-VACUITY: the pivot really is tiny, or this is just "info == 0".
         ASSERT_GT(diag, 0.0) << "U(c,c) is exactly zero, so this is the SINGULAR case";
         ASSERT_LT(diag, 1e-20) << "U(c,c) = " << diag << " is not nearly singular at all";
@@ -1711,7 +1705,7 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
             << " -- a tolerance crept into the singularity predicate, which diverges from "
                "LAPACK and cuBLAS invisibly";
     }
-    check_factor(p, "blocked/near-singular", /*check_L=*/true);
+    check_factor(*this->ctx, p, "blocked/near-singular", /*check_L=*/true);
 }
 
 // L7. THE PIVOT METRIC IS cabs1, NOT THE MODULUS. cublas{C,Z}getrfBatched pivots
@@ -1734,21 +1728,21 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
             const double f = 1.0 + 0.25 * double(b);
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    A[size_t(j) * p.ld + i] = (i == j) ? make<T>(5.0 * f, 0.0)
-                                                       : make<T>(0.25 * f, -0.125 * f);
+                    A[size_t(j) * p.ld + i] = (i == j) ? MVof<T>::make(5.0 * f, 0.0)
+                                                       : MVof<T>::make(0.25 * f, -0.125 * f);
             // Column 0: cabs1 reads 3 vs 4 (row 1 wins); |z| reads 3 vs 2.828
             // (row 0 wins). Every other row of column 0 is far below both.
-            A[0]        = make<T>(3.0, 0.0);
-            A[1]        = make<T>(2.0, 2.0);
-            for (int i = 2; i < n; ++i) A[size_t(i)] = make<T>(0.1 * f, 0.1 * f);
+            A[0]        = MVof<T>::make(3.0, 0.0);
+            A[1]        = MVof<T>::make(2.0, 2.0);
+            for (int i = 2; i < n; ++i) A[size_t(i)] = MVof<T>::make(0.1 * f, 0.1 * f);
         }
         poison(p);
 
         // ANTI-VACUITY: the two functionals must genuinely disagree on this data.
-        const auto z0 = up(p.a0[0]);
-        const auto z1 = up(p.a0[1]);
-        ASSERT_LT(verify::cabs1(z0), verify::cabs1(z1)) << "cabs1 does not prefer row 1 on this matrix";
-        ASSERT_GT(verify::abs(z0), verify::abs(z1))     << "the modulus does not prefer row 0 on this matrix";
+        const auto z0 = MVof<T>::up(p.a0[0]);
+        const auto z1 = MVof<T>::up(p.a0[1]);
+        ASSERT_LT(MVof<T>::cabs1(z0), MVof<T>::cabs1(z1)) << "cabs1 does not prefer row 1 on this matrix";
+        ASSERT_GT(std::abs(z0), std::abs(z1))     << "the modulus does not prefer row 0 on this matrix";
 
         for (int tier = 0; tier < 2; ++tier) {
             poison(p);
@@ -1764,7 +1758,7 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
                     << " at b=" << b << ". 2 is cabs1's answer (LAPACK's, netlib's); 1 is the "
                        "MODULUS's answer, which is cuBLAS's and is not this library's contract";
             }
-            check_factor(p, tier ? "blocked/pivot-metric" : "cta/pivot-metric");
+            check_factor(*this->ctx, p, tier ? "blocked/pivot-metric" : "cta/pivot-metric");
             if (this->HasFailure()) return;
         }
     }
@@ -1788,7 +1782,7 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
             << "this matrix's permutation is SELF-INVERSE, so the transposed getrs's "
                "backwards walk is indistinguishable from a forwards one and the Trans and "
                "ConjTrans rows below prove nothing";
-        check_factor(p, "getrs/factor");
+        check_factor(*this->ctx, p, "getrs/factor");
         if (this->HasFailure()) return;
 
         auto rhs = make_rhs<T>(n, nrhs, batch, 909u + unsigned(nrhs));
@@ -1805,7 +1799,7 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
             this->ctx->wait();
 
             for (int b = 0; b < batch; ++b) {
-                const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                const double res = solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                                      rhs.buf.data() + size_t(b) * rhs.stride,
                                                      rhs.b0.data() + size_t(b) * rhs.stride,
                                                      n, nrhs, p.ld, rhs.ld, op);
@@ -1850,7 +1844,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                 << "this matrix's permutation is SELF-INVERSE, so the gather's REVERSED "
                    "index walk is indistinguishable from its forward one and the Trans and "
                    "ConjTrans rows below prove nothing";
-            check_factor(p, "getrs/spellings/factor");
+            check_factor(*this->ctx, p, "getrs/spellings/factor");
             if (this->HasFailure()) return;
 
             auto rhs = make_rhs<T>(n, nrhs, batch, 1313u + unsigned(n + nrhs));
@@ -1888,7 +1882,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                     this->ctx->wait();
 
                     for (int b = 0; b < batch; ++b) {
-                        const double res = solve_residual<T>(
+                        const double res = solve_residual<T>(*this->ctx, 
                             p.a0.data() + size_t(b) * p.stride,
                             rhs.buf.data() + size_t(b) * rhs.stride,
                             rhs.b0.data() + size_t(b) * rhs.stride,
@@ -2019,13 +2013,13 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     ASSERT_FALSE(interchange_is_involution(p.expect_piv))
         << "this matrix's permutation is SELF-INVERSE, so getri's BACKWARD trace through the "
            "interchange list is indistinguishable from a forward one";
-    check_factor(p, "getri/factor");
+    check_factor(*this->ctx, p, "getri/factor");
     if (this->HasFailure()) return;
     const std::vector<T> factored(p.buf.begin(), p.buf.end());
 
     Lu<T> c;
     alloc(c, n, batch, 7, 13);
-    std::fill(c.buf.begin(), c.buf.end(), make<T>(-9.75e3, 4.5e3));
+    std::fill(c.buf.begin(), c.buf.end(), MVof<T>::make(-9.75e3, 4.5e3));
     UnifiedVector<int32_t> cinfo(size_t(batch), int32_t(-12345));
 
     auto A = view_of(p);
@@ -2038,7 +2032,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
 
     for (int b = 0; b < batch; ++b) {
         EXPECT_EQ(cinfo[b], 0) << "b=" << b;
-        const double res = inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
+        const double res = inverse_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                                c.buf.data() + size_t(b) * c.stride,
                                                n, p.ld, c.ld);
         if (verbose())
@@ -2048,7 +2042,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     }
 
     for (size_t i = 0; i < factored.size(); ++i)
-        ASSERT_EQ(verify::abs(up(p.buf[i]) - up(factored[i])), 0.0)
+        ASSERT_EQ(std::abs(MVof<T>::up(p.buf[i]) - MVof<T>::up(factored[i])), 0.0)
             << "getri wrote through A at element " << i
             << "; cublas<t>getriBatched takes A as const and a caller may reuse it";
 
@@ -2057,8 +2051,8 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     bool differ = false;
     for (int j = 0; j < n && !differ; ++j)
         for (int i = 0; i < n && !differ; ++i)
-            if (verify::abs(up(c.buf[size_t(j) * c.ld + i]) -
-                     up(c.buf[size_t(batch - 1) * c.stride + size_t(j) * c.ld + i])) > 0.0)
+            if (std::abs(MVof<T>::up(c.buf[size_t(j) * c.ld + i]) -
+                     MVof<T>::up(c.buf[size_t(batch - 1) * c.stride + size_t(j) * c.ld + i])) > 0.0)
                 differ = true;
     EXPECT_TRUE(differ) << "the first and last inverses are identical";
 }
@@ -2077,7 +2071,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
         const int n = 72, batch = 3, nrhs = 4;
         auto p = make_dominant_permuted<T>(n, batch, 6767u);
         this->run_blocked(p);
-        check_factor(p, "dropin/native-factor");
+        check_factor(*this->ctx, p, "dropin/native-factor");
         if (this->HasFailure()) return;
 
         auto A = view_of(p);
@@ -2091,7 +2085,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
                                                          p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
                                             n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
@@ -2099,7 +2093,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
         }
         {   // vendor getri on the native factor
             Lu<T> c; alloc(c, n, batch, 7, 13);
-            std::fill(c.buf.begin(), c.buf.end(), make<T>(-9.75e3, 4.5e3));
+            std::fill(c.buf.begin(), c.buf.end(), MVof<T>::make(-9.75e3, 4.5e3));
             UnifiedVector<int32_t> ci(size_t(batch), int32_t(-12345));
             auto C = view_of(c);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -2109,7 +2103,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) {
                 EXPECT_EQ(ci[b], 0);
-                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                               c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld))
                     << "the VENDOR getri could not consume the NATIVE getrf's factor, b=" << b;
             }
@@ -2135,7 +2129,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
             // The vendor's own factor must satisfy the same host reconstruction, which proves
             // the two agree on the pivot FORMAT even where they differ on the pivot CHOICE.
-            check_factor(p, "dropin/vendor-factor", /*check_L=*/false);
+            check_factor(*this->ctx, p, "dropin/vendor-factor", /*check_L=*/false);
             if (this->HasFailure()) return;
         }
 
@@ -2151,7 +2145,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
                 this->getrs_seam()));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
                                             n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
@@ -2159,7 +2153,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
         }
         {   // native getri on the vendor factor
             Lu<T> c; alloc(c, n, batch, 7, 13);
-            std::fill(c.buf.begin(), c.buf.end(), make<T>(-9.75e3, 4.5e3));
+            std::fill(c.buf.begin(), c.buf.end(), MVof<T>::make(-9.75e3, 4.5e3));
             UnifiedVector<int32_t> ci(size_t(batch), int32_t(-12345));
             auto C = view_of(c);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -2170,7 +2164,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) {
                 EXPECT_EQ(ci[b], 0);
-                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, inverse_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                               c.buf.data() + size_t(b) * c.stride, n, p.ld, c.ld))
                     << "the NATIVE getri could not consume the VENDOR getrf's factor, b=" << b;
             }
@@ -2249,14 +2243,14 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->ctx->wait();
 
         for (size_t i = 0; i < direct.buf.size(); ++i)
-            ASSERT_EQ(verify::abs(up(direct.buf[i]) - up(viafac.buf[i])), 0.0)
+            ASSERT_EQ(std::abs(MVof<T>::up(direct.buf[i]) - MVof<T>::up(viafac.buf[i])), 0.0)
                 << "pin=" << pin << ": the facade's factor differs from the direct entry "
                    "point's at element " << i << " -- something else served this call";
         for (int b = 0; b < batch; ++b)
             for (int k = 0; k < n; ++k)
                 ASSERT_EQ(piv_item(direct, b)[k], piv_item(viafac, b)[k])
                     << "pin=" << pin << ": pivot " << k << " of item " << b << " differs";
-        check_factor(viafac, "facade/getrf");
+        check_factor(*this->ctx, viafac, "facade/getrf");
         if (this->HasFailure()) return;
     }
 
@@ -2284,7 +2278,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
                                      w2.to_span())));
         this->ctx->wait();
         for (size_t i = 0; i < r1.buf.size(); ++i)
-            ASSERT_EQ(verify::abs(up(r1.buf[i]) - up(r2.buf[i])), 0.0)
+            ASSERT_EQ(std::abs(MVof<T>::up(r1.buf[i]) - MVof<T>::up(r2.buf[i])), 0.0)
                 << "the facade's getrs differs from the direct driver at element " << i;
     }
     {
@@ -2297,8 +2291,8 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         Lu<T> c1, c2;
         alloc(c1, n, batch, 7, 13);
         alloc(c2, n, batch, 7, 13);
-        std::fill(c1.buf.begin(), c1.buf.end(), make<T>(-9.75e3, 4.5e3));
-        std::fill(c2.buf.begin(), c2.buf.end(), make<T>(-9.75e3, 4.5e3));
+        std::fill(c1.buf.begin(), c1.buf.end(), MVof<T>::make(-9.75e3, 4.5e3));
+        std::fill(c2.buf.begin(), c2.buf.end(), MVof<T>::make(-9.75e3, 4.5e3));
         UnifiedVector<int32_t> i1(size_t(batch), -12345), i2(size_t(batch), -12345);
         auto C1 = view_of(c1);
         auto C2 = view_of(c2);
@@ -2313,7 +2307,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
                                      i2.to_span())));
         this->ctx->wait();
         for (size_t i = 0; i < c1.buf.size(); ++i)
-            ASSERT_EQ(verify::abs(up(c1.buf[i]) - up(c2.buf[i])), 0.0)
+            ASSERT_EQ(std::abs(MVof<T>::up(c1.buf[i]) - MVof<T>::up(c2.buf[i])), 0.0)
                 << "the facade's getri differs from the direct driver at element " << i;
     }
 }
@@ -2330,7 +2324,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
 
     // A non-square view.
     {
-        UnifiedVector<T> w(size_t(24) * 32, make<T>(1.0, 0.0));
+        UnifiedVector<T> w(size_t(24) * 32, MVof<T>::make(1.0, 0.0));
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
         UnifiedVector<int64_t> pv(64, 0);
@@ -2449,7 +2443,7 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
         ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                      p.info.to_span())));
         this->ctx->wait();
-        check_factor(p, "buffer-size/getrf");
+        check_factor(*this->ctx, p, "buffer-size/getrf");
         if (this->HasFailure()) return;
     }
 }
@@ -2471,7 +2465,7 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
     ASSERT_FALSE(interchange_is_involution(p.expect_piv))
         << "this matrix's permutation is SELF-INVERSE, so the transposed arm's backwards walk "
            "is indistinguishable from a forwards one and the Trans/ConjTrans rows prove nothing";
-    check_factor(p, "fused/factor");
+    check_factor(*this->ctx, p, "fused/factor");
     if (this->HasFailure()) return;
 
     for (int nrhs : {1, 2, 3, 4, 5, 8}) {
@@ -2493,7 +2487,7 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
             // one the hole ladder uses: only this form is sensitive to the permutation
             // DIRECTION, because only this form knows what A was before it was factored.
             for (int b = 0; b < batch; ++b) {
-                const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                const double res = solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                                      rhs.buf.data() + size_t(b) * rhs.stride,
                                                      rhs.b0.data() + size_t(b) * rhs.stride,
                                                      n, nrhs, p.ld, rhs.ld, op);
@@ -2540,7 +2534,7 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
         // ||PA - LU|| is O(n^3); at 1023 and above the end-to-end solve residual
         // against the ORIGINAL A is the oracle, which is O(n^2 nrhs).
         if (n <= 128) {
-            check_factor(p, "fused/orders");
+            check_factor(*this->ctx, p, "fused/orders");
             if (this->HasFailure()) return;
         }
 
@@ -2559,7 +2553,7 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
                     << "n=" << n << " nrhs=" << nrhs << " transA=" << int(op);
                 this->ctx->wait();
                 for (int b = 0; b < batch; ++b) {
-                    const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                    const double res = solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                                          rhs.buf.data() + size_t(b) * rhs.stride,
                                                          rhs.b0.data() + size_t(b) * rhs.stride,
                                                          n, nrhs, p.ld, rhs.ld, op);
@@ -2588,7 +2582,7 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
 
     auto p = make_dominant_permuted<T>(n, batch, 9090u);
     this->run_blocked(p);
-    check_factor(p, "fused/ceiling");
+    check_factor(*this->ctx, p, "fused/ceiling");
     if (this->HasFailure()) return;
     auto A = view_of(p);
 
@@ -2629,7 +2623,7 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
             ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
                                             n, nrhs, p.ld, rhs.ld, op))
@@ -2693,7 +2687,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
-                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                             rhs.buf.data() + size_t(b) * rhs.stride,
                                             rhs.b0.data() + size_t(b) * rhs.stride,
                                             n, nrhs, p.ld, rhs.ld, op))
@@ -2706,14 +2700,14 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     {   // native getrf, BLOCKED tier
         auto p = make_dominant_permuted<T>(n, batch, 3535u);
         this->run_blocked(p);
-        check_factor(p, "dropin/fused/native-blocked");
+        check_factor(*this->ctx, p, "dropin/fused/native-blocked");
         if (this->HasFailure()) return;
         solve_and_check(p, "NATIVE BLOCKED getrf's");
     }
     {   // native getrf, CTA tier
         auto p = make_dominant_permuted<T>(n, batch, 3636u);
         this->run_cta(p);
-        check_factor(p, "dropin/fused/native-cta");
+        check_factor(*this->ctx, p, "dropin/fused/native-cta");
         if (this->HasFailure()) return;
         solve_and_check(p, "NATIVE CTA getrf's");
     }
@@ -2729,7 +2723,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
                                                          ws.to_span(), p.info.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
-            check_factor(p, "dropin/fused/vendor-factor", /*check_L=*/false);
+            check_factor(*this->ctx, p, "dropin/fused/vendor-factor", /*check_L=*/false);
             if (this->HasFailure()) return;
         }
         solve_and_check(p, "VENDOR getrf's");
@@ -2745,7 +2739,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
                                                      p.piv.to_span(), ws.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
-            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                         rhs.buf.data() + size_t(b) * rhs.stride,
                                         rhs.b0.data() + size_t(b) * rhs.stride,
                                         n, nrhs, p.ld, rhs.ld, Transpose::NoTrans))
@@ -2786,11 +2780,11 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                 for (int b = 0; b < batch; ++b) {
                     for (int c = 0; c < nrhs; ++c)
                         for (int i = 0; i < n; ++i)
-                            ASSERT_TRUE(verify::finite(up(
+                            ASSERT_TRUE(MVof<T>::finite(MVof<T>::up(
                                 rhs.buf[size_t(b) * rhs.stride + size_t(c) * rhs.ld + i])))
                                 << "a NEARLY singular factor produced a non-finite answer at kz="
                                 << kz << " transA=" << int(op) << " b=" << b;
-                    const double res = lu_solve_residual<T>(
+                    const double res = lu_solve_residual<T>(*this->ctx, 
                         p.buf.data() + size_t(b) * p.stride,
                         reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * n,
                         rhs.buf.data() + size_t(b) * rhs.stride,
@@ -2809,7 +2803,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
             this->run_blocked(p);
             if (this->HasFailure()) return;
             for (int b = 0; b < batch; ++b)
-                p.buf[size_t(b) * p.stride + size_t(kz) * p.ld + kz] = make<T>(0.0, 0.0);
+                p.buf[size_t(b) * p.stride + size_t(kz) * p.ld + kz] = MVof<T>::make(0.0, 0.0);
             auto A = view_of(p);
             for (Transpose op : {Transpose::NoTrans, Transpose::Trans}) {
                 auto rhs = make_rhs<T>(n, nrhs, batch, 5050u + unsigned(kz) + unsigned(int(op)));
@@ -2824,7 +2818,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                     bool nonfinite = false;
                     for (int c = 0; c < nrhs && !nonfinite; ++c)
                         for (int i = 0; i < n && !nonfinite; ++i)
-                            if (!verify::finite(up(rhs.buf[size_t(b) * rhs.stride +
+                            if (!MVof<T>::finite(MVof<T>::up(rhs.buf[size_t(b) * rhs.stride +
                                                     size_t(c) * rhs.ld + i])))
                                 nonfinite = true;
                     EXPECT_TRUE(nonfinite)
@@ -2855,7 +2849,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
 
     auto p = make_dominant_permuted<T>(n, batch, 6161u);
     this->run_blocked(p);
-    check_factor(p, "facade/fused/factor");
+    check_factor(*this->ctx, p, "facade/fused/factor");
     if (this->HasFailure()) return;
     auto A = view_of(p);
 
@@ -2878,7 +2872,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
         this->ctx->wait();
 
         for (size_t i = 0; i < r1.buf.size(); ++i)
-            ASSERT_EQ(verify::abs(up(r1.buf[i]) - up(r2.buf[i])), 0.0)
+            ASSERT_EQ(std::abs(MVof<T>::up(r1.buf[i]) - MVof<T>::up(r2.buf[i])), 0.0)
                 << "transA=" << int(op) << ": the facade's getrs differs from the FUSED direct "
                    "entry point at element " << i << " -- something else served this call";
     }
@@ -2906,7 +2900,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 
     // A non-square A.
     {
-        UnifiedVector<T> w(size_t(24) * 32, make<T>(1.0, 0.0));
+        UnifiedVector<T> w(size_t(24) * 32, MVof<T>::make(1.0, 0.0));
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
         EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, W, Bv, Transpose::NoTrans,
@@ -2966,7 +2960,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
                                      exact.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
-            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+            EXPECT_VERIFY(T, Check::solve, n, solve_residual<T>(*this->ctx, p.a0.data() + size_t(b) * p.stride,
                                         rhs.buf.data() + size_t(b) * rhs.stride,
                                         rhs.b0.data() + size_t(b) * rhs.stride,
                                         n, nrhs, p.ld, rhs.ld, Transpose::NoTrans));
@@ -3004,7 +2998,7 @@ template <typename T>
 void expect_pad_untouched(const Lu<T>& p, const char* what) {
     for (size_t i = 0; i < p.buf.size(); ++i) {
         if (tiny_in_window(p, i)) continue;
-        ASSERT_EQ(verify::abs(up(p.buf[i]) - up(p.a0[i])), 0.0)
+        ASSERT_EQ(std::abs(MVof<T>::up(p.buf[i]) - MVof<T>::up(p.a0[i])), 0.0)
             << what << ": element " << i << " lies outside every item's n x n window "
             << "(n=" << p.n << ", ld=" << p.ld << ", stride=" << p.stride
             << ") and was written -- an off-by-one in the padded store";
@@ -3018,11 +3012,11 @@ void expect_pad_untouched(const Lu<T>& p, const char* what) {
 template <class T>
 void tiny_tie_pair(T& a, T& b) {
     if constexpr (std::is_same_v<RealOf<T>, T>) {
-        a = make<T>(3.0, 0.0);
-        b = make<T>(-3.0, 0.0);      // cabs1 3 == 3
+        a = MVof<T>::make(3.0, 0.0);
+        b = MVof<T>::make(-3.0, 0.0);      // cabs1 3 == 3
     } else {
-        a = make<T>(3.0, 1.0);
-        b = make<T>(1.0, -3.0);      // cabs1 4 == 4
+        a = MVof<T>::make(3.0, 1.0);
+        b = MVof<T>::make(1.0, -3.0);      // cabs1 4 == 4
     }
 }
 
@@ -3030,19 +3024,19 @@ template <typename T>
 Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
     Lu<T> p;
     alloc(p, n, batch, 5, 11);
-    Rng rg(seed);
+    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
     T tie_a, tie_b;
     tiny_tie_pair(tie_a, tie_b);
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] =
-                    scale(make<T>(rg.next(), rg.next()), 0.2);
+                    scale(R(i, j, b), 0.2);
         // Columns 1.. are strongly dominant, so the tie is the only decision that
         // is not forced by magnitude and the factor stays well conditioned.
         for (int j = 1; j < n; ++j)
             p.buf[size_t(b) * p.stride + size_t(j) * p.ld + j] =
-                make<T>(4.0 * double(n) * (1.0 + 0.01 * double(b)), 0.0);
+                MVof<T>::make(4.0 * double(n) * (1.0 + 0.01 * double(b)), 0.0);
         p.buf[size_t(b) * p.stride + 0] = tie_a;                 // row 0
         p.buf[size_t(b) * p.stride + 2] = tie_b;                 // row 2
     }
@@ -3065,16 +3059,16 @@ inline constexpr double kTinyAmbiguous = 0.99;
 template <typename T>
 void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
                              std::vector<double>& margin) {
-    using P = decltype(up(T{}));
+    using P = decltype(MVof<T>::up(T{}));
     piv.assign(size_t(n), 0);
     margin.assign(size_t(n), 0.0);
     std::vector<P> A(size_t(n) * size_t(n));
-    for (size_t i = 0; i < A.size(); ++i) A[i] = up(a[i]);
+    for (size_t i = 0; i < A.size(); ++i) A[i] = MVof<T>::up(a[i]);
     for (int k = 0; k < n; ++k) {
         double best = -1.0, second = -1.0;
         int win = k;
         for (int i = k; i < n; ++i) {
-            const double m = verify::cabs1(A[size_t(k) * size_t(n) + size_t(i)]);
+            const double m = MVof<T>::cabs1(A[size_t(k) * size_t(n) + size_t(i)]);
             // STRICTLY greater, so an exact tie keeps the LOWEST row -- I?AMAX's order
             // and the tier's. A `>=` here would silently make the oracle disagree with
             // LAPACK on exactly the case TinyBreaksAnExactCabs1Tie guards.
@@ -3088,7 +3082,7 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
                 std::swap(A[size_t(c) * size_t(n) + size_t(k)],
                           A[size_t(c) * size_t(n) + size_t(win)]);
         const P p = A[size_t(k) * size_t(n) + size_t(k)];
-        if (verify::cabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
+        if (MVof<T>::cabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
         for (int i = k + 1; i < n; ++i) A[size_t(k) * size_t(n) + size_t(i)] /= p;
         for (int c = k + 1; c < n; ++c) {
             const P u = A[size_t(c) * size_t(n) + size_t(k)];
@@ -3103,9 +3097,9 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
 // list. Used to decide whether the host LAPACKE on THIS machine may be trusted as an
 // oracle for a given cell -- see the note in TinyPivotsMatchLapackeOnUnstructuredData.
 template <typename T>
-double host_factor_residual(int n, const std::vector<T>& a0, const std::vector<T>& f,
+double host_factor_residual(Queue& ctx, int n, const std::vector<T>& a0, const std::vector<T>& f,
                             const std::int32_t* ip) {
-    return factor_residual<T>(a0.data(), f.data(), ip, n, n, n);
+    return factor_residual<T>(ctx, a0.data(), f.data(), ip, n, n, n);
 }
 
 }  // namespace
@@ -3138,7 +3132,7 @@ TYPED_TEST(LuTest, TinyFactorisesAndPivotsExactlyAtEveryOrder) {
                                        "assertions below are vacuous";
                 }
                 this->run_tiny(dom);
-                check_factor(dom, "tiny/dominant-permuted");
+                check_factor(*this->ctx, dom, "tiny/dominant-permuted");
                 for (int b = 0; b < batch; ++b)
                     EXPECT_EQ(dom.info[b], 0)
                         << "tiny: a nonsingular item reported info = " << dom.info[b]
@@ -3147,7 +3141,7 @@ TYPED_TEST(LuTest, TinyFactorisesAndPivotsExactlyAtEveryOrder) {
 
                 auto rnd = make_random<T>(n, batch, 900u + unsigned(n), ld_pad, 11);
                 this->run_tiny(rnd);
-                check_factor(rnd, "tiny/random");
+                check_factor(*this->ctx, rnd, "tiny/random");
                 if (this->HasFailure()) return;
             }
         }
@@ -3190,17 +3184,17 @@ TYPED_TEST(LuTest, TinyPaddingIsInertAgainstTheCtaRoute) {
             EXPECT_EQ(a.info[it], b.info[it]) << "n=" << n << " item " << it << ": info differs";
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const auto av = up(a.buf[size_t(it) * a.stride + size_t(j) * a.ld + i]);
-                    const auto bv = up(b.buf[size_t(it) * b.stride + size_t(j) * b.ld + i]);
-                    const double d = verify::abs(av - bv);
+                    const auto av = MVof<T>::up(a.buf[size_t(it) * a.stride + size_t(j) * a.ld + i]);
+                    const auto bv = MVof<T>::up(b.buf[size_t(it) * b.stride + size_t(j) * b.ld + i]);
+                    const double d = std::abs(av - bv);
                     // Relative to the element itself, floored at 1 so an entry that
                     // underflows towards zero does not demand exact agreement.
-                    const double scale = std::max(1.0, verify::abs(bv));
+                    const double scale = std::max(1.0, std::abs(bv));
                     const double tol = kTinyVsCtaUlpsPerStep * double(n) * (2.0 * verify::eps<T>()) * scale;
                     ASSERT_LE(d, tol)
                         << "n=" << n << " item " << it << " element (" << i << "," << j
                         << "): tiny and cta differ by " << d << " (" << d / ((2.0 * verify::eps<T>()) * scale)
-                        << " ulp of " << verify::abs(bv) << "), tolerance " << tol;
+                        << " ulp of " << std::abs(bv) << "), tolerance " << tol;
                 }
         }
         if (this->HasFailure()) return;
@@ -3220,7 +3214,7 @@ TYPED_TEST(LuTest, TinyNeverWritesThePad) {
         auto p = make_dominant_permuted<T>(n, 7, 55u + unsigned(n));
         this->run_tiny(p);
         expect_pad_untouched(p, "tiny/pad");
-        check_factor(p, "tiny/pad-fixture");
+        check_factor(*this->ctx, p, "tiny/pad-fixture");
         if (this->HasFailure()) return;
     }
 }
@@ -3246,7 +3240,7 @@ TYPED_TEST(LuTest, TinyPlantedZeroColumnGivesGlobalOneBasedInfo) {
             auto p = make_dominant_permuted<T>(n, batch, 606u + unsigned(n));
             const int bad = 3;                       // NOT item 0: offset 0 hides a stride bug
             for (int i = 0; i < n; ++i)
-                p.buf[size_t(bad) * p.stride + size_t(k) * p.ld + i] = make<T>(0.0, 0.0);
+                p.buf[size_t(bad) * p.stride + size_t(k) * p.ld + i] = MVof<T>::make(0.0, 0.0);
             p.a0.assign(p.buf.begin(), p.buf.end());
             poison(p);
             this->run_tiny(p);
@@ -3264,7 +3258,7 @@ TYPED_TEST(LuTest, TinyPlantedZeroColumnGivesGlobalOneBasedInfo) {
                         << ip[c] << " is outside [c+1, n] -- a padded row won the argmax";
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i)
-                        ASSERT_TRUE(verify::finite(up(p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i])))
+                        ASSERT_TRUE(MVof<T>::finite(MVof<T>::up(p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i])))
                             << "n=" << n << " k=" << k << " b=" << b << ": F(" << i << "," << j
                             << ") is not finite -- the elimination did not continue finitely";
             }
@@ -3286,12 +3280,12 @@ TYPED_TEST(LuTest, TinyPackedLaunchesDoNotBleed) {
         if (n > cap) continue;
         auto p = make_dominant_permuted<T>(n, 19, 771u + unsigned(n));
         for (size_t i = 0; i < p.buf.size(); ++i)
-            if (!tiny_in_window(p, i)) p.buf[i] = make<T>(qnan, qnan);
+            if (!tiny_in_window(p, i)) p.buf[i] = MVof<T>::make(qnan, qnan);
         p.a0.assign(p.buf.begin(), p.buf.end());
         // poison() restores a0, which now carries the NaN pad, and re-poisons ipiv.
         poison(p);
         this->run_tiny(p);
-        check_factor(p, "tiny/nan-pad");
+        check_factor(*this->ctx, p, "tiny/nan-pad");
         for (int b = 0; b < 19; ++b)
             EXPECT_EQ(p.info[b], 0) << "n=" << n << " b=" << b << ": NaN outside the window "
                                                                  "reached the pivot test";
@@ -3318,7 +3312,7 @@ TYPED_TEST(LuTest, TinyLocalMemoryRowSurvivesASaturatedLaunch) {
         if (n > cap) continue;
         auto p = make_random<T>(n, 4096, 8800u + unsigned(n));
         this->run_tiny(p);
-        check_factor(p, "tiny/saturated");
+        check_factor(*this->ctx, p, "tiny/saturated");
         if (this->HasFailure()) return;
     }
 }
@@ -3345,8 +3339,8 @@ TYPED_TEST(LuTest, TinyArgmaxIgnoresANaNCandidate) {
         // A NON-PIVOT row of column 0 in every item: row n-1 of a random matrix is
         // the argmax with probability 1/n, so the assertion below keeps this honest.
         for (int it = 0; it < batch; ++it) {
-            a.buf[size_t(it) * a.stride + size_t(n - 1)] = make<T>(qnan, qnan);
-            b.buf[size_t(it) * b.stride + size_t(n - 1)] = make<T>(qnan, qnan);
+            a.buf[size_t(it) * a.stride + size_t(n - 1)] = MVof<T>::make(qnan, qnan);
+            b.buf[size_t(it) * b.stride + size_t(n - 1)] = MVof<T>::make(qnan, qnan);
         }
         a.a0.assign(a.buf.begin(), a.buf.end());
         b.a0.assign(b.buf.begin(), b.buf.end());
@@ -3391,14 +3385,14 @@ TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
         // cabs1, must be strictly the column maximum, and must be different values.
         for (int b = 0; b < batch; ++b) {
             const T* A0 = p.a0.data() + size_t(b) * p.stride;
-            const double c0 = verify::cabs1(up(A0[0]));
-            const double c2 = verify::cabs1(up(A0[2]));
+            const double c0 = MVof<T>::cabs1(MVof<T>::up(A0[0]));
+            const double c2 = MVof<T>::cabs1(MVof<T>::up(A0[2]));
             ASSERT_EQ(c0, c2) << "the fixture no longer carries an exact cabs1 tie";
-            ASSERT_GT(verify::abs(up(A0[0]) - up(A0[2])), 0.0)
+            ASSERT_GT(std::abs(MVof<T>::up(A0[0]) - MVof<T>::up(A0[2])), 0.0)
                 << "the tied entries are equal, so no tie-break can be observed";
             for (int i = 0; i < n; ++i)
                 if (i != 0 && i != 2)
-                    ASSERT_LT(verify::cabs1(up(A0[i])), c0)
+                    ASSERT_LT(MVof<T>::cabs1(MVof<T>::up(A0[i])), c0)
                         << "row " << i << " outranks the tie, so column 0 is not decided by it";
         }
         this->run_tiny(p);
@@ -3406,7 +3400,7 @@ TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
             EXPECT_EQ(piv_item(p, b)[0], 1)
                 << "n=" << n << " b=" << b << ": an exact cabs1 tie between rows 0 and 2 "
                    "must go to row 0 (ipiv 1), which is I?AMAX's order";
-        check_factor(p, "tiny/cabs1-tie", /*check_L=*/true);
+        check_factor(*this->ctx, p, "tiny/cabs1-tie", /*check_L=*/true);
         if (this->HasFailure()) return;
     }
 }
@@ -3433,7 +3427,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     }
     // A non-square view.
     {
-        UnifiedVector<T> w(size_t(8) * 16, make<T>(1.0, 0.0));
+        UnifiedVector<T> w(size_t(8) * 16, MVof<T>::make(1.0, 0.0));
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 8, 16, 8, 8 * 16, 1, wp.data());
         UnifiedVector<int64_t> pv(64, 0);
@@ -3452,7 +3446,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     {
         auto q = make_dominant_permuted<T>(n, batch, 19u);
         EXPECT_NO_THROW(this->run_tiny(q, /*pass_info=*/false));
-        check_factor(q, "tiny/empty-info");
+        check_factor(*this->ctx, q, "tiny/empty-info");
     }
 }
 
@@ -3484,14 +3478,14 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
     this->ctx->wait();
 
     for (size_t i = 0; i < direct.buf.size(); ++i)
-        ASSERT_EQ(verify::abs(up(direct.buf[i]) - up(viafac.buf[i])), 0.0)
+        ASSERT_EQ(std::abs(MVof<T>::up(direct.buf[i]) - MVof<T>::up(viafac.buf[i])), 0.0)
             << "the facade's factor differs from getrf_tiny_dispatch's at element " << i
             << " -- something else served this call";
     for (int b = 0; b < batch; ++b)
         for (int k = 0; k < n; ++k)
             ASSERT_EQ(piv_item(direct, b)[k], piv_item(viafac, b)[k])
                 << "pivot " << k << " of item " << b << " differs";
-    check_factor(viafac, "facade/tiny");
+    check_factor(*this->ctx, viafac, "facade/tiny");
 }
 
 // T12. ELEMENTWISE PIVOTS AGAINST AN INDEPENDENT HOST ORACLE, ON UNSTRUCTURED DATA.
@@ -3536,7 +3530,7 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
         for (int b = 0; b < batch; ++b) {
             // The n x n window out of the PADDED, STRIDED original: a0, not buf,
             // because the factorisation overwrote buf in place.
-            h.assign(size_t(n) * size_t(n), make<T>(0.0, 0.0));
+            h.assign(size_t(n) * size_t(n), MVof<T>::make(0.0, 0.0));
             for (int c = 0; c < n; ++c)
                 std::memcpy(h.data() + size_t(c) * size_t(n),
                             p.a0.data() + size_t(b) * p.stride + size_t(c) * p.ld,
@@ -3546,7 +3540,7 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
             f = h;
             ASSERT_TRUE(verify::getrf_pivots(n, n, f, hp)) << "n=" << n << " b=" << b
                                                            << ": the host reference itself failed";
-            const double lres = host_factor_residual<T>(n, h, f, hp.data());
+            const double lres = host_factor_residual<T>(*this->ctx, n, h, f, hp.data());
             const bool trust = std::isfinite(lres) && lres <= kLapackeTrustTol;
             ++lapacke_cells;
             if (!trust) ++lapacke_dropped;
@@ -3575,7 +3569,7 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
             }
             EXPECT_EQ(p.info[b], 0) << "n=" << n << " b=" << b << ": info = " << p.info[b];
         }
-        check_factor(p, "tiny/host-oracle");
+        check_factor(*this->ctx, p, "tiny/host-oracle");
         if (this->HasFailure()) return;
     }
     // ANTI-VACUITY, ACROSS THE WHOLE SWEEP: if every asserted step were the diagonal

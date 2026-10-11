@@ -4,7 +4,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
 
@@ -41,12 +41,12 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
 
     // Three facts make Prod the identity: the copy is exactly A^T, the gemm of the two is right, and
     // A is orthonormal (SVQB orthogonalizes the given columns directly, so Check::orthogonality).
-    const auto items = batchlas::verify::all_items(batch_size);
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const auto items = A.view().all_items();
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, m,
-                  batchlas::verify::gemm_backward_error(At.view(), batchlas::verify::Shape::general, Transpose::NoTrans, A.view(),
-                                                        batchlas::verify::Shape::general, Transpose::NoTrans, Prod.view(),
-                                                        Prod.view(), batchlas::verify::Shape::general, 1.0, 0.0, items));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, m, batchlas::verify::orthogonality(A.view(), items));
+                  MV::gemm_backward_error(*this->ctx, At.view(), Transpose::NoTrans, A.view(), Transpose::NoTrans, Prod.view(),
+                                          Prod.view(), 1.0, 0.0, items));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, A.view(), items));
     for (int b = 0; b < batch_size; ++b)
         for (int i = 0; i < m; ++i)
             for (int j = 0; j < k; ++j) ASSERT_EQ(At(j, i, b), A(i, j, b)) << "batch " << b << " (" << i << "," << j << ")";

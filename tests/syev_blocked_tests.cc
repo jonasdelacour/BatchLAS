@@ -87,7 +87,7 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		// float n = 320: the kind's 32 n u ||A||_2 (||A||_2 ~ 20) is 6x the old 2e-3 absolute.
 		std::optional<verify::Slack> slack;
 		if (std::is_same_v<Real, float> && n == 320) slack = verify::Slack{0.25, "old float bound 2e-3 absolute, ||A||_2 ~ 20 at n = 320"};
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n, false, verify::all_items(batch), slack);
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n, false, A0.view().all_items(), slack);
 	}
 }
 
@@ -122,7 +122,7 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 	}
 
 	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n);
-	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_blk.view(), W_blk, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_blk.view(), W_blk, n);
 }
 
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
@@ -195,7 +195,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 		EXPECT_TRUE(std::isfinite(W_two_stage[i])) << "non-finite eigenvalue at i=" << i;
 	}
 
-	test_utils::expect_eigenpairs<Scalar>(A0.view(), A_two_stage.view(), W_two_stage, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_two_stage.view(), W_two_stage, n);
 }
 // n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
 // sytrd_block_size_default<T> now returns a different panel width for complex
@@ -248,7 +248,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 		}
 	}
 
-	test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n);
 }
 
 // The n <= 32 range, where Auto picks among the three CTA kernels rather than a
@@ -290,7 +290,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 				<< "eigenvalues not ascending, n=" << n << " i=" << i;
 		}
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n);
 	}
 }
 #endif
@@ -324,7 +324,7 @@ Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFo
 	for (int b = 0; b < M.view().batch_size(); ++b) {
 		Scalar* Mb = M.view().data().data() + static_cast<std::size_t>(b) * M.view().stride();
 		for (int c = 0; c < n; ++c)
-			for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = verify::conj(Mb[c + r * ld]);
+			for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = MatrixView<Scalar, MatrixFormat::Dense>::conj(Mb[c + r * ld]);
 	}
 	return M;
 }
@@ -334,10 +334,8 @@ template <typename Scalar>
 double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B) {
 	double gap = 0;
 	for (int b = 0; b < A.batch_size(); ++b) {
-		auto a = verify::copy_item(A, b);
-		auto c = verify::copy_item(B, b);
 		std::vector<double> wa, wc;
-		if (!verify::eigenvalues(A.rows(), a, wa) || !verify::eigenvalues(B.rows(), c, wc)) return std::numeric_limits<double>::quiet_NaN();
+		if (!verify::eigenvalues(A, b, wa) || !verify::eigenvalues(B, b, wc)) return std::numeric_limits<double>::quiet_NaN();
 		for (std::size_t i = 0; i < wa.size(); ++i) gap = verify::nanmax(gap, std::fabs(wa[i] - wc[i]));
 	}
 	return gap;
@@ -388,7 +386,7 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 								JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 	}
 
-	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, verify::all_items(batch));
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, A_sym.view().all_items());
 }
 
 // Same, through the two-stage provider, which has its own mirror call site.
@@ -427,6 +425,6 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 									  JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 		}
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, verify::all_items(batch));
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, A_sym.view().all_items());
 	}
 }

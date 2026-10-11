@@ -10,7 +10,6 @@
 #include <random>
 #include <type_traits>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
@@ -81,8 +80,9 @@ protected:
 
         // op(A) X = alpha B0, normwise (Check::solve, n = the order of A); B holds X.
         const int item = batch_idx;
-        const double res = batchlas::verify::trsm_residual(A, Side::Left, uplo, trans, Diag::NonUnit, B, B_original,
-                                                           batchlas::verify::up(alpha), std::span<const int>(&item, 1));
+        using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+        const double res = MV::trsm_residual(*this->ctx, A, Side::Left, uplo, trans, Diag::NonUnit, B, B_original,
+                                             MV::up(alpha), std::span<const int>(&item, 1));
         if (trace_enabled)
             std::cerr << "TRSM TRACE: residual " << res << " bound " << batchlas::verify::bound<ScalarType>(batchlas::verify::Check::solve, rows)
                       << " for batch " << batch_idx << " (trans=" << static_cast<int>(trans) << ")" << std::endl;
@@ -293,8 +293,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const MV A0(a_host.data(), n, n, n, n * n, bs);
     const MV B0(b_in.data(), brows, bcols, brows, brows * bcols, bs);
-    const double res = batchlas::verify::trsm_residual(A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0,
-                                                       batchlas::verify::up(tc.alpha));
+    const double res = MV::trsm_residual(*ctx, A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0, MV::up(tc.alpha));
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
         << "residual " << res << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n)
         << "  n=" << n << " q=" << q << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
@@ -420,8 +419,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
 
     const MV A0(a_host.data(), n, n, n, n * n, bs);
     const MV B0(b_in.data(), brows, bcols, brows, brows * bcols, bs);
-    const double res = batchlas::verify::trsm_residual(A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0,
-                                                       batchlas::verify::up(tc.alpha));
+    const double res = MV::trsm_residual(*ctx, A0, tc.side, tc.uplo, tc.transA, tc.diag, Bv, B0, MV::up(tc.alpha));
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
         << "blocked: residual " << res << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n)
         << "  n=" << n << " q=" << q << " side=" << int(tc.side) << " uplo=" << int(tc.uplo)
@@ -775,8 +773,8 @@ std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
 
     const MatrixView<T, MatrixFormat::Dense> A0(const_cast<T*>(a_host.data()), n, n, lda, sa, bs);
     const MatrixView<T, MatrixFormat::Dense> B0(b_in.data(), n, q, n, n * q, bs);
-    const double res = batchlas::verify::trsm_residual(A0, Side::Left, tc.uplo, tc.transA, tc.diag, Bv, B0,
-                                                       batchlas::verify::up(tc.alpha));
+    const double res = MatrixView<T, MatrixFormat::Dense>::trsm_residual(*ctx, A0, Side::Left, tc.uplo, tc.transA,
+                                                                         tc.diag, Bv, B0, MatrixView<T, MatrixFormat::Dense>::up(tc.alpha));
     if (!batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
         ADD_FAILURE() << "sg-left n=" << n << " q=" << q << " uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
                       << " diag=" << int(tc.diag) << " residual=" << res << " exceeds "
@@ -947,15 +945,19 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
         std::vector<T> a_lower(a0);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < j; ++i) a_lower[i + static_cast<std::size_t>(j) * n] = T(0);
-        const double a_norm = batchlas::verify::frobenius(batchlas::verify::view(a_lower.data(), n, n, n), 0);
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        using P = MV::promoted_type;
+        const double a_norm = norm(*ctx, MV(a_lower.data(), n, n, n).astype<P>(std::vector<int>{0}).view())[0];
+        const auto bnorms = norm(*ctx, B0.astype<P>(items).view());
+        const auto xnorms = norm(*ctx, B.view().astype<P>(items).view());
         double factor = 1.0;
-        for (int b : items) {
-            const double bn = batchlas::verify::frobenius(B0, b), xn = batchlas::verify::frobenius(B.view(), b);
+        for (std::size_t g = 0; g < items.size(); ++g) {
+            const double bn = bnorms[g], xn = xnorms[g];
             factor = std::min(factor, 1e-5 * bn / (batchlas::verify::bound<T>(batchlas::verify::Check::solve, n) * (a_norm * xn + bn)));
         }
         EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::solve, n,
-                            batchlas::verify::trsm_residual(A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, B.view(), B0,
-                                                            batchlas::verify::up(T(1)), items),
+                            MV::trsm_residual(*ctx, A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit,
+                                              B.view(), B0, MV::up(T(1)), items),
                             (batchlas::verify::Slack{factor, "the old ||AX-B||/||B|| < 1e-5"}));
     }
 }

@@ -5,7 +5,7 @@
 // (have_reference) false is a failed reference, and the caller fails.
 #pragma once
 
-#include <batchlas/verify/norms.hh>
+#include <batchlas/blas/matrix.hh>
 
 #include <algorithm>
 #include <complex>
@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <span>
 #include <vector>
 
 // Undefined would read as 0 and silently compile the "no reference" branch.
@@ -48,26 +49,13 @@ template <class D> void require_host_dgemm() {
 }
 }  // namespace detail
 
-/// Packed (ld = rows) column-major copy of item @p item, promoted to double / complex<double>.
-template <class View> auto copy_item(const View& A, int item) {
-    const auto m = detail::item_of(A, item);
-    using D = promoted_t<std::remove_cv_t<std::remove_pointer_t<decltype(m.data)>>>;
-    std::vector<D> out(static_cast<std::size_t>(m.rows) * m.cols);
-    for (int j = 0; j < m.cols; ++j)
-        for (int i = 0; i < m.rows; ++i)
-            out[static_cast<std::size_t>(j) * m.rows + i] = up(m.data[static_cast<long long>(j) * m.ld + i]);
-    return out;
+namespace detail {
+// Item @p item of @p A as a packed std::vector, converted to U.
+template <class U, class T> std::vector<U> item_vector(const MatrixView<T, MatrixFormat::Dense>& A, int item) {
+    const auto m = A.template astype<U>(std::span<const int>(&item, 1));
+    return std::vector<U>(m.data().data(), m.data().data() + std::size_t(A.rows()) * std::size_t(A.cols()));
 }
-
-/// Packed (ld = rows) column-major copy of item @p item in the view's own element type.
-template <class View> auto copy_item_native(const View& A, int item) {
-    const auto m = detail::item_of(A, item);
-    using E = std::remove_cv_t<std::remove_pointer_t<decltype(m.data)>>;
-    std::vector<E> out(static_cast<std::size_t>(m.rows) * m.cols);
-    for (int j = 0; j < m.cols; ++j)
-        for (int i = 0; i < m.rows; ++i) out[static_cast<std::size_t>(j) * m.rows + i] = m.data[static_cast<long long>(j) * m.ld + i];
-    return out;
-}
+}  // namespace detail
 
 /// Ascending eigenvalues of the n x n Hermitian @p a (column-major, ld = n, both triangles valid; destroyed).
 template <class D> bool eigenvalues(int n, std::vector<D>& a, std::vector<double>& w) {
@@ -140,8 +128,8 @@ template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vecto
 }
 
 /// getrf_pivots of item @p item of a dense view, copied in the view's own precision.
-template <class View> bool getrf_pivots(const View& A, int item, std::vector<std::int32_t>& ipiv) {
-    auto a = copy_item_native(A, item);
+template <class T> bool getrf_pivots(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<std::int32_t>& ipiv) {
+    auto a = detail::item_vector<T>(A, item);
     return getrf_pivots(A.rows(), A.cols(), a, ipiv);
 }
 
@@ -175,6 +163,26 @@ inline bool tridiagonal_eigenvalues(std::vector<double>& d, std::vector<double>&
     (void)e;
     return false;
 #endif
+}
+
+/// eigenvalues() of item @p item of the Hermitian @p A (both triangles valid), promoted.
+template <class T> bool eigenvalues(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& w) {
+    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+    return eigenvalues(A.rows(), a, w);
+}
+
+/// singular_values() of item @p item of @p A, promoted.
+template <class T> bool singular_values(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& s) {
+    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+    return singular_values(A.rows(), A.cols(), a, s);
+}
+
+/// geqrf_tau() of item @p item of @p A, promoted; the factor is discarded.
+template <class T>
+bool geqrf_tau(const MatrixView<T, MatrixFormat::Dense>& A, int item,
+               std::vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>& tau) {
+    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+    return geqrf_tau(A.rows(), A.cols(), a, tau);
 }
 
 }  // namespace batchlas::verify

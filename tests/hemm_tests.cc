@@ -8,7 +8,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -106,17 +105,15 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
                     hemm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
-                    const auto shape_a = uplo == Uplo::Lower ? batchlas::verify::Shape::hermitian_lower
-                                                             : batchlas::verify::Shape::hermitian_upper;
-                    const auto general = batchlas::verify::Shape::general;
+                    using MV = MatrixView<T, MatrixFormat::Dense>;
+                    auto A_mirror = A_poisoned.clone();
+                    A_mirror.view().hermitize(*(this->ctx), uplo).wait();
                     const double err =
                         side == Side::Left
-                            ? batchlas::verify::gemm_backward_error(A_poisoned.view(), shape_a, Transpose::NoTrans, B.view(), general,
-                                                                    Transpose::NoTrans, C0.view(), C.view(), general, batchlas::verify::up(alpha),
-                                                                    batchlas::verify::up(beta), batchlas::verify::all_items(shape.batch))
-                            : batchlas::verify::gemm_backward_error(B.view(), general, Transpose::NoTrans, A_poisoned.view(), shape_a,
-                                                                    Transpose::NoTrans, C0.view(), C.view(), general, batchlas::verify::up(alpha),
-                                                                    batchlas::verify::up(beta), batchlas::verify::all_items(shape.batch));
+                            ? MV::gemm_backward_error(*(this->ctx), A_mirror.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans,
+                                                      C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items())
+                            : MV::gemm_backward_error(*(this->ctx), B.view(), Transpose::NoTrans, A_mirror.view(), Transpose::NoTrans,
+                                                      C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items());
                     EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
                         << "hemm read storage it must not touch: " << route << " route, n=" << n
                         << ", side=" << (side == Side::Left ? "Left" : "Right")
@@ -211,20 +208,21 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
              {.transA = Transpose::ConjTrans}).wait();
 
         // Imaginary diagonal over the largest denominator of X^H (AX): two products of length n, k = 2n.
-        const auto general = batchlas::verify::Shape::general;
-        const auto shape_a = uplo == Uplo::Lower ? batchlas::verify::Shape::hermitian_lower : batchlas::verify::Shape::hermitian_upper;
+        using MV = MatrixView<T, MatrixFormat::Dense>;
         for (int b = 0; b < batch; ++b) {
             double worst = 0;
             for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, std::abs(double(XhAX(i, i, b).imag())));
-            const double scale = batchlas::verify::gemm_max_denominator(X.view(), general, Transpose::ConjTrans, AX.view(), general,
-                                                                        Transpose::NoTrans, XhAX.view(), 1.0, 0.0, b);
+            const double scale = MV::gemm_max_denominator(*(this->ctx), X.view(), Transpose::ConjTrans, AX.view(), Transpose::NoTrans,
+                                                          XhAX.view(), 1.0, 0.0, b);
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * n, worst / scale)
                 << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                 << ", batch=" << b;
         }
+        auto A_mirror = A.clone();
+        A_mirror.view().hermitize(*(this->ctx), uplo).wait();
         EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
-                      batchlas::verify::gemm_backward_error(A.view(), shape_a, Transpose::NoTrans, X.view(), general, Transpose::NoTrans, AX.view(),
-                                                            AX.view(), general, 1.0, 0.0, batchlas::verify::all_items(batch)))
+                      MV::gemm_backward_error(*(this->ctx), A_mirror.view(), Transpose::NoTrans, X.view(), Transpose::NoTrans, AX.view(),
+                                              AX.view(), 1.0, 0.0, AX.view().all_items()))
             << "uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper");
     }
 }

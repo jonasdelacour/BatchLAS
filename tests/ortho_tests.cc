@@ -3,8 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
-#include <batchlas/verify/norms.hh>
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <vector>
 #include <iostream>
@@ -46,6 +45,7 @@ template <typename Config>
 class OrthoTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
     static constexpr Backend BackendType = Config::BackendVal;
 
     // The vectors of Q (its columns for NoTrans, its rows for Trans) as the columns of a host
@@ -58,7 +58,7 @@ protected:
             for (int v = 0; v < count; ++v)
                 for (int i = 0; i < dim; ++i)
                     out[(static_cast<size_t>(b) * count + v) * dim + i] =
-                        transQ == Transpose::NoTrans ? Q(i, v, b) : verify::conj(Q(v, i, b));
+                        transQ == Transpose::NoTrans ? Q(i, v, b) : MV::conj(Q(v, i, b));
         return out;
     }
 
@@ -66,8 +66,8 @@ protected:
     void check_orthonormality(const MatrixView<ScalarType, MatrixFormat::Dense>& Q, Transpose transQ, verify::Check kind) {
         int dim = 0, count = 0;
         const auto q = vectors_of(Q, transQ, dim, count);
-        const auto V = verify::view(q.data(), dim, count, dim, dim * count, Q.batch_size());
-        EXPECT_VERIFY(ScalarType, kind, dim, verify::orthogonality(V, verify::all_items(Q.batch_size())));
+        const MV V(const_cast<ScalarType*>(q.data()), dim, count, dim, dim * count, Q.batch_size());
+        EXPECT_VERIFY(ScalarType, kind, dim, MV::orthogonality(*this->ctx, V, V.all_items()));
     }
 
     // A orthonormal and orthogonal to the orthonormal basis M: the columns of [M A] are orthonormal,
@@ -84,8 +84,8 @@ protected:
             std::copy_n(m.begin() + static_cast<std::ptrdiff_t>(b) * dim * nm, dim * nm, ma.begin() + static_cast<std::ptrdiff_t>(b) * dim * cols);
             std::copy_n(a.begin() + static_cast<std::ptrdiff_t>(b) * dim * na, dim * na, ma.begin() + static_cast<std::ptrdiff_t>(b) * dim * cols + dim * nm);
         }
-        const auto V = verify::view(ma.data(), dim, cols, dim, dim * cols, batch);
-        EXPECT_VERIFY(ScalarType, kind, dim, verify::orthogonality(V, verify::all_items(batch)));
+        const MV V(ma.data(), dim, cols, dim, dim * cols, batch);
+        EXPECT_VERIFY(ScalarType, kind, dim, MV::orthogonality(*this->ctx, V, V.all_items()));
     }
 };
 

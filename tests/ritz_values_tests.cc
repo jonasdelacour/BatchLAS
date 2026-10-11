@@ -6,7 +6,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -82,7 +82,8 @@ TYPED_TEST(RitzValuesTest, DiagonalMatrix) {
     // Ritz values of exact eigenvectors are eigenvalues: Check::values against the closed form,
     // ||A||_2 = 5. The kind's float bound is 4.8e-5 absolute, so the Slack keeps the old power.
     const std::vector<std::vector<double>> ref{std::vector<double>(expected.begin(), expected.end())};
-    EXPECT_VERIFY_SLACK(ScalarType, verify::Check::values, n, verify::values_error(VectorView<RealType>(ritz_vals), ref, 5.0),
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    EXPECT_VERIFY_SLACK(ScalarType, verify::Check::values, n, MV::values_error(VectorView<RealType>(ritz_vals), ref, 5.0),
                         verify::Slack{0.25, "old bound 1e-5 absolute float (test_utils::tolerance), ||A||_2 = 5"});
 }
 
@@ -139,8 +140,9 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     
     const std::vector<std::vector<double>> ref(batch, std::vector<double>(expected.begin(), expected.end()));
     const double norm2 = double(a) + 2.0 * std::cos(M_PI / (n + 1));
-    EXPECT_VERIFY(ScalarType, verify::Check::values, n,
-                  verify::values_error(VectorView<RealType>(ritz_vals), ref, norm2, verify::all_items(batch)));
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    const VectorView<RealType> w(ritz_vals);
+    EXPECT_VERIFY(ScalarType, verify::Check::values, n, MV::values_error(w, ref, norm2, w.all_items()));
 }
 
 

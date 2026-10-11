@@ -32,7 +32,6 @@
 #include "test_utils.hh"
 
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
@@ -175,8 +174,8 @@ protected:
 
             // Orthogonality of U's columns and Vh's rows (the columns of Vh^T).
             const std::array<int, 1> item{b};
-            const double uorth = batchlas::verify::orthogonality(U.view(), item);
-            const double vorth = batchlas::verify::orthogonality(Vt.view(), item);
+            const double uorth = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, U.view(), item);
+            const double vorth = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, Vt.view(), item);
             if (orth_slack > 0.0) {
                 const batchlas::verify::Slack slack{
                     orth_slack,

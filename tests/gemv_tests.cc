@@ -9,7 +9,6 @@
 #include <limits>
 #include <algorithm>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include "../src/sycl/gemv_native.hh"
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment
@@ -33,7 +32,7 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 // The Slack keeps it.
 template <typename T>
 batchlas::verify::Slack old_relative_tolerance(int k) {
-    constexpr double old_tol = batchlas::verify::is_complex<T>::value ? (std::is_same_v<batchlas::verify::real_t<T>, float> ? 2e-5 : 2e-10)
+    constexpr double old_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
                                                                       : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
     return {std::min(1.0, old_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
             "the old relative tolerance, kept"};
@@ -92,8 +91,8 @@ protected:
     double gemv_error(const MatrixView<ScalarType, MatrixFormat::Dense>& A, const VectorView<ScalarType>& x,
                       const VectorView<ScalarType>& y0, const VectorView<ScalarType>& y, ScalarType alpha, ScalarType beta,
                       Transpose trans) {
-        return batchlas::verify::gemv_backward_error(A, trans, x, y0, y, batchlas::verify::up(alpha), batchlas::verify::up(beta),
-                                                     batchlas::verify::all_items(y.batch_size()));
+        using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+        return MV::gemv_backward_error(*this->ctx, A, trans, x, y0, y, MV::up(alpha), MV::up(beta), y.all_items());
     }
 };
 
@@ -311,7 +310,7 @@ protected:
             }
         }
 
-        std::vector<ScalarType> y_initial(static_cast<size_t>(std::max(1, y_stride * c.batch)));
+        UnifiedVector<ScalarType> y_initial(static_cast<size_t>(std::max(1, y_stride * c.batch)), ScalarType(0));
         const ScalarType nan_v =
             c.y_starts_nan ? static_cast<ScalarType>(std::numeric_limits<RealType>::quiet_NaN())
                            : ScalarType(0);
@@ -354,11 +353,12 @@ protected:
              {.alpha = c.alpha, .beta = c.beta, .transA = c.transA});
         this->ctx->wait();
 
-        const MatrixView<ScalarType, MatrixFormat::Dense> A_ref_view(A_ref.data(), c.m, c.n, ld, a_stride, c.batch);
+        using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+        const MV A_ref_view(A_ref.data(), c.m, c.n, ld, a_stride, c.batch);
         VectorView<ScalarType> y0_vec(y_initial.data(), out, c.batch, c.yinc, y_stride);
         EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, red,
-                            batchlas::verify::gemv_backward_error(A_ref_view, c.transA, x_vec, y0_vec, y_vec, batchlas::verify::up(c.alpha),
-                                                                  batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)),
+                            MV::gemv_backward_error(*(this->ctx), A_ref_view, c.transA, x_vec, y0_vec, y_vec, MV::up(c.alpha),
+                                                    MV::up(c.beta), y_vec.all_items()),
                             old_relative_tolerance<ScalarType>(red));
 
         for (int b = 0; b < c.batch; ++b) {

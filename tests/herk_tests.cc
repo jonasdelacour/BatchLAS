@@ -8,7 +8,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -116,13 +115,11 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
                               .uplo = uplo,
                               .trans = trans}).wait();
 
-                        const auto triangle = uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper;
-                        const auto general = batchlas::verify::Shape::general;
-                        const double err = batchlas::verify::gemm_backward_error(
-                            A.view(), general, trans, A.view(), general,
-                            trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(), triangle,
-                            batchlas::verify::up(T(scaling.alpha)), batchlas::verify::up(T(scaling.beta)),
-                            batchlas::verify::all_items(shape.batch));
+                        using MV = MatrixView<T, MatrixFormat::Dense>;
+                        const double err = MV::gemm_backward_error(
+                            *(this->ctx), A.view(), trans, A.view(),
+                            trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(),
+                            MV::up(T(scaling.alpha)), MV::up(T(scaling.beta)), C.view().all_items(), uplo);
                         EXPECT_VERIFY(T, batchlas::verify::Check::blas, k, err)
                             << "herk read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
                             << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
@@ -195,14 +192,13 @@ TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
         herk(*(this->ctx), A.view(), C_lower.view(), {.uplo = Uplo::Lower, .trans = trans}).wait();
         herk(*(this->ctx), A.view(), C_upper.view(), {.uplo = Uplo::Upper, .trans = trans}).wait();
 
-        const auto general = batchlas::verify::Shape::general;
+        using MV = MatrixView<T, MatrixFormat::Dense>;
         const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                          batchlas::verify::gemm_backward_error(A.view(), general, trans, A.view(), general, other, C.view(), C.view(),
-                                                                uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
-                                                                1.0, 0.0, batchlas::verify::all_items(batch)))
+                          MV::gemm_backward_error(*(this->ctx), A.view(), trans, A.view(), other, C.view(), C.view(), 1.0, 0.0,
+                                                  C.view().all_items(), uplo))
                 << "herk's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
                 << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }
@@ -304,13 +300,12 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
                 herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, uplo, transA).wait();
 
                 // Only the requested triangle is the answer; its conjugate half is not computed.
-                const auto general = batchlas::verify::Shape::general;
+                using MV = MatrixView<T, MatrixFormat::Dense>;
                 EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                              batchlas::verify::gemm_backward_error(
-                                  A.view(), general, transA, A.view(), general,
+                              MV::gemm_backward_error(
+                                  *(this->ctx), A.view(), transA, A.view(),
                                   transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(),
-                                  uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
-                                  batchlas::verify::up(T(alpha)), batchlas::verify::up(T(beta)), batchlas::verify::all_items(batch)))
+                                  MV::up(T(alpha)), MV::up(T(beta)), C.view().all_items(), uplo))
                     << "route=" << route << " n=" << n << " trans=" << static_cast<int>(transA) << " uplo=" << static_cast<int>(uplo);
             }
         }

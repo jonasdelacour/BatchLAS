@@ -8,7 +8,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -41,7 +40,7 @@ TYPED_TEST_SUITE(Her2kTest, Her2kTestTypes);
 TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
-
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     struct Shape {
         int n;
         int k;
@@ -111,10 +110,10 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
 
                         // C0's diagonal is read as real, as BLAS does.
                         EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
-                                      batchlas::verify::rank2k_backward_error(A.view(), B.view(), trans, C0.view(), C.view(), uplo,
-                                                                              batchlas::verify::up(scaling.alpha),
-                                                                              batchlas::verify::up(T(scaling.beta)), true,
-                                                                              batchlas::verify::all_items(shape.batch)))
+                                      MV::rank2k_backward_error(
+                                          *(this->ctx), A.view(), B.view(), trans, C0.view(), C.view(), uplo,
+                                          MV::up(scaling.alpha),
+                                          MV::up(T(scaling.beta)), true, C.view().all_items()))
                             << "her2k read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
                             << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
                             << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper") << ", beta=" << scaling.beta;
@@ -168,7 +167,7 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
 TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
-
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const int n = 65;
     const int k = 40;
     const int batch = 4;
@@ -194,9 +193,10 @@ TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             const auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
-                          batchlas::verify::rank2k_backward_error(A.view(), B.view(), trans, C.view(), C.view(), uplo,
-                                                                  batchlas::verify::up(alpha), batchlas::verify::up(T(0)), true,
-                                                                  batchlas::verify::all_items(batch)))
+                          MV::rank2k_backward_error(
+                              *(this->ctx), A.view(), B.view(), trans, C.view(), C.view(), uplo,
+                              MV::up(alpha), MV::up(T(0)), true,
+                              C.view().all_items()))
                 << "her2k's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
                 << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }

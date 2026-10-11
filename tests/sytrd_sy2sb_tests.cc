@@ -16,7 +16,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -127,7 +127,9 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
         // Bwork = Q^T A0 Q is the explicit similarity transform; AB must be its band, so Bwork = I AB_dense I^T.
         const auto Bband = band_to_dense(AB.view(), n, kd);
         const auto I = Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
-        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, batchlas::verify::similarity_residual(Bwork.view(), I.view(), Bband.view()));
+        const double resid =
+            MatrixView<Real, MatrixFormat::Dense>::similarity_residual(*this->ctx, Bwork.view(), I.view(), Bband.view());
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, resid);
     }
 }
 #endif

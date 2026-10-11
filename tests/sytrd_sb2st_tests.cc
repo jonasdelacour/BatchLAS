@@ -15,8 +15,6 @@
 #include <string>
 #include <cstring>
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
-#include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <limits>
 #include <span>
@@ -55,7 +53,7 @@ static void dense_from_lower_band_work(const std::vector<T>& ABw,
                 const T aij = AB_b[r + static_cast<size_t>(j) * static_cast<size_t>(ldab)];
                 A_b[i + static_cast<size_t>(j) * static_cast<size_t>(lda)] = aij;
                 if (i != j) {
-                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = batchlas::verify::conj(aij);
+                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = MatrixView<T, MatrixFormat::Dense>::conj(aij);
                 }
             }
         }
@@ -139,8 +137,7 @@ template <class View>
 bool dense_spectra(const View& A, Spectra& out) {
     out.assign(static_cast<std::size_t>(A.batch_size()), {});
     for (int b = 0; b < A.batch_size(); ++b) {
-        auto a = batchlas::verify::copy_item(A, b);
-        if (!batchlas::verify::eigenvalues(A.rows(), a, out[static_cast<std::size_t>(b)])) return false;
+        if (!batchlas::verify::eigenvalues(A, b, out[static_cast<std::size_t>(b)])) return false;
     }
     return true;
 }
@@ -171,7 +168,7 @@ inline double spectra_error(const Spectra& got, const Spectra& ref, int* worst_i
     const VectorView<double> w(packed.data(), n, batch);
     double worst = 0;
     for (int b = 0; b < batch; ++b) {
-        const double err = batchlas::verify::values_error(w, ref, scale, std::span<const int>(&b, 1));
+        const double err = MatrixView<double, MatrixFormat::Dense>::values_error(w, ref, scale, std::span<const int>(&b, 1));
         if (worst_item && !(err <= worst)) *worst_item = b;
         worst = batchlas::verify::nanmax(worst, err);
     }

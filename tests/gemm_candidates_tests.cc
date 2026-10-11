@@ -15,7 +15,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/gemm/choice.hh"
@@ -217,7 +216,7 @@ struct Problem {
     T alpha{}, beta{};
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     UnifiedVector<T*> pa, pb, pc;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, pa.data()}; }
@@ -230,15 +229,15 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return batchlas::verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
 void init(Problem<T>& p, std::size_t total) {
     using R = RealOf<T>;
     const Spec& s = p.s;
-    p.alpha = batchlas::verify::make<T>(R(1.25), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : batchlas::verify::make<T>(R(-0.75), R(0.25));
+    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
+    p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     p.mem = UnifiedVector<T>(total, poison<T>());
     p.pa = UnifiedVector<T*>(s.batch, nullptr);
     p.pb = UnifiedVector<T*>(s.batch, nullptr);
@@ -254,14 +253,14 @@ void init(Problem<T>& p, std::size_t total) {
                 for (int i = 0; i < g.rows; ++i) {
                     T& v = p.mem[Problem<T>::at(g, it, i, j)];
                     if (it != r) v = p.mem[Problem<T>::at(g, r, i, j)];
-                    else v = is_c && s.nan_c ? batchlas::verify::make<T>(nan, nan) : batchlas::verify::make<T>(u(gen), u(gen));
+                    else v = is_c && s.nan_c ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen));
                 }
         };
         put(p.a, false);
         if (p.b.off != p.a.off) put(p.b, false);
         put(p.c, true);
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
 }
 
 std::size_t up4(std::size_t v) { return (v + 3) / 4 * 4; }
@@ -302,31 +301,26 @@ Problem<T> make_panel(Spec s, int parent) {
     return p;
 }
 
-// Item `it` against the library's componentwise BLAS backward error (k eps units); the operands and
-// C0 are read from the pristine copy, so a kernel that wrote into A, B or C0 cannot hide it.
+// The worst of `items` against the library's componentwise BLAS backward error (k eps units); the
+// operands and C0 are read from the pristine copy, so a kernel that wrote into A, B or C0 cannot hide it.
 template <typename T>
-::testing::AssertionResult item_ok(const Problem<T>& p, int it) {
+::testing::AssertionResult items_ok(Queue& ctx, const Problem<T>& p, std::span<const int> items) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
-    auto view0 = [&](const Region& g) {
-        return batchlas::verify::view(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
-    };
-    auto view1 = [&](const Region& g) {
-        return batchlas::verify::view(p.mem.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch);
-    };
-    const int one[] = {it};
-    const double err = batchlas::verify::gemm_backward_error(
-        view0(p.a), batchlas::verify::Shape::general, s.ta, view0(p.b), batchlas::verify::Shape::general, s.tb, view0(p.c),
-        view1(p.c), batchlas::verify::Shape::general, batchlas::verify::up(p.alpha), batchlas::verify::up(p.beta), one);
+    auto view0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
+    const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const double err =
+        MV::gemm_backward_error(ctx, view0(p.a), s.ta, view0(p.b), s.tb, view0(p.c), C1, MV::up(p.alpha), MV::up(p.beta), items);
     if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, err))
-        return ::testing::AssertionFailure() << "item " << it << ": componentwise backward error " << err << " exceeds "
-                                             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
+        return ::testing::AssertionFailure() << "worst of " << items.size() << " items: componentwise backward error " << err
+                                             << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     return ::testing::AssertionSuccess();
 }
 
 // The checked items are right, nothing outside C's footprint moved, and a repeating batch is
 // bit-identical to its representatives.
 template <typename T>
-void expect_gemm(const Problem<T>& p, const std::string& what) {
+void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) {
@@ -336,7 +330,7 @@ void expect_gemm(const Problem<T>& p, const std::string& what) {
     } else {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
-    for (int it : items) ASSERT_TRUE(item_ok(p, it)) << what;
+    ASSERT_TRUE(items_ok(ctx, p, items)) << what;
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -525,7 +519,7 @@ TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
                         const std::string what = name(c, s);
                         if (TestFixture::vendor_word_falls_back(c)) {
                             EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
-                            expect_gemm(p, what + " (vendor-free: Auto)");
+                            expect_gemm(*this->ctx, p, what + " (vendor-free: Auto)");
                             continue;
                         }
                         if (!TestFixture::expect_runs(c, s)) {
@@ -534,7 +528,7 @@ TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
                             continue;
                         }
                         ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                        expect_gemm(p, what);
+                        expect_gemm(*this->ctx, p, what);
                         if (::testing::Test::HasFatalFailure()) return;
                         ++ran;
                     }
@@ -591,7 +585,7 @@ TYPED_TEST(GemmCandidates, PinnedRunIsTheLauncherBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->launch(c, direct, &why)) << name(c, s) << ": " << why;
-                expect_gemm(pinned, name(c, s));
+                expect_gemm(*this->ctx, pinned, name(c, s));
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << name(c, s) << ": the pinned facade did not run this family's launcher; element " << e;
@@ -689,7 +683,7 @@ TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
             auto p = make_panel<T>(s, mn + k + 8);
             if (!TestFixture::expect_runs(c, p.s) || TestFixture::vendor_word_falls_back(c)) continue;
             this->run_pinned(c, p);
-            expect_gemm(p, name(c, p.s) + " (parent-ld panel)");
+            expect_gemm(*this->ctx, p, name(c, p.s) + " (parent-ld panel)");
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -718,7 +712,7 @@ TYPED_TEST(GemmCandidates, BetaZeroDoesNotReadC) {
                 if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_word_falls_back(c)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
-                expect_gemm(p, name(c, s) + (known ? " (finite C: known-defects #11)" : " (NaN C)"));
+                expect_gemm(*this->ctx, p, name(c, s) + (known ? " (finite C: known-defects #11)" : " (NaN C)"));
                 if (::testing::Test::HasFatalFailure()) return;
                 nan_checked += !known;
             }
@@ -742,7 +736,7 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_word_falls_back(c)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
-                expect_gemm(p, name(c, s));
+                expect_gemm(*this->ctx, p, name(c, s));
                 if (::testing::Test::HasFatalFailure()) return;
             }
     }
@@ -791,7 +785,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
         if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
         auto p = make_problem<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_gemm(p, name(c, at));
+        expect_gemm(*this->ctx, p, name(c, at));
         auto q = make_problem<T>(past);
         EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
         for (std::size_t e = 0; e < q.mem.size(); ++e)
@@ -800,7 +794,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     if constexpr (!kCx<T>) {
         auto p = make_problem<T>(past);
         ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
-        expect_gemm(p, "small past the grid ceiling");
+        expect_gemm(*this->ctx, p, "small past the grid ceiling");
     }
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
@@ -809,7 +803,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     } else {
         const std::string got = traced_choice([&] { this->run(p); });
         EXPECT_EQ(got, kCx<T> ? "vendor" : "small") << label(past) << ": small ranks above the vendor here";
-        expect_gemm(p, "auto past the grid ceiling");
+        expect_gemm(*this->ctx, p, "auto past the grid ceiling");
     }
 }
 
@@ -854,7 +848,7 @@ TYPED_TEST(GemmCandidates, NonDefaultPrecisionHasNoNativeRoute) {
     auto p = make_problem<T>(s);
     if constexpr (TestFixture::kVendor) {
         EXPECT_EQ(traced_choice([&] { this->run(p, prec); }), "vendor");
-        expect_gemm(p, "auto, non-default precision");
+        expect_gemm(*this->ctx, p, "auto, non-default precision");
     } else {
         EXPECT_THROW(this->run(p, prec), batchlas::NoRouteError);
     }
@@ -937,7 +931,7 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
                 this->run(p);
             });
             EXPECT_EQ(got, w.spelling) << what;
-            expect_gemm(p, what);
+            expect_gemm(*this->ctx, p, what);
         }
 }
 
@@ -956,7 +950,7 @@ TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "tiled");
-    expect_gemm(p, "tiled over the env pin");
+    expect_gemm(*this->ctx, p, "tiled over the env pin");
     const Pin outer("gemm", C{og::Direct{}});
     {
         const Pin inner("gemm", C{og::Tiled{}});
@@ -965,7 +959,7 @@ TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_problem<T>(tn);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "direct") << "the inner pin did not restore the outer";
-    expect_gemm(r, "outer direct");
+    expect_gemm(*this->ctx, r, "outer direct");
 }
 
 // key_of's every field reaches choose(): a synthetic table for this device whose winner changes
@@ -1006,7 +1000,7 @@ TYPED_TEST(GemmCandidates, AutoReadsEveryKeyField) {
     for (const auto& k : probes) {
         auto p = make_problem<T>(k.s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe, " << label(k.s);
-        expect_gemm(p, std::string("the ") + k.field + " probe");
+        expect_gemm(*this->ctx, p, std::string("the ") + k.field + " probe");
     }
 }
 
@@ -1024,7 +1018,7 @@ TYPED_TEST(GemmCandidates, TraceKeyFoldsAndClassifiesLayout) {
         auto p = make_problem<T>(k.s);
         const std::string line = traced_line([&] { this->run(p); });
         EXPECT_NE(line.find("ta=" + k.key), std::string::npos) << line;
-        expect_gemm(p, line);
+        expect_gemm(*this->ctx, p, line);
     }
     // A at a 16-byte base but ld != rows is strided; so is a contiguous A off a 16-byte base.
     auto p = make_problem<T>(Spec{kN, kN, 8, 8, 8, 1, Layout::Packed});
@@ -1076,7 +1070,7 @@ TYPED_TEST(GemmCandidates, AutoReadsTheSm89TranscribedTable) {
     for (const Row& r : rows) {
         auto p = make_problem<T>(r.s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), TestFixture::kVendor ? r.with_vendor : r.without) << label(r.s);
-        expect_gemm(p, "auto " + label(r.s));
+        expect_gemm(*this->ctx, p, "auto " + label(r.s));
     }
 }
 
@@ -1094,7 +1088,7 @@ TYPED_TEST(GemmCandidates, VendorFreeLastResortIsDirect) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "direct") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_gemm(p, "vendor-only table, " + label(s));
+        expect_gemm(*this->ctx, p, "vendor-only table, " + label(s));
     }
 }
 
@@ -1181,12 +1175,12 @@ TYPED_TEST(GemmCandidatesCpu, CpuQueueRunsNativeOnlyWithoutAHostBlas) {
             EXPECT_THROW(call(p), std::invalid_argument) << select::to_string(c);
         } else {
             call(p);
-            expect_gemm(p, "cpu " + select::to_string(c));
+            expect_gemm(*this->ctx, p, "cpu " + select::to_string(c));
         }
     }
     auto p = make_problem<T>(s);
     EXPECT_EQ(traced_choice([&] { call(p); }), kVendor ? "vendor" : "direct");
-    expect_gemm(p, "cpu auto");
+    expect_gemm(*this->ctx, p, "cpu auto");
 }
 
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them

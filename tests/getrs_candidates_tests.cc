@@ -17,7 +17,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/getrs_native.hh"
 #include "../src/ops/getrs/choice.hh"
@@ -55,7 +55,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-using verify::up;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -98,7 +97,7 @@ struct Sys {
 
 template <typename T>
 T poison() {
-    return verify::make<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MVof<T>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -127,11 +126,11 @@ Sys<T> make_sys(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
-                if (i == j) p.f(it, i, j) = verify::make<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else p.f(it, i, j) = verify::make<T>(sg * d(gen) / R(s.n), d(gen) / R(s.n));
+                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                else p.f(it, i, j) = MVof<T>::make(sg * d(gen) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
-            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = verify::make<T>(u(gen), u(gen));
+            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = MVof<T>::make(u(gen), u(gen));
     }
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -146,29 +145,28 @@ Sys<T> make_sys(const Spec& s) {
     return p;
 }
 
-// ||op(P^-1 L U) X - B0||_F / (||M||_F ||X||_F) for one item, M formed on the host from the factors.
+// ||op(P^-1 L U) X - B0||_F / (||M||_F ||X||_F), worst over @p items, M formed from the factors.
 template <typename T>
-double residual(Sys<T>& p, int it) {
-    const int n = p.s.n, nr = p.s.nrhs, items[] = {it};
+double residual(Queue& ctx, Sys<T>& p, std::span<const int> items) {
+    const int n = p.s.n, nr = p.s.nrhs;
     const VectorView<std::int32_t> piv(p.p32(), n, p.s.batch, 1, n);
-    return verify::lu_solve_residual(verify::view(p.a.data(), n, n, p.lda, p.sa, p.s.batch), piv, p.s.trans,
-                                     verify::view(p.b.data(), n, nr, p.ldb, p.sb, p.s.batch),
-                                     verify::view(p.b0.data(), n, nr, p.ldb, p.sb, p.s.batch), items);
+    return MVof<T>::lu_solve_residual(ctx, MVof<T>(p.a.data(), n, n, p.lda, p.sa, p.s.batch), piv, p.s.trans,
+                                      MVof<T>(p.b.data(), n, nr, p.ldb, p.sb, p.s.batch),
+                                      MVof<T>(p.b0.data(), n, nr, p.ldb, p.sb, p.s.batch), items);
 }
 
 // Residuals of the checked items, everything outside B's footprint and A bit for bit, and for a
 // repeating batch every item bit-identical to its representative.
 template <typename T>
-void expect_solved(Sys<T>& p, const std::string& what, const std::vector<T>* a0 = nullptr) {
+void expect_solved(Queue& ctx, Sys<T>& p, const std::string& what, const std::vector<T>* a0 = nullptr) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double r = residual(p, it);
-        ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
-    }
+    const double r = residual(ctx, p, items);
+    ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r))
+        << what << " worst residual over " << items.size() << " items " << r;
     for (std::size_t e = 0; e < p.b.size(); ++e) {
         const std::size_t off = e % std::size_t(p.sb), col = off / std::size_t(p.ldb), row = off % std::size_t(p.ldb);
         if (col >= std::size_t(s.nrhs) || row >= std::size_t(s.n))
@@ -365,7 +363,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
                     auto q = make_sys<T>(s);
                     const std::string want = this->auto_choice(q);
                     EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                    expect_solved(p, what + " (vendor-free: Auto)");
+                    expect_solved(*this->ctx, p, what + " (vendor-free: Auto)");
                     continue;
                 }
                 if (!this->expect_runs(c, n, nrhs)) {
@@ -376,7 +374,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
                 ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
                 const std::vector<T> a0(p.a.begin(), p.a.end());
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), select::to_string(c)) << what;
-                expect_solved(p, what, &a0);
+                expect_solved(*this->ctx, p, what, &a0);
                 if (::testing::Test::HasFatalFailure()) return;
                 ++ran;
             }
@@ -396,7 +394,7 @@ TYPED_TEST(GetrsCandidates, CtaLaunchesAtItsResidentCapacity) {
     auto p = make_sys<T>(s);
     ASSERT_TRUE(this->pin_accepted(C{gs::Cta{}}, p));
     this->run_pinned(C{gs::Cta{}}, p);
-    expect_solved(p, "cta at capacity " + label(s));
+    expect_solved(*this->ctx, p, "cta at capacity " + label(s));
     Spec over = s;
     over.n = fit + 1;
     auto q = make_sys<T>(over);
@@ -405,7 +403,7 @@ TYPED_TEST(GetrsCandidates, CtaLaunchesAtItsResidentCapacity) {
     EXPECT_FALSE(this->direct(C{gs::Cta{}}, q, &why)) << "the fused driver launched past its capacity";
     auto r = make_sys<T>(over);
     this->run_pinned(C{gs::Blocked{}}, r);
-    expect_solved(r, "blocked past the cta capacity " + label(over));
+    expect_solved(*this->ctx, r, "blocked past the cta capacity " + label(over));
 }
 
 // The pinned facade runs exactly that family's driver: bit-identical to the direct call.
@@ -424,7 +422,7 @@ TYPED_TEST(GetrsCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_solved(pinned, what);
+                expect_solved(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.b.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.b[e], direct.b[e]))
                         << what << ": the pinned facade did not run this family's driver; element " << e;
@@ -448,7 +446,7 @@ TYPED_TEST(GetrsCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             s.seed = 777u + k.n;
             auto p = make_sys<T>(s);
             this->run_pinned(k.c, p);
-            expect_solved(p, name(k.c, s));
+            expect_solved(*this->ctx, p, name(k.c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
     }
@@ -505,7 +503,7 @@ TYPED_TEST(GetrsCandidates, WorkspaceIsExactlyWhatTheChoiceNeeds) {
             this->ctx->wait();
             for (std::size_t e = need; e < arena.size(); ++e)
                 ASSERT_EQ(arena[e], std::byte{0xA5}) << name(c, s) << ": wrote past the workspace at byte " << e;
-            expect_solved(p, name(c, s) + " (exact workspace)");
+            expect_solved(*this->ctx, p, name(c, s) + " (exact workspace)");
         }
     }
 }
@@ -628,7 +626,7 @@ TYPED_TEST(GetrsCandidates, ClassWordsAndSpellings) {
             }, &err);
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_GETRS_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            expect_solved(p, what);
+            expect_solved(*this->ctx, p, what);
         }
 }
 
@@ -647,7 +645,7 @@ TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "blocked");
-    expect_solved(p, "blocked over env cta");
+    expect_solved(*this->ctx, p, "blocked over env cta");
     const Spec s{20, 2, 2};
     const Pin outer("getrs", C{gs::Cta{}});
     {
@@ -657,7 +655,7 @@ TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_sys<T>(s);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_solved(r, "outer cta");
+    expect_solved(*this->ctx, r, "outer cta");
 }
 
 // Auto on the shipped (transcribed) table equals the old router on both sides of every
@@ -681,7 +679,7 @@ TYPED_TEST(GetrsCandidates, AutoReadsTheTranscribedTable) {
         auto p = make_sys<T>(s);
         const std::string want = old_auto(dt, k.n, k.nrhs, k.batch, TestFixture::kVendor, this->cta_fits(k.n, k.nrhs));
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
-        expect_solved(p, "auto " + label(s));
+        expect_solved(*this->ctx, p, "auto " + label(s));
     }
 }
 
@@ -703,7 +701,7 @@ TYPED_TEST(GetrsCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_sys<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -714,7 +712,7 @@ TYPED_TEST(GetrsCandidates, TraceLineShowsTheKey) {
     auto p = make_sys<T>(s);
     const std::string line = traced_line([&] { this->run(p); });
     EXPECT_NE(line.find("n=12 nrhs=7 batch=5 ->"), std::string::npos) << line;
-    expect_solved(p, line);
+    expect_solved(*this->ctx, p, line);
 }
 
 // RouteGetrs.VendorFreeFallbackHandsOverTheNativeRoute, ported: with a table naming only the
@@ -730,7 +728,7 @@ TYPED_TEST(GetrsCandidates, VendorFreeLastResortIsBlocked) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_solved(p, "vendor-only table, " + label(s));
+        expect_solved(*this->ctx, p, "vendor-only table, " + label(s));
     }
 }
 

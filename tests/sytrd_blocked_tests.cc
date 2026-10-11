@@ -33,23 +33,23 @@ namespace {
 template <typename Scalar>
 double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                       std::span<const int> items = {}) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const int n = A0.rows();
     const int batch = A0.batch_size();
-    const std::vector<int> picked = items.empty() ? verify::default_items(batch) : std::vector<int>(items.begin(), items.end());
+    const std::vector<int> picked = items.empty() ? A0.default_items() : std::vector<int>(items.begin(), items.end());
     std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch));
     std::vector<double> got(static_cast<std::size_t>(n) * batch, 0.0);
     double scale = 0;
     for (int b : picked) {
-        auto a = verify::copy_item(A0, b);
         std::vector<double> dd(n), ee(std::max(0, n - 1));
-        for (int i = 0; i < n; ++i) dd[i] = std::real(verify::up(d(i, b)));
-        for (int i = 0; i + 1 < n; ++i) ee[i] = verify::abs(verify::up(e(i, b)));
-        if (!verify::eigenvalues(n, a, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee))
+        for (int i = 0; i < n; ++i) dd[i] = std::real(MV::up(d(i, b)));
+        for (int i = 0; i + 1 < n; ++i) ee[i] = std::abs(MV::up(e(i, b)));
+        if (!verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee))
             return std::numeric_limits<double>::quiet_NaN();
         std::copy(dd.begin(), dd.end(), got.begin() + static_cast<std::ptrdiff_t>(b) * n);
         for (double l : ref[static_cast<std::size_t>(b)]) scale = verify::nanmax(scale, std::fabs(l));
     }
-    return verify::values_error(VectorView<double>(got.data(), n, batch), ref, scale, picked);
+    return MatrixView<double, MatrixFormat::Dense>::values_error(VectorView<double>(got.data(), n, batch), ref, scale, picked);
 }
 
 // float only. The old float bounds, 1e4 x test_utils::tolerance<double>() = 1e-6 relative per value
@@ -143,7 +143,7 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     const int nb = 32;
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
-    const auto items = verify::all_items(batch);
+    const auto items = A0.view().all_items();
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     const auto slack = float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"});
 
@@ -297,7 +297,7 @@ void run_latrd_grid_case(int n, int batch, int nb, const char* impl) {
     ctx->wait();
 
     SCOPED_TRACE(::testing::Message() << "impl=" << impl << " n=" << n << " batch=" << batch << " nb=" << nb);
-    expect_spectrum<Scalar>(A0.view(), d, e, float_slack<Real>(kSlackLatrd), verify::all_items(batch));
+    expect_spectrum<Scalar>(A0.view(), d, e, float_slack<Real>(kSlackLatrd), A0.view().all_items());
 }
 
 TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {

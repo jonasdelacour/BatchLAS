@@ -15,7 +15,6 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/geqrf_native.hh"
@@ -85,8 +84,8 @@ Qr<T> make_qr(const Spec& s) {
     p.s = s;
     p.ld = s.m + 3;
     p.stride = p.ld * s.n + 7;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, verify::make<T>(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, verify::make<T>(-12345.0, -12345.0));
+    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, MVof<T>::make(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, MVof<T>::make(-12345.0, -12345.0));
     p.ptrs = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
@@ -94,20 +93,9 @@ Qr<T> make_qr(const Spec& s) {
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.at(it, i, j)] = it < reps ? verify::make<T>(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
+                p.mem[p.at(it, i, j)] = it < reps ? MVof<T>::make(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
-}
-
-// ||Q R - A||_F / ||A||_F for one item, from the packed reflectors.
-template <typename T>
-double qr_residual(const Qr<T>& p, int it) {
-    const int k = p.k();
-    const int item[] = {it};
-    const auto F = verify::view(p.mem.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
-    const auto A0 = verify::view(p.mem0.data(), p.s.m, p.s.n, p.ld, p.stride, p.s.batch);
-    const VectorView<T> tau(const_cast<T*>(p.tau.data()), k, p.s.batch, 1, k);
-    return verify::qr_residual(A0, F, tau, item);
 }
 
 // The pre-migration bound max(m+n, 16) eps as a factor on the kind's 16 m eps, never above 1.
@@ -121,24 +109,25 @@ verify::Slack tol(int m, int n) {
 // every element outside the m x n windows bit for bit, every tau finite, and for a repeating
 // batch every item's factor and tau bit-identical to its representative's.
 template <typename T>
-void expect_factored(const Qr<T>& p, const std::string& what) {
+void expect_factored(Queue& ctx, const Qr<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double r = qr_residual(p, it);
-        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, s.m, r, tol(s.m, s.n)))
-            << what << " item " << it << " residual " << r;
-    }
+    // ||Q R - A||_F / ||A||_F from the packed reflectors.
+    const MVof<T> F(p.mem.data(), s.m, s.n, p.ld, p.stride, s.batch);
+    const MVof<T> A0(const_cast<T*>(p.mem0.data()), s.m, s.n, p.ld, p.stride, s.batch);
+    const VectorView<T> tau(p.tau.data(), p.k(), s.batch, 1, p.k());
+    const double r = MVof<T>::qr_residual(ctx, A0, F, tau, items);
+    ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, s.m, r, tol(s.m, s.n))) << what << " residual " << r;
     for (std::size_t e = 0; e < p.mem.size(); ++e) {
         const int it = int(e / p.stride), off = int(e % p.stride), j = off / p.ld, i = off % p.ld;
         if (it < s.batch && j < s.n && i < s.m) continue;
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside A's window at element " << e;
     }
     for (std::size_t e = 0; e < std::size_t(p.k()) * s.batch; ++e)
-        ASSERT_TRUE(std::isfinite(verify::abs(verify::up(p.tau[e])))) << what << ": tau[" << e << "] not written";
+        ASSERT_TRUE(std::isfinite(std::abs(MVof<T>::up(p.tau[e])))) << what << ": tau[" << e << "] not written";
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it) {
             for (int j = 0; j < s.n; ++j)
@@ -332,7 +321,7 @@ TYPED_TEST(GeqrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             if (TestFixture::vendor_word_falls_back(c)) {
                 if (s.m < s.n) continue;  // vendor-free wide: no route at all
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
-                expect_factored(p, what + " (vendor-free: Auto)");
+                expect_factored(*this->ctx, p, what + " (vendor-free: Auto)");
                 continue;
             }
             if (!this->expect_runs(c, s.m, s.n)) {
@@ -342,7 +331,7 @@ TYPED_TEST(GeqrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             }
             ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
             this->run_pinned(c, p);
-            if (s.m >= s.n) expect_factored(p, what);
+            if (s.m >= s.n) expect_factored(*this->ctx, p, what);
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -363,7 +352,7 @@ TYPED_TEST(GeqrfCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             this->run_pinned(c, pinned);
             std::string why;
             ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-            expect_factored(pinned, what);
+            expect_factored(*this->ctx, pinned, what);
             for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                 ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e])) << what << ": not this family's driver; element " << e;
             for (std::size_t e = 0; e < pinned.tau.size(); ++e)
@@ -386,7 +375,7 @@ TYPED_TEST(GeqrfCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         Spec s{k.m, k.n, 1024, 7, 777u + unsigned(k.m)};
         auto p = make_qr<T>(s);
         this->run_pinned(k.c, p);
-        expect_factored(p, name(k.c, s));
+        expect_factored(*this->ctx, p, name(k.c, s));
         if (::testing::Test::HasFatalFailure()) return;
     }
 }
@@ -429,7 +418,7 @@ TYPED_TEST(GeqrfCandidates, ExactWorkspaceInAPoisonedArena) {
             UnifiedVector<std::byte> arena(need + kGuard, std::byte{0xA5});
             (void)geqrf<B, T>(*this->ctx, p.A(), p.tau.to_span(), Span<std::byte>(arena.data(), need));
             this->ctx->wait();
-            expect_factored(p, name(c, s) + " in an exact workspace");
+            expect_factored(*this->ctx, p, name(c, s) + " in an exact workspace");
             for (std::size_t e = need; e < arena.size(); ++e)
                 ASSERT_EQ(arena[e], std::byte{0xA5}) << name(c, s) << ": wrote " << (e - need)
                                                      << " bytes past a workspace of " << need;
@@ -544,7 +533,7 @@ TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
             });
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_GEQRF_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            expect_factored(p, what);
+            expect_factored(*this->ctx, p, what);
         }
     {   // tiny on a square order inside the ceiling.
         auto p = make_qr<T>(Spec{9, 9, 2});
@@ -553,7 +542,7 @@ TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
                       this->run(p);
                   }),
                   "tiny");
-        expect_factored(p, "tiny");
+        expect_factored(*this->ctx, p, "tiny");
     }
 }
 
@@ -567,7 +556,7 @@ TYPED_TEST(GeqrfCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto p = make_qr<T>(Spec{40, 24, 2});
     EXPECT_EQ(traced_choice([&] { this->run_pinned(C{gq::Blocked{}}, p); }), "blocked");
-    expect_factored(p, "blocked over env tiny");
+    expect_factored(*this->ctx, p, "blocked over env tiny");
     const Pin outer("geqrf", C{gq::Cta{}});
     {
         const Pin inner("geqrf", C{gq::Blocked{}});
@@ -576,7 +565,7 @@ TYPED_TEST(GeqrfCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_qr<T>(Spec{16, 16, 2});
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_factored(r, "outer cta");
+    expect_factored(*this->ctx, r, "outer cta");
 }
 
 // The shipped (transcribed) table on this device reproduces the old router at the window
@@ -618,7 +607,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
         auto p = make_qr<T>(s);
         const std::string want = TestFixture::kVendor ? r.vendor : r.native;
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << "Auto " << label(s);
-        expect_factored(p, "auto " + label(s));
+        expect_factored(*this->ctx, p, "auto " + label(s));
         auto q = make_qr<T>(s);
         EXPECT_EQ(traced_choice([&] {
                       const Pin pin("geqrf", std::string_view("native"));
@@ -657,7 +646,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsEveryKeyField) {
     for (const auto& k : probes) {
         auto p = make_qr<T>(Spec{k.m, k.n, 2, 0, 43u});
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_factored(p, std::string("the ") + k.field + " row");
+        expect_factored(*this->ctx, p, std::string("the ") + k.field + " row");
     }
     if constexpr (TestFixture::kVendor) {
         auto p = make_qr<T>(Spec{8, 17, 2, 0, 44u});
@@ -672,7 +661,7 @@ TYPED_TEST(GeqrfCandidates, TraceShowsTheLookupKey) {
         auto p = make_qr<T>(Spec{m, n, 5});
         const std::string line = traced_line([&] { this->run_pinned(C{gq::Blocked{}}, p); });
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_factored(p, line);
+        expect_factored(*this->ctx, p, line);
     }
 }
 
@@ -698,7 +687,7 @@ TYPED_TEST(GeqrfCandidates, VendorFreeWalkIsTheOldTieBreak) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked") << m << "x" << n;
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_factored(p, "vendor-only table");
+        expect_factored(*this->ctx, p, "vendor-only table");
     }
 }
 

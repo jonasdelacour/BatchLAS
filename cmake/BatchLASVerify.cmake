@@ -1,10 +1,10 @@
-# batchlas::verify (docs/design/verification.md): headers in include/batchlas/verify, the dense
-# checks as SYCL kernels in libbatchlas_verify (src/verify/engine.cc), device-linked once here
-# rather than in every test binary. Not installed: no install rule, and
-# cmake/BatchLASPackaging.cmake excludes include/batchlas/verify.
-add_library(batchlas_verify SHARED "${PROJECT_SOURCE_DIR}/src/verify/engine.cc")
+# batchlas::verify (docs/design/verification.md): the tolerance policy and the host LAPACKE references
+# (the checks themselves are MatrixView statics). Host code only; not installed (no install rule, and
+# cmake/BatchLASPackaging.cmake excludes include/batchlas/verify).
+add_library(batchlas_verify STATIC "${PROJECT_SOURCE_DIR}/src/verify/reference.cc")
 add_library(batchlas::verify ALIAS batchlas_verify)
-batchlas_configure_component(batchlas_verify)
+target_include_directories(batchlas_verify PUBLIC "${PROJECT_SOURCE_DIR}/include" "${PROJECT_BINARY_DIR}/include")
+target_compile_features(batchlas_verify PUBLIC cxx_std_20)
 target_link_libraries(batchlas_verify PUBLIC batchlas)
 
 if(BATCHLAS_HAS_HOST_BACKEND)

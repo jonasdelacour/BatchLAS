@@ -3,8 +3,6 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
-#include <batchlas/verify/norms.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
@@ -26,18 +24,18 @@ std::vector<Real> dense_tridiag(const std::vector<Real>& d, const std::vector<Re
     return t;
 }
 
-// eigen_residual and (unless residual_only) orthogonality_rotations (n = kb, the vectors checked) of item
-// b's first kb columns.
+// eigen_residual and, unless residual_only, orthogonality_rotations (n = kb) of item b's first kb columns.
 template <typename Real>
-void expect_stein_pairs(const std::vector<Real>& t, const MatrixView<Real, MatrixFormat::Dense>& Z,
+void expect_stein_pairs(Queue& ctx, const std::vector<Real>& t, const MatrixView<Real, MatrixFormat::Dense>& Z,
                         const Real* w, int n, int k, int b, int kb, bool residual_only = false) {
     using batchlas::verify::Check;
-    const auto zb = batchlas::verify::view(Z.data_ptr() + static_cast<size_t>(b) * Z.stride(), n, kb, Z.ld());
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    const MV zb(Z.data_ptr() + static_cast<size_t>(b) * Z.stride(), n, kb, Z.ld());
     const VectorView<Real> wb(const_cast<Real*>(w) + static_cast<size_t>(b) * k, kb, 1, 1, kb);
-    EXPECT_VERIFY(Real, Check::eigen_residual, n, batchlas::verify::eigen_residual(batchlas::verify::view(t.data(), n, n, n), zb, wb))
+    EXPECT_VERIFY(Real, Check::eigen_residual, n, MV::eigen_residual(ctx, MV(const_cast<Real*>(t.data()), n, n, n), zb, wb))
         << "batch " << b << ", " << kb << " vectors";
     if (!residual_only)
-        EXPECT_VERIFY(Real, Check::orthogonality_rotations, kb, batchlas::verify::orthogonality(zb)) << "batch " << b;
+        EXPECT_VERIFY(Real, Check::orthogonality_rotations, kb, MV::orthogonality(ctx, zb)) << "batch " << b;
 }
 
 template <typename Real>
@@ -83,7 +81,7 @@ protected:
         ctx->wait();
 
         const auto t = dense_tridiag(d_host, e_host, n);
-        for (int b = 0; b < batch; ++b) expect_stein_pairs(t, Z.view(), w.data(), n, k, b, k);
+        for (int b = 0; b < batch; ++b) expect_stein_pairs(*this->ctx, t, Z.view(), w.data(), n, k, b, k);
     }
 
     std::shared_ptr<Queue> ctx;
@@ -249,7 +247,7 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
         const int kb = f.counts[b];
 
         // (a) the declared prefix is a genuine orthonormal invariant-subspace basis.
-        expect_stein_pairs(t, Z.view(), f.w.data(), n, k, b, kb);
+        expect_stein_pairs(*this->ctx, t, Z.view(), f.w.data(), n, k, b, kb);
 
         // (b) everything past the prefix is exactly zero -- not the sentinel, not
         // an inverse-iteration result on a garbage shift, and above all not NaN.
@@ -384,7 +382,7 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
         }
     }
     // Item 0 is unaffected by its neighbour's empty request.
-    expect_stein_pairs(dense_tridiag(f.d, f.e, n), Z.view(), f.w.data(), n, k, 0, k, /*residual_only=*/true);
+    expect_stein_pairs(*this->ctx, dense_tridiag(f.d, f.e, n), Z.view(), f.w.data(), n, k, 0, k, /*residual_only=*/true);
 }
 
 int main(int argc, char** argv) {

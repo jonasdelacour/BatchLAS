@@ -243,7 +243,7 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
 	}
 }
 
@@ -293,9 +293,9 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 
 			syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
 
-			test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, batchlas::verify::all_items(batch));
+			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, A0.view().all_items());
 		}
 	}
 }
@@ -321,9 +321,9 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
 
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, batchlas::verify::all_items(batch));
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, A0.view().all_items());
 	}
 }
 
@@ -380,7 +380,7 @@ TYPED_TEST(SyevJacobiCtaTest, NearDegenerateResidualAndOrtho) {
 
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, 0);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, 0);
 	}
 }
 

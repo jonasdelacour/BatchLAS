@@ -9,7 +9,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -29,14 +28,11 @@ TYPED_TEST_SUITE(SyrkTest, SyrkTestTypes);
 // The `uplo` triangle of C against alpha op(A) op(A)^T + beta C0 in double, every item (Check::blas, k the
 // inner dimension). The other triangle is not the answer; the poison tests check that it is left alone.
 template <typename T, class VA, class VC0, class VC>
-void expect_syrk_matches(const VA& A, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha, T beta, int k) {
-    const auto general = batchlas::verify::Shape::general;
+void expect_syrk_matches(Queue& ctx, const VA& A, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha, T beta, int k) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                  batchlas::verify::gemm_backward_error(A, general, trans, A, general,
-                                                        trans == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans, C0, C,
-                                                        uplo == Uplo::Lower ? batchlas::verify::Shape::lower : batchlas::verify::Shape::upper,
-                                                        batchlas::verify::up(alpha), batchlas::verify::up(beta),
-                                                        batchlas::verify::all_items(C.batch_size())))
+                  MV::gemm_backward_error(ctx, A, trans, A, trans == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans, C0, C,
+                                          MV::up(alpha), MV::up(beta), C.all_items(), uplo))
         << "trans=" << static_cast<int>(trans) << ", uplo=" << static_cast<int>(uplo);
 }
 
@@ -67,7 +63,7 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
                      C.view(),
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            expect_syrk_matches(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+            expect_syrk_matches(*(this->ctx), A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -107,7 +103,7 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
                 SCOPED_TRACE(::testing::Message() << "n=" << n);
-                expect_syrk_matches(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+                expect_syrk_matches(*(this->ctx), A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
             }
         }
     }
@@ -199,7 +195,8 @@ void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo up
     }
 }
 
-void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
+void expect_triangle_respected(Queue& ctx,
+                               Matrix<float, MatrixFormat::Dense>& A,
                                Matrix<float, MatrixFormat::Dense>& C,
                                Matrix<float, MatrixFormat::Dense>& C0,
                                Uplo uplo,
@@ -207,7 +204,7 @@ void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
                                float alpha,
                                float beta,
                                int k) {
-    expect_syrk_matches<float>(A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+    expect_syrk_matches<float>(ctx, A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
@@ -269,7 +266,7 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 }
 
-                expect_triangle_respected(A, C_custom, C0, uplo, transA, alpha, beta, shape.k);
+                expect_triangle_respected(ctx, A, C_custom, C0, uplo, transA, alpha, beta, shape.k);
             }
         }
     }
@@ -322,8 +319,8 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
             }
 
-            expect_triangle_respected(A, C_auto, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
-            expect_triangle_respected(A, C_native, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
+            expect_triangle_respected(ctx, A, C_auto, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
+            expect_triangle_respected(ctx, A, C_native, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
         }
     }
 }

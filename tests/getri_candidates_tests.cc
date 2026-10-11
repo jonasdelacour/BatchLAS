@@ -18,7 +18,7 @@
 
 #include "test_utils.hh"
 
-#include <batchlas/verify/residuals.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/getri/choice.hh"
 #include "../src/extensions/getri_native.hh"
@@ -53,7 +53,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-using verify::up;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -104,7 +103,7 @@ struct Inv {
 
 template <typename T>
 T poison() {
-    return verify::make<T>(RealOf<T>(-9.75e3), RealOf<T>(4.5e3));
+    return MVof<T>::make(RealOf<T>(-9.75e3), RealOf<T>(4.5e3));
 }
 
 // Strictly diagonally dominant with its rows permuted, so getrf pivots; every entry has a
@@ -123,7 +122,7 @@ void fill_a(Inv<T>& p) {
         std::shuffle(perm.begin(), perm.end(), gen);
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
-                const T v = i == j ? verify::make<T>(R(s.n) + R(1.5), R(0.25)) : verify::make<T>(u(gen), u(gen));
+                const T v = i == j ? MVof<T>::make(R(s.n) + R(1.5), R(0.25)) : MVof<T>::make(u(gen), u(gen));
                 p.mem[p.ai(it, perm[i], j)] = v;
                 p.a0[std::size_t(it) * s.n * s.n + std::size_t(j) * s.n + perm[i]] = v;
             }
@@ -133,14 +132,18 @@ void fill_a(Inv<T>& p) {
             for (int i = 0; i < s.n; ++i) p.mem[p.ai(it, i, j)] = p.mem[p.ai(it % reps, i, j)];
 }
 
-// ||A0 C - I||_F / (||A0||_F ||C||_F) for one item, A0 and C promoted to double.
+// ||A0 C - I||_F / (||A0||_F ||C||_F), worst over @p items, A0 and C promoted to double. A0 and C
+// are packed in @p items order (a0 holds only the representatives of a repeating batch).
 template <typename T>
-double residual(const Inv<T>& p, int it) {
-    const int n = p.s.n;
-    const int rep = p.s.period > 0 ? it % std::min(p.s.period, p.s.batch) : it;
-    return verify::solve_residual(verify::view(p.a0.data() + std::size_t(rep) * n * n, n, n, n),
-                                  verify::view(p.mem.data() + p.ci(it, 0, 0), n, n, p.ldc),
-                                  verify::view(static_cast<const T*>(nullptr), 0, 0, 1));
+double residual(Queue& ctx, const Inv<T>& p, const std::vector<int>& items) {
+    const int n = p.s.n, g = int(items.size());
+    Matrix<T> a(n, n, g);
+    for (int k = 0; k < g; ++k) {
+        const int rep = p.s.period > 0 ? items[k] % std::min(p.s.period, p.s.batch) : items[k];
+        std::copy_n(p.a0.data() + std::size_t(rep) * n * n, std::size_t(n) * n, a.data().data() + std::size_t(k) * n * n);
+    }
+    const auto c = MVof<T>(const_cast<T*>(p.mem.data()) + p.coff, n, n, p.ldc, p.sc, p.s.batch).template astype<T>(items);
+    return MVof<T>::solve_residual(ctx, a.view(), c.view(), MVof<T>(nullptr, 0, 0, 1), a.view().all_items());
 }
 
 std::string label(const Spec& s) { return "n=" + std::to_string(s.n) + " batch=" + std::to_string(s.batch); }
@@ -310,10 +313,9 @@ protected:
         } else {
             items = {0, 1, s.batch / 2, s.batch - 1};
         }
-        for (int it : items) {
-            const double r = residual(p, it);
-            ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r)) << what << " item " << it << " residual " << r;
-        }
+        const double r = residual(*this->ctx, p, items);
+        ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r))
+            << what << " worst residual over " << items.size() << " items " << r;
         for (int it = 0; it < s.batch; ++it) ASSERT_EQ(p.info[it], 0) << what << " info of item " << it;
         std::vector<char> inc(p.mem.size(), 0);
         for (int it = 0; it < s.batch; ++it)
@@ -794,7 +796,7 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Ai(n, n, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = verify::make<T>(RealOf<T>(i == j ? n + 1 : 0.25), RealOf<T>(0.1));
+            for (int i = 0; i < n; ++i) A(i, j, b) = MVof<T>::make(RealOf<T>(i == j ? n + 1 : 0.25), RealOf<T>(0.1));
     UnifiedVector<int64_t> piv(std::size_t(n) * batch);
     auto call = [&] {
         UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, A.view())));

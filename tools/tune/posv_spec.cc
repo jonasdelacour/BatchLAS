@@ -1,12 +1,11 @@
 // posv for the tuner (flat-kernel-selection-phase3-plan.md §1.1): SPD A, random B, the
-// batchlas::verify solve residual (docs/design/verification.md). posv's cta and blocked times
+// MatrixView::solve_residual (docs/design/verification.md). posv's cta and blocked times
 // include the public potrf and trsm the composition calls, each choosing for itself (plan §2 "Coupling").
 
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/posv/choice.hh"
@@ -62,7 +61,7 @@ struct PosvProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        return {batchlas::verify::solve_residual(A0v, Xv, B0v), bad};
+        return {MV::solve_residual(q, A0v, Xv, B0v), bad};
     }
 };
 

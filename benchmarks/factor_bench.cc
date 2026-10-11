@@ -2,8 +2,7 @@
 // saturation-aware A/B harness for the batched factorizations
 // (potrf / getrf / getrs / geqrf / orgqr / gesv / posv) at n = 4..512.
 // It ports the proven pieces of wp4_potrf/phase2_ab/realpotrf.cpp, wp6_lu/bench/lubench6.cpp and
-// wp5_qr/bench/qrbench.cpp (tag perf-evidence/vendor-independence) into the tree. Inputs, residuals
-// and bounds come from batchlas::verify (docs/design/verification.md).
+// wp5_qr/bench/qrbench.cpp (tag perf-evidence/vendor-independence); checks: docs/design/verification.md.
 // ONE CELL PER PROCESS. The binary takes exactly one (op, type, shape, batch)
 // and never loops over shapes internally. That is not a style choice: the SLM
 // carve-out attribute is sticky per CUfunction, so an earlier, larger launch in
@@ -48,7 +47,6 @@
 #include "../src/ops/potrf/choice.hh"
 
 #include <batchlas/verify/reference.hh>
-#include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
@@ -540,13 +538,13 @@ static int run(const Cfg& c) {
         bool within = false;
         switch (c.op) {
             case OpKind::potrf:
-                a.residual = verify::potrf_residual(A0v, Av, up_of(c), items);
+                a.residual = MV::potrf_residual(*q, A0v, Av, up_of(c), items);
                 within = verify::within<T>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
                 // Packed 1-based int32 pivots, n per item, in the first half of the int64 span.
                 VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), n, batch, 1, pstride);
-                a.residual = verify::getrf_residual(A0v, Av, pivv, items);
+                a.residual = MV::getrf_residual(*q, A0v, Av, pivv, items);
                 within = verify::within<T>(Check::factorization, n, a.residual);
                 // The discriminating oracle: pivots elementwise against host xGETRF.
                 int mism = 0;
@@ -567,20 +565,17 @@ static int run(const Cfg& c) {
             case OpKind::gesv:
             case OpKind::posv:
             case OpKind::getrs:
-                a.residual = verify::solve_residual(A0v, Xv, B0v, items);
+                a.residual = MV::solve_residual(*q, A0v, Xv, B0v, items);
                 within = verify::within<T>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
-                using D = verify::promoted_t<T>;
-                using QV = MatrixView<D, MatrixFormat::Dense>;
+                using QV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
                 VectorView<T> tauv(tau.data(), kmin, batch, 1, kmin);
-                a.residual = verify::qr_residual(A0v, Av, tauv, items);
+                a.residual = MV::qr_residual(*q, A0v, Av, tauv, items);
                 double orth = 0;
                 for (int b : items) {
-                    std::vector<D> Q = verify::form_q(Av, tauv, b, kmin);
-                    D* qp = Q.data();
-                    QV Qv(Q.data(), m, kmin, m, m * kmin, 1, &qp);
-                    orth = verify::nanmax(orth, verify::orthogonality(Qv));
+                    const auto Q = MV::form_q(*q, Av, tauv, b, kmin);
+                    orth = verify::nanmax(orth, QV::orthogonality(*q, Q.view()));
                 }
                 a.extra = orth;
                 within = verify::within<T>(Check::factorization, n, a.residual);
@@ -588,7 +583,7 @@ static int run(const Cfg& c) {
                 break;
             }
             case OpKind::orgqr: {
-                a.residual = verify::orthogonality(Av, items);
+                a.residual = MV::orthogonality(*q, Av, items);
                 a.extra = a.residual;
                 within = verify::within<T>(Check::orthogonality, m, a.residual);
                 break;

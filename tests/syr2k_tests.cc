@@ -10,7 +10,6 @@
 #include <string>
 
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -30,10 +29,11 @@ TYPED_TEST_SUITE(Syr2kTest, Syr2kTestTypes);
 // The `uplo` triangle of C against alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C0 in double, every item
 // (Check::blas, 2k terms per entry). The other triangle is not the answer; the poison tests check it.
 template <typename T, class VA, class VB, class VC0, class VC>
-void expect_syr2k_matches(const VA& A, const VB& B, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha, T beta, int k) {
+void expect_syr2k_matches(Queue& ctx, const VA& A, const VB& B, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha,
+                          T beta, int k) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
-                  batchlas::verify::rank2k_backward_error(A, B, trans, C0, C, uplo, batchlas::verify::up(alpha), batchlas::verify::up(beta),
-                                                          false, batchlas::verify::all_items(C.batch_size())))
+                  MV::rank2k_backward_error(ctx, A, B, trans, C0, C, uplo, MV::up(alpha), MV::up(beta), false, C.all_items()))
         << "trans=" << static_cast<int>(trans) << ", uplo=" << static_cast<int>(uplo);
 }
 
@@ -66,7 +66,7 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
                       C.view(),
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            expect_syr2k_matches(A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+            expect_syr2k_matches(*(this->ctx), A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -162,7 +162,8 @@ void poison_unreferenced_triangle(Matrix<float, MatrixFormat::Dense>& C, Uplo up
     }
 }
 
-void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
+void expect_triangle_respected(Queue& ctx,
+                               Matrix<float, MatrixFormat::Dense>& A,
                                Matrix<float, MatrixFormat::Dense>& B,
                                Matrix<float, MatrixFormat::Dense>& C,
                                Matrix<float, MatrixFormat::Dense>& C0,
@@ -171,7 +172,7 @@ void expect_triangle_respected(Matrix<float, MatrixFormat::Dense>& A,
                                float alpha,
                                float beta,
                                int k) {
-    expect_syr2k_matches<float>(A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+    expect_syr2k_matches<float>(ctx, A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
@@ -221,7 +222,7 @@ void expect_route_respects_triangle(Queue& ctx,
             }
 
             ASSERT_NO_FATAL_FAILURE(
-                expect_triangle_respected(A, B, C_custom, C0, uplo, transA, alpha, beta, shape.k));
+                expect_triangle_respected(ctx, A, B, C_custom, C0, uplo, transA, alpha, beta, shape.k));
         }
     }
 }
@@ -368,7 +369,7 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
 
                 // Only the referenced triangle is read from C0, so a surviving NaN there is a read across the boundary.
                 SCOPED_TRACE(::testing::Message() << "n=" << shape.n << ", k=" << shape.k);
-                expect_syr2k_matches<float>(A.view(), B.view(), C0.view(), C_custom.view(), uplo, transA, alpha, beta, shape.k);
+                expect_syr2k_matches<float>(ctx, A.view(), B.view(), C0.view(), C_custom.view(), uplo, transA, alpha, beta, shape.k);
             }
         }
     }

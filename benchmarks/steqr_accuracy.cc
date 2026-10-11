@@ -123,8 +123,9 @@ UnifiedVector<float> lapacke_ssyev_eigs(const MatrixView<float, MatrixFormat::De
     const int batch = A.batch_size();
     UnifiedVector<float> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     for (int b = 0; b < batch; ++b) {
-        auto a = batchlas::verify::copy_item_native(A, b);
-        const lapack_int info = LAPACKE_ssyev(LAPACK_COL_MAJOR, 'N', 'L', n, a.data(), n, out.data() + static_cast<std::size_t>(b) * n);
+        auto a = A.astype<float>(std::span<const int>(&b, 1));
+        const lapack_int info =
+            LAPACKE_ssyev(LAPACK_COL_MAJOR, 'N', 'L', n, a.view().data_ptr(), n, out.data() + static_cast<std::size_t>(b) * n);
         if (info != 0)
             for (int i = 0; i < n; ++i) out[static_cast<std::size_t>(i + b * n)] = std::numeric_limits<float>::quiet_NaN();
     }
@@ -137,9 +138,8 @@ UnifiedVector<double> lapacke_ref_eigs(const MatrixView<InType, MatrixFormat::De
     const int batch = A.batch_size();
     UnifiedVector<double> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     for (int b = 0; b < batch; ++b) {
-        auto a_host = batchlas::verify::copy_item(A, b);
         std::vector<double> w;
-        const bool ok = batchlas::verify::eigenvalues(n, a_host, w);
+        const bool ok = batchlas::verify::eigenvalues(A, b, w);
         for (int i = 0; i < n; ++i)
             out[static_cast<std::size_t>(i + b * n)] = ok ? w[static_cast<std::size_t>(i)] : std::numeric_limits<double>::quiet_NaN();
     }

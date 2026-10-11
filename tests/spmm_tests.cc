@@ -16,7 +16,6 @@
 #include <type_traits>
 #include <vector>
 #include "test_utils.hh"
-#include <batchlas/verify/residuals.hh>
 
 using namespace batchlas;
 
@@ -298,7 +297,7 @@ protected:
         constexpr int kGuard = 64;
         const size_t c_live = static_cast<size_t>(str_c) * static_cast<size_t>(c.batch);
         UnifiedVector<S> c_data(c_live + kGuard);
-        std::vector<S> c_initial(c_live);
+        UnifiedVector<S> c_initial(c_live);
         for (size_t t = 0; t < c_live; ++t) {
             const size_t seed_t = c.identical_items ? t % static_cast<size_t>(str_c) : t;
             const S v = c.c_starts_nan
@@ -430,13 +429,14 @@ protected:
         for (const auto& seg : segments) {
             const int first = seg[0], count = seg[1] - seg[0];
             if (count <= 0) continue;
-            const auto Bseg = b_nt ? batchlas::verify::view(b_data.data() + static_cast<size_t>(first) * ldb, b_rows, count, ldb, str_b, c.batch)
-                                   : batchlas::verify::view(b_data.data(), b_rows, b_cols, ldb, str_b, c.batch);
-            const auto Cseg = batchlas::verify::view(c_data.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
-            const auto C0seg = batchlas::verify::view(c_initial.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
+            using MV = MatrixView<S, MatrixFormat::Dense>;
+            const MV Bseg = b_nt ? MV(b_data.data() + static_cast<size_t>(first) * ldb, b_rows, count, ldb, str_b, c.batch)
+                                 : MV(b_data.data(), b_rows, b_cols, ldb, str_b, c.batch);
+            const MV Cseg(c_data.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
+            const MV C0seg(c_initial.data() + static_cast<size_t>(first) * ldc, out_rows, count, ldc, str_c, c.batch);
             EXPECT_VERIFY(S, batchlas::verify::Check::blas, terms,
-                          batchlas::verify::spmm_backward_error(A_ref, c.transA, Bseg, c.transB, C0seg, Cseg, batchlas::verify::up(c.alpha),
-                                                                batchlas::verify::up(c.beta), batchlas::verify::all_items(c.batch)))
+                          MV::spmm_backward_error(*(this->ctx), A_ref, c.transA, Bseg, c.transB, C0seg, Cseg, MV::up(c.alpha),
+                                                  MV::up(c.beta), Cseg.all_items()))
                 << "columns " << first << ".." << first + count - 1;
         }
 
