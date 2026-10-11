@@ -76,9 +76,11 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
   old records. `scripts/sweep_to_table.py --rehash-sample RUN_ID --op OP --device DEV [--family F...]`
   compares every cell of that run with the best record usable under the old hashes. A cell agrees
   when the winners match, or when the old winner is within the 3% tie band of the sample's winner
-  in the sample's own times. If every cell agrees, one line per stale family is appended
-  (`"why": "<n> cells agree"`, `"at"`: HEAD); otherwise nothing is written and the disagreeing
-  cells are printed as `--remeasure-keys` lines, to be re-measured at deep.
+  in the sample's own times. A disagreeing cell is settled once a deep record measured with
+  today's kernels holds it (it then outranks the old record by date). If every cell agrees or is
+  settled, one line per stale family is appended (`"why": "<n> cells agree, <m> re-measured at
+  deep"`, `"at"`: HEAD); otherwise nothing is written and the unsettled cells are printed as
+  `--remeasure-keys` lines, to be re-measured at deep.
 
 A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
 and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one

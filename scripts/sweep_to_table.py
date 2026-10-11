@@ -717,7 +717,10 @@ def rehash_sample(ledger_path, op, run_id, families=None, at=None, repo=REPO, wr
         report.append(f"refused: the sample misses {len(missing)} exact-key combinations, e.g. {missing[:3]}")
     if report:
         return False, report, []
-    agree, bad = 0, []
+    # A disagreeing cell is settled once a deep record measured with today's kernels holds it.
+    remeasured = {(c["dtype"], c["key"]) for c in old_cells if c["tier"] == "deep" and usable(c, now)
+                  and all(not r["hash"] or now.get(spelling_family(r["cand"])) == r["hash"] for r in c["cands"])}
+    agree, settled, bad = 0, 0, []
     for c in sample:
         old = old_best.get((c["dtype"], c["key"]))
         if old is None or not old["ranked"] or not c["ranked"]:
@@ -726,19 +729,23 @@ def rehash_sample(ledger_path, op, run_id, families=None, at=None, repo=REPO, wr
         win, ow = c["ranked"][0], old["ranked"][0]
         if win == ow or (ow in times and win in times and times[ow] <= times[win] * (1.0 + TIE)):
             agree += 1
+        elif (c["dtype"], c["key"]) in remeasured:
+            settled += 1
         else:
             bad.append(f"{op} {c['dtype']} {','.join(f'{n}={v}' for n, v in c['key'])}   # old {ow}, now {win}")
     if bad or agree == 0:
-        return False, [f"{len(bad)} of {agree + len(bad)} sampled cells disagree (re-measure them with "
+        return False, [f"{len(bad)} of {agree + settled + len(bad)} sampled cells disagree (re-measure them with "
                        "--remeasure-keys at deep):"] + bad, []
     at = at or subprocess.run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], capture_output=True,
                               text=True).stdout.strip() or "unknown"
     lines = [{"kind": "rehash", "family": f, "from": next(iter(h)), "to": now[f], "at": at,
-              "proof": f"sample:{run_id}", "why": f"{agree} cells agree"} for f, h in sorted(stored.items())]
+              "proof": f"sample:{run_id}", "why": f"{agree} cells agree, {settled} re-measured at deep"}
+             for f, h in sorted(stored.items())]
     if write:
         with open(ledger_path, "a") as fh:
             fh.write("".join(json.dumps(x) + "\n" for x in lines))
-    return True, [f"{agree} sampled cells agree: rehashed {', '.join(x['family'] for x in lines)}"], lines
+    return True, [f"{agree} sampled cells agree, {settled} re-measured at deep: rehashed "
+                  f"{', '.join(x['family'] for x in lines)}"], lines
 
 
 def hash_vector_problem(repo=REPO):
@@ -925,10 +932,13 @@ def self_test():
         with open(os.path.join(repo, "src", "k.cc"), "w") as f:
             f.write("int k; // kernel\n")
 
-        def sample_ledger(name, sample_ns, flip=None, upper=False):
+        def sample_ledger(name, sample_ns, flip=None, upper=False, remeasured=()):
             old = {f"h{i}": "v1old" for i in range(3)}
             lines = [run_line(r1, "2026-10-01"), run_line("S", "2026-10-05", tier="custom")]
             lines += [dict(cell(r1, "deep", n), **old) for n in range(1, 65)]
+            if remeasured:
+                lines.append(run_line("D", "2026-10-06"))
+            lines += [{**cell("D", "deep", n, date="2026-10-06"), **{f"h{i}": hk for i in range(3)}} for n in remeasured]
             if upper:
                 lines.append(dict(cell(r1, "deep", 1, uplo="U"), **old))
             for n in sample_ns:
@@ -943,6 +953,10 @@ def self_test():
                and recs[0]["to"] == hk and "64 cells agree" in recs[0]["why"], f"rehash sample agrees (tie at n=7) -> {msg}")
         ok, msg, _ = rehash_sample(sample_ledger("s2.jsonl", range(1, 65), {7: 1.5}), "posv", "S", repo=repo)
         expect(not ok and any("n=7" in m and "old tiny, now cta" in m for m in msg), f"rehash sample disagrees -> {msg}")
+        ok, msg, recs = rehash_sample(sample_ledger("s2b.jsonl", range(1, 65), {7: 1.5}, remeasured=(7,)), "posv", "S",
+                                      repo=repo, write=False)
+        expect(ok and "63 cells agree, 1 re-measured at deep" in recs[0]["why"],
+               f"rehash sample: a disagreeing cell re-measured at deep is settled -> {msg}")
         ok, msg, _ = rehash_sample(sample_ledger("s3.jsonl", range(1, 11)), "posv", "S", repo=repo)
         expect(not ok and "fewer than 64" in msg[0], f"rehash sample too small -> {msg}")
         ok, msg, _ = rehash_sample(sample_ledger("s4.jsonl", range(1, 65), upper=True), "posv", "S", repo=repo)
