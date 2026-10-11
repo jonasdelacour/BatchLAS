@@ -673,7 +673,7 @@ TYPED_TEST(GesvCandidates, AutoReadsEveryKeyField) {
                        "n=8 nrhs=4 | blocked 1 | tiny 2\n"
                        "n=12 nrhs=1 | blocked 1 | tiny 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, nrhs; const char* expect; const char* field; };
     const Probe probes[] = {{8, 1, "tiny", "base"}, {8, 4, "blocked", "nrhs"}, {12, 1, "blocked", "n"}};
     for (const auto& k : probes) {
@@ -762,7 +762,7 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"nrhs", r.nrhs}});
             ASSERT_NE(row, nullptr) << t.file;
             const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(r.n);

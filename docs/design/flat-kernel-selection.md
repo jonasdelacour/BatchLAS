@@ -92,35 +92,38 @@ use `cpu`.
 
 ### 5.4 Tables and provenance {#flat-selection-tables-and-provenance}
 
-Each table is one file, `tuned/<op>.<dtype>.<device>.txt`, embedded at build time and parsed once
-per op. `BATCHLAS_TUNED_DIR=<dir>` replaces a built-in table with a file of the same name (the trace
-then shows `[override sm_120]`).
+Each table file is `tuned/<op>.<device>.txt`, embedded at build time; the loader splits it into one
+table per dtype, parsed once per (op, dtype). `BATCHLAS_TUNED_DIR=<dir>` replaces a built-in file
+with a file of the same name (the trace then shows `[override sm_120]`). The files, the ledger they
+are generated from and the check are in @ref design_tuning_data.
 
 ```
-# op=potrf dtype=float device=sm_120 batchlas=<sha> kernels=<hash> source=<origin>
-# keys: uplo:exact n:log:3 batch:log
-uplo=L n=64  batch=8192  | lpanel:panel=8 0.302 | vendor 0.490 | cta 0.530 | blocked 0.536
-uplo=L n=512 batch=2048  | blocked 14.10 | vendor 13.74 | lpanel:panel=8 14.84   # tie: within 3%, list order
+# op=potrf device=sm_120 batchlas=<sha> kernels=<hash> family_kernels=<family>:<hash>,... date=<date>
+# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_120.jsonl tiers=deep:1345,...
+# keys: dtype:exact uplo:exact n:log:3 batch:log
+dtype=float uplo=L n=64  batch=8192  | lpanel:panel=8 0.302 | vendor 0.490 | cta 0.530 | blocked 0.536 # deep
+dtype=float uplo=L n=512 batch=2048  | blocked 14.10 | vendor 13.74 | lpanel:panel=8 14.84 # deep
 ```
 
-- Each row lists every measured candidate in rank order. Times are milliseconds per call for the
-  whole batch.
-- A row is either all timed or all untimed. An untimed row has the form `uplo=L n=8 nrhs=1 batch=128 | tiny - | cta -`, and
-  the header then needs `source=transcribed:<hex sha>`.
-- `kernels=<hash>` is the first 8 hex digits of a SHA-256 over the op's kernel sources, listed in
-  `tools/tune/<op>_spec.cc` between the `kernel-sources-begin` and `kernel-sources-end` markers. A
-  mismatch or `unknown` is a warning, in CMake and in `.github/ci/check_tuned_tables.py`. The table
-  stays in use.
+- Each row lists every measured candidate in rank order (within 3%: candidate-list order). Times
+  are milliseconds per call for the whole batch. The comment is the row's ledger tier.
+- A row is either all timed or all untimed. An untimed row has the form
+  `dtype=float uplo=L n=8 nrhs=1 batch=128 | tiny - | cta - # transcribed`, and the header then
+  needs a `source=ledger:` (or, in a hand-made single table, `source=transcribed:<hex sha>`).
+- `kernels=<hash>` is kernel hash v2 over the op's kernel sources, listed in
+  `tools/tune/<op>_spec.cc` between the `kernel-sources-begin` and `kernel-sources-end` markers
+  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning, in
+  `scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`. The table stays in use.
 - A candidate in a table must be a member of `candidates<T>()`. The loader checks this on first use,
   and `tuned_tables_tests` checks every shipped table without a GPU.
 
-Every shipped table has one of three origins:
+Every row has one of four origins, its ledger tier:
 
 | Origin | Meaning | Examples |
 |---|---|---|
-| measured | `batchlas_tune` timings (`source=tuner:<jsonl>`) | trsm float and double on sm_120 |
-| converted | timings from earlier sweeps, written by `scripts/sweep_to_table.py` | potrf on sm_120 and sm_89; posv on sm_120 |
-| transcribed | the old router's preference order, evaluated at each grid cell; untimed | all other sm_89 and sm_120 tables; the cpu spmm table |
+| measured (`deep`, `coarse`, `preview`, `custom`) | `batchlas_tune` timings | every sm_120 table but gemv |
+| converted | timings from earlier forced-route sweeps, on old kernels | potrf on sm_89 |
+| transcribed | the old router's preference order, evaluated at each grid cell; untimed | all other sm_89 tables, gemv on sm_120, the cpu spmm table, sm_120 rows the deep lattice measured nothing near |
 
 The inventory per op, dtype and device is in @ref tuned_tables_readme. Every op ships a table for
 every dtype it instantiates on sm_89 and sm_120, so no device borrows in the normal case. Retuning the
@@ -209,17 +212,19 @@ Every entry of `candidates<T>()`, pinned with `ScopedPin` and run through the pu
 
 ### 6.4 Output
 
-`tuned/<op>.<dtype>.<device>.txt` in the §5.4 format, written by `scripts/sweep_to_table.py --tuner`,
-with `kernels=<hash>`. The raw per-rep JSONL goes to `benchmarks/results/tuning/` (Git LFS).
+Cell records appended to the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` (Git LFS),
+from which `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt` in the §5.4 format
+(@ref design_tuning_data).
 `--gate` compares Auto against an old choice on the cells where they differ. FAIL means the new
 time is above 1.05× the old in both passes. Exit code 1 on FAIL, 3 when a row is an error or no cell
 was gated.
 
 ### 6.5 Staleness check
 
-A CMake configure step and `.github/ci/check_tuned_tables.py` recompute each op's kernel hash. A
-header hash that differs, or says `unknown`, prints a warning (`tuned/potrf.float.sm_120.txt is
-stale (kernels unknown -> 3f9a1c2e); run tools/tune`). It is never an error.
+`scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py` recompute each op's
+kernel hash (v2, comments and whitespace ignored). A header hash that differs prints a warning
+(`tuned/potrf.sm_120.txt is stale (kernels 0d38569e -> 3f9a1c2e); retune the op`). It is never an
+error. There is no configure-time check.
 
 ## 8. Tests
 
@@ -246,8 +251,10 @@ arena and check that nothing is written past the end.
 
 ### 8.4 Table validity
 
-`tests/tuned_tables_tests.cc`, no GPU. Every embedded table parses, names only members of
-`candidates<T>()`, and has strictly ascending ranked times apart from ties. On the matching device,
+`tests/tuned_tables_tests.cc`, no GPU. Every embedded file is `<op>.<device>.txt` keyed
+`dtype:exact` plus the op's `choice.hh` keys, every per-dtype table parses and names only members of
+that dtype's `candidates<T>()`, and timed rows outside ledger tables have ascending ranked times
+apart from ties. On the matching device,
 each row's first runnable candidate also passes `can_run` at that row's own key.
 
 ### 8.5 Pins and borrowing
@@ -287,9 +294,9 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 
 ## 11. Open items
 
-- **Retune.** The transcribed tables (sm_89 everywhere; sm_120 gemm, cfloat and cdouble trsm, and the
-  spmm cpu table) and the converted potrf and posv tables are to be replaced with tuner output and
-  re-stamped with hashes. Until then, transcribed rows encode the old router's choices, untimed.
+- **Retune.** The transcribed rows (sm_89 everywhere, sm_120 gemv, the spmm cpu table, and sm_120
+  rows the deep lattice measured nothing near) and the converted sm_89 potrf rows are to be replaced
+  with tuner output. Until then, transcribed rows encode the old router's choices, untimed.
 - **sm_89 live gate** for potrf and for the other ops with transcribed sm_89 tables.
 - **hemm, herk and her2k** still select by hand in `src/backends/cublas.cc` (vendor builds only). They
   expand or fold into the public gemm when `expansion_preferred`, `herk_gemm_preferred`
@@ -333,8 +340,9 @@ unless a line says otherwise.
   workspace.
 - **Upper:** Upper calls use the Lower rows (the exact key is dropped). sm_120 has measured Upper
   rows for float only, so the other dtypes rank only the Upper-capable entries of a Lower row.
-- **Data:** sm_120 is converted from the routing sweeps. sm_89 is converted from the archive, which
-  has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`.
+- **Data:** sm_120 is deep-measured (@ref tuned_tables_readme). sm_89 is converted from the
+  forced-route archive (`converted` rows), which has no current-era `lpanel` timings, so the sm_89
+  tables never pick `lpanel`.
 
 ### posv (Cholesky solve)
 
@@ -345,8 +353,7 @@ unless a line says otherwise.
   `internal_error` before `choose()`.
 - **Last resort:** `blocked`.
 - **Data:** sm_89 is transcribed (untimed): `tiny | cta | blocked` inside the old tiny window and
-  `cta | blocked` elsewhere. sm_120 is converted from the posv sweep, with duplicate re-runs
-  resolved to the later measurement.
+  `cta | blocked` elsewhere. sm_120 is deep-measured.
 
 > **Note:** the `max_wg >= 64` term cannot fail on any device with `max_wg` of 64 or more, so no
 > test can turn it red on current hardware.
@@ -363,8 +370,7 @@ unless a line says otherwise.
   - `vendor`: `has_vendor`.
 - **Last resort:** `blocked`, then `vendor`.
 - **Errors:** `A.batch_size() != B.batch_size()` throws `invalid_argument`.
-- **Data:** float and double on sm_120 are measured. The other sm_120 dtypes and all sm_89 tables
-  are transcribed. The sm_89 transcription is `cta | blocked | vendor` for order at most 32 (7,680 of
+- **Data:** sm_120 is deep-measured, every dtype. All sm_89 tables are transcribed. The sm_89 transcription is `cta | blocked | vendor` for order at most 32 (7,680 of
   17,280 rows) and `blocked | vendor` above that (9,600 rows). No transcribed row names `sg_left`.
 - **`uplo` and `diag` (sm_120 A/B, 56 cells):** four combinations per cell, for float and cdouble.
   The first entry is the same for all four combinations in every cell. Lower-ranked entries swap in
@@ -584,7 +590,7 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
 
 | Topic | Chosen | Rejected |
 |---|---|---|
-| Source of speed | Measured or transcribed tables per (op, dtype, device) | Hand-written device rules; first-call autotuning; a fitted cost model |
+| Source of speed | Measured or transcribed tables per (op, device), dtype a key | Hand-written device rules; first-call autotuning; a fitted cost model |
 | Choice type | `std::variant` of family structs with int fields | One type per compiled config; a flat struct with family and fields; an enum per kernel; virtual kernel objects |
 | Nested ops | Each op decides through the public function. A parent override only where a measurement needs one. | A parent that plans everything |
 | Unmeasured shapes | Nearest row by weighted log distance over the op's keys | Generated regions; power-of-two buckets |

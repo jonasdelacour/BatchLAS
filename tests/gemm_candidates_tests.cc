@@ -19,6 +19,7 @@
 
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -975,7 +976,7 @@ TYPED_TEST(GemmCandidates, AutoReadsEveryKeyField) {
         rows += "ta=C tb=N layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n"
                 "ta=N tb=C layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n";
     const TableGuard restore;
-    select::testing::set_builtin_tables(with_gemm_table(dtype, dev, rows));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(with_gemm_table(dtype, dev, rows)));
     const std::string conj = kCx<T> ? "wide:m=64:n=64:k=16" : "tiled";
     struct Probe { Spec s; std::string expect; const char* field; };
     const Probe probes[] = {
@@ -1042,7 +1043,7 @@ TYPED_TEST(GemmCandidates, AutoReadsTheSm89TranscribedTable) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("gemm", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:424a45bc")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads a measured gemm table";
     struct Row { Spec s; std::string with_vendor, without; };
     std::vector<Row> rows;
@@ -1073,8 +1074,8 @@ TYPED_TEST(GemmCandidates, VendorFreeLastResortIsDirect) {
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     const TableGuard restore;
-    select::testing::set_builtin_tables(
-        with_gemm_table(dtype, dev, "ta=N tb=N layout=packed m=64 n=64 k=64 batch=128 | vendor 1\n"));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(
+        with_gemm_table(dtype, dev, "ta=N tb=N layout=packed m=64 n=64 k=64 batch=128 | vendor 1\n")));
     for (const Spec& s : {Spec{kN, kN, 64, 64, 64, 4, Layout::Packed}, Spec{kT, kC, 300, 5, 70, 2, Layout::Strided}}) {
         auto p = make_problem<T>(s);
         std::string all;
@@ -1201,7 +1202,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"ta", r.ta}, {"tb", r.tb}, {"layout", r.layout}, {"m", r.m},
                               {"n", r.n},   {"k", r.k},   {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);

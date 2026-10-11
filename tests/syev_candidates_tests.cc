@@ -589,7 +589,7 @@ TYPED_TEST(SyevCandidates, AutoReadsEveryKeyField) {
                        "jobz=V n=16 batch=128 | blocked 1 | cta 2\n"
                        "jobz=N n=8 batch=128 | cta 1 | jacobi 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { JobType j; int n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{JobType::EigenVectors, 8, 100, "jacobi", "base"},
                             {JobType::EigenVectors, 8, 30000, "cta_fused", "batch"},
@@ -618,7 +618,7 @@ TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("syev", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads no transcribed syev table";
     const std::string dt(select::dtype_name<T>());
     const std::string v = TestFixture::kVendor ? "vendor" : "cta";
@@ -646,7 +646,7 @@ TYPED_TEST(SyevCandidates, VendorFreeLastResortIsBlocked) {
                        "# op=syev dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: jobz:exact n:log:3 batch:log\njobz=V n=64 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (int n : {16, 48}) {
         auto p = make_eig<T>(Spec{n, 2});
         std::string all;
@@ -772,7 +772,7 @@ TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
                 ASSERT_FALSE(tables.empty()) << r.dtype;
                 const select::Table& t = *tables.front();
                 ASSERT_EQ(t.device, dev) << r.dtype;
-                EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+                EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
                 const select::TableRow* row = t.nearest({{"jobz", r.jobz}, {"n", r.n}, {"batch", batch}});
                 ASSERT_NE(row, nullptr) << t.file;
                 std::string got;

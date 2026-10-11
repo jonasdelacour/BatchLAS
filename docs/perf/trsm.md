@@ -23,7 +23,7 @@ tie-break order. `can_run` (`trsm.cc:45-61`) is correctness only. Every native f
 | `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1` (`trsm.cc:58`) |
 | `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked (`d.has_vendor`, `trsm.cc:59`) |
 
-Selection takes the first runnable entry of the nearest row of `tuned/trsm.<dtype>.<device>.txt`
+Selection takes the first runnable entry of the nearest row of `tuned/trsm.<device>.txt`
 (@ref selection_tables). The key is `side:exact trans:exact order:log:2 q:log batch:log`
 (`choice.hh:26-27`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
 folds to `T`. uplo and diag are not keys. The last resort is `blocked`, then `vendor`. The CPU has no

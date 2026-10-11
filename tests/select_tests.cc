@@ -66,9 +66,23 @@ std::string table(const std::string& device, const std::string& rows, const std:
     return "# op=" + op + " dtype=float device=" + device + " kernels=unknown\n" +
            "# keys: uplo:exact n:log batch:log\n" + rows;
 }
+// Every row line gets "dtype=float " in front: a tuned/<op>.<device>.txt file keys rows by dtype first.
+std::string float_rows(const std::string& rows) {
+    std::string out;
+    std::size_t a = 0;
+    while (a < rows.size()) {
+        std::size_t e = rows.find('\n', a);
+        if (e == std::string::npos) e = rows.size();
+        const std::string line = rows.substr(a, e - a);
+        out += (line.empty() || line[0] == '#' ? line : "dtype=float " + line) + (e < rows.size() ? "\n" : "");
+        a = e + 1;
+    }
+    return out;
+}
 std::pair<std::string, std::string> file(const std::string& device, const std::string& rows,
                                          const std::string& op = "synth") {
-    return {op + ".float." + device + ".txt", table(device, rows, op)};
+    return {op + "." + device + ".txt", "# op=" + op + " device=" + device + " kernels=unknown\n" +
+                                            "# keys: dtype:exact uplo:exact n:log batch:log\n" + float_rows(rows)};
 }
 
 C choose(const std::string& device, const sel::Key& k, const Pred& ok = kAll, const std::string& op = "synth") {
@@ -137,7 +151,7 @@ TEST(SelectTable, ParsesRowsCommentsAndHeader) {
         "uplo=L n=64 batch=1024 | lpanel:panel=8 0.302 | vendor 0.49   # noisy\n"
         "\n"
         "# a comment after the rows\n"
-        "batch=2048 n=64 uplo=L | cta 1\n"), "synth.float.sm_120.txt");
+        "batch=2048 n=64 uplo=L | cta 1\n"), "synth.sm_120.txt");
     EXPECT_EQ(t.op, "synth");
     EXPECT_EQ(t.device, "sm_120");
     EXPECT_EQ(t.family, "sm");
@@ -154,8 +168,8 @@ TEST(SelectTable, ParsesRowsCommentsAndHeader) {
 }
 
 TEST(SelectTable, LogKeyWeightsDefaultToOne) {
-    const auto t = sel::parse_table("# keys: uplo:exact n:log:3 batch:log m:log:0.5\nuplo=L n=4 batch=1 m=2 | tiny 1\n",
-                                    "synth.float.sm_120.txt");
+    const auto t = sel::parse_table("# dtype=float\n# keys: uplo:exact n:log:3 batch:log m:log:0.5\nuplo=L n=4 batch=1 m=2 | tiny 1\n",
+                                    "synth.sm_120.txt");
     ASSERT_EQ(t.keys.size(), 4u);
     EXPECT_DOUBLE_EQ(t.keys[0].weight, 1.0);
     EXPECT_DOUBLE_EQ(t.keys[1].weight, 3.0);
@@ -169,7 +183,7 @@ TEST(SelectTable, TranscribedRowsAreRankedWithoutTimes) {
         "# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
         "# keys: uplo:exact n:log batch:log\n"
         "uplo=L n=20 batch=8192 | tiny - | cta - | blocked -\n"
-        "uplo=L n=64 batch=8192 | blocked - | cta -\n", "synth.float.sm_89.txt");
+        "uplo=L n=64 batch=8192 | blocked - | cta -\n", "synth.sm_89.txt");
     EXPECT_EQ(t.source, "transcribed:2b46acab");
     ASSERT_EQ(t.rows.size(), 2u);
     EXPECT_FALSE(t.rows[0].timed);
@@ -180,14 +194,14 @@ TEST(SelectTable, TranscribedRowsAreRankedWithoutTimes) {
     EXPECT_EQ(t.rows[1].ranked[0].spelling, "blocked");
     const auto timed = sel::parse_table("# op=synth dtype=float device=sm_89 source=sweep.jsonl\n"
                                         "# keys: uplo:exact n:log batch:log\n"
-                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.float.sm_89.txt");
+                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.sm_89.txt");
     EXPECT_TRUE(timed.rows[0].timed);
     EXPECT_DOUBLE_EQ(timed.rows[0].ranked[0].ms, 1.5);
     // A transcribed table may mix row kinds (each row is one kind); the Python --check agrees.
     const auto mixed = sel::parse_table("# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
                                         "# keys: uplo:exact n:log batch:log\n"
                                         "uplo=L n=20 batch=8192 | tiny - | cta -\n"
-                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.float.sm_89.txt");
+                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.sm_89.txt");
     ASSERT_EQ(mixed.rows.size(), 2u);
     EXPECT_FALSE(mixed.rows[0].timed);
     EXPECT_TRUE(mixed.rows[1].timed);
@@ -199,7 +213,7 @@ TEST(SelectTable, LedgerTableMixesTimedAndTranscribedRows) {
                                     "# source=ledger:benchmarks/results/tuning/ledger/synth.float.sm_89 tiers=deep:1,coarse:0,preview:0,custom:0,transcribed:1\n"
                                     "# keys: uplo:exact n:log batch:log\n"
                                     "uplo=L n=20 batch=8192 | tiny - | cta - # transcribed\n"
-                                    "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2 # deep\n", "synth.float.sm_89.txt");
+                                    "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2 # deep\n", "synth.sm_89.txt");
     EXPECT_EQ(t.source.rfind("ledger:", 0), 0u);
     ASSERT_EQ(t.rows.size(), 2u);
     EXPECT_FALSE(t.rows[0].timed);
@@ -211,15 +225,65 @@ TEST(SelectTable, LedgerTableMixesTimedAndTranscribedRows) {
     ASSERT_NE(hi, nullptr);
     EXPECT_EQ(hi->ranked[0].spelling, "blocked");
     EXPECT_THROW(sel::parse_table("# op=synth dtype=float device=sm_89 source=sweep.jsonl\n# keys: n:log\nn=4 | tiny -\n",
-                                  "synth.float.sm_89.txt"), std::runtime_error);
+                                  "synth.sm_89.txt"), std::runtime_error);
 }
 
 TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
-    const auto t = sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt");
-    EXPECT_EQ(t.file, "op.cfloat.gfx90a.txt");
+    const auto parts = sel::parse_tables("# keys: dtype:exact uplo:exact n:log\ndtype=cfloat uplo=L n=4 | tiny 1\n",
+                                         "dir/op.gfx90a.txt");
+    ASSERT_EQ(parts.size(), 1u);
+    const sel::Table& t = parts[0];
+    EXPECT_EQ(t.file, "op.gfx90a.txt");
+    EXPECT_EQ(t.op, "op");
     EXPECT_EQ(t.dtype, "cfloat");
     EXPECT_EQ(t.family, "gfx");
     EXPECT_EQ(t.arch_number, 90);
+    EXPECT_THROW(sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt"),
+                 std::runtime_error) << "an old <op>.<dtype>.<device>.txt name supplies nothing";
+}
+
+// tuned/<op>.<device>.txt: dtype is the first key; the file splits into one Table per dtype, each
+// without the dtype key, rows in file order, lookups confined to the dtype.
+TEST(SelectTable, AnOpDeviceFileSplitsIntoOneTablePerDtype) {
+    const std::string text =
+        "# op=synth device=sm_120 source=ledger:x.jsonl\n"
+        "# keys: dtype:exact uplo:exact n:log batch:log\n"
+        "dtype=float uplo=L n=64 batch=1024 | tiny 1 # deep\n"
+        "dtype=double uplo=L n=64 batch=1024 | cta 2 # deep\n"
+        "dtype=float uplo=L n=512 batch=1024 | vendor 3 # deep\n"
+        "dtype=double uplo=L n=8 batch=1024 | blocked - # transcribed\n";
+    const auto parts = sel::parse_tables(text, "synth.sm_120.txt");
+    ASSERT_EQ(parts.size(), 2u);
+    EXPECT_EQ(parts[0].dtype, "float");
+    EXPECT_EQ(parts[1].dtype, "double");
+    for (const sel::Table& t : parts) {
+        EXPECT_EQ(t.op, "synth");
+        EXPECT_EQ(t.device, "sm_120");
+        EXPECT_EQ(t.source, "ledger:x.jsonl");
+        ASSERT_EQ(t.keys.size(), 3u);
+        EXPECT_EQ(t.keys[0].name, "uplo");
+        ASSERT_EQ(t.rows.size(), 2u);
+        for (const auto& r : t.rows) EXPECT_EQ(r.keys.size(), 3u);
+    }
+    EXPECT_EQ(parts[0].rows[1].line, 5);
+    EXPECT_EQ(parts[0].nearest({{"uplo", "L"}, {"n", "8"}, {"batch", "1024"}})->ranked[0].spelling, "tiny");
+    EXPECT_FALSE(parts[1].rows[1].timed);
+    EXPECT_EQ(parts[1].nearest({{"uplo", "L"}, {"n", "512"}, {"batch", "1024"}})->ranked[0].spelling, "cta");
+    const std::vector<std::pair<std::string, std::string>> bad{
+        {"# keys: uplo:exact dtype:exact n:log\nuplo=L dtype=float n=4 | tiny 1\n", "the first key must be dtype:exact"},
+        {"# keys: dtype:log n:log\ndtype=4 n=4 | tiny 1\n", "the first key must be dtype:exact"},
+        {"# op=synth dtype=float\n# keys: dtype:exact n:log\ndtype=float n=4 | tiny 1\n", "the dtype is a key column"},
+        {"# keys: dtype:exact n:log\ndtype=half n=4 | tiny 1\n", "unknown dtype 'half'"},
+        {"# keys: dtype:exact n:log\ndtype=float n=4 | tiny 1\ndtype=float n=4 | cta 1\n", "duplicate row"},
+    };
+    for (const auto& [t, why] : bad) {
+        try {
+            sel::parse_tables(t, "synth.sm_120.txt");
+            ADD_FAILURE() << "accepted:\n" << t;
+        } catch (const std::runtime_error& e) {
+            EXPECT_NE(std::string(e.what()).find(why), std::string::npos) << e.what();
+        }
+    }
 }
 
 TEST(SelectTable, EveryParseErrorNamesFileAndLine) {
@@ -268,11 +332,11 @@ TEST(SelectTable, EveryParseErrorNamesFileAndLine) {
     };
     for (const auto& [text, where, why] : bad) {
         try {
-            sel::parse_table(text, "synth.float.sm_120.txt");
+            sel::parse_table(text, "synth.sm_120.txt");
             ADD_FAILURE() << "accepted:\n" << text;
         } catch (const std::runtime_error& e) {
             const std::string m = e.what();
-            EXPECT_EQ(m.find("synth.float.sm_120.txt" + where), 0u) << m;
+            EXPECT_EQ(m.find("synth.sm_120.txt" + where), 0u) << m;
             EXPECT_NE(m.find(why), std::string::npos) << m;
         }
     }
@@ -293,7 +357,7 @@ const char* kGrid =
     "uplo=L n=512 batch=1024 | vendor 2\n";   // 10
 
 int nearest_line(const sel::Key& k) {
-    static const auto t = sel::parse_table(table("sm_120", kGrid), "synth.float.sm_120.txt");
+    static const auto t = sel::parse_table(table("sm_120", kGrid), "synth.sm_120.txt");
     const auto* r = t.nearest(k);
     return r ? r->line : -1;
 }
@@ -322,7 +386,7 @@ TEST(SelectNearest, TiesGoToSmallerNThenSmallerBatch) {
         "uplo=L n=128 batch=1024 | blocked 1\n"
         "uplo=L n=32 batch=1024 | tiny 1\n"
         "uplo=L n=128 batch=256 | cta 1\n"
-        "uplo=L n=32 batch=4096 | vendor 1\n"), "synth.float.sm_120.txt");
+        "uplo=L n=32 batch=4096 | vendor 1\n"), "synth.sm_120.txt");
     EXPECT_EQ(t.nearest(key("L", 64, 1024))->line, 4);  // n=128 and n=32 tie: smaller n
     EXPECT_EQ(t.nearest(key("L", 64, 512))->line, 4);   // three-way tie at 2: n decides before
                                                         // batch, so (128,256) loses to (32,1024)
@@ -334,16 +398,16 @@ TEST(SelectNearest, KeyWeightScalesThatKeysDistance) {
     const std::string rows = "uplo=L n=16 batch=1024 | tiny 1\n"   // line 3: A
                              "uplo=L n=32 batch=4096 | cta 1\n";   // 4: B
     const std::string head = "# op=synth dtype=float device=sm_120\n";
-    const auto plain = sel::parse_table(head + "# keys: uplo:exact n:log batch:log\n" + rows, "synth.float.sm_120.txt");
-    const auto cubed = sel::parse_table(head + "# keys: uplo:exact n:log:3 batch:log\n" + rows, "synth.float.sm_120.txt");
-    const auto light = sel::parse_table(head + "# keys: uplo:exact n:log batch:log:0.4\n" + rows, "synth.float.sm_120.txt");
+    const auto plain = sel::parse_table(head + "# keys: uplo:exact n:log batch:log\n" + rows, "synth.sm_120.txt");
+    const auto cubed = sel::parse_table(head + "# keys: uplo:exact n:log:3 batch:log\n" + rows, "synth.sm_120.txt");
+    const auto light = sel::parse_table(head + "# keys: uplo:exact n:log batch:log:0.4\n" + rows, "synth.sm_120.txt");
     EXPECT_EQ(plain.nearest(key("L", 32, 1024))->line, 3);
     EXPECT_EQ(cubed.nearest(key("L", 32, 1024))->line, 4);
     EXPECT_EQ(light.nearest(key("L", 32, 1024))->line, 4);  // 0.4 * 2 < 1: a fractional weight
     // A weighted tie (3*1 == 3) still goes to the smaller n.
     const auto tie = sel::parse_table(head + "# keys: uplo:exact n:log:3 batch:log\n"
                                       "uplo=L n=32 batch=8192 | cta 1\nuplo=L n=16 batch=1024 | tiny 1\n",
-                                      "synth.float.sm_120.txt");
+                                      "synth.sm_120.txt");
     EXPECT_EQ(tie.nearest(key("L", 32, 1024))->line, 4);
 }
 
@@ -359,7 +423,7 @@ TEST(SelectNearest, ExactKeysAreDroppedFromTheRightOneAtATime) {
         return sel::Key{{"side", side}, {"trans", trans}, {"n", n}, {"batch", 1024}};
     };
     const auto st = sel::parse_table(head + "# keys: side:exact trans:exact n:log batch:log\n" + rows,
-                                     "synth.float.sm_120.txt");
+                                     "synth.sm_120.txt");
     EXPECT_EQ(st.nearest(k("L", "T", 512))->line, 4);   // both exact keys match
     EXPECT_EQ(st.nearest(k("R", "T", 32))->line, 6);    // trans dropped: side=R kept, 8 beats 512
     EXPECT_EQ(st.nearest(k("R", "T", 300))->line, 5);   // ... and the log distance still decides
@@ -367,7 +431,7 @@ TEST(SelectNearest, ExactKeysAreDroppedFromTheRightOneAtATime) {
     EXPECT_EQ(st.nearest(k("X", "T", 64))->line, 3);    // side unmatched: both dropped, pure distance
     // Declared order decides which key is kept: trans first keeps trans=T over side.
     const auto ts = sel::parse_table(head + "# keys: trans:exact n:log side:exact batch:log\n" + rows,
-                                     "synth.float.sm_120.txt");
+                                     "synth.sm_120.txt");
     EXPECT_EQ(ts.nearest(k("R", "T", 8))->line, 4);
     EXPECT_EQ(ts.nearest(k("R", "N", 8))->line, 6);
     // exact = {0, 2} is not {0, 1}: comparing by prefix position j instead of exact[j] never
@@ -376,7 +440,7 @@ TEST(SelectNearest, ExactKeysAreDroppedFromTheRightOneAtATime) {
 }
 
 TEST(SelectNearest, MissingKeyThrows) {
-    const auto t = sel::parse_table(table("sm_120", kGrid), "synth.float.sm_120.txt");
+    const auto t = sel::parse_table(table("sm_120", kGrid), "synth.sm_120.txt");
     EXPECT_THROW(t.nearest({{"uplo", "L"}, {"n", 64}}), std::invalid_argument);
 }
 
@@ -396,7 +460,7 @@ TEST_F(Select, EmbeddedTablesWithBadSpellingsFailLoudly) {
         choose("sm_120", key("L", 64, 1024));
         ADD_FAILURE() << "accepted";
     } catch (const std::runtime_error& e) {
-        EXPECT_NE(std::string(e.what()).find("synth.float.sm_120.txt:4:"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("synth.sm_120.txt:4:"), std::string::npos) << e.what();
     }
 }
 
@@ -685,7 +749,7 @@ TEST_F(Select, TunedDirReplacesSameNamedTablesAndTagsThem) {
               std::string::npos) << err;
     EXPECT_NE(err.find("-> blocked  1.00 ms  [override sm_89, borrowed for sm_86]\n"), std::string::npos) << err;
     for (const char* junk : {"README.txt", "synth.float.sm_120.bak.txt"})
-        EXPECT_NE(err.find(std::string("BATCHLAS_TUNED_DIR: skipping ") + junk + " (not <op>.<dtype>.<device>.txt)\n"),
+        EXPECT_NE(err.find(std::string("BATCHLAS_TUNED_DIR: skipping ") + junk + " (not <op>.<device>.txt)\n"),
                   std::string::npos) << junk << "\n" << err;
 }
 
@@ -762,11 +826,11 @@ TEST_F(Select, TraceLinesAndIndentation) {
 // A transcribed row is walked like a timed one (rank order, can_run, candidates); the trace
 // says "transcribed" where a timed row prints its times.
 TEST_F(Select, TranscribedRowsWalkInRankOrderAndTraceAsTranscribed) {
-    sel::testing::set_builtin_tables({{"synth.float.sm_89.txt",
-        "# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
-        "# keys: uplo:exact n:log batch:log\n"
-        "uplo=L n=20 batch=8192 | tiny - | cta - | blocked -\n"
-        "uplo=L n=512 batch=8192 | blocked - | vendor -\n"}});
+    sel::testing::set_builtin_tables({{"synth.sm_89.txt",
+        "# op=synth device=sm_89 source=transcribed:2b46acab\n"
+        "# keys: dtype:exact uplo:exact n:log batch:log\n"
+        "dtype=float uplo=L n=20 batch=8192 | tiny - | cta - | blocked -\n"
+        "dtype=float uplo=L n=512 batch=8192 | blocked - | vendor -\n"}});
     ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
     for (const auto& [n, ok] : std::vector<std::pair<int, Pred>>{{20, kAll}, {20, all_but({"tiny"})}, {512, kAll}}) {

@@ -1,6 +1,8 @@
 #include "ledger.hh"
 
 #include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -37,7 +39,7 @@ std::string host_name() {
 
 std::string run_line(const RunMeta& m) {
     Json j;
-    j.str("kind", "run").str("run_id", m.run_id).str("host", m.host).str("device", m.device)
+    j.str("kind", "run").str("dtype", m.dtype).str("run_id", m.run_id).str("host", m.host).str("device", m.device)
         .str("device_name", m.device_name).str("batchlas", m.batchlas).str("argv", m.argv).str("date", m.date)
         .str("tier", to_string(m.tier)).str("keys", m.keys).str("candidates", m.candidates);
     for (const auto& [k, v] : m.worker_mode) j.str("wm." + k, v);
@@ -45,9 +47,9 @@ std::string run_line(const RunMeta& m) {
 }
 
 // Candidate i of a cell is spread over fields h<i> s<i> r<i> m<i> lo<i> hi<i> n<i>, so a cell is one line.
-std::string cell_line(const CellRecord& r) {
+std::string cell_line(const CellRecord& r, const std::string& dtype) {
     Json j;
-    j.str("kind", "cell").str("run_id", r.run_id).str("tier", to_string(r.tier)).str("key", key_arg(r.key))
+    j.str("kind", "cell").str("dtype", dtype).str("run_id", r.run_id).str("tier", to_string(r.tier)).str("key", key_arg(r.key))
         .integer("round", r.round).str("date", r.date).str("ranked", join_bar(r.ranked));
     std::vector<std::string> names;
     for (const auto& c : r.cands) names.push_back(c.cand);
@@ -70,6 +72,7 @@ Tier need_tier(const Record& r) {
 RunMeta parse_run(const Record& r) {
     RunMeta m;
     m.run_id = r.get("run_id");
+    m.dtype = r.get("dtype");
     m.host = r.get("host");
     m.device = r.get("device");
     m.device_name = r.get("device_name");
@@ -127,47 +130,63 @@ std::string make_run_id() {
     return std::string(ts) + "-" + host_name() + "-" + std::to_string(getpid());
 }
 
-std::string ledger_dir(const std::string& root, const std::string& op, const std::string& dtype,
-                       const std::string& device) {
-    return root + "/" + op + "." + dtype + "." + device;
+std::string ledger_file(const std::string& root, const std::string& op, const std::string& device) {
+    return root + "/" + op + "." + device + ".jsonl";
 }
 
-LedgerWriter::LedgerWriter(std::string dir, RunMeta meta) : meta_(std::move(meta)) {
-    fs::create_directories(dir);
-    const std::string path = dir + "/" + meta_.run_id + ".jsonl";
-    fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd_ < 0) throw std::runtime_error("cannot open " + path);
-    repair_tail(path);
+LedgerWriter::LedgerWriter(std::string path, RunMeta meta) : path_(std::move(path)), meta_(std::move(meta)) {
+    if (const fs::path parent = fs::path(path_).parent_path(); !parent.empty()) fs::create_directories(parent);
+    fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_APPEND, 0644);
+    if (fd_ < 0) throw std::runtime_error("cannot open " + path_);
     put(run_line(meta_));
 }
 
-// A reopened file may end in a torn line. A complete record just missing its newline gets one; any
-// other fragment is cut, since appending after it would make it a malformed middle line.
-void LedgerWriter::repair_tail(const std::string& path) {
-    std::string text;
-    {
-        std::ifstream in(path, std::ios::binary);
-        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+// Under the lock: a file ending in a torn line (a killed writer) is repaired before the next line. A
+// complete record just missing its newline gets one; any other fragment is cut, since appending
+// after it would make it a malformed middle line.
+void LedgerWriter::repair_tail() {
+    struct stat st{};
+    if (::fstat(fd_, &st) != 0) throw std::runtime_error("cannot stat " + path_);
+    const off_t size = st.st_size;
+    char last = '\n';
+    if (size == 0 || ::pread(fd_, &last, 1, size - 1) != 1 || last == '\n') return;
+    std::string tail;  // bytes after the last newline, read backwards in chunks
+    off_t start = size;
+    while (start > 0) {
+        const off_t n = std::min<off_t>(start, 65536);
+        std::string chunk(static_cast<std::size_t>(n), '\0');
+        if (::pread(fd_, chunk.data(), static_cast<std::size_t>(n), start - n) != n) throw std::runtime_error("cannot read " + path_);
+        const std::size_t nl = chunk.rfind('\n');
+        if (nl != std::string::npos) {
+            tail = chunk.substr(nl + 1) + tail;
+            start = start - n + static_cast<off_t>(nl) + 1;
+            break;
+        }
+        tail = chunk + tail;
+        start -= n;
     }
-    if (text.empty() || text.back() == '\n') return;
-    const std::size_t nl = text.rfind('\n');
-    const std::size_t start = nl == std::string::npos ? 0 : nl + 1;
-    if (parse_record(std::string_view(text).substr(start))) put("\n");
-    else if (::ftruncate(fd_, static_cast<off_t>(start)) != 0) throw std::runtime_error("cannot repair " + path);
+    if (parse_record(tail)) {
+        if (::write(fd_, "\n", 1) != 1) throw std::runtime_error("cannot repair " + path_);
+    } else if (::ftruncate(fd_, start) != 0) {
+        throw std::runtime_error("cannot repair " + path_);
+    }
 }
 
 LedgerWriter::~LedgerWriter() {
     if (fd_ >= 0) ::close(fd_);
 }
 
-// An unbuffered write() per line: a kill lands between lines or tears only the one in flight.
+// One unbuffered write() per line under flock: another writer's line never interleaves, and a kill
+// lands between lines or tears only the one in flight.
 void LedgerWriter::put(const std::string& line) {
-    std::size_t done = 0;
-    while (done < line.size()) {
-        const ssize_t n = ::write(fd_, line.data() + done, line.size() - done);
-        if (n < 0) throw std::runtime_error("ledger write failed");
-        done += static_cast<std::size_t>(n);
-    }
+    if (::flock(fd_, LOCK_EX) != 0) throw std::runtime_error("cannot lock " + path_);
+    struct Unlock {
+        int fd;
+        ~Unlock() { ::flock(fd, LOCK_UN); }
+    } unlock{fd_};
+    repair_tail();
+    const ssize_t n = ::write(fd_, line.data(), line.size());
+    if (n < 0 || static_cast<std::size_t>(n) != line.size()) throw std::runtime_error("ledger write failed: " + path_);
 }
 
 void LedgerWriter::cell(const CellRecord& r) { cell(r, meta_.tier); }
@@ -176,12 +195,12 @@ void LedgerWriter::cell(const CellRecord& r, Tier tier) {
     CellRecord c = r;
     c.run_id = meta_.run_id;
     c.tier = tier;
-    put(cell_line(c));
+    put(cell_line(c, meta_.dtype));
 }
 
 void LedgerWriter::audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms) {
-    put(Json().str("kind", "audit").str("run_id", meta_.run_id).str("key", key_arg(key)).str("verdict", verdict)
-            .num("fresh_ms", fresh_ms).num("warm_ms", warm_ms).line());
+    put(Json().str("kind", "audit").str("dtype", meta_.dtype).str("run_id", meta_.run_id).str("key", key_arg(key))
+            .str("verdict", verdict).num("fresh_ms", fresh_ms).num("warm_ms", warm_ms).line());
 }
 
 void LedgerWriter::update_run(const RunMeta& meta) {
@@ -189,46 +208,59 @@ void LedgerWriter::update_run(const RunMeta& meta) {
     put(run_line(meta_));
 }
 
-Ledger read_ledger(const std::string& dir) {
+Ledger read_ledger(const std::string& path, const std::string& dtype) {
     Ledger l;
-    std::vector<std::string> files;
-    if (fs::is_directory(dir))
-        for (const auto& e : fs::directory_iterator(dir)) {
-            const std::string n = e.path().filename().string();
-            if (ends_with(n, ".jsonl") && !ends_with(n, ".reps.jsonl")) files.push_back(e.path().string());
-        }
-    std::sort(files.begin(), files.end());
-    for (const std::string& path : files) {
-        std::ifstream f(path);
-        std::vector<std::pair<int, std::string>> lines;
-        std::string line;
-        for (int no = 1; std::getline(f, line); ++no)
-            if (line.find_first_not_of(" \t\r") != std::string::npos) lines.emplace_back(no, line);
-        if (!lines.empty() && lines[0].second.rfind("version https://git-lfs.github.com/spec/v1", 0) == 0)
-            throw std::runtime_error(path + ": Git LFS pointer: run git lfs pull");
-        for (std::size_t i = 0; i < lines.size(); ++i) {
-            try {
-                std::string err;
-                const auto rec = parse_record(lines[i].second, &err);
-                if (!rec) throw std::runtime_error(err);
-                const std::string kind = rec->get("kind");
-                if (kind == "run") {
-                    RunMeta m = parse_run(*rec);
-                    const auto same = std::find_if(l.runs.begin(), l.runs.end(), [&](const RunMeta& x) { return x.run_id == m.run_id; });
-                    if (same == l.runs.end()) l.runs.push_back(std::move(m));
-                    else *same = std::move(m);
-                } else if (kind == "cell") l.cells.push_back(parse_cell(*rec));
-            } catch (const std::exception& e) {
-                const std::string where = path + ":" + std::to_string(lines[i].first) + ": " + e.what();
-                if (i + 1 != lines.size()) throw std::runtime_error(where);
-                l.warnings.push_back("skipping truncated last line, " + where);
+    std::ifstream f(path);
+    if (!f) return l;
+    std::vector<std::pair<int, std::string>> lines;
+    std::string line;
+    for (int no = 1; std::getline(f, line); ++no)
+        if (line.find_first_not_of(" \t\r") != std::string::npos) lines.emplace_back(no, line);
+    if (!lines.empty() && lines[0].second.rfind("version https://git-lfs.github.com/spec/v1", 0) == 0)
+        throw std::runtime_error(path + ": Git LFS pointer: run git lfs pull");
+    std::map<std::string, std::map<std::string, std::string>> rehash;  // family -> from -> to
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        try {
+            std::string err;
+            const auto rec = parse_record(lines[i].second, &err);
+            if (!rec) throw std::runtime_error(err);
+            const std::string kind = rec->get("kind");
+            if (kind == "rehash") {
+                rehash[rec->get("family")][rec->get("from")] = rec->get("to");
+                continue;
             }
+            if (!rec->has("dtype")) throw std::runtime_error("no dtype");
+            if (rec->get("dtype") != dtype) continue;
+            if (kind == "run") {
+                RunMeta m = parse_run(*rec);
+                std::erase_if(l.runs, [&](const RunMeta& x) { return x.run_id == m.run_id; });
+                l.runs.push_back(std::move(m));
+            } else if (kind == "cell") {
+                l.cells.push_back(parse_cell(*rec));
+            }
+        } catch (const std::exception& e) {
+            const std::string where = path + ":" + std::to_string(lines[i].first) + ": " + e.what();
+            if (i + 1 != lines.size()) throw std::runtime_error(where);
+            l.warnings.push_back("skipping truncated last line, " + where);
         }
     }
+    std::set<std::string> dirty;
+    for (const RunMeta& m : l.runs)
+        if (ends_with(m.batchlas, "-dirty")) {
+            dirty.insert(m.run_id);
+            l.warnings.push_back(path + ": run " + m.run_id + " (" + dtype + ") is " + m.batchlas + ": excluded");
+        }
+    std::erase_if(l.runs, [&](const RunMeta& m) { return dirty.count(m.run_id) != 0; });
+    std::erase_if(l.cells, [&](const CellRecord& c) { return dirty.count(c.run_id) != 0; });
+    for (CellRecord& c : l.cells)
+        for (CandResult& r : c.cands)
+            if (const auto fam = rehash.find(family_of(r.cand)); fam != rehash.end())
+                if (const auto to = fam->second.find(r.hash); to != fam->second.end()) r.hash = to->second;
     return l;
 }
 
 std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<std::string, std::string>& family_hash) {
+    if (unhashed(r.tier)) return {};
     std::set<std::string> seen, out;
     for (const CandResult& c : r.cands) {
         const std::string fam = family_of(c.cand);
@@ -248,6 +280,7 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
 }
 
 Freshness freshness(const CellRecord& r, const std::map<std::string, std::string>& family_hash) {
+    if (unhashed(r.tier)) return Freshness::current;
     if (!r.ranked.empty()) {
         const auto it = family_hash.find(family_of(r.ranked.front()));
         const auto win = std::find_if(r.cands.begin(), r.cands.end(),
@@ -341,7 +374,8 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
             m.tier = tier;
             m.keys = rec->get("keys");
             m.candidates = rec->get("candidates");
-            w = std::make_unique<LedgerWriter>(ledger_dir(ledger_root, rec->get("op"), rec->get("dtype"), m.device), m);
+            m.dtype = rec->get("dtype");
+            w = std::make_unique<LedgerWriter>(ledger_file(ledger_root, rec->get("op"), m.device), m);
             continue;
         }
         if (kind != "pass" && kind != "cell") continue;

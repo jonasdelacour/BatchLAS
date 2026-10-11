@@ -607,7 +607,7 @@ TYPED_TEST(OrgqrCandidates, AutoReadsEveryKeyField) {
                        "m=256 n=64 | vendor 1 | blocked 2\n"
                        "m=64 n=16 | vendor 1 | blocked 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n; const char* expect; const char* field; };
     for (const Probe& k : {Probe{64, 64, "blocked", "base"}, Probe{256, 64, "vendor", "m"},
                            Probe{64, 16, "vendor", "n"}}) {
@@ -639,7 +639,7 @@ TYPED_TEST(OrgqrCandidates, VendorFreeLastResortIsBlocked) {
                        "# op=orgqr dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: m:log n:log:2\nm=64 n=64 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (auto [m, n] : {std::pair{64, 64}, std::pair{600, 520}}) {
         auto p = this->prob(m, n, 1, 53u);
         std::string all;
@@ -746,7 +746,7 @@ TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (auto [m, n] : points) {
                 const select::TableRow* row = t.nearest(select::Key{{"m", m}, {"n", n}});
                 ASSERT_NE(row, nullptr) << t.file;

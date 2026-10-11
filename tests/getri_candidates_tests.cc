@@ -188,7 +188,7 @@ void install_getri_table(const std::string& dtype, const std::string& dev, const
         if (t.name.rfind("getri.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
     files.emplace_back("getri." + dtype + "." + dev + ".txt", "# op=getri dtype=" + dtype + " device=" + dev +
                                                                   " kernels=unknown\n# keys: n:log:3 batch:log\n" + rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 // A view whose data is never dereferenced: getri_buffer_size reads metadata only.
@@ -822,7 +822,7 @@ TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (int n : {1, 5, 100, 112, 126, 127, 128, 129, 160, 254, 255, 256, 257, 300, 3000, 9000})
                 for (int batch : {1, 2, 3, 300, 100000}) {
                     const select::TableRow* row = t.nearest({{"n", n}, {"batch", batch}});

@@ -1,5 +1,5 @@
 // spmm (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-spmm): select::run
-// takes the first entry of the nearest tuned/spmm.<dtype>.<device>.txt row that can_run() admits. Direct
+// takes the first entry of the nearest tuned/spmm.<device>.txt row that can_run() admits. Direct
 // is the native batched CSR driver (gather for transA == N, scale + atomic scatter otherwise); Vendor is
 // cuSPARSE / rocSPARSE / netlib.
 //

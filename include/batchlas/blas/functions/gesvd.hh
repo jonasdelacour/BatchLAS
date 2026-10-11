@@ -65,7 +65,7 @@ using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFor
  * Computes \f$ A = U \Sigma V^H \f$ for every m x n batch item, with the
  * \f$ k = \min(m, n) \f$ singular values in descending order. The kernel family is
  * the first entry of the nearest row of the device's tuned table
- * (`tuned/gesvd.<dtype>.<device>.txt`) that can run the call: `jacobi` (one-sided
+ * (`tuned/gesvd.<device>.txt`) that can run the call: `jacobi` (one-sided
  * Jacobi, max(m, n) <= 64, or 32 for `complex<double>` with vectors), `cta`
  * (max(m, n) <= 32; no `Thin` request that canonicalisation leaves thin),
  * `blocked` (bidiagonalisation for real input; square Hermitian `Lower` input of

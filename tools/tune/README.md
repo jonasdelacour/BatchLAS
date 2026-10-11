@@ -2,8 +2,10 @@
 
 > **Status:** current.
 
-`batchlas_tune` times every entry of an op's `candidates<T>()` over the op's grid and writes
-`tuned/<op>.<dtype>.<device>.txt` through `scripts/sweep_to_table.py`. Candidates are pinned with
+`batchlas_tune` times every entry of an op's `candidates<T>()` over the op's grid, appends the
+results to the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl`, and writes
+`tuned/<op>.<device>.txt` from it through `scripts/sweep_to_table.py`
+([the tuning data layout](../../docs/design/tuning-data.md)). Candidates are pinned with
 `select::ScopedPin` through the public entry point. The output tables are described in
 [tuned/README.md](../../tuned/README.md). The selection design is in
 [flat kernel selection](../../docs/design/flat-kernel-selection.md) §6.
@@ -30,24 +32,24 @@ Tiered runs are the normal workflow: plan, measure, inspect, write tables.
     # what each ledger holds
     batchlas_tune --status
     # ledger tables into a scratch directory
-    python3 scripts/sweep_to_table.py --ledger benchmarks/results/tuning/ledger --out /tmp/tables
+    python3 scripts/sweep_to_table.py --op potrf --device sm_89 --out /tmp/tables
 
     # tiered, several ops, tables in a scratch directory
     batchlas_tune potrf,trsm,posv --tier preview --dtype float,double --devices 1 --out /tmp/tables
     batchlas_tune all --tier coarse --devices 1,2 --budget 6 --progress-fd 3 3>events.jsonl
 
     # import a schema-1 raw sweep as a deep run
-    batchlas_tune --import-raw benchmarks/results/tuning/trsm.float.sm_120.jsonl
+    batchlas_tune --import-raw /tmp/raw/trsm.float.sm_120.jsonl
 
-    # custom protocol: raw JSONL per dtype, then tables (omit --out for raw only)
+    # custom protocol: raw JSONL per dtype; with --ledger also a custom run there and, with --out, tables
     batchlas_tune potrf --dtype float,double,cfloat,cdouble --devices 1 \
-                  --raw benchmarks/results/tuning --out tuned
+                  --raw /tmp/raw --ledger benchmarks/results/tuning/ledger --out tuned
 
     # smoke test
     batchlas_tune posv --devices 1 --dtype float --n-list 24,32 --nrhs-list 2 --batches 8192 --uplo L \
-                  --reps 8 --warm 0.5 --raw /tmp/raw --out /tmp/tables
+                  --reps 8 --warm 0.5 --raw /tmp/raw
 
-    # uplo/diag invariance A/B (raw only; the converter refuses it as a table)
+    # uplo/diag invariance A/B (raw only; sweep_to_table refuses a ledger that varies a hidden axis)
     batchlas_tune trsm --devices 1 --dtype float --grid uplo=L:U --grid diag=N:U --no-refine \
                   --grid order=16:64:256 --grid q=8:128 --batches 8192 --raw /tmp/ab
 
@@ -73,12 +75,13 @@ families changed are re-raced (`partial:<family>`).
 | flag | default | meaning |
 |---|---|---|
 | `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all` (every registered spec). Tiered runs take the ops in dependency order ("Op order" below) and skip, with one note, a dtype a spec refuses. Gate and custom runs take one op |
-| `--tier` | none | `preview`, `coarse` or `deep` |
+| `--tier` | none | `preview`, `coarse` or `deep`; `custom` with `--remeasure-keys`: exactly the named cells, every candidate, no lattice and no refinement (a rehash sample, [kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)) |
 | `--plan` | off | print cells, skips with reasons and the estimate, then exit. No GPU |
 | `--budget H` | none | stop refinement after H hours; the starting lattice always completes. `--plan` warns if its estimate exceeds H |
 | `--remeasure-keys FILE` | none | lines `<op> <dtype> <name=v,...>` (the ledger key, in its field order): those cells are measured again in round 0 at the run's tier whatever the ledger holds, refinement midpoints and cells past `--max-dim` included (not past `--cap-gib`). Every op and dtype named must be in the run. With `--budget 1e-9` nothing else is measured. See "Engine: re-measuring named cells" in [tiered tuning](../../docs/design/tiered-tuning.md) |
 | `--progress-fd N` | none | one JSON event per line on fd N |
-| `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<dtype>.<device>/` directory per table. Custom runs record here only when given |
+| `--ledger DIR` | `<repo>/benchmarks/results/tuning/ledger` | ledger root, one `<op>.<device>.jsonl` file per table, every dtype in it. Custom runs record here only when given |
+| `--allow-dirty` | off | measure into a ledger from a `--repo` tree with uncommitted changes to tracked files. Without it such a run is refused; with it the run is stamped `<sha>-dirty` and every reader leaves it out of the tables |
 | `--device-key sm_NN` | compute capability of the first `--devices` GPU | device whose ledger `--plan` reads |
 | `--cell-overhead-s` | 0.49 | per-child start-up in the estimate |
 | `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
@@ -88,7 +91,7 @@ families changed are re-raced (`partial:<family>`).
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
 | `--devices` | required (not for `--plan`) | GPU indices in nvidia-smi / PCI order. Inside `CUDA_VISIBLE_DEVICES` when that is set; UUID lists are refused |
 | `--raw DIR` | `<repo>/benchmarks/results/tuning` | custom: raw JSONL (Git LFS) |
-| `--out DIR` | none | table directory; runs the converter after each dtype (tiered: `--ledger`; custom: `--tuner`) |
+| `--out DIR` | none | table directory: after the run, `sweep_to_table.py --op <op> --device <dev>` regenerates each measured op's table from the ledger (custom runs: only with `--ledger`) |
 | `--reps`, `--warm`, `--passes` | 16, 1.5 s, 2 | custom: §6.3 protocol |
 | `--remeasure` | 0.10 | custom: re-measure a cell once when pass medians differ by more |
 | `--refine-ratio`, `--no-refine` | 1.1 | custom: §6.2 bisection stops when hi/lo < ratio |
@@ -162,8 +165,10 @@ and planning is in `schedule.cc`.
   prints `ld audit FAILED`, and the summary gives passed/skipped/failed per op and dtype. The audit
   above ignores an ld-audit failure (its fresh child verifies at the natural ld). Rationale:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-ld-audit).
-- **Ledger.** One run file per (op, dtype) under `--ledger`. Its `run` record holds the full key spec
-  and candidate list, whatever `--grid` narrowed.
+- **Ledger.** One file per (op, device) under `--ledger`, shared by every dtype job and process:
+  lines are appended under `flock`, one `write()` each, and carry `dtype`. A run writes one `run`
+  line per dtype with the full key spec and candidate list, whatever `--grid` narrowed. A dirty
+  `--repo` tree is refused without `--allow-dirty`.
 - **Estimate.** Per cell: `--cell-overhead-s` plus, per candidate, `max_reps` times the nearest ledger
   median (else bytes / 500 GB/s), the warm-up top-up and 0.05 s of verification. `--plan` prints the
   lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so divide by
@@ -205,7 +210,7 @@ Progress events (`--progress-fd`), one JSON object per line; every event also ca
   it) is retried once. If it fails again, every candidate is run alone. Those that fail alone are
   `error` (`crashed alone: ...`), and the rest are timed together.
 - **Tie rule.** Within 3% of the best is a tie, broken by `candidates<T>()` order (`rank()` in
-  `tune_core.cc` and in the converter; `tune_tests` checks they agree).
+  `tune_core.cc`; the cell record's `ranked` list carries it into the ledger).
 - **Refinement (§6.2).** Along each line of fixed (uplo, other keys, batch), neighbouring n points with
   different winners are bisected at `round(sqrt(lo*hi))` until hi/lo < 1.1 or the bracket is two
   adjacent integers. Batch is never refined. A midpoint with no winner is written as a `stalled` record.
@@ -249,9 +254,9 @@ Times are milliseconds per call for the whole batch.
 | `cell` (last lines) | key fields, `round` (0 = coarse grid), `refined`, `status` (`ok`, `none`, `skipped` = over the cap), `reason`, `final_attempt` (-1 when none), `ranked` (`\|`-joined) |
 | `stalled` | `op`, `dtype`, `note` (a bracket wider than the ratio because its midpoint has no winner) |
 
-Key fields use the op's key names. Integer values are JSON integers. The converter reads `meta` and the
+Key fields use the op's key names. Integer values are JSON integers. With `--ledger`, `import_schema1` reads `meta` and the
 `pass` records of each cell's highest attempt that timed anything. A candidate enters the table when it
-is `ok` in every pass of that attempt.
+is `ok` in every pass of that attempt, and the run becomes a `custom` run of the ledger.
 
 ## Gate mode (§10.3)
 
@@ -278,10 +283,12 @@ Each `<op>_spec.cc` implements `OpSpec` (`spec.hh`, not `select::OpSpec`) and pr
 - a problem builder: potrf and posv use SPD A; posv and trsm use random B; trsm uses a diagonally
   dominant triangular A with the other triangle poisoned;
 - verification through `batchlas::verify`, the 4 GiB cap, and how an old coverage route maps to a spelling;
-- the kernel-source list for the §6.4 hash, between the `kernel-sources-begin` and `kernel-sources-end`
-  markers. The hash is `sha256sum <files> | sha256sum`, first 8 hex digits, paths relative to the
-  repository. `check_tuned_tables.py` and `cmake/BatchLASTunedStaleness.cmake` parse this block, and
-  the driver refuses to run when it differs from the compiled list (rebuild).
+- the kernel-source list for the kernel hash, between the `kernel-sources-begin` and
+  `kernel-sources-end` markers: hash v2, sha256 over `"<sha256(file without comments and
+  whitespace)>  <path>\n"` lines, first 8 hex digits, paths relative to the repository
+  ([kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)).
+  `check_tuned_tables.py` and `sweep_to_table.py` parse this block, and the driver refuses to run
+  when it differs from the compiled list (rebuild).
 
 Limits of the hash: posv's list holds only its own kernels, but its `cta` and `blocked` times depend on
 potrf's and trsm's choices (not yet followed). trsm's list covers its native kernels, not the vendor

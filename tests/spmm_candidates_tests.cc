@@ -728,7 +728,7 @@ TYPED_TEST(SpmmCandidates, AutoReadsEveryKeyField) {
                        "transA=T transB=N m=16 nrhs=4 batch=8 | direct 1 | vendor 2\n"
                        "transA=T transB=N m=1024 nrhs=4 batch=8 | vendor 1 | direct 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Transpose ta, tb; int m, k, nrhs, batch; const char* expect; const char* field; };
     const Probe probes[] = {
         {Transpose::NoTrans, Transpose::NoTrans, 16, 16, 4, 8, "vendor", "base"},
@@ -853,7 +853,7 @@ TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
                         ASSERT_FALSE(tables.empty()) << dtype << " " << dev;
                         const select::Table& t = *tables.front();
                         ASSERT_EQ(t.device, dev) << dtype;
-                        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+                        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
                         const select::Key key{{"transA", ta}, {"transB", tb}, {"m", m}, {"nrhs", nrhs}, {"batch", batch}};
                         const select::TableRow* row = t.nearest(key);
                         ASSERT_NE(row, nullptr) << t.file;

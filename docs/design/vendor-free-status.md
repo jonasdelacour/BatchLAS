@@ -54,7 +54,7 @@ For routes, read the `reached` rows of the coverage dump (`BATCHLAS_COVERAGE_OUT
 
 ## Per-op status
 
-Route = the first runnable native entry of the op's table (`tuned/<op>.<dtype>.<device>.txt`,
+Route = the first runnable native entry of the op's table (`tuned/<op>.<device>.txt`,
 selected in `src/ops/<op>/<op>.cc`). "Transcribed" means the rows reproduce the deleted
 `preferred()` window (@ref tuned_tables_readme).
 

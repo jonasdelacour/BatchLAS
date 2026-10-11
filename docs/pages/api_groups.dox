@@ -156,7 +156,7 @@ guards, and every candidate is pinned in a test on shapes that straddle its limi
 
 @section selection_table_format Tables, lookup and borrowing
 
-One plain-text file per (op, dtype, device), `tuned/<op>.<dtype>.<device>.txt`, embedded at build
+One plain-text file per (op, dtype, device), `tuned/<op>.<device>.txt`, embedded at build
 time and parsed once; a directory named by `BATCHLAS_TUNED_DIR` replaces a built-in table of the
 same name. The header names the keys (`# keys: uplo:exact n:log:3 batch:log`); each row is one
 measured shape followed by every candidate timed there, fastest first. Inventory and provenance:

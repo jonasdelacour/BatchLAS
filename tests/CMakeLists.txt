@@ -268,7 +268,6 @@ function(batchlas_add_test_target test_name)
         find_package(Python3 QUIET COMPONENTS Interpreter)
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
-            BATCHLAS_TUNE_CMAKE="${CMAKE_COMMAND}"
             BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
     elseif(test_name STREQUAL "verify_tests")
         # libbatchlas_verify's kernels run on a GPU slot; MatrixView's constructor lives in the library.

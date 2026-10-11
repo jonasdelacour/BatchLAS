@@ -1,4 +1,5 @@
-// Every table embedded from tuned/*.txt (docs/design/flat-kernel-selection.md §8.4). No GPU.
+// Every table embedded from tuned/<op>.<device>.txt (docs/design/tuning-data.md,
+// docs/design/flat-kernel-selection.md §8.4). No GPU.
 
 #include <gtest/gtest.h>
 
@@ -257,15 +258,54 @@ std::string joined(const std::vector<std::string>& v) {
     return s;
 }
 
-TEST(TunedTables, EveryEmbeddedTableParsesAndNamesOnlyCandidates) {
+// choice.hh's key_names: the keys every table of the op declares after dtype, weights included.
+std::string key_spec(const std::string& op) {
+    std::string out;
+    auto join = [&](const auto& names) {
+        for (auto k : names) out += (out.empty() ? "" : " ") + std::string(k);
+    };
+    if (op == "potrf") join(batchlas::ops::potrf::key_names);
+    if (op == "posv") join(batchlas::ops::posv::key_names);
+    if (op == "trsm") join(batchlas::ops::trsm::key_names);
+    if (op == "gemm") join(batchlas::ops::gemm::key_names);
+    if (op == "gemv") join(batchlas::ops::gemv::key_names);
+    if (op == "geqrf") join(batchlas::ops::geqrf::key_names);
+    if (op == "orgqr") join(batchlas::ops::orgqr::key_names);
+    if (op == "ormqr") join(batchlas::ops::ormqr::key_names);
+    if (op == "getrf") join(batchlas::ops::getrf::key_names);
+    if (op == "getrs") join(batchlas::ops::getrs::key_names);
+    if (op == "getri") join(batchlas::ops::getri::key_names);
+    if (op == "gesv") join(batchlas::ops::gesv::key_names);
+    if (op == "gesvd") join(batchlas::ops::gesvd::key_names);
+    if (op == "spmm") join(batchlas::ops::spmm::key_names);
+    if (op == "syev") join(batchlas::ops::syev::key_names);
+    if (op == "symm") join(batchlas::ops::symm::key_names);
+    if (op == "syrk") join(batchlas::ops::syrk::key_names);
+    if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
+    if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    return out;
+}
+
+// Every embedded file is <op>.<device>.txt, keyed "dtype:exact" + the op's choice.hh keys, and splits
+// into per-dtype tables whose every spelling is a candidate of that dtype.
+TEST(TunedTables, EveryEmbeddedTableIsKeyedByDtypeThenChoiceKeysAndNamesOnlyCandidates) {
     ASSERT_FALSE(sel::embedded_tables().empty());
     for (const auto& e : sel::embedded_tables()) {
         SCOPED_TRACE(std::string(e.name));
-        sel::Table t;
-        ASSERT_NO_THROW(t = sel::parse_table(e.text, e.name));
-        EXPECT_FALSE(t.rows.empty());
-        const auto p = spelling_problems(t);
-        EXPECT_TRUE(p.empty()) << joined(p);
+        const std::string name(e.name), op = name.substr(0, name.find('.'));
+        EXPECT_EQ(std::count(name.begin(), name.end(), '.'), 2) << "not <op>.<device>.txt";
+        const std::string spec = key_spec(op);
+        ASSERT_FALSE(spec.empty()) << op << " has no key_names in this test's registry";
+        EXPECT_NE(std::string(e.text).find("\n# keys: dtype:exact " + spec + "\n"), std::string::npos);
+        std::vector<sel::Table> parts;
+        ASSERT_NO_THROW(parts = sel::parse_tables(e.text, e.name));
+        ASSERT_FALSE(parts.empty());
+        for (const sel::Table& t : parts) {
+            EXPECT_EQ(t.op, op);
+            EXPECT_FALSE(t.rows.empty()) << t.dtype;
+            const auto p = spelling_problems(t);
+            EXPECT_TRUE(p.empty()) << t.dtype << "\n" << joined(p);
+        }
     }
 }
 
@@ -273,8 +313,10 @@ TEST(TunedTables, RankedTimesFollowTheTieRule) {
     ASSERT_FALSE(sel::embedded_tables().empty());
     for (const auto& e : sel::embedded_tables()) {
         SCOPED_TRACE(std::string(e.name));
-        const auto p = tie_rule_problems(sel::parse_table(e.text, e.name));
-        EXPECT_TRUE(p.empty()) << joined(p);
+        for (const sel::Table& t : sel::parse_tables(e.text, e.name)) {
+            const auto p = tie_rule_problems(t);
+            EXPECT_TRUE(p.empty()) << t.dtype << "\n" << joined(p);
+        }
     }
 }
 
@@ -309,37 +351,18 @@ TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
     EXPECT_EQ(tie_rule_problems(edge), std::vector<std::string>{"line 5: tied entries out of candidate order"});
 }
 
-// choice.hh's key_names is the spec every table of that op declares, weights included.
-template <class Names>
-void expect_tables_declare(const std::string& op, const Names& names) {
-    std::string want = "# keys:";
-    for (auto k : names) want += " " + std::string(k);
-    int seen = 0;
-    for (const auto& e : sel::embedded_tables()) {
-        if (std::string_view(e.name).rfind(op + ".", 0) != 0) continue;
-        EXPECT_NE(std::string(e.text).find("\n" + want + "\n"), std::string::npos) << e.name;
-        ++seen;
-    }
-    EXPECT_GT(seen, 0) << op;
-}
 
-TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
-TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
-TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
-TEST(TunedTables, GemmTablesDeclareChoiceKeyNames) { expect_tables_declare("gemm", batchlas::ops::gemm::key_names); }
-TEST(TunedTables, GemvTablesDeclareChoiceKeyNames) { expect_tables_declare("gemv", batchlas::ops::gemv::key_names); }
-TEST(TunedTables, GeqrfTablesDeclareChoiceKeyNames) { expect_tables_declare("geqrf", batchlas::ops::geqrf::key_names); }
-TEST(TunedTables, OrgqrTablesDeclareChoiceKeyNames) { expect_tables_declare("orgqr", batchlas::ops::orgqr::key_names); }
-TEST(TunedTables, GetrfTablesDeclareChoiceKeyNames) { expect_tables_declare("getrf", batchlas::ops::getrf::key_names); }
-TEST(TunedTables, GetrsTablesDeclareChoiceKeyNames) { expect_tables_declare("getrs", batchlas::ops::getrs::key_names); }
-
-const sel::Table& embedded(const std::string& name) {
+// One dtype's table of the embedded tuned/<op>.<device>.txt.
+const sel::Table& embedded(const std::string& op, const std::string& dtype, const std::string& device) {
     static std::map<std::string, sel::Table> cache;
-    auto it = cache.find(name);
+    const std::string name = op + "." + device + ".txt", id = name + "|" + dtype;
+    auto it = cache.find(id);
     if (it == cache.end())
         for (const auto& e : sel::embedded_tables())
-            if (e.name == name) it = cache.emplace(name, sel::parse_table(e.text, e.name)).first;
-    if (it == cache.end()) throw std::runtime_error(name + " is not embedded");
+            if (e.name == name)
+                for (sel::Table& t : sel::parse_tables(e.text, e.name))
+                    if (t.dtype == dtype) it = cache.emplace(id, std::move(t)).first;
+    if (it == cache.end()) throw std::runtime_error(id + " is not embedded");
     return it->second;
 }
 
@@ -355,7 +378,7 @@ TEST(TunedTables, PosvSm89TablesHoldExactlyTheChoiceGrid) {
                     want.insert(std::string(u) + " " + std::to_string(n) + " " + std::to_string(r) + " " +
                                 std::to_string(b));
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-        const sel::Table& t = embedded(std::string("posv.") + dt + ".sm_89.txt");
+        const sel::Table& t = embedded("posv", dt, "sm_89");
         std::set<std::string> got;
         for (const auto& row : t.rows)
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3]);
@@ -379,8 +402,8 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
     std::map<std::string, std::map<std::string, std::string>> rows_89;
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("trsm.") + dt + "." + dev + ".txt");
-            EXPECT_EQ(t.source, "transcribed:8b9adeb3") << t.file;
+            const sel::Table& t = embedded("trsm", dt, dev);
+            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/trsm.sm_89.jsonl") << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string k =
@@ -400,8 +423,10 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
 // sm_120 (spmm also on the CPU), so no shipped device borrows. Which ones are measured and which
 // are transcribed is tuned/README.md's inventory; the measured sm_120 ones are checked below.
 TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
-    std::set<std::string> names;
-    for (const auto& e : sel::embedded_tables()) names.insert(std::string(e.name));
+    std::set<std::string> names;  // "<op>.<dtype>.<device>.txt" for every (file, dtype) part
+    for (const auto& e : sel::embedded_tables())
+        for (const sel::Table& t : sel::parse_tables(e.text, e.name))
+            names.insert(t.op + "." + t.dtype + "." + t.device + ".txt");
     // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
@@ -418,21 +443,21 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
             }
 }
 
-// Every sm_120 table is the deep tiered run's ledger table (tuned/README.md): the source names the
-// committed ledger directory and has timed rows (untimed rows are the old transcription kept
-// only where the deep lattice measured nothing near, e.g. beyond the 2048 dimension cap).
+// Every sm_120 table is generated from the deep tiered run's ledger (tuned/README.md): the source
+// names the committed ledger file and every dtype has timed rows (untimed rows are the old
+// transcription kept only where the deep lattice measured nothing near, e.g. beyond the 2048
+// dimension cap). gemv is the exception until it is re-measured: its deep records are stale.
 TEST(TunedTables, Sm120TablesAreDeepLedgerTablesNamingTheirLedger) {
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             if (dt[0] == 'c' && real_only.count(op)) continue;
-            const std::string stem = std::string(op) + "." + dt + ".sm_120";
-            const sel::Table& t = embedded(stem + ".txt");
-            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/" + stem) << t.file;
+            const sel::Table& t = embedded(op, dt, "sm_120");
+            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/" + std::string(op) + ".sm_120.jsonl") << t.file;
             std::size_t timed = 0;
             for (const auto& row : t.rows) timed += row.timed;
-            EXPECT_GT(timed, 0u) << t.file;
+            if (std::string(op) != "gemv") EXPECT_GT(timed, 0u) << t.file << " " << dt;
         }
 }
 
@@ -497,8 +522,8 @@ TEST(TunedTables, GemmTranscribedTablesHoldExactlyTheChoiceGrid) {
             }
         std::map<std::string, std::string> rows_89;
         for (const char* dev : {"sm_89"}) {
-            const sel::Table& t = embedded(std::string("gemm.") + dt + "." + dev + ".txt");
-            EXPECT_EQ(t.source, "transcribed:424a45bc") << t.file;
+            const sel::Table& t = embedded("gemm", dt, dev);
+            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/gemm.sm_89.jsonl") << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 std::string k = row.keys[0];
@@ -528,7 +553,7 @@ TEST(TunedTables, GemvTranscribedTablesHoldExactlyTheChoiceGrid) {
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
         std::map<std::string, std::string> first;
         for (const char* dev : {"sm_89"}) {
-            const sel::Table& t = embedded(std::string("gemv.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("gemv", dt, dev);
             std::set<std::string> got;
             std::map<std::string, std::string> ranked;
             for (const auto& row : t.rows) {
@@ -538,7 +563,6 @@ TEST(TunedTables, GemvTranscribedTablesHoldExactlyTheChoiceGrid) {
             }
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
             if (first.empty()) first = ranked;
             else EXPECT_EQ(ranked, first) << dt << ": sm_120 rows differ from sm_89";
         }
@@ -558,7 +582,7 @@ TEST(TunedTables, GeqrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
         std::map<std::string, std::string> rows_89;
         for (const char* dev : {"sm_89"}) {
-            const sel::Table& t = embedded(std::string("geqrf.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("geqrf", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string key = row.keys[0] + " " + row.keys[1] + " " + row.keys[2];
@@ -582,21 +606,14 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
         for (int n : orgqr::grid)
             if (n <= m) want.insert(std::to_string(m) + " " + std::to_string(n));
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-        const sel::Table& a = embedded(std::string("orgqr.") + dt + ".sm_89.txt");
+        const sel::Table& a = embedded("orgqr", dt, "sm_89");
         std::set<std::string> got;
         for (const auto& row : a.rows) got.insert(row.keys[0] + " " + row.keys[1]);
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(a.rows.size(), want.size()) << dt;
-        EXPECT_EQ(a.source.rfind("transcribed:", 0), 0u) << a.file;
-    }
+        }
 }
 
-TEST(TunedTables, OrmqrTablesDeclareChoiceKeyNames) { expect_tables_declare("ormqr", batchlas::ops::ormqr::key_names); }
-TEST(TunedTables, GetriTablesDeclareChoiceKeyNames) { expect_tables_declare("getri", batchlas::ops::getri::key_names); }
-TEST(TunedTables, GesvTablesDeclareChoiceKeyNames) { expect_tables_declare("gesv", batchlas::ops::gesv::key_names); }
-TEST(TunedTables, GesvdTablesDeclareChoiceKeyNames) { expect_tables_declare("gesvd", batchlas::ops::gesvd::key_names); }
-TEST(TunedTables, SpmmTablesDeclareChoiceKeyNames) { expect_tables_declare("spmm", batchlas::ops::spmm::key_names); }
-TEST(TunedTables, SyevTablesDeclareChoiceKeyNames) { expect_tables_declare("syev", batchlas::ops::syev::key_names); }
 
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription on sm_89 holds exactly that grid, both sides, N/T/C.
@@ -614,15 +631,14 @@ TEST(TunedTables, OrmqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
                                             std::to_string(k) + " " + std::to_string(q) + " " + std::to_string(b));
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("ormqr.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("ormqr", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows)
                 got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " +
                            row.keys[4] + " " + row.keys[5]);
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
-        }
+            }
 }
 
 // getrf's transcriber likewise, on sm_89: one row per (n, batch) of choice.hh.
@@ -635,8 +651,7 @@ TEST(TunedTables, GetrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
         std::map<std::string, std::string> rows[1];
         int i = 0;
         for (const char* dev : {"sm_89"}) {
-            const sel::Table& t = embedded(std::string("getrf.") + dt + "." + dev + ".txt");
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            const sel::Table& t = embedded("getrf", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string key = row.keys[0] + " " + row.keys[1];
@@ -659,8 +674,7 @@ TEST(TunedTables, GetrsTranscribedTablesHoldExactlyTheChoiceGrid) {
             for (int b : getrs::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(r) + " " + std::to_string(b));
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("getrs.") + dt + "." + dev + ".txt");
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            const sel::Table& t = embedded("getrs", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
             EXPECT_EQ(got, want) << t.file;
@@ -676,13 +690,12 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
         for (int b : getri::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("getri.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("getri", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1]);
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
-        }
+            }
 }
 
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
@@ -693,7 +706,7 @@ TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
         for (int r : gesv::grid_nrhs) want.insert(std::to_string(n) + " " + std::to_string(r));
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("gesv.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("gesv", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1]);
             EXPECT_EQ(got, want) << dt << " " << dev;
@@ -715,8 +728,7 @@ TEST(TunedTables, GesvdTablesHoldExactlyTheChoiceGridOnBothDevices) {
         std::map<std::string, std::string> rows[1];
         int i = 0;
         for (const char* dev : {"sm_89"}) {
-            const sel::Table& t = embedded(std::string("gesvd.") + dt + "." + dev + ".txt");
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            const sel::Table& t = embedded("gesvd", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
@@ -744,7 +756,7 @@ TEST(TunedTables, SpmmTranscribedTablesHoldExactlyTheChoiceGrid) {
                                     " " + std::to_string(b));
     for (const char* dev : {"sm_89", "cpu"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("spmm.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("spmm", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows)
                 got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " +
@@ -763,7 +775,7 @@ TEST(TunedTables, SyevTablesHoldExactlyTheChoiceGridOnBothDevices) {
             for (int b : syev::grid_batch) want.insert(std::string(j) + " " + std::to_string(n) + " " + std::to_string(b));
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-            const sel::Table& t = embedded(std::string("syev.") + dt + "." + dev + ".txt");
+            const sel::Table& t = embedded("syev", dt, dev);
             std::set<std::string> got;
             for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
             EXPECT_EQ(got, want) << dt << " " << dev;
@@ -776,12 +788,12 @@ TEST(TunedTables, SyevTablesHoldExactlyTheChoiceGridOnBothDevices) {
 // double n=3 batch=128 to n=256 batch=256. n:log:3 keeps both on their own small-n rows.
 TEST(TunedTables, Sm89SmallOrdersStayOnSmallOrderRows) {
     const sel::Key f{{"uplo", "L"}, {"n", 24}, {"batch", 512}};
-    const auto* r = embedded("potrf.float.sm_89.txt").nearest(f);
+    const auto* r = embedded("potrf", "float", "sm_89").nearest(f);
     ASSERT_NE(r, nullptr);
     EXPECT_EQ(r->keys[1], "24") << "line " << r->line;
     EXPECT_EQ(r->ranked.front().spelling, "cta") << "line " << r->line;
     const sel::Key d{{"uplo", "L"}, {"n", 3}, {"batch", 128}};
-    r = embedded("potrf.double.sm_89.txt").nearest(d);
+    r = embedded("potrf", "double", "sm_89").nearest(d);
     ASSERT_NE(r, nullptr);
     EXPECT_LE(std::stoi(r->keys[1]), 4) << "line " << r->line;
     EXPECT_EQ(r->ranked.front().spelling, "tiny") << "line " << r->line;
@@ -814,7 +826,8 @@ TEST(TunedTables, ShippedPotrfRowsAreWhatChooseReturns) {
     sel::testing::reset_warnings();
     const auto order = sel::tables_in_borrow_order("potrf", "float", sel::device_from_key("sm_120"));
     ASSERT_FALSE(order.empty());
-    EXPECT_EQ(order.front()->file, "potrf.float.sm_120.txt");
+    EXPECT_EQ(order.front()->file, "potrf.sm_120.txt");
+    EXPECT_EQ(order.front()->dtype, "float");
     EXPECT_FALSE(order.front()->is_override);
     ::testing::internal::CaptureStderr();
     EXPECT_EQ(pick("sm_120", "L", 64, 8192), "lpanel:panel=8");

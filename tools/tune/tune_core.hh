@@ -131,7 +131,11 @@ KernelBlock kernel_block_from_file(const std::string& repo, const std::string& s
 std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
                                                  const std::vector<std::string>& families);
 
-// sha256 of "<sha256(file)>  <path>\n" lines (sha256sum's format), first 8 hex; nullopt if missing.
+// Hash v2's normalization: /* */ blocks removed (an unterminated one to the end), then // to end of
+// line, then every whitespace byte; string literals are not special. evidence: docs/design/tuning-data.md#tuning-data-kernel-hash
+std::string normalize_source(std::string_view text);
+
+// Hash v2: sha256 of "<sha256(normalized file)>  <path>\n" lines, first 8 hex; nullopt if missing.
 std::optional<std::string> kernel_hash(const std::string& repo, const std::vector<std::string>& paths,
                                        std::string* missing = nullptr);
 

@@ -329,15 +329,16 @@ There is no RouteTable and no `include/batchlas/blas/dispatch/`.
 - `can_run()` is correctness only: false means the launch would throw or give a WRONG ANSWER. Never
   put a speed threshold there, or the shape becomes unservable vendor-free.
 - Speed lives only in tables. `select::choose` (`src/select/select.hh`) takes the first runnable
-  entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`: exact keys must match; `n`/`batch`
+  entry of the nearest row of `tuned/<op>.<device>.txt`: exact keys must match; `n`/`batch`
   are log distance, weighted per key (`n:log:3`: potrf work ~ n^3 x batch). A device with no table
   borrows the nearest one and warns once; the CPU never borrows; nothing runnable falls to the op's
   last resort.
-- Tables are generated, not hand-edited: `scripts/sweep_to_table.py` (`--check` is run by hand as
-  part of the per-op acceptance gate; CI does not run it). A table headed
-  `source=transcribed:<sha>` (entries `<spelling> -`) is an old router's order evaluated per grid
-  cell by a transcriber (deleted after use; provenance in `tuned/README.md`), **untimed**: it
-  reproduces the deleted windows and is not a measurement.
+- Tables are generated, not hand-edited: `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt`
+  from the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` alone, and CI runs
+  `--check` ("Tuned tables equal their ledgers"; `docs/design/tuning-data.md`). A row tagged
+  `# transcribed` (entries `<spelling> -`) is an old router's order evaluated per grid cell,
+  **untimed**: it reproduces the deleted windows and is not a measurement. A `-dirty` tuner run never
+  reaches a table.
 - `BATCHLAS_TUNED_DIR=<dir>` overrides tables without a rebuild; `BATCHLAS_SELECT_TRACE=1` prints
   every choice and the runner-up.
 

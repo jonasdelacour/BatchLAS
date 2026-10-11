@@ -1,5 +1,5 @@
 // gesvd (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
-// tuned/gesvd.<dtype>.<device>.txt row that can_run() admits. Jacobi is one-sided Jacobi in local memory;
+// tuned/gesvd.<device>.txt row that can_run() admits. Jacobi is one-sided Jacobi in local memory;
 // Cta forms the normal equations and solves them with syev_cta; Blocked bidiagonalises (or, Hermitian,
 // runs syev_blocked); Vendor is the solver library (cuSOLVER gesvdjBatched, LAPACKE on the host).
 

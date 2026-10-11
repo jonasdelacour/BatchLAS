@@ -218,7 +218,7 @@ void install_gemv_table(Queue& q, const std::string& rows) {
                                                                   " kernels=unknown\n"
                                                                   "# keys: trans:exact out:log red:log batch:log\n" +
                                                                   rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 template <typename T, Backend B>
@@ -899,7 +899,7 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"trans", r.trans}, {"out", r.out}, {"red", r.red}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

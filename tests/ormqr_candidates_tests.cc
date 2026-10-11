@@ -20,6 +20,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/ormqr/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -227,7 +228,7 @@ void install_table(const std::string& dtype, const std::string& dev, const std::
     files.emplace_back("ormqr." + dtype + "." + dev + ".txt",
                        "# op=ormqr dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: side:exact trans:exact m:log k:log q:log batch:log\n" + rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 template <typename T, Backend B>
@@ -591,7 +592,7 @@ TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device does not read a transcribed ormqr table";
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
                           Spec{Side::Left, Transpose::Trans, 33, 20, 1, 5}, Spec{Side::Right, Transpose::Trans, 2, 1, 700, 3000}}) {
@@ -772,7 +773,7 @@ TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

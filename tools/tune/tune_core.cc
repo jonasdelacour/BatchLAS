@@ -584,6 +584,29 @@ std::map<std::string, std::string> family_hashes(const std::string& repo, const 
     return out;
 }
 
+std::string normalize_source(std::string_view text) {
+    std::string no_block;
+    for (std::size_t i = 0; i < text.size();) {
+        if (text.compare(i, 2, "/*") == 0) {
+            const std::size_t e = text.find("*/", i + 2);
+            i = e == std::string_view::npos ? text.size() : e + 2;  // an unterminated block runs to the end
+        } else {
+            no_block += text[i++];
+        }
+    }
+    std::string out;
+    for (std::size_t i = 0; i < no_block.size();) {
+        if (no_block.compare(i, 2, "//") == 0) {
+            i = no_block.find('\n', i);
+            if (i == std::string::npos) break;
+        } else {
+            const char c = no_block[i++];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' && c != '\v') out += c;
+        }
+    }
+    return out;
+}
+
 std::optional<std::string> kernel_hash(const std::string& repo, const std::vector<std::string>& paths,
                                        std::string* missing) {
     std::string manifest;
@@ -595,7 +618,7 @@ std::optional<std::string> kernel_hash(const std::string& repo, const std::vecto
         }
         std::ostringstream ss;
         ss << f.rdbuf();
-        manifest += sha256_hex(ss.str()) + "  " + p + "\n";
+        manifest += sha256_hex(normalize_source(ss.str())) + "  " + p + "\n";
     }
     return sha256_hex(manifest).substr(0, 8);
 }
