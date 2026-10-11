@@ -1279,6 +1279,11 @@ namespace batchlas {
         static Matrix<promoted_type, MType> form_q(Queue& ctx, const MatrixView& F, const VectorView<T>& tau, int item,
                                                    int cols);
 
+        /// @brief form_q() of each of @p items (empty: default_items()), packed in that order: item g of
+        ///        the result is the first @p cols columns of Q of item items[g].
+        static Matrix<promoted_type, MType> form_q(Queue& ctx, const MatrixView& F, const VectorView<T>& tau,
+                                                   std::span<const int> items, int cols);
+
         /// @brief ||A0 - Q triu(R)||_F / ||A0||_F with an explicit m x k @p Q; the first k rows of @p R
         ///        are read on and above the diagonal.
         static double qr_reconstruction(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& R,
@@ -1287,6 +1292,12 @@ namespace batchlas {
         /// @brief ||A0 - Q B Q^H||_F / ||A0||_F for square operands of equal order.
         static double similarity_residual(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& B,
                                           std::span<const int> items = {});
+
+        /// @brief ||A0 - U diag(s) Vh||_F / ||A0||_F for an m x n @p A0 over the first k = min(m, n)
+        ///        columns of @p U, values of @p s and rows of @p Vh (thin or full factors).
+        /// @throws batchlas::invalid_argument on a shape mismatch
+        static double svd_residual(Queue& ctx, const MatrixView& A0, const MatrixView& U, const VectorView<float_t<T>>& s,
+                                   const MatrixView& Vh, std::span<const int> items = {});
 
         /// @brief ||op(A0) X - B0||_F / (||A0||_F ||X||_F); an empty @p B0 (rows() == 0) is the identity.
         ///        Above @p full_limit multiply-adds per item, 8 seeded probe columns of X stand in for all.

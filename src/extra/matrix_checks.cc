@@ -349,17 +349,65 @@ double MatrixView<T, MType>::qr_residual(Queue& ctx, const MatrixView& A0, const
 template <typename T, MatrixFormat MType>
 Matrix<typename MatrixView<T, MType>::promoted_type, MType> MatrixView<T, MType>::form_q(Queue& ctx, const MatrixView& F,
                                                                                       const VectorView<T>& tau, int item, int cols) {
+    const int one[] = {item};
+    return form_q(ctx, F, tau, std::span<const int>(one), cols);
+}
+
+template <typename T, MatrixFormat MType>
+Matrix<typename MatrixView<T, MType>::promoted_type, MType> MatrixView<T, MType>::form_q(Queue& ctx, const MatrixView& F,
+                                                                                      const VectorView<T>& tau,
+                                                                                      std::span<const int> items, int cols) {
     using P = promoted_type;
     const int m = F.rows(), k = std::min(m, F.cols());
     if (cols < 0 || cols > m) bad("form_q", "cols must lie in [0, rows]");
     if (tau.size() < k) bad("form_q", "fewer than min(m, n) tau entries per item");
-    const int one[] = {item};
-    auto f = F.template astype<P>(one);
-    auto tv = column_of<P>(tau, k, std::vector<int>{item});
-    auto Q = identity<P>(ctx, m, cols, 1);
+    const auto all = pick(F, items);
+    auto f = F.template astype<P>(all);
+    auto tv = column_of<P>(tau, k, all);
+    auto Q = identity<P>(ctx, m, cols, int(all.size()));
     apply_q(ctx, Q.view(), f.view(), tv.view(), k);
     ctx.wait();
     return Q;
+}
+
+template <typename T, MatrixFormat MType>
+double MatrixView<T, MType>::svd_residual(Queue& ctx, const MatrixView& A0, const MatrixView& U, const VectorView<float_t<T>>& s,
+                                          const MatrixView& Vh, std::span<const int> items) {
+    using P = promoted_type;
+    const int m = A0.rows(), n = A0.cols(), k = std::min(m, n);
+    if (U.rows() != m || U.cols() < k || Vh.cols() != n || Vh.rows() < k)
+        bad("svd_residual", "need A0 m x n, U m x (at least min(m, n)), Vh (at least min(m, n)) x n");
+    if (s.size() < k) bad("svd_residual", "fewer than min(m, n) singular values per item");
+    const auto all = pick(A0, items);
+    double worst = 0;
+    const std::size_t per = std::max({std::size_t(m) * n, std::size_t(m) * U.cols(), std::size_t(Vh.rows()) * n});
+    for (auto grp : chunks(all, per)) {
+        const int g = int(grp.size());
+        const std::vector<int> it_list(grp.begin(), grp.end());
+        auto u = U.template astype<P>(grp), v = Vh.template astype<P>(grp), t = A0.template astype<P>(grp);
+        auto sv = column_of<P>(s, k, it_list);
+        const auto Vk = window(v.view(), k, n);
+        using D = Dev<P>;
+        D* x = dev_ptr(Vk);
+        const D* d = dev_ptr(sv.view());
+        const int ldv = Vk.ld();
+        const long long strv = Vk.stride(), strs = sv.view().stride();
+        const std::size_t total = std::size_t(g) * k * n;
+        if (total) ctx->parallel_for(sycl::range<1>(total), [=](sycl::id<1> id) {  // row l of Vh times s_l
+            const long long it = static_cast<long long>(id[0] / (std::size_t(k) * n));
+            const std::size_t r = id[0] % (std::size_t(k) * n);
+            const int l = int(r % std::size_t(k)), j = int(r / std::size_t(k));
+            D& e = x[it * strv + static_cast<long long>(j) * ldv + l];
+            e = sycl_device::dev_mul(e, d[it * strs + l]);
+        });
+        Matrix<P> X(m, n, g);
+        (void)MV<P>::product(ctx, window(u.view(), m, k), Transpose::NoTrans, Vk, Transpose::NoTrans, X.view());
+        UnifiedVector<double> nm(2 * std::size_t(g));
+        difference(ctx, X.view(), t.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        ctx.wait();
+        for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
+    }
+    return worst;
 }
 
 template <typename T, MatrixFormat MType>
@@ -751,6 +799,11 @@ bool MatrixView<T, MType>::pivots_valid(const VectorView<std::int32_t>& piv, int
                                                                     const VectorView<T>&, std::span<const int>);               \
     template Matrix<MatrixView<T, MatrixFormat::Dense>::promoted_type, MatrixFormat::Dense>                                    \
     MatrixView<T, MatrixFormat::Dense>::form_q(Queue&, const MatrixView&, const VectorView<T>&, int, int);                     \
+    template Matrix<MatrixView<T, MatrixFormat::Dense>::promoted_type, MatrixFormat::Dense>                                    \
+    MatrixView<T, MatrixFormat::Dense>::form_q(Queue&, const MatrixView&, const VectorView<T>&, std::span<const int>, int);    \
+    template double MatrixView<T, MatrixFormat::Dense>::svd_residual(Queue&, const MatrixView&, const MatrixView&,             \
+                                                                     const VectorView<float_t<T>>&, const MatrixView&,         \
+                                                                     std::span<const int>);                                    \
     template double MatrixView<T, MatrixFormat::Dense>::qr_reconstruction(Queue&, const MatrixView&, const MatrixView&,        \
                                                                           const MatrixView&, std::span<const int>);           \
     template double MatrixView<T, MatrixFormat::Dense>::solve_residual(Queue&, const MatrixView&, Transpose, const MatrixView&, \
