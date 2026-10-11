@@ -754,15 +754,14 @@ std::string Driver::meta_line(const std::string& name) const {
     std::string missing;
     const auto hash = kernel_hash(o_.repo, spec_.kernel_sources(), &missing);
     if (!hash) die("kernel source " + missing + " not found under --repo " + o_.repo);
-    std::string sha = capture("git -C '" + o_.repo + "' rev-parse --short=8 HEAD 2>/dev/null");
-    if (!capture("git -C '" + o_.repo + "' status --porcelain --untracked-files=no 2>/dev/null").empty()) sha += "-dirty";
+    const std::string sha = git_head(o_.repo);
     char date[16];
     const std::time_t now = std::time(nullptr);
     std::strftime(date, sizeof(date), "%Y-%m-%d", std::localtime(&now));
     std::vector<std::string> devs;
     for (int d : o_.devices) devs.push_back(std::to_string(d));
     return Json().str("kind", "meta").integer("schema", kSchema).str("op", spec_.op()).str("dtype", dtype_)
-        .str("device", device_).str("device_name", name).str("batchlas", sha.empty() ? "unknown" : sha)
+        .str("device", device_).str("device_name", name).str("batchlas", sha)
         .str("kernels", *hash).str("kernel_sources", join(spec_.kernel_sources(), "|")).str("date", date)
         .str("keys", join(spec_.key_names(), " ")).str("candidates", join(cands_, "|"))
         .integer("reps", o_.reps).num("warm_s", o_.warm).integer("passes", o_.passes).num("tie", kTie)

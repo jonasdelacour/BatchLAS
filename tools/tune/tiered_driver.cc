@@ -730,7 +730,11 @@ std::string table_summary(const fs::path& p) {
 
 std::string git_head(const std::string& repo) {
     std::string sha = capture("git -C '" + repo + "' rev-parse --short=8 HEAD 2>/dev/null");
-    if (!capture("git -C '" + repo + "' status --porcelain --untracked-files=no 2>/dev/null").empty()) sha += "-dirty";
+    // The tuner's own outputs (ledger, tables) do not make a tree dirty: a run appends to the ledger.
+    if (!capture("git -C '" + repo + "' status --porcelain --untracked-files=no -- . ':(exclude)benchmarks/results/tuning' "
+                 "':(exclude)tuned' 2>/dev/null")
+             .empty())
+        sha += "-dirty";
     return sha.empty() ? "unknown" : sha;
 }
 
