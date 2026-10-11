@@ -2582,6 +2582,41 @@ TEST(TuneRemeasure, CustomTierRunMeasuresOnlyTheNamedCellsAsASample) {
     EXPECT_EQ(custom, 2u);
 }
 
+// --only-named: a kernel change leaves every record stale, so a plain deep run with named cells
+// plans the whole stale lattice too; --only-named plans and measures exactly the named cells, at deep.
+TEST(TuneRemeasure, OnlyNamedOnAStaleLedgerMeasuresExactlyTheNamedCellsAtTheRunsTier) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::deep);
+    o.run_id = "20261009T000001-box-1";
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    std::ofstream(repo.path / "k.cc") << "k changed";
+    o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "9"}}}}};
+    o.plan = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string stale = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(stale.find("tier=deep: 2 cells"), std::string::npos) << "control: the stale lattice is planned\n" << stale;
+    o.only_named = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string named = testing::internal::GetCapturedStdout();
+    EXPECT_NE(named.find("== plan fakeop float sm_fake tier=deep: 2 cells (2 remeasure)"), std::string::npos) << named;
+    EXPECT_NE(named.find("(~0 refinement cells"), std::string::npos) << "no refinement is estimated\n" << named;
+    o.plan = false;
+    o.run_id = "20261009T000002-box-1";
+    FakeMeasurer again;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_EQ(sorted(again.keys), sorted({"n=4", "n=9"})) << "no stale lattice cell and no refinement";
+    std::size_t n = 0;
+    for (const CellRecord& c : read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float").cells)
+        if (c.run_id == o.run_id) {
+            ++n;
+            EXPECT_EQ(c.tier, Tier::deep) << key_arg(c.key);
+        }
+    EXPECT_EQ(n, 2u);
+}
+
 namespace {
 
 // m is derived (4 n), as geqrf's and orgqr's extents are: the keys alone name only n.

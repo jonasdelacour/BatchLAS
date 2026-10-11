@@ -89,7 +89,7 @@ struct Opts {
     double warm = 1.5, remeasure = 0.10, refine_ratio = 1.1, cap_gib = 4.0, cell_timeout = 1800, guard_wait = 300;
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
-    bool allow_idle_foreign = false, allow_dirty = false;
+    bool allow_idle_foreign = false, allow_dirty = false, only_named = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
     double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
@@ -1071,6 +1071,7 @@ void usage() {
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
         "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
         "        --remeasure-keys FILE (lines '<op> <dtype> <name=v,...>': measure those cells again in round 0)\n"
+        "        --only-named (with --remeasure-keys: measure exactly those cells at the run's tier, nothing else)\n"
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
@@ -1118,6 +1119,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.out = o.out;
     t.argv = join(o.argv, " ");
     t.grid = o.grid;
+    t.only_named = o.only_named;
     if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
 }
@@ -1174,6 +1176,7 @@ int main(int argc, char** argv) {
         else if (f == "--ledger") o.ledger = val(), o.ledger_given = true;
         else if (f == "--import-raw") o.import_raw = val();
         else if (f == "--remeasure-keys") o.remeasure_keys = val();
+        else if (f == "--only-named") o.only_named = true;
         else if (f == "--device-key") o.device_key = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
         else if (f == "--no-worker") o.worker = false;
@@ -1233,6 +1236,7 @@ int main(int argc, char** argv) {
     if (!tiered && o.ops.size() != 1) die("--gate and the custom protocol take one op");
     if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0 || !o.remeasure_keys.empty()))
         die("--plan, --budget, --progress-fd and --remeasure-keys need --tier");
+    if (o.only_named && o.remeasure_keys.empty()) die("--only-named measures the --remeasure-keys cells; give them");
     for (const std::string& op : o.ops) {
         const OpSpec* s = find_spec(op);
         for (const auto& d : o.dtypes) {

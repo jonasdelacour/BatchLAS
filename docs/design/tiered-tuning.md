@@ -520,12 +520,15 @@ ledger holds: `plan_round` gives it the reason `remeasure`, every runnable candi
 running tier and a fresh record, not a merge. The stored record's `round` carries over, so a
 re-measured refinement midpoint stays a refinement record for the cap and the margin hedge. The
 driver appends the named cells to round 0 when they are off the lattice. Round 0 is never
-budgeted, so `--budget 1e-9` runs exactly the named cells and starts no refinement. A named cell
+budgeted, so the named cells always run, but so does every other cell round 0 plans: with stale
+records (a kernel change) that is the whole stale lattice, whatever `--budget`. `--only-named`
+makes round 0 exactly the named cells, recorded at the run's tier, with no lattice and no
+refinement; tier `custom` always behaves so. A named cell
 is measured past `--max-dim`, because the deep run measured some cells before the cap existed,
 but not past `--cap-gib`. A key whose fields do not match the op's, or an op and dtype the run
 does not tune, stops the run. The newer record wins in `best_records` (same tier, later date or
 run id), so the tables pick up the re-measure with no other change. Host tests: `TuneRemeasure.*`
-(a deliberate break of the planner or of the round-0 append turns them red).
+(a deliberate break of the planner, of the round-0 append or of `--only-named` turns them red).
 
 ## Engine: the sm_120 deep run
 
