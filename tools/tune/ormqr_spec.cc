@@ -1,22 +1,23 @@
-// ormqr for the tuner (src/ops/ormqr/choice.hh): reflectors and tau from host_reflectors (larfg on
-// random columns, never a tuned geqrf), random complex C in [-1, 1), every ld padded by ld_pad,
-// block_size_hint 0 so blocked derives its WY width as a library caller's does. Verified on items 0
-// and batch-1: Q is formed explicitly on the host from the input reflectors, then op(Q) C (Left)
-// or C op(Q) (Right) is compared over up to 32 sampled columns or rows of C.
+// ormqr for the tuner (src/ops/ormqr/choice.hh): reflectors and tau from one untimed public geqrf
+// (Auto) of a MatrixView::fill_random m x k matrix, MatrixView::fill_random C (complex parts both),
+// every ld padded by ld_pad, block_size_hint 0 so blocked derives its WY width as a library caller's
+// does. Verified on the default items: Q (m x m) formed by MatrixView::form_q from the input
+// reflectors, independently of any ormqr, then op(Q) C0 (Left) or C0 op(Q) (Right) judged by
+// MatrixView::gemm_backward_error (Check::blas at n = m, docs/design/verification.md).
 //
 // The grid is the lattice with k <= m; complex trans=T is an argument error (throw_if_undefined),
 // so complex grids leave it out. blocked's time includes the public gemm and trmm of its WY
 // updates, each choosing for itself.
 
+#include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/ormqr/choice.hh"
 #include "cell_runner.hh"
-#include "qr_common.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -28,8 +29,6 @@
 namespace batchlas::tune {
 namespace {
 
-constexpr int kMaxChecked = 32;  // sampled columns (Left) or rows (Right) of C
-
 Transpose trans_of(const std::string& w) {
     return w == "N" ? Transpose::NoTrans : (w == "T" ? Transpose::Trans : Transpose::ConjTrans);
 }
@@ -37,7 +36,6 @@ Transpose trans_of(const std::string& w) {
 template <class T>
 struct OrmqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Side side;
     Transpose trans;
@@ -57,9 +55,11 @@ struct OrmqrProblem {
           Av(A.data(), m, k, lda, int(sa), batch, pA.data()),
           C0v(C0.data(), crows, ccols, ldc, int(sc), batch, pC0.data()),
           Cv(C.data(), crows, ccols, ldc, int(sc), batch, pC.data()) {
-        host_reflectors<T>(A0.data(), tau.data(), m, k, lda, sa, batch, 6161);
-        Rng rg(777);
-        for (std::size_t i = 0; i < C0.size(); ++i) C0[i] = mk<T>(rg.next(), rg.next());
+        (void)A0v.fill_random(q, false, 6161);
+        (void)C0v.fill_random(q, false, 777);
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        q.wait();
     }
     std::size_t workspace() { return ormqr_buffer_size<kBackend, T>(q, Av, Cv, side, trans, tau.to_span()); }
     void reset() {  // A too: a family that edits its reflectors in place must not hand the next arm its edit
@@ -73,34 +73,16 @@ struct OrmqrProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        const bool left = side == Side::Left;
-        const auto idx = sample_idx(nq, kMaxChecked);
-        double worst = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t oc = std::size_t(b) * sc;
-            const Reflectors<T> R{A0.data(), tau.data(), std::size_t(b) * sa, std::size_t(b) * std::size_t(k), lda, m};
-            std::vector<std::vector<D>> Q;  // Q[c][r] = Q(r, c), formed explicitly
-            for (int c = 0; c < m; ++c) Q.push_back(q_column<T>(R, k, c));
-            auto opq = [&](int r, int c) {  // op(Q)(r, c); a real Q's T and C agree
-                const std::size_t ur = std::size_t(r), uc = std::size_t(c);
-                return trans == Transpose::NoTrans ? Q[uc][ur] : cj(Q[ur][uc]);
-            };
-            auto cat = [&](const UnifiedVector<T>& M, int r, int c) {
-                return up(M[oc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)]);
-            };
-            double num = 0, den = 0;
-            for (int s : idx)
-                for (int e = 0; e < m; ++e) {  // Left: C(e, s) = sum_p op(Q)(e, p) C0(p, s); Right: C(s, e)
-                    D want = D(0);
-                    for (int p = 0; p < m; ++p) want += left ? opq(e, p) * cat(C0, p, s) : cat(C0, s, p) * opq(p, e);
-                    const D got = left ? cat(C, e, s) : cat(C, s, e), c0 = left ? cat(C0, e, s) : cat(C0, s, e);
-                    num += ab(got - want) * ab(got - want);
-                    den += ab(c0) * ab(c0);
-                }
-            if (std::isnan(num) || std::isnan(den)) return {std::nan(""), 0};
-            worst = nanmax(worst, den > 0 ? std::sqrt(num / den) : std::sqrt(num));
-        }
-        return {worst, 0};
+        using P = typename MV::promoted_type;
+        using PV = MatrixView<P, MatrixFormat::Dense>;
+        const auto items = Cv.default_items();
+        auto Q = MV::form_q(q, A0v, VectorView<T>(tau.data(), k, batch, 1, k), items, m);
+        auto c0 = C0v.template astype<P>(items), c = Cv.template astype<P>(items);
+        const Transpose nt = Transpose::NoTrans;
+        const auto all = Q.view().all_items();
+        return {side == Side::Left ? PV::gemm_backward_error(q, Q.view(), trans, c0.view(), nt, c0.view(), c.view(), P(1), P(0), all)
+                                   : PV::gemm_backward_error(q, c0.view(), nt, Q.view(), trans, c0.view(), c.view(), P(1), P(0), all),
+                0};
     }
 };
 
@@ -172,8 +154,9 @@ public:
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
             OrmqrProblem<T> p(*q, side, trans_of(*key_get(req.key, "trans")), m, k, int(key_int(req.key, "q")),
                               int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<ops::ormqr::OrmqrChoice>("ormqr", p, req, qr_tol<T>(m));
-            return run_arms<ops::ormqr::OrmqrChoice>("ormqr", p, req, qr_tol<T>(m));
+            const double tol = verify::bound<T>(verify::Check::blas, m);
+            if (req.mode == "race") return run_race<ops::ormqr::OrmqrChoice>("ormqr", p, req, tol);
+            return run_arms<ops::ormqr::OrmqrChoice>("ormqr", p, req, tol);
         });
     }
 };

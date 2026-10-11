@@ -1,10 +1,11 @@
 // syrk for the tuner (real only): C = alpha op(A) op(A)^T + beta C on the lower triangle, A and
-// C0's lower triangle random, C0's strict upper triangle poisoned with a large finite value,
-// beta = 0.75 so C is read. trans C is the real Trans spelled C (the key keeps it exact). uplo is
-// not a table key: fixed at L. Every ld is padded by --ld-pad. Verification is the componentwise
-// error |C - Cref| / (|alpha| |op(A)| |op(A)^T| + |beta| |C0|) in double on items 0 and batch-1,
-// over the lower-triangle entries of up to 256 sampled rows of up to 64 sampled columns; any change
-// to the upper triangle counts as a nonzero info (the arm wrote the half it must not).
+// C0 from MatrixView::fill_random, C0's strict upper triangle and ld padding then poisoned with a
+// large finite value, beta = 0.75 so C is read. trans C is the real Trans spelled C (the key keeps
+// it exact). uplo is not a table key: fixed at L. Every ld is padded by --ld-pad. Verification is
+// MatrixView::gemm_backward_error over C's lower triangle on the default items,
+// |C - Cref| / (|alpha| |op(A)| |op(A)^T| + |beta| |C0|) componentwise (Check::blas,
+// docs/design/verification.md); any change to the upper triangle counts as a nonzero info (the arm
+// wrote the half it must not).
 //
 // form is derived from (n, k) (choice.hh form_of), so the grid holds only consistent cells:
 // trans N and T take the n x k x batch product, C only the n axis at k = batch = 1 (choice.hh).
@@ -13,10 +14,10 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/syrk/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <stdexcept>
@@ -44,13 +45,13 @@ struct SyrkProblem {
           ac(t == Transpose::NoTrans ? k_ : n_), lda(ar + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(ac)),
           sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25)), beta(T(0.75)), A(sa * std::size_t(batch_)),
           C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
-        Rng rg(7373);
-        for (std::size_t i = 0; i < A.size(); ++i) A[i] = T(rg.next());
+        (void)view(A, ar, ac, lda, sa).fill_random(q, false, 7373);
+        (void)view(C0, n, n, ldc, sc).fill_random(q, false, 7374);
+        q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c)
                 for (int r = 0; r < ldc; ++r)
-                    C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] =
-                        r >= c && r < n ? T(rg.next()) : T(1e6);
+                    if (r < c || r >= n) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = T(1e6);
     }
     MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
@@ -69,35 +70,18 @@ struct SyrkProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        double worst = 0;
-        int touched = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, oc = std::size_t(b) * sc;
-            auto op = [&](int r, int p) {  // op(A)(r, p)
-                const int sr = trans == Transpose::NoTrans ? r : p, scol = trans == Transpose::NoTrans ? p : r;
-                return double(A[oa + std::size_t(scol) * std::size_t(lda) + std::size_t(sr)]);
-            };
-            auto at = [&](const UnifiedVector<T>& v, int r, int c) {
-                return v[oc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)];
-            };
-            for (int c = 0; c < n; ++c)
-                for (int r = 0; r < c; ++r) touched += at(C, r, c) != at(C0, r, c);
-            for (int j : sample_indices(n, 64))
-                for (int i : sample_indices(n, 256)) {
-                    if (i < j) continue;
-                    double acc = 0, mag = 0;
-                    for (int p = 0; p < k; ++p) {
-                        const double t = op(i, p) * op(j, p);
-                        acc += t;
-                        mag += ab(t);
-                    }
-                    const double c0 = double(at(C0, i, j));
-                    const double num = ab(double(at(C, i, j)) - (double(alpha) * acc + double(beta) * c0)),
-                                 den = ab(double(alpha)) * mag + ab(double(beta)) * ab(c0);
-                    worst = nanmax(worst, den > 0 ? num / den : num);
+        int touched = 0;  // the strict upper triangle of C must stay bit for bit as C0 left it
+        for (int b : view(C, n, n, ldc, sc).default_items())
+            for (int c = 1; c < n; ++c)
+                for (int r = 0; r < c; ++r) {
+                    const std::size_t o = std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r);
+                    touched += C[o] != C0[o];
                 }
-        }
-        return {worst, touched};
+        const MV a = view(A, ar, ac, lda, sa);
+        const Transpose tt = trans == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
+        return {MV::gemm_backward_error(q, a, trans, a, tt, view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc), MV::up(alpha),
+                                        MV::up(beta), {}, Uplo::Lower),
+                touched};
     }
 };
 
@@ -169,8 +153,9 @@ public:
             if (*key_get(req.key, "form") != K::form_of(n, k))
                 throw std::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
             SyrkProblem<T> p(*q, trans, n, k, int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<K::SyrkChoice>("syrk", p, req, Tol<T>::v);
-            return run_arms<K::SyrkChoice>("syrk", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, p.k);
+            if (req.mode == "race") return run_race<K::SyrkChoice>("syrk", p, req, tol);
+            return run_arms<K::SyrkChoice>("syrk", p, req, tol);
         });
     }
 };

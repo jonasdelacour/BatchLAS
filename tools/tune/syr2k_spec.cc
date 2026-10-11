@@ -1,19 +1,19 @@
 // syr2k for the tuner (real only): C = alpha (A B^T + B A^T) + beta C on the lower triangle, A, B
-// and C0's lower triangle random, C0's strict upper triangle poisoned with a large finite value,
-// beta = 0.75 so C is read. uplo and trans are not table keys: fixed at L and N (the sytrd-style
-// update). Every ld is padded by --ld-pad. Verification is the componentwise error
-// |C - Cref| / (|alpha| (|A| |B^T| + |B| |A^T|) + |beta| |C0|) in double on items 0 and batch-1,
-// over the lower-triangle entries of up to 256 sampled rows of up to 64 sampled columns; any change
-// to the upper triangle counts as a nonzero info. double has the vendor arm only (choice.hh R7).
+// and C0 from MatrixView::fill_random, C0's strict upper triangle then poisoned with a large finite
+// value, beta = 0.75 so C is read. uplo and trans are not table keys: fixed at L and N (the
+// sytrd-style update). Every ld is padded by --ld-pad. Verification is
+// MatrixView::rank2k_backward_error over C's lower triangle on the default items (Check::blas with
+// inner dimension 2k, docs/design/verification.md); any change to the upper triangle counts as a
+// nonzero info. double has the vendor arm only (choice.hh R7).
 
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/syr2k/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <string>
@@ -38,14 +38,13 @@ struct Syr2kProblem {
         : q(q_), n(n_), k(k_), batch(batch_), lda(n_ + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(k_)),
           sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25)), beta(T(0.75)), A(sa * std::size_t(batch_)),
           B(sa * std::size_t(batch_)), C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
-        Rng rg(8282);
-        for (auto* v : {&A, &B})
-            for (std::size_t i = 0; i < v->size(); ++i) (*v)[i] = T(rg.next());
+        (void)view(A, n, k, lda, sa).fill_random(q, false, 8282);
+        (void)view(B, n, k, lda, sa).fill_random(q, false, 8283);
+        (void)view(C0, n, n, ldc, sc).fill_random(q, false, 8284);
+        q.wait();
         for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < n; ++c)
-                for (int r = 0; r < n; ++r)
-                    C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] =
-                        r >= c ? T(rg.next()) : T(1e6);
+            for (int c = 1; c < n; ++c)
+                for (int r = 0; r < c; ++r) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = T(1e6);
     }
     MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
@@ -65,34 +64,17 @@ struct Syr2kProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        double worst = 0;
-        int touched = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, oc = std::size_t(b) * sc;
-            auto in = [&](const UnifiedVector<T>& v, int r, int p) {
-                return double(v[oa + std::size_t(p) * std::size_t(lda) + std::size_t(r)]);
-            };
-            auto at = [&](const UnifiedVector<T>& v, int r, int c) {
-                return v[oc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)];
-            };
-            for (int c = 0; c < n; ++c)
-                for (int r = 0; r < c; ++r) touched += at(C, r, c) != at(C0, r, c);
-            for (int j : sample_indices(n, 64))
-                for (int i : sample_indices(n, 256)) {
-                    if (i < j) continue;
-                    double acc = 0, mag = 0;
-                    for (int p = 0; p < k; ++p) {
-                        const double t1 = in(A, i, p) * in(B, j, p), t2 = in(B, i, p) * in(A, j, p);
-                        acc += t1 + t2;
-                        mag += ab(t1) + ab(t2);
-                    }
-                    const double c0 = double(at(C0, i, j));
-                    const double num = ab(double(at(C, i, j)) - (double(alpha) * acc + double(beta) * c0)),
-                                 den = ab(double(alpha)) * mag + ab(double(beta)) * ab(c0);
-                    worst = nanmax(worst, den > 0 ? num / den : num);
+        int touched = 0;  // the strict upper triangle of C must stay bit for bit as C0 left it
+        for (int b : view(C, n, n, ldc, sc).default_items())
+            for (int c = 1; c < n; ++c)
+                for (int r = 0; r < c; ++r) {
+                    const std::size_t o = std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r);
+                    touched += C[o] != C0[o];
                 }
-        }
-        return {worst, touched};
+        return {MV::rank2k_backward_error(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), Transpose::NoTrans,
+                                          view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc), Uplo::Lower, MV::up(alpha),
+                                          MV::up(beta), false),
+                touched};
     }
 };
 
@@ -137,8 +119,9 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             Syr2kProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "k")), int(key_int(req.key, "batch")),
                               req.ld_pad);
-            if (req.mode == "race") return run_race<R2::Syr2kChoice>("syr2k", p, req, Tol<T>::v);
-            return run_arms<R2::Syr2kChoice>("syr2k", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, 2 * p.k);
+            if (req.mode == "race") return run_race<R2::Syr2kChoice>("syr2k", p, req, tol);
+            return run_arms<R2::Syr2kChoice>("syr2k", p, req, tol);
         });
     }
 };

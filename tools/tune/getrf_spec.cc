@@ -1,16 +1,18 @@
-// getrf for the tuner (docs/design/flat-kernel-selection.md §6.1): row-permuted dominant inputs
-// with complex noise, the P*L*U reconstruction residual on items 0 and batch-1, every
-// candidates<T>() entry pinned through the public getrf. blocked's time includes the public
-// trsm and gemm it calls, each choosing for itself.
+// getrf for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted
+// inputs (row-permuted dominant, complex parts both), verified on the default items by
+// MatrixView::getrf_residual (factorization) and MatrixView::pivot_ratio (the partial-pivoting rule
+// no residual sees), each as a fraction of its bound (docs/design/verification.md), so the cell's
+// residual is the worse of the two and its tolerance 1. Every candidates<T>() entry is pinned through
+// the public getrf. blocked's time includes the public trsm and gemm it calls, each choosing for itself.
 
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/getrf/choice.hh"
 #include "cell_runner.hh"
-#include "lu_residuals.hh"
 
 #include <memory>
 #include <string>
@@ -40,7 +42,8 @@ struct GetrfProblem {
           pA(std::size_t(batch_)), A0v(A0.data(), n, n, ld, int(stride), batch, pA0.data()),
           Av(A.data(), n, n, ld, int(stride), batch, pA.data()), piv(std::size_t(n_) * std::size_t(batch_), 0),
           info(std::size_t(batch_), 0) {
-        fill_lu<T>(A0.data(), n, ld, stride, batch, 12345);
+        (void)A0v.fill_random_pivoted(q, 12345);
+        q.wait();
     }
     std::size_t workspace() { return getrf_buffer_size<kBackend, T>(q, Av); }
     void reset() {
@@ -60,8 +63,9 @@ struct GetrfProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        const auto* p32 = reinterpret_cast<const std::int32_t*>(piv.data());
-        return {getrf_residual<T>(A.data(), A0.data(), p32, n, ld, stride, batch), bad};
+        const VectorView<std::int32_t> p32(reinterpret_cast<std::int32_t*>(piv.data()), n, batch, 1, n);
+        const double res = MV::getrf_residual(q, A0v, Av, p32) / verify::bound<T>(verify::Check::factorization, n);
+        return {verify::nanmax(res, MV::pivot_ratio(Av) / verify::pivot_ratio_bound<T>()), bad};
     }
 };
 
@@ -116,8 +120,8 @@ public:
         return with_dtype(req.dtype, [&]<class T>() {
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             GetrfProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<F::GetrfChoice>("getrf", p, req, Tol<T>::v);
-            return run_arms<F::GetrfChoice>("getrf", p, req, Tol<T>::v);
+            if (req.mode == "race") return run_race<F::GetrfChoice>("getrf", p, req, 1.0);
+            return run_arms<F::GetrfChoice>("getrf", p, req, 1.0);
         });
     }
 };

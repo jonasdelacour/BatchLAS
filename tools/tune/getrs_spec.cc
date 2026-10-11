@@ -1,17 +1,18 @@
-// getrs for the tuner (docs/design/flat-kernel-selection.md §6.1): A factored once, untimed, by
-// the public getrf under Auto (factor_bench's protocol), random complex B, NoTrans, the solve
-// residual against the unfactored A on items 0 and batch-1. blocked's time includes the public
-// trsm it calls; no candidate's time includes getrf.
+// getrs for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A
+// factored once, untimed, by the public getrf under Auto (factor_bench's protocol), fill_random B,
+// NoTrans, verified on the default items by MatrixView::lu_solve_residual against those factors
+// (Check::solve, docs/design/verification.md). blocked's time includes the public trsm it calls; no
+// candidate's time includes getrf.
 
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/getrs/choice.hh"
 #include "cell_runner.hh"
-#include "lu_residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -44,13 +45,8 @@ struct GetrsProblem {
           pX(std::size_t(batch_)), A0v(A0.data(), n, n, lda, int(sa), batch, pA0.data()),
           Av(A.data(), n, n, lda, int(sa), batch, pA.data()), B0v(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data()),
           Xv(X.data(), n, nrhs, ldb, int(sb), batch, pX.data()), piv(std::size_t(n_) * std::size_t(batch_), 0) {
-        fill_lu<T>(A0.data(), n, lda, sa, batch, 12345);
-        Rng rg(777);
-        for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < nrhs; ++c)
-                for (int r = 0; r < n; ++r)
-                    B0[std::size_t(b) * sb + std::size_t(c) * std::size_t(ldb) + std::size_t(r)] =
-                        mk<T>(rg.next(), rg.next());
+        (void)A0v.fill_random_pivoted(q, 12345);
+        (void)B0v.fill_random(q, false, 777);
         (void)MV::copy(q, Av, A0v);
         UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<kBackend, T>(q, Av)));
         UnifiedVector<std::int32_t> info(std::size_t(batch_), 0);
@@ -70,7 +66,8 @@ struct GetrsProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        return {lu_solve_residual<T>(X.data(), B0.data(), A0.data(), n, nrhs, lda, sa, ldb, sb, batch), 0};
+        const VectorView<std::int32_t> p32(reinterpret_cast<std::int32_t*>(piv.data()), n, batch, 1, n);
+        return {MV::lu_solve_residual(q, Av, p32, Transpose::NoTrans, Xv, B0v), 0};
     }
 };
 
@@ -120,8 +117,9 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             GetrsProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                               int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<S::GetrsChoice>("getrs", p, req, Tol<T>::v);
-            return run_arms<S::GetrsChoice>("getrs", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::solve, p.n);
+            if (req.mode == "race") return run_race<S::GetrsChoice>("getrs", p, req, tol);
+            return run_arms<S::GetrsChoice>("getrs", p, req, tol);
         });
     }
 };

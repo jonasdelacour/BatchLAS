@@ -75,8 +75,8 @@ Each cell goes through three steps:
    restored untimed. A candidate is eliminated when it is confidently slower than the leader by more
    than the tie margin. The race stops when one candidate remains, when the survivors are confidently
    within the margin, or at the max reps. The race starts from the winner of the nearest finished
-   neighbour. Before its times count, each candidate is verified on items 0 and batch-1
-   (`residuals.hh`).
+   neighbour. Before its times count, each candidate is verified on the default items
+   (`batchlas::verify`, @ref design_verification).
 
 Across cells:
 

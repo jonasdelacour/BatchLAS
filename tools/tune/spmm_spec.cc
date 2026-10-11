@@ -1,21 +1,20 @@
 // spmm for the tuner (GPU tables only; the cpu tables stay transcribed): a square m x m CSR A with
-// min(m, 8) sorted, scattered columns per row (a hashed start, stride m / r), values in [-1, 1)
-// with both complex parts; B, C0 random; alpha and beta with imaginary parts, beta != 0; B and C
-// at ld = rows + ld_pad. trans=T times ConjTrans for a complex scalar (the key folds C into T).
-// Items cycle through four patterns and value sets; item 0 and batch-1 differ. Verification is the
-// componentwise error |C - Cref| / (|alpha| |op(A)| |op(B)| + |beta| |C0|) against a double host
-// reference on items 0 and batch-1, every row of up to 64 sampled columns. No nnz key (choice.hh):
-// 8 per row sits between the lanczos (3) and LOBPCG (16) cells of docs/perf/spmm.md.
+// min(m, 8) sorted, scattered columns per row (a hashed start, stride m / r; items cycle through four
+// patterns, item 0 and batch-1 differ), values, B and C0 from MatrixView::fill_random (complex parts
+// both); alpha and beta with imaginary parts, beta != 0; B and C at ld = rows + ld_pad. trans=T times
+// ConjTrans for a complex scalar (the key folds C into T). Verification is
+// MatrixView::spmm_backward_error, |C - Cref| / (|alpha| |op(A)| |op(B)| + |beta| |C0|) componentwise on
+// the default items (Check::blas, docs/design/verification.md). No nnz key (choice.hh): 8 per row sits
+// between the lanczos (3) and LOBPCG (16) cells of docs/perf/spmm.md.
 
 #include <batchlas/blas/functions/spmm.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/spmm/choice.hh"
 #include "cell_runner.hh"
-#include "host_reference.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <complex>
@@ -34,7 +33,6 @@ namespace P = ops::spmm;
 
 constexpr int kVariants = 4;
 constexpr int kNnzPerRow = 8;
-constexpr int kMaxCheckedCols = 64;
 
 inline int variant_of(int b, int batch) { return b == 0 ? 0 : b == batch - 1 ? 1 : 2 + (b & 1); }
 
@@ -47,7 +45,6 @@ template <class T>
 struct SpmmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using SV = MatrixView<T, MatrixFormat::CSR>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Transpose ta, tb;
     int m, nrhs, batch, r, nnz, br, bc, ldb, ldc;
@@ -62,34 +59,30 @@ struct SpmmProblem {
         : q(q_), ta(ta_), tb(tb_), m(m_), nrhs(nrhs_), batch(batch_), r(std::min(m_, kNnzPerRow)), nnz(m_ * r),
           br(tb_ == Transpose::NoTrans ? m_ : nrhs_), bc(tb_ == Transpose::NoTrans ? nrhs_ : m_), ldb(br + pad),
           ldc(m_ + pad), sb(std::size_t(ldb) * std::size_t(bc)), sc(std::size_t(ldc) * std::size_t(nrhs_)),
-          alpha(mk<T>(1.25, -0.5)), beta(mk<T>(0.75, 0.25)), vals(std::size_t(nnz) * std::size_t(batch_)),
+          alpha(MV::make(1.25, -0.5)), beta(MV::make(0.75, 0.25)), vals(std::size_t(nnz) * std::size_t(batch_)),
           B(sb * std::size_t(batch_)), C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)),
           offs(std::size_t(m_ + 1) * std::size_t(batch_)), cols(std::size_t(nnz) * std::size_t(batch_)),
           Av(vals.data(), offs.data(), cols.data(), m_, m_, NonZeros{nnz}, nnz, m_ + 1, batch_),
           Bv(B.data(), br, bc, ldb, int(sb), batch_), C0v(C0.data(), m_, nrhs_, ldc, int(sc), batch_),
           Cv(C.data(), m_, nrhs_, ldc, int(sc), batch_) {
         std::vector<std::vector<int>> vc(kVariants, std::vector<int>(std::size_t(nnz)));
-        std::vector<std::vector<T>> vv(kVariants, std::vector<T>(std::size_t(nnz)));
         const int step = std::max(1, m / r);
-        for (int v = 0; v < kVariants; ++v) {
-            Rng rg(3000 + std::uint64_t(v));
-            for (int i = 0; i < m; ++i) {
-                const int h = int((rg.next() + 1.0) * 0.5 * double(m)) % m;
+        for (int v = 0; v < kVariants; ++v)
+            for (int i = 0; i < m; ++i) {  // a fixed hash of (v, i): the pattern is the cell's structure
+                const int h = int((std::uint64_t(i) * 2654435761ULL + std::uint64_t(v) * 40503ULL) % std::uint64_t(m));
                 int* row = vc[v].data() + std::size_t(i) * r;
                 for (int d = 0; d < r; ++d) row[d] = (h + d * step) % m;
                 std::sort(row, row + r);
-                for (int d = 0; d < r; ++d) vv[v][std::size_t(i) * r + d] = mk<T>(rg.next(), rg.next());
             }
-        }
         for (int b = 0; b < batch; ++b) {
             const int v = variant_of(b, batch);
             std::copy(vc[v].begin(), vc[v].end(), cols.data() + std::size_t(b) * nnz);
-            std::copy(vv[v].begin(), vv[v].end(), vals.data() + std::size_t(b) * nnz);
             for (int i = 0; i <= m; ++i) offs[std::size_t(b) * (m + 1) + i] = i * r;
         }
-        Rng rg(4000);
-        for (auto* x : {&B, &C0})
-            for (std::size_t i = 0; i < x->size(); ++i) (*x)[i] = mk<T>(rg.next(), rg.next());
+        (void)MV(vals.data(), nnz, 1, nnz, nnz, batch).fill_random(q, false, 3000);
+        (void)Bv.fill_random(q, false, 4000);
+        (void)C0v.fill_random(q, false, 4001);
+        q.wait();
     }
     void reset() {  // beta != 0 reads C
         (void)MV::copy(q, Cv, C0v);
@@ -105,40 +98,8 @@ struct SpmmProblem {
         (void)spmm<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb, ws);
         q.wait();
     }
-    D opb(std::size_t o, int p, int j) const {  // op(B)(p, j)
-        const D x = up(B[o + (tb == Transpose::NoTrans ? std::size_t(j) * ldb + p : std::size_t(p) * ldb + j)]);
-        return tb == Transpose::ConjTrans ? cj(x) : x;
-    }
     std::pair<double, int> verify() {
-        const std::vector<int> js = sample_indices(nrhs, kMaxCheckedCols);
-        double worst = 0;
-        const double aal = ab(up(alpha)), abe = ab(up(beta));
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * nnz, ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;
-            std::vector<D> acc(std::size_t(m) * js.size(), D(0));
-            std::vector<double> mag(acc.size(), 0.0);
-            for (int p = 0; p < m; ++p)
-                for (int e = offs[std::size_t(b) * (m + 1) + p]; e < offs[std::size_t(b) * (m + 1) + p + 1]; ++e) {
-                    const int c = cols[oa + e];
-                    D a = up(vals[oa + e]);
-                    if (ta == Transpose::ConjTrans) a = cj(a);
-                    // NoTrans: C(p, j) += a(p, c) op(B)(c, j); else C(c, j) += op(a)(c, p) op(B)(p, j).
-                    const int row = ta == Transpose::NoTrans ? p : c, k = ta == Transpose::NoTrans ? c : p;
-                    for (std::size_t t = 0; t < js.size(); ++t) {
-                        const D x = a * opb(ob, k, js[t]);
-                        acc[t * m + row] += x;
-                        mag[t * m + row] += ab(x);
-                    }
-                }
-            for (std::size_t t = 0; t < js.size(); ++t)
-                for (int i = 0; i < m; ++i) {
-                    const std::size_t at = oc + std::size_t(js[t]) * ldc + i;
-                    const D c0 = up(C0[at]), want = up(alpha) * acc[t * m + i] + up(beta) * c0;
-                    const double num = ab(up(C[at]) - want), den = aal * mag[t * m + i] + abe * ab(c0);
-                    worst = nanmax(worst, den > 0 ? num / den : num);
-                }
-        }
-        return {worst, 0};
+        return {MV::spmm_backward_error(q, Av, ta, Bv, tb, C0v, Cv, MV::up(alpha), MV::up(beta)), 0};
     }
 };
 
@@ -190,8 +151,9 @@ public:
             SpmmProblem<T> p(*q, trans_of(*key_get(req.key, "transA"), kComplex),
                              trans_of(*key_get(req.key, "transB"), kComplex), int(key_int(req.key, "m")),
                              int(key_int(req.key, "nrhs")), int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<P::SpmmChoice>("spmm", p, req, Tol<T>::v);
-            return run_arms<P::SpmmChoice>("spmm", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, p.m);
+            if (req.mode == "race") return run_race<P::SpmmChoice>("spmm", p, req, tol);
+            return run_arms<P::SpmmChoice>("spmm", p, req, tol);
         });
     }
 };
