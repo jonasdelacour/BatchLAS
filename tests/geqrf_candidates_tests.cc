@@ -593,7 +593,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
     if (this->budget() != 97280) GTEST_SKIP() << "the expectations are read at a 97,280 B budget";
     const auto tables = select::tables_in_borrow_order("geqrf", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device's first geqrf table is not the transcription";
     struct Row { int m, n; const char* vendor; const char* native; };
     std::vector<Row> rows;
@@ -653,7 +653,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsEveryKeyField) {
                        "form=tall n=16 aspect=2 | blocked 1 | cta 2\n"
                        "form=wide n=8 aspect=2 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n; const char* expect; const char* field; };
     const Probe probes[] = {{8, 8, "tiny", "base"},           {16, 16, "blocked", "n (square)"},
                             {17, 8, "cta", "form"},           {64, 8, "blocked", "aspect"},
@@ -695,7 +695,7 @@ TYPED_TEST(GeqrfCandidates, VendorFreeWalkIsTheOldTieBreak) {
                        "# keys: form:exact n:log:3 aspect:log\n"
                        "form=tall n=16 aspect=4 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (auto [m, n] : {std::pair{64, 16}, std::pair{20, 20}}) {
         auto p = make_qr<T>(Spec{m, n, 2});
         std::string all;
@@ -816,7 +816,7 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, device) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest({{"form", r.form}, {"n", r.n}, {"aspect", r.aspect}});
             ASSERT_NE(row, nullptr) << t.file;
             std::string got;

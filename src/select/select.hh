@@ -249,9 +249,9 @@ struct TableRow {
     bool timed = true;
 };
 
-/// One parsed `tuned/<op>.<dtype>.<device>.txt` file.
+/// One dtype's table: a `tuned/<op>.<device>.txt` file holds one per dtype.
 struct Table {
-    std::string file;  ///< basename, e.g. "potrf.float.sm_120.txt"
+    std::string file;  ///< basename, e.g. "potrf.sm_120.txt"
     std::string op, dtype, device, family;
     int arch_number = 0;
     std::string source;  ///< the header's source= value, e.g. "transcribed:2b46acab"
@@ -271,8 +271,14 @@ struct Table {
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
-/// Parses one table file. @throws std::runtime_error `"<file>:<line>: <reason>"`.
+/// Parses one single-dtype table (the header or file name gives op, dtype and device).
+/// @throws std::runtime_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
+
+/// Parses one tuned table file, named op.device.txt with the exact key dtype first, into one
+/// Table per dtype without that key.
+/// @throws std::runtime_error as parse_table does.
+BATCHLAS_API std::vector<Table> parse_tables(std::string_view text, std::string_view file);
 
 /// A `tuned/*.txt` file compiled into the library: its basename and text.
 struct EmbeddedTable {

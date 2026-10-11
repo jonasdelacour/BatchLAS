@@ -19,6 +19,7 @@
 
 #include "../src/ops/trsm/choice.hh"
 #include "../src/sycl/trsm_native.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -762,7 +763,7 @@ TYPED_TEST(TrsmCandidates, AutoReadsTheSm89TranscribedTable) {
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("trsm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:8b9adeb3")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads a measured trsm table";
     struct Row { int n, q, batch; const char* expect; };
     const Row rows[] = {{8, 4, 512, "cta"},     {32, 64, 128, "cta"},     {33, 8, 512, "blocked"},
@@ -801,7 +802,7 @@ TYPED_TEST(TrsmCandidates, AutoReadsEveryKeyField) {
                        "side=R trans=N order=8 q=64 batch=128 | blocked 1 | cta 2\n"
                        "side=R trans=N order=16 q=8 batch=128 | blocked 1 | cta 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Side side; Transpose t; int n, q, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Side::Left, Transpose::NoTrans, 8, 8, 128, "sg_left", "base"},
                             {Side::Left, Transpose::NoTrans, 8, 8, 32768, "cta", "batch"},
@@ -849,7 +850,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
         auto p = make_solve<T>(s32);
         const std::string got = traced_choice([&] { this->run(p); });
         const auto tables = select::tables_in_borrow_order("trsm", dtype, select::device_of<TestFixture::B>(*this->ctx));
-        if (!tables.empty() && tables.front()->source == "transcribed:8b9adeb3") EXPECT_EQ(got, "cta");
+        if (!tables.empty() && test_utils::transcribed_only(*tables.front())) EXPECT_EQ(got, "cta");
         else EXPECT_NE(got, "vendor") << "nothing ranks the vendor at order 32 on " << dev;
         expect_solved(*this->ctx, p, "auto order 32");
     }
@@ -861,7 +862,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
                        "# keys: side:exact trans:exact order:log:2 q:log batch:log\n"
                        "side=L trans=N order=32 q=128 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (const Spec& s : {s32, s4k}) {
         auto p = make_solve<T>(s);
         std::string all;
@@ -982,7 +983,7 @@ TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"side", r.side}, {"trans", r.trans}, {"order", r.n}, {"q", r.q}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;

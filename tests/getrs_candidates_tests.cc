@@ -348,7 +348,7 @@ protected:
         files.emplace_back("getrs." + dtype + "." + dev + ".txt",
                            "# op=getrs dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                            "# keys: n:log:2 nrhs:log batch:log\n" + text);
-        select::testing::set_builtin_tables(std::move(files));
+        select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     }
 };
 

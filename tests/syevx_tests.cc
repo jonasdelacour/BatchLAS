@@ -21,6 +21,7 @@
 #include <type_traits>
 #include "../src/ops/syev/vendor.hh"
 #include "../src/select/select.hh"
+#include "shipped_table_pick.hh"
 #include <map>
 #include <set>
 #include <sstream>
@@ -1201,7 +1202,7 @@ TEST(SyevxProjectedSyevPin, CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFir
     struct Restore {
         ~Restore() { select::testing::use_embedded_tables(); }
     } restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     auto A = MakeGradedSymmetric(n, batch, 60.0f);
     ctx->wait();
     SYEVX_REQUIRE_LAPACKE();

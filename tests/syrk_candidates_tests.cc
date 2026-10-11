@@ -20,6 +20,7 @@
 #include "../src/backends/syrk_gram_tiles.hh"
 #include "../src/backends/syrk_triangular_tiles.hh"
 #include "../src/ops/syrk/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -221,7 +222,7 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
                                                                  "# keys: form:exact trans:exact n:log:2 k:log "
                                                                  "batch:log\n" +
                                                                  rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 // A heterogeneous A or C has no route on any backend: one tile launch has one (n, k, ld, stride),
@@ -735,7 +736,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:ff340fc6")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads another syrk table";
     struct Row { int n, k, batch; const char* f; const char* d; };  // float, double (vendor present)
     const Row rows[] = {{128, 64, 4, "gram", "gram"},           {1, 4096, 2, "gram", "gram"},
@@ -1018,7 +1019,7 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 ASSERT_EQ(row.keys.size(), 5u) << t.file << ":" << row.line;

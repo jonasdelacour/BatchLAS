@@ -336,7 +336,7 @@ protected:
                            "# keys: side:exact order:log:2 q:log batch:log\n"
                            "side=L order=8 q=8 batch=8 | " + left + "\n"
                            "side=R order=8 q=8 batch=8 | " + right + "\n");
-        select::testing::set_builtin_tables(std::move(files));
+        select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     }
 
     // Each family's own launch: the tile kernel (it takes no side, so it cannot serve Right), the
@@ -813,7 +813,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:ff340fc6")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads a measured trmm table";
     struct Row { int n, q, batch; };
     const Row rows[] = {{1, 1, 1}, {16, 16, 128}, {23, 300, 7}, {128, 1, 1024}, {200, 70, 2}, {700, 3, 1}};
@@ -855,7 +855,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
                        "side=R order=8 q=512 batch=8 | triangular 1 | vendor 2 | expand 3\n"
                        "side=R order=128 q=8 batch=8 | triangular 1 | vendor 2 | expand 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     const char* v = TestFixture::kVendor ? "vendor" : "expand";
     struct Probe { Side side; int n, q, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Side::Left, 8, 8, 8, v, "side (Left)"},
@@ -903,7 +903,7 @@ TYPED_TEST(TrmmCandidates, VendorOnlyTableFallsToTheLastResort) {
                        "side=L order=32 q=32 batch=128 | vendor 1\n"
                        "side=R order=32 q=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 32, 9, 3};
         auto p = make_prob<T>(s);
@@ -1026,17 +1026,20 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
                 for (int b : tm::grid_batch)
                     want.insert(std::string(s) + " " + std::to_string(o) + " " + std::to_string(q) + " " +
                                 std::to_string(b));
-    std::string keys = "# keys:";
+    std::string keys = "# keys: dtype:exact";
     for (auto k : tm::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
         for (const char* dev : {"sm_89"}) {
-            const std::string file = std::string("trmm.") + dt + "." + dev + ".txt";
+            const std::string file = std::string("trmm.") + dev + ".txt";
             const auto& all = select::embedded_tables();
             const auto e = std::find_if(all.begin(), all.end(), [&](const auto& t) { return t.name == file; });
             ASSERT_NE(e, all.end()) << file;
             EXPECT_NE(std::string(e->text).find("\n" + keys + "\n"), std::string::npos) << file;
-            const select::Table t = select::parse_table(e->text, e->name);
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << file;
+            const auto parts = select::parse_tables(e->text, e->name);
+            const auto part = std::find_if(parts.begin(), parts.end(), [&](const select::Table& x) { return x.dtype == dt; });
+            ASSERT_NE(part, parts.end()) << file << " " << dt;
+            const select::Table& t = *part;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];

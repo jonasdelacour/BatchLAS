@@ -8,13 +8,49 @@
 
 #include "../src/select/select.hh"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace test_utils {
 
 inline constexpr const char* kNoTableEntryRuns = "<no table entry runs: last resort>";
+
+// Tests spell a synthetic table for one dtype ("<op>.<dtype>.<device>.txt", keys without dtype);
+// set_builtin_tables wants tuned/<op>.<device>.txt files keyed by dtype first
+// (docs/design/tuning-data.md). Other names pass through unchanged.
+inline std::vector<std::pair<std::string, std::string>> dtype_keyed(std::vector<std::pair<std::string, std::string>> files) {
+    for (auto& [name, text] : files) {
+        std::vector<std::string> part;
+        for (std::size_t a = 0, e; a <= name.size(); a = e + 1) {
+            e = std::min(name.find('.', a), name.size());
+            part.push_back(name.substr(a, e - a));
+        }
+        if (part.size() != 4 || part[3] != "txt") continue;
+        const std::string dt = part[1];
+        std::string out;
+        for (std::size_t a = 0, e; a < text.size(); a = e + 1) {
+            e = std::min(text.find('\n', a), text.size());
+            std::string line = text.substr(a, e - a);
+            if (line.rfind("# keys:", 0) == 0) line = "# keys: dtype:exact" + line.substr(7);
+            else if (!line.empty() && line[0] == '#') {
+                if (const auto p = line.find(" dtype=" + dt); p != std::string::npos) line.erase(p, 7 + dt.size());
+            } else if (!line.empty()) line = "dtype=" + dt + " " + line;
+            out += line + "\n";
+        }
+        name = part[0] + "." + part[2] + ".txt";
+        text = out;
+    }
+    return files;
+}
+
+// A table whose every row is untimed: the old router's transcribed order (sm_89, cpu).
+inline bool transcribed_only(const batchlas::select::Table& t) {
+    return !t.rows.empty() && std::none_of(t.rows.begin(), t.rows.end(), [](const auto& r) { return r.timed; });
+}
 
 // `native_only`: what the class word "native" resolves to (the vendor family is skipped).
 template <class Choice, class Probe>

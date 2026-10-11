@@ -763,7 +763,7 @@ TYPED_TEST(SymmCandidates, AutoReadsEveryKeyField) {
                        "form=wide m=64 n=160 batch=128 | expand 1 | vendor 2\n"
                        "form=wide m=160 n=64 batch=128 | vendor 1 | expand 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{64, 64, 128, "vendor", "base"},          {64, 64, 32768, "expand", "batch"},
                             {64, 32, 128, "expand", "m"},             {32, 64, 128, "vendor", "n (m and n swapped)"},
@@ -806,7 +806,7 @@ TYPED_TEST(SymmCandidates, VendorFreeLastResortIsExpand) {
                        "# keys: form:exact m:log n:log batch:log\n"
                        "form=sq m=32 n=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 32, 32, 64}, Spec{Side::Right, Uplo::Upper, 3, 300, 1}}) {
         auto p = make_prob<T>(s);
         std::string all;
@@ -934,7 +934,7 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             ASSERT_EQ(t.keys.size(), sy::key_names.size()) << t.file;
             for (std::size_t i = 0; i < t.keys.size(); ++i) {
                 const std::string spec = t.keys[i].name + (t.keys[i].log ? ":log" : ":exact");

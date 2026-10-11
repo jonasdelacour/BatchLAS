@@ -758,7 +758,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsEveryKeyField) {
                        "herm=N vec=all m=16 n=24 | blocked 1 | jacobi 2\n"
                        "herm=N vec=thin m=24 n=16 | blocked 1 | jacobi 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Spec s; const char* expect; const char* field; bool real_only; };
     // Only cta runs a native Upper, so the Upper row tells itself apart with the vendor (whose
     // answer is not checked: it reads the poisoned triangle).
@@ -815,7 +815,7 @@ TYPED_TEST(GesvdCandidates, VendorFreeLastResortIsBlocked) {
                        "# keys: herm:exact vec:exact m:log:1.5 n:log:1.5\n"
                        "herm=N vec=all m=16 n=16 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     if constexpr (TestFixture::kVendor) {
         GTEST_SKIP() << "the vendor serves the row";
     } else {
@@ -942,7 +942,7 @@ TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"herm", r.herm}, {"vec", r.vec}, {"m", r.m}, {"n", r.n}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

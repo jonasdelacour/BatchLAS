@@ -624,7 +624,7 @@ TYPED_TEST(GetrfCandidates, AutoReadsEveryKeyField) {
                        "n=8 batch=32768 | blocked 1 | cta 2 | tiny 3\n"
                        "n=12 batch=128 | cta 1 | blocked 2 | tiny 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{8, 128, "tiny", "base"}, {8, 30000, "blocked", "batch"}, {12, 128, "cta", "n"}};
     for (const auto& k : probes) {
@@ -648,7 +648,7 @@ TYPED_TEST(GetrfCandidates, VendorFreeLastResortIsBlocked) {
                        "# keys: n:log:3 batch:log\n"
                        "n=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (int n : {8, 200}) {
         auto p = make_lu<T>(n, 3, 17u);
         std::string all;
@@ -761,7 +761,7 @@ TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"batch", r.batch}});
             ASSERT_NE(row, nullptr) << t.file;
             std::string got;

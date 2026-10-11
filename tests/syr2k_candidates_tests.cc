@@ -718,7 +718,7 @@ TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
                        "n=16 k=256 batch=4 | vendor 1 | triangular 2\n"
                        "n=16 k=4 batch=1024 | vendor 1 | triangular 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, k, batch; Transpose t; const char* expect; const char* field; };
     const Probe probes[] = {{16, 4, 4, Transpose::NoTrans, "triangular", "base"},
                             {16, 4, 4, Transpose::Trans, "triangular", "base (T)"},
@@ -761,7 +761,7 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
                                                           " kernels=unknown\n# keys: n:log:2 k:log batch:log\n"
                                                           "n=64 k=8 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     const Spec s{Uplo::Lower, Transpose::Trans, 70, 9, 6};
     auto p = make_prob<T>(s);
     std::string all;
@@ -915,10 +915,10 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
-            std::string keys = "# keys:";
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
+            std::string keys = "# keys: dtype:exact";
             for (auto k : s2::key_names) keys += " " + std::string(k);
-            const std::string file = "syr2k." + std::string(dt) + "." + dev + ".txt";
+            const std::string file = "syr2k." + std::string(dev) + ".txt";
             const auto& all = select::embedded_tables();
             const auto e = std::find_if(all.begin(), all.end(), [&](const auto& x) { return x.name == file; });
             ASSERT_NE(e, all.end()) << file;

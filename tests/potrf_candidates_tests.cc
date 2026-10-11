@@ -811,7 +811,7 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
     struct Restore {
         ~Restore() { select::testing::use_embedded_tables(); }
     } restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Uplo uplo; int n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Uplo::Lower, 16, 128, "tiny", "base"},
                             {Uplo::Lower, 16, 8192, "cta", "batch"},
