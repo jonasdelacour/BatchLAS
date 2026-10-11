@@ -636,6 +636,50 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
 // belongs to. A fold that got the divisor wrong would report failures against
 // the wrong items -- or, with batch_size = 1, look perfect while being wrong, so
 // this case uses a batch of 4.
+// Two 32-wide diagonal leaves of equal value coupled by one off-diagonal: the two nonzero z
+// components sit on equal poles, so deflation leaves a one-pole secular problem (dd == 1), which
+// the fused merges solve in closed form. That arm must report convergence; it reported failure
+// (heavy deflation reaches dd == 1 on the syev tuner's graded jobz=V n=448 cells). P = 8 is the
+// partition path, P = 64 the work-group path. Spectrum {1 - c, 1 (n - 2 times), 1 + c}.
+TYPED_TEST(StedcTest, InfoIsZeroWhenDeflationLeavesOnePole) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "the fused merges are GPU-only"; }
+    using float_type = typename base_type<T>::type;
+    const int n = 64;
+    const int batch = 8;
+    const double c = 0.5;
+
+    for (int P : {8, 64}) {
+        SCOPED_TRACE("secular_threads_per_root=" + std::to_string(P));
+        auto d = Vector<float_type>::ones(n, batch);
+        auto e = Vector<float_type>::zeros(n - 1, batch);
+        for (int b = 0; b < batch; ++b) e(n / 2 - 1, b) = float_type(c);
+        auto eigvals = Vector<float_type>::zeros(n, batch);
+        auto eigvects = Matrix<float_type>::Identity(n, batch);
+        StedcParams<float_type> params{
+            .recursion_threshold = n / 2,
+            .merge_variant = StedcMergeVariant::FusedCta,
+            .secular_threads_per_root = P,
+        };
+        UnifiedVector<int32_t> info(batch, int32_t(-1));
+        UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+        (void)stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
+                    eigvects.view(), info.to_span());
+        this->ctx->wait();
+
+        for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << "item " << b;
+        std::vector<double> spectrum(n, 1.0);
+        spectrum.front() = 1.0 - c;
+        spectrum.back() = 1.0 + c;
+        const std::vector<std::vector<double>> ref(batch, spectrum);
+        std::vector<int> items(batch);
+        for (int b = 0; b < batch; ++b) items[b] = b;
+        EXPECT_VERIFY(float_type, verify::Check::values, n,
+                      MatrixView<float_type>::values_error(eigvals.view(), ref, 1.0 + c, items));
+    }
+}
+
 TYPED_TEST(StedcTest, InfoReportsLeafSolvesThatExhaustTheirSweepBudget) {
     using T = typename TestFixture::ScalarType;
     using float_type = typename base_type<T>::type;
