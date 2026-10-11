@@ -373,7 +373,6 @@ template <typename T>
 void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
-        const T* A0 = p.a0.data() + size_t(b) * p.stride;
         const int* ip = piv_item(p, b);
 
         for (int k = 0; k < p.n; ++k)
@@ -385,13 +384,6 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
             for (int i = 0; i < p.n; ++i)
                 ASSERT_TRUE(verify::finite(up(F[size_t(j) * p.ld + i])))
                     << what << ": F(" << i << "," << j << ") is not finite at b=" << b;
-
-        const double res = factor_residual<T>(A0, F, ip, p.n, p.n, p.ld);
-        if (verbose())
-            std::printf("[verbose] %-34s n=%4d b=%d  ||PA-LU||=%.4e  tol=%.4e\n",
-                        what, p.n, b, res, verify::bound<T>(Check::factorization, p.n));
-        EXPECT_VERIFY(T, Check::factorization, p.n, res)
-            << what << ": ||PA - LU||_F / ||A||_F too large at b=" << b << " (n=" << p.n << ")";
 
         if (check_L) {
             const double ratio = verify::pivot_ratio(verify::view(F, p.n, p.n, p.ld));
@@ -410,6 +402,15 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
                     << " -- the pivot base, direction or metric disagrees with LAPACK";
         }
     }
+    const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.piv.data())), p.n, p.batch, 1, p.n);
+    const double res = verify::getrf_residual(verify::view(p.a0.data(), p.n, p.n, p.ld, p.stride, p.batch),
+                                              verify::view(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch), piv,
+                                              verify::all_items(p.batch));
+    if (verbose())
+        std::printf("[verbose] %-34s n=%4d batch=%d  ||PA-LU||=%.4e  tol=%.4e\n",
+                    what, p.n, p.batch, res, verify::bound<T>(Check::factorization, p.n));
+    EXPECT_VERIFY(T, Check::factorization, p.n, res)
+        << what << ": ||PA - LU||_F / ||A||_F too large over " << p.batch << " items (n=" << p.n << ")";
 
     if (p.batch > 1) {
         const T* f0 = p.buf.data();

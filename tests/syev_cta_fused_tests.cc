@@ -215,9 +215,7 @@ TYPED_TEST(SyevCtaFusedTest, NearDegenerateSpectrum) {
 
 	syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-	for (int b = 0; b < batch; ++b) {
-		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, b);
-	}
+	test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, batchlas::verify::all_items(batch));
 }
 
 // Descending order and the work-group multiplier are both wired through to the
@@ -286,9 +284,7 @@ TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
 
 		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		for (int b = 0; b < batch; ++b) {
-			test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, b);
-		}
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A.view(), W, n, batchlas::verify::all_items(batch));
 	}
 }
 

@@ -295,9 +295,7 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 
 			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
 
-			for (int b = 0; b < batch; ++b) {
-				test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, b);
-			}
+			test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, batchlas::verify::all_items(batch));
 		}
 	}
 }
@@ -325,9 +323,7 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
 
 		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, verify::all_items(batch));
 
-		for (int b = 0; b < batch; ++b) {
-			test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, b);
-		}
+		test_utils::expect_eigenpairs<Scalar>(A0.view(), A_jac.view(), W_jac, n, batchlas::verify::all_items(batch));
 	}
 }
 

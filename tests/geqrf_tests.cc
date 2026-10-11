@@ -96,21 +96,10 @@ bool same_or_both_nan(T a, T b) {
 }
 
 // Householder QR's backward error is O(m k) eps ||A||; the 0.5 (m + k) term is tight, not
-// slack. The FLOOR under it is what lets the tiny band reach n < 8 at all: below m + k = 16
-// the formula demands one or two eps, which no correct Householder QR meets. It loosens no
-// shape this file tested before the tiny tier.
+// slack. The FLOOR under it (16 u, verify::bound(factorization, 1)) is what lets the tiny band
+// reach n < 8 at all: below m + k = 16 the formula demands one or two eps, which no correct
+// Householder QR meets. It loosens no shape this file tested before the tiny tier.
 // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
-template <typename T>
-double small_order_tol_floor() {
-    return 8.0 * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-template <typename T>
-double residual_tol(int m, int k) {
-    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
-                    small_order_tol_floor<T>());
-}
-
 // The pre-migration bounds, as factors on the kind's c m eps (factorization c = 16, orthogonality
 // c = 32). The Frobenius norm of Q^H Q - I is sqrt(k) times the normalised value the old tolerance
 // judged; the orthogonality factor is clamped at 1.
@@ -286,7 +275,8 @@ void check_one(const Problem<T>& p, const char* what) {
         const double orth = orth_of_promoted(Q, p.m, p.k);
         if (verbose()) {
             std::printf("[verbose] %-28s m=%4d n=%4d b=%d/%d  qr=%.4e orth=%.4e  tol=%.4e\n",
-                        what, p.m, p.n, b, p.batch, res, orth, residual_tol<T>(p.m, p.k));
+                        what, p.m, p.n, b, p.batch, res, orth,
+                        verify::bound<T>(verify::Check::factorization, p.m, residual_slack<T>(p.m, p.k)));
             std::fflush(stdout);
         }
         EXPECT_VERIFY_SLACK(T, verify::Check::factorization, p.m, res, residual_slack<T>(p.m, p.k))
@@ -1567,7 +1557,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
 
 // T9. RELATIVE accuracy against the tier this one would replace, because below m + k = 16
 // an absolute pass/fail says more about the tolerance constant than about the kernel. This
-// is the evidence behind small_order_tol_floor().
+// is the evidence behind the 16 u tiny-order floor (verify::bound(factorization, 1)).
 // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
 TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
     using T = typename TestFixture::T;
@@ -1609,10 +1599,11 @@ TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
             // claims it loses none; the floor is the half that binds at these orders.
             // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
             const double slack = 2.0;
-            EXPECT_LE(res_tiny[b], std::max(slack * res_cta, small_order_tol_floor<T>()))
+            const double floor = verify::bound<T>(verify::Check::factorization, 1);
+            EXPECT_LE(res_tiny[b], std::max(slack * res_cta, floor))
                 << "tiny is materially less accurate than the CTA route at n=" << n
                 << " b=" << b << " (tiny " << res_tiny[b] << " vs cta " << res_cta << ")";
-            EXPECT_LE(orth_tiny[b], std::max(slack * orth_cta, small_order_tol_floor<T>()))
+            EXPECT_LE(orth_tiny[b], std::max(slack * orth_cta, floor))
                 << "tiny's reflectors are materially less orthonormal than the CTA route's "
                 << "at n=" << n << " b=" << b << " (tiny " << orth_tiny[b] << " vs cta "
                 << orth_cta << ")";

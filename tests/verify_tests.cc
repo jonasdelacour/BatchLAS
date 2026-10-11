@@ -89,11 +89,14 @@ TEST(Norms, ReadThroughLdAndStride) {
     EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 2), std::sqrt(2.0 * 9.0 * 14.0));
     EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(A, 2), 9.0);
     EXPECT_DOUBLE_EQ(batchlas::verify::one_norm(A, 2), 18.0);
+    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 2), 18.0);  // row 3: 9 + |-9|
+    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 0), 6.0);
 
     buf[2 * stride + 1 * ld + 2] = kNaN;
     EXPECT_TRUE(std::isnan(batchlas::verify::frobenius(A, 2)));
     EXPECT_TRUE(std::isnan(batchlas::verify::max_abs(A, 2)));
     EXPECT_TRUE(std::isnan(batchlas::verify::one_norm(A, 2)));
+    EXPECT_TRUE(std::isnan(batchlas::verify::inf_norm(A, 2)));
     EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 0), std::sqrt(2.0 * 14.0));
 }
 
@@ -103,6 +106,7 @@ TEST(Norms, ComplexUsesModulus) {
     EXPECT_DOUBLE_EQ(batchlas::verify::frobenius(A, 0), std::sqrt(25.0 + 144.0 + 25.0));
     EXPECT_DOUBLE_EQ(batchlas::verify::max_abs(A, 0), 12.0);
     EXPECT_DOUBLE_EQ(batchlas::verify::one_norm(A, 0), 12.0 + 5.0);
+    EXPECT_DOUBLE_EQ(batchlas::verify::inf_norm(A, 0), 5.0 + 12.0);  // row 0: |3+4i| + |-12i|
 }
 
 TEST(Norms, KernelViewAccepted) {
@@ -273,6 +277,26 @@ TEST(View, LayoutAndDefaultStride) {
     EXPECT_THROW(batchlas::verify::view(buf.data(), 6, 2, 5), std::invalid_argument);
     EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, -1), std::invalid_argument);
     EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, 0, 0), std::invalid_argument);
+    // Overlapping items, and ld * cols beyond int, are rejected; one item may have any stride.
+    EXPECT_THROW(batchlas::verify::view(buf.data(), 3, 2, 5, 9, 2), std::invalid_argument);
+    EXPECT_EQ(batchlas::verify::view(buf.data(), 3, 2, 5, 9, 1).stride(), 9);
+    EXPECT_THROW(batchlas::verify::view(buf.data(), 50000, 50000, 50000), std::invalid_argument);
+}
+
+// 8200 items of 64 x 64 exceed the engine's 2^25-element group, so the check runs in two groups;
+// a finite poison in the second group must still be seen (a wrong group offset reads group one twice).
+TEST(Engine, SecondGroupKeepsItsItemIndices) {
+    constexpr int n = 64, batch = 8200, poisoned = 8195;
+    std::vector<float> buf(static_cast<std::size_t>(n) * n * batch, 0.0f);
+    for (int b = 0; b < batch; ++b)
+        for (int i = 0; i < n; ++i) buf[static_cast<std::size_t>(b) * n * n + static_cast<std::size_t>(i) * n + i] = 1.0f;
+    MatrixView<float, MatrixFormat::Dense> Q(buf.data(), n, n, n, n * n, batch);
+    const auto all = batchlas::verify::all_items(batch);
+    EXPECT_EQ(batchlas::verify::orthogonality(Q, all), 0.0);
+    buf[static_cast<std::size_t>(poisoned) * n * n + 5 * n + 3] = 1e3f;
+    EXPECT_GT(batchlas::verify::orthogonality(Q, all), 1e3);
+    const int clean[] = {0, batch / 2, batch - 1};
+    EXPECT_EQ(batchlas::verify::orthogonality(Q, clean), 0.0);
 }
 
 TEST(View, ConstOverloadFeedsTheChecks) {
@@ -513,7 +537,9 @@ TEST(Inputs, GradedHermitianHasRequestedCondition) {
         for (int b = 0; b < batch; ++b) {
             auto a = batchlas::verify::copy_item(A, b);
             std::vector<double> w;
-            if (!batchlas::verify::eigenvalues(n, a, w)) return;
+            const bool ok = batchlas::verify::eigenvalues(n, a, w);
+            if (!batchlas::verify::have_reference) return;
+            ASSERT_TRUE(ok) << "LAPACKE reference failed, item " << b;
             ran = true;
             EXPECT_NEAR(w[n - 1] / w[0] / std::pow(10.0, c), 1.0, 0.01);
         }

@@ -52,10 +52,7 @@ protected:
         return batchlas::verify::max_abs(mat.view(), b);
     }
     static double expected_inf_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int b) {
-        std::vector<ScalarType> t(static_cast<size_t>(mat.rows()) * mat.cols());
-        for (int j = 0; j < mat.cols(); ++j)
-            for (int i = 0; i < mat.rows(); ++i) t[static_cast<size_t>(i) * mat.cols() + j] = mat(i, j, b);
-        return batchlas::verify::one_norm(batchlas::verify::view(t.data(), mat.cols(), mat.rows(), mat.cols()), 0);
+        return batchlas::verify::inf_norm(mat.view(), b);
     }
 
     // Small helper to map NormType to a string for readable failure messages

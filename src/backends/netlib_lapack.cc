@@ -23,6 +23,7 @@
 #include <batchlas/blas/functions/syev.hh>
 
 #include "gemm_variant.hh"
+#include "host_blas_health.hh"
 #include "../util/template-instantiations.hh"
 #include <batchlas/settings.hh>
 
@@ -34,67 +35,18 @@ namespace batchlas{
     // on another machine). Deliberately NO setenv(): OpenBLAS already read OPENBLAS_CORETYPE.
     // evidence: docs/design/runtime-internals.md#runtime-internals-the-host-blas-dgemm-health-check
 
-#ifndef BATCHLAS_REQUIRED_OPENBLAS_CORETYPE
-#define BATCHLAS_REQUIRED_OPENBLAS_CORETYPE ""
-#endif
-
-    struct HostBlasDoubleHealth {
-        bool ok = true;
-        int bad_size = 0;
-        double worst_error = 0.0;
-    };
-
     // off | warn (default) | error; `off` is refused by the unsafe gate, `error` is let through.
     inline batchlas::UnsafeSettings::BlasHealth host_blas_health_mode() {
         return batchlas::settings().unsafe.blas_health;
     }
 
-    // Port of cmake/BatchLASBlasHealthCheck.cmake on a strided sample of C. The sizes are the ones
-    // that expose the known defect: n=64 and n=256 happen to be correct there.
     inline HostBlasDoubleHealth probe_host_dgemm() {
-        HostBlasDoubleHealth health;
-        static const int sizes[] = {128, 200, 512};
-        for (int n : sizes) {
-            const size_t nn = static_cast<size_t>(n) * static_cast<size_t>(n);
-            std::vector<double> a(nn), b(nn), c(nn, 0.0);
-            for (int col = 0; col < n; ++col) {
-                for (int row = 0; row < n; ++row) {
-                    a[row + static_cast<size_t>(col) * n] = std::sin(0.5 * (row + 1) * (col + 1));
-                    b[row + static_cast<size_t>(col) * n] = std::cos(0.25 * (row + 1) * (col + 2));
-                }
-            }
-
+        return probe_dgemm([](int n, double* a, double* b, double* c) {
             call_backend_nh<double, BackendLibrary::CBLAS>(
                 cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                 Layout::ColMajor, Transpose::NoTrans, Transpose::NoTrans,
-                n, n, n,
-                1.0,
-                a.data(), n,
-                b.data(), n,
-                0.0,
-                c.data(), n);
-
-            const int step = std::max(1, n / 32);
-            double worst = 0.0;
-            for (int col = 0; col < n; col += step) {
-                for (int row = 0; row < n; row += step) {
-                    double want = 0.0;
-                    for (int i = 0; i < n; ++i) {
-                        want += a[row + static_cast<size_t>(i) * n] * b[i + static_cast<size_t>(col) * n];
-                    }
-                    const double diff = std::abs(want - c[row + static_cast<size_t>(col) * n]);
-                    if (diff > worst) worst = diff;
-                }
-            }
-            // Rounding differences are ~1e-13 here; a broken kernel is off by O(1)+.
-            if (worst > 1e-6) {
-                health.ok = false;
-                health.bad_size = n;
-                health.worst_error = worst;
-                return health;
-            }
-        }
-        return health;
+                n, n, n, 1.0, a, n, b, n, 0.0, c, n);
+        });
     }
 
     inline const HostBlasDoubleHealth& host_blas_double_health() {
@@ -105,41 +57,6 @@ namespace batchlas{
             return probe_host_dgemm();
         }();
         return health;
-    }
-
-    inline std::string host_blas_double_health_message(const HostBlasDoubleHealth& health) {
-        const std::string required = BATCHLAS_REQUIRED_OPENBLAS_CORETYPE;
-        // OpenBLAS's own variable: deliberately NOT captured into Settings.
-        const char* current_env = std::getenv("OPENBLAS_CORETYPE");
-        const std::string current = current_env ? current_env : "";
-
-        std::string msg =
-            "BatchLAS: the host BLAS computes dgemm INCORRECTLY on this machine.\n"
-            "  probe: max abs error " + std::to_string(health.worst_error) +
-            " at n=" + std::to_string(health.bad_size) + " (rounding alone is ~1e-13)\n"
-            "  OPENBLAS_CORETYPE is currently " +
-            (current.empty() ? std::string("unset") : ("\"" + current + "\"")) + "\n";
-
-        if (!required.empty()) {
-            msg += "  this build detected that OPENBLAS_CORETYPE=" + required + " repairs it\n";
-        }
-        msg += "Double-precision results from the host/NETLIB backend cannot be trusted.\n"
-               "OpenBLAS reads OPENBLAS_CORETYPE in its library constructor, before main(),\n"
-               "so it must be set in the environment before the process starts - BatchLAS\n"
-               "cannot set it for you.\n";
-
-        if (!required.empty() && required != current) {
-            msg += "    export OPENBLAS_CORETYPE=" + required + "\n";
-        } else if (!required.empty()) {
-            msg += "OPENBLAS_CORETYPE=" + required + " is already set and dgemm is still wrong: "
-                   "this host BLAS is unusable for double precision, upgrade or replace it.\n";
-        } else {
-            msg += "No working value was recorded at build time. Try, in order:\n"
-                   "    export OPENBLAS_CORETYPE=SKYLAKEX   (then HASWELL, SANDYBRIDGE, NEHALEM, PRESCOTT)\n";
-        }
-        msg += "Set BATCHLAS_BLAS_HEALTH=error to turn this into an exception, "
-               "or BATCHLAS_BLAS_HEALTH=off to skip the check.\n";
-        return msg;
     }
 
     inline void check_host_blas_double_health() {

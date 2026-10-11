@@ -72,18 +72,31 @@ inline void check_slack(const Slack& s) {
 }
 
 // "kind dtype n value bound factor reason"; bound is the kind's, never the slacked one, and value is raw.
+// One open handle while BATCHLAS_VERIFY_RECORD names the same path: reopened when it changes, closed
+// when it is unset (getenv per check is a scan of environ; the open/close per check was the cost).
 inline void record(const char* kind, const char* dtype, int n, double value, double b, double factor, const char* reason) {
+    static std::mutex mu;
+    static std::string open_path;
+    static std::FILE* f = nullptr;
+    std::lock_guard<std::mutex> lock(mu);
     const char* path = std::getenv("BATCHLAS_VERIFY_RECORD");
-    if (!path || !*path) return;
+    if (!path || !*path) {
+        if (f) std::fclose(f);
+        f = nullptr;
+        open_path.clear();
+        return;
+    }
+    if (!f || open_path != path) {
+        if (f) std::fclose(f);
+        f = std::fopen(path, "a");
+        open_path = path;
+    }
+    if (!f) return;
     std::string r(reason);
     for (char& c : r)
         if (std::isspace(static_cast<unsigned char>(c))) c = '_';
-    static std::mutex mu;
-    std::lock_guard<std::mutex> lock(mu);
-    if (std::FILE* f = std::fopen(path, "a")) {
-        std::fprintf(f, "%s %s %d %.17g %.17g %.17g %s\n", kind, dtype, n, value, b, factor, r.c_str());
-        std::fclose(f);
-    }
+    std::fprintf(f, "%s %s %d %.17g %.17g %.17g %s\n", kind, dtype, n, value, b, factor, r.c_str());
+    std::fflush(f);  // a test that crashes keeps every line before it
 }
 
 }  // namespace detail

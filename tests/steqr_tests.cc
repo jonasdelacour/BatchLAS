@@ -24,7 +24,7 @@ using namespace batchlas;
 
 namespace {
 // Eigenvalues of every item of a dense symmetric A (both triangles valid) from LAPACKE, ascending,
-// and ||A||_2 over them. Empty without LAPACKE.
+// and ||A||_2 over them. Empty without LAPACKE or when a reference fails.
 template <typename Real>
 std::vector<std::vector<double>> lapacke_spectra(const MatrixView<Real, MatrixFormat::Dense>& A, double& norm2) {
     std::vector<std::vector<double>> w(static_cast<std::size_t>(A.batch_size()));
@@ -44,11 +44,15 @@ std::vector<std::vector<double>> repeated(const std::vector<double>& one, int ba
     return std::vector<std::vector<double>>(static_cast<std::size_t>(batch), one);
 }
 
-// w (n values per item) against ref at Check::values, scaled by norm2. An empty ref (no LAPACKE) skips.
+// w (n values per item) against ref at Check::values, scaled by norm2. An empty ref skips without
+// LAPACKE and fails with it: there it means the reference itself failed.
 template <typename Real>
 void expect_values(const VectorView<Real>& w, const std::vector<std::vector<double>>& ref, double norm2, int n,
                    std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
-    if (ref.empty()) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    if (ref.empty()) {
+        if constexpr (verify::have_reference) FAIL() << "host LAPACKE reference failed (info != 0)";
+        else GTEST_SKIP() << "no host LAPACKE reference in this build";
+    }
     const double err = verify::values_error(w, ref, norm2, items);
     if (slack) EXPECT_VERIFY_SLACK(Real, verify::Check::values, n, err, *slack);
     else EXPECT_VERIFY(Real, verify::Check::values, n, err);

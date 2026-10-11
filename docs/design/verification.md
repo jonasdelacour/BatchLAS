@@ -1,8 +1,8 @@
 # Verification library {#design_verification}
 
 > **Status:** implemented 2026-10-09 (tests, benchmarks and the tuner verify through it; tolerances
-> calibrated on threadripper02, RTX PRO 6000 sm_120) · scope: one host-side verification facility ·
-> machine-independent
+> calibrated on threadripper02, RTX PRO 6000 sm_120); dense checks on a SYCL device since
+> 2026-10-11 · scope: one verification facility · machine-independent
 
 BatchLAS checks its own results in three places: the tests, the benchmark harnesses and the
 tuner, which refuses to time a wrong answer. Each grew its own input generators, references,
@@ -35,27 +35,30 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 | Question | Decision |
 | --- | --- |
 | Data | the library's own `MatrixView<T, MatrixFormat::Dense>` and `VectorView<T>`; no new matrix or batch type. A site holding raw buffers builds a view over them |
-| Memory | host-readable views (unified or host allocations); the caller waits on its queue first |
+| Memory | host-readable views (unified or host allocations); the caller waits on its queue first. The checked items are copied to the engine's device |
 | Arithmetic | every check promotes to `double` / `std::complex<double>` |
 | Maxima | NaN-propagating everywhere: a NaN anywhere in a check fails it |
 | Items checked | `{0, batch/2, batch−1}` by default; an overload takes an explicit item list, `all_items(batch)` lists every item (saturating-batch tests) |
 | Tolerance | `c · f(n) · eps(T)` per check kind, one named entry per kind (below); no fixed per-type bounds |
-| Device-side checks | out of scope: miniacc's accuracy benchmarks keep `gemm`/`norm` on the device and only take their LAPACKE references from here |
+| Where checks run | the dense residuals and backward errors as SYCL kernels on the library's own queue ([device engine](#verification-device-engine)); generators, LAPACKE references and the O(input) scans (norms, `values_error`, `pivots_valid`, `pivot_ratio`) on the host |
 | Public API | no: internal, not installed |
 
 ## Layout
 
-Header-only, `include/batchlas/verify/`, namespace `batchlas::verify`, CMake INTERFACE target
-`batchlas::verify` defined at the top level (tests are under `BATCHLAS_BUILD_TESTS`, the tuner
-and benchmarks under `BATCHLAS_BUILD_BENCHMARKS`, so neither directory can own it).
+Headers in `include/batchlas/verify/`, namespace `batchlas::verify`; the kernels in the shared
+library `libbatchlas_verify` (`src/verify/engine.cc`), device-linked once rather than in every test
+binary. CMake target `batchlas::verify`, defined at the top level (tests are under
+`BATCHLAS_BUILD_TESTS`, the tuner and benchmarks under `BATCHLAS_BUILD_BENCHMARKS`, so neither
+directory can own it); not installed.
 
 | Header | Contents |
 | --- | --- |
 | `scalar.hh` | `promoted_t<T>`, `up`, `conj` (in T for every dtype), `make<T>`, `abs`, `cabs1` (`|re| + |im|`, LAPACK's pivot metric), `finite` (every component), `eps<T>()`, `nanmax`, `Rng` (factor_bench's historical LCG, constants unchanged: `next()` in [−1, 1), `uniform01()`, `normal()`) |
 | `inputs.hh` | `fill_spd`, `fill_lu` (dominant, then row-permuted per item), `fill_random`, `fill_graded_hermitian` (condition ~1e±6), `fill_reflectors` (larfg on random columns, LAPACK storage) |
-| `norms.hh` | `view(data, rows, cols, ld, stride = 0, batch = 1)` (a `KernelMatrixView` over raw host memory, `const T*` too; stride 0 is `ld·cols`); Frobenius, max-abs and one-norm of one item, promoted |
-| `residuals.hh` | `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, the same reflector loop as `qr_residual`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`, Q explicit), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, B a tridiagonal or banded reduction stored densely; judged as `factorization`), `solve_residual` (null B for getri; probe columns above 2^28 elements; an overload reads A through a `Shape` and a `Transpose`), `lu_solve_residual` (the solve quantity for X from getrf factors and pivots: `op(P·L·U)` formed per checked item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`), `gemm_max_denominator` (the largest of those denominators, to turn an absolute tolerance into a componentwise one), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees) |
-| `reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` factor and tau, `?sterf`. Each returns `false` without LAPACKE, empty input included, and the caller reports NaN or skips, so a check without a reference never passes |
+| `norms.hh` | `view(data, rows, cols, ld, stride = 0, batch = 1)` (a `KernelMatrixView` over raw host memory, `const T*` too; stride 0 is `ld·cols`; overlapping items and `ld·cols` beyond `int` throw); Frobenius, max-abs, one- and infinity-norm of one item, promoted |
+| `residuals.hh` | `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, the same reflector loop as `qr_residual`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`, Q explicit), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, B a tridiagonal or banded reduction stored densely; judged as `factorization`), `solve_residual` (null B for getri; probe columns above 2^28 elements; an overload reads A through a `Shape` and a `Transpose`), `lu_solve_residual` (the solve quantity for X from getrf factors and pivots: `op(P·L·U)` formed per checked item on the device), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`), `gemm_max_denominator` (the largest of those denominators, to turn an absolute tolerance into a componentwise one), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees) |
+| `reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` factor and tau, `?sterf`. Each returns `false` without LAPACKE, empty input included, and the caller reports NaN or skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
+| `engine.hh` | `Shape`, the type-erased `Operand` and the entry points `libbatchlas_verify` exports; internal to `residuals.hh` |
 | `tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()` |
 
 `tests/test_utils.hh` adds the one gtest wrapper, `EXPECT_VERIFY(T, kind, n, value)` and
@@ -65,6 +68,19 @@ kind, n and the slack. The library itself stays gtest-free.
 Every residual returns the worst value over the checked items as a `double`; the caller compares
 it with `bound`. Nothing in the library calls a BatchLAS operation, so a reference can never go
 through the tables or routes under test (agent guide §8 rule 7).
+
+## Verification: device engine
+
+| Aspect | Rule |
+| --- | --- |
+| Lanes | two in-order queues per process, leaked: the first GPU and the first CPU device with fp64 on which a probe kernel runs (a build without that device's image fails the probe). A check above 2^24 multiply-adds runs on the GPU, the rest on the CPU device; with one lane, everything runs there. Under `ctest_gpus.sh` the GPU is the slot's |
+| Synchronization | one wait per check: uploads and downloads go through a pinned host arena that does not move within a check. Each wait costs ~1 ms on the CUDA adapter (threadripper02, an 8-byte copy or an empty kernel alike) and ~40 µs on the OpenCL CPU device, which is why small checks stay on the CPU |
+| Call pattern | check a batch with one call over its items (`all_items(batch)`), not one call per item: each call pays a wait. `syev_cta_fused_tests` (4099 items checked one call each) took 248 s on a GPU-only, several-waits engine against 2 s with host loops; one call over all items on this engine takes 4 s |
+| Data path | each checked item is packed on the host in its own precision (`ld` and `stride` read there), copied, and promoted on the device; `op()` and `Shape` are applied by an expand kernel, never by a host copy |
+| Groups | items are processed together while the largest buffer stays under 2^25 elements |
+| Kernels | one work-item per output element, inner sums sequential in the host loops' order; complex arithmetic written out (`{re, im}`), no `std::complex` in device code |
+| Reductions | per-element partials, summed or `nanmax`ed on the host in column-major order: no device reduction or group algorithm |
+| Concurrency | one mutex around each check; a slot that grows waits for the queue before it is freed |
 
 ## Tolerance kinds
 

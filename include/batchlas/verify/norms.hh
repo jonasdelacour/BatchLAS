@@ -6,7 +6,9 @@
 #include <batchlas/verify/scalar.hh>
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace batchlas::verify {
 namespace detail {
@@ -36,12 +38,15 @@ Item<T> item_of(const KernelMatrixView<T, MatrixFormat::Dense>& A, int item) {
 }  // namespace detail
 
 /// A dense batch over raw host-readable memory: item b starts at data + b * stride; stride 0 means
-/// ld * cols. @throws std::invalid_argument for ld < max(1, rows), a negative size or stride, batch < 1.
+/// ld * cols. @throws std::invalid_argument for ld < max(1, rows), a negative size or stride, batch < 1,
+/// items that overlap (batch > 1 and stride < ld * cols), or ld * cols beyond int.
 template <class T>
 KernelMatrixView<T, MatrixFormat::Dense> view(T* data, int rows, int cols, int ld, int stride = 0, int batch = 1) {
-    if (rows < 0 || cols < 0 || stride < 0 || batch < 1 || ld < (rows > 1 ? rows : 1))
+    const long long item = static_cast<long long>(ld) * cols;
+    if (rows < 0 || cols < 0 || stride < 0 || batch < 1 || ld < (rows > 1 ? rows : 1) || item > std::numeric_limits<int>::max() ||
+        (batch > 1 && stride > 0 && stride < item))
         throw std::invalid_argument("batchlas::verify::view: invalid rows, cols, ld, stride or batch");
-    return KernelMatrixView<T, MatrixFormat::Dense>(data, rows, cols, ld, stride > 0 ? stride : ld * cols, batch);
+    return KernelMatrixView<T, MatrixFormat::Dense>(data, rows, cols, ld, stride > 0 ? stride : static_cast<int>(item), batch);
 }
 
 /// view over read-only memory; every check only reads through it.
@@ -81,6 +86,17 @@ template <class View> double one_norm(const View& A, int item) {
         for (int i = 0; i < m.rows; ++i) col += abs(up(m.data[static_cast<long long>(j) * m.ld + i]));
         best = nanmax(best, col);
     }
+    return best;
+}
+
+/// Largest absolute row sum of item @p item.
+template <class View> double inf_norm(const View& A, int item) {
+    const auto m = detail::item_of(A, item);
+    std::vector<double> row(static_cast<std::size_t>(m.rows), 0.0);
+    for (int j = 0; j < m.cols; ++j)
+        for (int i = 0; i < m.rows; ++i) row[static_cast<std::size_t>(i)] += abs(up(m.data[static_cast<long long>(j) * m.ld + i]));
+    double best = 0.0;
+    for (double r : row) best = nanmax(best, r);
     return best;
 }
 

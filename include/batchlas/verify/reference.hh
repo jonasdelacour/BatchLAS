@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Host LAPACK references (docs/design/verification.md): eigenvalues, singular values and getrf pivots
 // from LAPACKE, never from a BatchLAS path under test. Without LAPACKE (no host backend) every
-// function returns false, empty input included, and the caller reports NaN or skips: never a pass.
+// function returns false, empty input included, and the caller skips: never a pass. With LAPACKE
+// (have_reference) false is a failed reference, and the caller fails.
 #pragma once
 
 #include <batchlas/verify/norms.hh>
@@ -9,14 +10,43 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 
+// Undefined would read as 0 and silently compile the "no reference" branch.
+#ifndef BATCHLAS_VERIFY_HAVE_LAPACKE
+#error "batchlas/verify/reference.hh: link batchlas::verify, which defines BATCHLAS_VERIFY_HAVE_LAPACKE"
+#endif
+
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
 #include <lapacke.h>
+
+namespace batchlas::verify::detail {
+/// The host dgemm probe (libbatchlas_verify, cached): empty when correct, else the diagnostic.
+std::string host_dgemm_defect();
+}  // namespace batchlas::verify::detail
 #endif
 
 namespace batchlas::verify {
+
+/// True when this build has host LAPACKE references; a reference that returns false here failed.
+inline constexpr bool have_reference = BATCHLAS_VERIFY_HAVE_LAPACKE != 0;
+
+namespace detail {
+// Every double reference except ?sterf runs blocked code on the host dgemm, which OpenBLAS 0.3.20
+// gets wrong on Cooperlake without OPENBLAS_CORETYPE: a wrong reference fails a correct result or
+// passes a wrong one, so refuse it. evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
+template <class D> void require_host_dgemm() {
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
+    if constexpr (std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>) {
+        static const std::string defect = host_dgemm_defect();
+        if (!defect.empty()) throw std::runtime_error("batchlas::verify: host LAPACKE reference refused\n" + defect);
+    }
+#endif
+}
+}  // namespace detail
 
 /// Packed (ld = rows) column-major copy of item @p item, promoted to double / complex<double>.
 template <class View> auto copy_item(const View& A, int item) {
@@ -44,6 +74,7 @@ template <class D> bool eigenvalues(int n, std::vector<D>& a, std::vector<double
     w.assign(static_cast<std::size_t>(n), 0.0);
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (n == 0) return true;
+    detail::require_host_dgemm<D>();
     if constexpr (std::is_same_v<D, double>)
         return LAPACKE_dsyevd(LAPACK_COL_MAJOR, 'N', 'L', n, a.data(), n, w.data()) == 0;
     else
@@ -60,6 +91,7 @@ template <class D> bool singular_values(int m, int n, std::vector<D>& a, std::ve
     s.assign(static_cast<std::size_t>(std::min(m, n)), 0.0);
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (s.empty()) return true;
+    detail::require_host_dgemm<D>();
     if constexpr (std::is_same_v<D, double>)
         return LAPACKE_dgesdd(LAPACK_COL_MAJOR, 'N', m, n, a.data(), m, s.data(), nullptr, 1, nullptr, 1) == 0;
     else
@@ -86,6 +118,7 @@ template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vecto
     ipiv.assign(static_cast<std::size_t>(std::min(m, n)), 0);
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (ipiv.empty()) return true;
+    detail::require_host_dgemm<E>();
     std::vector<lapack_int> p(ipiv.size());
     lapack_int info;
     if constexpr (std::is_same_v<E, float>)
@@ -120,6 +153,7 @@ template <class D> bool geqrf_tau(int m, int n, std::vector<D>& a, std::vector<D
     tau.assign(static_cast<std::size_t>(std::min(m, n)), D(0));
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (tau.empty()) return true;
+    detail::require_host_dgemm<D>();
     if constexpr (std::is_same_v<D, double>)
         return LAPACKE_dgeqrf(LAPACK_COL_MAJOR, m, n, a.data(), m, tau.data()) == 0;
     else

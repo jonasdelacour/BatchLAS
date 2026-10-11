@@ -74,7 +74,12 @@ public:
         return double(std::int32_t(std::uint32_t(s_ >> 32))) / 2147483648.0;
     }
     double uniform01() { const double u = next() * 0.5 + 0.5; return u <= 0.0 ? 1e-12 : u; }
-    double normal() { return std::sqrt(-2.0 * std::log(uniform01())) * std::cos(6.283185307179586 * uniform01()); }
+    double normal() {
+        // Two draws in one expression are unsequenced; the goldens are clang's left-to-right order.
+        const double u1 = uniform01();
+        const double u2 = uniform01();
+        return std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2);
+    }
 
 private:
     std::uint64_t s_;

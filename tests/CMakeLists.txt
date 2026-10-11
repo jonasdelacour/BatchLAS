@@ -16,7 +16,7 @@ endif()
 
 # Host-only (no GPU slot, tests/cmake/BatchLASTestGpus.cmake); RUN_SERIAL under
 # any -j: syev_cta_tests has a concurrency wrong-answer flake (docs/developer/agent-guide.md section 8).
-set(BATCHLAS_HOST_ONLY_TESTS tune_tests verify_tests)
+set(BATCHLAS_HOST_ONLY_TESTS tune_tests)
 set(BATCHLAS_RUN_SERIAL_TESTS syev_cta_tests)
 
 # Define test executables
@@ -271,7 +271,7 @@ function(batchlas_add_test_target test_name)
             BATCHLAS_TUNE_CMAKE="${CMAKE_COMMAND}"
             BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
     elseif(test_name STREQUAL "verify_tests")
-        # Host-only: header-only batchlas::verify; MatrixView's constructor lives in the library.
+        # libbatchlas_verify's kernels run on a GPU slot; MatrixView's constructor lives in the library.
         target_sources(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/verify_residuals_tests.cc")
         batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
     elseif(test_name STREQUAL "tune_race_gpu_tests")
@@ -304,7 +304,7 @@ function(batchlas_add_test_target test_name)
     # src/CMakeLists.txt) because PUBLIC pushed absolute -dev paths and a
     # find_dependency(CUDAToolkit) onto every installed consumer.
     #
-    # batchlas::verify (header-only) brings LAPACKE and BATCHLAS_VERIFY_HAVE_LAPACKE=0|1 to every test.
+    # batchlas::verify (libbatchlas_verify) brings LAPACKE and BATCHLAS_VERIFY_HAVE_LAPACKE=0|1 to every test.
     # No test calls LAPACKE_* directly: references go through batchlas::verify (reference.hh), and
     # geqrf_tests and getrf_tests use it as an independent oracle (rationale below).
     target_link_libraries(${test_name} PRIVATE batchlas::verify)
