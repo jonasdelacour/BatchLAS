@@ -9,14 +9,18 @@
 
 namespace batchlas::tune {
 
-// Declared in ascending precedence: a deeper tier replaces a shallower record.
-enum class Tier { transcribed, custom, preview, coarse, deep };
+// Declared in ascending precedence: a deeper tier replaces a shallower record. transcribed and
+// converted carry no kernel hash and are never stale (docs/design/tuning-data.md).
+enum class Tier { transcribed, converted, custom, preview, coarse, deep };
 
 inline int tier_rank(Tier t) { return static_cast<int>(t); }
+
+inline bool unhashed(Tier t) { return t == Tier::transcribed || t == Tier::converted; }
 
 inline std::string to_string(Tier t) {
     switch (t) {
         case Tier::transcribed: return "transcribed";
+        case Tier::converted: return "converted";
         case Tier::custom: return "custom";
         case Tier::preview: return "preview";
         case Tier::coarse: return "coarse";
@@ -26,7 +30,7 @@ inline std::string to_string(Tier t) {
 }
 
 inline std::optional<Tier> parse_tier(std::string_view s) {
-    for (Tier t : {Tier::transcribed, Tier::custom, Tier::preview, Tier::coarse, Tier::deep})
+    for (Tier t : {Tier::transcribed, Tier::converted, Tier::custom, Tier::preview, Tier::coarse, Tier::deep})
         if (to_string(t) == s) return t;
     return std::nullopt;
 }

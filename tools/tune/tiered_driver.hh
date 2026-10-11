@@ -24,6 +24,7 @@ struct TieredOpts {
     double audit_fraction = -1;     // < 0: the tier's
     double refine_cap_factor = -1;  // < 0: the tier's
     bool plan = false;
+    bool allow_dirty = false;  // else a dirty --repo tree is refused (docs/design/tuning-data.md)
     int progress_fd = -1;
     std::string repo, ledger_root, out, argv;
     std::string run_id;  // empty: make_run_id()

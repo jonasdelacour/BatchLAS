@@ -1,6 +1,7 @@
 #pragma once
 
-// Per-run result ledger, host-only. evidence: docs/design/tiered-tuning.md#engine-the-ledger-and-table-generation
+// The tuning ledger, one JSONL file per (op, device), host-only.
+// evidence: docs/design/tuning-data.md#tuning-data-ledger-file
 
 #include "tier.hh"
 #include "tune_core.hh"
@@ -30,7 +31,7 @@ struct CellRecord {
 };
 
 struct RunMeta {
-    std::string run_id, host, device, device_name, batchlas, argv, date;
+    std::string run_id, dtype, host, device, device_name, batchlas, argv, date;
     std::string keys;        // the op's '# keys:' spec text, e.g. "uplo:exact n:log:3 batch:log"
     std::string candidates;  // '|'-joined spellings in candidate order (the tie order)
     Tier tier = Tier::deep;
@@ -38,13 +39,14 @@ struct RunMeta {
 };
 
 std::string make_run_id();  // <UTC yyyymmddThhmmss>-<host>-<pid>
-std::string ledger_dir(const std::string& root, const std::string& op, const std::string& dtype,
-                       const std::string& device);
+std::string ledger_file(const std::string& root, const std::string& op, const std::string& device);  // <root>/<op>.<device>.jsonl
 
-// One write() per line; cell() stamps the writer's run id and tier.
+// Appends to one ledger file shared by every dtype and process: each line under flock(LOCK_EX), one
+// write() per line, a torn last line repaired under the same lock. Every line carries meta.dtype;
+// cell() stamps the writer's run id and tier.
 class LedgerWriter {
 public:
-    LedgerWriter(std::string dir, RunMeta meta);
+    LedgerWriter(std::string path, RunMeta meta);
     ~LedgerWriter();
     LedgerWriter(const LedgerWriter&) = delete;
     LedgerWriter& operator=(const LedgerWriter&) = delete;
@@ -55,7 +57,8 @@ public:
 
 private:
     void put(const std::string& line);
-    void repair_tail(const std::string& path);
+    void repair_tail();
+    std::string path_;
     RunMeta meta_;
     int fd_ = -1;
 };
@@ -66,9 +69,11 @@ struct Ledger {
     std::vector<std::string> warnings;
 };
 
-// Union of <dir>/*.jsonl except *.reps.jsonl; a malformed last line warns, an earlier one throws.
-// A repeated run line (update_run) replaces the earlier one with its run id.
-Ledger read_ledger(const std::string& dir);
+// `dtype`'s lines of one ledger file in file order (a missing file is an empty ledger); a malformed
+// last line warns, an earlier one throws. A repeated (run id, dtype) run line replaces the earlier
+// one. `rehash` lines rewrite stored family hashes; a run whose batchlas ends in -dirty is dropped
+// with its cells (a warning). sweep_to_table.py's read_ledger is the same rule.
+Ledger read_ledger(const std::string& path, const std::string& dtype);
 
 enum class Freshness { current, partly_stale, stale };
 
@@ -84,7 +89,7 @@ bool all_error(const CellRecord& r);  // every candidate "error": a failed child
 // newest date, then larger run_id (later line on a full tie).
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash);
 
-// Schema-1 raw sweep -> one run file at `tier` (a custom run records itself this way); hashes are
+// Schema-1 raw sweep -> one run in <ledger_root>/<op>.<device>.jsonl at `tier` (a custom run records itself this way); hashes are
 // "legacy:<kernels>" unless `kernels` == `op_hash_now`. A cell's key is the meta's table keys, or,
 // when `axes` (the spec's grid axes) is given, every axis in its order, as the tiered driver keys
 // cells: a hidden axis (trsm's uplo, diag) missing from a record takes its axis's only value.

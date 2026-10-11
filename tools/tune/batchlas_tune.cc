@@ -89,7 +89,7 @@ struct Opts {
     double warm = 1.5, remeasure = 0.10, refine_ratio = 1.1, cap_gib = 4.0, cell_timeout = 1800, guard_wait = 300;
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
-    bool allow_idle_foreign = false;
+    bool allow_idle_foreign = false, allow_dirty = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
     double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
@@ -463,7 +463,7 @@ private:
     void run_shard(int gpu, const std::vector<Cell*>& cells);
     void run_round(std::vector<Cell*> cells);
     std::string meta_line(const std::string& name) const;
-    void convert(const std::string& jsonl);
+    void convert();  // the op's table from --ledger
 };
 
 // A failed nvidia-smi query (a GPU reset elsewhere in the box) retries with backoff for --guard-wait.
@@ -772,13 +772,18 @@ std::string Driver::meta_line(const std::string& name) const {
         .str("argv", join(o_.argv, " ")).line();
 }
 
-void Driver::convert(const std::string& jsonl) {
+// Tables come from ledgers only: the op's table is regenerated from the ledger this run appended to.
+void Driver::convert() {
     const std::string script = o_.repo + "/scripts/sweep_to_table.py";
-    const Spawned s = spawn_wait({"/usr/bin/env", "python3", script, "--tuner", jsonl, "--out", o_.out}, {}, "", 600);
-    if (s.status != 0) die("table conversion failed: python3 " + script + " --tuner " + jsonl);
+    const Spawned s = spawn_wait({"/usr/bin/env", "python3", script, "--ledger", o_.ledger, "--op", spec_.op(), "--device",
+                                  device_, "--out", o_.out}, {}, "", 600);
+    if (s.status != 0) die("table generation failed: python3 " + script + " --ledger " + o_.ledger + " --op " + spec_.op());
 }
 
 int Driver::tune() {
+    if (o_.ledger_given && !o_.allow_dirty && git_head(o_.repo).ends_with("-dirty"))
+        die("the tree at --repo " + o_.repo + " has uncommitted changes to tracked files: commit them, or pass "
+            "--allow-dirty (such a run never reaches tuned/)");
     const std::string name = preflight();
     const double cap = o_.cap_gib * 1024.0 * 1024.0 * 1024.0;
     const std::string refine_key = spec_.refine_key();
@@ -846,11 +851,11 @@ int Driver::tune() {
             const auto fh = family_hashes(o_.repo, spec_.kernel_block(o_.repo), fams);
             import_schema1(path, o_.ledger, fh, kernel_hash(o_.repo, spec_.kernel_sources()).value_or(""), Tier::custom,
                            spec_.axes());
-            std::printf("== recorded as a custom run under %s\n", ledger_dir(o_.ledger, spec_.op(), dtype, device_).c_str());
+            std::printf("== recorded as a custom run under %s\n", ledger_file(o_.ledger, spec_.op(), device_).c_str());
         } catch (const std::exception& e) {
             die(std::string("ledger: ") + e.what());
         }
-        if (!o_.out.empty()) convert(path);
+        if (!o_.out.empty() && o_.ledger_given) convert();
     }
     return 0;
 }
@@ -1070,7 +1075,7 @@ void usage() {
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
-        "         --util-ceiling 5 --allow-idle-foreign\n"
+        "         --util-ceiling 5 --allow-idle-foreign --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
@@ -1107,6 +1112,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.overhead_s = o.overhead_s;
     t.audit_fraction = o.audit_fraction;
     t.plan = o.plan;
+    t.allow_dirty = o.allow_dirty;
     t.progress_fd = o.progress_fd;
     t.repo = o.repo;
     t.ledger_root = o.ledger;
@@ -1160,7 +1166,7 @@ int main(int argc, char** argv) {
         else if (f == "--ld-pad") o.ld_pad = std::stoi(val()), custom();
         else if (f == "--tier") {
             const auto t = parse_tier(val());
-            if (!t || *t == Tier::custom || *t == Tier::transcribed) die("--tier takes preview, coarse or deep");
+            if (!t || unhashed(*t)) die("--tier takes preview, coarse, deep or custom (with --remeasure-keys)");
             o.tier = t;
         } else if (f == "--budget") o.budget_h = std::stod(val());
         else if (f == "--plan") o.plan = true;
@@ -1180,6 +1186,7 @@ int main(int argc, char** argv) {
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
         else if (f == "--util-ceiling") o.util_ceiling = std::stod(val());
         else if (f == "--allow-idle-foreign") o.allow_idle_foreign = true;
+        else if (f == "--allow-dirty") o.allow_dirty = true;
         else if (f == "--lock-dir") o.lock_dir = val();
         else if (f == "--n-list") o.grid["n"] = csv_list(val());
         else if (f == "--batches") o.grid["batch"] = csv_list(val());
@@ -1222,6 +1229,8 @@ int main(int argc, char** argv) {
     if (tiered && !o.tier)
         die("give --tier preview|coarse|deep, or a protocol flag (--reps, --warm, --passes, --remeasure, --refine-ratio, "
             "--no-refine, --no-jit, --ld-pad, --raw) for a custom two-pass run");
+    if (tiered && *o.tier == Tier::custom && o.remeasure_keys.empty())
+        die("--tier custom measures exactly the --remeasure-keys cells (a rehash sample); give them");
     if (!tiered && o.ops.size() != 1) die("--gate and the custom protocol take one op");
     if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0 || !o.remeasure_keys.empty()))
         die("--plan, --budget, --progress-fd and --remeasure-keys need --tier");

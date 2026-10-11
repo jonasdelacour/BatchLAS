@@ -125,7 +125,7 @@ struct Region {
 
 struct Job {
     const OpSpec* spec = nullptr;
-    std::string dtype, dir;
+    std::string dtype, file;  // file: <ledger root>/<op>.<device>.jsonl, shared by every dtype
     std::vector<std::string> cands;
     std::map<std::string, std::string> fh;
     Ledger ledger;  // read once; plan_round's `stored` pointers point into it
@@ -224,8 +224,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     j->dtype = dtype;
     j->cands = s.candidates(dtype);
     j->fh = current_hashes(o_.repo, s, dtype);
-    j->dir = ledger_dir(o_.ledger_root, op, dtype, id_.device);
-    j->ledger = read_ledger(j->dir);
+    j->file = ledger_file(o_.ledger_root, op, id_.device);
+    j->ledger = read_ledger(j->file, dtype);
     for (const std::string& w : j->ledger.warnings) std::fprintf(stderr, "batchlas_tune: warning: %s\n", w.c_str());
     auto ax = s.axes();
     for (const auto& [name, values] : o_.grid)
@@ -236,7 +236,9 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
-    j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // A custom tiered run is a sample: the named cells only, every candidate, no refinement.
+    if (o_.tier == Tier::custom) j->next.clear();
+    else j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
         j->remeasure = r->second;
@@ -293,6 +295,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     if (!j.writer) {
         RunMeta m;
         m.run_id = run_id_;
+        m.dtype = j.dtype;
         m.host = host_name();
         m.device = id_.device;
         m.device_name = id_.device_name;
@@ -305,7 +308,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.candidates = join(j.cands, "|");
         m.worker_mode[j.spec->op() + "." + j.dtype] = m_ && m_->persistent() ? "worker" : "fresh";
         j.meta = m;
-        j.writer = std::make_unique<LedgerWriter>(j.dir, m);
+        j.writer = std::make_unique<LedgerWriter>(j.file, m);
     }
     CellRecord c = r;
     c.date = date_;
@@ -453,7 +456,7 @@ std::size_t TieredRun::stage(Job& j) {
 // Runs without sq_; no other thread touches j meanwhile (its queue is empty and nothing of it runs).
 void TieredRun::advance(Job& j) {
     for (;;) {
-        if (j.capped) j.next.clear();
+        if (j.capped || o_.tier == Tier::custom) j.next.clear();
         else refine(j);
         if (!j.next.empty() && over_budget()) budget_left_ += j.next.size(), j.next.clear();
         if (j.next.empty()) break;
@@ -632,7 +635,10 @@ int TieredRun::go() {
     if (o_.plan) return 0;
     if (!m_) throw std::logic_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
-    t0_ = std::chrono::steady_clock::now();
+    if (batchlas_.ends_with("-dirty") && !o_.allow_dirty)
+        throw std::runtime_error("the tree at --repo " + o_.repo + " has uncommitted changes to tracked files (" + batchlas_ +
+                                 "): commit them, or pass --allow-dirty (such a run never reaches tuned/)");
+    t0_ =std::chrono::steady_clock::now();
     for (auto& j : jobs_)
         if (stage(*j) == 0) advance(*j);
     gpu_max_.assign(o_.devices.size(), 0);
@@ -664,13 +670,18 @@ int TieredRun::go() {
     std::fflush(stdout);
     emit(Json().str("ev", "schedule").integer("switches", std::int64_t(switches_))
              .integer("restarts", std::int64_t(restarts_)).integer("switch_restarts", std::int64_t(switch_restarts_)));
+    std::set<std::string> written;
     for (auto& j : jobs_) {
         if (!j->writer) continue;
-        std::printf("== wrote %s/%s.jsonl: %zu cells\n", j->dir.c_str(), run_id_.c_str(), j->mine.size());
-        if (o_.out.empty()) continue;
-        const std::string cmd = "python3 '" + o_.repo + "/scripts/sweep_to_table.py' --ledger '" + j->dir + "' --out '" + o_.out + "'";
-        if (std::system(cmd.c_str()) != 0) throw std::runtime_error("table generation failed: " + cmd);
+        std::printf("== wrote %s: %zu %s cells (run %s)\n", j->file.c_str(), j->mine.size(), j->dtype.c_str(), run_id_.c_str());
+        written.insert(j->spec->op());
     }
+    if (!o_.out.empty())
+        for (const std::string& op : written) {
+            const std::string cmd = "python3 '" + o_.repo + "/scripts/sweep_to_table.py' --ledger '" + o_.ledger_root +
+                                    "' --op '" + op + "' --device '" + id_.device + "' --out '" + o_.out + "'";
+            if (std::system(cmd.c_str()) != 0) throw std::runtime_error("table generation failed: " + cmd);
+        }
     emit(Json().str("ev", "done"));
     return 0;
 }
@@ -691,7 +702,7 @@ struct StatusRow {
 
 std::string tier_mix(const std::map<Tier, int>& t) {
     std::string s;
-    for (Tier x : {Tier::deep, Tier::coarse, Tier::preview, Tier::custom, Tier::transcribed})
+    for (Tier x : {Tier::deep, Tier::coarse, Tier::preview, Tier::custom, Tier::converted, Tier::transcribed})
         if (t.count(x)) s += (s.empty() ? "" : ",") + to_string(x) + ":" + std::to_string(t.at(x));
     return s.empty() ? "-" : s;
 }
@@ -740,42 +751,53 @@ int status_main(const std::string& repo, const std::string& ledger_root, const s
             }
         return it->second;
     };
-    auto ident = [](const std::string& name) -> std::optional<std::tuple<std::string, std::string, std::string>> {
-        const auto p = split(name, '.');
-        if (p.size() < 3) return std::nullopt;
-        return std::tuple(p[0], p[1], join(std::vector<std::string>(p.begin() + 2, p.end()), "."));
+    // "<op>.<device>" -> {op, device}
+    auto ident = [](const std::string& stem) -> std::optional<std::pair<std::string, std::string>> {
+        const auto p = split(stem, '.');
+        if (p.size() != 2) return std::nullopt;
+        return std::pair(p[0], p[1]);
     };
+    const std::vector<std::string> dtypes{"float", "double", "cfloat", "cdouble"};
     std::error_code ec;
     if (fs::is_directory(ledger_root, ec))
         for (const auto& e : fs::directory_iterator(ledger_root)) {
-            const auto id = e.is_directory() ? ident(e.path().filename().string()) : std::nullopt;
-            if (!id) continue;
-            StatusRow& r = rows[*id];
-            r.ledger = true;
-            try {
-                const Ledger l = read_ledger(e.path().string());
-                const auto& fh = hashes_of(std::get<0>(*id), std::get<1>(*id));
-                const auto best = best_records(l, fh);
-                std::set<CellKey> keys;
-                for (const CellRecord& c : l.cells) keys.insert(c.key);
-                r.runs = l.runs.size();
-                r.cells = keys.size();
-                r.stale = keys.size() - best.size();
-                for (const auto& [k, c] : best) {
-                    r.tiers[c->tier]++;
-                    r.partial += freshness(*c, fh) == Freshness::partly_stale;
+            const auto od = e.path().extension() == ".jsonl" ? ident(e.path().stem().string()) : std::nullopt;
+            if (!od) continue;
+            for (const std::string& dtype : dtypes) {
+                const std::tuple<std::string, std::string, std::string> id(od->first, dtype, od->second);
+                try {
+                    const Ledger l = read_ledger(e.path().string(), dtype);
+                    if (l.runs.empty() && l.cells.empty()) continue;
+                    StatusRow& r = rows[id];
+                    r.ledger = true;
+                    const auto& fh = hashes_of(od->first, dtype);
+                    const auto best = best_records(l, fh);
+                    std::set<CellKey> keys;
+                    for (const CellRecord& c : l.cells) keys.insert(c.key);
+                    r.runs = l.runs.size();
+                    r.cells = keys.size();
+                    r.stale = keys.size() - best.size();
+                    for (const auto& [k, c] : best) {
+                        r.tiers[c->tier]++;
+                        r.partial += freshness(*c, fh) == Freshness::partly_stale;
+                    }
+                    for (const RunMeta& m : l.runs) r.newest = std::max(r.newest, m.date);
+                } catch (const std::exception& ex) {
+                    rows[id].ledger = true;
+                    rows[id].error = ex.what();
                 }
-                for (const RunMeta& m : l.runs) r.newest = std::max(r.newest, m.date);
-            } catch (const std::exception& ex) {
-                r.error = ex.what();
             }
         }
     if (fs::is_directory(tuned_dir, ec))
         for (const auto& e : fs::directory_iterator(tuned_dir)) {
             if (e.path().extension() != ".txt") continue;
-            const auto id = ident(e.path().stem().string());
-            if (!id || (!find_spec(std::get<0>(*id)) && !rows.count(*id))) continue;
-            rows[*id].table = table_summary(e.path());
+            const auto od = ident(e.path().stem().string());
+            if (!od) continue;
+            const std::string summary = table_summary(e.path());  // one table per (op, device), every dtype
+            bool any = false;
+            for (auto& [id, r] : rows)
+                if (std::get<0>(id) == od->first && std::get<2>(id) == od->second) r.table = summary, any = true;
+            if (!any && find_spec(od->first)) rows[{od->first, "-", od->second}].table = summary;
         }
     const std::time_t now = std::time(nullptr);
     std::printf("%-6s %-7s %-7s | %4s %6s %-40s %5s %7s %-16s | %s\n", "op", "dtype", "device", "runs", "cells",
@@ -805,7 +827,7 @@ int import_raw_main(const std::string& repo, const std::string& ledger_root, con
     if (!spec) throw std::runtime_error(raw + ": no spec for op '" + op + "'");
     const auto op_hash = kernel_hash(repo, spec->kernel_sources());
     import_schema1(raw, ledger_root, current_hashes(repo, *spec, dtype), op_hash.value_or(""), Tier::deep, spec->axes());
-    std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_dir(ledger_root, op, dtype, device).c_str(),
+    std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_file(ledger_root, op, device).c_str(),
                 op_hash && *op_hash == meta->get("kernels") ? "" : " (kernels changed since: hashes are legacy:<kernels>)");
     return 0;
 }
