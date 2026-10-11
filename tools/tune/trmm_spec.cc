@@ -1,20 +1,20 @@
 // trmm for the tuner: C = alpha op(A) B (Left) or alpha B op(A) (Right), out of place. A is
-// lower triangular with random entries and its strict upper triangle poisoned with a large finite
-// value; B is random; alpha has an imaginary part; C is re-poisoned before every run, so an arm
-// that skips a tile cannot inherit the previous arm's answer. uplo, trans and diag are not table
-// keys: fixed at L, N and N. Every ld is padded by --ld-pad. Verification is the componentwise
-// error |C - Cref| / (|alpha| |op(A)| |B|) in double / complex<double> on items 0 and batch-1, over
-// up to 256 sampled rows of up to 64 sampled columns (always the first and last of each).
-// expand's times include the public gemm it calls.
+// lower triangular, MatrixView::fill_random with its strict upper triangle then poisoned with a
+// large finite value; B is fill_random; alpha has an imaginary part; C is re-poisoned before every
+// run, so an arm that skips a tile cannot inherit the previous arm's answer. uplo, trans and diag
+// are not table keys: fixed at L, N and N. Every ld is padded by --ld-pad. Verification is
+// MatrixView::gemm_backward_error against A's triangle (triangularize on a packed copy of the
+// default items), |C - Cref| / (|alpha| |op(A)| |B|) componentwise (Check::blas,
+// docs/design/verification.md). expand's times include the public gemm it calls.
 
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/trmm/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <string>
@@ -29,7 +29,6 @@ namespace M = ops::trmm;
 template <class T>
 struct TrmmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Side side;
     int order, nrhs, batch, rows, cols, lda, ldb;
@@ -40,16 +39,16 @@ struct TrmmProblem {
     TrmmProblem(Queue& q_, Side s, int order_, int q_rhs, int batch_, int pad)
         : q(q_), side(s), order(order_), nrhs(q_rhs), batch(batch_), rows(s == Side::Left ? order_ : q_rhs),
           cols(s == Side::Left ? q_rhs : order_), lda(order_ + pad), ldb(rows + pad),
-          sa(std::size_t(lda) * std::size_t(order_)), sb(std::size_t(ldb) * std::size_t(cols)), alpha(mk<T>(1.5, -0.5)),
-          A(sa * std::size_t(batch_)), B(sb * std::size_t(batch_)), Cp(sb * std::size_t(batch_), mk<T>(-999, 777)),
+          sa(std::size_t(lda) * std::size_t(order_)), sb(std::size_t(ldb) * std::size_t(cols)), alpha(MV::make(1.5, -0.5)),
+          A(sa * std::size_t(batch_)), B(sb * std::size_t(batch_)), Cp(sb * std::size_t(batch_), MV::make(-999, 777)),
           C(sb * std::size_t(batch_)) {
-        Rng rg(5150);
+        (void)view(A, order, order, lda, sa).fill_random(q, false, 5150);
+        (void)view(B, rows, cols, ldb, sb).fill_random(q, false, 5151);
+        q.wait();
         for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < order; ++c)
-                for (int r = 0; r < order; ++r)
-                    A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] =
-                        r >= c ? mk<T>(rg.next(), rg.next()) : mk<T>(1e6, 0.0);
-        for (std::size_t i = 0; i < B.size(); ++i) B[i] = mk<T>(rg.next(), rg.next());
+            for (int c = 1; c < order; ++c)
+                for (int r = 0; r < c; ++r)
+                    A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] = MV::make(1e6, 0.0);
     }
     MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {
@@ -70,30 +69,18 @@ struct TrmmProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        double worst = 0;
-        const double aal = ab(up(alpha));
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, ob = std::size_t(b) * sb;
-            auto a = [&](int r, int c) {
-                return r >= c ? up(A[oa + std::size_t(c) * std::size_t(lda) + std::size_t(r)]) : D(0);
-            };
-            auto at = [&](const UnifiedVector<T>& v, int r, int c) {
-                return up(v[ob + std::size_t(c) * std::size_t(ldb) + std::size_t(r)]);
-            };
-            for (int j : sample_indices(cols, 64))
-                for (int i : sample_indices(rows, 256)) {
-                    D acc = D(0);
-                    double mag = 0;
-                    for (int k = 0; k < order; ++k) {
-                        const D t = side == Side::Left ? a(i, k) * at(B, k, j) : at(B, i, k) * a(k, j);
-                        acc += t;
-                        mag += ab(t);
-                    }
-                    const double num = ab(at(C, i, j) - up(alpha) * acc), den = aal * mag;
-                    worst = nanmax(worst, den > 0 ? num / den : num);
-                }
-        }
-        return {worst, 0};
+        const MV av = view(A, order, order, lda, sa);
+        const auto items = av.default_items();
+        auto a = av.template astype<T>(items);
+        auto b = view(B, rows, cols, ldb, sb).template astype<T>(items), c = view(C, rows, cols, ldb, sb).template astype<T>(items);
+        (void)a.view().triangularize(q, Uplo::Lower, Diag::NonUnit);
+        q.wait();
+        const auto all = a.view().all_items();
+        const Transpose nt = Transpose::NoTrans;
+        const auto al = MV::up(alpha), zero = MV::up(T(0));
+        return {side == Side::Left ? MV::gemm_backward_error(q, a.view(), nt, b.view(), nt, b.view(), c.view(), al, zero, all)
+                                   : MV::gemm_backward_error(q, b.view(), nt, a.view(), nt, b.view(), c.view(), al, zero, all),
+                0};
     }
 };
 
@@ -146,8 +133,9 @@ public:
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
             TrmmProblem<T> p(*q, side, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<M::TrmmChoice>("trmm", p, req, Tol<T>::v);
-            return run_arms<M::TrmmChoice>("trmm", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, p.order);
+            if (req.mode == "race") return run_race<M::TrmmChoice>("trmm", p, req, tol);
+            return run_arms<M::TrmmChoice>("trmm", p, req, tol);
         });
     }
 };

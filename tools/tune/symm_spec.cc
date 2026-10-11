@@ -1,9 +1,10 @@
 // symm for the tuner (real only): C = alpha A B + beta C, A symmetric m x m held in its lower
-// triangle (the strict upper triangle poisoned with a large finite value), B and C0 random,
-// beta = 0.75 so C is read. side and uplo are not table keys: fixed at L and L. Every ld is
-// padded by --ld-pad. Verification is the componentwise error |C - Cref| / (|alpha| |A| |B| +
-// |beta| |C0|) in double on items 0 and batch-1, over up to 256 sampled rows of up to 64 sampled
-// columns. expand's times include the public gemm it calls.
+// triangle (MatrixView::fill_random, the strict upper triangle then poisoned with a large finite
+// value), B and C0 fill_random, beta = 0.75 so C is read. side and uplo are not table keys: fixed at
+// L and L. Every ld is padded by --ld-pad. Verification is MatrixView::gemm_backward_error against
+// A's mirrored lower triangle (symmetrize on a packed copy of the default items),
+// |C - Cref| / (|alpha| |A| |B| + |beta| |C0|) componentwise (Check::blas,
+// docs/design/verification.md). expand's times include the public gemm it calls.
 //
 // form is derived from (m, n) (choice.hh form_of), so the grid is the lattice's consistent cells
 // only: a cell whose extents contradict its form cannot be timed. Refinement keeps form and the
@@ -14,10 +15,10 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/symm/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <stdexcept>
@@ -43,14 +44,13 @@ struct SymmProblem {
         : q(q_), m(m_), n(n_), batch(batch_), lda(m_ + pad), ldb(m_ + pad), sa(std::size_t(lda) * std::size_t(m_)),
           sb(std::size_t(ldb) * std::size_t(n_)), alpha(T(1.25)), beta(T(0.75)), A(sa * std::size_t(batch_)),
           B(sb * std::size_t(batch_)), C0(sb * std::size_t(batch_)), C(sb * std::size_t(batch_)) {
-        Rng rg(6061);
+        (void)view(A, m, m, lda, sa).fill_random(q, false, 6061);
+        (void)view(B, m, n, ldb, sb).fill_random(q, false, 6062);
+        (void)view(C0, m, n, ldb, sb).fill_random(q, false, 6063);
+        q.wait();
         for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < m; ++c)
-                for (int r = 0; r < m; ++r)
-                    A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] =
-                        r >= c ? T(rg.next()) : T(1e6);
-        for (auto* v : {&B, &C0})
-            for (std::size_t i = 0; i < v->size(); ++i) (*v)[i] = T(rg.next());
+            for (int c = 1; c < m; ++c)
+                for (int r = 0; r < c; ++r) A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] = T(1e6);
     }
     MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
@@ -70,31 +70,17 @@ struct SymmProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        double worst = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, ob = std::size_t(b) * sb;
-            auto a = [&](int r, int c) {  // the lower triangle, mirrored
-                return double(r >= c ? A[oa + std::size_t(c) * std::size_t(lda) + std::size_t(r)]
-                                     : A[oa + std::size_t(r) * std::size_t(lda) + std::size_t(c)]);
-            };
-            auto at = [&](const UnifiedVector<T>& v, int r, int c) {
-                return double(v[ob + std::size_t(c) * std::size_t(ldb) + std::size_t(r)]);
-            };
-            for (int j : sample_indices(n, 64))
-                for (int i : sample_indices(m, 256)) {
-                    double acc = 0, mag = 0;
-                    for (int k = 0; k < m; ++k) {
-                        const double t = a(i, k) * at(B, k, j);
-                        acc += t;
-                        mag += ab(t);
-                    }
-                    const double c0 = at(C0, i, j);
-                    const double num = ab(at(C, i, j) - (double(alpha) * acc + double(beta) * c0)),
-                                 den = ab(double(alpha)) * mag + ab(double(beta)) * ab(c0);
-                    worst = nanmax(worst, den > 0 ? num / den : num);
-                }
-        }
-        return {worst, 0};
+        const MV av = view(A, m, m, lda, sa);
+        const auto items = av.default_items();
+        auto a = av.template astype<T>(items);
+        auto b = view(B, m, n, ldb, sb).template astype<T>(items), c0 = view(C0, m, n, ldb, sb).template astype<T>(items),
+             c = view(C, m, n, ldb, sb).template astype<T>(items);
+        (void)a.view().symmetrize(q, Uplo::Lower);
+        q.wait();
+        const Transpose nt = Transpose::NoTrans;
+        return {MV::gemm_backward_error(q, a.view(), nt, b.view(), nt, c0.view(), c.view(), MV::up(alpha), MV::up(beta),
+                                        a.view().all_items()),
+                0};
     }
 };
 
@@ -161,8 +147,9 @@ public:
             if (*key_get(req.key, "form") != Y::form_of(m, n))
                 throw std::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
             SymmProblem<T> p(*q, m, n, int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<Y::SymmChoice>("symm", p, req, Tol<T>::v);
-            return run_arms<Y::SymmChoice>("symm", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, p.m);
+            if (req.mode == "race") return run_race<Y::SymmChoice>("symm", p, req, tol);
+            return run_arms<Y::SymmChoice>("symm", p, req, tol);
         });
     }
 };

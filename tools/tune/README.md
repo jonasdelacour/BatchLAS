@@ -277,7 +277,7 @@ Each `<op>_spec.cc` implements `OpSpec` (`spec.hh`, not `select::OpSpec`) and pr
 - key names, candidates and grid axes from the op's `choice.hh`;
 - a problem builder: potrf and posv use SPD A; posv and trsm use random B; trsm uses a diagonally
   dominant triangular A with the other triangle poisoned;
-- host verification, the 4 GiB cap, and how an old coverage route maps to a spelling;
+- verification through `batchlas::verify`, the 4 GiB cap, and how an old coverage route maps to a spelling;
 - the kernel-source list for the §6.4 hash, between the `kernel-sources-begin` and `kernel-sources-end`
   markers. The hash is `sha256sum <files> | sha256sum`, first 8 hex digits, paths relative to the
   repository. `check_tuned_tables.py` and `cmake/BatchLASTunedStaleness.cmake` parse this block, and
@@ -298,8 +298,8 @@ and syr2k are real-only: `--dtype cfloat` is refused and `--list` prints `-`. sy
 of the lattice (`--grid` filters it, as gemm's does). trmm's and symm's `expand` call the public
 gemm, so their deps list gemm's kernels and `gemm.cc`, and their tables should be tuned after gemm's.
 
-syev and gesvd check values-only results against host LAPACKE (`host_reference.hh`; without the host
-backend those arms are `bad`). gesvd has no batch key: each cell runs at a batch derived from m and n
+syev and gesvd check eigen- and singular values against host LAPACKE (`<batchlas/verify/reference.hh>`;
+without LAPACKE those arms are `bad`). gesvd has no batch key: each cell runs at a batch derived from m and n
 (a power of two in [128, 16384] with m n batch <= 2^24), and its grid drops the cells no call keys
 (Hermitian non-square, square thin). One vendor refusal lives in a spec because the library would
 not report it as a refused pin: gesvd's values-only non-square vendor call faults the device (known
@@ -307,5 +307,7 @@ defect 15) although `can_run` admits it. spmm's `vendor` arm needs none: where `
 (known defect 17), the strict pin refuses it too. spmm tunes the GPU tables only; its cpu tables stay
 transcribed.
 
-The specs other than potrf, posv, trsm and gemm still verify through local helpers (`residuals.hh`,
-`lu_residuals.hh`, `qr_common.hh`, `host_reference.hh`), not yet through `batchlas::verify`.
+Every spec verifies through `batchlas::verify` ([verification library](../../docs/design/verification.md)):
+inputs from `MatrixView` fills, the `MatrixView` checks on the default items, the bound of the check's
+kind. A spec with one check reports its raw value against `verify::bound`; a spec with several
+(getrf, geqrf, orgqr, syev, gesvd) reports the worst value divided by its own bound, against 1.

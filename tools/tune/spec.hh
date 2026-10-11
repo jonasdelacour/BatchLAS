@@ -82,6 +82,16 @@ inline double dtype_bytes(const std::string& dtype) {
     return dtype == "float" ? 4 : dtype == "cdouble" ? 16 : 8;
 }
 
+// geqrf and orgqr have no batch key, so a cell runs at the largest power-of-two batch whose input
+// fits 256 MiB, within [2, 16384]: saturating at small n (agent guide §10), memory-bounded at large n.
+// Two items keep 0 and batch-1 distinct, and batch 1 would send geqrf's vendor arm to
+// cusolverDnXgeqrf instead of the geqrfBatched every other cell times.
+inline int qr_batch(double item_bytes) {
+    int b = 2;
+    while (b < 16384 && double(2 * b) * item_bytes <= 256.0 * 1024 * 1024) b *= 2;
+    return b;
+}
+
 std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out,  // of `wanted`, those out verified
                                        const std::vector<std::string>& wanted);
 void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit);  // bad/error there: bad here

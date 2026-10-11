@@ -1,18 +1,17 @@
-// gemv for the tuner: random A, x and y0 in [-1, 1) (complex parts both), alpha with an imaginary
-// part and beta = 0.75, so the epilogue reads y. trans=T times ConjTrans for a complex scalar (the
-// key folds C into T). A's ld and x's and y's item strides are padded by --ld-pad. Verification is
-// the componentwise error |y - yref| / (|alpha| |op(A)| |x| + |beta| |y0|) against a double /
-// complex<double> host reference on items 0 and batch-1, over up to 256 sampled outputs (always
-// the first and last).
+// gemv for the tuner: MatrixView::fill_random A, x and y0 (complex parts both), alpha with an
+// imaginary part and beta = 0.75, so the epilogue reads y. trans=T times ConjTrans for a complex
+// scalar (the key folds C into T). A's ld and x's and y's item strides are padded by --ld-pad.
+// Verification is MatrixView::gemv_backward_error, |y - yref| / (|alpha| |op(A)| |x| + |beta| |y0|)
+// componentwise on the default items (Check::blas, docs/design/verification.md).
 
 #include <batchlas/blas/functions/gemv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/gemv/choice.hh"
 #include "cell_runner.hh"
-#include "residuals.hh"
 
 #include <memory>
 #include <string>
@@ -27,7 +26,6 @@ namespace V = ops::gemv;
 template <class T>
 struct GemvProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     Transpose trans;
     int out, red, batch, rows, cols, lda, sx, sy;
@@ -38,14 +36,17 @@ struct GemvProblem {
     GemvProblem(Queue& q_, Transpose t, int out_, int red_, int batch_, int pad)
         : q(q_), trans(t), out(out_), red(red_), batch(batch_), rows(t == Transpose::NoTrans ? out_ : red_),
           cols(t == Transpose::NoTrans ? red_ : out_), lda(rows + pad), sx(red_ + pad), sy(out_ + pad),
-          sa(std::size_t(lda) * std::size_t(cols)), alpha(mk<T>(1.25, -0.5)), beta(mk<T>(0.75, 0.0)),
+          sa(std::size_t(lda) * std::size_t(cols)), alpha(MV::make(1.25, -0.5)), beta(MV::make(0.75, 0.0)),
           A(sa * std::size_t(batch_)), X(std::size_t(sx) * std::size_t(batch_)), Y0(std::size_t(sy) * std::size_t(batch_)),
           Y(std::size_t(sy) * std::size_t(batch_)) {
-        Rng rg(919);
-        for (auto* v : {&A, &X, &Y0})
-            for (std::size_t i = 0; i < v->size(); ++i) (*v)[i] = mk<T>(rg.next(), rg.next());
+        (void)Av().fill_random(q, false, 919);
+        (void)MV(X.data(), sx, 1, sx, sx, batch).fill_random(q, false, 920);
+        (void)MV(Y0.data(), sy, 1, sy, sy, batch).fill_random(q, false, 921);
+        q.wait();
     }
     MV Av() { return MV(A.data(), rows, cols, lda, int(sa), batch); }
+    VectorView<T> xv() { return VectorView<T>(X.data(), red, batch, 1, sx); }
+    VectorView<T> yv(UnifiedVector<T>& y) { return VectorView<T>(y.data(), out, batch, 1, sy); }
     void reset() {  // beta != 0 accumulates into y
         (void)MV::copy(q, MV(Y.data(), sy, 1, sy, sy, batch), MV(Y0.data(), sy, 1, sy, sy, batch));
         q.wait();
@@ -58,34 +59,11 @@ struct GemvProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)gemv<kBackend, T>(q, Av(), VectorView<T>(X.data(), red, batch, 1, sx),
-                                VectorView<T>(Y.data(), out, batch, 1, sy), alpha, beta, trans);
+        (void)gemv<kBackend, T>(q, Av(), xv(), yv(Y), alpha, beta, trans);
         q.wait();
     }
     std::pair<double, int> verify() {
-        double worst = 0;
-        const double aal = ab(up(alpha)), abe = ab(up(beta));
-        for (int b : {0, batch - 1}) {
-            const std::size_t oa = std::size_t(b) * sa, ox = std::size_t(b) * std::size_t(sx),
-                              oy = std::size_t(b) * std::size_t(sy);
-            for (int i : sample_indices(out, 256)) {
-                D acc = D(0);
-                double mag = 0;
-                for (int j = 0; j < red; ++j) {
-                    const int r = trans == Transpose::NoTrans ? i : j, c = trans == Transpose::NoTrans ? j : i;
-                    D a = up(A[oa + std::size_t(c) * std::size_t(lda) + std::size_t(r)]);
-                    if (trans == Transpose::ConjTrans) a = cj(a);
-                    const D t = a * up(X[ox + std::size_t(j)]);
-                    acc += t;
-                    mag += ab(t);
-                }
-                const D y0 = up(Y0[oy + std::size_t(i)]);
-                const double num = ab(up(Y[oy + std::size_t(i)]) - (up(alpha) * acc + up(beta) * y0)),
-                             den = aal * mag + abe * ab(y0);
-                worst = nanmax(worst, den > 0 ? num / den : num);
-            }
-        }
-        return {worst, 0};
+        return {MV::gemv_backward_error(q, Av(), trans, xv(), yv(Y0), yv(Y), MV::up(alpha), MV::up(beta)), 0};
     }
 };
 
@@ -133,8 +111,9 @@ public:
             const Transpose t = n ? Transpose::NoTrans : kComplex ? Transpose::ConjTrans : Transpose::Trans;
             GemvProblem<T> p(*q, t, int(key_int(req.key, "out")), int(key_int(req.key, "red")),
                              int(key_int(req.key, "batch")), req.ld_pad);
-            if (req.mode == "race") return run_race<V::GemvChoice>("gemv", p, req, Tol<T>::v);
-            return run_arms<V::GemvChoice>("gemv", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::blas, p.red);
+            if (req.mode == "race") return run_race<V::GemvChoice>("gemv", p, req, tol);
+            return run_arms<V::GemvChoice>("gemv", p, req, tol);
         });
     }
 };

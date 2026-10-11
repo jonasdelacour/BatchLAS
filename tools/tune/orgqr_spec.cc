@@ -1,21 +1,24 @@
-// orgqr for the tuner (src/ops/orgqr/choice.hh): reflectors and tau from host_reflectors (larfg on
-// random columns, never a tuned geqrf), the diagonal and above holding values orgqr must ignore,
-// ld = m + ld_pad. Verified on items 0 and batch-1 over sampled columns: Q against H_0 ... H_{n-1}
-// e_j applied on the host from the input reflectors, and Q^H Q - I (qr_common.hh).
+// orgqr for the tuner (src/ops/orgqr/choice.hh): reflectors and tau from one untimed public geqrf
+// (Auto) of a MatrixView::fill_random M, R on and above the diagonal (values orgqr must ignore),
+// ld = m + ld_pad. Verified on the default items by MatrixView::qr_reconstruction, ||M - Q R||_F /
+// ||M||_F with R from the geqrf factor (factorization), and MatrixView::orthogonality (orthogonality),
+// each as a fraction of its bound at n = m (docs/design/verification.md), so the cell's residual is
+// the worse of the two and its tolerance 1. No orgqr path forms M's reflectors, so the check is not
+// self-referential (agent guide §8 rule 7).
 //
-// The key has no batch: a cell runs at qr_batch (qr_common.hh). The grid is the m x n lattice with
+// The key has no batch: a cell runs at qr_batch (spec.hh). The grid is the m x n lattice with
 // n <= m (Q's columns live in C^m). blocked's time includes the public ormqr it applies to an
 // identity, and that ormqr's own gemm and trmm, each choosing for itself.
 
+#include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/orgqr/choice.hh"
 #include "cell_runner.hh"
-#include "qr_common.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -27,25 +30,27 @@
 namespace batchlas::tune {
 namespace {
 
-constexpr double kCheckBudget = 4e8;  // host multiply-adds per verified item
-
 template <class T>
 struct OrgqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     int m, n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A, tau;
-    UnifiedVector<T*> pA0, pA;
-    MV A0v, Av;
+    UnifiedVector<T> M, A0, A, tau;
+    UnifiedVector<T*> pM, pA0, pA;
+    MV Mv, A0v, Av;
 
     OrgqrProblem(Queue& q_, int m_, int n_, int batch_, int ld_pad)
         : q(q_), m(m_), n(n_), batch(batch_), ld(m_ + ld_pad), stride(std::size_t(ld) * std::size_t(n_)),
-          A0(stride * std::size_t(batch_)), A(stride * std::size_t(batch_)), tau(std::size_t(n_) * std::size_t(batch_)),
-          pA0(std::size_t(batch_)), pA(std::size_t(batch_)), A0v(A0.data(), m, n, ld, int(stride), batch, pA0.data()),
-          Av(A.data(), m, n, ld, int(stride), batch, pA.data()) {
-        host_reflectors<T>(A0.data(), tau.data(), m, n, ld, stride, batch, 5151);
+          M(stride * std::size_t(batch_)), A0(stride * std::size_t(batch_)), A(stride * std::size_t(batch_)),
+          tau(std::size_t(n_) * std::size_t(batch_)), pM(std::size_t(batch_)), pA0(std::size_t(batch_)),
+          pA(std::size_t(batch_)), Mv(M.data(), m, n, ld, int(stride), batch, pM.data()),
+          A0v(A0.data(), m, n, ld, int(stride), batch, pA0.data()), Av(A.data(), m, n, ld, int(stride), batch, pA.data()) {
+        (void)Mv.fill_random(q, false, 5151);
+        (void)MV::copy(q, A0v, Mv);
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        q.wait();
     }
     std::size_t workspace() { return orgqr_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
     void reset() {
@@ -58,29 +63,8 @@ struct OrgqrProblem {
         q.wait();
     }
     std::pair<double, int> verify() {
-        const auto cols = sample_idx(n, int(std::clamp(kCheckBudget / (double(m) * double(n)), 2.0, 32.0)));
-        double worst = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t o = std::size_t(b) * stride;
-            const Reflectors<T> R{A0.data(), tau.data(), o, std::size_t(b) * std::size_t(n), ld, m};
-            auto at = [&](int r, int c) { return up(A[o + std::size_t(c) * std::size_t(ld) + std::size_t(r)]); };
-            double diff = 0, orth = 0;
-            for (int j : cols) {
-                const auto ref = q_column<T>(R, n, j);
-                for (int r = 0; r < m; ++r) {
-                    const double d = ab(at(r, j) - ref[std::size_t(r)]);
-                    diff += d * d;
-                }
-                for (int i : cols) {
-                    D g = D(i == j ? -1 : 0);
-                    for (int r = 0; r < m; ++r) g += cj(at(r, i)) * at(r, j);
-                    orth += ab(g) * ab(g);
-                }
-            }
-            if (std::isnan(diff) || std::isnan(orth)) return {std::nan(""), 0};
-            worst = nanmax(worst, std::sqrt(std::max(diff, orth) / double(cols.size())));
-        }
-        return {worst, 0};
+        const double rec = MV::qr_reconstruction(q, Mv, Av, A0v) / verify::bound<T>(verify::Check::factorization, m);
+        return {verify::nanmax(rec, MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality, m)), 0};
     }
 };
 
@@ -109,7 +93,7 @@ public:
         if (cells.empty()) throw std::invalid_argument("orgqr: the --grid values leave no cell with n <= m");
         return cells;
     }
-    double bytes(const std::string& dtype, const CellKey& k) const override {  // A0, A (tau is n per item)
+    double bytes(const std::string& dtype, const CellKey& k) const override {  // A0, A (tau is n per item; M is the check's)
         const double item = double(key_int(k, "m")) * double(key_int(k, "n")) * dtype_bytes(dtype);
         return 2.0 * item * double(qr_batch(item));
     }
@@ -143,8 +127,8 @@ public:
             if (n > m) throw std::invalid_argument("orgqr: n > m has no native family to tune");
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             OrgqrProblem<T> p(*q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);
-            if (req.mode == "race") return run_race<ops::orgqr::OrgqrChoice>("orgqr", p, req, qr_tol<T>(m));
-            return run_arms<ops::orgqr::OrgqrChoice>("orgqr", p, req, qr_tol<T>(m));
+            if (req.mode == "race") return run_race<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
+            return run_arms<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
         });
     }
 };

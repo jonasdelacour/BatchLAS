@@ -1,5 +1,6 @@
-// gesv for the tuner (docs/design/flat-kernel-selection.md §6.1): row-permuted dominant A with
-// complex noise, random complex B, the solve residual on items 0 and batch-1. blocked's time
+// gesv for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A,
+// fill_random B, verified on the default items by MatrixView::solve_residual against the unfactored A
+// (Check::solve, docs/design/verification.md). blocked's time
 // includes the public getrf and getrs it composes, each choosing for itself (and through them
 // trsm and gemm), so gesv is tuned after those ops.
 //
@@ -10,10 +11,10 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/gesv/choice.hh"
 #include "cell_runner.hh"
-#include "lu_residuals.hh"
 
 #include <memory>
 #include <string>
@@ -53,13 +54,9 @@ struct GesvProblem {
           Av(A.data(), n, n, lda, int(sa), batch, pA.data()), B0v(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data()),
           Xv(X.data(), n, nrhs, ldb, int(sb), batch, pX.data()), piv(std::size_t(n_) * std::size_t(batch_), 0),
           info(std::size_t(batch_), 0) {
-        fill_lu<T>(A0.data(), n, lda, sa, batch, 12345);
-        Rng rg(777);
-        for (int b = 0; b < batch; ++b)
-            for (int c = 0; c < nrhs; ++c)
-                for (int r = 0; r < n; ++r)
-                    B0[std::size_t(b) * sb + std::size_t(c) * std::size_t(ldb) + std::size_t(r)] =
-                        mk<T>(rg.next(), rg.next());
+        (void)A0v.fill_random_pivoted(q, 12345);
+        (void)B0v.fill_random(q, false, 777);
+        q.wait();
     }
     std::size_t workspace() { return gesv_buffer_size<kBackend, T>(q, Av, Xv); }
     void reset() {  // the solve overwrites A with the factor and B with X
@@ -77,7 +74,7 @@ struct GesvProblem {
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        return {lu_solve_residual<T>(X.data(), B0.data(), A0.data(), n, nrhs, lda, sa, ldb, sb, batch), bad};
+        return {MV::solve_residual(q, A0v, Xv, B0v), bad};
     }
 };
 
@@ -128,8 +125,9 @@ public:
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const int n = int(key_int(req.key, "n"));
             GesvProblem<T> p(*q, n, int(key_int(req.key, "nrhs")), gesv_batch(req.dtype, n), req.ld_pad);
-            if (req.mode == "race") return run_race<G::GesvChoice>("gesv", p, req, Tol<T>::v);
-            return run_arms<G::GesvChoice>("gesv", p, req, Tol<T>::v);
+            const double tol = verify::bound<T>(verify::Check::solve, p.n);
+            if (req.mode == "race") return run_race<G::GesvChoice>("gesv", p, req, tol);
+            return run_arms<G::GesvChoice>("gesv", p, req, tol);
         });
     }
 };

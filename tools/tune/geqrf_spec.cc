@@ -1,9 +1,10 @@
-// geqrf for the tuner (docs/design/flat-kernel-selection.md#phase-5-geqrf): random complex A in
-// [-1, 1), ld = m + ld_pad. Verified on items 0 and batch-1 by || A0 - Q R ||_F / || A0 ||_F over
-// sampled columns, Q applied on the host from the returned reflectors and tau, plus the unitarity
-// of every reflector (qr_common.hh). tau is poisoned before the verified run.
+// geqrf for the tuner (docs/design/flat-kernel-selection.md#phase-5-geqrf): MatrixView::fill_random A
+// (complex parts both), ld = m + ld_pad. Verified on the default items by MatrixView::qr_residual
+// (factorization) and the orthogonality of Q's first min(m, n) columns from MatrixView::form_q
+// (orthogonality), each as a fraction of its bound at n = m (docs/design/verification.md), so the
+// cell's residual is the worse of the two and its tolerance 1. tau is poisoned before the verified run.
 //
-// The key has no batch: a cell runs at qr_batch (qr_common.hh). Its grid is not a lattice (sq
+// The key has no batch: a cell runs at qr_batch (spec.hh). Its grid is not a lattice (sq
 // x grid_n, tall x grid_n x grid_aspect, wide x grid_wide_n x grid_wide_aspect), and a key maps to
 // the smallest m of its aspect bucket; a key no (m, n) reproduces is left out. `--grid` FILTERS it.
 // blocked's time includes the public gemm of its trailing updates, which chooses for itself.
@@ -12,11 +13,10 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/geqrf/choice.hh"
 #include "cell_runner.hh"
-#include "qr_common.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <memory>
@@ -28,8 +28,6 @@
 
 namespace batchlas::tune {
 namespace {
-
-constexpr double kCheckBudget = 4e8;  // host multiply-adds per verified item
 
 // The rows of a (form, n, aspect) key: the smallest m whose aspect_of is `aspect`.
 std::optional<int> rows_of(const std::string& form, int n, int aspect) {
@@ -45,7 +43,6 @@ std::optional<int> rows_of(const std::string& form, int n, int aspect) {
 template <class T>
 struct GeqrfProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    using D = typename Prom<T>::type;
     Queue& q;
     int m, n, k, batch, ld;
     std::size_t stride;
@@ -59,8 +56,8 @@ struct GeqrfProblem {
           tau(std::size_t(k) * std::size_t(batch_)), pA0(std::size_t(batch_)), pA(std::size_t(batch_)),
           A0v(A0.data(), m, n, ld, int(stride), batch, pA0.data()),
           Av(A.data(), m, n, ld, int(stride), batch, pA.data()) {
-        Rng rg(4242);
-        for (std::size_t i = 0; i < A0.size(); ++i) A0[i] = mk<T>(rg.next(), rg.next());
+        (void)A0v.fill_random(q, false, 4242);
+        q.wait();
     }
     std::size_t workspace() { return geqrf_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
     void reset() {
@@ -68,34 +65,19 @@ struct GeqrfProblem {
         q.wait();
     }
     void clear_info() {  // a tau left by an earlier arm must not pass for this one's
-        for (std::size_t i = 0; i < tau.size(); ++i) tau[i] = mk<T>(7.0, -3.0);
+        for (std::size_t i = 0; i < tau.size(); ++i) tau[i] = MV::make(7.0, -3.0);
     }
     void run(Span<std::byte> ws) {
         (void)geqrf<kBackend, T>(q, Av, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
-        const int cap = int(std::clamp(kCheckBudget / (double(m) * double(n)), 2.0, 32.0));
-        double worst = 0;
-        for (int b : {0, batch - 1}) {
-            const std::size_t o = std::size_t(b) * stride;
-            const Reflectors<T> R{A.data(), tau.data(), o, std::size_t(b) * std::size_t(k), ld, m};
-            double num = 0, den = 0, unit = 0;
-            for (int i = 0; i < k; ++i) unit = nanmax(unit, R.unitarity(i));
-            for (int j : sample_idx(n, cap)) {
-                std::vector<D> x(std::size_t(m), D(0));
-                for (int r = 0; r <= std::min(j, m - 1); ++r) x[std::size_t(r)] = up(A[o + std::size_t(j) * ld + r]);
-                for (int i = std::min(j, k - 1); i >= 0; --i) R.left(x, i, false);
-                for (int r = 0; r < m; ++r) {
-                    const D a = up(A0[o + std::size_t(j) * ld + r]);
-                    num += ab(x[std::size_t(r)] - a) * ab(x[std::size_t(r)] - a);
-                    den += ab(a) * ab(a);
-                }
-            }
-            if (std::isnan(num) || std::isnan(den)) return {std::nan(""), 0};
-            worst = nanmax(worst, nanmax(den > 0 ? std::sqrt(num / den) : std::sqrt(num), unit));
-        }
-        return {worst, 0};
+        using PV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
+        const VectorView<T> tv(tau.data(), k, batch, 1, k);
+        const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<T>(verify::Check::factorization, m);
+        auto Q = MV::form_q(q, Av, tv, Av.default_items(), k);
+        const double orth = PV::orthogonality(q, Q.view(), Q.view().all_items()) / verify::bound<T>(verify::Check::orthogonality, m);
+        return {verify::nanmax(res, orth), 0};
     }
 };
 
@@ -194,8 +176,8 @@ public:
             if (!m) throw std::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             GeqrfProblem<T> p(*q, *m, n, qr_batch(double(*m) * double(n) * sizeof(T)), req.ld_pad);
-            if (req.mode == "race") return run_race<ops::geqrf::GeqrfChoice>("geqrf", p, req, qr_tol<T>(*m));
-            return run_arms<ops::geqrf::GeqrfChoice>("geqrf", p, req, qr_tol<T>(*m));
+            if (req.mode == "race") return run_race<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
+            return run_arms<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
         });
     }
 };

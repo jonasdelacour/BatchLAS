@@ -1,9 +1,11 @@
-// gesvd for the tuner. herm=N: a random m x n A (uniform in [-1, 1), complex parts both) with graded
-// columns, A(:, j) scaled by 10^(-j / (n-1)); herm=L|U: a graded random Hermitian D S D with both
-// triangles valid (the vendor family reads all of A). Verification on items 0 and batch-1: the
-// singular values against host LAPACK, max |s - s_ref| / s_ref[0], and with vectors the
-// reconstruction ||A(:, j) - U S Vh(:, j)|| / ||A||_F plus max |U^H U - I| and |Vh Vh^H - I| over up
-// to 32 sampled columns and rows. Items cycle through four matrices; item 0 and batch-1 differ.
+// gesvd for the tuner. herm=N: MatrixView::fill_random m x n A (complex parts both); herm=L|U:
+// MatrixView::fill_graded_hermitian (condition 100) with both triangles valid (the vendor family
+// reads all of A). Every item differs. Verified on the default items (docs/design/verification.md):
+// the singular values against host LAPACKE (verify::singular_values, MatrixView::values_error
+// relative to s_max; values at n = min(m, n)), and with vectors MatrixView::svd_residual
+// (factorization at n = max(m, n)) and the orthogonality_rotations of U's columns and of Vh's rows
+// (the columns of Vh^H, formed by MatrixView::product with an identity), each as a fraction of its
+// bound, so the cell's residual is the worst and its tolerance 1. Without LAPACKE every arm is bad.
 //
 // batch is no key (choice.hh), so it is derived from the shape, never a grid axis: the largest
 // power of two in [128, 16384] with m n batch <= 2^24, saturating per docs/developer/agent-guide.md
@@ -17,11 +19,11 @@
 #include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/reference.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/gesvd/choice.hh"
 #include "cell_runner.hh"
-#include "host_reference.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -37,21 +39,10 @@ namespace {
 
 namespace G = ops::gesvd;
 
-constexpr int kVariants = 4;
-constexpr int kMaxChecked = 32;
-
-inline int variant_of(int b, int batch) { return b == 0 ? 0 : b == batch - 1 ? 1 : 2 + (b & 1); }
-
 int gesvd_batch(std::int64_t m, std::int64_t n) {
     std::int64_t b = 16384;
     while (b > 128 && b * m * n > (std::int64_t(1) << 24)) b /= 2;
     return int(b);
-}
-
-template <class T>
-T conj_of(T x) {
-    if constexpr (std::is_same_v<T, typename base_type<T>::type>) return x;
-    else return std::conj(x);
 }
 
 SvdVectors job_of(const std::string& vec) {
@@ -62,7 +53,6 @@ template <class T>
 struct GesvdProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;
-    using D = typename Prom<T>::type;
     Queue& q;
     std::optional<Uplo> herm;
     SvdVectors job;
@@ -73,7 +63,7 @@ struct GesvdProblem {
     MV A0v, Av, Uv, Vhv;
     UnifiedVector<R> s;
     UnifiedVector<std::int32_t> info;
-    std::vector<std::vector<double>> ref;  // host singular values of items 0 and batch-1, lazily
+    std::vector<std::vector<double>> ref;  // host singular values of the default items (indexed by item), lazily
 
     GesvdProblem(Queue& q_, std::optional<Uplo> h, SvdVectors j, int m_, int n_, int ld_pad)
         : q(q_), herm(h), job(j), m(m_), n(n_), k(std::min(m_, n_)), batch(gesvd_batch(m_, n_)), ld(m_ + ld_pad),
@@ -87,23 +77,9 @@ struct GesvdProblem {
           Av(A.data(), m, n, ld, int(sa), batch, pA.data()), Uv(U.data(), urows, ucols, ldu, int(su), batch, pU.data()),
           Vhv(Vh.data(), vrows, vcols, ldv, int(sv), batch, pVh.data()), s(std::size_t(k) * std::size_t(batch)),
           info(std::size_t(batch), 0) {
-        std::vector<std::vector<T>> var(kVariants, std::vector<T>(sa, mk<T>(0.0, 0.0)));
-        for (int v = 0; v < kVariants; ++v) {
-            Rng rg(2000 + std::uint64_t(v));
-            auto at = [&](int r, int c) -> T& { return var[v][std::size_t(c) * std::size_t(ld) + std::size_t(r)]; };
-            for (int c = 0; c < n; ++c)
-                for (int r = 0; r < m; ++r) {
-                    if (herm && r < c) continue;
-                    const double g = herm ? std::pow(10.0, -double(r + c) / double(std::max(1, n - 1)))
-                                          : std::pow(10.0, -double(c) / double(std::max(1, n - 1)));
-                    at(r, c) = herm && r == c ? mk<T>(g * rg.next(), 0.0) : mk<T>(g * rg.next(), g * rg.next());
-                }
-            if (herm)
-                for (int c = 0; c < n; ++c)
-                    for (int r = 0; r < c; ++r) at(r, c) = conj_of(at(c, r));
-        }
-        for (int b = 0; b < batch; ++b)
-            std::copy(var[variant_of(b, batch)].begin(), var[variant_of(b, batch)].end(), A0.data() + std::size_t(b) * sa);
+        if (herm) (void)A0v.fill_graded_hermitian(q, 2.0, 2000);
+        else (void)A0v.fill_random(q, false, 2000);
+        q.wait();
     }
     // The vendor binding throws `unsupported` for a shape its batched call cannot take (m or n
     // above 32, Thin) although can_run admits it: that is a refused pin here, not a crashed arm.
@@ -135,61 +111,33 @@ struct GesvdProblem {
             (void)gesvd<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, ws, info.to_span());
         q.wait();
     }
-    D a0(int b, int r, int c) const { return up(A0[std::size_t(b) * sa + std::size_t(c) * std::size_t(ld) + std::size_t(r)]); }
-    D u(int b, int r, int c) const { return up(U[std::size_t(b) * su + std::size_t(c) * std::size_t(ldu) + std::size_t(r)]); }
-    D vh(int b, int r, int c) const { return up(Vh[std::size_t(b) * sv + std::size_t(c) * std::size_t(ldv) + std::size_t(r)]); }
-    double values_residual(int slot, int b) {
-        if (ref.empty()) ref.resize(2);
-        if (ref[slot].empty()) {
-            std::vector<D> a(std::size_t(m) * std::size_t(n));
-            for (int c = 0; c < n; ++c)
-                for (int r = 0; r < m; ++r) a[std::size_t(c) * m + r] = a0(b, r, c);
-            if (!host_singular_values(m, n, a, ref[slot])) return std::nan("");
-        }
-        double worst = 0;
-        for (int i = 0; i < k; ++i)
-            worst = nanmax(worst, std::fabs(double(s[std::size_t(b) * k + i]) - ref[slot][std::size_t(i)]));
-        return ref[slot][0] > 0 ? worst / ref[slot][0] : worst;
-    }
-    double vectors_residual(int b) const {
-        double fro = 0;
-        for (int c = 0; c < n; ++c)
-            for (int r = 0; r < m; ++r) fro += ab(a0(b, r, c)) * ab(a0(b, r, c));
-        fro = std::sqrt(fro);
-        double worst = 0;
-        for (int j : sample_indices(n, kMaxChecked)) {
-            double num = 0;
-            for (int r = 0; r < m; ++r) {
-                D acc = D(0);
-                for (int l = 0; l < k; ++l) acc += u(b, r, l) * double(s[std::size_t(b) * k + l]) * vh(b, l, j);
-                num += ab(acc - a0(b, r, j)) * ab(acc - a0(b, r, j));
-            }
-            worst = nanmax(worst, fro > 0 ? std::sqrt(num) / fro : std::sqrt(num));
-        }
-        const auto uc = sample_indices(ucols, kMaxChecked), vr = sample_indices(vrows, kMaxChecked);
-        for (int i : uc)
-            for (int j : uc) {
-                D dot = D(0);
-                for (int r = 0; r < m; ++r) dot += cj(u(b, r, i)) * u(b, r, j);
-                worst = nanmax(worst, ab(dot - D(i == j ? 1.0 : 0.0)));
-            }
-        for (int i : vr)
-            for (int j : vr) {
-                D dot = D(0);
-                for (int c = 0; c < n; ++c) dot += vh(b, i, c) * cj(vh(b, j, c));
-                worst = nanmax(worst, ab(dot - D(i == j ? 1.0 : 0.0)));
-            }
-        return worst;
-    }
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        double worst = 0;
-        for (int slot : {0, 1}) {
-            const int b = slot == 0 ? 0 : batch - 1;
-            worst = nanmax(worst, values_residual(slot, b));
-            if (job != SvdVectors::None) worst = nanmax(worst, vectors_residual(b));
+        const auto items = A0v.default_items();
+        if (ref.empty()) {
+            ref.assign(std::size_t(batch), {});
+            for (int b : items)
+                if (!verify::singular_values(A0v, b, ref[std::size_t(b)])) {
+                    ref.clear();
+                    return {std::nan(""), bad};
+                }
         }
+        double scale = 0;
+        for (int b : items) scale = std::max(scale, ref[std::size_t(b)].empty() ? 0.0 : ref[std::size_t(b)][0]);
+        const VectorView<R> sval(s.data(), k, batch);
+        double worst = MV::values_error(sval, ref, scale) / verify::bound<T>(verify::Check::values, k);
+        if (job == SvdVectors::None) return {worst, bad};
+        const double rec = MV::svd_residual(q, A0v, Uv, sval, Vhv) / verify::bound<T>(verify::Check::factorization, std::max(m, n));
+        const double ou = MV::orthogonality(q, Uv) / verify::bound<T>(verify::Check::orthogonality_rotations, ucols);
+        auto vh = Vhv.template astype<T>(items);
+        Matrix<T, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
+        auto eye = Matrix<T, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
+        (void)MV::product(q, vh.view(), Transpose::ConjTrans, eye.view(), Transpose::NoTrans, vhh.view());
+        q.wait();
+        const double ov = MV::orthogonality(q, vhh.view(), vhh.view().all_items()) /
+                          verify::bound<T>(verify::Check::orthogonality_rotations, vrows);
+        worst = verify::nanmax(worst, verify::nanmax(rec, verify::nanmax(ou, ov)));
         return {worst, bad};
     }
 };
@@ -271,12 +219,8 @@ public:
                 h == "N" ? std::nullopt : std::optional<Uplo>(h == "U" ? Uplo::Upper : Uplo::Lower);
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             GesvdProblem<T> p(*q, herm, job_of(*key_get(req.key, "vec")), m, n, req.ld_pad);
-            // cta solves the normal equations, so its U loses eps kappa^2 (1.1e-4 for float at 32 x 32,
-            // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa): a 10x looser
-            // bound than syev's, which a 1% error in one entry still fails (4.7e-3 at 16 x 16).
-            const double tol = 10.0 * Tol<T>::v * std::max(1.0, double(std::max(m, n)) / 32.0);
-            if (req.mode == "race") return run_race<G::GesvdChoice>("gesvd", p, req, tol);
-            return run_arms<G::GesvdChoice>("gesvd", p, req, tol);
+            if (req.mode == "race") return run_race<G::GesvdChoice>("gesvd", p, req, 1.0);
+            return run_arms<G::GesvdChoice>("gesvd", p, req, 1.0);
         });
     }
 };

@@ -1,22 +1,26 @@
-// syev for the tuner: a graded random Hermitian A = D S D (S uniform in [-1, 1), complex parts both;
-// D = diag(10^(-3 i / (n-1)))), Lower named, the ld padding poisoned with a large finite value. The
-// upper triangle holds the mirror, not poison: blocked (n <= 32) and two_stage read it (known defect
-// 14, docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle),
-// and a poisoned run would drop them from those rows for a defect, not a time. jobz=V: max_j ||A v_j - w_j v_j|| / ||A||_F and max |V^H V - I| over up to
-// 32 sampled columns; jobz=N: the sorted eigenvalues against host LAPACK, max |w - w_ref| / max
-// |w_ref|; both on items 0 and batch-1. Items cycle through four matrices, item 0 and batch-1 differ.
-// blocked's and two_stage's times include the public gemm, syr2k and trmm (sytrd_blocked, stedc,
-// ormqr_blocked) and, two_stage, geqrf and ormqr (sytrd_sy2sb), each choosing for itself.
+// syev for the tuner: a graded Hermitian A from MatrixView::fill_graded_hermitian (condition 1e6, a
+// different eigenbasis per item, so item 0 and batch-1 differ), Lower named, the ld padding poisoned
+// with a large finite value. The upper triangle holds the mirror, not poison: blocked (n <= 32) and
+// two_stage read it (known defect 14,
+// docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle), and a
+// poisoned run would drop them from those rows for a defect, not a time. Verified on the default
+// items (docs/design/verification.md): the eigenvalues against host LAPACKE (verify::eigenvalues,
+// MatrixView::values_error relative to max |lambda|; values), and with jobz=V
+// MatrixView::eigen_residual (eigen_residual) and MatrixView::orthogonality (orthogonality_rotations),
+// each as a fraction of its bound, so the cell's residual is the worst and its tolerance 1. Without
+// LAPACKE every arm is bad. blocked's and two_stage's times include the public gemm, syr2k and trmm
+// (sytrd_blocked, stedc, ormqr_blocked) and, two_stage, geqrf and ormqr (sytrd_sy2sb), each choosing
+// for itself.
 
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/verify/reference.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../../src/ops/syev/choice.hh"
 #include "cell_runner.hh"
-#include "host_reference.hh"
-#include "residuals.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -30,18 +34,12 @@ namespace {
 
 namespace S = ops::syev;
 
-constexpr int kVariants = 4;
-constexpr int kMaxChecked = 32;
 constexpr double kPoison = 1e6;
-
-// item b's matrix: item 0 and batch-1 always differ, so a wrong batch stride shows.
-inline int variant_of(int b, int batch) { return b == 0 ? 0 : b == batch - 1 ? 1 : 2 + (b & 1); }
 
 template <class T>
 struct SyevProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;
-    using D = typename Prom<T>::type;
     Queue& q;
     JobType jobz;
     int n, batch, ld;
@@ -51,7 +49,7 @@ struct SyevProblem {
     MV A0v, Av;
     UnifiedVector<R> w;
     UnifiedVector<std::int32_t> info;
-    std::vector<std::vector<double>> ref;  // jobz=N: host eigenvalues of items 0 and batch-1, lazily
+    std::vector<std::vector<double>> ref;  // host eigenvalues of the default items (indexed by item), lazily
 
     SyevProblem(Queue& q_, JobType j, int n_, int batch_, int ld_pad)
         : q(q_), jobz(j), n(n_), batch(batch_), ld(n_ + ld_pad), stride(std::size_t(ld) * std::size_t(n_)),
@@ -59,20 +57,10 @@ struct SyevProblem {
           pA(std::size_t(batch_)), A0v(A0.data(), n, n, ld, int(stride), batch, pA0.data()),
           Av(A.data(), n, n, ld, int(stride), batch, pA.data()), w(std::size_t(n_) * std::size_t(batch_)),
           info(std::size_t(batch_), 0) {
-        std::vector<std::vector<T>> var(kVariants, std::vector<T>(stride, mk<T>(kPoison, 0.0)));
-        for (int v = 0; v < kVariants; ++v) {
-            Rng rg(1000 + std::uint64_t(v));
-            for (int c = 0; c < n; ++c)
-                for (int r = c; r < n; ++r) {
-                    const double g = std::pow(10.0, -3.0 * double(r + c) / double(std::max(1, n - 1)));
-                    const double re = g * rg.next(), im = r == c ? 0.0 : g * rg.next();
-                    var[v][std::size_t(c) * std::size_t(ld) + std::size_t(r)] = mk<T>(re, im);
-                    var[v][std::size_t(r) * std::size_t(ld) + std::size_t(c)] = mk<T>(re, -im);
-                }
-        }
-        for (int b = 0; b < batch; ++b) std::copy(var[variant_of(b, batch)].begin(), var[variant_of(b, batch)].end(),
-                                                  A0.data() + std::size_t(b) * stride);
-        std::copy(A0.data(), A0.data() + A0.size(), A.data());  // the padding keeps its poison
+        (void)MV(A0.data(), ld, n, ld, int(stride), batch).fill(q, MV::make(kPoison, 0.0));
+        (void)A0v.fill_graded_hermitian(q, 6.0, 1000);
+        (void)MV::copy(q, MV(A.data(), ld, n, ld, int(stride), batch), MV(A0.data(), ld, n, ld, int(stride), batch));
+        q.wait();  // the padding keeps its poison
     }
     std::size_t workspace() { return syev_buffer_size<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower); }
     void reset() {
@@ -86,67 +74,27 @@ struct SyevProblem {
         (void)syev<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
         q.wait();
     }
-    // The Hermitian matrix item b represents, from its Lower triangle.
-    std::vector<D> full(int b) const {
-        std::vector<D> a(std::size_t(n) * std::size_t(n));
-        const std::size_t o = std::size_t(b) * stride;
-        for (int c = 0; c < n; ++c)
-            for (int r = c; r < n; ++r) {
-                const D v = up(A0[o + std::size_t(c) * std::size_t(ld) + std::size_t(r)]);
-                a[std::size_t(c) * n + r] = v;
-                a[std::size_t(r) * n + c] = cj(v);
-            }
-        return a;
-    }
-    double vectors_residual(int b) const {
-        const std::vector<D> a = full(b);
-        double fro = 0;
-        for (const D& x : a) fro += ab(x) * ab(x);
-        fro = std::sqrt(fro);
-        const std::size_t o = std::size_t(b) * stride;
-        auto v = [&](int r, int c) { return up(A[o + std::size_t(c) * std::size_t(ld) + std::size_t(r)]); };
-        const std::vector<int> cols = sample_indices(n, kMaxChecked);
-        double worst = 0;
-        for (int j : cols) {
-            const double wj = double(w[std::size_t(b) * n + j]);
-            double num = 0;
-            for (int r = 0; r < n; ++r) {
-                D acc = D(0);
-                for (int k = 0; k < n; ++k) acc += a[std::size_t(k) * n + r] * v(k, j);
-                num += ab(acc - wj * v(r, j)) * ab(acc - wj * v(r, j));
-            }
-            worst = nanmax(worst, fro > 0 ? std::sqrt(num) / fro : std::sqrt(num));
-            for (int i : cols) {
-                D dot = D(0);
-                for (int r = 0; r < n; ++r) dot += cj(v(r, i)) * v(r, j);
-                worst = nanmax(worst, ab(dot - D(i == j ? 1.0 : 0.0)));
-            }
-        }
-        return worst;
-    }
-    double values_residual(int slot, int b) {
-        if (ref.empty()) ref.resize(2);
-        if (ref[slot].empty()) {
-            std::vector<D> a = full(b);
-            if (!host_eigenvalues(n, a, ref[slot])) return std::nan("");
-        }
-        std::vector<double> got(static_cast<std::size_t>(n));
-        for (int i = 0; i < n; ++i) got[std::size_t(i)] = double(w[std::size_t(b) * n + i]);
-        std::sort(got.begin(), got.end());
-        double scale = 0, worst = 0;
-        for (double x : ref[slot]) scale = std::max(scale, std::fabs(x));
-        for (int i = 0; i < n; ++i) worst = nanmax(worst, std::fabs(got[std::size_t(i)] - ref[slot][std::size_t(i)]));
-        return scale > 0 ? worst / scale : worst;
-    }
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
-        double worst = 0;
-        for (int slot : {0, 1}) {
-            const int b = slot == 0 ? 0 : batch - 1;
-            worst = nanmax(worst, jobz == JobType::EigenVectors ? vectors_residual(b) : values_residual(slot, b));
+        const auto items = A0v.default_items();
+        if (ref.empty()) {
+            ref.assign(std::size_t(batch), {});
+            for (int b : items)
+                if (!verify::eigenvalues(A0v, b, ref[std::size_t(b)])) {
+                    ref.clear();
+                    return {std::nan(""), bad};
+                }
         }
-        return {worst, bad};
+        double scale = 0;
+        for (int b : items)
+            for (double x : ref[std::size_t(b)]) scale = std::max(scale, std::fabs(x));
+        const VectorView<R> wv(w.data(), n, batch);
+        double worst = MV::values_error(wv, ref, scale) / verify::bound<T>(verify::Check::values, n);
+        if (jobz != JobType::EigenVectors) return {worst, bad};
+        worst = verify::nanmax(worst, MV::eigen_residual(q, A0v, Av, wv) / verify::bound<T>(verify::Check::eigen_residual, n));
+        const double orth = MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality_rotations, n);
+        return {verify::nanmax(worst, orth), bad};
     }
 };
 
@@ -236,10 +184,8 @@ public:
             const JobType jobz = *key_get(req.key, "jobz") == "V" ? JobType::EigenVectors : JobType::NoEigenVectors;
             const int n = int(key_int(req.key, "n"));
             SyevProblem<T> p(*q, jobz, n, int(key_int(req.key, "batch")), req.ld_pad);
-            // Backward error grows like n eps: scale the O(1)-input bound, which a wrong answer (O(1)) still fails.
-            const double tol = Tol<T>::v * std::max(1.0, double(n) / 32.0);
-            if (req.mode == "race") return run_race<S::SyevChoice>("syev", p, req, tol);
-            return run_arms<S::SyevChoice>("syev", p, req, tol);
+            if (req.mode == "race") return run_race<S::SyevChoice>("syev", p, req, 1.0);
+            return run_arms<S::SyevChoice>("syev", p, req, 1.0);
         });
     }
 };
