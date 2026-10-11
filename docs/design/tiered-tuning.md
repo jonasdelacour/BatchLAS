@@ -336,9 +336,15 @@ interface above:
 
 | Interface above | As built | Why |
 | --- | --- | --- |
-| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (best record, staleness, `ledger_rows`, `nearest`) | the views show exactly what `sweep_to_table.py` would write next, need no build, and all 70 sm_120 ledgers load in about 2 s |
-| `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`) | the tuner already guards every GPU it uses; a run is not a campaign |
+| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (`read_ledger`, best record, staleness, `ledger_rows`, `parse_table`, `nearest`) | the views show exactly what `sweep_to_table.py` would write next and need no build |
+| status matrix: staleness | per kernel family: the table header's hash against hash v2 of the sources now, the keys the ledger holds stale in it per dtype, and `stale_kernel_warnings`; per dtype, the table's rows and `behind` when its header does not name the newest run | one table per (op, device) carries the hashes; a row-exact check per dtype (the `--check` rule, header hashes) is in the op view, where it costs one `ledger_rows` |
+| launch: tiers | preview, coarse, deep, and custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible | the tuner's flags since the tuning data layout (@ref design_tuning_data) |
+| `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`) | the tuner already guards every GPU it uses; a run is not a campaign |
 | figure style | interactive SVG | the map is clicked, not printed |
+
+Since the tuning data layout the tab reads one ledger and one table per (op, device) and filters
+each by dtype. Loading all 39 ledger files takes about 13 s (threadripper02, 2026-10-11); the
+server warms this at start.
 
 The diff's two picks are the same section 5.4 lookup: in the shipped table, and in the rows
 `sweep_to_table.py` would write now. Each takes the first entry the cell's record did not

@@ -2,6 +2,7 @@
 import json
 import os
 import random
+import stat
 import subprocess
 import sys
 import tempfile
@@ -14,33 +15,43 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tuning  # noqa: E402
 from tuning import stt  # noqa: E402
 
-CANDS = ["tiny", "cta", "lpanel:panel=8", "blocked", "vendor"]  # potrf float, choice.hh order
+CANDS = ["tiny", "cta", "lpanel:panel=8", "blocked", "vendor"]
+KEYS = "uplo:exact n:log:3 batch:log"
 
 
 def hashes():
-    block = stt.parse_kernel_block(stt.read_spec_source(stt.OP_BY_NAME["potrf"]))
-    return stt.family_hashes(stt.REPO, block, list(dict.fromkeys(stt.spelling_family(c) for c in CANDS)))
+    return tuning.current_hashes("potrf", list(dict.fromkeys(stt.spelling_family(c) for c in CANDS)))
 
 
-def cell(key, tier, ranked, med, run="r1", date="2026-10-01", status=None, bad_hash=(), rnd=0):
+def run(rid="r1", dtype="float", date="2026-10-01", batchlas="x"):
+    return {"kind": "run", "dtype": dtype, "run_id": rid, "date": date, "tier": "deep", "batchlas": batchlas,
+            "keys": KEYS, "candidates": "|".join(CANDS)}
+
+
+def cell(key, tier, ranked, med, run="r1", date="2026-10-01", bad_hash=(), rnd=0, dtype="float", old_hash="00000000"):
     """A potrf ledger record: med = {candidate: median}; a candidate absent from med was skipped."""
-    fh, rec = hashes(), {"kind": "cell", "run_id": run, "tier": tier, "key": key, "round": rnd, "date": date,
-                         "ranked": "|".join(ranked), "cands": "|".join(CANDS)}
+    fh, rec = hashes(), {"kind": "cell", "dtype": dtype, "run_id": run, "tier": tier, "key": key, "round": rnd,
+                         "date": date, "ranked": "|".join(ranked), "cands": "|".join(CANDS)}
     for i, c in enumerate(CANDS):
         fam = stt.spelling_family(c)
-        st = (status or {}).get(c) or ("ok" if c in med else "skipped")
-        rec.update({f"h{i}": "00000000" if fam in bad_hash else fh[fam], f"s{i}": st, f"r{i}": "",
-                    f"m{i}": med.get(c), f"lo{i}": med.get(c), f"hi{i}": med.get(c), f"n{i}": 6})
+        rec.update({f"h{i}": old_hash if fam in bad_hash else fh[fam], f"s{i}": "ok" if c in med else "skipped",
+                    f"r{i}": "", f"m{i}": med.get(c), f"lo{i}": med.get(c), f"hi{i}": med.get(c), f"n{i}": 6})
     return rec
 
 
-def write_ledger(root, recs, audits=()):
-    d = Path(root) / "potrf.float.sm_120"
-    d.mkdir(parents=True, exist_ok=True)
-    lines = [{"kind": "run", "run_id": "r1", "date": "2026-10-01", "tier": "deep", "batchlas": "x",
-              "keys": stt.OP_BY_NAME["potrf"].keys, "candidates": "|".join(CANDS)}] + list(recs) + \
-        [{"kind": "audit", "run_id": "r1", "key": k, "verdict": v} for k, v in audits]
-    (d / "r1.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+def write_ledger(root, lines, audits=(), name="potrf.sm_120.jsonl"):
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    lines = list(lines) + [{"kind": "audit", "dtype": d, "run_id": "r1", "key": k, "verdict": v} for d, k, v in audits]
+    (root / name).write_text("".join(json.dumps(x) + "\n" for x in lines))
+
+
+def write_table(tuned, rows, fam=None, batchlas="x", date="2026-10-01"):
+    fam = fam or hashes()
+    head = (f"# op=potrf device=sm_120 batchlas={batchlas} kernels=k family_kernels="
+            + ",".join(f"{f}:{h}" for f, h in fam.items()) + f" date={date}\n"
+            "# source=ledger:x tiers=deep:0\n# keys: dtype:exact " + KEYS + "\n")
+    (Path(tuned) / "potrf.sm_120.txt").write_text(head + "".join(r + "\n" for r in rows))
 
 
 class Status(unittest.TestCase):
@@ -52,8 +63,12 @@ class Status(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_higher_tier_wins_and_stale_and_audits_count(self):
+    def row(self, s, dtype="float"):
+        return next(x for x in s["rows"] if x["op"] == "potrf" and x["device"] == "sm_120" and x["dtype"] == dtype)
+
+    def test_higher_tier_wins_stale_audits_and_the_dtype_filter(self):
         write_ledger(self.root, [
+            run(), run(dtype="double"),
             cell("uplo=L,n=8,batch=128", "deep", ["tiny", "cta"], {"tiny": 1.0, "cta": 2.0}, date="2026-09-01"),
             # newer, but a lower tier: never replaces the deep record
             cell("uplo=L,n=8,batch=128", "preview", ["cta", "tiny"], {"tiny": 1.0, "cta": 0.5}, run="r2", date="2026-10-05"),
@@ -61,27 +76,69 @@ class Status(unittest.TestCase):
             cell("uplo=L,n=16,batch=128", "coarse", ["cta", "tiny"], {"tiny": 1.0, "cta": 0.5}, bad_hash={"cta"}),
             # a loser's kernels changed: partly stale, still the best record
             cell("uplo=U,n=8,batch=128", "coarse", ["tiny", "cta"], {"tiny": 1.0, "cta": 2.0}, bad_hash={"cta"}),
-        ], audits=[("uplo=L,n=8,batch=128", "ok"), ("uplo=U,n=8,batch=128", "mismatch:winner tiny/cta")])
+            cell("uplo=L,n=8,batch=128", "transcribed", ["vendor"], {}, run="t", dtype="double"),
+        ], audits=[("float", "uplo=L,n=8,batch=128", "ok"), ("float", "uplo=U,n=8,batch=128", "mismatch:winner tiny/cta"),
+                   ("double", "uplo=L,n=8,batch=128", "mismatch:x")])
         s = tuning.Ledgers(self.root, self.tuned).status()
-        r = next(x for x in s["rows"] if x["op"] == "potrf" and x["device"] == "sm_120")
+        r = self.row(s)
         self.assertEqual((r["cells"], r["best"], r["stale"], r["partial"]), (3, 2, 1, 1))
         self.assertEqual((r["tiers"]["deep"], r["tiers"]["coarse"], r["tiers"]["preview"]), (1, 1, 0))
         self.assertEqual(r["audits"], {"ok": 1, "mismatch": 1, "inconclusive": 0})
         self.assertIsNone(r["table"])
+        d = self.row(s, "double")
+        self.assertEqual((d["cells"], d["best"], d["tiers"]["transcribed"], d["rows"]["transcribed"]), (1, 1, 1, 1))
+        self.assertEqual(d["audits"]["mismatch"], 1)
+        fams = {f["name"]: f for f in s["files"]["potrf.sm_120"]["families"]}
+        self.assertEqual(fams["cta"]["stale"], {"float": 2})  # n=16 (winner) and U n=8 (loser)
+        self.assertIsNone(fams["cta"]["table"])
+
+    def test_rehash_lines_and_dirty_runs_follow_read_ledger(self):
+        old = cell("uplo=L,n=8,batch=128", "deep", ["cta", "tiny"], {"tiny": 1.0, "cta": 0.5}, bad_hash={"cta"},
+                   old_hash="v1cta000")
+        dirty = [run("d", batchlas="abc-dirty"), cell("uplo=U,n=8,batch=128", "deep", ["tiny"], {"tiny": 1.0}, run="d")]
+        write_ledger(self.root, [run(), old] + dirty)
+        r = self.row(tuning.Ledgers(self.root, self.tuned).status())
+        self.assertEqual((r["best"], r["stale"], r["runs"]), (0, 1, 1))
+        rehash = {"kind": "rehash", "family": "cta", "from": "v1cta000", "to": hashes()["cta"], "at": "a", "proof": "normalized"}
+        write_ledger(self.root, [run(), old, rehash] + dirty)
+        s = tuning.Ledgers(self.root, self.tuned).status()
+        self.assertEqual((self.row(s)["best"], self.row(s)["stale"]), (1, 0))
+        self.assertTrue(any("abc-dirty" in w for w in s["files"]["potrf.sm_120"]["warnings"]))
+
+    def test_table_staleness_behind_and_sync(self):
+        write_ledger(self.root, [run(), cell("uplo=L,n=8,batch=128", "deep", ["tiny", "cta"], {"tiny": 1.0, "cta": 2.0})])
+        stale_fam = dict(hashes(), blocked="deadbeef")
+        write_table(self.tuned, ["dtype=float uplo=L n=8 batch=128 | tiny 1.000 | cta 2.000 # deep"], stale_fam)
+        L = tuning.Ledgers(self.root, self.tuned)
+        s = L.status()
+        f = s["files"]["potrf.sm_120"]
+        blocked = next(x for x in f["families"] if x["name"] == "blocked")
+        self.assertEqual((blocked["table"], blocked["now"] != "deadbeef"), ("deadbeef", True))
+        self.assertTrue(f["table_warnings"] and "blocked:deadbeef->" in f["table_warnings"][0])
+        r = self.row(s)
+        self.assertEqual((r["table"]["rows"], r["table"]["tiers"]["deep"], r["table"]["behind"]), (1, 1, False))
+        self.assertEqual(L.op_view("potrf", "float", "sm_120")["table"]["differ"], 0)
+        # a newer run: the header no longer names it, and its cell is a row the table lacks
+        write_ledger(self.root, [run(), run("r2", date="2026-10-02"),
+                                 cell("uplo=L,n=8,batch=128", "deep", ["tiny", "cta"], {"tiny": 1.0, "cta": 2.0}),
+                                 cell("uplo=U,n=8,batch=128", "deep", ["tiny"], {"tiny": 1.0}, run="r2")])
+        self.assertTrue(self.row(L.status())["table"]["behind"])
+        self.assertEqual(L.op_view("potrf", "float", "sm_120")["table"]["differ"], 1)
 
     def test_diff_predicts_the_speedup_of_the_ledger_pick(self):
         write_ledger(self.root, [
+            run(),
             cell("uplo=L,n=8,batch=128", "deep", ["tiny", "cta", "vendor"], {"tiny": 1.0, "cta": 3.0, "vendor": 4.0}),
             # the table's first entry (blocked) refused this cell: the table runs its second, vendor
             cell("uplo=L,n=64,batch=128", "deep", ["cta", "vendor"], {"cta": 1.0, "vendor": 2.0}),
             cell("uplo=U,n=8,batch=128", "deep", ["tiny", "cta"], {"tiny": 1.0, "cta": 1.5}),
         ])
-        (self.tuned / "potrf.float.sm_120.txt").write_text(
-            "# op=potrf dtype=float device=sm_120 source=ledger:x date=2026-09-01\n# keys: uplo:exact n:log:3 batch:log\n"
-            "uplo=L n=8 batch=128 | cta 3 | tiny 1\n"
-            "uplo=L n=64 batch=128 | blocked 1 | vendor 2 | cta 1\n"
-            "uplo=U n=8 batch=128 | tiny 1 | cta 1.5\n")
+        write_table(self.tuned, ["dtype=float uplo=L n=8 batch=128 | cta 3 | tiny 1 # deep",
+                                 "dtype=float uplo=L n=64 batch=128 | blocked 1 | vendor 2 | cta 1 # deep",
+                                 "dtype=float uplo=U n=8 batch=128 | tiny 1 | cta 1.5 # deep",
+                                 "dtype=double uplo=U n=8 batch=128 | vendor 1 # deep"])
         v = tuning.Ledgers(self.root, self.tuned).op_view("potrf", "float", "sm_120")
+        self.assertEqual((v["names"], v["table"]["rows"]), (["uplo", "n", "batch"], 3))
         by = {tuple(c[0]): c for c in v["cells"]}
         n8 = by[("L", 8, 128)]
         self.assertEqual((v["cands"][n8[7]], v["cands"][n8[9]], n8[8]), ("cta", "tiny", 3.0))
@@ -93,12 +150,29 @@ class Status(unittest.TestCase):
 
     def test_cell_lists_every_record_best_first(self):
         write_ledger(self.root, [
+            run(),
             cell("uplo=L,n=8,batch=128", "preview", ["cta"], {"cta": 2.0}, run="r0", date="2026-08-01"),
             cell("uplo=L,n=8,batch=128", "deep", ["tiny", "cta"], {"tiny": 1.0, "cta": 2.0}),
+            cell("uplo=L,n=8,batch=128", "deep", ["tiny"], {"tiny": 1.0}, dtype="double"),
         ])
         recs = tuning.Ledgers(self.root, self.tuned).cell("potrf", "float", "sm_120", ["L", 8, 128])["records"]
         self.assertEqual([(r["tier"], r["best"]) for r in recs], [("deep", True), ("preview", False)])
         self.assertEqual(recs[0]["cands"][0]["reps"], 6)
+
+    def test_an_lfs_pointer_is_an_error_not_a_crash(self):
+        self.root.mkdir()
+        (self.root / "potrf.sm_120.jsonl").write_text(stt.LFS_POINTER + "\noid sha256:00\nsize 1\n")
+        s = tuning.Ledgers(self.root, self.tuned).status()
+        self.assertIn("git lfs pull", s["files"]["potrf.sm_120"]["error"])
+
+    def test_the_checked_in_data_loads(self):
+        """Every shipped table equals its ledger (what `sweep_to_table.py --check` proves)."""
+        L = tuning.Ledgers()
+        v = L.op_view("potrf", "float", "sm_120")
+        if not v["cells"] and L.file("potrf", "sm_120") and L.file("potrf", "sm_120").error:
+            self.skipTest("ledger not fetched (git lfs pull)")
+        self.assertEqual(v["table"]["differ"], 0)
+        self.assertIn("potrf", tuning.spec_ops())
 
 
 class NearestMatchesTheReference(unittest.TestCase):
@@ -114,6 +188,22 @@ class NearestMatchesTheReference(unittest.TestCase):
         self.assertEqual(got, [stt.nearest(rows, q, keyspec)[1] for q in qs])
 
 
+FAKE_TUNER = """#!/bin/sh
+# A stand-in batchlas_tune: --help lists the current flags; --plan writes plan events to --progress-fd.
+if [ "$1" = "--help" ]; then
+  echo "usage: batchlas_tune <op> --tier preview|coarse|deep --plan --progress-fd N --ledger DIR"
+  echo "  --device-key sm_NN --remeasure-keys FILE --allow-dirty"
+  exit 0
+fi
+echo "$@" > "$(dirname "$0")/argv"
+fd=""; prev=""
+for a in "$@"; do [ "$prev" = "--progress-fd" ] && fd="$a"; prev="$a"; done
+[ -n "$fd" ] || exit 2
+echo '{"ev":"plan_job","op":"potrf","dtype":"float","cells":4,"measure":3,"mix":"3 measure","est_s":1,"refine_cells":0,"est_refine_s":0}' >&"$fd"
+echo '{"ev":"plan","cells":3,"est_s":1,"refine_cells":0,"est_refine_s":0,"est_total_s":1}' >&"$fd"
+"""
+
+
 class Runs(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -126,6 +216,14 @@ class Runs(unittest.TestCase):
     def events(self, evs, pid=None):
         (self.d / "run.json").write_text(json.dumps({"pid": pid, "argv": ["x"], "request": {"devices": [0]}, "started": 1.0}))
         (self.d / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in evs))
+
+    def fake_build(self, script):
+        b = Path(self.tmp.name) / "build"
+        (b / "tools" / "tune").mkdir(parents=True)
+        p = b / "tools" / "tune" / "batchlas_tune"
+        p.write_text(script)
+        p.chmod(p.stat().st_mode | stat.S_IXUSR)
+        return b, p
 
     def test_fold(self):
         k = {"op": "potrf", "dtype": "float", "uplo": "L", "n": 8, "batch": 128}
@@ -162,16 +260,68 @@ class Runs(unittest.TestCase):
         self.assertFalse(tuning._alive(p.pid))  # the zombie case: os.kill(pid, 0) alone says alive
 
     def test_bad_requests(self):
-        b = Path("/bin/true")
+        b, keys = Path("/bin/true"), Path(self.tmp.name) / "keys.txt"
         for req in ({"ops": [], "dtypes": ["float"], "tier": "coarse", "devices": [0]},
                     {"ops": ["potrf"], "dtypes": ["float"], "tier": "ultra", "devices": [0]},
-                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "coarse", "devices": []}):
+                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "transcribed", "devices": [0]},
+                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "coarse", "devices": []},
+                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "custom", "devices": [0]},
+                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "coarse", "devices": [0],
+                     "remeasure_keys": "trsm float side=L"},
+                    {"ops": ["potrf"], "dtypes": ["float"], "tier": "coarse", "devices": [0], "remeasure_keys": "potrf float"}):
             with self.assertRaises(ValueError):
-                tuning.run_argv(b, req, Path("/l"))
+                tuning.run_argv(b, req, Path("/l"), keys)
         argv = tuning.run_argv(b, {"ops": ["potrf", "nope"], "dtypes": ["float"], "tier": "deep", "devices": [2, 0],
-                                   "max_dim": 2048}, Path("/l"))
-        self.assertEqual(argv[1:8], ["potrf", "--tier", "deep", "--dtype", "float", "--devices", "0,2"])
+                                   "max_dim": 2048, "allow_dirty": True}, Path("/l"), keys)
+        self.assertEqual(argv[1:6], ["potrf", "--tier", "deep", "--dtype", "float"])
+        self.assertEqual(argv[argv.index("--devices") + 1], "0,2")
         self.assertIn("--max-dim", argv)
+        self.assertIn("--allow-dirty", argv)
+        self.assertNotIn("--remeasure-keys", argv)
+        argv = tuning.run_argv(b, {"ops": ["potrf"], "dtypes": ["float"], "tier": "custom", "devices": [],
+                                   "device_key": "sm_120", "remeasure_keys": "potrf float uplo=L,n=8,batch=128\n"},
+                               Path("/l"), keys, plan=True)
+        self.assertEqual(argv[argv.index("--device-key") + 1], "sm_120")
+        self.assertNotIn("--devices", argv)
+        self.assertEqual(argv[argv.index("--remeasure-keys") + 1], str(keys))
+        self.assertEqual(keys.read_text(), "potrf float uplo=L,n=8,batch=128\n")
+
+    def test_find_tuner_says_why(self):
+        self.assertIn("no build tree", tuning.find_tuner([])[1])
+        self.assertIn("no build has", tuning.find_tuner([Path(self.tmp.name)])[1])
+        b, p = self.fake_build("#!/bin/sh\necho 'usage: batchlas_tune <op> --devices N --raw DIR'\n")
+        binary, why = tuning.find_tuner([b])
+        self.assertIsNone(binary)
+        self.assertIn("predates the current tuner", why)
+        p.write_text(FAKE_TUNER)
+        self.assertEqual(tuning.find_tuner([b]), (p, None))
+
+    def test_plan_runs_the_tuner_with_plan_flags(self):
+        _, p = self.fake_build(FAKE_TUNER)
+        req = {"ops": ["potrf"], "dtypes": ["float"], "tier": "custom", "devices": [], "device_key": "sm_120",
+               "remeasure_keys": "potrf float uplo=L,n=8,batch=128"}
+        got = tuning.plan(p, req, Path("/l"))
+        self.assertEqual((got["total"]["cells"], got["jobs"][0]["measure"]), (3, 3))
+        argv = (p.parent / "argv").read_text().split()
+        self.assertEqual(argv[:3], ["potrf", "--tier", "custom"])
+        for flag in ("--plan", "--device-key", "--remeasure-keys", "--progress-fd", "--ledger", "--repo"):
+            self.assertIn(flag, argv)
+
+    def test_launch_writes_the_keys_into_the_run(self):
+        _, p = self.fake_build(FAKE_TUNER)
+        req = {"ops": ["potrf"], "dtypes": ["float"], "tier": "custom", "devices": [0],
+               "remeasure_keys": "potrf float uplo=L,n=8,batch=128"}
+        name = tuning.launch(Path(self.tmp.name), p, req, Path("/l"), "k")
+        d = tuning.runs_dir(Path(self.tmp.name)) / name
+        for _ in range(50):
+            if (d / "exit").exists():
+                break
+            time.sleep(0.1)
+        self.assertEqual((d / "remeasure-keys.txt").read_text(), "potrf float uplo=L,n=8,batch=128\n")
+        self.assertEqual(tuning.run_state(Path(self.tmp.name), name)["state"], "finished")
+        with self.assertRaises(ValueError):
+            tuning.launch(Path(self.tmp.name), p, dict(req, remeasure_keys=""), Path("/l"), "bad")
+        self.assertFalse((tuning.runs_dir(Path(self.tmp.name)) / "bad").exists())
 
 
 if __name__ == "__main__":
