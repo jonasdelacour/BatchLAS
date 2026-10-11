@@ -1,5 +1,5 @@
 // geqrf (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-geqrf):
-// select::run takes the first entry of the nearest tuned/geqrf.<dtype>.<device>.txt row that can_run()
+// select::run takes the first entry of the nearest tuned/geqrf.<device>.txt row that can_run()
 // (can_run.hh) admits. Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local
 // memory, and Blocked factors nb-wide panels with Cta's device function and updates the trailing matrix
 // with the public gemm, which picks its own kernel.

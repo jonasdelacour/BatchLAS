@@ -41,7 +41,7 @@ distinct: `BATCHLAS_KERNEL_TRACE_PATH` falls through to `BATCHLAS_TRACE_PATH` on
 | Variable | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `BATCHLAS_<OP>_ROUTE` | `auto`, `native`, `vendor`, or a choice spelling (`lpanel:panel=8`) | `auto` | Pins the route of one op. See [route pins](#environment-route-pins-are-raw-strings). |
-| `BATCHLAS_TUNED_DIR` | directory | built-in tables | Replaces the table of the same name (`gemm.float.sm_89.txt`). Other files are skipped with a warning. |
+| `BATCHLAS_TUNED_DIR` | directory | built-in tables | Replaces the table file of the same name (`gemm.sm_89.txt`, every dtype in it). Other names are skipped with a warning. |
 | `BATCHLAS_EXPAND_ROUTE` | `expand`, `loop` | unset | Chooses expansion or the per-item loop for hemm/herk/her2k. |
 | `BATCHLAS_GEMV_SEGT` | `off`, `auto`, `2`, `4`, `8` | unset | Re-read; must not be latched. |
 | `BATCHLAS_GESVD_BIDIAG` | `bdsdc`, `normal`, `bdsqr` | unset | Bidiagonal solver. Changes numerics; see [knobs that override an argument](#environment-knobs-that-override-an-explicit-argument). |

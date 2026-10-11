@@ -1,5 +1,5 @@
 // ormqr (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
-// tuned/ormqr.<dtype>.<device>.txt row that can_run() admits. Blocked is the WY apply (larft + level-3
+// tuned/ormqr.<device>.txt row that can_run() admits. Blocked is the WY apply (larft + level-3
 // updates) in ormqr_blocked.cc; Vendor is cuSOLVER / rocSOLVER / LAPACKE ormqr.
 
 #include <batchlas/backend_config.h>

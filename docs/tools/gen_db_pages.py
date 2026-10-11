@@ -12,7 +12,7 @@ Three pages are derived from the tree on every docs build, so they cannot drift:
                         depends on it.
   selection_tables.md   every op under src/ops/: its kernel families (from
                         choice.hh), table keys and tuner grid, and for each
-                        tuned/<op>.<dtype>.<device>.txt table its provenance
+                        tuned/<op>.<device>.txt table its provenance
                         and which family ranks first over which n range.
 
 Usage:
@@ -232,8 +232,8 @@ def parse_choice(path):
 
 
 def parse_table(path):
-    """Header fields, row count, timed flag and first-ranked family per row of one tuned table."""
-    header, rows = {}, []
+    """Header fields and, per dtype, (first-ranked family, n, tier) per row of one tuned/<op>.<device>.txt."""
+    header, rows = {}, {}
     for line in open(path, encoding="utf-8", errors="replace"):
         line = line.strip()
         if not line:
@@ -242,24 +242,24 @@ def parse_table(path):
             for tok in re.findall(r"(\w+)=(\S+)", line):
                 header.setdefault(tok[0], tok[1])
             continue
-        key, _, ranked = line.partition("|")
+        body, _, tier = line.partition("#")
+        key, _, ranked = body.partition("|")
         entries = [e.strip() for e in ranked.split("|") if e.strip()]
-        if not entries:
+        dtype = re.search(r"(?:^|\s)dtype=(\S+)", key)
+        if not entries or not dtype:
             continue
-        first = entries[0].split()[0]
-        timed = len(entries[0].split()) > 1 and entries[0].split()[1] != "-"
         n = re.search(r"(?:^|\s)n=(\d+)", key)
-        rows.append((first, int(n.group(1)) if n else None, timed))
+        rows.setdefault(dtype.group(1), []).append((entries[0].split()[0], int(n.group(1)) if n else None,
+                                                    tier.strip() or "?"))
     return header, rows
 
 
-def provenance(header, rows):
-    src = header.get("source", "")
-    if src.startswith("tuner:"):
-        return "measured"
-    if src.startswith("transcribed:") or (rows and not any(t for _, _, t in rows)):
-        return "transcribed"
-    return "converted" if rows else "empty"
+def provenance(rows):
+    """'deep 812, transcribed 4': the rows per ledger tier, most first."""
+    count = {}
+    for _, _, tier in rows:
+        count[tier] = count.get(tier, 0) + 1
+    return ", ".join("%s %d" % (t, count[t]) for t in sorted(count, key=lambda t: -count[t])) or "empty"
 
 
 def winners(rows):
@@ -295,8 +295,8 @@ def selection_page(root):
     tuned = os.path.join(root, TUNED_DIR)
     for name in sorted(os.listdir(tuned)) if os.path.isdir(tuned) else []:
         parts = name.split(".")
-        if len(parts) == 4 and parts[3] == "txt":
-            tables.setdefault(parts[0], []).append((parts[1], parts[2], os.path.join(tuned, name)))
+        if len(parts) == 3 and parts[2] == "txt":
+            tables.setdefault(parts[0], []).append((parts[1], os.path.join(tuned, name)))
     out = [
         "# Kernel selection tables {#selection_tables}",
         "",
@@ -304,15 +304,16 @@ def selection_page(root):
         "",
         "Every op routes through flat kernel selection: `src/ops/<op>/choice.hh` declares the",
         "kernel *families* the op can run (and the knobs each one takes), the table keys a call",
-        "is matched on, and the tuner's grid; `tuned/<op>.<dtype>.<device>.txt` ranks the families",
+        "is matched on, and the tuner's grid; `tuned/<op>.<device>.txt` ranks the families",
         "per measured shape and `select::choose` takes the first runnable entry of the nearest",
         "row. The design is @ref design_flat_selection; the measurements behind",
         "each op's families are on its evidence page.",
         "",
-        "**Provenance** of a table: *measured* (timed by `tools/tune`), *converted* (from timed",
-        "forced-route sweeps in `benchmarks/results/routing/`) or *transcribed* (the pre-selection",
-        "router's preference order, untimed). **Ranked first** counts the rows whose first-ranked",
-        "family is each family, with the n range those rows cover where the table has an `n` key.",
+        "Each table is generated from its ledger (@ref design_tuning_data). **Rows** counts the rows",
+        "per ledger tier: *deep*, *coarse*, *preview*, *custom* (timed by `tools/tune`), *converted*",
+        "(timed forced-route sweeps on old kernels) or *transcribed* (the pre-selection router's",
+        "preference order, untimed). **Ranked first** counts the rows whose first-ranked family is",
+        "each family, with the n range those rows cover where the table has an `n` key.",
         "",
         "%d ops, %d tables." % (len(ops), sum(len(v) for v in tables.values())),
         "",
@@ -338,12 +339,15 @@ def selection_page(root):
         out.append("")
         rows = tables.get(op, [])
         if rows:
-            out += ["| dtype | device | provenance | date | rows | ranked first |",
-                    "|-------|--------|------------|------|------|--------------|"]
-            for dtype, dev, path in sorted(rows, key=lambda r: (r[1], r[0])):
-                header, trows = parse_table(path)
-                out.append("| %s | %s | %s | %s | %d | %s |" % (
-                    dtype, dev, provenance(header, trows), header.get("date", "—"), len(trows), winners(trows) or "—"))
+            out += ["| dtype | device | rows | date | ranked first |",
+                    "|-------|--------|------|------|--------------|"]
+            order = ("float", "double", "cfloat", "cdouble")
+            for dev, path in sorted(rows):
+                header, by_dtype = parse_table(path)
+                for dtype in sorted(by_dtype, key=lambda d: order.index(d) if d in order else len(order)):
+                    trows = by_dtype[dtype]
+                    out.append("| %s | %s | %s | %s | %s |" % (
+                        dtype, dev, provenance(trows), header.get("date", "—"), winners(trows) or "—"))
             out.append("")
         else:
             out += ["No tuned tables for this op.", ""]
@@ -386,10 +390,11 @@ def self_test():
                      'inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};\n'
                      'inline constexpr std::array<int, 3> grid_n{1, 2, 4};\n')
         os.makedirs(os.path.join(root, TUNED_DIR))
-        with open(os.path.join(root, TUNED_DIR, "potrf.float.sm_89.txt"), "w") as fh:
-            fh.write("# op=potrf dtype=float device=sm_89 date=2026-10-04\n# source=benchmarks/x.jsonl\n"
-                     "n=1 batch=8 | tiny 0.01 | lpanel:8 0.2\nn=4 batch=8 | tiny 0.01 | lpanel:8 0.2\n"
-                     "n=64 batch=8 | lpanel:8 0.1 | tiny 0.3\n")
+        with open(os.path.join(root, TUNED_DIR, "potrf.sm_89.txt"), "w") as fh:
+            fh.write("# op=potrf device=sm_89 date=2026-10-04\n# source=ledger:x.jsonl\n"
+                     "dtype=float n=1 batch=8 | tiny 0.01 | lpanel:8 0.2 # converted\n"
+                     "dtype=float n=4 batch=8 | tiny 0.01 | lpanel:8 0.2 # converted\n"
+                     "dtype=float n=64 batch=8 | lpanel:8 0.1 | tiny 0.3 # deep\n")
         pages = write(os.path.join(root, "out"), root)
         res, ev = pages["results_database.md"], pages["evidence_index.md"]
         sel = pages["selection_tables.md"]
@@ -404,7 +409,7 @@ def self_test():
             ("selection family", "| `tiny` | — | registers |" in sel),
             ("selection knobs", "| `lpanel` | `panel` |" in sel),
             ("selection keys", "Table keys: `n:log:3`, `batch:log`." in sel),
-            ("selection table row", "| float | sm_89 | converted | 2026-10-04 | 3 | `tiny` 2 (n 1..4), `lpanel:8` 1 (n 64..64) |" in sel),
+            ("selection table row", "| float | sm_89 | converted 2, deep 1 | 2026-10-04 | `tiny` 2 (n 1..4), `lpanel:8` 1 (n 64..64) |" in sel),
         ]
         bad = [name for name, ok in checks if not ok]
         if bad:

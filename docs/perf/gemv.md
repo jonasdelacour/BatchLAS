@@ -15,7 +15,7 @@ tables, which use `body3_ms / body5_ms`.
 ### The families and their `can_run` terms
 
 `gemv` decides in `src/ops/gemv/gemv.cc` by flat selection (@ref design_flat_selection).
-`select::run` takes the first entry of the nearest row of `tuned/gemv.<dtype>.<device>.txt` that
+`select::run` takes the first entry of the nearest row of `tuned/gemv.<device>.txt` that
 `can_run` admits. The last resort is `vendor`, then `direct` (`src/ops/gemv/choice.hh:30`). The
 tables are transcribed, not timed (`source=transcribed:424a45bc`, `tuned/README.md`).
 

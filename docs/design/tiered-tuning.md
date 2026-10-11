@@ -94,27 +94,29 @@ Across cells:
 
 ## Engine: the ledger and table generation
 
-**Ledger.** One directory per (op, dtype, device): `benchmarks/results/tuning/ledger/<op>.<dtype>.<device>/`,
-with one `<run id>.jsonl` per run (Git LFS). A run writes only its own file and readers take the
-union. Appending to one shared LFS file would conflict between boxes.
+**Ledger.** One file per (op, device): `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` (Git
+LFS), every line tagged with its dtype, appended under `flock` by every dtype job and process. The
+layout, the line kinds and the dirty-run rule are in @ref design_tuning_data; it replaced one
+directory per (op, dtype, device) with one file per run on 2026-10-11.
 
 | Record | Fields |
 | --- | --- |
-| `run` | run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date |
+| `run` | dtype, run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date, keys, candidates |
 | `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set |
 | `audit` | run id, cell key, persistent and fresh-process medians and winners, verdict |
 
 A truncated last line (a killed run) is ignored with a warning, so a cell is either fully recorded
 or absent. Results merge by device key (sm_89, sm_120); the host is recorded.
 
-**Hashes.** A spec's `kernel-sources` block maps each family to its files, plus a common set
+**Hashes.** Kernel hash v2, which ignores comments and whitespace
+([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A spec's `kernel-sources` block maps each family to its files, plus a common set
 (dispatch, `src/select/`) that every family depends on. Each spec lists its `src/ops/<op>/<op>.cc`,
 where `can_run` lives, so an edit to what can run stales every cell. `kernel-deps` adds files
 outside the source list (`// family: <name> "path" ...` or `// common "path" ...`). The posv
 coupling is explicit: posv's families list the potrf and trsm families they call.
 
-**Which record counts.** Precedence is deep > coarse > preview > custom > transcribed. A `cell`
-record is:
+**Which record counts.** Precedence is deep > coarse > preview > custom > converted > transcribed.
+converted and transcribed records carry no hash and are always current. A `cell` record is:
 
 - **Current** when every candidate's hash matches the source tree. A candidate stored as `skipped`
   is not compared, because a change to what can run goes through the hashed `<op>.cc`. A candidate
@@ -130,23 +132,22 @@ A record in which every candidate is `error` counts as no record. `best_records`
 `sweep_to_table.py`) applies this one rule, so planning, refinement, `--status` and table generation
 agree.
 
-**Table generation.** `scripts/sweep_to_table.py --ledger <file>` replaces `--tuner`. Output is
-byte-reproducible, and `--check` re-derives every table. It refuses to overwrite a timed table that
-is not from a ledger unless `--replace-timed` is given.
+**Table generation.** `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt` from the ledger
+alone. Output is byte-reproducible, and `--check` (run by CI) re-derives every table with the
+hashes in its header.
 
 - Each cell takes its best current record.
 - A lower-tier row is emitted only to fill a gap: no higher-tier row may lie within the lower tier's
   lattice spacing under `select::choose`'s distance. A coarse point never sits inside a region a deep
   run resolved.
-- Transcribed rows survive only where nothing measured covers them.
+- Converted and transcribed rows survive only where nothing measured covers them.
 - The header reports the tier mix and per-family hashes:
-  `source=ledger:<dir> tiers=deep:812,coarse:120,preview:0,transcribed:0 family_kernels=<family>:<hash>,...`.
-  The op-level `kernels=` hash is unchanged.
+  `source=ledger:<file> tiers=deep:812,coarse:120,preview:0,custom:0,converted:0,transcribed:0`,
+  `family_kernels=<family>:<hash>,...`, and the op-level `kernels=` hash.
 - Each row ends in a tier comment (`# deep`), which both parsers already strip.
 
-**Import.** `batchlas_tune --import-raw` turns `trsm.{float,double}.sm_120.jsonl` (schema 1) into
-deep runs. Their hashes are `legacy:c923160f`, so they are stale until a diagnostic
-`--assume-current` judges them by stored hashes.
+**Import.** `batchlas_tune --import-raw` turns a schema-1 raw sweep into a deep run. Its hashes are
+`legacy:<kernels>` unless the raw file's op hash equals today's, so an old sweep imports stale.
 
 ## Engine: persistent workers and the carve-out audit
 
@@ -335,12 +336,12 @@ interface above:
 
 | Interface above | As built | Why |
 | --- | --- | --- |
-| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (best record, staleness, `ledger_rows`, `nearest`) | the views show exactly what `--ledger` would write next, need no build, and all 70 sm_120 ledgers load in about 2 s |
+| reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (best record, staleness, `ledger_rows`, `nearest`) | the views show exactly what `sweep_to_table.py` would write next, need no build, and all 70 sm_120 ledgers load in about 2 s |
 | `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`) | the tuner already guards every GPU it uses; a run is not a campaign |
 | figure style | interactive SVG | the map is clicked, not printed |
 
 The diff's two picks are the same section 5.4 lookup: in the shipped table, and in the rows
-`sweep_to_table.py --ledger` would write now. Each takes the first entry the cell's record did not
+`sweep_to_table.py` would write now. Each takes the first entry the cell's record did not
 refuse (`skipped`, that is `can_run` false). The predicted speedup is the ratio of the two picks'
 medians in that one record. A race calls candidates within 3% a tie and keeps the earlier one, so
 a changed pick can read as low as 0.971×. Against main's tables (2026-10-09), gemm double

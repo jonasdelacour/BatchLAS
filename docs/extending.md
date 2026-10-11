@@ -74,11 +74,12 @@ Every step is required; each has a check that fails if skipped.
      calls the same validator, then `select::pick<B, T>` with the same key and `can_run`, then
      `workspace` (rule R5: sizing and running make the same choice). Validate only what no family
      could serve ([positional validators](design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve)).
-3. **Tables, `tuned/<op>.<dtype>.<%device>.txt`**: one per dtype on every device the tree ships
-   tables for. `tuned_tables_tests` holds that inventory, parses every table, checks spellings
-   against `candidates<T>()` and header keys against `key_names` (register the op in its
-   `candidates(op, dtype)` map). Produce tables with the tuner, or `scripts/sweep_to_table.py`
-   (`--tuner`, or `--transcribe` for an untimed ranking); never by hand (@ref tuned_tables_readme).
+3. **Tables, `tuned/<op>.<device>.txt`**: one per device the tree ships tables for, dtype the first
+   key. `tuned_tables_tests` holds that inventory, parses every table, checks spellings against
+   `candidates<T>()` and header keys against `dtype:exact` plus `key_names` (register the op in its
+   `candidates(op, dtype)` and `key_spec(op)` maps). Produce tables by tuning into the ledger
+   (`batchlas_tune <op> --tier ...`) and `scripts/sweep_to_table.py`; never by hand
+   (@ref tuned_tables_readme, @ref design_tuning_data).
    A device without a table borrows another's and warns once.
 4. **Tuner spec, `tools/tune/<op>_spec.cc`**: implements `tools/tune/spec.hh` (problem builder, host
    verification, grid from `choice.hh`, kernel-source list between the `kernel-sources-begin`/`-end`
