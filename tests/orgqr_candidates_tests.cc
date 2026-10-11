@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/orgqr_native.hh"
 #include "../src/ops/orgqr/choice.hh"
@@ -52,22 +53,12 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MVof<T>::make(-999, 777);
 }
 
 // One factored A at ld = m + 3 and stride = ld * n + 5 inside a buffer of large finite poison,
@@ -97,7 +88,7 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = MVof<T>::make(u(gen), u(gen));
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
@@ -119,45 +110,22 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     return p;
 }
 
-template <typename T>
-double tol(int m) {
-    return 64.0 * std::max(m, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-// ||Q^H Q - I||_max and ||Q R - A0||_max / ||A0||_max for one item, in double (R = triu(F)).
-template <typename T>
-std::pair<double, double> q_errors(const Prob<T>& p, int it) {
-    const int m = p.m, n = p.n;
-    double orth = 0, rec = 0, an = 0;
-    for (int a = 0; a < n; ++a)
-        for (int b = 0; b < n; ++b) {
-            std::complex<double> s = 0;
-            for (int i = 0; i < m; ++i) s += std::conj(up(p.mem[p.at(it, i, a)])) * up(p.mem[p.at(it, i, b)]);
-            orth = std::max(orth, std::abs(s - (a == b ? 1.0 : 0.0)));
-        }
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < m; ++i) {
-            std::complex<double> s = 0;
-            for (int l = 0; l <= j; ++l) s += up(p.mem[p.at(it, i, l)]) * up(p.f[p.at(it, l, j)]);
-            rec = std::max(rec, std::abs(s - up(p.a0[p.at(it, i, j)])));
-            an = std::max(an, std::abs(up(p.a0[p.at(it, i, j)])));
-        }
-    return {orth, rec / std::max(an, 1e-300)};
-}
-
 // Q's checked items, every element outside A's footprint and all of tau bit for bit, and for a
 // repeating batch every item bit-identical to its representative.
 template <typename T>
-void expect_q(const Prob<T>& p, const std::string& what) {
+void expect_q(Queue& ctx, const Prob<T>& p, const std::string& what) {
     std::vector<int> items;
     if (p.period > 0) for (int it = 0; it < std::min(p.period, p.batch); ++it) items.push_back(it);
     else if (p.batch <= 4) for (int it = 0; it < p.batch; ++it) items.push_back(it);
     else items = {0, 1, p.batch / 2, p.batch - 1};
-    for (int it : items) {
-        const auto [orth, rec] = q_errors(p, it);
-        ASSERT_TRUE(std::isfinite(orth) && orth <= tol<T>(p.m)) << what << " item " << it << " |Q^H Q - I| " << orth;
-        ASSERT_TRUE(std::isfinite(rec) && rec <= tol<T>(p.m)) << what << " item " << it << " |QR - A| " << rec;
-    }
+    // ||Q^H Q - I||_F and ||A0 - Q triu(F)||_F / ||A0||_F over the checked items.
+    const MVof<T> Q(p.mem.data(), p.m, p.n, p.ld, p.stride, p.batch);
+    const MVof<T> F(const_cast<T*>(p.f.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    const double orth = MVof<T>::orthogonality(ctx, Q, items);
+    const double rec = MVof<T>::qr_reconstruction(ctx, A0, Q, F, items);
+    ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::orthogonality, p.m, orth)) << what << " |Q^H Q - I| " << orth;
+    ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::factorization, p.m, rec)) << what << " |QR - A| " << rec;
     std::vector<char> in(p.mem.size(), 0);
     for (int it = 0; it < p.batch; ++it)
         for (int j = 0; j < p.n; ++j)
@@ -338,7 +306,7 @@ TYPED_TEST(OrgqrCandidates, PinnedCandidatesStraddleTheirLimits) {
             }
             if (n > m || n < 1 || batch < 1) continue;  // the vendor's own business, untested here
             ASSERT_NO_THROW(this->run_pinned(c, p)) << what;
-            expect_q(p, what);
+            expect_q(*this->ctx, p, what);
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -358,7 +326,7 @@ TYPED_TEST(OrgqrCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             ASSERT_TRUE(this->direct(c, b.A(), b.tau.to_span(), &why)) << name(c, m, n, 3) << ": " << why;
             for (std::size_t e = 0; e < a.mem.size(); ++e)
                 ASSERT_TRUE(same_bits(a.mem[e], b.mem[e])) << name(c, m, n, 3) << ": differs at element " << e;
-            expect_q(a, name(c, m, n, 3));
+            expect_q(*this->ctx, a, name(c, m, n, 3));
         }
 }
 
@@ -371,7 +339,7 @@ TYPED_TEST(OrgqrCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         const std::string what = (c ? select::to_string(*c) : std::string("auto")) + " " + label(48, 32, 1024);
         if (c) this->run_pinned(*c, p);
         else EXPECT_EQ(this->auto_choice(p), "blocked") << what;
-        expect_q(p, what);
+        expect_q(*this->ctx, p, what);
     }
 }
 
@@ -430,7 +398,7 @@ TYPED_TEST(OrgqrCandidates, ExactWorkspaceInAPoisonedArena) {
                 << what;
             for (std::size_t i = 0; i < kGuard; ++i)
                 ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u) << what << ": wrote " << i << " bytes past";
-            expect_q(p, what);
+            expect_q(*this->ctx, p, what);
         }
 }
 
@@ -539,7 +507,7 @@ TYPED_TEST(OrgqrCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor" && !v;
             EXPECT_EQ(err.find("orgqr pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_q(p, what);
+            expect_q(*this->ctx, p, what);
         }
 }
 
@@ -557,7 +525,7 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
                       this->run(p);
                   }),
                   "vendor");
-        expect_q(p, "vendor over env blocked");
+        expect_q(*this->ctx, p, "vendor over env blocked");
         const Pin outer("orgqr", C{oq::Vendor{}});
         {
             const Pin inner("orgqr", C{oq::Blocked{}});
@@ -566,11 +534,11 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
         }
         auto r = this->prob(40, 24, 2, 94u);
         EXPECT_EQ(traced_choice([&] { this->run(r); }), "vendor") << "the inner pin did not restore the outer";
-        expect_q(r, "outer vendor");
+        expect_q(*this->ctx, r, "outer vendor");
     } else {
         const Pin over("orgqr", std::string_view("auto"));
         EXPECT_EQ(traced_choice([&] { this->run(p); }), "blocked");
-        expect_q(p, "auto over env blocked");
+        expect_q(*this->ctx, p, "auto over env blocked");
     }
 }
 
@@ -590,7 +558,7 @@ TYPED_TEST(OrgqrCandidates, AutoReadsTheTranscribedTable) {
         auto p = this->prob(r.m, r.n, r.batch, 41u + r.m);
         const std::string want = old_first(r.m, r.n, TestFixture::kVendor);
         EXPECT_EQ(this->auto_choice(p), want) << label(r.m, r.n, r.batch);
-        expect_q(p, "auto " + label(r.m, r.n, r.batch));
+        expect_q(*this->ctx, p, "auto " + label(r.m, r.n, r.batch));
     }
 }
 
@@ -617,7 +585,7 @@ TYPED_TEST(OrgqrCandidates, AutoReadsEveryKeyField) {
                            Probe{64, 16, "vendor", "n"}}) {
         auto p = this->prob(k.m, k.n, 2, 43u);
         EXPECT_EQ(this->auto_choice(p), k.expect) << "the " << k.field << " row";
-        expect_q(p, std::string("the ") + k.field + " row");
+        expect_q(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -626,7 +594,7 @@ TYPED_TEST(OrgqrCandidates, TraceKeyIsMAndN) {
     auto p = this->prob(37, 12, 5, 47u);
     const std::string line = traced_line([&] { this->run(p); });
     EXPECT_NE(line.find("m=37 n=12 batch=5 ->"), std::string::npos) << line;
-    expect_q(p, line);
+    expect_q(*this->ctx, p, line);
 }
 
 // RouteOrgqr.VendorFreeFallbackHandsOverTheNativeRoute's other half: with a table naming only
@@ -651,7 +619,7 @@ TYPED_TEST(OrgqrCandidates, VendorFreeLastResortIsBlocked) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked") << label(m, n, 1);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_q(p, "vendor-only table, " + label(m, n, 1));
+        expect_q(*this->ctx, p, "vendor-only table, " + label(m, n, 1));
     }
 }
 

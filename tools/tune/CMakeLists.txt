@@ -15,7 +15,7 @@ add_executable(batchlas_tune_impl
     posv_spec.cc
     trsm_spec.cc
     gemm_spec.cc)
-batchlas_configure_binary_target(batchlas_tune_impl)
+batchlas_configure_binary_target(batchlas_tune_impl LIBRARIES batchlas::verify)
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 

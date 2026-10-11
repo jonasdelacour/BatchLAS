@@ -166,7 +166,7 @@ namespace batchlas
                     // Find the maximum absolute value in the matrix
                     for (int j = local_idx; j < rows * cols; j += local_size) {
                         auto col = j / rows;
-                        auto row = j % cols;
+                        auto row = j % rows;
                         temp = std::max(internal::abs(data_span[col * ld + row]), temp);
                     }
                     result = sycl::reduce_over_group(cta, temp, sycl::maximum<float_t<T>>());

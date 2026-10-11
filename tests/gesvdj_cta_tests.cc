@@ -1,11 +1,9 @@
 // Tests for gesvdj_cta, the one-sided Jacobi SVD.
-//
 // Checks are host-side and self-contained rather than shared with
 // gesvd_tests.cc, deliberately: the tolerances there are solver-aware and
 // absolute (and fall back to 5e-2 / 2e-1 / 3e-1 under the normal-equations
 // bidiagonal), too loose to detect a regression in this kernel.
 // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
-//
 // The rectangular, complex and rank-deficient cases are the ones NOT covered by
 // the n=32 square benchmark shape, so they are the reason this file exists.
 
@@ -18,6 +16,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+
+#include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -56,24 +56,6 @@ template <typename T> struct is_cplx_h : std::false_type {};
 template <typename T> struct is_cplx_h<std::complex<T>> : std::true_type {};
 template <typename T> inline constexpr bool is_cplx_v = is_cplx_h<T>::value;
 
-template <typename T>
-inline T conj_h(const T& x) {
-    if constexpr (is_cplx_v<T>) {
-        return std::conj(x);
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
-inline double abs2_h(const T& x) {
-    if constexpr (is_cplx_v<T>) {
-        return static_cast<double>(std::norm(x));
-    } else {
-        return static_cast<double>(x) * static_cast<double>(x);
-    }
-}
-
 template <typename Config>
 class GesvdjCtaTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -108,46 +90,25 @@ protected:
                 for (int i = 0; i < m; ++i) {
                     std::complex<double> acc(0.0, 0.0);
                     for (int t = 0; t < k; ++t) {
-                        const std::complex<double> u = to_cd(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
-                        const std::complex<double> v = to_cd(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
+                        const std::complex<double> u = MatrixView<Scalar, MatrixFormat::Dense>::up(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
+                        const std::complex<double> v = MatrixView<Scalar, MatrixFormat::Dense>::up(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
                         acc += u * static_cast<double>(s[b * k + t]) * v;
                     }
-                    const std::complex<double> a = to_cd(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
+                    const std::complex<double> a = MatrixView<Scalar, MatrixFormat::Dense>::up(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
                     num += std::norm(a - acc);
                     den += std::norm(a);
                 }
             }
-            worst = std::max(worst, den > 0.0 ? std::sqrt(num / den) : std::sqrt(num));
+            worst = batchlas::verify::nanmax(worst, den > 0.0 ? std::sqrt(num / den) : std::sqrt(num));
         }
         return worst;
     }
 
-    // max |M^H M - I| over the leading `cols` columns of an ld x cols block.
-    static double col_orthogonality(int rows, int cols, int batch,
+    // ||M^H M - I||_F over the leading `cols` columns of an ld x cols block, worst over the batch.
+    static double col_orthogonality(Queue& ctx, int rows, int cols, int batch,
                                     const Scalar* M, int64_t stride, int ld) {
-        double worst = 0.0;
-        for (int b = 0; b < batch; ++b) {
-            for (int p = 0; p < cols; ++p) {
-                for (int q = 0; q < cols; ++q) {
-                    std::complex<double> acc(0.0, 0.0);
-                    for (int t = 0; t < rows; ++t) {
-                        acc += std::conj(to_cd(M[b * stride + static_cast<size_t>(p) * ld + t]))
-                             * to_cd(M[b * stride + static_cast<size_t>(q) * ld + t]);
-                    }
-                    const double target = (p == q) ? 1.0 : 0.0;
-                    worst = std::max(worst, std::abs(acc - target));
-                }
-            }
-        }
-        return worst;
-    }
-
-    static std::complex<double> to_cd(const Scalar& x) {
-        if constexpr (is_cplx_v<Scalar>) {
-            return std::complex<double>(static_cast<double>(x.real()), static_cast<double>(x.imag()));
-        } else {
-            return std::complex<double>(static_cast<double>(x), 0.0);
-        }
+        const MatrixView<Scalar, MatrixFormat::Dense> V(const_cast<Scalar*>(M), rows, cols, ld, static_cast<int>(stride), batch);
+        return MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, V, V.all_items());
     }
 
     // Runs gesvdj_cta on a caller-provided A and validates the factorisation.
@@ -191,9 +152,8 @@ protected:
                   static_cast<double>(recon_tol()))
             << "reconstruction m=" << m << " n=" << n;
 
-        EXPECT_LE(col_orthogonality(m, m, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld())),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(ctx, m, m, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld())))
             << "U orthogonality m=" << m << " n=" << n;
 
         // Vh's ROWS are the right singular vectors, so check Vh^H's columns by
@@ -203,17 +163,15 @@ protected:
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * n + static_cast<size_t>(j) * n + i] =
-                        conj_h(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        MatrixView<Scalar, MatrixFormat::Dense>::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
-        EXPECT_LE(col_orthogonality(n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, col_orthogonality(ctx, n, n, batch, vht.data(), static_cast<int64_t>(n) * n, n))
             << "V orthogonality m=" << m << " n=" << n;
     }
 
     // Same validation as check(), but with U as m x k and Vh as k x n.
-    //
     // Worth stating what this can and cannot catch on its own: for m >= n a
     // thin V^H IS a full V^H, and for m <= n a thin U IS a full U, so exactly
     // one side is genuinely narrower in each shape. The tall and wide cases
@@ -262,9 +220,8 @@ protected:
                   static_cast<double>(recon_tol()))
             << "thin reconstruction m=" << m << " n=" << n;
 
-        EXPECT_LE(col_orthogonality(m, k, batch, U.view().data_ptr(), U.view().stride(),
-                                    static_cast<int>(U.view().ld())),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, m, k, batch, U.view().data_ptr(), U.view().stride(),
+                                    static_cast<int>(U.view().ld())))
             << "thin U orthogonality m=" << m << " n=" << n;
 
         // Vh is k x n; its k ROWS must be orthonormal, so build Vh^H (n x k)
@@ -274,12 +231,11 @@ protected:
             for (int j = 0; j < k; ++j) {
                 for (int i = 0; i < n; ++i) {
                     vht[static_cast<size_t>(b) * n * k + static_cast<size_t>(j) * n + i] =
-                        conj_h(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
+                        MatrixView<Scalar, MatrixFormat::Dense>::conj(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(i) * Vh.view().ld() + j]);
                 }
             }
         }
-        EXPECT_LE(col_orthogonality(n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n),
-                  static_cast<double>(ortho_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, n, k, batch, vht.data(), static_cast<int64_t>(n) * k, n))
             << "thin V orthogonality m=" << m << " n=" << n;
     }
 
@@ -306,7 +262,6 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // The 33..64 band.
 //
 // Above 32 the kernel keeps P = 32 lanes and grows the tile capacity C to 64,
@@ -320,7 +275,6 @@ TYPED_TEST(GesvdjCtaTest, SquareRandom) {
 // Sizes that are not multiples of 32 matter most here: they exercise the
 // padding in the second row-slot, where an off-by-one in `row < RR` silently
 // mixes a pad row into a dot product.
-// ---------------------------------------------------------------------------
 
 TYPED_TEST(GesvdjCtaTest, SquareAboveThirtyTwo) {
     if (TestFixture::max_dim_with_vectors() < 64) {
@@ -617,9 +571,9 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
             // phase of a singular vector is not determined.
             std::complex<double> acc(0.0, 0.0);
             for (int i = 0; i < m; ++i) {
-                acc += std::conj(TestFixture::to_cd(
+                acc += std::conj(MatrixView<Scalar, MatrixFormat::Dense>::up(
                            U_thin.view().data_ptr()[b * U_thin.view().stride() + static_cast<size_t>(c) * U_thin.view().ld() + i]))
-                     * TestFixture::to_cd(
+                     * MatrixView<Scalar, MatrixFormat::Dense>::up(
                            U_all.view().data_ptr()[b * U_all.view().stride() + static_cast<size_t>(c) * U_all.view().ld() + i]);
             }
             EXPECT_NEAR(std::abs(acc), 1.0, 1e-3) << "U column " << c << " differs at b=" << b;

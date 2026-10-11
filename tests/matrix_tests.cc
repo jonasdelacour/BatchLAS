@@ -2,10 +2,15 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/verify/reference.hh>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <vector>
 #include <complex>
 #include <string>
+
+#include "test_utils.hh"
 
 using namespace batchlas;
 
@@ -1316,4 +1321,253 @@ TEST(MatrixDenseTest, AstypePackedBatched) {
             for (int i = 0; i < rows; ++i)
                 EXPECT_FLOAT_EQ(view(i, j, b),
                                 static_cast<float>(raw[b * rows * cols + j * rows + i]));
+}
+
+// ---- fill_random_spd / fill_random_pivoted / fill_graded_hermitian ----
+// Every case runs on a padded layout (ld > n, stride > ld * n) whose padding holds a poison the
+// fills must leave alone, with batch >= 3 so per-item seeding is visible.
+
+template <typename T, Backend B>
+struct FillConfig {
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
+};
+
+using FillTestTypes = typename test_utils::backend_types<FillConfig>::type;
+
+template <typename Config>
+class MatrixFillTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using T = typename Config::ScalarType;
+    using R = batchlas::float_t<T>;
+
+    static T poison() {
+        if constexpr (is_std_complex_v<T>) return T(1234.5, -77.25);
+        else return T(1234.5);
+    }
+
+    static Matrix<T, MatrixFormat::Dense> padded(int n, int batch) {
+        const int ld = n + 3;
+        Matrix<T, MatrixFormat::Dense> m(n, n, batch, ld, ld * n + 7);
+        for (auto& x : m.data()) x = poison();
+        return m;
+    }
+
+    static T at(Matrix<T, MatrixFormat::Dense>& m, int i, int j, int b) {
+        return m.data()[static_cast<std::size_t>(b) * m.stride() + static_cast<std::size_t>(j) * m.ld() + i];
+    }
+
+    static void expect_padding_untouched(Matrix<T, MatrixFormat::Dense>& m) {
+        const int n = m.rows();
+        std::size_t bad = 0;
+        for (std::size_t k = 0; k < m.data().size(); ++k) {
+            const std::size_t off = k % m.stride();
+            const bool inside = off / m.ld() < static_cast<std::size_t>(n) && off % m.ld() < static_cast<std::size_t>(n);
+            if (!inside && !(m.data()[k] == poison())) ++bad;
+        }
+        EXPECT_EQ(bad, 0u) << "padding entries overwritten";
+    }
+
+    static std::vector<T> active(Matrix<T, MatrixFormat::Dense>& m) {
+        std::vector<T> out;
+        for (int b = 0; b < m.batch_size(); ++b)
+            for (int j = 0; j < m.cols(); ++j)
+                for (int i = 0; i < m.rows(); ++i) out.push_back(at(m, i, j, b));
+        return out;
+    }
+
+    static bool items_equal(Matrix<T, MatrixFormat::Dense>& m, int b0, int b1) {
+        for (int j = 0; j < m.cols(); ++j)
+            for (int i = 0; i < m.rows(); ++i)
+                if (!(at(m, i, j, b0) == at(m, i, j, b1))) return false;
+        return true;
+    }
+
+    static void expect_items_differ(Matrix<T, MatrixFormat::Dense>& m) {
+        for (int b = 1; b < m.batch_size(); ++b) EXPECT_FALSE(items_equal(m, 0, b)) << "item " << b << " equals item 0";
+    }
+
+    static void expect_exactly_hermitian(Matrix<T, MatrixFormat::Dense>& m) {
+        const int n = m.rows();
+        std::size_t asym = 0, nonreal = 0, nonfinite = 0;
+        for (int b = 0; b < m.batch_size(); ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    const T x = at(m, i, j, b);
+                    if (!std::isfinite(std::real(x)) || !std::isfinite(std::imag(x))) ++nonfinite;
+                    if (i == j && std::imag(x) != R(0)) ++nonreal;
+                    if (i != j) {
+                        T mirrored = at(m, j, i, b);
+                        if constexpr (is_std_complex_v<T>) mirrored = std::conj(mirrored);
+                        if (!(x == mirrored)) ++asym;
+                    }
+                }
+        EXPECT_EQ(asym, 0u) << "entries with a_ij != conj(a_ji)";
+        EXPECT_EQ(nonreal, 0u) << "diagonal entries with a nonzero imaginary part";
+        EXPECT_EQ(nonfinite, 0u) << "non-finite entries";
+    }
+
+    template <typename Fill>
+    void expect_reproducible(int n, Fill fill) {
+        auto a = padded(n, 3), b = padded(n, 3), c = padded(n, 3);
+        fill(a.view(), 11u).wait();
+        fill(b.view(), 11u).wait();
+        fill(c.view(), 12u).wait();
+        EXPECT_TRUE(active(a) == active(b)) << "the same seed did not reproduce bit-identically";
+        EXPECT_FALSE(active(a) == active(c)) << "a different seed gave the same matrices";
+    }
+};
+
+TYPED_TEST_SUITE(MatrixFillTest, FillTestTypes);
+
+TYPED_TEST(MatrixFillTest, RandomSpdIsHermitianAndStrictlyDiagonallyDominant) {
+    using R = typename TestFixture::R;
+    for (int n : {1, 5, 37}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        auto m = TestFixture::padded(n, 4);
+        m.view().fill_random_spd(*this->ctx, 7u).wait();
+        TestFixture::expect_padding_untouched(m);
+        TestFixture::expect_exactly_hermitian(m);
+        if (n > 1) TestFixture::expect_items_differ(m);
+        for (int b = 0; b < 4; ++b)
+            for (int i = 0; i < n; ++i) {
+                R off = 0;
+                for (int j = 0; j < n; ++j)
+                    if (j != i) off += std::abs(TestFixture::at(m, i, j, b));
+                const R d = std::real(TestFixture::at(m, i, i, b));
+                EXPECT_GT(d, off) << "row " << i << " item " << b << " not strictly dominant";
+                EXPECT_GT(d, R(0));
+            }
+    }
+    this->expect_reproducible(9, [&](auto v, unsigned s) { return v.fill_random_spd(*this->ctx, s); });
+    if constexpr (TestFixture::BackendType != Backend::NETLIB) {
+        auto q = TestFixture::padded(9, 3), d = TestFixture::padded(9, 3);
+        q.view().fill_random_spd(*this->ctx, 5u).wait();
+        d.view().fill_random_spd(5u).wait();
+        EXPECT_TRUE(TestFixture::active(q) == TestFixture::active(d)) << "queue-less twin differs";
+    }
+}
+
+TYPED_TEST(MatrixFillTest, RandomPivotedMovesEveryRowPerItem) {
+    using R = typename TestFixture::R;
+    for (int n : {4, 9, 40}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        constexpr int batch = 5;
+        auto m = TestFixture::padded(n, batch);
+        m.view().fill_random_pivoted(*this->ctx, 3u).wait();
+        TestFixture::expect_padding_untouched(m);
+        TestFixture::expect_items_differ(m);
+        std::vector<std::vector<int>> owner(batch, std::vector<int>(n, -1));
+        for (int b = 0; b < batch; ++b) {
+            std::vector<int> hits(n, 0);
+            for (int c = 0; c < n; ++c)
+                for (int i = 0; i < n; ++i)
+                    if (std::abs(TestFixture::at(m, i, c, b)) >= R(n - 1)) {
+                        owner[b][c] = i;
+                        ++hits[i];
+                    }
+            for (int c = 0; c < n; ++c) {
+                ASSERT_GE(owner[b][c], 0) << "column " << c << " item " << b << " has no dominant entry";
+                // A random n-cycle moves every row, so the identity is impossible, not just unlikely.
+                EXPECT_NE(owner[b][c], c) << "column " << c << " item " << b << " kept its row";
+            }
+            for (int i = 0; i < n; ++i) EXPECT_EQ(hits[i], 1) << "row " << i << " item " << b;
+        }
+        bool any_differs = false;
+        for (int b = 1; b < batch; ++b) any_differs = any_differs || owner[b] != owner[0];
+        EXPECT_TRUE(any_differs) << "every item has the same row permutation";
+    }
+    this->expect_reproducible(9, [&](auto v, unsigned s) { return v.fill_random_pivoted(*this->ctx, s); });
+}
+
+TYPED_TEST(MatrixFillTest, GradedHermitianIsExactlyHermitian) {
+    for (int n : {1, 16, 70}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        auto m = TestFixture::padded(n, 3);
+        m.view().fill_graded_hermitian(*this->ctx, 6.0, 21u).wait();
+        TestFixture::expect_padding_untouched(m);
+        TestFixture::expect_exactly_hermitian(m);
+        // n == 1: lambda = 1, and H M H only rounds it (|v|^2 is 1 to a few ulps).
+        const auto eps = std::numeric_limits<typename TestFixture::R>::epsilon();
+        if (n == 1) EXPECT_LE(std::abs(TestFixture::at(m, 0, 0, 0) - typename TestFixture::T(1)), 8 * eps);
+        else TestFixture::expect_items_differ(m);
+    }
+    this->expect_reproducible(12, [&](auto v, unsigned s) { return v.fill_graded_hermitian(*this->ctx, 3.0, s); });
+}
+
+TYPED_TEST(MatrixFillTest, GradedHermitianHasTheRequestedSpectrum) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<batchlas::float_t<T>, double>) {
+        GTEST_SKIP() << "spectrum checked in double precision only";
+    } else if constexpr (!batchlas::verify::have_reference) {
+        GTEST_SKIP() << "no LAPACKE reference";
+    } else {
+        for (int n : {16, 64})
+            for (double cond : {3.0, 6.0}) {
+                SCOPED_TRACE("n=" + std::to_string(n) + " log10_cond=" + std::to_string(cond));
+                auto m = TestFixture::padded(n, 3);
+                m.view().fill_graded_hermitian(*this->ctx, cond, 5u).wait();
+                for (int b = 0; b < 3; ++b) {
+                    std::vector<T> a;
+                    for (int j = 0; j < n; ++j)
+                        for (int i = 0; i < n; ++i) a.push_back(TestFixture::at(m, i, j, b));
+                    std::vector<double> w;
+                    ASSERT_TRUE(batchlas::verify::eigenvalues(n, a, w));
+                    EXPECT_NEAR(w.back() / w.front(), std::pow(10.0, cond), 0.01 * std::pow(10.0, cond)) << "item " << b;
+                    double worst = 0;
+                    for (int i = 0; i < n; ++i) {
+                        const double lambda = std::pow(10.0, -cond * double(n - 1 - i) / double(n - 1));
+                        worst = std::max(worst, std::abs(w[i] - lambda));
+                    }
+                    // Normwise relative (lambda_max = 1): a small eigenvalue carries the
+                    // reflectors' absolute rounding, ~n eps, not a relative one.
+                    EXPECT_LT(worst, 1e-10) << "item " << b;
+                }
+            }
+    }
+}
+
+TYPED_TEST(MatrixFillTest, GradedHermitianRunsAtN512) {
+    constexpr int n = 512;
+    auto m = TestFixture::padded(n, 2);
+    m.view().fill_graded_hermitian(*this->ctx, 6.0, 4u).wait();
+    TestFixture::expect_padding_untouched(m);
+    TestFixture::expect_exactly_hermitian(m);
+    TestFixture::expect_items_differ(m);
+    if constexpr (std::is_same_v<typename TestFixture::R, double> && batchlas::verify::have_reference) {
+        std::vector<typename TestFixture::T> a;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) a.push_back(TestFixture::at(m, i, j, 1));
+        std::vector<double> w;
+        ASSERT_TRUE(batchlas::verify::eigenvalues(n, a, w));
+        EXPECT_NEAR(w.back() / w.front(), 1e6, 1e4);
+    }
+}
+
+TYPED_TEST(MatrixFillTest, SquareFillsRejectARectangularView) {
+    Matrix<typename TestFixture::T, MatrixFormat::Dense> m(5, 4, 3);
+    EXPECT_THROW((void)m.view().fill_random_spd(*this->ctx), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.view().fill_random_pivoted(*this->ctx), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.view().fill_graded_hermitian(*this->ctx, 3.0), batchlas::invalid_argument);
+}
+
+// Race guard for the two local-memory kernels: a saturating batch must give, item for item,
+// the same bits on a packed layout as on a padded one, and the same bits twice.
+TYPED_TEST(MatrixFillTest, LocalMemoryFillsAreRaceFreeAtASaturatingBatch) {
+    using T = typename TestFixture::T;
+    constexpr int n = 32, batch = 1024;
+    for (int which = 0; which < 2; ++which) {
+        SCOPED_TRACE(which == 0 ? "pivoted" : "graded");
+        auto run = [&](Matrix<T, MatrixFormat::Dense>& m) {
+            if (which == 0) m.view().fill_random_pivoted(*this->ctx, 8u).wait();
+            else m.view().fill_graded_hermitian(*this->ctx, 4.0, 8u).wait();
+        };
+        auto padded = TestFixture::padded(n, batch);
+        Matrix<T, MatrixFormat::Dense> packed(n, n, batch), again(n, n, batch);
+        run(padded);
+        run(packed);
+        run(again);
+        EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(padded)) << "layout changed the values";
+        EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(again)) << "a rerun changed the values";
+    }
 }

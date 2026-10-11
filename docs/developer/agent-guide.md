@@ -314,6 +314,8 @@ passing a wrong answer. Every new or rewritten test needs:
 9. For a capacity guard, a *launch* at the advertised ceiling, not an arithmetic re-derivation.
 10. To verify a revert of an untracked file, use `md5sum` against a pristine copy (`git diff` prints
     nothing).
+11. Verify results with `batchlas::verify` (`EXPECT_VERIFY`; `docs/design/verification.md`). No local
+    residual, reference or tolerance helpers.
 
 ## 9. Architecture: Routing and Dispatch
 

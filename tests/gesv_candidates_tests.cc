@@ -16,6 +16,8 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/verify/tolerance.hh>
+
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
 
@@ -51,16 +53,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -87,7 +79,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     Sys<T> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = mk<T>(R(-999), R(777));
+    const T poison = MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777));
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(batch, nullptr);
@@ -101,11 +93,11 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T v = (i == j) ? mk<T>(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
-                                         : mk<T>(d(gen), d(gen));
+                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
+                                         : MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
-            for (auto& v : b1) v = mk<T>(d(gen), d(gen));
+            for (auto& v : b1) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
         }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) p.a[size_t(it) * p.stra + size_t(j) * p.lda + i] = a1[i + size_t(j) * n];
@@ -117,27 +109,14 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     return p;
 }
 
-// ||A X - B||_F / (||A||_F ||X||_F) in double, against the pristine A.
+// ||A X - B||_F / (||A||_F ||X||_F) against the pristine A, worst over the first and last item.
 template <typename T>
-double residual(const Sys<T>& p, int it) {
-    double num = 0, an = 0, xn = 0;
-    const size_t ao = size_t(it) * p.stra, bo = size_t(it) * p.strb;
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) an += std::norm(up(p.a0[ao + size_t(j) * p.lda + i]));
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const size_t col = bo + size_t(k) * p.ldb;
-            xn += std::norm(up(p.b[col + i]));
-            std::complex<double> acc = -up(p.b0[col + i]);
-            for (int t = 0; t < p.n; ++t) acc += up(p.a0[ao + size_t(t) * p.lda + i]) * up(p.b[col + t]);
-            num += std::norm(acc);
-        }
-    return (an == 0 || xn == 0) ? std::sqrt(num) : std::sqrt(num / (an * xn));
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+double residual(Queue& ctx, const Sys<T>& p) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const int items[] = {0, p.batch - 1};
+    return MV::solve_residual(ctx, MV(const_cast<T*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
+                              MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                              MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
@@ -149,11 +128,11 @@ int32_t piv32(const Sys<T>& p, int it, int i) {
 // info, the residual of the first and last item, a valid nontrivial pivot list, and every
 // padding element of A and B untouched, bit for bit.
 template <typename T>
-void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what) {
+void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what) {
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
+    const double r = residual(ctx, p);
+    EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " items 0 and " << p.batch - 1 << " residual " << r;
     for (int it : {0, p.batch - 1}) {
-        const double r = residual(p, it);
-        EXPECT_TRUE(std::isfinite(r) && r <= tol<T>(p.n)) << what << " item " << it << " residual " << r;
         bool moved = false;
         for (int i = 0; i < p.n; ++i) {
             const int32_t pv = piv32(p, it, i);
@@ -338,7 +317,7 @@ TYPED_TEST(GesvCandidates, PinnedCandidatesStraddleTheirLimits) {
                 }
                 ASSERT_TRUE(this->pin_accepted(c, p.A(), p.B())) << what << " was refused";
                 try {
-                    expect_solved(p, this->run_pinned(c, p), what);
+                    expect_solved(*this->ctx, p, this->run_pinned(c, p), what);
                     ++ran;
                 } catch (const batchlas::NoRouteError& e) {
                     if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
@@ -371,7 +350,7 @@ TYPED_TEST(GesvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             UnifiedVector<int32_t> dinfo(3, int32_t(-7));
             ASSERT_NO_THROW(this->run_direct(c, direct, dinfo.to_span())) << what;
             for (int it = 0; it < 3; ++it) ASSERT_EQ(info[it], dinfo[it]) << what;
-            expect_solved(pinned, info, what);
+            expect_solved(*this->ctx, pinned, info, what);
             for (size_t e = 0; e < pinned.b.size(); ++e)
                 ASSERT_TRUE(same_bits(pinned.b[e], direct.b[e]))
                     << what << ": the pinned facade did not run this family's kernels; X element " << e;
@@ -401,7 +380,7 @@ TYPED_TEST(GesvCandidates, SaturatingBatchIsBitIdentical) {
             if (this->child_may_lack_route()) continue;
             throw;
         }
-        expect_solved(p, info, what);
+        expect_solved(*this->ctx, p, info, what);
         for (int it = 1; it < kBatch; ++it) {
             for (int col = 0; col < k.nrhs; ++col)
                 for (int i = 0; i < k.n; ++i) {
@@ -456,8 +435,8 @@ TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 40 : -1), R(0.25));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = MatrixView<T, MatrixFormat::Dense>::make(R(i == j ? 40 : -1), R(0.25));
+    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -522,7 +501,7 @@ TYPED_TEST(GesvCandidates, ExactWorkspaceInAPoisonedArena) {
                 for (std::size_t i = 0; i < kGuard; ++i)
                     ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                         << what << ": wrote " << i << " bytes past the sized workspace";
-                expect_solved(p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
+                expect_solved(*this->ctx, p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
                                            : std::vector<int32_t>(p.batch, 0),
                               what);
             }
@@ -599,7 +578,7 @@ TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor";
             EXPECT_EQ(err.find("gesv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_solved(p, info, what);
+            expect_solved(*this->ctx, p, info, what);
         }
     }
 }
@@ -622,14 +601,14 @@ TYPED_TEST(GesvCandidates, ScopedPinBeatsTheEnvironment) {
                   info = this->run_auto(p);
               }),
               "blocked");
-    expect_solved(p, info, "blocked over env tiny");
+    expect_solved(*this->ctx, p, info, "blocked over env tiny");
     auto q = make_sys<T>(n, 2, 2, 32u);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("gesv", "auto");
                   info = this->run_auto(q);
               }),
               "blocked");
-    expect_solved(q, info, "auto over env tiny");
+    expect_solved(*this->ctx, q, info, "auto over env tiny");
 
     const int m = 8;
     const Pin outer("gesv", C{gs::Blocked{}});
@@ -667,7 +646,7 @@ TYPED_TEST(GesvCandidates, AutoReadsTheTranscribedTables) {
         const std::string what = "n=" + std::to_string(r.n) + " nrhs=" + std::to_string(r.nrhs);
         try {
             EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
-            expect_solved(p, info, what);
+            expect_solved(*this->ctx, p, info, what);
         } catch (const batchlas::NoRouteError& e) {
             if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
         }
@@ -700,7 +679,7 @@ TYPED_TEST(GesvCandidates, AutoReadsEveryKeyField) {
         auto p = make_sys<T>(k.n, k.nrhs, 128, 43u);
         std::vector<int32_t> info;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, info, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, info, std::string("the ") + k.field + " row");
     }
 }
 
@@ -834,7 +813,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         });
         EXPECT_EQ(got, "blocked");
         for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "item " << it;
-        for (int it : {0, p.batch - 1}) EXPECT_LE(residual(p, it), tol<T>(p.n)) << "item " << it;
+        EXPECT_VERIFY(T, verify::Check::solve, p.n, residual(*q, p)) << "items 0 and " << p.batch - 1;
 #endif
     }
 }

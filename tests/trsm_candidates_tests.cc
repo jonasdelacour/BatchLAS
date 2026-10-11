@@ -3,6 +3,7 @@
 // constants; which kernel ran is read back from the select trace or a bit-for-bit comparison
 // with the direct driver, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
@@ -51,16 +52,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -112,7 +103,7 @@ struct Solve {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MVof<T>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 // Strictly diagonally dominant owned triangle, every entry with a nonzero imaginary part; a
@@ -128,13 +119,13 @@ void fill(Solve<T>& p) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 if (i == j)
-                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? mk<T>(R(300), R(-200))
-                                                                 : mk<T>(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
+                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? MVof<T>::make(R(300), R(-200))
+                                                                 : MVof<T>::make(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
                 else if (p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
+                    p.mem[p.ai(it, i, j)] = MVof<T>::make((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
             }
         for (int j = 0; j < p.b.cols; ++j)
-            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = mk<T>(u(gen), u(gen));
+            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = MVof<T>::make(u(gen), u(gen));
     }
     for (int it = reps; it < s.batch; ++it) {
         const int r = it % reps;
@@ -149,7 +140,7 @@ void fill(Solve<T>& p) {
 
 template <typename T>
 T alpha_of() {
-    return mk<T>(RealOf<T>(1.5), RealOf<T>(-0.5));
+    return MVof<T>::make(RealOf<T>(1.5), RealOf<T>(-0.5));
 }
 
 template <typename T>
@@ -189,55 +180,25 @@ Solve<T> make_panel(const Spec& s, int parent, int j0) {
     return p;
 }
 
-// ||op(A) X - alpha B|| / (||op(A)|| ||X|| + |alpha| ||B||) for one item, in double.
+// ||op(A) X - alpha B|| / (||A|| ||X|| + |alpha| ||B||) for one item through the library: A and B
+// from the pristine copy, X from the result buffer, A's other triangle and a Unit diagonal unread.
 template <typename T>
-double residual(const Solve<T>& p, int it) {
+double residual(Queue& ctx, const Solve<T>& p, std::span<const int> items) {
     const Spec& s = p.s;
-    const int n = s.n, q = s.q;
-    std::vector<std::complex<double>> tri(std::size_t(n) * n, 0.0);
-    double an = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> v = 0.0;
-            if (i == j) v = s.diag == Diag::Unit ? 1.0 : up(p.mem0[p.ai(it, i, j)]);
-            else if (p.owned(i, j)) v = up(p.mem0[p.ai(it, i, j)]);
-            // op(A)(i, j)
-            const int oi = s.trans == Transpose::NoTrans ? i : j, oj = s.trans == Transpose::NoTrans ? j : i;
-            tri[oi + std::size_t(oj) * n] = s.trans == Transpose::ConjTrans ? std::conj(v) : v;
-            an += std::norm(v);
-        }
-    const std::complex<double> al = up(p.alpha);
-    double num = 0, xn = 0, bn = 0;
-    for (int r = 0; r < q; ++r)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> acc = 0.0;
-            if (s.side == Side::Left) {
-                for (int t = 0; t < n; ++t) acc += tri[i + std::size_t(t) * n] * up(p.mem[p.bi(it, t, r)]);
-                acc -= al * up(p.mem0[p.bi(it, i, r)]);
-                xn += std::norm(up(p.mem[p.bi(it, i, r)]));
-                bn += std::norm(up(p.mem0[p.bi(it, i, r)]));
-            } else {
-                for (int t = 0; t < n; ++t) acc += up(p.mem[p.bi(it, r, t)]) * tri[t + std::size_t(i) * n];
-                acc -= al * up(p.mem0[p.bi(it, r, i)]);
-                xn += std::norm(up(p.mem[p.bi(it, r, i)]));
-                bn += std::norm(up(p.mem0[p.bi(it, r, i)]));
-            }
-            num += std::norm(acc);
-        }
-    const double den = std::sqrt(an * xn) + std::abs(al) * std::sqrt(bn);
-    return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    using View = MatrixView<T, MatrixFormat::Dense>;
+    T* m0 = const_cast<T*>(p.mem0.data());
+    T* m = const_cast<T*>(p.mem.data());
+    const View A0(m0 + p.a.off, s.n, s.n, p.a.ld, p.a.stride, s.batch);
+    const View B0(m0 + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    const View X(m + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+    return View::trsm_residual(ctx, A0, s.side, s.uplo, s.trans, s.diag, X, B0, View::up(p.alpha), items);
 }
 
 // Residuals of the checked items (all of them for small batches; the representatives of a
 // repeating batch), every element outside B's footprint bit for bit, and, for a repeating
 // batch, every item's X bit-identical to its representative's.
 template <typename T>
-void expect_solved(const Solve<T>& p, const std::string& what) {
+void expect_solved(Queue& ctx, const Solve<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) {
@@ -247,10 +208,10 @@ void expect_solved(const Solve<T>& p, const std::string& what) {
     } else {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
-    for (int it : items) {
-        const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
-    }
+    const double r = residual(ctx, p, items);
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::solve, s.n, r))
+        << what << " worst residual over " << items.size() << " items " << r << " exceeds "
+        << batchlas::verify::bound<T>(batchlas::verify::Check::solve, s.n);
     std::vector<char> inb(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < p.b.cols; ++j)
@@ -424,7 +385,7 @@ TYPED_TEST(TrsmCandidates, PinnedCandidatesStraddleTheirLimits) {
                     if (TestFixture::vendor_word_falls_back(c)) {
                         const std::string want = this->auto_choice(s);
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                        expect_solved(p, what + " (vendor-free: Auto)");
+                        expect_solved(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     if (!this->expect_runs(c, side, n)) {
@@ -433,7 +394,7 @@ TYPED_TEST(TrsmCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_solved(p, what);
+                    expect_solved(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -456,7 +417,7 @@ TYPED_TEST(TrsmCandidates, EveryCombinationOnEveryCandidate) {
                             s.seed = 77u + n;
                             auto p = make_solve<T>(s);
                             this->run_pinned(c, p);
-                            expect_solved(p, name(c, s));
+                            expect_solved(*this->ctx, p, name(c, s));
                             if (::testing::Test::HasFatalFailure()) return;
                         }
 }
@@ -480,7 +441,7 @@ TYPED_TEST(TrsmCandidates, ParentLdSubViews) {
             s.seed = 300u + k.n;
             auto p = make_panel<T>(s, 8 + k.n + k.q, 8);
             this->run_pinned(c, p);
-            expect_solved(p, name(c, s) + " (parent-ld sub-view)");
+            expect_solved(*this->ctx, p, name(c, s) + " (parent-ld sub-view)");
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -500,7 +461,7 @@ TYPED_TEST(TrsmCandidates, OrthoCallerShapes) {
                     s.seed = 500u + n;
                     auto p = make_solve<T>(s);
                     this->run_pinned(c, p);
-                    expect_solved(p, name(c, s) + " (ortho shape)");
+                    expect_solved(*this->ctx, p, name(c, s) + " (ortho shape)");
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -523,7 +484,7 @@ TYPED_TEST(TrsmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_solved(pinned, what);
+                expect_solved(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's driver; element " << e;
@@ -550,7 +511,7 @@ TYPED_TEST(TrsmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             s.seed = 777u + k.n;
             auto p = make_solve<T>(s);
             this->run_pinned(k.c, p);
-            expect_solved(p, name(k.c, s));
+            expect_solved(*this->ctx, p, name(k.c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
     }
@@ -676,7 +637,7 @@ TYPED_TEST(TrsmCandidates, BlockedServesPastTheCtaCeiling) {
         EXPECT_FALSE(this->pin_accepted(C{ts::Cta{}}, refused)) << n;
         auto p = make_solve<T>(s);
         this->run_pinned(C{ts::Blocked{}}, p);
-        expect_solved(p, name(C{ts::Blocked{}}, s));
+        expect_solved(*this->ctx, p, name(C{ts::Blocked{}}, s));
     }
 }
 
@@ -691,8 +652,8 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = MVof<T>::make(R(i == j ? 4 : (i > j ? 0.1 : 0)), R(0));
+    Bm.fill(MVof<T>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -760,7 +721,7 @@ TYPED_TEST(TrsmCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("trsm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_solved(p, what);
+            expect_solved(*this->ctx, p, what);
         }
     }
 }
@@ -780,7 +741,7 @@ TYPED_TEST(TrsmCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "blocked");
-    expect_solved(p, "blocked over env cta");
+    expect_solved(*this->ctx, p, "blocked over env cta");
     const Spec s8{Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::Unit, 8, 5, 2};
     const Pin outer("trsm", C{ts::Cta{}});
     {
@@ -790,7 +751,7 @@ TYPED_TEST(TrsmCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_solve<T>(s8);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_solved(r, "outer cta");
+    expect_solved(*this->ctx, r, "outer cta");
 }
 
 // Auto against the transcribed table on a device that reads it (sm_89, sm_120 complex, which
@@ -813,7 +774,7 @@ TYPED_TEST(TrsmCandidates, AutoReadsTheSm89TranscribedTable) {
                 s.seed = 41u + r.n;
                 auto p = make_solve<T>(s);
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), r.expect) << label(s);
-                expect_solved(p, "auto " + label(s));
+                expect_solved(*this->ctx, p, "auto " + label(s));
             }
 }
 
@@ -856,7 +817,7 @@ TYPED_TEST(TrsmCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_solve<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -870,7 +831,7 @@ TYPED_TEST(TrsmCandidates, TraceKeyQFollowsSide) {
         const std::string line = traced_line([&] { this->run(p); });
         const std::string want = std::string("side=") + side_s(side) + " trans=T order=12 q=37 batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_solved(p, line);
+        expect_solved(*this->ctx, p, line);
     }
 }
 
@@ -890,7 +851,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
         const auto tables = select::tables_in_borrow_order("trsm", dtype, select::device_of<TestFixture::B>(*this->ctx));
         if (!tables.empty() && tables.front()->source == "transcribed:8b9adeb3") EXPECT_EQ(got, "cta");
         else EXPECT_NE(got, "vendor") << "nothing ranks the vendor at order 32 on " << dev;
-        expect_solved(p, "auto order 32");
+        expect_solved(*this->ctx, p, "auto order 32");
     }
     std::vector<std::pair<std::string, std::string>> files;
     for (const auto& t : select::embedded_tables())
@@ -907,7 +868,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked") << "order " << s.n;
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_solved(p, "vendor-only table, order " + std::to_string(s.n));
+        expect_solved(*this->ctx, p, "vendor-only table, order " + std::to_string(s.n));
     }
 }
 
@@ -1000,7 +961,7 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_solved(p, "cpu vendor");
+        expect_solved(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

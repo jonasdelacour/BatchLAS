@@ -9,7 +9,7 @@
 #include <chrono>
 #include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
-#include "../src/ops/syev/vendor.hh"
+#include <batchlas/verify/tolerance.hh>
 
 using namespace batchlas;
 
@@ -40,122 +40,6 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
     }
     
-    // Helper function to compute expected Frobenius norm
-    typename base_type<ScalarType>::type expected_frobenius_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<ScalarType>::type;
-        real_t sum = real_t(0);
-        auto data = mat.data();
-        int stride = mat.stride();
-        int size = mat.rows() * mat.cols();
-        
-        for (int i = 0; i < size; ++i) {
-            ScalarType val = data[batch_idx * stride + i];
-            if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
-                         std::is_same_v<ScalarType, std::complex<double>>) {
-                sum += val.real() * val.real() + val.imag() * val.imag();
-            } else {
-                sum += val * val;
-            }
-        }
-        return std::sqrt(sum);
-    }
-    
-    // Helper function to compute expected one norm (max column sum)
-    typename base_type<ScalarType>::type expected_one_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<ScalarType>::type;
-        auto data = mat.data();
-        int rows = mat.rows();
-        int cols = mat.cols();
-        int ld = mat.ld();
-        int stride = mat.stride();
-        real_t max_sum = real_t(0);
-        for (int j = 0; j < cols; ++j) {
-            real_t col_sum = real_t(0);
-            for (int i = 0; i < rows; ++i) {
-                ScalarType val = data[batch_idx * stride + j * ld + i];
-                if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
-                             std::is_same_v<ScalarType, std::complex<double>>) {
-                    col_sum += std::abs(val);
-                } else {
-                    col_sum += std::abs(val);
-                }
-            }
-            max_sum = std::max(max_sum, col_sum);
-        }
-        return max_sum;
-    }
-    
-    // Helper function to compute expected infinity norm (max row sum)
-    typename base_type<ScalarType>::type expected_inf_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<ScalarType>::type;
-        auto data = mat.data();
-        int rows = mat.rows();
-        int cols = mat.cols();
-        int ld = mat.ld();
-        int stride = mat.stride();
-        
-        real_t max_sum = real_t(0);
-        for (int i = 0; i < rows; ++i) {
-            real_t row_sum = real_t(0);
-            for (int j = 0; j < cols; ++j) {
-                ScalarType val = data[batch_idx * stride + j * ld + i];
-                if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
-                             std::is_same_v<ScalarType, std::complex<double>>) {
-                    row_sum += std::abs(val);
-                } else {
-                    row_sum += std::abs(val);
-                }
-            }
-            max_sum = std::max(max_sum, row_sum);
-        }
-        return max_sum;
-    }
-    
-    // Helper function to compute expected max norm (max element magnitude)
-    typename base_type<ScalarType>::type expected_max_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        using real_t = typename base_type<ScalarType>::type;
-        auto data = mat.data();
-        int stride = mat.stride();
-        int size = mat.rows() * mat.cols();
-        
-        real_t max_val = real_t(0);
-        for (int i = 0; i < size; ++i) {
-            ScalarType val = data[batch_idx * stride + i];
-            if constexpr (std::is_same_v<ScalarType, std::complex<float>> || 
-                         std::is_same_v<ScalarType, std::complex<double>>) {
-                max_val = std::max(max_val, real_t(std::abs(val)));
-            } else {
-                max_val = std::max(max_val, std::abs(val));
-            }
-        }
-        return max_val;
-    }
-
-    typename base_type<ScalarType>::type expected_spectral_norm(const Matrix<ScalarType, MatrixFormat::Dense>& mat, int batch_idx = 0) {
-        // For testing purposes, we can use a simple power iteration method
-        using real_t = typename base_type<ScalarType>::type;
-        UnifiedVector<real_t> eigs(mat.rows());
-
-        Queue &queue = *(this->ctx);
-        // Through the gated shim, not backend::syev_vendor directly: with no
-        // netlib in the build there is no vendor syev to reference, and the
-        // shim turns that into a NoRouteError instead of an undefined symbol.
-        namespace disp = batchlas::blas::dispatch::detail;
-        UnifiedVector<std::byte> ws = UnifiedVector<std::byte>(
-            disp::syev_vendor_buffer_size_or_throw<Backend::NETLIB, ScalarType>(
-                queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-        disp::syev_vendor_or_throw<Backend::NETLIB, ScalarType>(
-            queue, mat.view(), eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
-        queue.wait();
-        auto max_eig = *std::max_element(eigs.begin(), eigs.end(), [](real_t a, real_t b) { return std::abs(a) < std::abs(b); });
-        return std::abs(max_eig);
-    }   
-    
-    // Test tolerances based on type
-    static constexpr auto tolerance() {
-        return test_utils::tolerance<ScalarType>();
-    }
-
     // Small helper to map NormType to a string for readable failure messages
     static const char* norm_name(NormType t) {
         switch (t) {
@@ -166,6 +50,18 @@ protected:
             case NormType::Spectral:  return "Spectral";
         }
         return "";
+    }
+
+    // A norm is a reduction, so its relative error is judged as Check::blas with k the number of terms
+    // it adds (Frobenius: all of them, One: a column, Inf: a row, Max: none); an exact zero must be exact.
+    static void expect_norm_close(NormType t, double got, double want, int rows, int cols) {
+        const int k = t == NormType::Frobenius ? rows * cols : t == NormType::One ? rows : t == NormType::Inf ? cols : 1;
+        if (want == 0.0) {
+            EXPECT_EQ(got, 0.0) << norm_name(t) << " norm of a zero matrix";
+        } else {
+            EXPECT_VERIFY(ScalarType, batchlas::verify::Check::blas, k, std::abs(got - want) / want)
+                << norm_name(t) << " norm, got " << got << " want " << want;
+        }
     }
 
     // Convenience array with all norm types
@@ -186,8 +82,8 @@ protected:
 
             for (int b = 0; b < mat.batch_size(); ++b) {
                 auto expected = expected_fn(ntype, b);
-                EXPECT_NEAR(result[b], expected, tolerance())
-                    << "Batch " << b << " " << norm_name(ntype) << " norm mismatch";
+                SCOPED_TRACE(::testing::Message() << "batch " << b);
+                expect_norm_close(ntype, result[b], expected, mat.rows(), mat.cols());
             }
         }
     }
@@ -213,22 +109,44 @@ protected:
 // Typed tests for different scalar types
 TYPED_TEST_SUITE(NormTest, NormTestTypes);
 
-// Test all norm types with a random matrix
+// The random matrix's signs on closed-form moduli |a_ij| = 5 (i+1)(j+1)(b+1), exact in every T: a
+// complex entry is (+-3 +-4i) or (+-4 +-3i) times (i+1)(j+1)(b+1), so |re| + |im| != |a|. With
+// S1(n) = n(n+1)/2 and S2(n) = n(n+1)(2n+1)/6, per item: Frobenius 5 (b+1) sqrt(S2(rows) S2(cols)),
+// One 5 (b+1) cols S1(rows), Inf 5 (b+1) rows S1(cols), Max 5 (b+1) rows cols.
 TYPED_TEST(NormTest, RandomMatrixAllNorms) {
     using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
     const int rows = 5, cols = 4, batch_size = 2;
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 123);
+    auto A = mat.view();
+    for (int b = 0; b < batch_size; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) {
+                const T r = A(i, j, b);
+                const real_t m = real_t((i + 1) * (j + 1) * (b + 1));
+                if constexpr (is_std_complex_v<T>) {
+                    const bool wide = std::abs(r.real()) >= std::abs(r.imag());
+                    const real_t re = (r.real() < 0 ? -m : m) * real_t(wide ? 4 : 3);
+                    const real_t im = (r.imag() < 0 ? -m : m) * real_t(wide ? 3 : 4);
+                    A(i, j, b) = T(re, im);
+                } else {
+                    A(i, j, b) = r < 0 ? -5 * m : 5 * m;
+                }
+            }
 
-    auto expected_fn = [this, &mat](NormType ntype, int b) {
+    auto s1 = [](int n) { return n * (n + 1) / 2.0; };
+    auto s2 = [](int n) { return n * (n + 1) * (2 * n + 1) / 6.0; };
+    auto expected_fn = [&](NormType ntype, int b) -> double {
+        const double c = 5.0 * (b + 1);
         switch (ntype) {
-            case NormType::Frobenius: return this->expected_frobenius_norm(mat, b);
-            case NormType::One:       return this->expected_one_norm(mat, b);
-            case NormType::Inf:       return this->expected_inf_norm(mat, b);
-            case NormType::Max:       return this->expected_max_norm(mat, b);
-            default : std::cerr << "Unsupported norm type for random matrix" << std::endl; return typename base_type<T>::type(0);
+            case NormType::Frobenius: return c * std::sqrt(s2(rows) * s2(cols));
+            case NormType::One:       return c * cols * s1(rows);
+            case NormType::Inf:       return c * rows * s1(cols);
+            case NormType::Max:       return c * rows * cols;
+            default: std::cerr << "Unsupported norm type for random matrix" << std::endl; return 0.0;
         }
-        return typename base_type<T>::type(0);
+        return 0.0;
     };
 
     this->check_all_norms(mat, expected_fn);

@@ -9,6 +9,11 @@
 #include <tuple>
 #include <array>    // Added for std::array element types
 #include <sstream>  // Added for temporary string formatting of non-streamable types
+#include <cmath>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <vector>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -1188,6 +1193,169 @@ namespace batchlas {
         template <typename U>
         Matrix<U, MType> astype() const;
 
+        /// @name Verification
+        /// Accuracy checks of a computed result against its inputs (@ref design_verification). Each
+        /// reads every operand through ld() and stride(), promotes to double / complex<double>, runs
+        /// on @p ctx, waits, and returns the worst value over @p items (empty: default_items());
+        /// a NaN anywhere is the result. Compare it with batchlas::verify::bound(). Operands are read
+        /// as stored: apply triangularize(), hermitize() or symmetrize() to a copy first to check
+        /// against a triangle or a mirrored matrix.
+        /// @{
+
+        /// @brief T's promoted type: double, or complex<double> for complex T.
+        using promoted_type = std::conditional_t<is_std_complex_v<T>, std::complex<double>, double>;
+
+        /// @brief @p x as promoted_type.
+        template <typename U = T>
+            requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
+        static promoted_type up(U x) { return promoted_type(x); }
+
+        /// @brief re + i im rounded to T; the imaginary part is dropped for a real T.
+        template <typename U = T>
+            requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
+        static U make(double re, double im = 0.0) {
+            if constexpr (is_std_complex_v<U>) return U(float_t<U>(re), float_t<U>(im));
+            else { (void)im; return U(re); }
+        }
+
+        /// @brief The complex conjugate of @p x; @p x itself for a real T.
+        template <typename U = T>
+            requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
+        static U conj(U x) {
+            if constexpr (is_std_complex_v<U>) return std::conj(x);
+            else return x;
+        }
+
+        /// @brief |re| + |im|, LAPACK's partial-pivoting metric; |x| for a real T.
+        template <typename U = T>
+            requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
+        static double cabs1(U x) {
+            if constexpr (is_std_complex_v<U>) return std::fabs(double(x.real())) + std::fabs(double(x.imag()));
+            else return std::fabs(double(x));
+        }
+
+        /// @brief True when every component of @p x is finite.
+        template <typename U = T>
+            requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
+        static bool finite(U x) {
+            if constexpr (is_std_complex_v<U>) return std::isfinite(double(x.real())) && std::isfinite(double(x.imag()));
+            else return std::isfinite(double(x));
+        }
+
+        /// @brief Every item index, 0 .. batch_size() - 1.
+        std::vector<int> all_items() const;
+
+        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated: what a check reads by default.
+        std::vector<int> default_items() const;
+
+        /// @brief astype() of @p items only, packed in that order (item g at g * rows() * cols()).
+        /// @throws batchlas::out_of_range for an item outside [0, batch_size())
+        /// @throws batchlas::invalid_argument for a heterogeneous view
+        template <typename U>
+        Matrix<U, MType> astype(std::span<const int> items) const;
+
+        /// @brief C := op(A) op(B) per item: one work-item per element of C, the inner sum in order.
+        ///        The reference product of the checks, independent of gemm's tuned kernels.
+        /// @throws batchlas::invalid_argument on a shape mismatch
+        static Event product(const Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B, Transpose tb,
+                             const MatrixView& C);
+
+        /// @brief ||A0 - L L^H||_F / ||A0||_F (Lower) or ||A0 - U^H U||_F / ||A0||_F (Upper) over the
+        ///        factor's triangle; the other triangle of @p F is not read.
+        static double potrf_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F, Uplo uplo,
+                                     std::span<const int> items = {});
+
+        /// @brief ||P A0 - L U||_F / ||A0||_F for an m x n factor with packed 1-based pivots (min(m, n)
+        ///        per item); an out-of-range pivot makes that item NaN.
+        static double getrf_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F,
+                                     const VectorView<std::int32_t>& piv, std::span<const int> items = {});
+
+        /// @brief ||A0 - Q R||_F / ||A0||_F for @p F in LAPACK geqrf storage and its min(m, n) @p tau.
+        static double qr_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F, const VectorView<T>& tau,
+                                  std::span<const int> items = {});
+
+        /// @brief The first @p cols columns of Q = H_0 ... H_{k-1} of item @p item of a geqrf factor
+        ///        (k = min(m, n)); F's diagonal and upper triangle are not read.
+        static Matrix<promoted_type, MType> form_q(Queue& ctx, const MatrixView& F, const VectorView<T>& tau, int item,
+                                                   int cols);
+
+        /// @brief ||A0 - Q triu(R)||_F / ||A0||_F with an explicit m x k @p Q; the first k rows of @p R
+        ///        are read on and above the diagonal.
+        static double qr_reconstruction(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& R,
+                                        std::span<const int> items = {});
+
+        /// @brief ||A0 - Q B Q^H||_F / ||A0||_F for square operands of equal order.
+        static double similarity_residual(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& B,
+                                          std::span<const int> items = {});
+
+        /// @brief ||op(A0) X - B0||_F / (||A0||_F ||X||_F); an empty @p B0 (rows() == 0) is the identity.
+        ///        Above @p full_limit multiply-adds per item, 8 seeded probe columns of X stand in for all.
+        static double solve_residual(Queue& ctx, const MatrixView& A0, Transpose ta, const MatrixView& X,
+                                     const MatrixView& B0, std::span<const int> items = {},
+                                     double full_limit = double(1 << 28));
+
+        /// @brief solve_residual() with op(A0) = A0.
+        static double solve_residual(Queue& ctx, const MatrixView& A0, const MatrixView& X, const MatrixView& B0,
+                                     std::span<const int> items = {});
+
+        /// @brief solve_residual() with A = P L U formed per item from getrf factors @p F and pivots @p piv.
+        static double lu_solve_residual(Queue& ctx, const MatrixView& F, const VectorView<std::int32_t>& piv,
+                                        Transpose ta, const MatrixView& X, const MatrixView& B0,
+                                        std::span<const int> items = {});
+
+        /// @brief Componentwise max |C - (alpha op(A) op(B) + beta C0)| / (|alpha| |op(A)| |op(B)| + |beta| |C0|),
+        ///        over @p c_triangle of C when given; C0 is not read when beta == 0.
+        static double gemm_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B, Transpose tb,
+                                          const MatrixView& C0, const MatrixView& C, promoted_type alpha,
+                                          promoted_type beta, std::span<const int> items = {},
+                                          std::optional<Uplo> c_triangle = std::nullopt);
+
+        /// @brief The largest denominator of gemm_backward_error() over item @p item.
+        static double gemm_max_denominator(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B,
+                                           Transpose tb, const MatrixView& C0, promoted_type alpha, promoted_type beta,
+                                           int item = 0);
+
+        /// @brief gemm_backward_error() of y = alpha op(A) x + beta y0.
+        static double gemv_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const VectorView<T>& x,
+                                          const VectorView<T>& y0, const VectorView<T>& y, promoted_type alpha,
+                                          promoted_type beta, std::span<const int> items = {});
+
+        /// @brief ||op(A) X - alpha B0||_F / (||A||_F ||X||_F + |alpha| ||B0||_F) (Side::Right: X op(A)); only
+        ///        the @p uplo triangle of A is read, its diagonal only for Diag::NonUnit.
+        static double trsm_residual(Queue& ctx, const MatrixView& A, Side side, Uplo uplo, Transpose ta, Diag diag,
+                                    const MatrixView& X, const MatrixView& B0, promoted_type alpha,
+                                    std::span<const int> items = {});
+
+        /// @brief gemm_backward_error() with a CSR @p A; an out-of-range column index makes the result NaN.
+        static double spmm_backward_error(Queue& ctx, const MatrixView<T, MatrixFormat::CSR>& A, Transpose ta,
+                                          const MatrixView& B, Transpose tb, const MatrixView& C0, const MatrixView& C,
+                                          promoted_type alpha, promoted_type beta, std::span<const int> items = {});
+
+        /// @brief Componentwise backward error of a rank-2k update over the @p uplo triangle of C: her2k
+        ///        (@p hermitian, real beta, C0's diagonal read as real) or syr2k.
+        static double rank2k_backward_error(Queue& ctx, const MatrixView& A, const MatrixView& B, Transpose trans,
+                                            const MatrixView& C0, const MatrixView& C, Uplo uplo, promoted_type alpha,
+                                            promoted_type beta, bool hermitian, std::span<const int> items = {});
+
+        /// @brief ||Q^H Q - I||_F over Q's columns.
+        static double orthogonality(Queue& ctx, const MatrixView& Q, std::span<const int> items = {});
+
+        /// @brief ||A V - V diag(w)||_F / ||A||_F; A Hermitian, read from its lower triangle.
+        static double eigen_residual(Queue& ctx, const MatrixView& A, const MatrixView& V, const VectorView<float_t<T>>& w,
+                                     std::span<const int> items = {});
+
+        /// @brief max |w - ref| / scale per item; ref[item] holds w.size() values in the caller's order.
+        static double values_error(const VectorView<float_t<T>>& w, const std::vector<std::vector<double>>& ref,
+                                   double scale, std::span<const int> items = {});
+
+        /// @brief max cabs1(L(i,k) U(k,k)) / cabs1(U(k,k)) over a getrf factor: at most 1, up to rounding,
+        ///        for cabs1 partial pivoting (a residual cannot see the pivot rule).
+        static double pivot_ratio(const MatrixView& F, std::span<const int> items = {});
+
+        /// @brief True when every pivot of every item lies in [1, n].
+        static bool pivots_valid(const VectorView<std::int32_t>& piv, int n);
+        /// @}
+
         /// @brief Leading dimension: element distance between columns.
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
@@ -1545,6 +1713,61 @@ namespace batchlas {
                                      Diag diag = Diag::Unit,
                                      unsigned int seed = 42) const {
             return fill_triangular_random(Queue(), uplo, diag, seed);
+        }
+
+        /// @brief Random Hermitian (real T: symmetric) positive definite matrix, a different one per item.
+        ///
+        /// The Hermitian fill_random() values with the shift n (2n for complex T, whose entries reach
+        /// modulus sqrt(2)) added to the real diagonal: every row is strictly diagonally dominant
+        /// with a positive diagonal. a_ij == conj(a_ji) holds bitwise. Deterministic in @p seed,
+        /// independent of ld() and stride(); writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols()
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_spd(const Queue& ctx, unsigned int seed = 42) const;
+
+        /// @brief fill_random_spd() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_spd(unsigned int seed = 42) const {
+            return fill_random_spd(Queue(), seed);
+        }
+
+        /// @brief Row-permuted diagonally dominant random matrix, so LU partial pivoting is not the identity.
+        ///
+        /// Item b is P_b D_b: D_b holds uniform [-1, 1) entries plus the fill_random_spd() shift on
+        /// the diagonal, and P_b is a seeded random n-cycle (no row stays in place for n >= 2), a
+        /// different one per item. Each column's dominant entry therefore sits in a distinct row.
+        /// Deterministic in @p seed; writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols(), or if n ints exceed the device's local memory
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_pivoted(const Queue& ctx, unsigned int seed = 42) const;
+
+        /// @brief fill_random_pivoted() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_pivoted(unsigned int seed = 42) const {
+            return fill_random_pivoted(Queue(), seed);
+        }
+
+        /// @brief Hermitian Q diag(lambda) Q^H with condition number 10^@p log10_cond, a different Q per item.
+        ///
+        /// lambda_i = 10^(-log10_cond * i / (n - 1)) for i = 0..n-1 (1 when n == 1). Q is the product
+        /// of n Householder reflectors I - 2 v v^H of seeded random unit vectors (real for real T),
+        /// applied in T's precision. The result is exactly Hermitian with a real diagonal.
+        /// Deterministic in @p seed; writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols(), if @p log10_cond is not finite,
+        ///         or if 2n elements of T exceed the device's local memory
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed = 42) const;
+
+        /// @brief fill_graded_hermitian() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_graded_hermitian(double log10_cond, unsigned int seed = 42) const {
+            return fill_graded_hermitian(Queue(), log10_cond, seed);
         }
         /// @}
 
@@ -1972,6 +2195,12 @@ namespace batchlas {
         /// @brief Element distance between items.
         int stride() const { return stride_; }
         int batch_size() const { return batch_size_; }  ///< Number of batch items.
+        /// @brief Every item index, 0 .. batch_size() - 1.
+        std::vector<int> all_items() const {
+            std::vector<int> items(static_cast<std::size_t>(batch_size_ > 0 ? batch_size_ : 0));
+            for (std::size_t i = 0; i < items.size(); ++i) items[i] = static_cast<int>(i);
+            return items;
+        }
 
         /// @brief Owning copy with every element converted by `static_cast<U>`, in this layout; host loop.
         template <typename U>
@@ -2146,6 +2375,40 @@ namespace batchlas {
             }
         }
         return result;
+    }
+
+    template <typename T, MatrixFormat MType>
+    template <typename U>
+    Matrix<U, MType> MatrixView<T, MType>::astype(std::span<const int> items) const {
+        static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
+        if (is_heterogeneous()) throw batchlas::invalid_argument("MatrixView::astype: heterogeneous views are not supported");
+        Matrix<U, MType> result(rows_, cols_, static_cast<int>(items.size()));
+        const std::size_t packed = static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_);
+        U* dst = result.data().data();
+        for (std::size_t g = 0; g < items.size(); ++g) {
+            if (items[g] < 0 || items[g] >= batch_size_) throw batchlas::out_of_range("MatrixView::astype: batch item out of range");
+            const T* src = data_.data() + static_cast<std::size_t>(items[g]) * static_cast<std::size_t>(stride_);
+            for (int j = 0; j < cols_; ++j)
+                for (int i = 0; i < rows_; ++i)
+                    dst[g * packed + static_cast<std::size_t>(j) * rows_ + i] =
+                        static_cast<U>(src[static_cast<std::size_t>(j) * static_cast<std::size_t>(ld_) + i]);
+        }
+        return result;
+    }
+
+    template <typename T, MatrixFormat MType>
+    std::vector<int> MatrixView<T, MType>::all_items() const {
+        std::vector<int> items(static_cast<std::size_t>(std::max(batch_size_, 0)));
+        for (std::size_t i = 0; i < items.size(); ++i) items[i] = static_cast<int>(i);
+        return items;
+    }
+
+    template <typename T, MatrixFormat MType>
+    std::vector<int> MatrixView<T, MType>::default_items() const {
+        if (batch_size_ < 1) return {};
+        std::vector<int> items{0, batch_size_ / 2, batch_size_ - 1};
+        items.erase(std::unique(items.begin(), items.end()), items.end());
+        return items;
     }
 
     template <typename T>

@@ -17,6 +17,7 @@
 #include "../src/select/vendor.hh"
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/backends/triangular_expand.hh"
 #include "../src/backends/trmm_triangular_tiles.hh"
@@ -57,16 +58,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -100,7 +91,7 @@ struct Prob {
     T alpha{};
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
 
     MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
@@ -113,7 +104,7 @@ struct Prob {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -121,7 +112,7 @@ Prob<T> make_prob(const Spec& s) {
     using R = RealOf<T>;
     Prob<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.5), R(-0.5));
+    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
     const int br = s.side == Side::Left ? s.n : s.q, bc = s.side == Side::Left ? s.q : s.n;
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
@@ -135,54 +126,35 @@ Prob<T> make_prob(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
                 if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+                    p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
-// ||C - alpha op(A) B|| / (|alpha| ||A|| ||B||) for one item (Right: B op(A)), in double, read
-// from the referenced triangle only (Unit: 1 on the diagonal).
+// Worst componentwise backward error of C = alpha op(A) B (Right: B op(A)) over `items` through the
+// library; A is read as its triangle (Unit: no diagonal), operands from the pristine copy.
 template <typename T>
-double residual(const Prob<T>& p, int it) {
+double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
-    const int n = s.n;
-    std::vector<std::complex<double>> op(std::size_t(n) * n, 0.0);
-    double an = 0, bn = 0, num = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> v = 0.0;
-            if (i == j) v = s.diag == Diag::Unit ? 1.0 : up(p.mem0[p.ai(it, i, j)]);
-            else if (p.owned(i, j)) v = up(p.mem0[p.ai(it, i, j)]);
-            const int oi = s.trans == Transpose::NoTrans ? i : j, oj = s.trans == Transpose::NoTrans ? j : i;
-            op[oi + std::size_t(oj) * n] = s.trans == Transpose::ConjTrans ? std::conj(v) : v;
-            an += std::norm(v);
-        }
-    const std::complex<double> al = up(p.alpha);
-    for (int j = 0; j < p.b.cols; ++j)
-        for (int i = 0; i < p.b.rows; ++i) {
-            std::complex<double> acc = 0.0;
-            for (int t = 0; t < n; ++t)
-                acc += s.side == Side::Left ? op[i + std::size_t(t) * n] * up(p.mem0[p.bi(it, t, j)])
-                                            : up(p.mem0[p.bi(it, i, t)]) * op[t + std::size_t(j) * n];
-            num += std::norm(al * acc - up(p.mem[p.ci(it, i, j)]));
-            bn += std::norm(up(p.mem0[p.bi(it, i, j)]));
-        }
-    const double den = std::abs(al) * std::sqrt(an * bn);
-    return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    auto at0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
+    const MV B0 = at0(p.b), C0 = at0(p.c);
+    const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
+    MV::copy(ctx, A0.view(), at0(p.a)).wait();
+    A0.view().triangularize(ctx, s.uplo, s.diag).wait();
+    if (s.side == Side::Left)
+        return MV::gemm_backward_error(ctx, A0.view(), s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
+    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), s.trans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
 }
 
 // Residuals of the checked items, every element outside C bit for bit (A's poison included),
 // and, for a repeating batch, every item's C bit-identical to its representative's.
 template <typename T>
-void expect_trmm(const Prob<T>& p, const std::string& what) {
+void expect_trmm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0)
@@ -191,10 +163,10 @@ void expect_trmm(const Prob<T>& p, const std::string& what) {
         for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else
         items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
-    }
+    const double r = residual(ctx, p, items);
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.n, r))
+        << what << " worst backward error over " << items.size() << " items " << r << " exceeds "
+        << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.n);
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < p.c.cols; ++j)
@@ -254,8 +226,8 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     using R = RealOf<T>;
     const int n = 16, q = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
-    A.fill(mk<T>(R(0.5), R(0)));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+    A.fill(MatrixView<T, MatrixFormat::Dense>::make(R(0.5), R(0)));
+    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -397,7 +369,7 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
                     const std::string what = name(c, s);
                     if (TestFixture::vendor_word_falls_back(c)) {
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
-                        expect_trmm(p, what + " (vendor-free: Auto)");
+                        expect_trmm(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     if (!this->expect_runs(c, s)) {
@@ -406,7 +378,7 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_trmm(p, what);
+                    expect_trmm(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -424,7 +396,7 @@ TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
             const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes).c_str());
             auto p = make_prob<T>(s);
             ASSERT_TRUE(this->pin_accepted(C{tm::Expand{}}, p)) << label(s) << " at " << bytes << " bytes";
-            expect_trmm(p, "expand at the exact budget " + label(s));
+            expect_trmm(*this->ctx, p, "expand at the exact budget " + label(s));
         }
         const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes - 1).c_str());
         auto p = make_prob<T>(s);
@@ -436,7 +408,7 @@ TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
             continue;
         }
         EXPECT_EQ(traced_choice([&] { this->run(r); }), side == Side::Left ? "triangular" : "vendor") << label(s);
-        expect_trmm(r, "auto over budget " + label(s));
+        expect_trmm(*this->ctx, r, "auto over budget " + label(s));
     }
 }
 
@@ -454,7 +426,7 @@ TYPED_TEST(TrmmCandidates, EveryCombinationOnEveryCandidate) {
                             if (!this->expect_runs(c, s)) continue;
                             auto p = make_prob<T>(s);
                             this->run_pinned(c, p);
-                            expect_trmm(p, name(c, s));
+                            expect_trmm(*this->ctx, p, name(c, s));
                             if (::testing::Test::HasFatalFailure()) return;
                         }
 }
@@ -475,7 +447,7 @@ TYPED_TEST(TrmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_trmm(pinned, what);
+                expect_trmm(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's launch; element " << e;
@@ -501,7 +473,7 @@ TYPED_TEST(TrmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             if (!this->expect_runs(k.c, s)) continue;
             auto p = make_prob<T>(s);
             this->run_pinned(k.c, p);
-            expect_trmm(p, name(k.c, s));
+            expect_trmm(*this->ctx, p, name(k.c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
 }
@@ -539,7 +511,7 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         Spec at{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling};
         auto p = make_prob<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_trmm(p, name(c, at));
+        expect_trmm(*this->ctx, p, name(c, at));
         Spec past = at;
         past.batch = ceiling + 1;
         auto r = make_prob<T>(past);
@@ -553,7 +525,7 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
     if constexpr (TestFixture::kVendor) {
         EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor");
-        expect_trmm(p, "auto past the grid ceiling");
+        expect_trmm(*this->ctx, p, "auto past the grid ceiling");
     } else {
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
     }
@@ -768,7 +740,7 @@ TYPED_TEST(TrmmCandidates, ClassWordsAndSpellings) {
                 const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
                 EXPECT_EQ(err.find("trmm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
-                expect_trmm(p, what);
+                expect_trmm(*this->ctx, p, what);
             }
     }
 }
@@ -787,7 +759,7 @@ TYPED_TEST(TrmmCandidates, ScopedPinBeatsTheEnvironment) {
                   const Pin pin("trmm", C{tm::Expand{}});
                   this->run(p);
               }), "expand");
-    expect_trmm(p, "expand over env triangular");
+    expect_trmm(*this->ctx, p, "expand over env triangular");
     const Spec left{Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::Unit, 20, 5, 2};
     const Pin outer("trmm", C{tm::Triangular{}});
     {
@@ -797,7 +769,7 @@ TYPED_TEST(TrmmCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_prob<T>(left);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "triangular") << "the inner pin did not restore the outer";
-    expect_trmm(r, "outer triangular");
+    expect_trmm(*this->ctx, r, "outer triangular");
 }
 
 // Auto against the transcribed tables: triangular on Side::Left, expand on Side::Right, at grid
@@ -819,7 +791,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
                 auto p = make_prob<T>(s);
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), side == Side::Left ? "triangular" : "expand")
                     << label(s);
-                expect_trmm(p, "auto " + label(s));
+                expect_trmm(*this->ctx, p, "auto " + label(s));
             }
 }
 
@@ -864,7 +836,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_prob<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_trmm(p, std::string("the ") + k.field + " row");
+        expect_trmm(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -877,7 +849,7 @@ TYPED_TEST(TrmmCandidates, TraceKeyQFollowsSide) {
         const std::string line = traced_line([&] { this->run(p); });
         const std::string want = std::string("side=") + side_s(side) + " order=12 q=37 batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_trmm(p, line);
+        expect_trmm(*this->ctx, p, line);
     }
 }
 
@@ -904,7 +876,7 @@ TYPED_TEST(TrmmCandidates, VendorOnlyTableFallsToTheLastResort) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "expand") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_trmm(p, "vendor-only table " + label(s));
+        expect_trmm(*this->ctx, p, "vendor-only table " + label(s));
     }
 }
 
@@ -992,7 +964,7 @@ TYPED_TEST(TrmmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_trmm(p, "cpu vendor");
+        expect_trmm(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }

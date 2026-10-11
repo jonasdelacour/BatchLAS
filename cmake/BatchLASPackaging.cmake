@@ -73,6 +73,7 @@ function(batchlas_install_package)
             PATTERN "minibench.hh" EXCLUDE
             PATTERN "minibench_structured.hh" EXCLUDE
             PATTERN "bench_structured.hh" EXCLUDE
+            PATTERN "verify" EXCLUDE
     )
     # The umbrella header is the one file that legitimately sits in the include
     # root; install(DIRECTORY) above cannot carry it.

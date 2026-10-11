@@ -86,6 +86,11 @@ inline D dev_one() {
     }
 }
 
+inline float dev_abs(float x) { return sycl::fabs(x); }
+inline double dev_abs(double x) { return sycl::fabs(x); }
+template <typename R>
+inline R dev_abs(Cx<R> x) { return sycl::hypot(x.re, x.im); }
+
 inline float dev_conj(float x) { return x; }
 inline double dev_conj(double x) { return x; }
 

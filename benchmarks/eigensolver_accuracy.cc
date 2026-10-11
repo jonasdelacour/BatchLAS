@@ -16,9 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#if BATCHLAS_HAS_HOST_BACKEND
-#include <lapacke.h>
-#endif
+#include <batchlas/verify/reference.hh>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -331,9 +329,9 @@ void emit_metrics_rows(std::ofstream& out,
 
 template <Backend B, typename Real>
 int run_accuracy(const Options& opt) {
-#if !BATCHLAS_HAS_HOST_BACKEND
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
     (void)opt;
-    std::cerr << "Host backend is required for LAPACKE fp64 STERF reference.\n";
+    std::cerr << "LAPACKE (batchlas::verify) is required for the fp64 STERF reference.\n";
     return 3;
 #else
     const int n = opt.n;
@@ -408,8 +406,7 @@ int run_accuracy(const Options& opt) {
                     d_work[static_cast<size_t>(i)] = static_cast<double>(d_ref(i, b));
                     if (i < n - 1) e_work[static_cast<size_t>(i)] = static_cast<double>(e_ref(i, b));
                 }
-                const int info = LAPACKE_dsterf(static_cast<lapack_int>(n), d_work.data(), e_work.data());
-                if (info == 0) {
+                if (batchlas::verify::tridiagonal_eigenvalues(d_work, e_work)) {
                     std::sort(d_work.begin(), d_work.end());
                     ref_eigs_sorted[static_cast<size_t>(b)] = std::move(d_work);
                     ref_ok[static_cast<size_t>(b)] = 1;
