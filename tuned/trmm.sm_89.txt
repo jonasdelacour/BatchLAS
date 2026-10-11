@@ -1,4 +1,4 @@
-# op=trmm device=sm_89 batchlas=ff340fc6 kernels=ed96f220 family_kernels=triangular:2679b4bf,expand:4578c0e3,vendor:39039ba3 date=2026-10-06
+# op=trmm device=sm_89 batchlas=ff340fc6 kernels=ed96f220 family_kernels=triangular:2679b4bf,expand:3d052bc4,vendor:39039ba3 date=2026-10-06
 # source=ledger:benchmarks/results/tuning/ledger/trmm.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:1440
 # keys: dtype:exact side:exact order:log:2 q:log batch:log
 dtype=float side=L order=1 q=1 batch=1 | triangular - | expand - | vendor - # transcribed

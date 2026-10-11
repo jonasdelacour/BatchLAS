@@ -1,4 +1,4 @@
-# op=orgqr device=sm_120 batchlas=f4f8ea54 kernels=5a352c8b family_kernels=blocked:9c853239,vendor:9d16cb56 date=2026-10-09
+# op=orgqr device=sm_120 batchlas=a549338b kernels=5a352c8b family_kernels=blocked:cad87277,vendor:9d16cb56 date=2026-10-11
 # source=ledger:benchmarks/results/tuning/ledger/orgqr.sm_120.jsonl tiers=deep:497,coarse:0,preview:0,custom:0,converted:0,transcribed:68
 # keys: dtype:exact m:log n:log:2
 dtype=float m=1 n=1 | blocked 0.1177 | vendor 622.8 # deep
@@ -526,7 +526,7 @@ dtype=cdouble m=1024 n=256 | blocked 81.75 | vendor 118.9 # deep
 dtype=cdouble m=1024 n=384 | blocked 107.9 | vendor 116.2 # deep
 dtype=cdouble m=1024 n=512 | blocked 146.7 | vendor 200.8 # deep
 dtype=cdouble m=1024 n=513 | vendor 97.77 | blocked 115.8 # deep
-dtype=cdouble m=1024 n=628 | blocked 138.5 | vendor 136.3 # deep
+dtype=cdouble m=1024 n=628 | vendor 135.9 | blocked 158.2 # deep
 dtype=cdouble m=1024 n=768 | blocked 181.6 | vendor 198.0 # deep
 dtype=cdouble m=1024 n=1024 | blocked 221.7 | vendor 257.4 # deep
 dtype=cdouble m=1448 n=384 | vendor 57.54 | blocked 108.6 # deep

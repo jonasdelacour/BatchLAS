@@ -446,7 +446,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
 // Every sm_120 table is generated from the deep tiered run's ledger (tuned/README.md): the source
 // names the committed ledger file and every dtype has timed rows (untimed rows are the old
 // transcription kept only where the deep lattice measured nothing near, e.g. beyond the 2048
-// dimension cap). gemv is the exception until it is re-measured: its deep records are stale.
+// dimension cap).
 TEST(TunedTables, Sm120TablesAreDeepLedgerTablesNamingTheirLedger) {
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
@@ -457,7 +457,7 @@ TEST(TunedTables, Sm120TablesAreDeepLedgerTablesNamingTheirLedger) {
             EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/" + std::string(op) + ".sm_120.jsonl") << t.file;
             std::size_t timed = 0;
             for (const auto& row : t.rows) timed += row.timed;
-            if (std::string(op) != "gemv") EXPECT_GT(timed, 0u) << t.file << " " << dt;
+            EXPECT_GT(timed, 0u) << t.file << " " << dt;
         }
 }
 

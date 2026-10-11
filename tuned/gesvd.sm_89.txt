@@ -1,4 +1,4 @@
-# op=gesvd device=sm_89 batchlas=424a45bc kernels=24248021 family_kernels=jacobi:e01c265c,cta:c0d1d518,blocked:40ec5fee,vendor:8b3c7bbe date=2026-10-05
+# op=gesvd device=sm_89 batchlas=424a45bc kernels=24248021 family_kernels=jacobi:e01c265c,cta:c0d1d518,blocked:43a11970,vendor:8b3c7bbe date=2026-10-05
 # source=ledger:benchmarks/results/tuning/ledger/gesvd.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:8100
 # keys: dtype:exact herm:exact vec:exact m:log:1.5 n:log:1.5
 dtype=float herm=L vec=all m=1 n=1 | cta - | blocked - | vendor - # transcribed

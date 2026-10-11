@@ -1,4 +1,4 @@
-# op=posv device=sm_89 batchlas=7e71a6e0 kernels=b0bdeee4 family_kernels=tiny:52ec666d,cta:428f0e14,blocked:92186da5 date=2026-10-04
+# op=posv device=sm_89 batchlas=7e71a6e0 kernels=b0bdeee4 family_kernels=tiny:52ec666d,cta:d476366f,blocked:b33e5230 date=2026-10-04
 # source=ledger:benchmarks/results/tuning/ledger/posv.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:7920
 # keys: dtype:exact uplo:exact n:log:3 nrhs:log batch:log
 dtype=float uplo=L n=1 nrhs=1 batch=128 | tiny - | cta - | blocked - # transcribed

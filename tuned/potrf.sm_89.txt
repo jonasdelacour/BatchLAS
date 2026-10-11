@@ -1,4 +1,4 @@
-# op=potrf device=sm_89 batchlas=unknown kernels=0d38569e family_kernels=tiny:0bf1ed4c,cta:97105257,lpanel:6db9e9e1,blocked:d05bc136,vendor:59a368ab date=2026-10-04
+# op=potrf device=sm_89 batchlas=unknown kernels=0ad6e00a family_kernels=tiny:0bf1ed4c,cta:97105257,lpanel:6db9e9e1,blocked:c43aa2d8,vendor:59a368ab date=2026-10-04
 # source=ledger:benchmarks/results/tuning/ledger/potrf.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:241,transcribed:0
 # keys: dtype:exact uplo:exact n:log:3 batch:log
 dtype=float uplo=L n=1 batch=65536 | tiny 0.01758 | vendor 0.06896 # converted

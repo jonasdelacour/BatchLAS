@@ -1,4 +1,4 @@
-# op=geqrf device=sm_120 batchlas=f4f8ea54 kernels=6bba1964 family_kernels=tiny:b39d5968,cta:fac77784,blocked:cc5210ce,vendor:e3360dd7 date=2026-10-09
+# op=geqrf device=sm_120 batchlas=2606d367 kernels=e2ab9f00 family_kernels=tiny:b39d5968,cta:fac77784,blocked:127bf8cd,vendor:e3360dd7 date=2026-10-11
 # source=ledger:benchmarks/results/tuning/ledger/geqrf.sm_120.jsonl tiers=deep:2186,coarse:0,preview:0,custom:0,converted:0,transcribed:423
 # keys: dtype:exact form:exact n:log:3 aspect:log
 dtype=float form=sq n=1 aspect=1 | tiny 0.008573 | cta 0.01126 | blocked 0.01182 | vendor 0.01572 # deep

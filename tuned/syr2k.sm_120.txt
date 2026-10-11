@@ -1,4 +1,4 @@
-# op=syr2k device=sm_120 batchlas=209d9fb8 kernels=9434b46c family_kernels=triangular:505efbf2,vendor:8ee38c17 date=2026-10-08
+# op=syr2k device=sm_120 batchlas=2606d367 kernels=9434b46c family_kernels=triangular:505efbf2,vendor:8ee38c17 date=2026-10-11
 # source=ledger:benchmarks/results/tuning/ledger/syr2k.sm_120.jsonl tiers=deep:941,coarse:0,preview:0,custom:0,converted:0,transcribed:101
 # keys: dtype:exact n:log:2 k:log batch:log
 dtype=float n=1 k=1 batch=1 | triangular 0.01124 | vendor 0.04708 # deep

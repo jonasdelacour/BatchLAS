@@ -1,4 +1,4 @@
-# op=symm device=sm_89 batchlas=ff340fc6 kernels=38f098e2 family_kernels=expand:039b421d,vendor:d8493aa8 date=2026-10-06
+# op=symm device=sm_89 batchlas=ff340fc6 kernels=38f098e2 family_kernels=expand:bf2296b5,vendor:d8493aa8 date=2026-10-06
 # source=ledger:benchmarks/results/tuning/ledger/symm.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:10584
 # keys: dtype:exact form:exact m:log n:log batch:log
 dtype=float form=sq m=1 n=1 batch=1 | vendor - | expand - # transcribed
