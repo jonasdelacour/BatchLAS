@@ -224,7 +224,12 @@ syev's closed-form spectra, the candidates tests' scalar helpers, getrf's LAPACK
 The tiered-tuning PR (19 specs) follows it and writes its specs against this library, so
 `lu_residuals.hh`, `qr_common.hh` and `host_reference.hh` from the `tuning-deep-sm120` branch
 never land. It added the item-list `form_q` (ormqr's and geqrf's Q for one batch call) and
-`svd_residual` (gesvd's reconstruction).
+`svd_residual` (gesvd's reconstruction). `svd_residual` keeps the `factorization` constant 16: its
+measured need is 3.73 float / 1.29 double over gesvd_tests and 5.17 / 5.68 over the tuner's native
+arms, but 25.3 for cuSOLVER's 2x2 Hermitian double cells, which the tuner therefore records `bad`
+(the rule would give 128, an 8x loosening that needs the maintainer's acceptance; not adopted).
+The `cta` arm is `bad` on square vectors cells too: U's orthogonality goes like eps·κ² on the
+normal-equations path (docs/perf/gesvd.md, defect A), up to 2.3e4 n eps; no slack.
 
 ## Verification: acceptance
 

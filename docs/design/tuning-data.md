@@ -153,8 +153,8 @@ same PR (the transcribers went the same way), wrote the new files from the old o
   were dropped).
 - **Rehash:** 59 verified `rehash` lines (`proof: normalized`), every family of 18 ops. gemv's were refused: its
   records predate real edits to `src/ops/gemv/gemv.cc` and `src/sycl/device_scalar.hh`, and its
-  full re-run (`20261009T042647-threadripper02-422873`) was `-dirty`. The gemv sm_120 table
-  holds only transcribed rows until gemv is re-measured.
+  full re-run (`20261009T042647-threadripper02-422873`) was `-dirty`; gemv was re-measured at
+  deep on 2026-10-11 (run `20261011T204301-threadripper02-39013`).
 - **Check:** each new table, regenerated with today's hashes and restricted to one dtype, has
   exactly the rows of the old per-dtype table (keys, entries, times, tier tags), gemv sm_120
   excepted.

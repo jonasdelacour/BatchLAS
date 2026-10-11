@@ -57,9 +57,16 @@ instantiates, on threadripper02 (4x RTX PRO 6000 Blackwell, sm_120, CUDA 13.2, D
 user had damaged (`--remeasure-keys`). Details are in
 [tiered tuning](../docs/design/tiered-tuning.md), "Engine: the sm_120 deep run".
 
-- **gemv is not measured.** The defect-13 fix and a later edit to `src/sycl/device_scalar.hh`
-  staled every gemv record, and the full gemv re-run of 2026-10-09 was made from a dirty tree, so
-  readers leave it out. `gemv.sm_120.txt` holds only transcribed rows until gemv is re-measured.
+- **2026-10-11/12 updates without a new campaign.** Specs on `batchlas::verify` and two kernel fixes
+  (defect 11: native gemm read C at beta = 0; the stedc one-pole merge's convergence flag) staled
+  most families. Stratified `--tier custom` samples (about 128 cells per op, all 19 ops) found no
+  verdict change from the new checks except the gesvd `cta` normal-equations cells (correctly bad)
+  and the syev cells the stedc fix repaired. Then, per op:
+  - re-measured at deep: gemv (its 2026-10-09 run was dirty), potrf, gesv, posv, syev, trmm
+    (their samples disagreed systematically: the blocked paths got faster);
+  - carried over by sample-proof rehash lines (docs/design/tuning-data.md, "Kernel hashes"): gemm
+    (9 noise-level disagreements re-measured at deep with `--only-named`), geqrf, getrf, orgqr,
+    ormqr, gesvd, symm.
 - **Dimension cap 2048.** No cell was planned with a matrix dimension above 2048 (`--max-dim`). The
   first run measured some larger cells before the cap existed; they stay. Above the cap the nearest
   measured row decides.
