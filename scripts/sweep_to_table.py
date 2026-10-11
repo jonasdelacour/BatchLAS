@@ -54,6 +54,7 @@ LEDGER_TIERS = ("deep", "coarse", "preview", "custom", "converted", "transcribed
 LEDGER_STRIDE = {"deep": 1, "coarse": 1, "preview": 2, "custom": 2, "converted": 2, "transcribed": 2}
 UNHASHED = ("converted", "transcribed")
 LEDGER_STATUS_TIMED = ("ok", "eliminated")
+TIE = 0.03  # the tuner's tie band (tune_core.cc rank())
 LFS_POINTER = "version https://git-lfs.github.com/spec/v1"  # the first line of an unfetched LFS file
 HASH_VECTOR = "tests/data/kernel_hash_v2"
 
@@ -589,8 +590,15 @@ def check_table(path, failures, notes, repo=REPO):
     if len({k for k, _ in parsed}) != len(parsed):
         failures.append(f"{rel}: duplicate row keys")
     failures += [f"{rel}: {p}" for p in row_kind_problems(header, parsed)]
+    # A row's own exact keys match in full, so its lookup pool is the rows sharing them; at distance 0
+    # only a row with the same first log key can tie or beat it, so the pool narrows to those (same answer).
+    pool = [i for i, (_, is_log, _) in enumerate(keyspec) if not is_log]
+    pool += [i for i, (_, is_log, _) in enumerate(keyspec) if is_log][:1]
+    groups = defaultdict(list)
+    for row in parsed:
+        groups[tuple(row[0][i] for i in pool)].append(row)
     for key, ranked in parsed:
-        hit = nearest(parsed, key, keyspec)
+        hit = nearest(groups[tuple(key[i] for i in pool)], key, keyspec)
         if hit is None or hit[0] != key:
             failures.append(f"{rel}: nearest{key} -> {hit and hit[0]}")
         bad = [c for c, _ in ranked if c not in der.vocab.get(key[0], [])]
@@ -656,6 +664,81 @@ def write_tables(root, out_dir, op=None, device=None):
         with open(dest, "w") as f:
             f.write(der.text)
         print(f"wrote {os.path.relpath(dest)}: " + ", ".join(f"{t}={n}" for t, n in der.counts.items()))
+
+
+SAMPLE_MIN_CELLS = 64
+
+
+def rehash_sample(ledger_path, op, run_id, families=None, at=None, repo=REPO, write=True):
+    """The sample proof of a rehash (docs/design/tuning-data.md#tuning-data-kernel-hash): run_id is a
+    run measured with today's kernels. Every sampled cell is compared with the best record usable
+    under the OLD hashes: it agrees when the winners match or the old winner is within TIE of the
+    sample's winner in the sample's own times. All agree: one rehash line per stale family is
+    appended. Returns (ok, report lines, rehash records)."""
+    led = read_ledger(ledger_path)
+    heads = {}
+    for r in led.runs:
+        heads.setdefault(r["dtype"], []).append(r)
+    cands = [c for d in heads.values() for c in newest(d).get("candidates", "").split("|") if c]
+    block = parse_kernel_block(read_spec_source(op, repo))
+    now = family_hashes(block, list(dict.fromkeys(spelling_family(c) for c in cands)), repo)
+    sample = [c for c in led.cells if c["run_id"] == run_id]
+    old_cells = [c for c in led.cells if c["run_id"] != run_id and c["tier"] not in UNHASHED]
+    if not sample:
+        return False, [f"run {run_id} has no cells in {ledger_path}"], []
+    stale_in_sample = sorted({spelling_family(r["cand"]) for c in sample for r in c["cands"]
+                              if r["status"] != "skipped" and r["hash"] and now.get(spelling_family(r["cand"])) != r["hash"]})
+    if stale_in_sample:
+        return False, [f"run {run_id} was not measured with today's kernels (families {stale_in_sample})"], []
+    stored = defaultdict(set)  # family -> stale stored hashes in the old records
+    for c in old_cells:
+        for r in c["cands"]:
+            f = spelling_family(r["cand"])
+            if r["hash"] and f in now and r["hash"] != now[f] and (families is None or f in families):
+                stored[f].add(r["hash"])
+    if not stored:
+        return False, ["no stale family to rehash"], []
+    ambiguous = {f: sorted(h) for f, h in stored.items() if len(h) > 1}
+    if ambiguous:
+        return False, [f"several stale hashes per family {ambiguous}: rehash them one at a time"], []
+    old_judge = dict(now, **{f: next(iter(h)) for f, h in stored.items()})
+    old_best = {(c["dtype"], c["key"]): c for c in
+                [b for d in heads for b in best_records([c for c in old_cells if c["dtype"] == d], old_judge).values()]}
+    keys = {d: parse_keys(newest(rs)["keys"]) for d, rs in heads.items()}
+    def exact(d, key):
+        return tuple((n, v) for n, v in key if n in {k for k, is_log, _ in keys[d] if not is_log})
+    want = {(d, exact(d, key)) for d, key in old_best}
+    got = {(c["dtype"], exact(c["dtype"], c["key"])) for c in sample}
+    report = []
+    if len(sample) < SAMPLE_MIN_CELLS:
+        report.append(f"refused: {len(sample)} sampled cells, fewer than {SAMPLE_MIN_CELLS}")
+    missing = sorted(want - got)
+    if missing:
+        report.append(f"refused: the sample misses {len(missing)} exact-key combinations, e.g. {missing[:3]}")
+    if report:
+        return False, report, []
+    agree, bad = 0, []
+    for c in sample:
+        old = old_best.get((c["dtype"], c["key"]))
+        if old is None or not old["ranked"] or not c["ranked"]:
+            continue
+        times = {r["cand"]: r["median"] for r in c["cands"] if r["status"] in LEDGER_STATUS_TIMED and r["median"]}
+        win, ow = c["ranked"][0], old["ranked"][0]
+        if win == ow or (ow in times and win in times and times[ow] <= times[win] * (1.0 + TIE)):
+            agree += 1
+        else:
+            bad.append(f"{op} {c['dtype']} {','.join(f'{n}={v}' for n, v in c['key'])}   # old {ow}, now {win}")
+    if bad or agree == 0:
+        return False, [f"{len(bad)} of {agree + len(bad)} sampled cells disagree (re-measure them with "
+                       "--remeasure-keys at deep):"] + bad, []
+    at = at or subprocess.run(["git", "-C", repo, "rev-parse", "--short=8", "HEAD"], capture_output=True,
+                              text=True).stdout.strip() or "unknown"
+    lines = [{"kind": "rehash", "family": f, "from": next(iter(h)), "to": now[f], "at": at,
+              "proof": f"sample:{run_id}", "why": f"{agree} cells agree"} for f, h in sorted(stored.items())]
+    if write:
+        with open(ledger_path, "a") as fh:
+            fh.write("".join(json.dumps(x) + "\n" for x in lines))
+    return True, [f"{agree} sampled cells agree: rehashed {', '.join(x['family'] for x in lines)}"], lines
 
 
 def hash_vector_problem(repo=REPO):
@@ -838,6 +921,37 @@ def self_test():
         os.remove(tab)
         failures, _ = check(os.path.join(repo, "tuned"), os.path.join(repo, "ledger"), repo)
         expect(any("no table" in x for x in failures), f"a ledger without a table fails -> {failures}")
+        # the sample proof of a rehash: agree, a tie within TIE, a disagreement, too few cells, a missing combination
+        with open(os.path.join(repo, "src", "k.cc"), "w") as f:
+            f.write("int k; // kernel\n")
+
+        def sample_ledger(name, sample_ns, flip=None, upper=False):
+            old = {f"h{i}": "v1old" for i in range(3)}
+            lines = [run_line(r1, "2026-10-01"), run_line("S", "2026-10-05", tier="custom")]
+            lines += [dict(cell(r1, "deep", n), **old) for n in range(1, 65)]
+            if upper:
+                lines.append(dict(cell(r1, "deep", 1, uplo="U"), **old))
+            for n in sample_ns:
+                c = {**cell("S", "custom", n, date="2026-10-05"), **{f"h{i}": hk for i in range(3)}}
+                if n in (flip or {}):  # the sample's own times: cta first by the given ratio
+                    c.update(ranked="cta|tiny", m0=flip[n], m1=1.0)
+                lines.append(c)
+            return build(lines, os.path.join(repo, "ledger"), name)
+
+        ok, msg, recs = rehash_sample(sample_ledger("s1.jsonl", range(1, 65), {7: 1.02}), "posv", "S", repo=repo, write=False)
+        expect(ok and len(recs) == 3 and recs[0]["proof"] == "sample:S" and recs[0]["from"] == "v1old"
+               and recs[0]["to"] == hk and "64 cells agree" in recs[0]["why"], f"rehash sample agrees (tie at n=7) -> {msg}")
+        ok, msg, _ = rehash_sample(sample_ledger("s2.jsonl", range(1, 65), {7: 1.5}), "posv", "S", repo=repo)
+        expect(not ok and any("n=7" in m and "old tiny, now cta" in m for m in msg), f"rehash sample disagrees -> {msg}")
+        ok, msg, _ = rehash_sample(sample_ledger("s3.jsonl", range(1, 11)), "posv", "S", repo=repo)
+        expect(not ok and "fewer than 64" in msg[0], f"rehash sample too small -> {msg}")
+        ok, msg, _ = rehash_sample(sample_ledger("s4.jsonl", range(1, 65), upper=True), "posv", "S", repo=repo)
+        expect(not ok and "misses 1 exact-key" in " ".join(msg), f"rehash sample misses uplo=U -> {msg}")
+        s5 = sample_ledger("s5.jsonl", range(1, 65))
+        ok, _, _ = rehash_sample(s5, "posv", "S", repo=repo)
+        rows5 = ledger_rows(keyspec, read_ledger(s5, "float").cells, family_hashes(parse_kernel_block(
+            read_spec_source("posv", repo)), cands, repo))
+        expect(ok and rows5[("L", 5, 1, 128)][0] == "deep", f"after the rehash the deep records stand -> {ok}")
         # row kinds
         expect(row_kind_problems({"source": "ledger:x"}, [(("L",), [("a", None), ("b", 1.0)])]) != [], "mixed row")
         expect(row_kind_problems({"source": "x"}, [(("L",), [("a", None)])]) != [], "untimed row needs ledger:")
@@ -852,7 +966,18 @@ def main():
     ap.add_argument("--op", help="only this op's ledgers")
     ap.add_argument("--device", help="only this device's ledgers")
     ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="table directory (default tuned/)")
+    ap.add_argument("--rehash-sample", metavar="RUN_ID",
+                    help="with --op and --device: rehash the stale families if this sample run agrees with the old records")
+    ap.add_argument("--family", nargs="+", help="--rehash-sample: only these families")
+    ap.add_argument("--at", help="--rehash-sample: the commit to record (default HEAD)")
     args = ap.parse_args()
+    if args.rehash_sample:
+        if not args.op or not args.device:
+            raise SystemExit("--rehash-sample needs --op and --device")
+        path = os.path.join(args.ledger, f"{args.op}.{args.device}.jsonl")
+        ok, msg, _ = rehash_sample(path, args.op, args.rehash_sample, args.family, args.at)
+        print("\n".join(msg))
+        return 0 if ok else 1
     if args.self_test:
         bad = self_test()
         print("\n".join(bad + [f"--self-test: {'FAILED' if bad else 'OK'}"]))

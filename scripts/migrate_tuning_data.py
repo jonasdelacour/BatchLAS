@@ -234,7 +234,7 @@ def migrate_sm120(op, device, dirs, tables, report):
                 report["rehash_refused"][f"{op}.{device} {fam} {frm}"] = why
                 continue
             extra.append(json.dumps({"kind": "rehash", "family": fam, "from": frm, "to": to, "at": BASE,
-                                     "why": WHY_REHASH}))
+                                     "proof": "normalized", "why": WHY_REHASH}))
             report["rehash"][f"{op}.{device} {fam}"] = report["rehash"].get(f"{op}.{device} {fam}", []) + [f"{frm}->{to}"]
     return lines + extra
 
