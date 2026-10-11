@@ -1,6 +1,6 @@
 # Known defects, located and not fixed
 
-> **Status:** current · checked 2026-10-06
+> **Status:** current · checked 2026-10-11
 
 Each entry is a defect located to a line and left in the tree. Entries give the symptom, the
 cause with its location, any workaround, and the status. Performance debt is listed per op under
@@ -24,7 +24,7 @@ closed and kept only for numbering.
 | 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
-| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | open, worked around in `geqrf_blocked` |
+| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | gemm worked around; complex<double> gemv vendor refused on CUDA |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
@@ -170,17 +170,30 @@ wrote both triangles and was reachable only through those pins.
 
 ## Defect 11: native gemm reads C at beta zero
 
-- **Symptom:** `GeqrfTest.BlockedIgnoresAGarbageWorkspace` (`tests/geqrf_tests.cc`) returns `NaN`
-  for all four scalar types when the trailing update runs as a native gemm. The caller's workspace
-  is `0xff`-filled, and the test is 64 x 64.
-- **Cause:** `LinearEpilogue::apply` in `src/sycl/gemm/epilogue_linear.hh` computes
-  `alpha * acc + beta * prior` unconditionally. `launch_direct` in `src/sycl/gemm_kernels.cc` reads
-  `c_ptr` the same way. `0 * NaN` is `NaN`. Reference BLAS does not read `C` at `beta == 0`.
-- **Workaround:** `geqrf_blocked_dispatch` zero-fills `W1` and `W2` on each call
-  (`src/extensions/geqrf_blocked.cc`).
-- **Fix needs:** the two-line change to skip `C` at `beta == 0` in both places, plus a gemm timing
-  A/B. When it lands, delete the memset. The test stays as the guard.
-- **Status:** open. Found 2026-09-30 on threadripper02 (RTX PRO 6000, sm_120).
+- **Symptom:** a beta = 0 gemm into a dirty workspace returned `NaN` when it ran as the native
+  `direct`, `tiled` or float `reg` family. `geqrf_blocked` (W1/W2) and `potrf_blocked` (the W x W
+  product) zero-filled their scratch to hide it. `orgqr_blocked` had no fill: the blocked `ormqr`
+  apply's `W1 = V^H C` reads the caller's arena. Under the deep sm_120 gemm tables, complex
+  `orgqr` at 1x1 and 33x20 routes that gemm to `direct` and `tiled`, so
+  `OrgqrCandidates.ExactWorkspaceInAPoisonedArena` (0xff arena) went NaN for cfloat and cdouble.
+  The sm_89/old tables sent those shapes to families that skip `C`, which hid it.
+- **Cause:** `LinearEpilogue::apply` (`src/sycl/gemm/epilogue_linear.hh`), used by `tiled_general.hh`
+  and `register_tiled_common.hh`, computed `alpha * acc + beta * prior` unconditionally.
+  `launch_direct` in `src/sycl/gemm_kernels.cc` read `c_ptr` the same way. `0 * NaN` is `NaN`.
+  Reference BLAS does not read `C` at `beta == 0`. `small`, `wide` and the 128x128 tile already
+  skipped it.
+- **Fix:** `LinearEpilogue::store` skips the load at `beta == 0`, and all three families call it.
+  The geqrf and potrf zero fills are deleted. Timing A/B on sm_120 (batch 256-512, 6 alternating
+  reps, medians): beta = 0 is 1-15% faster (the C load is gone), and beta = 1 is within noise
+  (0.998-1.017).
+- **Guards**, each pinning `direct` and `tiled` through `BATCHLAS_GEMM_ROUTE`'s `ScopedPin` so the
+  gemm table cannot hide the family: `GemmCandidates.BetaZeroDoesNotReadC` (every family, NaN `C`,
+  including 1x1x1), `OrgqrCandidates.PoisonedArenaUnderEveryPinnedNativeGemm`,
+  `GeqrfTest.BlockedIgnoresAGarbageWorkspace` and `PotrfBlockedTest.BlockedDoesNotReadUninitialisedWorkspace`.
+  With the epilogues reverted, those four go red for every GPU type, plus
+  `OrgqrCandidates.ExactWorkspaceInAPoisonedArena` and `PotrfCandidates.ExactWorkspaceInAPoisonedArena`
+  for cfloat and cdouble. Nothing else in those suites goes red.
+- **Status:** fixed 2026-10-11 on threadripper02 (RTX PRO 6000, sm_120). Found 2026-09-30.
 
 ## Defect 12: vendor potrf and trsm accept a heterogeneous batch
 
