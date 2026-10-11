@@ -233,8 +233,17 @@ def read_ledger(path, dtype=None):
     led.cells = [c for c in led.cells if (c["run_id"], c["dtype"]) not in dirty]
     for c in led.cells:
         for r in c["cands"]:
-            r["hash"] = rehash.get(spelling_family(r["cand"]), {}).get(r["hash"], r["hash"])
+            r["hash"] = follow_rehash(rehash.get(spelling_family(r["cand"]), {}), r["hash"])
     return led
+
+
+def follow_rehash(chain, h):
+    """A stored hash through every rehash step (a normalized step, then a sample step, ...); a cycle stops."""
+    seen = {h}
+    while h in chain and chain[h] not in seen:
+        h = chain[h]
+        seen.add(h)
+    return h
 
 
 def stale_families(cell, family_hash):
@@ -857,6 +866,9 @@ def self_test():
         expect(tiers(got6) == {64: "deep"}, f"rehash makes the record current -> {got6}")
         rh_other = dict(rh, family="cta")
         expect(rows_of(build([run_line(r1, "2026-10-01"), old, rh_other], d, "k.jsonl")) == {}, "rehash is per family")
+        chain = [dict(rh, to="v2old"), dict(rh, **{"from": "v2old", "to": "htiny"})]
+        got7 = rows_of(build([run_line(r1, "2026-10-01"), old] + chain, d, "k2.jsonl"))
+        expect(tiers(got7) == {64: "deep"}, f"a rehash chain v1 -> v2old -> now is followed -> {got7}")
         # a dirty run is excluded with a warning, per (run id, dtype)
         dl = [run_line(r1, "2026-10-01", batchlas="abc-dirty"), cell(r1, "deep", 64),
               run_line(r1, "2026-10-01", dtype="double"), cell(r1, "deep", 64, dtype="double")]

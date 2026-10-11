@@ -254,8 +254,13 @@ Ledger read_ledger(const std::string& path, const std::string& dtype) {
     std::erase_if(l.cells, [&](const CellRecord& c) { return dirty.count(c.run_id) != 0; });
     for (CellRecord& c : l.cells)
         for (CandResult& r : c.cands)
-            if (const auto fam = rehash.find(family_of(r.cand)); fam != rehash.end())
-                if (const auto to = fam->second.find(r.hash); to != fam->second.end()) r.hash = to->second;
+            if (const auto fam = rehash.find(family_of(r.cand)); fam != rehash.end()) {
+                // Every step of a chain (normalized, then sample, ...); a cycle stops.
+                std::set<std::string> seen{r.hash};
+                for (auto to = fam->second.find(r.hash); to != fam->second.end() && seen.insert(to->second).second;
+                     to = fam->second.find(r.hash))
+                    r.hash = to->second;
+            }
     return l;
 }
 
