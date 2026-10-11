@@ -8,6 +8,8 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace batchlas::verify {
@@ -34,6 +36,9 @@ template <class T>
 Item<T> item_of(const KernelMatrixView<T, MatrixFormat::Dense>& A, int item) {
     return make_item<T>(A.data_, A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(), A.is_heterogeneous(), item);
 }
+
+template <class View>
+using value_of_t = std::remove_const_t<std::remove_pointer_t<decltype(item_of(std::declval<const View&>(), 0).data)>>;
 
 }  // namespace detail
 

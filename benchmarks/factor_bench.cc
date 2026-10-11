@@ -47,7 +47,6 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
-#include <batchlas/verify/inputs.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -351,18 +350,19 @@ static int run(const Cfg& c) {
     if (has_rhs) {
         B0v = MV(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data());
         Xv  = MV(X.data(),  n, nrhs, ldb, int(sb), batch, pX.data());
-        verify::fill_random(B0v, 777);
+        (void)B0v.fill_random(*q, false, 777);
     }
 
     switch (c.op) {
         case OpKind::potrf:
-        case OpKind::posv: verify::fill_spd(A0v); break;
+        case OpKind::posv: (void)A0v.fill_random_spd(*q, 12345); break;
         case OpKind::getrf:
         case OpKind::gesv:
-        case OpKind::getrs: verify::fill_lu(A0v, 12345); break;
+        case OpKind::getrs: (void)A0v.fill_random_pivoted(*q, 12345); break;
         case OpKind::geqrf:
-        case OpKind::orgqr: verify::fill_gauss(A0v, 12345); break;
+        case OpKind::orgqr: (void)A0v.fill_random(*q, false, 12345); break;
     }
+    q->wait();
 
     auto reset_A = [&] { (void)MV::copy(*q, Av, A0v); q->wait(); };
 

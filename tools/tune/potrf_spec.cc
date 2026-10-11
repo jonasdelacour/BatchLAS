@@ -6,7 +6,6 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/inputs.hh>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -40,7 +39,8 @@ struct PotrfProblem {
           A0(stride * std::size_t(batch_)), A(stride * std::size_t(batch_)), pA0(std::size_t(batch_)),
           pA(std::size_t(batch_)), A0v(A0.data(), n, n, ld, int(stride), batch, pA0.data()),
           Av(A.data(), n, n, ld, int(stride), batch, pA.data()), info(std::size_t(batch_), 0) {
-        batchlas::verify::fill_spd(A0v);
+        (void)A0v.fill_random_spd(q, 12345);
+        q.wait();
     }
     std::size_t workspace() { return potrf_buffer_size<kBackend, T>(q, Av, uplo); }
     void reset() {

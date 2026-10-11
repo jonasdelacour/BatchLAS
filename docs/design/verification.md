@@ -41,6 +41,7 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 | Items checked | `{0, batch/2, batch−1}` by default; an overload takes an explicit item list, `all_items(batch)` lists every item (saturating-batch tests) |
 | Tolerance | `c · f(n) · eps(T)` per check kind, one named entry per kind (below); no fixed per-type bounds |
 | Where checks run | the dense residuals and backward errors on a SYCL device ([device engine](#verification-device-engine)); LAPACKE references and the O(input) scans (norms, `values_error`, `pivots_valid`, `pivot_ratio`) on the host |
+| Inputs | `MatrixView` fills: `fill_random`, `fill_random_spd`, `fill_random_pivoted` (dominant, rows a random n-cycle per item), `fill_graded_hermitian` (condition 10^c); verify has no generators |
 | Library use | fills, transforms (`triangularize`, `hermitize`, `symmetrize`, `fill_identity`), `linalg::axpby_into`, `linalg::triangular_mask_into` and `norm` (Frobenius) are BatchLAS's own; no routed operation (gemm, potrf, ...) is called. Products, the componentwise backward error, reflector application and row interchanges are the engine's kernels, so no check runs through the op it judges |
 | Public API | no: internal, not installed |
 
@@ -55,7 +56,6 @@ directory can own it); not installed.
 | Header | Contents |
 | --- | --- |
 | `scalar.hh` | `promoted_t<T>`, `up`, `conj` (in T for every dtype), `make<T>`, `abs`, `cabs1` (`|re| + |im|`, LAPACK's pivot metric), `finite` (every component), `eps<T>()`, `nanmax`, `Rng` (factor_bench's historical LCG, constants unchanged: `next()` in [−1, 1), `uniform01()`, `normal()`) |
-| `inputs.hh` | `fill_spd`, `fill_lu` (dominant, then row-permuted per item), `fill_random`, `fill_graded_hermitian` (condition ~1e±6), `fill_reflectors` (larfg on random columns, LAPACK storage) |
 | `norms.hh` | `view(data, rows, cols, ld, stride = 0, batch = 1)` (a `KernelMatrixView` over raw host memory, `const T*` too; stride 0 is `ld·cols`; overlapping items and `ld·cols` beyond `int` throw); Frobenius, max-abs, one- and infinity-norm of one item, promoted |
 | `residuals.hh` | `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, the same reflector loop as `qr_residual`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`, Q explicit), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, B a tridiagonal or banded reduction stored densely; judged as `factorization`), `solve_residual` (null B for getri; probe columns above 2^28 elements; an overload reads A through a `Shape` and a `Transpose`), `lu_solve_residual` (the solve quantity for X from getrf factors and pivots: `op(P·L·U)` formed per checked item on the device), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`), `gemm_max_denominator` (the largest of those denominators, to turn an absolute tolerance into a componentwise one), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees) |
 | `reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` factor and tau, `?sterf`. Each returns `false` without LAPACKE, empty input included, and the caller reports NaN or skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
@@ -246,9 +246,9 @@ never land.
 
 ## Verification: acceptance
 
-- **Inputs unchanged.** `fill_spd` and `fill_lu` produce byte-identical buffers to
-  `factor_bench.cc` and `tools/tune/residuals.hh` for every dtype at a fixed seed (golden hashes
-  in the library's tests), so archived sweeps and ledger records stay comparable.
+- **Inputs are library fills.** Test inputs come from `MatrixView::fill_random`, `fill_random_spd`,
+  `fill_random_pivoted` and `fill_graded_hermitian` (device kernels, deterministic in the seed);
+  verify has no generators. Inputs of sweeps archived before 2026-10-11 do not reproduce.
 - **Every check proven.** Each residual has a test with a correct input (passes) and one
   deliberate corruption per axis it reads: a perturbed element, a wrong `ld`, a wrong batch
   `stride`, the last item (not item 0) corrupted, a NaN. Each must fail.

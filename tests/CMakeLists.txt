@@ -290,6 +290,7 @@ function(batchlas_add_test_target test_name)
             LIBRARIES
                 GTest::gtest
                 GTest::gtest_main
+                batchlas::verify
         )
     else()
         batchlas_configure_binary_target(${test_name}

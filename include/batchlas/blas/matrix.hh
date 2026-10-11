@@ -1546,6 +1546,61 @@ namespace batchlas {
                                      unsigned int seed = 42) const {
             return fill_triangular_random(Queue(), uplo, diag, seed);
         }
+
+        /// @brief Random Hermitian (real T: symmetric) positive definite matrix, a different one per item.
+        ///
+        /// The Hermitian fill_random() values with the shift n (2n for complex T, whose entries reach
+        /// modulus sqrt(2)) added to the real diagonal: every row is strictly diagonally dominant
+        /// with a positive diagonal. a_ij == conj(a_ji) holds bitwise. Deterministic in @p seed,
+        /// independent of ld() and stride(); writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols()
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_spd(const Queue& ctx, unsigned int seed = 42) const;
+
+        /// @brief fill_random_spd() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_spd(unsigned int seed = 42) const {
+            return fill_random_spd(Queue(), seed);
+        }
+
+        /// @brief Row-permuted diagonally dominant random matrix, so LU partial pivoting is not the identity.
+        ///
+        /// Item b is P_b D_b: D_b holds uniform [-1, 1) entries plus the fill_random_spd() shift on
+        /// the diagonal, and P_b is a seeded random n-cycle (no row stays in place for n >= 2), a
+        /// different one per item. Each column's dominant entry therefore sits in a distinct row.
+        /// Deterministic in @p seed; writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols(), or if n ints exceed the device's local memory
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_pivoted(const Queue& ctx, unsigned int seed = 42) const;
+
+        /// @brief fill_random_pivoted() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_random_pivoted(unsigned int seed = 42) const {
+            return fill_random_pivoted(Queue(), seed);
+        }
+
+        /// @brief Hermitian Q diag(lambda) Q^H with condition number 10^@p log10_cond, a different Q per item.
+        ///
+        /// lambda_i = 10^(-log10_cond * i / (n - 1)) for i = 0..n-1 (1 when n == 1). Q is the product
+        /// of n Householder reflectors I - 2 v v^H of seeded random unit vectors (real for real T),
+        /// applied in T's precision. The result is exactly Hermitian with a real diagonal.
+        /// Deterministic in @p seed; writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols(), if @p log10_cond is not finite,
+        ///         or if 2n elements of T exceed the device's local memory
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed = 42) const;
+
+        /// @brief fill_graded_hermitian() on a new default queue.
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_graded_hermitian(double log10_cond, unsigned int seed = 42) const {
+            return fill_graded_hermitian(Queue(), log10_cond, seed);
+        }
         /// @}
 
 

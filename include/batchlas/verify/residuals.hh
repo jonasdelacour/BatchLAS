@@ -8,7 +8,6 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/verify/engine.hh>
-#include <batchlas/verify/inputs.hh>
 #include <batchlas/verify/items.hh>
 #include <batchlas/verify/norms.hh>
 #include <batchlas/verify/scalar.hh>

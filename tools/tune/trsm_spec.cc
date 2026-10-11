@@ -13,7 +13,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/inputs.hh>
+#include <batchlas/verify/scalar.hh>
 #include <batchlas/verify/items.hh>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -70,7 +70,8 @@ struct TrsmProblem {
                         r == c ? batchlas::verify::make<T>(2.0, 0.5)
                         : batchlas::verify::make<T>(in_tri ? w : 1e6, in_tri ? 0.5 * w : 0.0);
                 }
-        batchlas::verify::fill_random(B0v, 4242);
+        (void)B0v.fill_random(q, false, 4242);
+        q.wait();
     }
     void reset() {  // the solve overwrites B with X
         (void)MV::copy(q, Xv, B0v);

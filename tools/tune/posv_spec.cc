@@ -6,7 +6,6 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/verify/inputs.hh>
 #include <batchlas/verify/residuals.hh>
 #include <batchlas/verify/tolerance.hh>
 
@@ -43,8 +42,9 @@ struct PosvProblem {
           pX(std::size_t(batch_)), A0v(A0.data(), n, n, lda, int(sa), batch, pA0.data()),
           Av(A.data(), n, n, lda, int(sa), batch, pA.data()), B0v(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data()),
           Xv(X.data(), n, nrhs, ldb, int(sb), batch, pX.data()), info(std::size_t(batch_), 0) {
-        batchlas::verify::fill_spd(A0v);
-        batchlas::verify::fill_random(B0v, 777);
+        (void)A0v.fill_random_spd(q, 12345);
+        (void)B0v.fill_random(q, false, 777);
+        q.wait();
     }
     std::size_t workspace() { return posv_buffer_size<kBackend, T>(q, Av, Xv, uplo); }
     void reset() {  // the solve overwrites A with the factor and B with X
