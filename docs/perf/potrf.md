@@ -307,8 +307,9 @@ BATCHLAS_POTRF_ROUTE=blocked                            -> 0/8 bad, rel resid 4.
 BATCHLAS_POTRF_ROUTE=blocked BATCHLAS_GEMM_ROUTE=native -> 8/8 bad, rel resid 9.941e-01
 ```
 
-**Fix:** `ctx->fill(ws.product.data(), T(0), ws.product.size())` (`potrf_blocked.cc:283-285`). Guard:
-`PotrfBlockedTest.BlockedDoesNotReadUninitialisedWorkspace`, the only test of 101 that goes red without the fill.
+**Fix:** first a zero fill of `ws.product`. Since 2026-10-11 the gemm epilogues skip `C` at `beta = 0` and the fill is
+deleted ([known-defects #11](../design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero)). Guard:
+`PotrfBlockedTest.BlockedDoesNotReadUninitialisedWorkspace`, which pins `direct` and `tiled`.
 
 **3. The facade test asserted on a route, not on execution.** It now compares bit-exactly against `potrf_cta_dispatch`;
 a residual check cannot see low-bit differences.

@@ -403,6 +403,31 @@ TYPED_TEST(OrgqrCandidates, ExactWorkspaceInAPoisonedArena) {
         }
 }
 
+// The blocked apply's W1 = V^H C is a beta = 0 gemm into the arena. Pinning the native gemm
+// families that once read C there (known-defects.md #11) makes this independent of the gemm table.
+TYPED_TEST(OrgqrCandidates, PoisonedArenaUnderEveryPinnedNativeGemm) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    const C blocked{oq::Blocked{}};
+    int ran = 0;
+    for (const char* gemm : {"direct", "tiled"})
+        for (auto [m, n] : {std::pair{1, 1}, std::pair{33, 20}}) {
+            if (!this->expect_runs(blocked, m, n, 5)) continue;
+            auto p = this->prob(m, n, 5, 7u + m);
+            const Pin pin("orgqr", blocked);
+            const Pin gpin("gemm", std::string_view(gemm));
+            const std::size_t bytes = orgqr_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span());
+            UnifiedVector<std::byte> arena(bytes);
+            std::memset(arena.data(), 0xFF, bytes);
+            (void)orgqr<B, T>(*this->ctx, p.A(), p.tau.to_span(), arena.to_span());
+            this->ctx->wait();
+            expect_q(*this->ctx, p, name(blocked, m, n, 5) + " gemm=" + gemm);
+            if (::testing::Test::HasFatalFailure()) return;
+            ++ran;
+        }
+    if (ran == 0) GTEST_SKIP() << "blocked has no route on this backend";
+}
+
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;

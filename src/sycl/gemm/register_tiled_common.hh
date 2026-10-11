@@ -481,9 +481,7 @@ Event launch_register_tiled(Queue& ctx,
                         const int row = row_base + i;
                         for (int j = 0; j < ThreadTileCols; ++j) {
                             const int col = col_base + j;
-                            const int index = batch_c + col * ldc + row;
-                            const T prior = c_ptr[index];
-                            c_ptr[index] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                            LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta, accum[i][j]);
                         }
                     }
                 } else {
@@ -495,9 +493,8 @@ Event launch_register_tiled(Queue& ctx,
                         for (int j = 0; j < ThreadTileCols; ++j) {
                             const int col = col_base + j;
                             if (col < n) {
-                                const int index = batch_c + col * ldc + row;
-                                const T prior = c_ptr[index];
-                                c_ptr[index] = LinearEpilogue<T>::apply(alpha, beta, accum[i][j], prior);
+                                LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta,
+                                                         accum[i][j]);
                             }
                         }
                     }

@@ -428,6 +428,26 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
     }
 }
 
+// W1/W2 are beta = 0 trailing-gemm outputs in a 0xff (NaN) workspace with no zero fill; each
+// native gemm family that once read C there (known-defects.md #11) is pinned.
+TYPED_TEST(GeqrfTest, BlockedIgnoresAGarbageWorkspace) {
+    using T = typename TestFixture::T;
+    for (const char* gemm : {"auto", "direct", "tiled"})
+        for (auto [m, n] : {std::pair{64, 64}, std::pair{100, 72}}) {
+            ASSERT_LT(this->nb(m, n), n) << "no trailing update, so no W1/W2";
+            auto p = make_problem<T>(m, n, 3, 77u + unsigned(m));
+            auto V = view_of(p);
+            const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
+            UnifiedVector<std::byte> w(ws ? ws : 1);
+            std::memset(w.data(), 0xFF, w.size());
+            const select::ScopedPin<ops::geqrf::GeqrfChoice> pin("gemm", std::string_view(gemm));
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam());
+            this->ctx->wait();
+            check_one(*this->ctx, p, (std::string("blocked, gemm=") + gemm).c_str());
+            if (this->HasFailure()) return;
+        }
+}
+
 // G3. The block boundary, straddled on purpose and ASSERTED to be straddled. The rows
 // are m > n deliberately: on a square REAL matrix larfg returns tau = 0 for the final
 // 1x1 reflector, so dropping it changes nothing and the test guards nothing.

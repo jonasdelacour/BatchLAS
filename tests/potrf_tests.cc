@@ -1313,7 +1313,8 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
 
 // A POISONED WORKSPACE: the driver must not read scratch it has not written. Fresh
 // UnifiedVector pages come back ZEROED, so every other test here is blind to this. The
-// trap: the native gemm's epilogue reads `prior` unconditionally and 0 * NaN = NaN.
+// W x W product is a beta = 0 gemm into that scratch, with no zero fill; each native gemm
+// family that once read C at beta = 0 is pinned (known-defects.md #11).
 TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1324,31 +1325,36 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     ASSERT_GT(n, bp.nb) << "at n <= nb the scratch is not allocated at all "
                            "(potrf_blocked_layout), so this test would be vacuous";
 
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-    std::vector<std::vector<T>> ref(batch);
-    for (int b = 0; b < batch; ++b) {
-        ref[b] = make_spd<T>(n, 9001u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, MV<T>::make(R(0), R(0)));
-    }
+    for (const char* gemm : {"auto", "direct", "tiled"}) {
+        SCOPED_TRACE(std::string("gemm=") + gemm);
+        const select::ScopedPin<ops::potrf::PotrfChoice> gemm_pin("gemm", std::string_view(gemm));
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        std::vector<std::vector<T>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            ref[b] = make_spd<T>(n, 9001u + b);
+            this->load_triangle(A, b, n, ref[b], Uplo::Lower, MV<T>::make(R(0), R(0)));
+        }
 
-    const std::size_t bytes =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_GT(bytes, 0u);
-    UnifiedVector<std::byte> ws(bytes);
-    std::memset(ws.data(), 0xFF, bytes);
+        const std::size_t bytes =
+            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
+        ASSERT_GT(bytes, 0u);
+        UnifiedVector<std::byte> ws(bytes);
+        std::memset(ws.data(), 0xFF, bytes);
 
-    UnifiedVector<int32_t> info(batch, int32_t(-12345));
-    (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                          ws.to_span(), info.to_span(), TestFixture::gemm_seam(),
-                                          TestFixture::panel_solve());
-    this->ctx->wait();
+        UnifiedVector<int32_t> info(batch, int32_t(-12345));
+        (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+                                              ws.to_span(), info.to_span(), TestFixture::gemm_seam(),
+                                              TestFixture::panel_solve());
+        this->ctx->wait();
 
-    for (int b = 0; b < batch; ++b) {
-        ASSERT_EQ(info[b], 0)
-            << "a positive-definite matrix was reported not positive definite from a "
-               "POISONED workspace, b=" << b;
-        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(*this->ctx, ref[b], A, b, Uplo::Lower)))
-            << "b=" << b;
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0)
+                << "a positive-definite matrix was reported not positive definite from a "
+                   "POISONED workspace, b=" << b;
+            EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(*this->ctx, ref[b], A, b, Uplo::Lower)))
+                << "b=" << b;
+        }
+        if (this->HasFailure()) return;
     }
 }
 

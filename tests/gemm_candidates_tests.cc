@@ -690,31 +690,23 @@ TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
 }
 
 // beta = 0 with C full of NaN: BLAS does not read C, so the result must be finite and right.
-// direct, tiled and the LinearEpilogue register tiles compute beta * prior unconditionally
-// (known-defects.md #11, unfixed); they are run on a finite C instead and listed, so a fix
-// shows up here as an entry to delete.
+// Every family, aligned and predicated legs, and the 1x1x1 shape orgqr's blocked apply sends to
+// direct (known-defects.md #11: direct, tiled and reg once computed beta * prior unconditionally).
 TYPED_TEST(GemmCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
-    const std::vector<std::string> reads_c{"direct", "tiled", "reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1",
-                                           "reg:m=64:n=64:k=16:u=1", "reg:m=128:n=32:k=16:u=1",
-                                           "reg:m=128:n=32:k=32:u=1", "reg:m=128:n=64:k=16:u=1",
-                                           "reg:m=32:n=128:k=16:u=1", "reg:m=128:n=64:k=32:u=4",
-                                           "reg:m=128:n=64:k=32:u=2"};
     int nan_checked = 0;
     for (const C& c : og::candidates<T>()) {
-        const std::string sp = select::to_string(c);
-        const bool known = std::find(reads_c.begin(), reads_c.end(), sp) != reads_c.end();
         for (Transpose ta : {kN, kC})
-            for (auto [m, n, k] : {std::tuple{128, 128, 64}, std::tuple{45, 51, 38}}) {
+            for (auto [m, n, k] : {std::tuple{128, 128, 64}, std::tuple{45, 51, 38}, std::tuple{1, 1, 1}}) {
                 Spec s{ta, kN, m, n, k, 3, Layout::Strided};
                 s.beta_zero = true;
-                s.nan_c = !known;
+                s.nan_c = true;
                 if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_word_falls_back(c)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
-                expect_gemm(*this->ctx, p, name(c, s) + (known ? " (finite C: known-defects #11)" : " (NaN C)"));
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
                 if (::testing::Test::HasFatalFailure()) return;
-                nan_checked += !known;
+                ++nan_checked;
             }
     }
     EXPECT_GT(nan_checked, 0);
