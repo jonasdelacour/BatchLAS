@@ -10,8 +10,8 @@ binaries hold nearly all of it.
 | one test case | `./build/tests/stedc_tests --gtest_filter='StedcTest/0.BatchedMatrices'` |
 | one binary | `ctest -R '^stedc_tests$'` |
 | one component | `ctest -L tridiag` |
-| everything quick | `ctest -LE slow` (65 of 70 tests, about 95 s) |
-| everything | `ctest` (70 tests) |
+| everything quick | `ctest -LE slow` (about 95 s; `ctest -N -LE slow` counts it) |
+| everything | `ctest` (`ctest -N` counts it) |
 
 Counts move as binaries are added (see [the CI page](../docs/ci.md#running-all-of-it-locally)).
 `ctest -R` is a substring regex: `-R syev` matches `syev_tests`, `syevx_tests`, `syev_cta_tests`.
