@@ -94,7 +94,12 @@ Qr<T> make_qr(const Spec& s) {
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.at(it, i, j)] = it < reps ? MVof<T>::make(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
+                if (it < reps) {
+                    const auto re = u(gen), im = u(gen);
+                    p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+                } else {
+                    p.mem[p.at(it, i, j)] = p.mem[p.at(it % reps, i, j)];
+                }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }

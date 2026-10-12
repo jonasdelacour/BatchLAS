@@ -94,11 +94,15 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
-                                         : MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
+                    const auto x = d(gen), y = d(gen);
+                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (x >= 0 ? R(1) : R(-1)), y)
+                                         : MatrixView<T, MatrixFormat::Dense>::make(x, y);
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
-            for (auto& v : b1) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
+            for (auto& v : b1) {
+                const auto re = d(gen), im = d(gen);
+                v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+            }
         }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) p.a[size_t(it) * p.stra + size_t(j) * p.lda + i] = a1[i + size_t(j) * n];

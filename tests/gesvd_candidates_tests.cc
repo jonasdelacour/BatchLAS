@@ -107,7 +107,8 @@ std::vector<cd> unit_vector(std::mt19937& gen, int n) {
     std::vector<cd> u(n);
     double nrm = 0;
     for (auto& x : u) {
-        x = kCx<T> ? cd(d(gen), d(gen)) : cd(d(gen), 0);
+        const double re = d(gen);
+        x = cd(re, kCx<T> ? d(gen) : 0.0);
         nrm += std::norm(x);
     }
     for (auto& x : u) x /= std::sqrt(nrm);

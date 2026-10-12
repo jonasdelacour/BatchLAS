@@ -116,7 +116,8 @@ Eig<T> make_eig(const Spec& s) {
         std::vector<cd> v(n);
         double vv = 0;
         for (int i = 0; i < n; ++i) {
-            v[i] = kCx<T> ? cd(u(gen), u(gen)) : cd(u(gen), 0.0);
+            const double re = u(gen);
+            v[i] = cd(re, kCx<T> ? u(gen) : 0.0);
             vv += std::norm(v[i]);
         }
         auto q = [&](int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * v[i] * std::conj(v[j]) / vv; };

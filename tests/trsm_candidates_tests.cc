@@ -119,14 +119,21 @@ void fill(Solve<T>& p) {
     for (int it = 0; it < reps; ++it) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
-                if (i == j)
-                    p.mem[p.ai(it, i, j)] = s.diag == Diag::Unit ? MVof<T>::make(R(300), R(-200))
-                                                                 : MVof<T>::make(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else if (p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = MVof<T>::make((gen() & 1 ? d(gen) : -d(gen)) / R(s.n), d(gen) / R(s.n));
+                if (i == j && s.diag == Diag::Unit) {
+                    p.mem[p.ai(it, i, j)] = MVof<T>::make(R(300), R(-200));
+                } else if (i == j) {
+                    const auto x = d(gen), y = d(gen);
+                    p.mem[p.ai(it, i, j)] = MVof<T>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
+                } else if (p.owned(i, j)) {
+                    const auto x = gen() & 1 ? d(gen) : -d(gen);
+                    p.mem[p.ai(it, i, j)] = MVof<T>::make(x / R(s.n), d(gen) / R(s.n));
+                }
             }
         for (int j = 0; j < p.b.cols; ++j)
-            for (int i = 0; i < p.b.rows; ++i) p.mem[p.bi(it, i, j)] = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < p.b.rows; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.mem[p.bi(it, i, j)] = MVof<T>::make(re, im);
+            }
     }
     for (int it = reps; it < s.batch; ++it) {
         const int r = it % reps;

@@ -89,7 +89,10 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < m; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+            }
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {

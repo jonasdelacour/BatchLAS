@@ -123,7 +123,11 @@ void fill_a(Inv<T>& p) {
         std::shuffle(perm.begin(), perm.end(), gen);
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
-                const T v = i == j ? MVof<T>::make(R(s.n) + R(1.5), R(0.25)) : MVof<T>::make(u(gen), u(gen));
+                T v = MVof<T>::make(R(s.n) + R(1.5), R(0.25));
+                if (i != j) {
+                    const auto re = u(gen), im = u(gen);
+                    v = MVof<T>::make(re, im);
+                }
                 p.mem[p.ai(it, perm[i], j)] = v;
                 p.a0[std::size_t(it) * s.n * s.n + std::size_t(j) * s.n + perm[i]] = v;
             }

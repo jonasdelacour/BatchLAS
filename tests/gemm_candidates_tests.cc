@@ -267,7 +267,11 @@ void init(Problem<T>& p, std::size_t total) {
                 for (int i = 0; i < g.rows; ++i) {
                     T& v = p.mem[Problem<T>::at(g, it, i, j)];
                     if (it != r) v = p.mem[Problem<T>::at(g, r, i, j)];
-                    else v = is_c && s.nan_c ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen));
+                    else if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
+                    else {
+                        const auto re = u(gen), im = u(gen);
+                        v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+                    }
                 }
         };
         put(p.a, false);

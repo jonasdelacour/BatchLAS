@@ -127,11 +127,15 @@ Sys<T> make_sys(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
-                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else p.f(it, i, j) = MVof<T>::make(sg * d(gen) / R(s.n), d(gen) / R(s.n));
+                const auto x = d(gen), y = d(gen);
+                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
+                else p.f(it, i, j) = MVof<T>::make(sg * x / R(s.n), y / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
-            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < s.n; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.x(it, i, j) = MVof<T>::make(re, im);
+            }
     }
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;

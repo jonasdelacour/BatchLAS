@@ -16,57 +16,12 @@
 #include <complex>
 #include <cstddef>
 #include <limits>
-#include <random>
 #include <type_traits>
 #include <vector>
 
 using namespace batchlas;
 
 namespace {
-template <typename Scalar>
-using RealOf = typename base_type<Scalar>::type;
-
-// Clustered spectrum with small Hermitian noise: exercises deflation and the
-// tie-breaking in the fused kernel's rank-based ordering.
-template <typename Scalar>
-static Matrix<Scalar, MatrixFormat::Dense> make_near_degenerate_hermitian(int n, int batch, unsigned seed,
-																		 RealOf<Scalar> eps) {
-	using Real = RealOf<Scalar>;
-	Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
-
-	std::minstd_rand rng(seed);
-	std::uniform_real_distribution<Real> dist(Real(-1), Real(1));
-
-	for (int b = 0; b < batch; ++b) {
-		for (int j = 0; j < n; ++j) {
-			for (int i = 0; i <= j; ++i) {
-				Scalar z;
-				if constexpr (std::is_same_v<Scalar, Real>) {
-					z = Scalar(dist(rng));
-				} else {
-					z = Scalar(dist(rng), dist(rng));
-				}
-
-				if (i == j) {
-					const Real base = Real(i / 4);
-					const Real tiny = Real(i % 4) * Real(1e-4);
-					if constexpr (std::is_same_v<Scalar, Real>) {
-						A(i, j, b) = Scalar(base + tiny) + Scalar(eps) * z;
-					} else {
-						A(i, j, b) = Scalar(base + tiny) + Scalar(eps) * Scalar(Real(std::real(z)), Real(0));
-					}
-				} else {
-					const Scalar v = Scalar(eps) * z;
-					A(i, j, b) = v;
-					if constexpr (std::is_same_v<Scalar, Real>) A(j, i, b) = v;
-					else A(j, i, b) = std::conj(v);
-				}
-			}
-		}
-	}
-
-	return A;
-}
 
 template <typename T, Backend B>
 struct SyevCtaFusedConfig {
@@ -209,7 +164,8 @@ TYPED_TEST(SyevCtaFusedTest, NearDegenerateSpectrum) {
 	const int n = 24;
 	const int batch = 4;
 
-	auto A0 = make_near_degenerate_hermitian<Scalar>(n, batch, /*seed=*/1337, Real(1e-3));
+	Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
+	A0.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/1337).wait();
 	auto A = A0;
 	auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 

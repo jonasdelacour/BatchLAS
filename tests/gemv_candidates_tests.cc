@@ -117,14 +117,19 @@ Problem<T> make_problem(const Spec& s) {
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
+        // Named locals: the two draws of a complex entry in a fixed order on every compiler.
+        auto draw = [&] {
+            const auto re = u(gen), im = u(gen);
+            return MatrixView<T, MatrixFormat::Dense>::make(re, im);
+        };
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.xi(r, i)];
+                p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
+        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? draw() : p.mem[p.xi(r, i)];
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.yi(r, i)];
+                p.mem[p.yi(it, i)] = it < reps ? draw() : p.mem[p.yi(r, i)];
     }
     p.mem0 = p.mem;
     return p;

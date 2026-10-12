@@ -122,14 +122,19 @@ Prob<T> make_prob(const Spec& s) {
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    // Named locals: the two draws of a complex entry in a fixed order on every compiler.
+    auto draw = [&] {
+        const auto re = u(gen), im = u(gen);
+        return MatrixView<T, MatrixFormat::Dense>::make(re, im);
+    };
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % std::max(reps, 1);
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
                 if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+                    p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? draw() : p.mem[p.bi(r, i, j)];
     }
     p.mem0 = p.mem;
     return p;

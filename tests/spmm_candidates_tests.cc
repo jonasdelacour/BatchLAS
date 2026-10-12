@@ -143,7 +143,10 @@ Problem<T> make(const Spec& s) {
     p.ci.resize(p.val.size());
     p.ro.resize(std::size_t(p.ostride) * std::max(1, s.batch));
     std::vector<T> vals_rep(std::size_t(p.vstride) * reps);
-    for (auto& v : vals_rep) v = Dense<T>::make(u(gen), u(gen));
+    for (auto& v : vals_rep) {
+        const auto re = u(gen), im = u(gen);
+        v = Dense<T>::make(re, im);
+    }
     for (int b = 0; b < s.batch; ++b) {
         const int r = b % reps;
         const int nnz = int(cols[r].size());
@@ -160,8 +163,14 @@ Problem<T> make(const Spec& s) {
     for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<T>();
     std::vector<T> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
         crep(std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs) * reps);
-    for (auto& v : brep) v = Dense<T>::make(u(gen), u(gen));
-    for (auto& v : crep) v = Dense<T>::make(u(gen), u(gen));
+    for (auto& v : brep) {
+        const auto re = u(gen), im = u(gen);
+        v = Dense<T>::make(re, im);
+    }
+    for (auto& v : crep) {
+        const auto re = u(gen), im = u(gen);
+        v = Dense<T>::make(re, im);
+    }
     for (int b = 0; b < s.batch; ++b) {
         const std::size_t r = std::size_t(b % reps);
         for (int j = 0; j < p.b_cols; ++j)

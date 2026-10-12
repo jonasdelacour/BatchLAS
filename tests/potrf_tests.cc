@@ -44,7 +44,10 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 template <typename T>
 inline T host_rand(std::mt19937& gen) {
     std::uniform_real_distribution<RealOf<T>> d(RealOf<T>(-1), RealOf<T>(1));
-    if constexpr (test_utils::is_complex<T>::value) return T(d(gen), d(gen));
+    if constexpr (test_utils::is_complex<T>::value) {
+        const auto re = d(gen), im = d(gen);
+        return T(re, im);
+    }
     else return d(gen);
 }
 
@@ -98,7 +101,8 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         L[c + static_cast<size_t>(c) * n] = MV<T>::make(R(1), R(0));
         for (int i = c + 1; i < n; ++i) {
             if constexpr (test_utils::is_complex<T>::value) {
-                L[i + static_cast<size_t>(c) * n] = T(d(gen), d(gen));
+                const auto re = d(gen), im = d(gen);
+                L[i + static_cast<size_t>(c) * n] = T(re, im);
             } else {
                 L[i + static_cast<size_t>(c) * n] = d(gen);
             }

@@ -1544,11 +1544,36 @@ TYPED_TEST(MatrixFillTest, GradedHermitianRunsAtN512) {
     }
 }
 
+// Diagonal floor(i/4) + (i%4) 1e-4 plus a Hermitian perturbation of size noise: clusters of four.
+TYPED_TEST(MatrixFillTest, NearDegenerateHermitianIsClusteredAndExactlyHermitian) {
+    using R = typename TestFixture::R;
+    constexpr double noise = 1e-3;
+    for (int n : {1, 9, 33}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        auto m = TestFixture::padded(n, 3);
+        m.view().fill_near_degenerate_hermitian(*this->ctx, noise, 1337u).wait();
+        TestFixture::expect_padding_untouched(m);
+        TestFixture::expect_exactly_hermitian(m);
+        if (n > 1) TestFixture::expect_items_differ(m);
+        // |Re z| < 1 and |z| <= sqrt(2): every entry is noise-sized around its target.
+        const R bound = R(noise * 1.5) + 4 * std::numeric_limits<R>::epsilon() * R(n);
+        for (int b = 0; b < 3; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    const R target = i == j ? R(i / 4) + R(i % 4) * R(1e-4) : R(0);
+                    EXPECT_LE(std::abs(TestFixture::at(m, i, j, b) - typename TestFixture::T(target)), bound)
+                        << "(" << i << "," << j << ") item " << b;
+                }
+    }
+    this->expect_reproducible(12, [&](auto v, unsigned s) { return v.fill_near_degenerate_hermitian(*this->ctx, noise, s); });
+}
+
 TYPED_TEST(MatrixFillTest, SquareFillsRejectARectangularView) {
     Matrix<typename TestFixture::T, MatrixFormat::Dense> m(5, 4, 3);
     EXPECT_THROW((void)m.view().fill_random_spd(*this->ctx), batchlas::invalid_argument);
     EXPECT_THROW((void)m.view().fill_random_pivoted(*this->ctx), batchlas::invalid_argument);
     EXPECT_THROW((void)m.view().fill_graded_hermitian(*this->ctx, 3.0), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3), batchlas::invalid_argument);
 }
 
 // Race guard for the two local-memory kernels: a saturating batch must give, item for item,

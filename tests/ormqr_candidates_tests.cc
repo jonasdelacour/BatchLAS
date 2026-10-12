@@ -126,8 +126,11 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                const T v = i > j ? MVof<T>::make(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
-                                  : MVof<T>::make(300, -200);
+                T v = MVof<T>::make(300, -200);
+                if (i > j) {
+                    const auto re = u(gen), im = u(gen);
+                    v = MVof<T>::make(re / std::sqrt(double(s.m)), im / std::sqrt(double(s.m)));
+                }
                 p.mem[p.ai(it, i, j)] = v;
                 if (i > j) norm2 += std::norm(MVof<T>::up(v));
             }
@@ -140,7 +143,12 @@ Apply<T> make_apply(const Spec& s) {
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
-                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : MVof<T>::make(u(gen), u(gen));
+                if (it != r) {
+                    p.mem[p.ci(it, i, j)] = p.mem[p.ci(r, i, j)];
+                } else {
+                    const auto re = u(gen), im = u(gen);
+                    p.mem[p.ci(it, i, j)] = MVof<T>::make(re, im);
+                }
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;

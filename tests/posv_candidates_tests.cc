@@ -70,7 +70,8 @@ std::vector<T> make_hpd(int n, std::mt19937& gen) {
     for (int j = 0; j < n; ++j) {
         A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = MatrixView<T, MatrixFormat::Dense>::make((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const auto x = gen() & 1 ? d(gen) : -d(gen);
+            const T v = MatrixView<T, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
             A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }
@@ -113,7 +114,10 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     for (int it = 0; it < batch; ++it) {
         p.full[it] = (identical && it > 0) ? p.full[0] : make_hpd<T>(n, gen);
         if (!identical || it == 0)
-            for (auto& v : rhs) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
+            for (auto& v : rhs) {
+                const auto re = d(gen), im = d(gen);
+                v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+            }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 if (p.in_tri(i, j))
