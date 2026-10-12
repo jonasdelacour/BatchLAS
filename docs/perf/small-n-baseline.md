@@ -1,4 +1,4 @@
-# Small-n factorization baseline
+# Small-n factorization baseline {#perf_small_n_baseline}
 
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-09-10
 

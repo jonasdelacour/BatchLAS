@@ -1,4 +1,4 @@
-# Small-n factorization plan
+# Small-n factorization plan {#design_small_n_plan}
 
 > **Status:** current, partly shipped · RTX 4090 (sm_89), CUDA 13.2 · checked 2026-10-08
 

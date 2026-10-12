@@ -480,7 +480,7 @@ planning only after the round's last record, and records identical to a one-GPU 
 Added 2026-10-09. Every cell times and verifies at one leading dimension (`ld_pad`, normally 0), so a
 candidate that derives `ld` from `n` verifies, wins and ships. The deep sm_120 run was suspected of
 shipping exactly that for the syev `vendor` family. That suspicion turned out to be wrong
-(@ref md_docs_2design_2known-defects "known defects", the LOBPCG entry), but nothing in the tuner
+(@ref design_known_defects "known defects", the LOBPCG entry), but nothing in the tuner
 could have caught such a defect if it had been real.
 
 **The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified

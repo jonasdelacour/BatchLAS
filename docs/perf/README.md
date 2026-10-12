@@ -54,8 +54,9 @@ turns a pin into a throw.
   effect is cell-specific and intermittent; see `lu.md`.
 - **JIT warmed.** Medians of interleaved A/B. Cells over a relative-sd gate are discarded.
 - **Vendor-free means the build** (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), never an environment
-  variable inside a build that still links the vendor. There, an unsupported forced route falls
-  through to `automatic()`, which returns `{Vendor, Auto}`, so an A/B can be vendor against vendor.
+  variable inside a build that still links the vendor. There, a pin the shape cannot run throws, and
+  the class word `native` with nothing runnable falls back to Auto (with a warning), which may pick
+  the vendor, so an A/B can be vendor against vendor.
 - **Every boundary needs a bracketing non-winner.** A window edge with no measured loss just outside
   it is a guess. Where one is missing, the page says so.
 
@@ -100,23 +101,23 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 
 ## perf index: all evidence pages
 
-@subpage md_docs_2perf_2dispatch "Dispatch"
+@subpage perf_dispatch "Dispatch"
 
 @subpage perf_gemm "GEMM"
 
 @subpage perf_gemv "GEMV"
 
-@subpage md_docs_2perf_2level3 "Level 3 (symm, hemm, syrk, herk, syr2k, her2k, trmm)"
+@subpage perf_level3 "Level 3 (symm, hemm, syrk, herk, syr2k, her2k, trmm)"
 
 @subpage perf_trsm "TRSM"
 
-@subpage md_docs_2perf_2potrf "Cholesky (potrf, posv)"
+@subpage perf_potrf "Cholesky (potrf, posv)"
 
 @subpage perf_lu "LU (getrf, getrs, getri, gesv)"
 
-@subpage md_docs_2perf_2qr "QR (geqrf, orgqr, ormqr)"
+@subpage perf_qr "QR (geqrf, orgqr, ormqr)"
 
-@subpage md_docs_2perf_2spmm "SpMM"
+@subpage perf_spmm "SpMM"
 
 @subpage perf_syev "syev"
 
@@ -134,10 +135,10 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 
 @subpage perf_gesvd "gesvd"
 
-@subpage md_docs_2perf_2small-n-baseline "Small-n factorization baseline"
+@subpage perf_small_n_baseline "Small-n factorization baseline"
 
 @subpage perf_tuning "Tuning constants"
 
-@subpage md_docs_2perf_2blackwell "Blackwell (sm_120) retune"
+@subpage perf_blackwell "Blackwell (sm_120) retune"
 
 @subpage perf_sycl_implementations "DPC++ vs AdaptiveCpp"

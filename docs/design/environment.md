@@ -147,7 +147,7 @@ Tests pin a route with `ScopedPin` (`src/select/select.hh`), which wins over the
 To add a pinned op, add its name to `RoutingSettings::ops`. `BATCHLAS_<OP>_VARIANT`,
 `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KERNEL`, `BATCHLAS_GEMM_EXPERIMENTAL`,
 `BATCHLAS_GEMM_CUBLASDX_KERNEL`, `BATCHLAS_SYEV_SMALL_KERNEL` and `BATCHLAS_SYEV_CTA_MAX_N` are
-retired and no longer read. See `docs/design/flat-kernel-selection.md` (sections 5.3 and 12).
+retired and no longer read. See @ref design_flat_selection (sections 5.2 and 12).
 
 ## Knobs that override an explicit argument {#environment-knobs-that-override-an-explicit-argument}
 

@@ -1,4 +1,4 @@
-# Vendor-free status
+# Vendor-free status {#design_vendor_free_status}
 
 > **Status:** current · test counts are the last recorded runs (end of WP8) · op table snapshot 2026-10-06
 
@@ -73,13 +73,13 @@ selected in `src/ops/<op>/<op>.cc`). "Transcribed" means the rows reproduce the 
 | `getri` | `blocked`. Transcribed: `float` order >= 128, `cfloat` order >= 256. | Census 16, host rows. Unrouted win at `batch <= 32`, every type (see levers below). |
 | `gesv` | `tiny`, `blocked`. No vendor family. | None recorded. |
 | `spmm` | `direct`. Transcribed: CSR, `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans`. | Census 0. Transposed scatter is vendor-first: 169 of 458 saturated cells lose, worst 3.011, and no clause recovers a window ([spmm.md](../perf/spmm.md)). |
-| `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`. Transcribed from the old CUDA grid. | Census 87. Four call sites demand the vendor `syev_vendor_or_throw` and throw vendor-free: `src/extra/cond.cc:54`, `src/extra/norm.cc:46`, `src/extensions/syevx_lobpcg.cc:524` and `:1076`. Fix: call the public `syev` ([known-defects #2](known-defects.md)). |
+| `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`. Transcribed from the old CUDA grid. | Census 87. Four call sites demand the vendor `syev_vendor_or_throw` and throw vendor-free: `src/extra/cond.cc:54`, `src/extra/norm.cc:47`, `src/extensions/syevx_lobpcg.cc:546` and `:1076`. Fix: call the public `syev` ([known-defects #2](known-defects.md)). |
 | `gesvd` | `jacobi`, `cta`, `blocked`. Transcribed: real 33..64 is `blocked\|vendor\|jacobi` ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)). | Host rows refused. |
 | `symm` | Hand-rolled `if` chain. `expand` (mirrored expansion + public `gemm`; needs `expansion_fits`). No tile kernel. | Census 8. At the snapshot, `double` had no expansion route; the flat-selection spec lists `expand` for both types. Reconcile before relying on either. |
 | `syrk` | Hand-rolled. `gram` (`n <= 128`, float and double), `triangular` (float). | Census 12. Non-float tiles are reachable only from `cublas.cc`. |
 | `syr2k` | `triangular` (float only). Real ConjTrans stays on the vendor. | Census 10. No non-float tile route; `syr2k_triangular_tiles` has one call site, in the float-only dispatcher. |
 | `trmm` | `triangular` (`Side::Left`), `expand`. | Census 16. The `double`/complex tile branch is reachable only from `cublas.cc`. |
-| `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError`. | Census 12, 16, 12. No native arm in the facade (`src/ops/level3/level3.cc:68-115`). |
+| `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError`. | Census 12, 16, 12. No native arm in the facade (`src/ops/level3/level3.cc:23-70`). |
 
 Rows that stay vendor-first by measurement are the vendor's wins; kernel work will not change them.
 

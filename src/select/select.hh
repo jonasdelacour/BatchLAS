@@ -3,7 +3,7 @@
 /// @file
 /// @brief Flat kernel selection: one choose() per op over measured per-device tables.
 /// Spec: docs/design/flat-kernel-selection.md §4-§5. Everything here is generic over a choice
-/// std::variant whose alternatives are family structs (§4.2). @ingroup api_selection
+/// std::variant whose alternatives are family structs (§4.1). @ingroup api_selection
 // State that a test and the library must share (pins, table cache, trace depth) lives in select.cc
 // behind BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
@@ -75,7 +75,7 @@ constexpr std::string_view dtype_name() {
     }
 }
 
-// ---- families and spelling (§4.2, §5.2) -----------------------------------------------
+// ---- families and spelling (§4.1, §5.2) -----------------------------------------------
 
 /// A string literal as a template argument: the name of a NoFields family.
 template <std::size_t N>
@@ -382,7 +382,7 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
     throw std::runtime_error(std::string(op) + ": no runnable kernel on " + d.key);
 }
 
-// §5.3 / R6. nullopt means "auto": the caller runs the normal walk. The class words
+// §5.2 / R6. nullopt means "auto": the caller runs the normal walk. The class words
 // `native` and `vendor` fall back to auto with a warning; every other spelling throws.
 // `strict` (the tuner's arms): a class word that cannot serve the shape throws too, and
 // `vendor` must resolve to the candidate spelled `vendor`.
@@ -423,7 +423,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 
 }  // namespace detail
 
-// ---- pins (§5.3) ------------------------------------------------------------------------
+// ---- pins (§5.2) ------------------------------------------------------------------------
 
 /// Tag for a strict ScopedPin: a class word ("native", "vendor") that cannot serve the shape
 /// throws std::invalid_argument instead of falling back to auto.
@@ -463,7 +463,7 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
     return *detail::walk(op, dtype, d, key, candidates, can_run, rules, false);
 }
 
-// ---- trace and coverage (§5.6) ----------------------------------------------------------
+// ---- trace and coverage (§5.5) ----------------------------------------------------------
 
 namespace detail {
 /// The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).

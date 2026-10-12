@@ -284,7 +284,7 @@ Traps from the same record:
 
 * A harness that shrinks the batch cannot ask the routing question: the CTA-count gate multiplies by batch, and `can_use_64x64_k16_wide_fast_path` reads `stride()`.
 * Two RTX 4090s in one chassis are not independent. A sweep on device 1 beside one on device 0 read `getrf float n=256 batch=128` at 3.31-5.51 ms against 1.006 ms alone, with zero foreign processes. Serialise the box.
-* A stale bench binary reports a stale route. Rebuild every bench binary after a table or `can_run` change ([agent guide](docs/developer/agent-guide.md)).
+* A stale bench binary reports a stale route. Rebuild every bench binary after a table or `can_run` change ([agent guide](../developer/agent-guide.md)).
 * A refused pin used to become the other arm silently. Flat selection throws now. An A/B that does not read the resolved route per arm reports one arm twice and calls it 1.00x.
 * `BATCHLAS_GETRS_ROUTE=native` means the first runnable non-vendor entry. To measure the pre-CTA `native`, pin `blocked`.
 
@@ -380,7 +380,7 @@ P4's raw rows are in the tree: `benchmarks/results/p4_leaf_getrf_{float,cfloat,d
 ### One spelling per ceiling
 
 * `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` takes a runtime `local_mem_size` budget. The footprint covers the pivot-search scratch as well as the tile. 0 means the tier is absent from this build.
-* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:34`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:45-46`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
+* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:34`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:90-91`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
 * `getrf_cta_fits` is the tier's admission test, occupancy-scaled. `getrf_leaf_fits` is the residency question, asked at the whole budget ([panel leaf](#lu-the-panel-leaf-is-not-the-tier-ceiling)).
 * `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:328-332`).
 * `getrf_tiny_buffer_size` is not zero: a short or empty caller `info` span means "not requested" and draws pool scratch.
@@ -575,7 +575,7 @@ On sm_89 the register file is four sub-partitions of 16,384 registers, and a blo
 ceil(warps / 4) * 32 * ((regs + 7) & ~7) <= 16,384
 ```
 
-equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-103`, used by `getrs_fused.cc:99`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
+equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-103`, used by `getrs_fused.cc:156`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
 
 Device-link register counts (1,082 entry functions, 0 with spill):
 

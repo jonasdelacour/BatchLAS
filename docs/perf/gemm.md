@@ -29,7 +29,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 |---|---|---|---|
 | `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `choice.hh:115-120`) |
+| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:115-120`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (a real `Trans` uses a `ConjTrans` instance; a complex `Trans` is refused), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
@@ -44,7 +44,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 ```
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `choice.hh:104`) is native only through
+batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
 `small`. Candidate counts: float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
@@ -537,8 +537,8 @@ those streams are `ldb*4` bytes apart. It is a slope, not a cliff (monotone in p
 ruled out: a 4× allocation at `ld == rows` costs nothing. No mechanism below L2 is established.
 
 **The fix was routing.** `can_use_128x128_fast_path` was a leg predicate, but the old selector also used it as a
-routing gate, so failing it handed the call to a much slower kernel. Routing by a shape-only gate (`gemm_kernels.cc:575`
-in the parent tree) gives geomean 1.74× (pad 0) and 1.75× (pad 384) over 12 shapes, moving native from 0.58× to
+routing gate, so failing it handed the call to a much slower kernel. Routing by a shape-only gate (`gemm_kernels.cc` line 575
+at `08d07619^`) gives geomean 1.74× (pad 0) and 1.75× (pad 384) over 12 shapes, moving native from 0.58× to
 0.99× of cuBLAS at `ld == rows` and 0.54× to 0.93× strided. Examples: 1024×1024×64 b128 ld1408 3.187 → 1.337 ms,
 1000×1024×128 b128 ld1384 2.954 → 1.569 ms, 128×128×8 b512 0.074 → 0.030 ms. It also removes the `ld % 4 != 0`
 cliff (pad 1: 1.874 → 1.003 ms). The gate's bounds each have a counterexample: `mn_min >= 64` (32×1024×32 is a

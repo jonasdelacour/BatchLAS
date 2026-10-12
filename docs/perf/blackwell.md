@@ -1,4 +1,4 @@
-# Blackwell (sm_120) retune
+# Blackwell (sm_120) retune {#perf_blackwell}
 
 > **Status:** current · RTX PRO 6000 Blackwell Max-Q (sm_120), threadripper02, icpx 2026.0, CUDA 13.2 · measured 2026-09-30
 
@@ -19,7 +19,7 @@ so a transcribed sm_120 table holds the sm_89 decisions. "Branch-only" sections 
 
 | Section | On main | sm_120 selection on main |
 |---|---|---|
-| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:294`), `scripts/check_device_calls.py` | n/a |
+| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:308`), `scripts/check_device_calls.py` | n/a |
 | [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/sycl/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, transcribed: `direct` first for `transA=N` |
 | [compute-capability key](#compute-capability-key) | yes | n/a |
 | [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.sm_120.txt`, transcribed |
@@ -30,7 +30,7 @@ so a transcribed sm_120 table holds the sm_89 decisions. "Branch-only" sections 
 | [LU getrs fused](#lu-getrs-fused), [NR 1](#lu-getrs-fused-nr-1), [sm89 rows](#lu-getrs-fused-sm89-rows) | yes (`c9352406`) | transcribed; the branch's vendor-present sm_120 getrs window is not in the table |
 | [getrf windows](#lu-getrf-windows), [native tier](#lu-getrf-native-tier), [gesv](#lu-gesv), [end to end](#lu-end-to-end), [getrs windows](#getrs-windows-after-the-trsm-fix) | no | transcribed (getrf, getrs, gesv) |
 | [geqrf skinny panels](#geqrf-skinny-panels) | no (no `geqrf_skinny.cc`) | `tuned/geqrf.sm_120.txt`, transcribed (same CSV as sm_89) |
-| [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.cc:97`) | n/a |
+| [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.cc:98`) | n/a |
 | [trsm sub-group Left kernel](#trsm-sub-group-left-kernel), [side right](#trsm-side-right-on-sm120) | kernel yes (candidate `sg_left`); windows no | float and double measured (`tuned/trsm.{float,double}.sm_120.txt`); cfloat and cdouble are the sm_89 transcription, which never ranks `sg_left` |
 | [gemm](#gemm-native-register-tiled-selector) | 16x16 and 32x32 wide NN tiles yes; selector windows no | sm_89 transcription: float rows rank `vendor` first on 11154 of 11226 rows and `small` on the other 72; neither small wide tile appears in any sm_120 row, so they run only when pinned |
 
@@ -138,12 +138,12 @@ red; under precise it changes the SASS of 158 of 6277 kernels. The flag is the f
 
 `Device::cuda_compute_capability()` returns `major*10+minor`, parsed from the CUDA device's SYCL
 version string and memoized per device. It is the selection device key: `select::describe` names a
-CUDA device `sm_<cc>` (`src/select/select.cc:214-215`), which picks `tuned/<op>.<dtype>.sm_<cc>.txt`.
+CUDA device `sm_<cc>` (`src/select/select.cc:225-226`), which picks `tuned/<op>.<dtype>.sm_<cc>.txt`.
 A device with no table of its own borrows the nearest one with a one-time warning. Value 0 means
 "not CUDA". All four GPUs here return 120.
 
 `is_sm120_family` (120 <= cc < 130) is no longer a routing predicate. It survives only in the
-per-architecture register charge of the fused getrs launch (`src/extensions/getrs_fused.cc:125`).
+per-architecture register charge of the fused getrs launch (`src/extensions/getrs_fused.cc:127`).
 
 `tests/util_device_queue_tests.cc` checks the value against the CUDA runtime's
 `prop.major*10+prop.minor` for each NVIDIA GPU, paired by ordinal; CPU and non-NVIDIA devices must
@@ -362,7 +362,7 @@ In-library register counts exceed the sm_89 table: float Trans nrhs 5..8 uses 86
 sm_89 row handed out a 768-lane launch that the driver refused (`FusedGetrsLaunchHoleAt48KiB`). On
 sm_120 the cap reads a probed row.
 
-On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/extensions/getrs_fused.cc:241-242`)
+On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/extensions/getrs_fused.cc:243-244`)
 and the sm_120 register rows (`:125`). Branch-only: a vendor-present sm_120 window (float nrhs <= 8 at
 n >= 256; cfloat nrhs <= 4 at n >= 128 and nrhs <= 8 at n >= 512), later moved to float n >= 192 and
 cfloat n >= 96 / n >= 384 ([getrs windows](#getrs-windows-after-the-trsm-fix)). Main's sm_120 getrs
@@ -721,7 +721,7 @@ measured column; ties within 3% go to the side the neighbouring cells favour. Th
 comes from V1 (V1 at cfloat n16 q64 takes 0.91 ms, against 0.31 ms at n=12 and 1.48 ms at n=24). double
 and cdouble were not measured and keep V1. On the branch the blocked driver's diagonal solves used the
 same kernel through `trsm_native_v1_buckets`; on main that function runs V1 only
-(`src/sycl/trsm_native.cc:312`), so `blocked`'s diagonal solves do not reach `sg_left`.
+(`src/sycl/trsm_native.cc:313`), so `blocked`'s diagonal solves do not reach `sg_left`.
 
 Tests (`TrsmNativeSgLeft.*`) call the kernel directly with a padded ld, a batch stride and large finite
 poison. Planted breaks over all of `trsm_tests`: reading A with ld = n turns 10 tests red; dropping the
@@ -805,7 +805,7 @@ Kernel choice was checked with `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 > (no gemm sweep has run), so Auto on sm_120 runs what the 4090 router chose. The tiles below are ordinary
 > candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only; `wide:m=64:n=64:k=16`,
 > `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the transposed fallback;
-> `src/ops/gemm/choice.hh:80-86`). The measurements are hypotheses for an sm_120 `tools/tune` gemm sweep.
+> `src/ops/gemm/choice.hh:85-91`). The measurements are hypotheses for an sm_120 `tools/tune` gemm sweep.
 > The old kernel names (`16x16x16wide`, `32x32x16wide`, ...) are not pin words; they throw.
 
 The branch's windows were keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`

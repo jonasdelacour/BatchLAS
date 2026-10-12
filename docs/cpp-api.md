@@ -1,4 +1,4 @@
-# The BatchLAS C++ API
+# The BatchLAS C++ API {#guide_cpp_api}
 
 > **Status:** current
 

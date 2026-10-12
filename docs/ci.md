@@ -1,4 +1,4 @@
-# CI: what it proves, and how to stand the runner up
+# CI: what it proves, and how to stand the runner up {#dev_ci}
 
 > **Status:** current · self-hosted runner: RTX 4090 (sm_89), CUDA 13.2, Ubuntu 22.04
 
