@@ -21,7 +21,6 @@
 #include "gemm_heterogeneous.hh"
 #include "syrk_gram_tiles.hh"
 #include "../ops/syrk/choice.hh"
-#include "../util/resident_capacity.hh"
 #include "triangular_expand.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -368,11 +367,13 @@ namespace batchlas {
         // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
         // wins on every Gram shape measured.
         // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
+        // The terms are syrk's Gram can_run (src/ops/syrk/syrk.cc), not a partial copy of it.
         if constexpr (Back == Backend::CUDA) {
-            if (detail::is_gpu_queue(ctx) && ops::syrk::herk_gram_pinned() &&
+            const select::Device& d = select::device_of<Back>(ctx);
+            if (d.is_gpu && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true) &&
-                ops::syrk::gram_slm_bytes<T>(n) <= static_cast<std::int64_t>(resident::device_slm_budget(
-                    ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)))) {
+                batch <= ops::syrk::kMaxGridBatch && d.max_wg >= ops::syrk::gram_threads(n) &&
+                d.slm_budget >= ops::syrk::gram_slm_bytes<T>(n)) {
                 return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
             }
         }

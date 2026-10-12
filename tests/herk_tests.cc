@@ -322,6 +322,34 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     }
 }
 
+// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535:
+// with gram pinned, a batch of 65536 must fall back to a route that runs, not throw.
+TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend Ba = TestFixture::BackendType;
+    if constexpr (Ba != Backend::CUDA) {
+        GTEST_SKIP() << "the gram opt-in is CUDA's";
+    } else {
+        const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
+        const int n = 8, k = 5, batch = 65536;
+        const real_t alpha = real_t(0.75), beta = real_t(-0.5);
+        auto A = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, batch, 31);
+        auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 37);
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b)
+            for (int d = 0; d < n; ++d) C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
+        auto C = C0.clone();
+        this->ctx->wait();
+        ASSERT_NO_THROW((herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, Uplo::Lower, Transpose::NoTrans).wait()));
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                      MV::gemm_backward_error(*(this->ctx), A.view(), Transpose::NoTrans, A.view(), Transpose::ConjTrans,
+                                              C0.view(), C.view(), MV::up(T(alpha)), MV::up(T(beta)),
+                                              C.view().all_items(), Uplo::Lower));
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

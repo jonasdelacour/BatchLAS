@@ -259,7 +259,7 @@ namespace batchlas{
                     if (k == 0) {
                         for (int col = 0; col < n; ++col) {
                             for (int row = 0; row < m; ++row) {
-                                C_i.at(row, col) *= beta;
+                                C_i.at(row, col) = beta == T(0) ? T(0) : C_i.at(row, col) * beta;
                             }
                         }
                         continue;
