@@ -237,8 +237,11 @@ capability 5892"). That fails any `spir64_x86_64` link.
   non-empty value not starting with `0` as skip, including `false`, `off` and `no`; it is not
   `env_truthy`. The gate is compiled out when `BATCHLAS_ALLOW_UNSAFE_ENV` is ON. That option is set in
   `cmake/backend_config.h.in`, and `settings.cc` defaults it to the safe reading.
-- **Reload.** A reload reads the environment on top of what `configure()` last set, not on top of the
-  defaults. Starting from the defaults would discard `configure()` on any unrelated `ScopedEnvVar`.
+- **Reload.** A reload reads the environment on top of what `configure()` last set (the defaults when
+  it was never called), not on top of the defaults. Each loader assigns a field only when its variable
+  is exported (`set_if_present`), so an unset variable keeps the base value; the unsafe gate likewise
+  refuses only a move the environment made. Starting from the defaults would discard `configure()` on
+  any unrelated `ScopedEnvVar` (`ConfigureSurvivesUnrelatedReload` guards this).
   Ignoring the environment after `configure()` would make every `ScopedEnvVar` a no-op, so an A/B test
   would compare an arm with itself (`tests/settings_tests.cc`, case (c), guards this). An explicitly
   set variable still wins over `configure()`. To pin a knob against the environment, set it in the

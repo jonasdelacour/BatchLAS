@@ -96,10 +96,50 @@ TEST(SettingsConfigure, ConfigureBeatsTheEnvironment) {
         << "select's pin reader still reads the environment directly rather than settings()";
     EXPECT_EQ(source, "BATCHLAS_GEMM_ROUTE");
 
-    // Restore, while configure() is still permitted, so the cases below start clean.
-    // (pin's destructor reloads from the environment on the way out anyway; this is
-    // belt and braces for the case where the assertions above fail early.)
-    configure(original);
+    // Restore the defaults as the base, not `original`: that snapshot carries whatever the
+    // environment held, and a configured base outlives the variable that produced it.
+    (void)original;
+    configure(Settings{});
+    detail::reload_settings();
+}
+
+// (a2) A reload re-reads only what is exported: configure()'s other fields survive every
+// unrelated ScopedEnvVar, and an exported variable still wins over the configured base.
+TEST(SettingsConfigure, ConfigureSurvivesUnrelatedReload) {
+    ASSERT_FALSE(detail::queue_constructed())
+        << "configure() is closed; see the ordering contract at the top of this file.";
+    ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);
+    ScopedEnvVar clear_trsm("BATCHLAS_TRSM_OUTER_NB", nullptr);
+    ScopedEnvVar clear_force("BATCHLAS_LATRD_GRID_FORCE_UNSAFE", nullptr);
+
+    Settings s = settings();
+    s.geometry.potrf_nb = 24;
+    s.geometry.latrd_grid_min_n = 1000;
+    s.selection.gesvd_bidiag = EnvValue::of("bdsqr");
+    s.diagnostics.kernel_trace_path = "configured.json";
+    s.unsafe.latrd_grid_force_unsafe = true;  // configure() is not gated, so a reload keeps it
+    ASSERT_NO_THROW(configure(s));
+
+    {
+        ScopedEnvVar v("BATCHLAS_TRSM_OUTER_NB", "16");
+        EXPECT_EQ(settings().geometry.potrf_nb, 24);
+        EXPECT_EQ(settings().geometry.trsm_outer_nb, 16);
+        EXPECT_EQ(settings().geometry.latrd_grid_min_n, 1000);
+        EXPECT_EQ(settings().selection.gesvd_bidiag.value(), "bdsqr");
+        EXPECT_EQ(settings().diagnostics.kernel_trace_path, "configured.json");
+        EXPECT_TRUE(settings().unsafe.latrd_grid_force_unsafe);
+    }
+    EXPECT_EQ(settings().geometry.potrf_nb, 24);
+    EXPECT_EQ(settings().geometry.trsm_outer_nb, 0) << "an unset variable must fall back to the base";
+    {
+        ScopedEnvVar v("BATCHLAS_POTRF_NB", "8");
+        EXPECT_EQ(settings().geometry.potrf_nb, 8) << "an exported variable wins over configure()";
+    }
+    EXPECT_EQ(settings().geometry.potrf_nb, 24);
+
+    configure(Settings{});
+    detail::reload_settings();
+    EXPECT_EQ(settings().geometry.potrf_nb, 0);
 }
 
 // (b) configure() after a Queue exists throws. A route changed halfway through a run
@@ -183,15 +223,15 @@ TEST(SettingsEnvironment, ScopedEnvVarIsStillObservedAndStillReverts) {
 TEST(SettingsUnsafe, SkipPointerChecksHonoursTheBuildOption) {
     ScopedEnvVar skip("BATCHLAS_SKIP_POINTER_CHECKS", "1");
 
-    // One variable, two readers -- the Settings field and the predicate every entry
-    // point consults. They must not be able to disagree.
-    EXPECT_EQ(settings().unsafe.skip_pointer_checks, !detail::pointer_checks_enabled());
-
 #if BATCHLAS_ALLOW_UNSAFE_ENV
+    // pointer_checks_enabled() latches on its FIRST call in the process, so this arm never
+    // calls it: its value would depend on which case ran first, and latching it here would
+    // disarm the check for every later case.
     EXPECT_TRUE(settings().unsafe.skip_pointer_checks)
         << "this build allows the unsafe group, so the variable must take effect";
-    EXPECT_FALSE(detail::pointer_checks_enabled());
 #else
+    // The gate holds whatever ran first, so the latch and the field agree in any order.
+    EXPECT_EQ(settings().unsafe.skip_pointer_checks, !detail::pointer_checks_enabled());
     EXPECT_FALSE(settings().unsafe.skip_pointer_checks)
         << "BATCHLAS_ALLOW_UNSAFE_ENV is OFF, so the environment must not disarm the "
            "USM check";
