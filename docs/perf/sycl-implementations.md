@@ -60,13 +60,12 @@ families, *vendor* the cuBLAS/cuSOLVER family through `impl::run_native`.
 | Source | `acpp-dual-build` at `ddf07744`; `src/` and `include/` unchanged since; uncommitted harness changes (`gemm_transpose_benchmark` gained `BATCHLAS_BENCH_LD_PAD`) | same |
 
 Machine: threadripper02, 4x RTX PRO 6000 Blackwell Max-Q (sm_120, 300 W, no display), one NUMA
-node, CUDA 13.2 from HPC SDK 26.5. `benchviz info` for the three trees is in
-`implab_perf_provenance_sm120.txt`.
+node, CUDA 13.2 from HPC SDK 26.5.
 
 ## sycl-impl A/B: protocol {#sycl-impl-ab-protocol}
 
-benchviz pins only `native`/`vendor`, so the campaign uses a dedicated driver
-(`benchmarks/results/sycl-implementations/perf/harness/driver.py`) over the benchmark binaries:
+benchviz pins only `native`/`vendor`, so the campaign used a dedicated driver (not kept in the
+repository) over the benchmark binaries:
 one process per (cell, implementation), each under a GPU guard, coverage on.
 
 - **Harnesses.** `gemm_transpose_benchmark` (m = n = k, NN and TN, `BATCHLAS_BENCH_LD_PAD=3`
@@ -93,7 +92,7 @@ one process per (cell, implementation), each under a GPU guard, coverage on.
   checked to have reached exactly the pin; `factor_bench` pins throw rather than fall back.
 
 > **Note:** reps 0-2 and the first 140 processes of rep 3 ran on GPU 3. At 21:49 another user's job
-> took GPUs 0 and 3 at 300 W, so the rest of reps 3-9 ran on GPU 2 with a guard that tolerates an idle foreign context (`harness/p5guard.sh`). The
+> took GPUs 0 and 3 at 300 W, so the rest of reps 3-9 ran on GPU 2 with a guard that tolerates an idle foreign context. The
 > paired acpp/DPC++ ratio moved by a median of 0.000 (p05-p95 0.987-1.018, 425 cells) between the
 > two cards; DPC++ absolute times by +0.6%. Other sessions ran ctest on GPUs 0-1 during 2,538 of
 > the processes. One process that saw the foreign job start was dropped.
@@ -509,26 +508,3 @@ k, batch, uplo, side, diag, trans).
 - **Not measured:** complex types outside R10, the vendor-free acpp tree, coarse-grained events,
   sm_89, and saturation of the cells the table above flags (geqrf float n = 512, potrf float
   `blocked` n = 512, syev float n = 1024).
-
-## sycl-impl A/B: raw data {#sycl-impl-ab-raw-data}
-
-All under `benchmarks/results/sycl-implementations/` (Git LFS).
-
-| File | Content |
-| --- | --- |
-| `perf/implab_perf_cells_sm120.csv` | Per (cell, family): median ms, across-process `rel_sd`, sample count, routes, `jit` drops for DPC++, acpp, opt-in and no-bounds; ratios and paired bootstrap 95% CIs; sub-route equality |
-| `perf/implab_perf_samples_sm120.csv` | One row per (cell, family, implementation, rep): ms, in-process `rel_sd`, residual, SM clock at start |
-| `perf/implab_perf_runs_sm120.jsonl.xz` | Every process of the main campaign (warm pass included): argv, env, GPU, guard line, foreign GPU processes, harness rows, coverage `reached` rows |
-| `perf/implab_perf_saturation_{cells,runs}_sm120.*`, `perf/implab_perf_adaptivity2_{cells,runs}_sm120.*` | The batch x2 check and the level-2 arm |
-| `perf/implab_perf_provenance_sm120.txt` | `benchviz info` for the three trees, compiler and acpp versions, GPUs, `git status` |
-| `perf/harness/` | `driver.py` (campaign), `plan.py` (grid), `analyze.py`, `report.py`, `inversions.py`, `consistency.py`, `satcmp.py`, `regs.py`, `ptxhist.py`, `p5guard.sh`, `build.sh`, `nolb.sh` + `patch_nolb.py`; paths are the campaign's job directory |
-| `accuracy/` | The accuracy and route-parity evidence, with its own `README.md` |
-
-Command, per campaign (`harness/driver.py --help`):
-
-```sh
-python3 driver.py camp1 all --reps 1 --rep0 -1          # throwaway JIT pass
-python3 driver.py camp1 all --reps 6 --rep0 0 --gpu 2   # measured reps
-python3 analyze.py camp1 --cells cells.csv --samples samples.csv --extend extend.txt
-python3 driver.py camp1 all --reps 4 --rep0 6 --cells-file extend.txt --impls dpcpp,acpp
-```

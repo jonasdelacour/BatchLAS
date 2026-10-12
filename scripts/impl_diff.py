@@ -18,7 +18,7 @@ The input is generated on the device by each tree (Philox, ortho, gemm, tridiago
 it can round differently. `run` therefore passes `--inputs DIR` to both: tree A writes its matrices,
 tree B reads them. `--own-inputs` measures generator plus solver instead. The `inputs =` column
 says how many pairs really saw the same matrix.
-Plan: docs/design/sycl-implementations.md section 6; results: benchmarks/results/sycl-implementations/accuracy/.
+Plan: docs/design/sycl-implementations.md section 6; results: docs/perf/sycl-implementations.md.
 """
 import argparse
 import csv

@@ -374,8 +374,7 @@ On top of the measurement rules in `docs/developer/agent-guide.md` §10:
   covers the register-tile kernels, the sub-group CTA kernels (R5 and R10) and the SLM-heavy
   kernels (R2). Done, with syev Auto, a no-launch-bounds DPC++ arm, the opt-in arm, a batch x2
   saturation check and an adaptivity-level-2 arm: @ref perf_sycl_implementations.
-  benchviz pins only `native`/`vendor`, so that campaign used its own driver (raw data and harness
-  in `benchmarks/results/sycl-implementations/perf/`).
+  benchviz pins only `native`/`vendor`, so that campaign used its own driver.
 
 ## 8. Phases
 
