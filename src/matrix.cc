@@ -954,30 +954,27 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t flat_idx = item.get_global_id(0);
-        
-        // Bounds check
-        if (flat_idx >= total_elements) return;
-        
-        // Calculate 3D coordinates from flat index
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
+        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (n * n);          // batch index
+            size_t remainder = flat_idx % (n * n);
+            size_t i = remainder / n;               // row index
+            size_t j = remainder % n;               // column index
 
-        if (uplo == Uplo::Upper) {
-            // Upper triangular part
-            if (i < j) {
-                size_t idx1 = b * stride + j * ld + i;
-                size_t idx2 = b * stride + i * ld + j;
-                data_ptr[idx2] = data_ptr[idx1];
-            }
-        } else {
-            // Lower triangular part
-            if (i > j) {
-                size_t idx1 = b * stride + j * ld + i;
-                size_t idx2 = b * stride + i * ld + j;
-                data_ptr[idx2] = data_ptr[idx1];
+            if (uplo == Uplo::Upper) {
+                // Upper triangular part
+                if (i < j) {
+                    size_t idx1 = b * stride + j * ld + i;
+                    size_t idx2 = b * stride + i * ld + j;
+                    data_ptr[idx2] = data_ptr[idx1];
+                }
+            } else {
+                // Lower triangular part
+                if (i > j) {
+                    size_t idx1 = b * stride + j * ld + i;
+                    size_t idx2 = b * stride + i * ld + j;
+                    data_ptr[idx2] = data_ptr[idx1];
+                }
             }
         }
     });
@@ -1000,38 +997,35 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t flat_idx = item.get_global_id(0);
-        
-        // Bounds check
-        if (flat_idx >= total_elements) return;
-        
-        // Calculate 3D coordinates from flat index
-        size_t b = flat_idx / (n * n);          // batch index
-        size_t remainder = flat_idx % (n * n);
-        size_t i = remainder / n;               // row index
-        size_t j = remainder % n;               // column index
+        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (n * n);          // batch index
+            size_t remainder = flat_idx % (n * n);
+            size_t i = remainder / n;               // row index
+            size_t j = remainder % n;               // column index
 
-        if (uplo == Uplo::Upper) {
-            // Upper triangular part
-            if (i < j) {
-                size_t idx1 = b * stride + j * ld + i;
-                size_t idx2 = b * stride + i * ld + j;
-                data_ptr[idx2] = std::conj(data_ptr[idx1]);
+            if (uplo == Uplo::Upper) {
+                // Upper triangular part
+                if (i < j) {
+                    size_t idx1 = b * stride + j * ld + i;
+                    size_t idx2 = b * stride + i * ld + j;
+                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                }
+            } else {
+                // Lower triangular part
+                if (i > j) {
+                    size_t idx1 = b * stride + j * ld + i;
+                    size_t idx2 = b * stride + i * ld + j;
+                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                }
             }
-        } else {
-            // Lower triangular part
-            if (i > j) {
-                size_t idx1 = b * stride + j * ld + i;
-                size_t idx2 = b * stride + i * ld + j;
-                data_ptr[idx2] = std::conj(data_ptr[idx1]);
-            }
-        }
-        if (i == j) {
-            // Ensure diagonal elements are real
-            if constexpr (std::is_same_v<T, std::complex<float>> || 
-                          std::is_same_v<T, std::complex<double>>) {
-                size_t diag_idx = b * stride + i * ld + i;
-                data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
+            if (i == j) {
+                // Ensure diagonal elements are real
+                if constexpr (std::is_same_v<T, std::complex<float>> || 
+                              std::is_same_v<T, std::complex<double>>) {
+                    size_t diag_idx = b * stride + i * ld + i;
+                    data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
+                }
             }
         }
     });
@@ -1077,12 +1071,9 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t idx = item.get_global_id(0);
-        
-        // Bounds check
-        if (idx >= total_elements) return;
-        
-        data_ptr[idx] = philox::uniform_symmetric<T>(seed, 0, idx);
+        for (size_t idx = item.get_global_id(0); idx < total_elements; idx += item.get_global_range(0)) {
+            data_ptr[idx] = philox::uniform_symmetric<T>(seed, 0, idx);
+        }
     });
     
     // If hermitian flag is set, enforce Hermitian property using a kernel
@@ -1101,30 +1092,27 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
         
         ctx->parallel_for(sycl::nd_range<1>(herm_global_size, herm_local_size),
                         [=](sycl::nd_item<1> item) {
-            size_t flat = item.get_global_id(0);
-            
-            // Bounds check
-            if (flat >= hermitian_elements) return;
-            
-            size_t b = flat / (rows * cols);
-            size_t rem = flat % (rows * cols);
-            size_t j = rem / rows; // column index
-            size_t i = rem % rows; // row index
+            for (size_t flat = item.get_global_id(0); flat < hermitian_elements; flat += item.get_global_range(0)) {
+                size_t b = flat / (rows * cols);
+                size_t rem = flat % (rows * cols);
+                size_t j = rem / rows; // column index
+                size_t i = rem % rows; // row index
 
-            if (j > i) {
-                size_t idx1 = b * stride + j * ld + i;
-                size_t idx2 = b * stride + i * ld + j;
-                if constexpr (std::is_same_v<T, std::complex<float>> ||
-                              std::is_same_v<T, std::complex<double>>) {
-                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
-                } else {
-                    data_ptr[idx2] = data_ptr[idx1];
-                }
-            } else if (i == j) {
-                if constexpr (std::is_same_v<T, std::complex<float>> ||
-                              std::is_same_v<T, std::complex<double>>) {
-                    size_t diag_idx = b * stride + i * ld + i;
-                    data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
+                if (j > i) {
+                    size_t idx1 = b * stride + j * ld + i;
+                    size_t idx2 = b * stride + i * ld + j;
+                    if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                  std::is_same_v<T, std::complex<double>>) {
+                        data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                    } else {
+                        data_ptr[idx2] = data_ptr[idx1];
+                    }
+                } else if (i == j) {
+                    if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                  std::is_same_v<T, std::complex<double>>) {
+                        size_t diag_idx = b * stride + i * ld + i;
+                        data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
+                    }
                 }
             }
         });
@@ -1186,16 +1174,16 @@ Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed)
     const float_t<T> shift = dominant_shift<T>(rows_);
     auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        const std::size_t flat = item.get_global_id(0);
-        if (flat >= total) return;
-        const std::size_t b = flat / (n * n);
-        const std::size_t j = (flat / n) % n;
-        const std::size_t i = flat % n;
-        // The upper triangle conjugates the very value the lower one stores: exactly Hermitian.
-        T value = i >= j ? seeded_uniform<T>(seed, (b * n + j) * n + i)
-                         : conj_of(seeded_uniform<T>(seed, (b * n + i) * n + j));
-        if (i == j) value = T(std::real(value) + shift);
-        data[b * stride + j * ld + i] = value;
+        for (size_t flat = item.get_global_id(0); flat < total; flat += item.get_global_range(0)) {
+            const std::size_t b = flat / (n * n);
+            const std::size_t j = (flat / n) % n;
+            const std::size_t i = flat % n;
+            // The upper triangle conjugates the very value the lower one stores: exactly Hermitian.
+            T value = i >= j ? seeded_uniform<T>(seed, (b * n + j) * n + i)
+                             : conj_of(seeded_uniform<T>(seed, (b * n + i) * n + j));
+            if (i == j) value = T(std::real(value) + shift);
+            data[b * stride + j * ld + i] = value;
+        }
     });
     return ctx.get_event();
 }
@@ -1677,14 +1665,11 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
-        size_t flat = item.get_global_id(0);
-        
-        // Bounds check
-        if (flat >= total_elements) return;
-        
-        size_t b = flat / n;
-        size_t i = flat % n;
-        data_ptr[b * stride + i * ld + i] = diag_value;
+        for (size_t flat = item.get_global_id(0); flat < total_elements; flat += item.get_global_range(0)) {
+            size_t b = flat / n;
+            size_t i = flat % n;
+            data_ptr[b * stride + i * ld + i] = diag_value;
+        }
     });
     return ctx.get_event();
 }
@@ -1716,25 +1701,22 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
     
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
     ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t flat_idx = item.get_global_id(0);
+        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+            // Calculate 3D coordinates from flat index
+            int64_t b = flat_idx / (n * n);          // batch index
+            int64_t remainder = flat_idx % (n * n);
+            int64_t i = remainder % n;               // row index
+            int64_t j = remainder / n;               // column index
         
-        // Bounds check
-        if (flat_idx >= total_elements) return;
-        
-        // Calculate 3D coordinates from flat index
-        int64_t b = flat_idx / (n * n);          // batch index
-        int64_t remainder = flat_idx % (n * n);
-        int64_t i = remainder % n;               // row index
-        int64_t j = remainder / n;               // column index
-        
-        if (i == j) {
-            data_ptr[b * n * n + j * n + i] = diag; // Diagonal element
-        } else if (i == j - 1) {
-            data_ptr[b * n * n + j * n + i] = super_diag; // Super-diagonal element
-        } else if (i == j + 1) {
-            data_ptr[b * n * n + j * n + i] = sub_diag;   // Sub-diagonal element
-        } else {
-            data_ptr[b * n * n + j * n + i] = T(0);   // Zero elsewhere
+            if (i == j) {
+                data_ptr[b * n * n + j * n + i] = diag; // Diagonal element
+            } else if (i == j - 1) {
+                data_ptr[b * n * n + j * n + i] = super_diag; // Super-diagonal element
+            } else if (i == j + 1) {
+                data_ptr[b * n * n + j * n + i] = sub_diag;   // Sub-diagonal element
+            } else {
+                data_ptr[b * n * n + j * n + i] = T(0);   // Zero elsewhere
+            }
         }
     });
     return ctx.get_event();
@@ -1849,20 +1831,17 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pit
 
     // Submit a kernel to convert from row-major to column-major
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t flat_idx = item.get_global_id(0);
+        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
+            size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
+            size_t i = remainder / cols;            // row index
+            size_t j = remainder % cols;            // column index
 
-        // Bounds check
-        if (flat_idx >= total_elements) return;
-
-        // Calculate 3D coordinates from flat index
-        size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
-        size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
-        size_t i = remainder / cols;            // row index
-        size_t j = remainder % cols;            // column index
-
-        // src is row-major: [b, i, j] -> b * src_stride + i * src_pitch + j
-        // dst is col-major: [b, j, i] -> b * dst_stride + j * dst_ld + i
-        dst_ptr[b * dst_stride + j * dst_ld + i] = src_ptr[b * src_stride + i * src_pitch + j];
+            // src is row-major: [b, i, j] -> b * src_stride + i * src_pitch + j
+            // dst is col-major: [b, j, i] -> b * dst_stride + j * dst_ld + i
+            dst_ptr[b * dst_stride + j * dst_ld + i] = src_ptr[b * src_stride + i * src_pitch + j];
+        }
     }).wait();
 
     return col_major;
@@ -1915,20 +1894,17 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
 
     // Submit a kernel to convert from column-major to row-major
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t flat_idx = item.get_global_id(0);
+        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+            // Calculate 3D coordinates from flat index
+            size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
+            size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
+            size_t i = remainder / cols;            // row index
+            size_t j = remainder % cols;            // column index
 
-        // Bounds check
-        if (flat_idx >= total_elements) return;
-
-        // Calculate 3D coordinates from flat index
-        size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
-        size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
-        size_t i = remainder / cols;            // row index
-        size_t j = remainder % cols;            // column index
-
-        // src is col-major: [b, j, i] -> b * src_stride + j * src_ld + i
-        // dst is row-major: [b, i, j] -> b * dst_stride + i * dst_pitch + j
-        dst_ptr[b * dst_stride + i * dst_pitch + j] = src_ptr[b * src_stride + j * src_ld + i];
+            // src is col-major: [b, j, i] -> b * src_stride + j * src_ld + i
+            // dst is row-major: [b, i, j] -> b * dst_stride + i * dst_pitch + j
+            dst_ptr[b * dst_stride + i * dst_pitch + j] = src_ptr[b * src_stride + j * src_ld + i];
+        }
     }).wait();
 
     return row_major;
@@ -2433,8 +2409,7 @@ Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
         return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
             auto view = matrix.kernel_view();
             cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-                size_t gid = item.get_global_id(0);
-                if (gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size()) {
+                for (size_t gid = item.get_global_id(0); gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size(); gid += item.get_global_range(0)) {
                     size_t b = gid / (view.rows() * view.cols());
                     size_t rem = gid % (view.rows() * view.cols());
                     size_t j = rem / view.rows();
@@ -2453,8 +2428,7 @@ Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
         ctx.device(), KernelType::ELEMENTWISE);
     return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            size_t gid = item.get_global_id(0);
-            if (gid < static_cast<size_t>(vector.size()) * vector.batch_size()) {
+            for (size_t gid = item.get_global_id(0); gid < static_cast<size_t>(vector.size()) * vector.batch_size(); gid += item.get_global_range(0)) {
                 size_t b = gid / vector.size();
                 size_t i = gid % vector.size();
                 vector(i, b) *= alpha;

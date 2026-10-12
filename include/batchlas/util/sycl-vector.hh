@@ -148,6 +148,10 @@ struct BATCHLAS_API UnifiedVector
         std::swap(capacity_, other.capacity_);
     }
 private:
+    // USM shared allocation of @p n elements on the default device; throws std::bad_alloc on a
+    // null return (n > 0), so a caller updates capacity_ only after it succeeded.
+    static T* alloc_shared(size_t n);
+
     size_t size_;
     size_t capacity_;
     pointer data_;

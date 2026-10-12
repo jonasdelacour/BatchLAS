@@ -46,14 +46,11 @@ template <> struct PotrfBlockedConst<double>               { static constexpr in
 template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
 
-// Blocking overrides only, never routing; read once so the sizing query and the
-// call agree. The function-local statics are kept for exactly that reason: the
-// settings() snapshot is re-readable, and a reload landing between
-// potrf_buffer_size() and the matching potrf would desynchronise the allocated
-// workspace from the block width actually used. 0 means "unset" on both fields,
-// which is what the per-type PotrfBlockedConst defaults below fall back to.
-inline int potrf_nb_env() { static const int v = batchlas::settings().geometry.potrf_nb; return v; }
-inline int potrf_w_env()  { static const int v = batchlas::settings().geometry.potrf_w;  return v; }
+// Blocking overrides only, never routing; read per call (a latch ignored every later
+// ScopedEnvVar). Sizing and solve read the same snapshot, so they agree unless a reload lands
+// between them, which settings.hh forbids. 0 = unset: the PotrfBlockedConst default.
+inline int potrf_nb_env() { return batchlas::settings().geometry.potrf_nb; }
+inline int potrf_w_env()  { return batchlas::settings().geometry.potrf_w; }
 
 // Above this order the diagonal leaf stops being where the time goes and the trailing
 // update's k -- which IS nb -- starts to be; clamping nb to the occupancy ceiling there
