@@ -172,6 +172,11 @@ jobs:
         # Two of the 291 pointers in the tree were already dangling when this
         # was written.
         run: python3 .github/ci/check_evidence_anchors.py
+      - name: The failure gate still counts the registered tests
+        # --expected-tests-from against a two-test fixture, armed both ways: a
+        # junit missing a registered test fails, the same junit under -LE slow
+        # passes. Needs only ctest, no build.
+        run: python3 .github/ci/compare_failures.py --self-test
       - name: The Markdown location rule still discriminates
         # Same self-test-first reason. Pins a root plan file, any root
         # Markdown (README.md and AGENTS.md included), a nested docs/ and a
@@ -598,18 +603,18 @@ jobs:
         # `-LE slow` never ran it. Requiring it would fail every pull request.
         # The nightly job runs the full suite and requires it there.
         #
-        # --expected-tests 65 is the guard against a shrunken run. ctest's JUnit
+        # --expected-tests-from is the guard against a shrunken run. ctest's JUnit
         # records a test whose executable was never built as a *skip*, and even
         # miscounts it into the file's `skipped=` attribute, so thirty missing
-        # binaries look like thirty benign skips. The arithmetic behind 65: 70
-        # registered ctest tests minus the 5 slow-labelled ones (stedc_tests,
-        # steqr_tests, sytrd_sb2st_tests, gesvd_tests, consumer_package_tests).
+        # binaries look like thirty benign skips. The expected count is what
+        # `ctest -N -LE slow` registers in the same tree, never a literal: a
+        # literal goes stale with every added test and then fails every run.
         # --known defaults to tests/known-failures.txt, which is the ledger.
         run: |
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests 65
+            --expected-tests-from build/presets/dev-tests --label-exclude slow
 
       - name: Install to a temp prefix and check the generated export
         # This is the half of check_exported_package.py the exported-package job
@@ -689,9 +694,8 @@ jobs:
           cmake --build --preset dev-tests
 
       - name: Full ctest, slow suites included
-        # No -LE slow. This is the only run that exercises stedc_tests,
-        # steqr_tests, sytrd_sb2st_tests, gesvd_tests and consumer_package_tests
-        # - 70 tests rather than 65.
+        # No -LE slow. This is the only run that exercises the slow-labelled
+        # tests (stedc_tests, steqr_tests, consumer_package_tests, ...).
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/gtest-xml"
@@ -710,12 +714,12 @@ jobs:
         # laptop, wrong for CI: --require makes anything other than a real pass
         # a failure.
         #
-        # 70 rather than 65 here: this run includes the five slow-labelled tests.
+        # No --label-exclude here: this run includes the slow-labelled tests.
         run: |
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests 70 \
+            --expected-tests-from build/presets/dev-tests \
             --require consumer_package_tests
 
       - name: Vendor-free configure, build and ctest

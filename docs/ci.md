@@ -260,7 +260,7 @@ python3 .github/ci/compare_failures.py \
     --junit ctest.xml \
     --gtest-dir build/presets/dev-tests/gtest-xml \
     --require consumer_package_tests \
-    --expected-tests 70
+    --expected-tests-from build/presets/dev-tests
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
@@ -268,8 +268,9 @@ python3 .github/ci/compare_failures.py \
   ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
   (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
   `BATCHLAS_BUILD_DIR` is set.
-- Use `--require` and `--expected-tests` on a full run only. After `ctest -LE slow`,
-  `consumer_package_tests` does not run and the count is 65, so the per-PR job passes neither.
+- `--expected-tests-from <tree>` compares the junit count with what `ctest --test-dir <tree> -N`
+  registers. After `ctest -LE slow`, pass `--label-exclude slow` so the count is filtered the same way.
+- Use `--require consumer_package_tests` on a full run only: `ctest -LE slow` does not run it.
 
 ### Both directions fail the gate
 
@@ -414,5 +415,5 @@ with a `<skipped>` child, which includes never-built binaries. The root summary 
   variable gives 70/70 green.
 - **Defences:** CI sets neither `BATCHLAS_TEST_BACKEND` nor `BATCHLAS_TEST_FLOAT_TYPE`, and their
   absence from `env:` is a gate. `compare_failures.py` names such binaries under `SKIPPED`, read that
-  section rather than the exit code. `--expected-tests 70` catches missing executables. The
+  section rather than the exit code. `--expected-tests-from` catches missing executables. The
   assertions in [The environment trap](#the-environment-trap) catch a CPU-only build.
