@@ -1238,6 +1238,10 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
             p.a0[size_t(b) * p.stride + size_t(col) * p.ld + i] = MVof<T>::make(1.0 / 1024.0, 0.0);
     for (int b = 0; b < batch; ++b)
         p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = MVof<T>::make(64.0, -64.0);
+    // Row `row` is small left of `col`, so no earlier column takes it as its pivot (any seed).
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < col; ++j)
+            p.a0[size_t(b) * p.stride + size_t(j) * p.ld + row] = MVof<T>::make(1.0 / 1024.0, 0.0);
     repanel(p);
 
     ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(

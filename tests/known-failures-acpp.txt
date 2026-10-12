@@ -37,11 +37,3 @@ steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32;type_param=SteqrConfig<doubl
 # eps*kappa^2. acpp gives 0.99827855825424194, bit-identical to DPC++.
 gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
 
-# --- acpp only -----------------------------------------------------------------
-# A tolerance knife-edge, not an acpp bug: cdouble m=n=96, |tau_native - tau_vendor| =
-# 1.45e-14 against a 64-eps bound of 1.42e-14 (the factor itself agrees to 1.3e-15).
-# Over 12 seeds acpp and DPC++ spread the same (2.7e-15 to 1.98e-14), and DPC++ fails
-# at seed offset +2; the default seed only crosses on acpp. Fix: the test's tau bound.
-# Both entries: geqrf_tests_1 is the route-pinned rerun of the same binary.
-geqrf_tests::GeqrfTest/7.NativeFactorMatchesTheVendorElementwise;type_param=(anonymous namespace)::GeqrfConfig<std::complex<double>,(batchlas::Backend)1>
-geqrf_tests_1::GeqrfTest/7.NativeFactorMatchesTheVendorElementwise;type_param=(anonymous namespace)::GeqrfConfig<std::complex<double>,(batchlas::Backend)1>
