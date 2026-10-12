@@ -134,6 +134,10 @@ O(n^3) reference solves (91% of `steqr_tests` runtime). Original CUDA-only vs al
 > `BATCHLAS_TEST_BACKEND=cuda0` warns, `BATCHLAS_TEST_FLOAT_TYPE=single` skips silently. A run
 > where everything skipped is not a pass.
 
+A launch that finds no device image for its kernel ("No kernel named ...") fails the test.
+`BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1` turns that into a skip, for a deliberately partial
+`-fsycl-targets` build only (`test_utils::is_kernel_not_found_message`).
+
 ## Writing tests that stay fast
 
 1. **Do not combine large `n` with large `batch`.** `n` drives algorithmic depth (D&C merge
