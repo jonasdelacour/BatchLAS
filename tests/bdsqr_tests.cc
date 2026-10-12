@@ -245,6 +245,55 @@ TYPED_TEST(BdsqrTest, MixedSignsZerosAndWideRange) {
     for (int n : {8, 32, 64}) this->check_hostile(n, 16, 900u + n);
 }
 
+// A graded bidiagonal scaled by 2^(max_exponent/2): every d_i^2 overflows, so a shift formed from
+// squared entries is inf. The scale is a power of two, so dividing s by it afterwards is exact and
+// the checks run on the unscaled matrix.
+TYPED_TEST(BdsqrTest, GradedNearOverflow) {
+    using Scalar = typename TestFixture::Scalar;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::B;
+    auto& ctx = *this->ctx;
+    const int n = 32, batch = 2;
+    const Scalar scale = std::ldexp(Scalar(1), std::numeric_limits<Scalar>::max_exponent / 2);
+
+    auto A0 = Matrix<Scalar>::Zeros(n, n, batch);
+    UnifiedVector<Scalar> d(static_cast<size_t>(n) * batch), e(static_cast<size_t>(n - 1) * batch);
+    std::vector<std::vector<double>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        std::vector<double> dh(n), eh(n - 1);
+        for (int i = 0; i < n; ++i) {
+            dh[i] = static_cast<Scalar>((1.7 - 0.9 * ((i * 7 + b) % 5) / 4.0) * std::pow(0.8, i));
+            if (i < n - 1) eh[i] = static_cast<Scalar>(0.5 * (0.6 + 0.2 * ((i * 3 + b) % 4)) * std::pow(0.8, i));
+        }
+        for (int i = 0; i < n; ++i) {
+            A0.view()(i, i, b) = static_cast<Scalar>(dh[i]);
+            d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(dh[i]) * scale;
+            if (i < n - 1) {
+                A0.view()(i, i + 1, b) = static_cast<Scalar>(eh[i]);
+                e[static_cast<size_t>(b) * (n - 1) + i] = static_cast<Scalar>(eh[i]) * scale;
+            }
+        }
+        ref[b] = reference_singular_values(dh, eh, n);
+    }
+    VectorView<Scalar> dv(d.to_span(), n, batch, 1, n);
+    VectorView<Scalar> ev(e.to_span(), n - 1, batch, 1, n - 1);
+    Vector<Scalar> s(n, Scalar(0), batch);
+    UnifiedVector<std::byte> ws(bdsqr_buffer_size<Scalar>(ctx, dv, ev, s.data()));
+    auto U = Matrix<Scalar>::Identity(n, batch);
+    auto Vh = Matrix<Scalar>::Identity(n, batch);
+    (void)bdsqr<B, Scalar>(ctx, dv, ev, s.data(), ws.to_span(), U.view(), Vh.view(), true);
+    ctx.wait_and_throw();
+    for (int b = 0; b < batch; ++b)
+        for (int i = 0; i < n; ++i) s(i, b) /= scale;
+
+    double smax = 0;
+    for (const auto& r : ref) smax = batchlas::verify::nanmax(smax, r.front());
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, MV::values_error(VectorView<Scalar>(s), ref, smax, A0.view().all_items()));
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
+                  MV::svd_residual(ctx, A0.view(), U.view(), VectorView<Scalar>(s), Vh.view(), A0.view().all_items()));
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U.view(), U.view().all_items()));
+}
+
 
 } // namespace
 #endif  // BATCHLAS_HAS_CUDA_BACKEND

@@ -219,15 +219,16 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         }
                     }
 
+                    // DBDSQR's shift: the smaller singular value of the trailing 2x2 of B (?LAS2,
+                    // no squares, so no overflow near sqrt(max)), dropped when negligible.
                     const int32_t p = m - 1;
-                    const Real a = db[p] * db[p] + eb[p] * eb[p];
-                    const Real b12 = db[p] * eb[p];
-                    const Real c = db[m] * db[m];
-                    const auto eval2 = internal::eigenvalues_2x2(a, b12, c);
-                    const Real mu = (safe_abs(eval2[0] - c) < safe_abs(eval2[1] - c)) ? eval2[0] : eval2[1];
-
-                    Real f = db[l] * db[l] - mu;
-                    Real g = db[l] * eb[l];
+                    Real shift = internal::las2(db[p], eb[p], db[m])[0];
+                    const Real sll = safe_abs(db[l]);
+                    if (sll > Real(0) && (shift / sll) * (shift / sll) < std::numeric_limits<Real>::epsilon()) {
+                        shift = Real(0);
+                    }
+                    Real f = (sll - shift) * (sycl::copysign(Real(1), db[l]) + shift / db[l]);
+                    Real g = eb[l];
 
                     for (int32_t k = l; k <= m - 1; ++k) {
                         const auto r1 = internal::lartg<Real>(f, g);
