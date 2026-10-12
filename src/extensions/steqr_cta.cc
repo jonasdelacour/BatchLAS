@@ -56,8 +56,6 @@ namespace batchlas {
         ctx->submit([&](sycl::handler& cgh) {
             auto Q_view = eigvects.kernel_view();
             const auto dev = ctx->get_device();
-            const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-
             // CTA path assumes warp-sized sub-groups on NVIDIA.
             const int32_t sg_size = 32;
 
@@ -204,19 +202,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
         }
 
-        const auto dev = ctx->get_device();
-        bool has32 = false;
-        {
-            const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-            for (auto sgs : sg_sizes) {
-                if (static_cast<int32_t>(sgs) == 32) {
-                    has32 = true;
-                    break;
-                }
-            }
-        }
-
-        if (!has32) {
+        if (!ctx.device().supports_sub_group_size(32)) {
             return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
         }
 
@@ -303,19 +289,7 @@ namespace batchlas {
         size += sort_buffer_size<T>(ctx, eigenvalues.data(),
                                     MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
 
-        const auto dev = ctx->get_device();
-        bool has32 = false;
-        {
-            const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-            for (auto sgs : sg_sizes) {
-                if (static_cast<int32_t>(sgs) == 32) {
-                    has32 = true;
-                    break;
-                }
-            }
-        }
-
-        if (!has32) {
+        if (!ctx.device().supports_sub_group_size(32)) {
             const auto steqr_size = steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
             size = std::max<size_t>(size, steqr_size);
         }

@@ -9,16 +9,6 @@ namespace batchlas {
 
 namespace {
 
-inline int32_t device_max_sub_group_size(const Queue& ctx) {
-    const auto dev = ctx->get_device();
-    const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-    int32_t max_sg = 1;
-    for (const auto s : sg_sizes) {
-        max_sg = std::max(max_sg, static_cast<int32_t>(s));
-    }
-    return max_sg;
-}
-
 template <Backend B, typename T>
 inline bool should_use_cta(const Queue& ctx, int64_t n) {
     // steqr_cta uses chunked sub-group operations that produce incorrect
@@ -27,7 +17,7 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
         (void)ctx; (void)n;
         return false;
     }
-    return n > 0 && n <= static_cast<int64_t>(device_max_sub_group_size(ctx));
+    return n > 0 && n <= 32 && ctx.device().supports_sub_group_size(32);
 }
 
 } // namespace

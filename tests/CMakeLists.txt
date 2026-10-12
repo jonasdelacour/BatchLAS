@@ -556,6 +556,12 @@ if(Python3_Interpreter_FOUND)
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
 endif()
 
+# no_raw_subgroup_queries: every sub-group capability check goes through
+# Device::supports_sub_group_size, which carries the acpp "exactly {32}" rule.
+add_test(NAME no_raw_subgroup_queries
+    COMMAND sh -c "! grep -rn 'info::device::sub_group_sizes' '${PROJECT_SOURCE_DIR}/src' | grep -v 'util/queue-impl.cc'")
+set_tests_properties(no_raw_subgroup_queries PROPERTIES LABELS "util")
+
 # acpp_jit_tests: the AdaptiveCpp counterpart. acpp JIT-compiles kernels at first launch, so
 # scripts/check_acpp_jit.py runs these CUDA cases against a fresh ACPP_APPDB_DIR, then scans the
 # PTX the runtime cached: no out-of-line call, every required family reached, no stack array in a

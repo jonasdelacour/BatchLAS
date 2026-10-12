@@ -878,17 +878,7 @@ Event sytrd_sb2st(Queue& ctx,
 
     const Sb2stSubgroupMode mode = parse_mode();
 
-    bool device_has_sg32 = false;
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                device_has_sg32 = true;
-                break;
-            }
-        }
-    }
+    const bool device_has_sg32 = ctx.device().supports_sub_group_size(32);
 
     bool can_use_subgroup = false;
     if (mode != Sb2stSubgroupMode::ForceOff) {

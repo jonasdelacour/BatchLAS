@@ -884,16 +884,8 @@ Event gesvdj_cta(Queue& ctx,
             "(see gesvdj_cta_max_dim)");
     }
 
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto s : sg_sizes) {
-            if (static_cast<int32_t>(s) == 32) { has32 = true; break; }
-        }
-        if (!has32) {
-            throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
-        }
+    if (!ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
     }
 
     const bool transposed = (m < n);

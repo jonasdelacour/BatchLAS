@@ -541,19 +541,8 @@ Event ormqx_cta(Queue& ctx,
     auto& c = const_cast<MatrixView<T, MatrixFormat::Dense>&>(c_in);
 
     // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
-            }
-        }
-        if (!has32) {
-            throw batchlas::unsupported("ormqx_cta: device does not support subgroup size 32 required for CTA kernels.");
-        }
+    if (!ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("ormqx_cta: device does not support subgroup size 32 required for CTA kernels.");
     }
 
     auto launch = [&](auto P_tag) {

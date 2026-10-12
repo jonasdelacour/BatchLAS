@@ -704,14 +704,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const bool is_legacy = !use_device_sytrd();
 
     if (n <= 32) {
-        bool has_sg32 = false;
-        try {
-            const auto sizes = ctx->get_device().get_info<sycl::info::device::sub_group_sizes>();
-            has_sg32 = std::find(sizes.begin(), sizes.end(), 32) != sizes.end();
-        } catch (...) {
-            has_sg32 = false;
-        }
-        if (has_sg32) {
+        if (ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, T>(ctx, a_in, d_out, e_out, tau_out, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
         }
     }

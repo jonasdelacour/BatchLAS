@@ -281,16 +281,7 @@ Event gebrd_cta(Queue& ctx,
             throw batchlas::invalid_argument("gebrd_cta: batch size mismatch");
         }
 
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
-            }
-        }
-        if (!has32) {
+        if (!ctx.device().supports_sub_group_size(32)) {
             throw batchlas::unsupported("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
         }
 
