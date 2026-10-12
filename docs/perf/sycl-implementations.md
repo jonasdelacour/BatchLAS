@@ -37,10 +37,10 @@ families, *vendor* the cuBLAS/cuSOLVER family through `impl::run_native`.
 - **Routes.** All 90 Auto cells take the same top-level route in both trees (coverage `reached`
   rows), and every gemm pin ran exactly its pinned family. Sub-op routes differ only where a
   blocked driver derives its block size from the local-memory budget
-  ([R2](#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant)); the opt-in tree's sub-routes equal
+  ([A2](#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant)); the opt-in tree's sub-routes equal
   DPC++'s in every cell.
 - **Not the launch bounds.** Removing `BATCHLAS_LAUNCH_BOUNDS` from DPC++ changes nothing
-  (0.99-1.03, [R10](#sycl-impl-ab-launch-bounds-r10)). The float losses are code generation:
+  (0.99-1.03, [A10](#sycl-impl-ab-launch-bounds-r10)). The float losses are code generation:
   the getrf tiny kernel's JIT-ed PTX has 40% more instructions and 1.8x the branches.
 - **No per-implementation tables.** The fastest family changes in 3 of 78 cell groups, each by
   at most 9.5% ([the table decision](#sycl-impl-ab-per-implementation-tables)).
@@ -54,7 +54,7 @@ families, *vendor* the cuBLAS/cuSOLVER family through `impl::run_native`.
 | --- | --- | --- |
 | Compiler | `/opt/dpcpp-cuda/bin/clang++`, DPC++ 7.2.0 pre-release, intel/llvm `b87b3566` | `/opt/adaptivecpp-25.10.0-cuda13.2/bin/acpp`, 25.10.0+git.9f842c7, Ubuntu clang 20.1.2 |
 | Tree | `build-dpcpp`, Release, targets `nvptx64-nvidia-cuda` (sm_120) + `spir64_x86_64` | `build-acpp-rel`, Release, `--acpp-targets=generic` (SSCP, PTX JIT at first launch) |
-| fp | contract `on` (driver default), FTZ off | `-ffp-contract=on` (R11), FTZ off |
+| fp | contract `on` (driver default), FTZ off | `-ffp-contract=on` (A11), FTZ off |
 | Variant | `nolb`: as A from a source copy whose `BATCHLAS_LAUNCH_BOUNDS` is empty (0 `.minnctapersm` in its PTX; A has 152) | `optin`: as B plus `-DBATCHLAS_ACPP_SLM_OPTIN=ON` (`build-acpp-rel-optin`, budget 97,280 B as on DPC++) |
 | Runtime | `LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:/opt/lib` | same, plus `ACPP_ADAPTIVITY_LEVEL=1`, `ACPP_RT_SCHEDULER=direct`, one `ACPP_APPDB_DIR` per campaign |
 | Source | `acpp-dual-build` at `ddf07744`; `src/` and `include/` unchanged since; uncommitted harness changes (`gemm_transpose_benchmark` gained `BATCHLAS_BENCH_LD_PAD`) | same |
@@ -99,7 +99,7 @@ one process per (cell, implementation), each under a GPU guard, coverage on.
 
 ## sycl-impl A/B: gemm {#sycl-impl-ab-gemm}
 
-acpp / DPC++ time per family; `n/a` = acpp cannot run it (49,920 B of local memory, R2); empty =
+acpp / DPC++ time per family; `n/a` = acpp cannot run it (49,920 B of local memory, A2); empty =
 not measured at that n. Auto's route is the same in both trees.
 
 **float, NN, ld = rows + 3**
@@ -242,17 +242,17 @@ float n = 512).
 | 1024 | 128 | 1.05 | · | · | not run | 174.2 | `blocked` | 1.05 | 1.05 |
 
 - **geqrf float blocked** is the largest Auto loss: 1.35-1.70 at n = 128-1024, the same with the
-  opt-in budget, so not R2. Its sub-routes (cuBLAS gemm) are identical in both trees; the loss is
+  opt-in budget, so not A2. Its sub-routes (cuBLAS gemm) are identical in both trees; the loss is
   in the native panel kernels.
 - **potrf float `lpanel` at n = 256** is 1.36 (Auto takes it), also unchanged by the opt-in.
 - The `blocked` families at n = 64-256 and the `cta` cells marked 2.30-2.66 are the 48 KiB budget
   ([below](#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant)).
 - getrf `blocked` at n = 8-16 runs 0.36-0.67 on acpp in both precisions; no table routes it there.
-- The launch-bound cells (float n <= 32 `tiny`) are in [R10](#sycl-impl-ab-launch-bounds-r10).
+- The launch-bound cells (float n <= 32 `tiny`) are in [A10](#sycl-impl-ab-launch-bounds-r10).
 
 ## sycl-impl A/B: the sub-group CTA eigensolvers {#sycl-impl-ab-sub-group-cta-kernels}
 
-The real-kernel A/B rule for the `SscpBackend` of `sg_partition` (design §5.3): n = 5..32, batch
+The real-kernel A/B rule for the `SscpBackend` of `sg_partition` ([design: JIT-time target dispatch](../design/sycl-implementations.md#sycl-impl-device-target-dispatch)): n = 5..32, batch
 16384, eigenvectors. Each kernel is called directly, so the route is the function.
 
 | kernel | dtype | n = 5 | 8 | 12 | 16 | 24 | 32 | DPC++ ms at n = 16 |
@@ -272,7 +272,7 @@ Paired 95% CIs are within +-0.02 of every ratio.
 - **`syev_cta_fused` float is faster on acpp**, 0.54-0.81, and syev's Auto route takes it at n = 16
   and 32 (syev Auto 0.65 and 0.54). Nsight Systems, float n = 32: 3.30 ms DPC++, 1.78 ms acpp per
   call. ptxas resources for `SyevCtaFusedKernel<float, 32, vectors>`: DPC++ 84 registers and a 64 B
-  stack frame; acpp 94 registers, no stack (§6.1 of the design lists the same stack arrays).
+  stack frame; acpp 94 registers, no stack ([the design's JIT-ed PTX check](../design/sycl-implementations.md#sycl-impl-jit-ptx-check) lists the same stack arrays).
 - `stedc` (float 1.05-1.14, double 1.00-1.03) and syev Auto (below) inherit these kernels.
 
 ## sycl-impl A/B: stedc and syev Auto {#sycl-impl-ab-stedc-and-syev}
@@ -292,7 +292,7 @@ The float `blocked` syev (1.29-1.36) and `two_stage` syev (1.12) are the second-
 losses after geqrf float. In `two_stage` the acpp tree's sub-routes differ only in geqrf `cta` vs
 `blocked` panels (the 48 KiB budget); the opt-in tree matches DPC++'s sub-routes and the same ratio.
 
-## sycl-impl A/B: launch bounds (R10) {#sycl-impl-ab-launch-bounds-r10}
+## sycl-impl A/B: launch bounds (A10) {#sycl-impl-ab-launch-bounds-r10}
 
 acpp drops `[[intel::max_work_group_size, min_work_groups_per_cu]]` (the JIT emits `.maxntid` from
 the launch, no `.minnctapersm`). The `nolb` DPC++ tree isolates the attribute: the same compiler
@@ -321,7 +321,7 @@ at n = 256, 512, 1024 in both layouts; acpp / DPC++ = 0.98-1.08.
 
 ## sycl-impl A/B: the 48 KiB budget and the opt-in variant {#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant}
 
-acpp 25.10 caps a launch at 48 KiB of local memory (design §5.4). `can_run` routes around it, so a
+acpp 25.10 caps a launch at 48 KiB of local memory ([design: the local-memory budget](../design/sycl-implementations.md#sycl-impl-slm-budget)). `can_run` routes around it, so a
 family is `n/a`, and blocked drivers derive smaller blocks from the 45,056 B budget. The opt-in tree
 restores the 97,280 B budget; every one of its sub-routes then equals DPC++'s.
 
@@ -400,7 +400,7 @@ Level 2 moves the n = 32 factorization cells by up to 0.28 in either direction (
 
 ## sycl-impl A/B: per-implementation tables {#sycl-impl-ab-per-implementation-tables}
 
-The tables are keyed by device (`tuned/*.sm_120.txt`), not implementation (design §7). For each of
+The tables are keyed by device (`tuned/*.sm_120.txt`), not implementation ([design: the performance protocol](../design/sycl-implementations.md#sycl-impl-performance-ab)). For each of
 the 78 cell groups with two or more runnable pinned families, compare the fastest family per tree:
 
 | group | DPC++ fastest | acpp fastest | DPC++'s pick on acpp | acpp's pick on DPC++ |
@@ -411,7 +411,7 @@ the 78 cell groups with two or more runnable pinned families, compare the fastes
 
 Three changes, each a near-tie on DPC++. Auto took the same route in all 90 cells. **The data does
 not support per-implementation tables.** The acpp losses are per-kernel code generation, not
-ranking inversions, and the opt-in tree removes the only systematic ranking effect (R2).
+ranking inversions, and the opt-in tree removes the only systematic ranking effect (A2).
 
 ## sycl-impl A/B: accuracy {#sycl-impl-ab-accuracy}
 
@@ -443,9 +443,9 @@ bin, batch 128) and pairs the rows per sample.
   cuSOLVER (through `impl::run_native`) and the NETLIB host paths.
 - **Float R and O differ by at most 2 ulp** in about 18% of samples. Per-element arithmetic is the
   same PTX in both (`mul.rn`, `add.rn`, `sqrt.approx.f32`); the work-group sum is DPC++'s native
-  reduction against acpp's `portable::detail::wg_reduce_floating` (design §5.6). Why double R and O
+  reduction against acpp's `portable::detail::wg_reduce_floating` ([design: the group-algorithm wrappers](../design/sycl-implementations.md#sycl-impl-group-algorithms)). Why double R and O
   are bit-identical over the same grid is not explained.
-- **CGS2, SVQB, SVQB2** sum through the §5.6 replacements (and SVQB's blocked syev at n >= 64), so
+- **CGS2, SVQB, SVQB2** sum through the [group-algorithm replacements](../design/sycl-implementations.md#sycl-impl-group-algorithms) (and SVQB's blocked syev at n >= 64), so
   bits differ without bias. Past cond ~1/sqrt(eps) SVQB breaks down in both trees and per-sample
   results are chaotic (ratios above 2 and below 0.5 occur 1,483 vs 1,518 times of 12,800 for SVQB2
   float n = 64; geo-mean 0.975). The one flag is a sample maximum in that regime.
@@ -467,8 +467,8 @@ k, batch, uplo, side, diag, trans).
 | DPC++ vs acpp (45,056 B budget) | 10,303 / 10,236 | 9,844 | 34 | 425 | 358 |
 | DPC++ vs acpp + opt-in (97,280 B) | 10,303 / 10,282 | 10,273 | 1 | 29 | 8 |
 
-- **Every difference is R2 or test scheduling.** The opt-in budget removes 33 of 34 changes and
-  cuts the one-sided keys from 783 to 37. Both trees key the tables `[sm_120]` (R4 holds).
+- **Every difference is A2 or test scheduling.** The opt-in budget removes 33 of 34 changes and
+  cuts the one-sided keys from 783 to 37. Both trees key the tables `[sm_120]` (A4 holds).
 - The 34 changes: gemm float `reg 128x64x32` u=2/u=4 drop out (9); potrf `cta` above its 45 KiB
   order, `lpanel:panel=8` -> `blocked` (cdouble n = 96, 130), a smaller lpanel:16 window (9); geqrf
   `cta` -> `blocked` (cfloat n = 64-168, float n = 96), `tiny` drops out (7); getrf `cta` ->
@@ -501,10 +501,10 @@ k, batch, uplo, side, diag, trans).
   getrf tiny shows branches where DPC++ emits selects; the other kernels are not analysed. An acpp
   built on a newer LLVM, or `-O3`-level flags passed to the SSCP JIT, are the untested next steps.
 - **The `syev_cta_fused` float win** (0.54) points at DPC++'s 64 B stack frame in that kernel
-  (design §6.1); not confirmed by a DPC++ change.
-- **Upstream opt-in.** With the 97,280 B budget the R2 cells return to 0.99-1.20; the interposer
+  ([design: the JIT-ed PTX check](../design/sycl-implementations.md#sycl-impl-jit-ptx-check)); not confirmed by a DPC++ change.
+- **Upstream opt-in.** With the 97,280 B budget the A2 cells return to 0.99-1.20; the interposer
   costs 4-7% at launch-bound cells. An upstream `cuFuncSetAttribute` in acpp's CUDA backend would
   remove both.
-- **Not measured:** complex types outside R10, the vendor-free acpp tree, coarse-grained events,
+- **Not measured:** complex types outside A10, the vendor-free acpp tree, coarse-grained events,
   sm_89, and saturation of the cells the table above flags (geqrf float n = 512, potrf float
   `blocked` n = 512, syev float n = 1024).

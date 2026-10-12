@@ -14,7 +14,8 @@
 # build-acpp-tests: acpp v25.10.0, --acpp-targets=generic, RelWithDebInfo, CPU
 # target on (so the NETLIB instantiations run SYCL kernels on acpp's OpenMP host
 # device), BATCHLAS_ACPP_SLM_OPTIN=OFF. Design page:
-# docs/design/sycl-implementations.md (§4 rows R1-R15, §5.4-§5.6).
+# docs/design/sycl-implementations.md (#sycl-impl-runtime-differences rows A1-A11, and the
+# sections from #sycl-impl-slm-budget to #sycl-impl-group-algorithms).
 #
 # DELIBERATELY ABSENT (as from tests/known-failures.txt; each fails identically on the
 # DPC++ tree of the same box). Box environment: tune_tests (LFS pointers in a fresh
