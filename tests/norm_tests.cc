@@ -10,6 +10,7 @@
 #include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
+#include <batchlas/no_route.hh>
 
 using namespace batchlas;
 
@@ -396,7 +397,11 @@ TYPED_TEST(NormTest, SpectralOutOfOrder) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) mat.view()(i, j, b) = T(real_t(b + 1));
     UnifiedVector<real_t> result(batch_size, std::numeric_limits<real_t>::quiet_NaN());
-    (void)norm(oq, mat.view(), NormType::Spectral, result.to_span());
+    try {
+        (void)norm(oq, mat.view(), NormType::Spectral, result.to_span());
+    } catch (const batchlas::NoRouteError& e) {
+        GTEST_SKIP() << "the spectral norm needs syev, which has no route in this build: " << e.what();
+    }
     for (int b = 0; b < batch_size; ++b) {
         const double want = double(n) * (b + 1);
         EXPECT_VERIFY(T, batchlas::verify::Check::values, n, std::abs(double(result[b]) - want) / want) << "item " << b;
