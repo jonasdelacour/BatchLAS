@@ -95,13 +95,20 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
                           const std::vector<std::string>& order, double tie = 0.03, double margin = 0.10);
 
 // One (op, dtype)'s ld audit (spec.hh kLdAuditPad). An arm the cell did not verify stays wanted.
+// A fail is a verdict on the kernel, so the arm is `bad` in every cell of the (op, dtype).
 struct LdAuditBook {
-    std::set<std::string> done;  // arms with a verdict: pass, fail or skipped
-    std::size_t passed = 0, skipped = 0;
+    std::set<std::string> done;     // arms with a verdict: pass or fail
+    std::set<std::string> refused;  // the pin refused the padded shape (skipped): still wanted
+    std::map<std::string, std::string> bad;  // failed arm -> the reason its other cells record
+    std::size_t passed = 0;
     std::vector<std::string> failed;  // "<arm> @ <key>: <reason>"
     std::vector<std::string> want(const std::vector<std::string>& arms) const;  // those with no verdict yet
     std::vector<std::string> note(const CellKey& key, const std::vector<ArmOutcome>& out);  // returns this cell's fails
+    std::size_t skipped() const;  // refused at every cell that asked, never audited
 };
+
+// `arm` ok or eliminated in r -> bad with `reason`, out of r.ranked; false when r did not rank it.
+bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason);
 
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);

@@ -56,7 +56,8 @@ RaceVerdict race_step(RaceState& s, const TierParams& p, double tie) {
             const int n = static_cast<int>(q.size());
             const std::size_t k = lower_order_stat(n, p.confidence);
             std::sort(q.begin(), q.end());
-            if (n >= 1 && median(q) > kGrossLoserRatio) {
+            // Lower median over >= 2 rounds: one stalled round never kills an arm.
+            if (n >= 2 && q[(n - 1) / 2] > kGrossLoserRatio) {
                 dying.push_back(c);  // evidence: docs/design/tiered-tuning.md#engine-readiness-for-a-deep-run-over-all-19-ops
             } else if (n >= p.min_reps && k >= 1) {
                 if (q[k - 1] > 1.0 + tie) dying.push_back(c);

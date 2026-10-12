@@ -92,7 +92,7 @@ families changed are re-raced (`partial:<family>`).
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
 | `--devices` | required (not for `--plan`) | GPU indices in nvidia-smi / PCI order. Inside `CUDA_VISIBLE_DEVICES` when that is set; UUID lists are refused |
 | `--raw DIR` | `<repo>/benchmarks/results/tuning` | custom: raw JSONL (Git LFS) |
-| `--out DIR` | none | table directory: after the run, `sweep_to_table.py --op <op> --device <dev>` regenerates each measured op's table from the ledger (custom runs: only with `--ledger`) |
+| `--out DIR` | none | table directory: after the run, `sweep_to_table.py --op <op> --device <dev>` regenerates each measured op's table from the ledger (a custom run without `--ledger` refuses `--out`) |
 | `--reps`, `--warm`, `--passes` | 16, 1.5 s, 2 | custom: §6.3 protocol |
 | `--remeasure` | 0.10 | custom: re-measure a cell once when pass medians differ by more |
 | `--refine-ratio`, `--no-refine` | 1.1 | custom: §6.2 bisection stops when hi/lo < ratio |
@@ -141,9 +141,9 @@ and planning is in `schedule.cc`.
 - **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`): a warm-up per live candidate,
   then interleaved rounds of one timed run per candidate until a winner, a tie or `max_reps` rounds.
   Eliminated candidates are still verified; a passing one keeps its median with status `eliminated`
-  (ranked after the survivors). A failing one is `bad` and left out. From the first round on, whatever
-  `min_reps` says, an arm whose median paired ratio to the leader exceeds 4.0 is eliminated (a gross
-  loser).
+  (ranked after the survivors). A failing one is `bad` and left out. From the second round on,
+  whatever `min_reps` says, an arm whose lower median paired ratio to the leader exceeds 4.0 is
+  eliminated (a gross loser); one stalled round never kills an arm.
 - **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`) pin
   that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of timing Auto
   under the vendor's name.
@@ -162,8 +162,10 @@ and planning is in `schedule.cc`.
   10% slower in the fresh run) is logged as an `audit` record. The rest of that op and dtype then runs
   in fresh children.
 - **ld audit.** Each candidate's first verified cell per op and dtype is verified once more, in the
-  same worker or child, at `ld_pad + 3`. A failure makes the arm `bad` there (reason `ld audit: ...`),
-  prints `ld audit FAILED`, and the summary gives passed/skipped/failed per op and dtype. The audit
+  same worker or child, at `ld_pad + 3`; a pin that refuses the padded shape is asked again at the
+  next cell. A failure makes the arm `bad` in every cell of that op and dtype: later cells skip it,
+  and each current record that ranks it, this run's or the ledger's, is appended again with it
+  `bad`. It prints `ld audit FAILED`, and the summary gives passed/skipped/failed per op and dtype. The audit
   above ignores an ld-audit failure (its fresh child verifies at the natural ld). Rationale:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-ld-audit).
 - **Ledger.** One file per (op, device) under `--ledger`, shared by every dtype job and process:

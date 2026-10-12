@@ -861,13 +861,19 @@ TEST(TuneRace, SingleRoundNeverEliminatesBelowTheGrossLoserRatio) {
     }
 }
 
-TEST(TuneRace, GrossLoserDiesAfterTheFirstRoundInEveryTier) {
+TEST(TuneRace, GrossLoserDiesAfterTheSecondRoundInEveryTier) {
     for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
         const auto& p = params(t);
         RaceState s;
         s.cands = {"a", "b", "c"};
-        s.ms = {{1.0}, {4.1}, {3.9}};
+        s.ms = {{1.0}, {40.0}, {3.9}};
         s.alive = {true, true, true};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t);
+        EXPECT_EQ(s.alive, (std::vector<bool>{true, true, true})) << to_string(t) << ": one round is never enough";
+        s.ms = {{1.0, 1.0}, {40.0, 1.2}, {3.9, 1.0}};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t);
+        EXPECT_TRUE(s.alive[1]) << to_string(t) << ": one stalled round of two is no gross loss";
+        s.ms = {{1.0, 1.0}, {4.1, 4.2}, {3.9, 3.9}};
         EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t) << ": c is under the ratio and stays";
         EXPECT_EQ(s.alive, (std::vector<bool>{true, false, true})) << to_string(t);
         EXPECT_EQ(race_ranking(s, {"a", "b", "c"}), (std::vector<std::string>{"a", "c", "b"}));
@@ -2237,10 +2243,12 @@ TEST(TuneSchedule, AscendingBytesOrder) {
 
 TEST(TuneSchedule, PosvAfterPotrfAndTrsm) {
     using V = std::vector<std::string>;
-    EXPECT_EQ(op_order({"posv", "gemm", "potrf", "trsm"}), (V{"gemm", "potrf", "trsm", "posv"}));
-    EXPECT_EQ(op_order({"potrf", "posv", "trsm"}), (V{"potrf", "trsm", "posv"}));
-    EXPECT_EQ(op_order({"trsm", "potrf", "posv", "gemm"}), (V{"trsm", "potrf", "posv", "gemm"}));
+    EXPECT_EQ(op_order({"posv", "gemm", "potrf", "trsm"}), (V{"gemm", "trsm", "potrf", "posv"}));
+    EXPECT_EQ(op_order({"potrf", "posv", "trsm"}), (V{"trsm", "potrf", "posv"})) << "blocked potrf calls the public trsm";
+    EXPECT_EQ(op_order({"trsm", "potrf", "posv", "gemm"}), (V{"gemm", "trsm", "potrf", "posv"}));
     EXPECT_EQ(op_order({"gemm", "posv"}), (V{"gemm", "posv"}));
+    EXPECT_EQ(op_order({"trsm", "gemm"}), (V{"gemm", "trsm"})) << "blocked trsm calls the public gemm";
+    EXPECT_EQ(op_order({"potrf", "gemm"}), (V{"gemm", "potrf"})) << "blocked potrf calls the public gemm";
 }
 
 TEST(TuneSchedule, AllNineteenOpsFollowTheirDependencies) {
@@ -3626,13 +3634,42 @@ TEST(TuneLdAudit, TheBookAuditsEachArmOnceAndKeepsUnverifiedArmsWanted) {
     EXPECT_EQ(book.passed, 1u);
     ASSERT_EQ(book.failed.size(), 1u);
     EXPECT_EQ(book.failed[0], "a @ n=4 batch=1024: ld audit: residual");
+    ASSERT_EQ(book.bad.count("a"), 1u);
+    EXPECT_EQ(book.bad.at("a"), "ld audit failed @ n=4 batch=1024");
     EXPECT_TRUE(book.note(nkey(8), cell).empty()) << "a second verdict for an audited arm is not counted";
     EXPECT_EQ(book.passed, 1u);
     std::vector<ArmOutcome> later{arm("c", "ok")};
     later[0].ld_audit = "skipped";
     (void)book.note(nkey(16), later);
-    EXPECT_EQ(book.skipped, 1u);
+    EXPECT_EQ(book.skipped(), 1u);
+    EXPECT_EQ(book.want({"a", "b", "c"}), std::vector<std::string>{"c"}) << "a refused padded shape is asked again";
+    later[0].ld_audit = "pass";
+    (void)book.note(nkey(32), later);
+    EXPECT_EQ(book.skipped(), 0u) << "audited at a later cell";
+    EXPECT_EQ(book.passed, 2u);
     EXPECT_TRUE(book.want({"a", "b", "c"}).empty());
+}
+
+TEST(TuneLdAudit, RetractMarksTheArmBadAndUnranksIt) {
+    CellRecord r;
+    r.key = nkey(8);
+    for (const char* s : {"a", "b", "c"}) {
+        CandResult c;
+        c.cand = s;
+        c.status = std::string(s) == "c" ? "eliminated" : "ok";
+        c.median_ms = 1.0;
+        r.cands.push_back(c);
+    }
+    r.ranked = {"a", "b", "c"};
+    CellRecord x = r;
+    EXPECT_TRUE(ld_retract(x, "a", "ld audit failed @ n=4"));
+    EXPECT_EQ(x.ranked, (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(x.cands[0].status, "bad");
+    EXPECT_EQ(x.cands[0].reason, "ld audit failed @ n=4");
+    EXPECT_FALSE(ld_retract(x, "a", "again")) << "already bad";
+    EXPECT_TRUE(ld_retract(x, "c", "e")) << "an eliminated arm is ranked too";
+    EXPECT_EQ(x.ranked, std::vector<std::string>{"b"});
+    EXPECT_FALSE(ld_retract(x, "zz", "e"));
 }
 
 TEST(TuneLdAudit, RequestsAndOutcomesCarryTheAudit) {
@@ -3665,17 +3702,19 @@ namespace {
 // Honours CellJob::ld_audit as a child would: "a" fails the audit, every other audited arm passes.
 class LdAuditMeasurer : public CellMeasurer {
 public:
-    std::vector<std::vector<std::string>> asked;
+    std::vector<std::vector<std::string>> asked, timed;
     bool worker = false;  // persistent: the first worker cell gets the carve-out audit too
+    int refuse_a = 0;     // the first refuse_a audits of "a" are skipped (padded shape refused)
     bool persistent() const override { return worker; }
     ArmBatch measure(const CellJob& j) override {
         asked.push_back(j.ld_audit);
+        timed.push_back(sorted(j.arms));
         ArmBatch b;
         for (const std::string& a : j.arms) {
             ArmOutcome o = arm(a, "ok", {a == "a" ? 0.5 : 1.0});
             if (std::find(j.ld_audit.begin(), j.ld_audit.end(), a) != j.ld_audit.end()) {
-                o.ld_audit = a == "a" ? "fail" : "pass";
-                if (a == "a") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
+                o.ld_audit = a != "a" ? "pass" : refuse_a-- > 0 ? "skipped" : "fail";
+                if (o.ld_audit == "fail") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
             }
             b.arms.push_back(o);
         }
@@ -3710,12 +3749,40 @@ TEST(TuneLdAudit, TheTieredDriverAuditsEachCandidatesFirstCellAndReportsTheFailu
                 EXPECT_EQ(r.reason.rfind("ld audit", 0), 0u) << r.reason;
                 EXPECT_NE(c.ranked.front(), "a") << "a bad arm is never ranked";
             }
-    EXPECT_EQ(bad, 1u) << "only the audited cell marks it";
+    EXPECT_EQ(bad, l.cells.size()) << "a fail condemns the kernel in every cell, not only the audited one";
+    for (std::size_t i = 1; i < m.timed.size(); ++i) EXPECT_EQ(m.timed[i], std::vector<std::string>{"b"}) << "cell " << i;
     EXPECT_NE(out.find("ld audit FAILED: a ld audit"), std::string::npos) << out;
     EXPECT_NE(out.find("== summary fakeop float ld audit (ld +3): 1 passed, 0 skipped, 1 failed"), std::string::npos) << out;
     const std::string ev = read_file(events);
     EXPECT_NE(ev.find("\"ev\": \"ld_audit\""), std::string::npos) << ev;
     EXPECT_NE(ev.find("\"ev\": \"ld_audit_summary\""), std::string::npos) << ev;
+}
+
+TEST(TuneLdAudit, ARefusedAuditIsAskedAgainAndALaterFailUnranksEarlierCells) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    LdAuditMeasurer m;
+    m.refuse_a = 1;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_GE(m.asked.size(), 3u);
+    EXPECT_EQ(sorted(m.asked[0]), (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(m.asked[1], std::vector<std::string>{"a"}) << "refused at cell 0, so wanted again at cell 1";
+    EXPECT_TRUE(m.asked[2].empty());
+    EXPECT_NE(out.find("ld audit: a marked bad in 1 recorded cells"), std::string::npos) << out;
+    EXPECT_NE(out.find("ld audit (ld +3): 1 passed, 0 skipped, 1 failed"), std::string::npos) << out;
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    std::map<CellKey, const CellRecord*> last;  // equal tier, date and run: the later line wins
+    for (const CellRecord& c : l.cells) last[c.key] = &c;
+    EXPECT_EQ(l.cells.size(), last.size() + 1) << "cell 0 appended once more, with a bad";
+    for (const auto& [k, c] : last) {
+        EXPECT_EQ(c->ranked, std::vector<std::string>{"b"}) << key_text(k);
+        const auto a = std::find_if(c->cands.begin(), c->cands.end(), [](const CandResult& x) { return x.cand == "a"; });
+        ASSERT_NE(a, c->cands.end()) << key_text(k);
+        EXPECT_EQ(a->status, "bad") << key_text(k);
+    }
 }
 
 TEST(TuneLdAudit, AnLdAuditFailureIsNotACarveOutMismatch) {

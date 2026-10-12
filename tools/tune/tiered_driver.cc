@@ -199,6 +199,7 @@ private:
     void note_pop(std::size_t g, const Job& j, const PlannedCell& c);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
     void record(Job& j, const CellRecord& r, Tier tier);
+    void retract(Job& j, const std::vector<std::string>& arms);
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
     bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
@@ -243,6 +244,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
         j->remeasure = r->second;
+        if (j->next.empty() && grid.empty())
+            throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " has an empty grid to check the keys against");
         std::vector<std::string> names;
         for (const KV& f : j->next.empty() ? grid.front() : j->next.front()) names.push_back(f.name);
         for (const CellKey& k : r->second) {
@@ -314,8 +317,35 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     CellRecord c = r;
     c.date = date_;
     c.tier = tier;
+    // Under the lock that note() takes: a cell finishing on another GPU never ranks a failed arm.
+    for (const auto& [arm, why] : j.ld.bad) (void)ld_retract(c, arm, why);
     j.writer->cell(c, tier);
     j.mine[c.key] = c;
+}
+
+// An ld-audit fail condemns the kernel, not the cell: every current record of this (op, dtype) that
+// ranks the arm, from this run or the ledger, is appended again with the arm bad. The newer line
+// wins in best_records and sweep_to_table.py; record() applies j.ld.bad to the copy.
+void TieredRun::retract(Job& j, const std::vector<std::string>& arms) {
+    if (arms.empty()) return;
+    std::vector<CellRecord> hit;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::map<CellKey, const CellRecord*> cur = best_records(j.ledger, j.fh);
+        for (const auto& [k, r] : j.mine) cur[k] = &r;
+        for (const auto& [k, r] : cur) {
+            CellRecord c = *r;
+            bool ranked = false;
+            for (const std::string& a : arms) ranked = ld_retract(c, a, j.ld.bad.at(a)) || ranked;
+            if (ranked) hit.push_back(*r);
+        }
+    }
+    for (const CellRecord& r : hit) record(j, r, r.tier);
+    std::printf("== %s %s ld audit: %s marked bad in %zu recorded cells\n", j.spec->op().c_str(), j.dtype.c_str(),
+                join(arms, ",").c_str(), hit.size());
+    std::fflush(stdout);
+    emit(Json().str("ev", "ld_retract").str("op", j.spec->op()).str("dtype", j.dtype).str("cands", join(arms, ","))
+             .integer("cells", std::int64_t(hit.size())));
 }
 
 // A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
@@ -359,18 +389,25 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const double bytes = j.spec->bytes(j.dtype, c.key);
     CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(bytes, c.key)};
     bool worker = false;
+    std::vector<ArmOutcome> ld_bad;  // failed the ld audit at an earlier cell: not timed again
     {
         std::lock_guard<std::mutex> lock(mu_);
-        job.arms = seed_order(j.mine, c.key, c.arms);
-        job.ld_audit = j.ld.want(c.arms);
-        worker = m_->persistent() && !j.fresh;
+        std::vector<std::string> arms;
+        for (const std::string& a : c.arms)
+            if (const auto it = j.ld.bad.find(a); it != j.ld.bad.end()) ld_bad.push_back({a, "bad", it->second, {}, {}, 0, 0});
+            else arms.push_back(a);
+        job.arms = seed_order(j.mine, c.key, arms);
+        job.ld_audit = j.ld.want(job.arms);
+        worker = m_->persistent() && !j.fresh && !job.arms.empty();
     }
-    ArmBatch b = worker ? m_->measure(job) : m_->measure_fresh(job);
+    ArmBatch b = job.arms.empty() ? ArmBatch{} : worker ? m_->measure(job) : m_->measure_fresh(job);
+    b.arms.insert(b.arms.end(), ld_bad.begin(), ld_bad.end());
     std::vector<std::string> ld_failed;
     {
         std::lock_guard<std::mutex> lock(mu_);
         ld_failed = j.ld.note(c.key, b.arms);
     }
+    retract(j, ld_failed);
     for (const ArmOutcome& a : b.arms) {
         if (std::find(ld_failed.begin(), ld_failed.end(), a.arm) == ld_failed.end()) continue;
         std::printf("[gpu%d] %s %s %s ld audit FAILED: %s %s\n", gpu, op.c_str(), j.dtype.c_str(),
@@ -507,6 +544,8 @@ void TieredRun::gpu_loop(std::size_t g) {
             measure_one(*j, *c, o_.devices[g], round);
             lk.lock();
             --j->running;
+        } else {
+            ++budget_left_;  // a refinement cell the budget stopped
         }
         if (j->queue.empty() && j->running == 0 && !j->planning && !j->done) {
             j->planning = true;
@@ -660,10 +699,10 @@ int TieredRun::go() {
     }
     for (auto& j : jobs_) {
         std::printf("== summary %s %s ld audit (ld +%d): %zu passed, %zu skipped, %zu failed\n", j->spec->op().c_str(),
-                    j->dtype.c_str(), kLdAuditPad, j->ld.passed, j->ld.skipped, j->ld.failed.size());
+                    j->dtype.c_str(), kLdAuditPad, j->ld.passed, j->ld.skipped(), j->ld.failed.size());
         for (const std::string& f : j->ld.failed) std::printf("   ld audit FAILED %s\n", f.c_str());
         emit(Json().str("ev", "ld_audit_summary").str("op", j->spec->op()).str("dtype", j->dtype)
-                 .integer("passed", std::int64_t(j->ld.passed)).integer("skipped", std::int64_t(j->ld.skipped))
+                 .integer("passed", std::int64_t(j->ld.passed)).integer("skipped", std::int64_t(j->ld.skipped()))
                  .integer("failed", std::int64_t(j->ld.failed.size())).str("failures", join(j->ld.failed, "; ")));
     }
     std::printf("== summary workers: %zu (op, dtype) switches; %zu carve-out restarts by footprint order, %zu of "

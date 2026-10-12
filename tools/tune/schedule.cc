@@ -207,8 +207,10 @@ std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& 
 
 const std::map<std::string, std::vector<std::string>>& op_dependencies() {
     static const std::map<std::string, std::vector<std::string>> deps{
+        {"trsm", {"gemm"}},
         {"trmm", {"gemm"}},
         {"symm", {"gemm"}},
+        {"potrf", {"gemm", "trsm"}},
         {"getrf", {"gemm", "trsm"}},
         {"getrs", {"trsm"}},
         {"geqrf", {"gemm"}},
@@ -477,12 +479,34 @@ std::vector<std::string> LdAuditBook::want(const std::vector<std::string>& arms)
 std::vector<std::string> LdAuditBook::note(const CellKey& key, const std::vector<ArmOutcome>& out) {
     std::vector<std::string> fails;
     for (const ArmOutcome& o : out) {
-        if (o.ld_audit.empty() || !done.insert(o.arm).second) continue;
-        if (o.ld_audit == "pass") ++passed;
-        else if (o.ld_audit == "skipped") ++skipped;
-        else fails.push_back(o.arm), failed.push_back(o.arm + " @ " + key_text(key) + ": " + o.reason);
+        if (o.ld_audit.empty() || done.count(o.arm)) continue;
+        // The pin refused the padded shape here: asked again at the next cell, where it may run.
+        if (o.ld_audit == "skipped") {
+            refused.insert(o.arm);
+            continue;
+        }
+        done.insert(o.arm);
+        if (o.ld_audit == "pass") {
+            ++passed;
+            continue;
+        }
+        fails.push_back(o.arm);
+        bad[o.arm] = "ld audit failed @ " + key_text(key);
+        failed.push_back(o.arm + " @ " + key_text(key) + ": " + o.reason);
     }
     return fails;
+}
+
+std::size_t LdAuditBook::skipped() const {
+    return std::size_t(std::count_if(refused.begin(), refused.end(), [&](const std::string& a) { return !done.count(a); }));
+}
+
+bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason) {
+    bool hit = false;
+    for (CandResult& c : r.cands)
+        if (c.cand == arm && (c.status == "ok" || c.status == "eliminated")) c.status = "bad", c.reason = reason, hit = true;
+    if (hit) std::erase(r.ranked, arm);
+    return hit;
 }
 
 }  // namespace batchlas::tune

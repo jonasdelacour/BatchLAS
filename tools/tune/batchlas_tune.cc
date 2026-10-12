@@ -1234,6 +1234,8 @@ int main(int argc, char** argv) {
     if (tiered && *o.tier == Tier::custom && o.remeasure_keys.empty())
         die("--tier custom measures exactly the --remeasure-keys cells (a rehash sample); give them");
     if (!tiered && o.ops.size() != 1) die("--gate and the custom protocol take one op");
+    if (!tiered && !o.gate && !o.out.empty() && !o.ledger_given)
+        die("--out converts the ledger, and a custom run writes one only with --ledger: give --ledger, or drop --out");
     if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0 || !o.remeasure_keys.empty()))
         die("--plan, --budget, --progress-fd and --remeasure-keys need --tier");
     if (o.only_named && o.remeasure_keys.empty()) die("--only-named measures the --remeasure-keys cells; give them");

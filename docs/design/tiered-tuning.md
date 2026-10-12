@@ -374,9 +374,10 @@ that nothing in its class can serve throws `std::invalid_argument`, as a spellin
 spec-level workaround is gone; gesvd's stays, because there `can_run` admits a shape whose vendor
 call faults the device (known defect 15), which no pin rule can see.
 
-**Gross losers.** After every round, from the first on and whatever `min_reps` says, the race
-eliminates an arm whose median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
-`race.hh`). It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
+**Gross losers.** After every round from the second on, whatever `min_reps` says, the race
+eliminates an arm whose lower median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
+`race.hh`; the lower of the two middle ratios, so at two rounds both must exceed it). One stalled
+round never kills an arm. It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
 (`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
 cells, and before this rule each of its timed rounds cost minutes.
 
@@ -401,7 +402,7 @@ syr2k, trmm, geqrf):
 - Its motivation, a geqrf vendor call of many minutes on a float tall n=1024 aspect=256 cell, is gone
   with the matrix-dimension cap above.
 
-What stays is the in-race gross-loser rule (ratio > 4 after one round), which only uses data from
+What stays is the in-race gross-loser rule (ratio > 4 over two rounds), which only uses data from
 the same cell. A ledger record that still holds a `dominated:` skip is *partly stale*: the skipped
 arm's family counts as stale whatever its hash, so the next run re-races exactly those arms against
 the stored winner and runner-up at the stored tier and writes a merged record (`stale_candidates`,
@@ -486,14 +487,24 @@ could have caught such a defect if it had been real.
 cell* (status `ok`, or `eliminated` after passing verification) for one extra verification at
 `ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`). The check runs in the same worker or child,
 straight after the timed cell, as a `verify`-mode cell, which is a fresh problem built by the spec
-at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict. A candidate
-that the cell did not verify stays wanted for its next cell.
+at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict (pass or
+fail). A candidate that the cell did not verify, or whose pin refused the padded shape there
+(`skipped`), stays wanted for its next cell.
 
 **On a failure.** If the padded verification comes back `bad` or `error`, or throws, the arm is
-`bad` in that cell's record with the reason `ld audit: ld_pad +3: ...`, so it is never ranked
-there. The driver prints `ld audit FAILED`, emits an `ld_audit` progress event, and the run summary
-gives one line per (op, dtype) with passed, skipped and failed counts and lists the failures (event
-`ld_audit_summary`). A pin that refuses the padded shape counts as `skipped`. The carve-out audit
+`bad` in that cell's record with the reason `ld audit: ld_pad +3: ...`. The failure condemns the
+kernel, not the cell, so the arm is `bad` in every cell of that (op, dtype):
+
+- later cells, and cells still running on other GPUs, record it `bad` (reason
+  `ld audit failed @ <key>`) without timing it (`record()` applies `LdAuditBook::bad`);
+- every current record that already ranks it, from this run or an earlier one in the ledger, is
+  appended once more with the arm `bad` and out of `ranked` (`ld_retract`, `schedule.hh`). The
+  newer line wins in `best_records` and `sweep_to_table.py`, so no table ranks it.
+
+The driver prints `ld audit FAILED` and `ld audit: <arm> marked bad in N recorded cells`, emits
+`ld_audit` and `ld_retract` progress events, and the run summary gives one line per (op, dtype)
+with passed, skipped and failed counts and lists the failures (event `ld_audit_summary`).
+`skipped` counts arms whose pin refused the padded shape at every cell that asked. The carve-out audit
 (above) leaves out an arm that failed the ld audit, because its fresh child re-verifies at the
 natural `ld`, where the arm passes. Counting that as a worker mismatch would send the rest of the
 run to fresh children for nothing.

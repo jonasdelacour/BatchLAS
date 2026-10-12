@@ -18,7 +18,7 @@ struct RaceState {
 
 enum class RaceVerdict { more, winner, tie, cap };
 
-inline constexpr double kGrossLoserRatio = 4.0;  // median paired ratio; any round count, see race_step
+inline constexpr double kGrossLoserRatio = 4.0;  // lower median paired ratio, from round 2 on; see race_step
 
 // Largest k with P(Binomial(n, 0.5) < k) <= 1 - confidence; 0 when none.
 std::size_t lower_order_stat(int n, double confidence);
