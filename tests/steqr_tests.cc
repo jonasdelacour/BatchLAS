@@ -1429,6 +1429,37 @@ TYPED_TEST(SteqrTest, SortRejectsStridedEigenvalues) {
     }
 }
 
+// n = 48 takes steqr_wg. block_rotations with 2 * block_size > max_sweeps stores 2 * block_size
+// sweeps of rotations, and transpose_working_vectors changes the working layout: the size query must
+// follow both. The workspace is exactly steqr_buffer_size bytes, poisoned with 0x7f.
+TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    Vector<Real> evals = Vector<Real>::zeros(n, batch);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool transposed : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.block_rotations = true;
+        params.block_size = 16;
+        params.max_sweeps = 10;
+        params.sort = true;
+        params.transpose_working_vectors = transposed;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params),
+                                    std::byte(0x7f));
+        (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        this->ctx->wait();
+        double norm2 = 0;
+        const auto ref = lapacke_spectra(dense_A.view(), norm2);
+        expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.view().all_items());
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<Real>(evals), dense_A.view().all_items());
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
