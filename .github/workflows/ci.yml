@@ -305,7 +305,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: The kernel hash and header parser still work
+      - name: The shared kernel hash vector still matches
         run: python3 .github/ci/check_tuned_tables.py --self-test
       - name: Stale tables are reported (tuning-data.md#tuning-data-kernel-hash; never fails)
         run: python3 .github/ci/check_tuned_tables.py

@@ -62,7 +62,12 @@ files (common, its own, `kernel-deps`), hash v2:
   and `check_tuned_tables.py --self-test`.
 - Table staleness is one function, `sweep_to_table.stale_kernel_warnings`: the header's
   `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
-  deep, coarse, preview or custom row (all converted/transcribed) carries no hash and is never stale.
+  deep, coarse, preview or custom row (all converted/transcribed) carries no hash and is never stale;
+  a missing or unparsable `tiers=` is checked.
+- Shared device headers (`src/sycl/kernel_attrs.hh`, `src/sycl/sscp_target.hh`, `sg_compat.hh` and
+  `src/extensions/sg_partition/`, `group-collectives.hh`) sit in a spec's common section, once,
+  wherever its sources include them; `tune_tests` (`SharedKernelHeadersAreCommonInEverySpec`)
+  follows the includes and checks it.
 
 A comment or whitespace edit therefore leaves every record current. Any other edit to a hashed
 file stales the records of every family that hashes it.
@@ -92,9 +97,11 @@ that misses an exact-key combination.
 `scripts/sweep_to_table.py --emit-sample FILE --op OP --device DEV [--cells N]` writes such a
 sample from the ledger: per dtype and exact-key combination of the measured records, the cells at
 the min, median and max of every log key, then cells spread evenly over the rest up to `N`
-(default 64). The tuner records a sample as tier `custom`:
-`batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures exactly the named
-cells, every candidate, with no lattice and no refinement.
+(default 64); it exits 1 when the ledger holds fewer than 64 such cells. The tuner records a sample
+as tier `custom`: `batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures
+exactly the named cells, every candidate, with no lattice and no refinement. A named cell above
+`--cap-gib` is still skipped (`skip:cap`): raise the cap, or its exact-key combination can read as
+missing.
 
 `-dirty` runs are never rehashed. Records that no proof covers stay stale, and a stale family
 must be re-measured.

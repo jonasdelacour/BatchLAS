@@ -25,7 +25,7 @@ def check(repo):
     stale = 0
     for name in sorted(f for f in os.listdir(tuned) if f.endswith(".txt")):
         warnings = sweep_to_table.stale_kernel_warnings(os.path.join(tuned, name), repo)
-        stale += bool(warnings)
+        stale += any(w.startswith("warning:") for w in warnings)
         for w in warnings:
             print(w)
     print(f"check_tuned_tables: {stale} stale table(s) (warning only)")

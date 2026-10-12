@@ -112,8 +112,9 @@ dtype=float uplo=L n=512 batch=2048  | blocked 14.10 | vendor 13.74 | lpanel:pan
   needs a `source=ledger:` (or, in a hand-made single table, `source=transcribed:<hex sha>`).
 - `kernels=<hash>` is kernel hash v2 over the op's kernel sources, listed in
   `tools/tune/<op>_spec.cc` between the `kernel-sources-begin` and `kernel-sources-end` markers
-  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning, in
-  `scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`. The table stays in use.
+  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning (one
+  function, used by `scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`), and
+  a table with only converted/transcribed rows is never stale. The table stays in use.
 - A candidate in a table must be a member of `candidates<T>()`. The loader checks this on first use,
   and `tuned_tables_tests` checks every shipped table without a GPU.
 
@@ -221,9 +222,9 @@ was gated.
 
 ### 6.5 Staleness check
 
-`scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py` recompute each op's
-kernel hash (v2, comments and whitespace ignored). A header hash that differs prints a warning
-(`tuned/potrf.sm_120.txt is stale (kernels 0d38569e -> 3f9a1c2e); retune the op`). It is never an
+One function, `sweep_to_table.stale_kernel_warnings`, used by `scripts/sweep_to_table.py --check`
+and `.github/ci/check_tuned_tables.py`: see [kernel hashes](tuning-data.md#tuning-data-kernel-hash).
+A table with only converted/transcribed rows is never stale. A stale table is a warning, never an
 error. There is no configure-time check.
 
 ## 8. Tests
