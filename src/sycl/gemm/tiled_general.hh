@@ -77,8 +77,7 @@ Event launch_tiled_general(Queue& ctx,
             }
 
             if (row < m && col < n) {
-                const T prior = c_ptr[batch_c + col * ldc + row];
-                c_ptr[batch_c + col * ldc + row] = LinearEpilogue<T>::apply(alpha, beta, sum, prior);
+                LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta, sum);
             }
         });
     });

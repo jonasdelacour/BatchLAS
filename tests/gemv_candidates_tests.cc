@@ -16,6 +16,8 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/gemv/choice.hh"
 #include "../src/sycl/gemv_native.hh"
@@ -32,6 +34,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -54,16 +57,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -90,7 +83,7 @@ struct Problem {
     std::size_t a_off = 0, x_off = 0, y_off = 0;
     int lda = 0, sa = 0, incx = 2, sx = 0, incy = 3, sy = 0;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
 
     MVof<T> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
     VectorView<T> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
@@ -102,7 +95,7 @@ struct Problem {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -110,8 +103,8 @@ Problem<T> make_problem(const Spec& s) {
     using R = RealOf<T>;
     Problem<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.5), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : mk<T>(R(-0.75), R(0.25));
+    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
+    p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     p.lda = s.m + 3;
     p.sa = p.lda * std::max(s.n, 1) + 5;
     p.sx = p.incx * std::max(s.red(), 1) + 7;
@@ -126,56 +119,44 @@ Problem<T> make_problem(const Spec& s) {
         const int r = it % reps;
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.xi(r, i)];
+                p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.xi(r, i)];
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.yi(r, i)];
+                p.mem[p.yi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.yi(r, i)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
-}
-
-template <typename T>
-double tol(int red) {
-    return 32.0 * std::max(red, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
 }
 
 // y = alpha op(A) x + beta y against a double host reference on the checked items, every element
 // outside y's footprint bit for bit, and a repeating batch bit-identical to its representative.
 template <typename T>
-void expect_gemv(const Problem<T>& p, const std::string& what) {
+void expect_gemv(Queue& ctx, const Problem<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    const std::complex<double> al = up(p.alpha), be = up(p.beta);
     // Reference-BLAS quick return: m == 0 or n == 0 leaves y untouched, even when out > 0.
     const bool quick = s.m == 0 || s.n == 0;
     for (int it : items)
         if (quick)
             for (int o = 0; o < s.out(); ++o)
                 ASSERT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem0[p.yi(it, o)])) << what << ": quick return wrote y";
-    for (int it : quick ? std::vector<int>{} : items)
-        for (int o = 0; o < s.out(); ++o) {
-            std::complex<double> acc = 0.0;
-            double mag = 0.0;
-            for (int r = 0; r < s.red(); ++r) {
-                std::complex<double> a = s.trans == Transpose::NoTrans ? up(p.mem0[p.ai(it, o, r)])
-                                                                       : up(p.mem0[p.ai(it, r, o)]);
-                if (s.trans == Transpose::ConjTrans) a = std::conj(a);
-                acc += a * up(p.mem0[p.xi(it, r)]);
-                mag += std::abs(a) * std::abs(up(p.mem0[p.xi(it, r)]));
-            }
-            const std::complex<double> y0 = s.beta_zero ? 0.0 : up(p.mem0[p.yi(it, o)]);
-            const std::complex<double> want = al * acc + be * y0;
-            const double err = std::abs(up(p.mem[p.yi(it, o)]) - want);
-            const double scale = std::abs(al) * mag + std::abs(be) * std::abs(y0) + 1e-300;
-            ASSERT_TRUE(std::isfinite(err) && err <= tol<T>(s.red()) * std::max(scale, 1.0))
-                << what << " item " << it << " y[" << o << "] err " << err << " scale " << scale;
-        }
+    if (!quick) {
+        // Operands and y0 from the pristine copy; y from the result buffer.
+        auto at0 = [&](std::size_t off) { return const_cast<T*>(p.mem0.data()) + off; };
+        const MVof<T> A0(at0(p.a_off), s.m, s.n, p.lda, p.sa, s.batch);
+        const VectorView<T> X0(at0(p.x_off), s.red(), s.batch, Inc{p.incx}, Stride{p.sx});
+        const VectorView<T> Y0(at0(p.y_off), s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
+        const VectorView<T> Y1(const_cast<T*>(p.mem.data()) + p.y_off, s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
+        const double err = MVof<T>::gemv_backward_error(ctx, A0, s.trans, X0, Y0, Y1, MVof<T>::up(p.alpha), MVof<T>::up(p.beta), items);
+        ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.red(), err))
+            << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
+            << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
+    }
     std::vector<char> iny(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int o = 0; o < s.out(); ++o) iny[p.yi(it, o)] = 1;
@@ -237,34 +218,7 @@ void install_gemv_table(Queue& q, const std::string& rows) {
                                                                   " kernels=unknown\n"
                                                                   "# keys: trans:exact out:log red:log batch:log\n" +
                                                                   rows);
-    select::testing::set_builtin_tables(std::move(files));
-}
-
-// known-defects #13: cublasZgemvStridedBatched segfaults inside some BatchLAS processes
-// (threadripper02). A child process running GemvVendorProbe.ZgemvRuns answers once whether it
-// does here; where it crashes, the cases that would launch that vendor call skip by name.
-bool zgemv_vendor_usable() {
-    static const bool ok = [] {
-        const std::string exe = std::filesystem::read_symlink("/proc/self/exe").string();
-        const std::string cmd =
-            "BATCHLAS_GEMV_VENDOR_PROBE=1 '" + exe + "' --gtest_filter=GemvVendorProbe.ZgemvRuns > /dev/null 2>&1";
-        return std::system(cmd.c_str()) == 0;
-    }();
-    return ok;
-}
-
-TEST(GemvVendorProbe, ZgemvRuns) {
-    if (!std::getenv("BATCHLAS_GEMV_VENDOR_PROBE")) GTEST_SKIP() << "the known-defects #13 probe, run as a child";
-#if BATCHLAS_HAS_CUDA_BACKEND
-    if constexpr (batchlas::select::level3_vendor_available<Backend::CUDA>) {
-        using Z = std::complex<double>;
-        Queue q(Device("gpu"), Backend::CUDA);
-        UnifiedVector<Z> a(12, Z(1, 1)), x(3, Z(1, 0)), y(4, Z(0, 0));
-        (void)backend::gemv_vendor<Backend::CUDA, Z>(q, MVof<Z>(a.data(), 4, 3, 4, 12, 1), VectorView<Z>(x.data(), 3, 1),
-                                                     VectorView<Z>(y.data(), 4, 1), Z(1), Z(0), Transpose::NoTrans);
-        q.wait();
-    }
-#endif
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 template <typename T, Backend B>
@@ -288,15 +242,13 @@ protected:
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "GPU fixture (GemvCandidatesCpu covers host)";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
         if (!vendor_launch_ok())
-            std::cerr << "note: complex<double> vendor gemv crashes in this process (known-defects #13); "
+            std::cerr << "note: gemv's can_run refuses the complex<double> vendor on CUDA (known-defects #13); "
                          "cases that would launch it are skipped\n";
     }
 
-    // False where a vendor launch would hit known-defects #13 (asked of a child process once).
+    // False where gemv's can_run refuses the vendor: complex<double> on CUDA (known-defects #13).
     static bool vendor_launch_ok() {
-        if constexpr (kVendor && B == Backend::CUDA && std::is_same_v<T, std::complex<double>>)
-            return zgemv_vendor_usable();
-        return true;
+        return !(kVendor && B == Backend::CUDA && std::is_same_v<T, std::complex<double>>);
     }
     static bool launches_crashing_vendor(const C& c) {
         return std::holds_alternative<gv::Vendor>(c) && kVendor && !vendor_launch_ok();
@@ -313,6 +265,16 @@ protected:
     void run(Problem<T>& p) {
         (void)gemv<B, T>(*this->ctx, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
         this->ctx->wait();
+    }
+    // Auto's expected pick for `s` from the shipped tables (shipped_table_pick.hh).
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        const select::Key key{{"trans", s.trans == Transpose::NoTrans ? "N" : "T"}, {"out", s.out()},
+                              {"red", s.red()}, {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("gemv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_problem<T>(s);
+                                                     run(p);
+                                                 }, native_only);
     }
     void run_pinned(const C& c, Problem<T>& p) {
         const Pin pin("gemv", c);
@@ -394,7 +356,7 @@ TYPED_TEST(GemvCandidates, PinnedCandidatesStraddleTheirLimits) {
                         auto q = make_problem<T>(s);
                         const std::string want = this->auto_choice(q);
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                        expect_gemv(p, what + " (vendor-free: Auto)");
+                        expect_gemv(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     if (!TestFixture::expect_runs(c, t)) {
@@ -403,7 +365,7 @@ TYPED_TEST(GemvCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_gemv(p, what);
+                    expect_gemv(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -426,7 +388,7 @@ TYPED_TEST(GemvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_gemv(pinned, what);
+                expect_gemv(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's driver; element " << e;
@@ -451,7 +413,7 @@ TYPED_TEST(GemvCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         s.seed = 777u + k.m;
         auto p = make_problem<T>(s);
         this->run_pinned(k.c, p);
-        expect_gemv(p, name(k.c, s));
+        expect_gemv(*this->ctx, p, name(k.c, s));
         if (::testing::Test::HasFatalFailure()) return;
     }
 }
@@ -624,25 +586,34 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
 }
 
-// §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Bare
-// `native` is the row's best runnable non-vendor: cta under Trans, direct under NoTrans.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Auto and
+// bare `native` (the row's best runnable non-vendor) come from the shipped table; `vendor` is the
+// vendor where it can run (not complex<double> on CUDA, known defect 13), else Auto with a warning.
 TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
     for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
         const Spec s{t, 24, 10, 4};
-        const std::string auto_pick = TestFixture::kVendor ? "vendor" : (t == Transpose::NoTrans ? "direct" : "cta");
-        if (TestFixture::vendor_launch_ok()) {
+        const std::string auto_pick = this->table_pick(s);
+        const std::string native_pick = this->table_pick(s, true);
+        ASSERT_NE(auto_pick, test_utils::kNoTableEntryRuns);
+        ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
+        bool vendor_runs = true;
+        try {
+            const Pin strict("gemv", "vendor", select::StrictPin{});
+            auto p = make_problem<T>(s);
+            this->run(p);
+        } catch (const std::invalid_argument&) {
+            vendor_runs = false;
+        }
+        {
             auto p = make_problem<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), auto_pick);
         }
-        const std::string native_pick = t == Transpose::NoTrans ? "direct" : "cta";
         std::vector<std::pair<const char*, std::string>> expect{
             {"Direct", "direct"}, {"DIRECT", "direct"}, {"native", native_pick}};
-        if (TestFixture::vendor_launch_ok()) {
-            expect.emplace_back("vendor", auto_pick);
-            expect.emplace_back("auto", auto_pick);
-        }
+        expect.emplace_back("vendor", vendor_runs ? "vendor" : auto_pick);
+        expect.emplace_back("auto", auto_pick);
         if (t != Transpose::NoTrans) {
             expect.emplace_back("cta", "cta");
             expect.emplace_back("CTA", "cta");
@@ -660,10 +631,10 @@ TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
                 }, &err);
                 const std::string what = std::string(word) + " " + label(s) + (via_env ? " via env" : " via ScopedPin");
                 EXPECT_EQ(got, spelling) << what;
-                const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
+                const bool warns = std::string(word) == "vendor" && !vendor_runs;
                 EXPECT_EQ(err.find("gemv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
-                expect_gemv(p, what);
+                expect_gemv(*this->ctx, p, what);
             }
     }
 }
@@ -683,7 +654,7 @@ TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "direct");
-    expect_gemv(p, "direct over env cta");
+    expect_gemv(*this->ctx, p, "direct over env cta");
     const Spec st{Transpose::Trans, 9, 4, 2};
     const Pin outer("gemv", C{gv::Cta{}});
     {
@@ -693,43 +664,36 @@ TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_problem<T>(st);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_gemv(r, "outer cta");
+    expect_gemv(*this->ctx, r, "outer cta");
 }
 
-// Auto against the shipped transcribed table (sm_89 and sm_120 hold identical rows; any other
-// device borrows one). RouteGemv.CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned,
-// ported: complex<double> Trans/ConjTrans is cta inside 64 <= red <= 352, out >= 256,
-// batch >= 320 and the vendor outside, each edge from both sides, on- and off-grid; every other
-// type and NoTrans is the vendor. Vendor-free it is cta for any transposed call, direct for N.
-TYPED_TEST(GemvCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh), on the shapes that
+// straddled every edge of the old complex<double> transposed window (64 <= red <= 352, out >= 256,
+// batch >= 320) from both sides, on- and off-grid, all three trans forms. Each result is checked.
+TYPED_TEST(GemvCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
-    const auto tables =
-        select::tables_in_borrow_order("gemv", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx));
-    ASSERT_FALSE(tables.empty());
-    ASSERT_EQ(tables.front()->source.rfind("transcribed:", 0), 0u) << tables.front()->file;
-    constexpr bool kCd = std::is_same_v<T, std::complex<double>>;
-    struct Row { int out, red, batch; bool in; };
-    const Row rows[] = {{256, 64, 320, true},   {257, 65, 321, true},   {300, 352, 321, true},
-                        {256, 351, 321, true},  {1024, 128, 320, true}, {256, 63, 320, false},
-                        {256, 62, 321, false},  {256, 353, 320, false}, {260, 354, 321, false},
-                        {255, 128, 320, false}, {254, 100, 321, false}, {512, 128, 319, false},
-                        {300, 100, 318, false}, {64, 32, 64, false}};
+    struct Row { int out, red, batch; };
+    const Row rows[] = {{256, 64, 320},  {257, 65, 321},  {300, 352, 321}, {256, 351, 321}, {1024, 128, 320},
+                        {256, 63, 320},  {256, 62, 321},  {256, 353, 320}, {260, 354, 321}, {255, 128, 320},
+                        {254, 100, 321}, {512, 128, 319}, {300, 100, 318}, {64, 32, 64}};
+    std::set<std::string> seen;
     for (const Row& r : rows)
         for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             Spec s{t, t == Transpose::NoTrans ? r.out : r.red, t == Transpose::NoTrans ? r.red : r.out, r.batch};
             s.period = 1;  // one random item, the rest copies: the decision, not the data, is under test
             s.seed = 41u + r.red;
+            const std::string want = this->table_pick(s);
+            ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+            seen.insert(want);
             auto p = make_problem<T>(s);
-            std::string want;
-            if (!TestFixture::kVendor) want = t == Transpose::NoTrans ? "direct" : "cta";
-            else want = (kCd && r.in && t != Transpose::NoTrans) ? "cta" : "vendor";
-            if (want == "vendor" && !TestFixture::vendor_launch_ok()) continue;  // known-defects #13
-            EXPECT_EQ(traced_choice([&] { this->run(p); }), want)
-                << label(s) << " out=" << r.out << " red=" << r.red;
-            expect_gemv(p, "auto " + label(s));
+            EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s) << " out=" << r.out << " red=" << r.red;
+            expect_gemv(*this->ctx, p, "auto " + label(s));
             if (::testing::Test::HasFatalFailure()) return;
         }
+    std::string all;
+    for (const std::string& w : seen) all += w + " ";
+    std::cout << "gemv " << select::dtype_name<T>() << " Auto picks over the straddle set: " << all << "\n";
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with trans
@@ -761,7 +725,7 @@ TYPED_TEST(GemvCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_problem<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_gemv(p, std::string("the ") + k.field + " row");
+        expect_gemv(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -776,7 +740,7 @@ TYPED_TEST(GemvCandidates, TraceKeyOutRedFollowTrans) {
         const std::string want = t == Transpose::NoTrans ? "trans=N out=64 red=48 batch=5 ->"
                                                          : "trans=T out=48 red=64 batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_gemv(p, line);
+        expect_gemv(*this->ctx, p, line);
     }
 }
 
@@ -794,7 +758,7 @@ TYPED_TEST(GemvCandidates, VendorFreeLastResortIsDirect) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "direct") << trans_s(t);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_gemv(p, std::string("vendor-only table ") + trans_s(t));
+        expect_gemv(*this->ctx, p, std::string("vendor-only table ") + trans_s(t));
     }
 }
 
@@ -816,7 +780,7 @@ TYPED_TEST(GemvCandidates, OrthoCallerShapes) {
                 p.beta = t == Transpose::NoTrans ? T(1) : T(0);
                 p.s.beta_zero = t != Transpose::NoTrans;
                 this->run_pinned(c, p);
-                expect_gemv(p, name(c, s) + " (ortho shape)");
+                expect_gemv(*this->ctx, p, name(c, s) + " (ortho shape)");
                 ++ran;
             }
     EXPECT_GT(ran, 0);
@@ -905,20 +869,21 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
                   }),
                   batchlas::select::level3_vendor_available<B> ? "vendor" : "direct")
             << trans_s(t);
-        expect_gemv(p, std::string("cpu auto ") + trans_s(t));
+        expect_gemv(*this->ctx, p, std::string("cpu auto ") + trans_s(t));
         auto d = make_problem<T>(s);
         {
             const Pin pin("gemv", C{gv::Direct{}});
             (void)gemv<B, T>(*this->ctx, d.A(), d.X(), d.Y(), d.alpha, d.beta, t);
             this->ctx->wait();
         }
-        expect_gemv(d, std::string("cpu direct ") + trans_s(t));
+        expect_gemv(*this->ctx, d, std::string("cpu direct ") + trans_s(t));
     }
 }
 
-// The transcribed rows of both devices, read with Table::nearest directly so every machine checks
-// them: cta | vendor | direct in the complex<double> window, vendor | cta | direct for other
-// transposed cells, vendor | direct under N; on-grid and off-grid keys.
+// The sm_89 transcribed rows, read with Table::nearest directly so every machine checks them:
+// cta | vendor | direct in the complex<double> window, vendor | cta | direct for other transposed
+// cells, vendor | direct under N; on-grid and off-grid keys. sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance; AutoReadsTheShippedTable its use).
 TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* trans; int out, red, batch; const char* ranked; };
     const Row rows[] = {
@@ -928,13 +893,13 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
         {"cdouble", "T", 256, 64, 319, "vendor|cta|direct"},    {"cdouble", "N", 700, 200, 5000, "vendor|direct"},
         {"float", "T", 700, 200, 5000, "vendor|cta|direct"},    {"double", "N", 3, 9000, 2, "vendor|direct"},
         {"cfloat", "T", 256, 64, 320, "vendor|cta|direct"},     {"double", "T", 1, 1, 1, "vendor|cta|direct"}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gemv", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"trans", r.trans}, {"out", r.out}, {"red", r.red}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

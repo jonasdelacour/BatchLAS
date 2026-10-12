@@ -15,6 +15,9 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
+
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
@@ -51,16 +54,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -87,7 +80,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     Sys<T> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = mk<T>(R(-999), R(777));
+    const T poison = MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777));
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(batch, nullptr);
@@ -101,11 +94,11 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T v = (i == j) ? mk<T>(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
-                                         : mk<T>(d(gen), d(gen));
+                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
+                                         : MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
-            for (auto& v : b1) v = mk<T>(d(gen), d(gen));
+            for (auto& v : b1) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
         }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) p.a[size_t(it) * p.stra + size_t(j) * p.lda + i] = a1[i + size_t(j) * n];
@@ -117,27 +110,14 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
     return p;
 }
 
-// ||A X - B||_F / (||A||_F ||X||_F) in double, against the pristine A.
+// ||A X - B||_F / (||A||_F ||X||_F) against the pristine A, worst over the first and last item.
 template <typename T>
-double residual(const Sys<T>& p, int it) {
-    double num = 0, an = 0, xn = 0;
-    const size_t ao = size_t(it) * p.stra, bo = size_t(it) * p.strb;
-    for (int j = 0; j < p.n; ++j)
-        for (int i = 0; i < p.n; ++i) an += std::norm(up(p.a0[ao + size_t(j) * p.lda + i]));
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const size_t col = bo + size_t(k) * p.ldb;
-            xn += std::norm(up(p.b[col + i]));
-            std::complex<double> acc = -up(p.b0[col + i]);
-            for (int t = 0; t < p.n; ++t) acc += up(p.a0[ao + size_t(t) * p.lda + i]) * up(p.b[col + t]);
-            num += std::norm(acc);
-        }
-    return (an == 0 || xn == 0) ? std::sqrt(num) : std::sqrt(num / (an * xn));
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+double residual(Queue& ctx, const Sys<T>& p) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const int items[] = {0, p.batch - 1};
+    return MV::solve_residual(ctx, MV(const_cast<T*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
+                              MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                              MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
@@ -149,11 +129,11 @@ int32_t piv32(const Sys<T>& p, int it, int i) {
 // info, the residual of the first and last item, a valid nontrivial pivot list, and every
 // padding element of A and B untouched, bit for bit.
 template <typename T>
-void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what) {
+void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what) {
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
+    const double r = residual(ctx, p);
+    EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " items 0 and " << p.batch - 1 << " residual " << r;
     for (int it : {0, p.batch - 1}) {
-        const double r = residual(p, it);
-        EXPECT_TRUE(std::isfinite(r) && r <= tol<T>(p.n)) << what << " item " << it << " residual " << r;
         bool moved = false;
         for (int i = 0; i < p.n; ++i) {
             const int32_t pv = piv32(p, it, i);
@@ -261,6 +241,18 @@ protected:
         const Pin pin("gesv", c);
         return run_auto(p);
     }
+    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A child without a
+    // route (vendor-free) still means the gesv pin itself was taken.
+    std::string table_pick(int n, int nrhs, int batch) {
+        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 select::Key{{"n", n}, {"nrhs", nrhs}}, [&] {
+                                                     auto p = make_sys<T>(n, nrhs, batch, 7u);
+                                                     try {
+                                                         (void)run_auto(p);
+                                                     } catch (const batchlas::NoRouteError&) {
+                                                     }
+                                                 });
+    }
 
     // The family's own kernels, called directly: Tiny's driver; Blocked = public getrf + getrs.
     void run_direct(const C& c, Sys<T>& p, Span<int32_t> info) {
@@ -338,7 +330,7 @@ TYPED_TEST(GesvCandidates, PinnedCandidatesStraddleTheirLimits) {
                 }
                 ASSERT_TRUE(this->pin_accepted(c, p.A(), p.B())) << what << " was refused";
                 try {
-                    expect_solved(p, this->run_pinned(c, p), what);
+                    expect_solved(*this->ctx, p, this->run_pinned(c, p), what);
                     ++ran;
                 } catch (const batchlas::NoRouteError& e) {
                     if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
@@ -371,7 +363,7 @@ TYPED_TEST(GesvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             UnifiedVector<int32_t> dinfo(3, int32_t(-7));
             ASSERT_NO_THROW(this->run_direct(c, direct, dinfo.to_span())) << what;
             for (int it = 0; it < 3; ++it) ASSERT_EQ(info[it], dinfo[it]) << what;
-            expect_solved(pinned, info, what);
+            expect_solved(*this->ctx, pinned, info, what);
             for (size_t e = 0; e < pinned.b.size(); ++e)
                 ASSERT_TRUE(same_bits(pinned.b[e], direct.b[e]))
                     << what << ": the pinned facade did not run this family's kernels; X element " << e;
@@ -401,7 +393,7 @@ TYPED_TEST(GesvCandidates, SaturatingBatchIsBitIdentical) {
             if (this->child_may_lack_route()) continue;
             throw;
         }
-        expect_solved(p, info, what);
+        expect_solved(*this->ctx, p, info, what);
         for (int it = 1; it < kBatch; ++it) {
             for (int col = 0; col < k.nrhs; ++col)
                 for (int i = 0; i < k.n; ++i) {
@@ -456,8 +448,8 @@ TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 40 : -1), R(0.25));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = MatrixView<T, MatrixFormat::Dense>::make(R(i == j ? 40 : -1), R(0.25));
+    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -522,7 +514,7 @@ TYPED_TEST(GesvCandidates, ExactWorkspaceInAPoisonedArena) {
                 for (std::size_t i = 0; i < kGuard; ++i)
                     ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                         << what << ": wrote " << i << " bytes past the sized workspace";
-                expect_solved(p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
+                expect_solved(*this->ctx, p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
                                            : std::vector<int32_t>(p.batch, 0),
                               what);
             }
@@ -566,8 +558,8 @@ TYPED_TEST(GesvCandidates, CanRunFalsePinsThrow) {
 }
 
 // §5.3: spellings (case-folded) and the class words select their choice, via ScopedPin and via the environment. gesv
-// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick.
-// float n=16 is inside every transcribed window except double/cdouble's, so Auto differs by type.
+// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick, which
+// is the shipped table's at n=16 nrhs=2.
 TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
@@ -576,8 +568,7 @@ TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
         auto p = make_sys<T>(16, 2, 4, 5u);
         auto_pick = traced_choice([&] { (void)this->run_auto(p); });
     }
-    const bool window = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    ASSERT_EQ(auto_pick, window ? "tiny" : "blocked") << "the transcribed tables at n=16 nrhs=2";
+    ASSERT_EQ(auto_pick, this->table_pick(16, 2, 4)) << "the shipped table at n=16 nrhs=2";
     const std::pair<const char*, const char*> expect[] = {
         {"BLOCKED", "blocked"}, {"tiny", "tiny"},
         {"Blocked", "blocked"},  {"vendor", auto_pick.c_str()}, {"native", auto_pick.c_str()},
@@ -599,7 +590,7 @@ TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor";
             EXPECT_EQ(err.find("gesv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_solved(p, info, what);
+            expect_solved(*this->ctx, p, info, what);
         }
     }
 }
@@ -622,14 +613,14 @@ TYPED_TEST(GesvCandidates, ScopedPinBeatsTheEnvironment) {
                   info = this->run_auto(p);
               }),
               "blocked");
-    expect_solved(p, info, "blocked over env tiny");
+    expect_solved(*this->ctx, p, info, "blocked over env tiny");
     auto q = make_sys<T>(n, 2, 2, 32u);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("gesv", "auto");
                   info = this->run_auto(q);
               }),
               "blocked");
-    expect_solved(q, info, "auto over env tiny");
+    expect_solved(*this->ctx, q, info, "auto over env tiny");
 
     const int m = 8;
     const Pin outer("gesv", C{gs::Blocked{}});
@@ -642,38 +633,27 @@ TYPED_TEST(GesvCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_EQ(traced_choice([&] { (void)this->run_auto(s); }), "blocked") << "the inner pin did not restore the outer";
 }
 
-// Auto against the transcribed table this device reads (sm_89 or sm_120, or borrowed): rows
-// straddling the old window (float 32|33, cfloat 16|17) and the tiny nrhs ceiling (4|5), where
-// both answers can run unless can_run says otherwise. Absorbs gesv_tests' old G7.
-TYPED_TEST(GesvCandidates, AutoReadsTheTranscribedTables) {
+// Auto against the shipped table this device reads, on rows straddling the old window (float
+// 32|33, cfloat 16|17) and the tiny nrhs ceiling (4|5) from both sides, where both answers can run
+// unless can_run says otherwise. Absorbs gesv_tests' old G7.
+TYPED_TEST(GesvCandidates, AutoReadsTheShippedTables) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
-    const std::string dtype(select::dtype_name<T>());
-    const auto tables = select::tables_in_borrow_order("gesv", dtype, select::device_of<B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed gesv table";
-    struct Row { const char* dtype; int n, nrhs; const char* expect; };
-    const Row rows[] = {{"float", 4, 1, "tiny"},      {"float", 32, 4, "tiny"},     {"float", 33, 1, "blocked"},
-                        {"float", 25, 3, "tiny"},     {"float", 8, 5, "blocked"},   {"float", 64, 1, "blocked"},
-                        {"cfloat", 16, 4, "tiny"},    {"cfloat", 17, 1, "blocked"}, {"cfloat", 9, 2, "tiny"},
-                        {"cfloat", 32, 1, "blocked"}, {"double", 4, 1, "blocked"},  {"double", 32, 2, "blocked"},
-                        {"cdouble", 8, 1, "blocked"}, {"cdouble", 16, 4, "blocked"}};
-    int checked = 0;
-    for (const Row& r : rows) {
-        if (dtype != r.dtype) continue;
-        auto p = make_sys<T>(r.n, r.nrhs, 512, 41u);
+    const std::pair<int, int> rows[] = {{4, 1},  {32, 4}, {33, 1}, {25, 3}, {8, 5},  {64, 1}, {16, 4},
+                                        {17, 1}, {9, 2},  {32, 1}, {32, 2}, {8, 1},  {16, 5}};
+    for (const auto& [n, nrhs] : rows) {
+        const std::string want = this->table_pick(n, nrhs, 512);
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << n << " " << nrhs;
+        auto p = make_sys<T>(n, nrhs, 512, 41u);
         std::vector<int32_t> info;
-        const std::string what = "n=" + std::to_string(r.n) + " nrhs=" + std::to_string(r.nrhs);
+        const std::string what = "n=" + std::to_string(n) + " nrhs=" + std::to_string(nrhs);
         try {
-            EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
-            expect_solved(p, info, what);
+            EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
+            expect_solved(*this->ctx, p, info, what);
         } catch (const batchlas::NoRouteError& e) {
             if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
         }
-        ++checked;
     }
-    EXPECT_GT(checked, 0) << dtype;
 }
 
 // key_of's every field reaches choose(): a synthetic table for this device whose winner changes
@@ -693,14 +673,14 @@ TYPED_TEST(GesvCandidates, AutoReadsEveryKeyField) {
                        "n=8 nrhs=4 | blocked 1 | tiny 2\n"
                        "n=12 nrhs=1 | blocked 1 | tiny 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, nrhs; const char* expect; const char* field; };
     const Probe probes[] = {{8, 1, "tiny", "base"}, {8, 4, "blocked", "nrhs"}, {12, 1, "blocked", "n"}};
     for (const auto& k : probes) {
         auto p = make_sys<T>(k.n, k.nrhs, 128, 43u);
         std::vector<int32_t> info;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, info, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, info, std::string("the ") + k.field + " row");
     }
 }
 
@@ -765,10 +745,10 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
     }
 }
 
-// The transcribed rows of both devices, read with Table::nearest directly so every device checks
-// them: the old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first
-// entry, then blocked. Off-grid probes (25, 30, 36, 3000) included.
-TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
+// old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first entry, then
+// blocked. Off-grid probes (25, 30, 36, 3000) included. sm_120 is deep-measured since 2026-10-09.
+TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
     struct Row { const char* dtype; int n, nrhs; const char* first; std::size_t len; };
     const Row rows[] = {
         {"float", 1, 1, "tiny", 2},        {"float", 32, 64, "tiny", 2},   {"float", 33, 1, "blocked", 1},
@@ -776,13 +756,13 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
         {"cfloat", 17, 1, "blocked", 1},   {"cfloat", 25, 2, "blocked", 1}, {"double", 1, 1, "blocked", 1},
         {"cdouble", 16, 4, "blocked", 1},  {"double", 3000, 300, "blocked", 1},
     };
-    for (const char* dev : {"sm_89", "sm_120"}) {
+    for (const char* dev : {"sm_89"}) {
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gesv", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"nrhs", r.nrhs}});
             ASSERT_NE(row, nullptr) << t.file;
             const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(r.n);
@@ -834,7 +814,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         });
         EXPECT_EQ(got, "blocked");
         for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "item " << it;
-        for (int it : {0, p.batch - 1}) EXPECT_LE(residual(p, it), tol<T>(p.n)) << "item " << it;
+        EXPECT_VERIFY(T, verify::Check::solve, p.n, residual(*q, p)) << "items 0 and " << p.batch - 1;
 #endif
     }
 }

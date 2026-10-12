@@ -4,6 +4,7 @@
 // them all (CUDA_VISIBLE_DEVICES="") and passes the caller's value on in BATCHLAS_TUNE_PARENT_CVD,
 // which the driver checks --devices against. Children (--cell, --worker, --info) pass through untouched.
 // Deliberately links nothing but libc and libstdc++.
+// Exports configure's OPENBLAS_CORETYPE unless set: without it verify refuses the host reference, every cell aborts.
 
 #include <cerrno>
 #include <climits>
@@ -14,7 +15,12 @@
 
 #include <unistd.h>
 
+#ifndef BATCHLAS_TUNE_OPENBLAS_CORETYPE
+#define BATCHLAS_TUNE_OPENBLAS_CORETYPE ""
+#endif
+
 int main(int argc, char** argv) {
+    if (BATCHLAS_TUNE_OPENBLAS_CORETYPE[0] != '\0') ::setenv("OPENBLAS_CORETYPE", BATCHLAS_TUNE_OPENBLAS_CORETYPE, 0);
     char self[PATH_MAX];
     const ssize_t len = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (len <= 0) {

@@ -14,6 +14,9 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
+
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/gesvd_native.hh"
 #include "../src/util/resident_capacity.hh"
@@ -50,16 +53,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 using cd = std::complex<double>;
 
-template <typename T>
-T from(cd v) {
-    if constexpr (kCx<T>) return T(static_cast<RealOf<T>>(v.real()), static_cast<RealOf<T>>(v.imag()));
-    else return static_cast<T>(v.real());
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 
 // herm: 'N' general, 'L'/'U' the referenced triangle of a Hermitian A.
 struct Spec {
@@ -98,7 +91,7 @@ struct Svd {
 
     Svd(const Spec& sp)
         : s(sp), k(std::min(sp.m, sp.n)), ld(sp.m + sp.ldpad), stride(std::int64_t(sp.m + sp.ldpad) * sp.n + sp.gap),
-          a(std::size_t(stride) * sp.batch + 1, from<T>(cd(-321.0, 123.0))),
+          a(std::size_t(stride) * sp.batch + 1, MVof<T>::make(-321.0, 123.0)),
           U(sp.ju == SvdVectors::None ? 1 : sp.m, sp.ju == SvdVectors::All ? sp.m : (sp.ju == SvdVectors::Thin ? k : 1),
             sp.batch),
           Vh(sp.jv == SvdVectors::All ? sp.n : (sp.jv == SvdVectors::Thin ? k : 1), sp.jv == SvdVectors::None ? 1 : sp.n,
@@ -156,7 +149,7 @@ Svd<T> make_svd(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) {
                 const bool unreferenced = s.poison && ((s.herm == 'L' && i < j) || (s.herm == 'U' && i > j));
-                p.a[p.ai(b, i, j)] = unreferenced ? from<T>(cd(4.0e3, -2.0e3)) : from<T>(f[j * s.m + i]);
+                p.a[p.ai(b, i, j)] = unreferenced ? MVof<T>::make(4.0e3, -2.0e3) : MVof<T>::make(f[j * s.m + i].real(), f[j * s.m + i].imag());
             }
         p.full.push_back(std::move(f));
         p.sigma.push_back(std::move(sig));
@@ -181,8 +174,8 @@ void expect_solved(Svd<T>& p, const std::string& what) {
             for (int i = 0; i < s.m; ++i) {
                 cd acc = 0;
                 for (int l = 0; l < p.k; ++l)
-                    acc += up(p.U(i, l, b)) * double(p.sv[std::size_t(b) * p.k + l]) * up(p.Vh(l, j, b));
-                worst = std::max(worst, std::abs(acc - p.full[b][j * s.m + i]));
+                    acc += MVof<T>::up(p.U(i, l, b)) * double(p.sv[std::size_t(b) * p.k + l]) * MVof<T>::up(p.Vh(l, j, b));
+                worst = batchlas::verify::nanmax(worst, std::abs(acc - p.full[b][j * s.m + i]));
             }
     EXPECT_LE(worst, tol * 10) << what << ": reconstruction";
 }
@@ -289,6 +282,17 @@ protected:
     void run_pinned(const C& c, Svd<T>& p) {
         const Pin pin("gesvd", c);
         run(p);
+    }
+    // What Auto must pick for `s`, from the shipped tables (shipped_table_pick.hh).
+    std::string table_pick(const Spec& s) {
+        const char* herm = s.herm == 'N' ? "N" : (s.herm == 'L' ? "L" : "U");
+        const char* vec = canonical_thin(s) ? "thin" : (vectors(s) ? "all" : "none");
+        const select::Key key{{"herm", herm}, {"vec", vec}, {"m", s.m}, {"n", s.n}};
+        return test_utils::shipped_table_pick<C>("gesvd", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_svd<T>(s);
+                                                     run(p);
+                                                 });
     }
     // Acceptance is asked of the sizing call, which runs the same choose() (R5).
     bool pin_accepted(const C& c, Svd<T>& p) {
@@ -695,34 +699,28 @@ TYPED_TEST(GesvdCandidates, PinPrecedence) {
     expect_solved(r, "outer cta");
 }
 
-// Auto on the shipped (transcribed) tables reproduces the old router (ported from gesvd_tests'
-// DefaultProviderRoutesSmallGeneralToJacobi): jacobi leads general n <= 32 for every job, cta
-// Hermitian n <= 32, blocked real general above 32, and the vendor elsewhere.
-TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh), on the shapes that
+// straddled the old router's edges (ported from gesvd_tests' DefaultProviderRoutesSmallGeneralToJacobi):
+// general n = 32 for every job, Hermitian 30..33 both triangles, thin 32|40 x 9, 48, 64, 70 x 50.
+TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    const char* none = TestFixture::kVendor ? "vendor" : "<none>";
-    // Complex general above 32 has jacobi only, within its local memory cap (at 99 KiB: all but
-    // complex<double> with vectors; at acpp's 48 KiB also complex<float> with vectors).
-    auto jacobi_or_none = [&](const Spec& s) {
-        const bool fits = std::max(s.m, s.n) <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(s), g_slm_budget);
-        return fits ? "jacobi" : none;
-    };
-    struct Row { Spec s; const char* expect; };
-    std::vector<Row> rows;
-    for (const auto& jobs : kJobs) rows.push_back({{32, 32, 2, 'N', jobs[0], jobs[1]}, "jacobi"});
-    rows.push_back({{32, 32, 2, 'L'}, "cta"});
-    rows.push_back({{30, 30, 2, 'U'}, "cta"});
-    rows.push_back({{33, 33, 2, 'L'}, "blocked"});
-    rows.push_back({{32, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, "jacobi"});
-    for (const Spec s : {Spec{40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin}, Spec{64, 64, 2, 'N'},
-                         Spec{48, 48, 2, 'N', SvdVectors::None, SvdVectors::None}})
-        rows.push_back({s, TestFixture::kReal ? "blocked" : jacobi_or_none(s)});
-    rows.push_back({{70, 50, 2, 'N'}, TestFixture::kReal ? "blocked" : none});
-    for (const Row& r : rows) {
-        auto p = make_svd<T>(r.s);
-        if (std::string(r.expect) == "<none>") {
-            EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(r.s);
+    std::vector<Spec> rows;
+    for (const auto& jobs : kJobs) rows.push_back({32, 32, 2, 'N', jobs[0], jobs[1]});
+    rows.push_back({32, 32, 2, 'L'});
+    rows.push_back({30, 30, 2, 'U'});
+    rows.push_back({33, 33, 2, 'L'});
+    rows.push_back({32, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin});
+    rows.push_back({40, 9, 2, 'N', SvdVectors::Thin, SvdVectors::Thin});
+    rows.push_back({64, 64, 2, 'N'});
+    rows.push_back({48, 48, 2, 'N', SvdVectors::None, SvdVectors::None});
+    rows.push_back({70, 50, 2, 'N'});
+    for (const Spec& s : rows) {
+        const std::string want = this->table_pick(s);
+        auto p = make_svd<T>(s);
+        if (want == test_utils::kNoTableEntryRuns) {
+            if (TestFixture::kVendor) ADD_FAILURE() << "no shipped entry runs " << label(s);
+            else EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
             continue;
         }
         // cuSOLVER refuses past 32 (the old outcome too), in its sizing call, before any trace.
@@ -731,19 +729,20 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
             try {
                 this->run(p);
             } catch (const std::exception& e) {
-                if (std::string(r.expect) != "vendor") throw;
+                if (want != "vendor") throw;
                 refused = e.what();
             }
         });
         if (refused.find("gesvd_vendor (CUSOLVER)") != std::string::npos) got = "vendor";
-        EXPECT_EQ(got, r.expect) << label(r.s);
-        if (std::string(r.expect) != "vendor") expect_solved(p, "auto " + label(r.s));
+        EXPECT_EQ(got, want) << label(s);
+        if (want != "vendor") expect_solved(p, "auto " + label(s));
     }
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
     const Spec big_s{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None};
     auto big = make_svd<T>(big_s);
-    EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), std::string(jacobi_or_none(big_s)) == "jacobi");
-    if (!test_utils::kSlmCappedAt48KiB) EXPECT_STREQ(jacobi_or_none(big_s), "jacobi");
+    const bool fits = 64 <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
+    EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), fits);
+    if (!test_utils::kSlmCappedAt48KiB) EXPECT_TRUE(fits);
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with herm,
@@ -767,7 +766,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsEveryKeyField) {
                        "herm=N vec=all m=16 n=24 | blocked 1 | jacobi 2\n"
                        "herm=N vec=thin m=24 n=16 | blocked 1 | jacobi 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Spec s; const char* expect; const char* field; bool real_only; };
     // Only cta runs a native Upper, so the Upper row tells itself apart with the vendor (whose
     // answer is not checked: it reads the poisoned triangle).
@@ -824,7 +823,7 @@ TYPED_TEST(GesvdCandidates, VendorFreeLastResortIsBlocked) {
                        "# keys: herm:exact vec:exact m:log:1.5 n:log:1.5\n"
                        "herm=N vec=all m=16 n=16 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     if constexpr (TestFixture::kVendor) {
         GTEST_SKIP() << "the vendor serves the row";
     } else {
@@ -934,8 +933,8 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them, on both
-// transcribed devices.
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them.
+// sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* herm; const char* vec; int m, n; const char* ranked; };
     const Row rows[] = {
@@ -945,13 +944,13 @@ TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
         {"double", "U", "all", 33, 33, "vendor"},                  {"cfloat", "N", "all", 64, 64, "jacobi|vendor"},
         {"cfloat", "N", "all", 65, 65, "vendor"},                  {"cdouble", "N", "all", 33, 33, "vendor"},
         {"cdouble", "N", "none", 64, 64, "jacobi|vendor"},         {"cdouble", "L", "none", 48, 48, "blocked|vendor"}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gesvd", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"herm", r.herm}, {"vec", r.vec}, {"m", r.m}, {"n", r.n}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

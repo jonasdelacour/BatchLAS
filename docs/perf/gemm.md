@@ -73,14 +73,14 @@ TR/TC/stages (`reg_configs`). A launcher throws when handed a config or form it 
 `can_run` lists exactly the instantiated forms, so `GemmCandidates.TransposedPinOnAMissingInstantiationThrows`
 and `CanRunEqualsLaunch` (`tests/gemm_candidates_tests.cc`) hold.
 
-Selection is the first runnable entry of the nearest row of `tuned/gemm.<dtype>.<device>.txt`, keyed
+Selection is the first runnable entry of the nearest row of `tuned/gemm.<device>.txt`, keyed
 `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to `T` for real scalars.
 `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, else `strided`. Every log key has
 weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU and `precision != Default`).
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
 build (`gemm.cc:156-164`), and each item chooses separately.
 
-sm_89 and sm_120 tables are both transcribed; `tuned/gemm.*.sm_120.txt` is the same CSV written for sm_120, so
+sm_89 and sm_120 tables are both transcribed; `tuned/gemm.sm_120.txt` is the same CSV written for sm_120, so
 sm_120 runs the 4090 decision until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`) replaces it. No gemm sweep
 has been run (maintainer, 2026-10-05).
 

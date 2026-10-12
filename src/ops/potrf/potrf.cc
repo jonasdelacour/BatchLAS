@@ -1,5 +1,5 @@
 // potrf (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
-// tuned/potrf.<dtype>.<device>.txt row that can_run() admits. Kernel bodies live in
+// tuned/potrf.<device>.txt row that can_run() admits. Kernel bodies live in
 // src/extensions/potrf_{tiny,cta,lpanel,blocked}.cc.
 
 #include <batchlas/backend_config.h>

@@ -71,7 +71,7 @@ the 128 SMs, memory-limited), so that boundary rests on the weakest row; the gri
 
 ### syev: the blocked-over-cuSOLVER headline measurement
 
-Quoted by the README. 2026-08-07, float, eigenvectors, median of 5, default `nb`, fills the 320..512 gap. µs per
+Quoted on the documentation front page. 2026-08-07, float, eigenvectors, median of 5, default `nb`, fills the 320..512 gap. µs per
 matrix.
 
 | n | batch | blocked | two_stage | vendor | winner |

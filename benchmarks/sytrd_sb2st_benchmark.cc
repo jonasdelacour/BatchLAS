@@ -14,15 +14,6 @@ using namespace batchlas;
 namespace {
 
 template <typename T>
-inline T conj_if_needed(const T& x) {
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-        return std::conj(x);
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
 inline void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>& A,
                                       MatrixView<T, MatrixFormat::Dense> AB,
                                       int n,

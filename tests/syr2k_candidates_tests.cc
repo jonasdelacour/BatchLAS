@@ -3,6 +3,7 @@
 // kernel trace or a bit-for-bit comparison with the direct vendor call, never assumed from the
 // pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/syr2k.hh>
 #include "../src/select/coverage.hh"
@@ -14,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/ops/syr2k/choice.hh"
 
@@ -83,7 +85,7 @@ struct Prob {
     T alpha = T(1.25), beta = T(-0.5);
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
     MVof<T> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch}; }
@@ -124,39 +126,32 @@ Prob<T> make_prob(const Spec& s) {
             for (int i = 0; i < s.n; ++i)
                 if (p.referenced(i, j)) p.mem[p.idx(p.c, it, i, j)] = it < reps ? u(gen) : p.mem[p.idx(p.c, r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
 // The referenced triangle against a double reference; every other element bit for bit; for a
 // repeating batch, every item bit-identical to its representative.
 template <typename T>
-void expect_syr2k(const Prob<T>& p, const std::string& what) {
+void expect_syr2k(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
-    const bool nt = s.trans == Transpose::NoTrans;
-    auto opa = [&](int it, int i, int l) { return double(p.mem0[nt ? p.idx(p.a, it, i, l) : p.idx(p.a, it, l, i)]); };
-    auto opb = [&](int it, int i, int l) { return double(p.mem0[nt ? p.idx(p.b, it, i, l) : p.idx(p.b, it, l, i)]); };
-    const double eps = std::numeric_limits<T>::epsilon();
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 6) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items)
-        for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.n; ++i) {
-                if (!p.referenced(i, j)) continue;
-                double acc = 0, mag = 0;
-                for (int l = 0; l < s.k; ++l) {
-                    const double t = opa(it, i, l) * opb(it, j, l) + opb(it, i, l) * opa(it, j, l);
-                    acc += t;
-                    mag += std::abs(opa(it, i, l) * opb(it, j, l)) + std::abs(opb(it, i, l) * opa(it, j, l));
-                }
-                const double c0 = double(p.mem0[p.idx(p.c, it, i, j)]);
-                const double ref = double(p.alpha) * acc + double(p.beta) * c0;
-                const double bound = 8.0 * (s.k + 2) * eps * (std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0)) + 1e-30;
-                const double got = double(p.mem[p.idx(p.c, it, i, j)]);
-                ASSERT_LE(std::abs(got - ref), bound) << what << " item " << it << " (" << i << "," << j << ")";
-            }
+    // rank2k_backward_error: componentwise over the triangle, inner dimension 2k, from the pristine copy.
+    const int nr = s.n, k2 = 2 * s.k;
+    {
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        const MV A0(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+        const MV B0(p.mem0.data() + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
+        const MV C0(p.mem0.data() + p.c.off, nr, nr, p.c.ld, p.c.stride, s.batch);
+        const MV C1(p.mem.data() + p.c.off, nr, nr, p.c.ld, p.c.stride, s.batch);
+        const double err = MV::rank2k_backward_error(ctx, A0, B0, s.trans, C0, C1, s.uplo, MV::up(p.alpha), MV::up(p.beta), false, items);
+        ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k2, err))
+            << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
+            << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k2);
+    }
     std::vector<char> out(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -305,7 +300,7 @@ protected:
         const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
         auto p = make_prob<T>(s);
         const std::string got = traced_choice([&] { run(p); });
-        expect_syr2k(p, "auto " + label(s));
+        expect_syr2k(*this->ctx, p, "auto " + label(s));
         return got;
     }
 };
@@ -327,7 +322,7 @@ TYPED_TEST(Syr2kCandidates, PinnedCandidatesStraddleTheirLimits) {
                     if (TestFixture::vendor_word_falls_back(c)) continue;
                     const bool want = TestFixture::expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) expect_syr2k(p, name(c, s));
+                    if (want) expect_syr2k(*this->ctx, p, name(c, s));
                 }
 }
 
@@ -345,14 +340,14 @@ TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
                 auto p = make_prob<T>(s);
                 const bool want = TestFixture::expect_runs(c, s);
                 EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                if (want) expect_syr2k(p, name(c, s));
+                if (want) expect_syr2k(*this->ctx, p, name(c, s));
             }
             if (t != Transpose::ConjTrans) continue;
             const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
             auto p = make_prob<T>(s);
             if constexpr (TestFixture::kVendor) {
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor") << label(s);
-                expect_syr2k(p, "auto " + label(s));
+                expect_syr2k(*this->ctx, p, "auto " + label(s));
             } else {
                 EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
             }
@@ -414,7 +409,7 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
                           Spec{Uplo::Upper, Transpose::Trans, 200, 53, 1024, 3, false, 6u}}) {
         auto p = make_prob<T>(s);
         this->run_pinned(C{s2::Triangular{}}, p);
-        expect_syr2k(p, name(C{s2::Triangular{}}, s));
+        expect_syr2k(*this->ctx, p, name(C{s2::Triangular{}}, s));
     }
 }
 
@@ -645,7 +640,7 @@ TYPED_TEST(Syr2kCandidates, ClassWordsAndSpellings) {
         const std::string what = "'" + std::string(w.word) + (w.env ? "' via BATCHLAS_SYR2K_ROUTE" : "' via ScopedPin");
         EXPECT_EQ(got, w.pick) << what;
         if (got != "<no route>") EXPECT_EQ(err.find("but no ") != std::string::npos, w.warns) << what << ": " << err;
-        if (got == w.pick && got != "<no route>") expect_syr2k(p, what);
+        if (got == w.pick && got != "<no route>") expect_syr2k(*this->ctx, p, what);
     }
 }
 
@@ -665,7 +660,7 @@ TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "triangular");
-    expect_syr2k(p, "triangular over env vendor");
+    expect_syr2k(*this->ctx, p, "triangular over env vendor");
     const Pin outer("syr2k", C{s2::Triangular{}});
     {
         const Pin inner("syr2k", C{s2::Vendor{}});
@@ -676,11 +671,10 @@ TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "triangular") << "the inner pin did not restore the outer";
 }
 
-// Auto against the shipped transcription on either side of its only threshold (batch 1|2, the
-// old prefer_triangular_tiles), at grid and off-grid n, k and batch: float batch >= 2 runs the
-// tile kernel, batch 1 the vendor (vendor-free: the row's second entry, triangular); double is
-// the vendor at every shape (vendor-free: no route).
-TYPED_TEST(Syr2kCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh) on either side of the old
+// transcription's only threshold (batch 1|2, the old prefer_triangular_tiles), at grid and
+// off-grid n, k and batch. Vendor-free, double has no route.
+TYPED_TEST(Syr2kCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     struct Cell { int n, k, batch; Transpose t; };
     const Cell cells[] = {{200, 53, 1, Transpose::NoTrans}, {200, 53, 2, Transpose::Trans},
@@ -690,9 +684,11 @@ TYPED_TEST(Syr2kCandidates, AutoReadsTheTranscribedTable) {
                           {700, 2, 1, Transpose::Trans},      {2, 700, 2, Transpose::NoTrans}};
     for (const Cell& c : cells) {
         const Spec s{Uplo::Lower, c.t, c.n, c.k, c.batch, 0, false, unsigned(c.n + c.k)};
-        std::string want;
-        if constexpr (TestFixture::kFloat) want = (c.batch >= 2 || !TestFixture::kVendor) ? "triangular" : "vendor";
-        else want = TestFixture::kVendor ? "vendor" : "<no route>";
+        std::string want = test_utils::shipped_table_pick<C>(
+            "syr2k", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx),
+            select::Key{{"n", c.n}, {"k", c.k}, {"batch", c.batch}}, [&] { (void)this->auto_choice(s); });
+        if (want == test_utils::kNoTableEntryRuns) want = "<no route>";
+        if constexpr (!TestFixture::kVendor) EXPECT_EQ(want, TestFixture::kFloat ? "triangular" : "<no route>") << label(s);
         std::string got;
         try {
             got = this->auto_choice(s);
@@ -722,7 +718,7 @@ TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
                        "n=16 k=256 batch=4 | vendor 1 | triangular 2\n"
                        "n=16 k=4 batch=1024 | vendor 1 | triangular 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, k, batch; Transpose t; const char* expect; const char* field; };
     const Probe probes[] = {{16, 4, 4, Transpose::NoTrans, "triangular", "base"},
                             {16, 4, 4, Transpose::Trans, "triangular", "base (T)"},
@@ -734,7 +730,7 @@ TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
         const Spec s{Uplo::Lower, k.t, k.n, k.k, k.batch, 0, false, 43u};
         auto p = make_prob<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe";
-        expect_syr2k(p, std::string("the ") + k.field + " probe");
+        expect_syr2k(*this->ctx, p, std::string("the ") + k.field + " probe");
     }
 }
 
@@ -747,7 +743,7 @@ TYPED_TEST(Syr2kCandidates, TraceKeyKFollowsTrans) {
         auto p = make_prob<T>(s);
         const std::string line = traced_line([&] { this->run(p); });
         EXPECT_NE(line.find("n=12 k=37 batch=5 ->"), std::string::npos) << line;
-        expect_syr2k(p, line);
+        expect_syr2k(*this->ctx, p, line);
     }
 }
 
@@ -765,14 +761,14 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
                                                           " kernels=unknown\n# keys: n:log:2 k:log batch:log\n"
                                                           "n=64 k=8 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     const Spec s{Uplo::Lower, Transpose::Trans, 70, 9, 6};
     auto p = make_prob<T>(s);
     std::string all;
     const std::string got = traced_choice([&] { this->run(p); }, &all);
     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "triangular");
     if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-    expect_syr2k(p, "vendor-only table");
+    expect_syr2k(*this->ctx, p, "vendor-only table");
 }
 
 // Nothing runnable vendor-free (double) throws NoRouteError and records the coverage miss row.
@@ -894,7 +890,7 @@ TYPED_TEST(Syr2kCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_syr2k(p, "cpu vendor");
+        expect_syr2k(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
@@ -908,21 +904,21 @@ TYPED_TEST(Syr2kCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// The shipped tables (no GPU): one row per grid cell of choice.hh on sm_89 and sm_120, the same
-// rows on both, untimed, source transcribed:ff340fc6; float `triangular | vendor` from batch 2
-// and `vendor | triangular` at batch 1, double `vendor` everywhere; spot rows through nearest().
+// The sm_89 tables (no GPU): one row per grid cell of choice.hh, untimed, source
+// transcribed:ff340fc6; float `triangular | vendor` from batch 2 and `vendor | triangular` at
+// batch 1, double `vendor` everywhere; spot rows through nearest(). sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
-    std::map<std::string, std::vector<std::string>> by_dev;
     for (const char* dt : {"float", "double"})
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syr2k", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
-            std::string keys = "# keys:";
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
+            std::string keys = "# keys: dtype:exact";
             for (auto k : s2::key_names) keys += " " + std::string(k);
-            const std::string file = "syr2k." + std::string(dt) + "." + dev + ".txt";
+            const std::string file = "syr2k." + std::string(dev) + ".txt";
             const auto& all = select::embedded_tables();
             const auto e = std::find_if(all.begin(), all.end(), [&](const auto& x) { return x.name == file; });
             ASSERT_NE(e, all.end()) << file;
@@ -947,7 +943,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                         EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                         const select::TableRow* hit = t.nearest({{"n", n}, {"k", k}, {"batch", b}});
                         ASSERT_EQ(hit, &row) << t.file << ": grid cell n=" << n << " k=" << k << " batch=" << b;
-                        by_dev[std::string(dt) + dev].push_back(std::to_string(row.line) + ":" + ranked.front());
                     }
             const select::TableRow* off = t.nearest({{"n", 300}, {"k", 33}, {"batch", 2}});
             ASSERT_NE(off, nullptr);
@@ -955,8 +950,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             off = t.nearest({{"n", 3000}, {"k", 2}, {"batch", 1}});
             EXPECT_EQ(off->ranked.front().spelling, "vendor") << t.file;
         }
-    EXPECT_EQ(by_dev["floatsm_89"], by_dev["floatsm_120"]);
-    EXPECT_EQ(by_dev["doublesm_89"], by_dev["doublesm_120"]);
 }
 
 }  // namespace

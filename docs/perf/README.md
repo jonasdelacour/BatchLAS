@@ -6,7 +6,7 @@ the alternatives that were rejected, and the open debts. Read an op's page befor
 window or adding a tier.
 
 Since flat selection ([../design/flat-kernel-selection.md](../design/flat-kernel-selection.md)),
-each op ranks its kernels from `tuned/<op>.<dtype>.<device>.txt`. Where a page quotes a
+each op ranks its kernels from `tuned/<op>.<device>.txt`. Where a page quotes a
 `preferred()` or `supports()` predicate with its source line number, that predicate is deleted. Its window
 lives on as table rows.
 

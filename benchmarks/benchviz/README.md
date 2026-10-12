@@ -320,6 +320,51 @@ the n × batch cells; the CLI takes them as flags.
 On an RTX 4090 an arm-cell takes about 3–8 s, mostly process start, warm-up and the
 exclusive-GPU check.
 
+## Tuning tab
+
+`serve` also hosts `/tuning`, the selection tuner's dashboard (switch pages in the header). It shows
+what the tuning ledgers hold and what a table written from them would change, and starts and
+watches `tools/tune/batchlas_tune` runs. Files: docs/design/tuning-data.md (one ledger
+`benchmarks/results/tuning/ledger/<op>.<device>.jsonl` and one table `tuned/<op>.<device>.txt` per
+op and device). Design: docs/design/tiered-tuning.md, sub-project 3.
+
+```sh
+python3 benchmarks/benchviz serve                                   # then open /tuning
+python3 benchmarks/benchviz serve --tuned ../main-checkout/tuned    # diff against another table set
+python3 benchmarks/benchviz serve --build-dir ../other/build        # the batchlas_tune runs use
+python3 benchmarks/benchviz tune --tier coarse --ops potrf,getrs --devices 0,1 --plan   # estimate only
+python3 benchmarks/benchviz tune --tier coarse --ops potrf --devices '' --device-key sm_120 --plan   # no GPU query
+python3 benchmarks/benchviz tune --tier coarse --ops potrf,getrs --devices 0,1          # a run /tuning shows
+python3 benchmarks/benchviz tune --tier custom --ops potrf --dtype float --devices 1 --remeasure-keys keys.txt
+```
+
+| View | Shows |
+|---|---|
+| Status | op × precision for one device. Per op: its kernel families, `!` where a family's hash v2 differs from the table header's `family_kernels` (hover: both hashes and the ledger keys stale in it per precision), and the `retune` warning `sweep_to_table.py` prints. Per precision: the tier mix of the best records (deep, coarse, preview, custom, converted, transcribed), refined share, stale and partly stale cells, audit mismatches, age, the table's rows of that precision, and `behind` when the table header does not name the ledger's newest run |
+| Op (click a status cell) | the kernel families with table and current hashes and a verdict (current, retune, regenerate). The winner map over two keys with the others fixed: colour is the winning family, paler is a closer runner-up, a mark gives the tier. Click a cell for every record and candidate with its interval. "Change vs table" colours the predicted speedup instead, and the table below lists every changed pick. The lede says whether the table's rows equal the ledger's as `--check` judges them, and how many rows a table written now would hold |
+| Runs | per-GPU current cell, per-job progress against the plan, eliminations, audits, worker restarts, rate and ETA, the feed and the log |
+
+The read-only views need no GPU and no build. They read each ledger with
+`scripts/sweep_to_table.py` (`read_ledger`: one precision's lines, `rehash` lines applied, `-dirty`
+runs left out with a warning; `best_records`, `freshness`, `ledger_rows`, `parse_table`), the code
+that writes the tables, and judge freshness against the kernel sources in this checkout (re-hashed
+every 2 s). The first view loads every ledger, about 13 s for the 39 files on threadripper02; later
+views reload only a changed file. A ledger that is still an LFS pointer shows as unreadable.
+
+A run needs a build with the `batchlas_tune` target. The tab uses the first build whose
+`batchlas_tune --help` lists every flag it passes (`--tier`, `--plan`, `--progress-fd`, `--ledger`,
+`--device-key`, `--remeasure-keys`, `--allow-dirty`); otherwise the drawer says which build is
+missing or too old, and planning and starting are refused. The drawer offers the tiers preview,
+coarse and deep, plus custom, which measures exactly the cells listed under "Cells to measure
+again" (`--remeasure-keys`, also usable with the other tiers). A checkout with uncommitted changes
+to tracked files can be planned but not measured unless "Allow a dirty tree" is ticked; such a run
+never reaches `tuned/`. With no GPU visible, the plan reads the shown device's ledger
+(`--device-key`). One tuning run at a time. Stop sends SIGTERM to the run's process group. Every
+finished cell is already in the ledger, so "Run again" resumes: the tuner skips what the ledger
+holds at the run's tier or better. Runs live in `benchviz_runs/_tuning/<run>/` (with
+`remeasure-keys.txt` when cells were listed). A run started with `benchviz tune` from a terminal is
+watched the same way, and keeps going if the server stops.
+
 ## ROCm
 
 `factor_bench` selects its backend at compile time. Run a ROCm build with `--backend rocm`; it

@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     const auto tier = parse_tier(tier_name);
-    if (raw.empty() || !tier || *tier == Tier::transcribed || *tier == Tier::custom) {
+    if (raw.empty() || !tier || unhashed(*tier) || *tier == Tier::custom) {
         std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] "
                              "[--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]\n");
         return 2;

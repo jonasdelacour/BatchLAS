@@ -68,7 +68,7 @@ over square, tall, wide, rank-deficient, zero and graded inputs.
 
 ### gesvd README headline: Jacobi vs gesvdjBatched per matrix {#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix}
 
-Float, `All/All`, saturated batch, 2026-08-07 (the figure quoted in `README.md`):
+Float, `All/All`, saturated batch, 2026-08-07 (the figure quoted on the documentation front page):
 
 | n | batch | `gesvdj_cta` µs/matrix | `gesvdjBatched` µs/matrix | ratio |
 |---|---|---|---|---|
@@ -132,6 +132,10 @@ in float and \f$10^1..10^{14}\f$ in double.
 
 > **Note:** the generator uses CGS2. Chol2 squares \f$\kappa\f$ and `potrf` fails silently, and Householder items came
 > out numerically singular. miniacc's default \f$\log_{10}\kappa\f$ is NaN, so the harness records it explicitly.
+
+`benchmarks/gesvd_cta_acc.cc` and `benchmarks/gesvd_blocked_acc.cc` take `sv_max_abs_err` against double `?gesdd`
+(`batchlas::verify::singular_values`) since 2026-10-09; earlier CSVs used `?gesvd` in the working precision, so a float
+column from before that date is not comparable like for like.
 
 ## gesvd defect D: perf sweeps that stopped at batch 64 {#gesvd-defect-d-perf-sweeps-that-stopped-at-batch-64}
 

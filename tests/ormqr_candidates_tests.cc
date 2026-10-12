@@ -17,8 +17,10 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/ormqr/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -52,16 +54,6 @@ using RealOf = typename batchlas::base_type<T>::type;
 template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
-template <typename T>
-T mk(double r, double i) {
-    if constexpr (kCx<T>) return T(RealOf<T>(r), RealOf<T>(i));
-    else return T(r);
-}
-template <typename T>
-cd up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -117,8 +109,8 @@ Apply<T> make_apply(const Spec& s) {
     p.a = {0, s.m, s.k, s.m + 3, (s.m + 3) * s.k + 5};
     const int cr = s.side == Side::Left ? s.m : s.q, cc = s.side == Side::Left ? s.q : s.m;
     p.c = {std::size_t(p.a.stride) * s.batch + 11, cr, cc, cr + 2, (cr + 2) * cc + 7};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, mk<T>(-999, 777));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, mk<T>(0, 0));
+    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, MVof<T>::make(-999, 777));
+    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, MVof<T>::make(0, 0));
     p.aptr = UnifiedVector<T*>(s.batch, nullptr);
     p.cptr = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
@@ -134,86 +126,54 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                const T v = i > j ? mk<T>(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
-                                  : mk<T>(300, -200);
+                const T v = i > j ? MVof<T>::make(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
+                                  : MVof<T>::make(300, -200);
                 p.mem[p.ai(it, i, j)] = v;
-                if (i > j) norm2 += std::norm(up(v));
+                if (i > j) norm2 += std::norm(MVof<T>::up(v));
             }
             if (it != r) {
                 p.tau[std::size_t(it) * s.k + j] = p.tau[std::size_t(r) * s.k + j];
                 continue;
             }
             const cd t = (1.0 + std::polar(1.0, theta)) / norm2;
-            p.tau[std::size_t(it) * s.k + j] = mk<T>(t.real(), t.imag());
+            p.tau[std::size_t(it) * s.k + j] = MVof<T>::make(t.real(), t.imag());
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
-                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : mk<T>(u(gen), u(gen));
+                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : MVof<T>::make(u(gen), u(gen));
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }
 
-// op(Q) C or C op(Q) for one item, in double, from the stored reflectors and tau.
+// Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item, with
+// Q = H_0 ... H_{k-1} (m x m) formed by MatrixView::form_q from the stored reflectors and tau.
 template <typename T>
-std::vector<cd> reference(const Apply<T>& p, int it) {
+double apply_error(Queue& ctx, const Apply<T>& p, int it) {
     const Spec& s = p.s;
-    const int m = s.m;
-    std::vector<cd> Q(std::size_t(m) * m, 0.0);
-    for (int i = 0; i < m; ++i) Q[i + std::size_t(i) * m] = 1.0;
-    for (int j = 0; j < s.k; ++j) {  // Q <- Q H_j
-        std::vector<cd> v(m, 0.0);
-        v[j] = 1.0;
-        for (int i = j + 1; i < m; ++i) v[i] = up(p.mem0[p.ai(it, i, j)]);
-        const cd tj = up(p.tau[std::size_t(it) * s.k + j]);
-        for (int r = 0; r < m; ++r) {
-            cd w = 0.0;
-            for (int i = 0; i < m; ++i) w += Q[r + std::size_t(i) * m] * v[i];
-            for (int i = 0; i < m; ++i) Q[r + std::size_t(i) * m] -= tj * w * std::conj(v[i]);
-        }
-    }
-    auto opq = [&](int i, int j) {
-        if (s.trans == Transpose::NoTrans) return Q[i + std::size_t(j) * m];
-        const cd x = Q[j + std::size_t(i) * m];
-        return s.trans == Transpose::ConjTrans ? std::conj(x) : x;
-    };
-    const int rows = p.c.rows, cols = p.c.cols;
-    std::vector<cd> X(std::size_t(rows) * cols, 0.0);
-    for (int j = 0; j < cols; ++j)
-        for (int i = 0; i < rows; ++i) {
-            cd acc = 0.0;
-            for (int t = 0; t < m; ++t)
-                acc += s.side == Side::Left ? opq(i, t) * up(p.mem0[p.ci(it, t, j)])
-                                            : up(p.mem0[p.ci(it, i, t)]) * opq(t, j);
-            X[i + std::size_t(j) * rows] = acc;
-        }
-    return X;
-}
-
-template <typename T>
-double tol(const Spec& s) {
-    return 64.0 * (s.m + s.k + 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    using D = typename MVof<T>::promoted_type;
+    T* m0 = const_cast<T*>(p.mem0.data());
+    const MVof<T> F(m0 + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
+    const auto Q = MVof<T>::form_q(ctx, F, VectorView<T>(p.tau.data(), s.k, s.batch, 1, s.k), it, s.m);
+    const auto C0 = MVof<T>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    const auto C = MVof<T>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    if (s.side == Side::Left)
+        return MVof<D>::gemm_backward_error(ctx, Q.view(), s.trans, C0.view(), Transpose::NoTrans, C0.view(), C.view(), D(1), D(0));
+    return MVof<D>::gemm_backward_error(ctx, C0.view(), Transpose::NoTrans, Q.view(), s.trans, C0.view(), C.view(), D(1), D(0));
 }
 
 // The checked items against the reference, every element outside C's footprint bit for bit,
 // and, for a repeating batch, every item bit-identical to its representative.
 template <typename T>
-void expect_applied(const Apply<T>& p, const std::string& what) {
+void expect_applied(Queue& ctx, const Apply<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
     for (int it : items) {
-        const auto X = reference(p, it);
-        double err = 0, scale = 1;
-        for (int j = 0; j < p.c.cols; ++j)
-            for (int i = 0; i < p.c.rows; ++i) {
-                const cd x = X[i + std::size_t(j) * p.c.rows];
-                err = std::max(err, std::abs(up(p.mem[p.ci(it, i, j)]) - x));
-                scale = std::max(scale, std::abs(x));
-            }
-        ASSERT_TRUE(std::isfinite(err) && err / scale <= tol<T>(s)) << what << " item " << it << " error " << err / scale;
+        const double err = apply_error(ctx, p, it);
+        ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
     }
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
@@ -268,7 +228,7 @@ void install_table(const std::string& dtype, const std::string& dev, const std::
     files.emplace_back("ormqr." + dtype + "." + dev + ".txt",
                        "# op=ormqr dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: side:exact trans:exact m:log k:log q:log batch:log\n" + rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 template <typename T, Backend B>
@@ -407,7 +367,7 @@ TYPED_TEST(OrmqrCandidates, PinnedCandidatesStraddleTheirLimits) {
                 continue;
             }
             this->run_pinned(c, p);
-            expect_applied(p, name(c, s));
+            expect_applied(*this->ctx, p, name(c, s));
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -441,7 +401,7 @@ TYPED_TEST(OrmqrCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             if (!this->expect_runs(c, s.trans)) continue;
             auto p = make_apply<T>(s);
             this->run_pinned(c, p);
-            expect_applied(p, name(c, s) + " saturating");
+            expect_applied(*this->ctx, p, name(c, s) + " saturating");
         }
 }
 
@@ -491,7 +451,7 @@ TYPED_TEST(OrmqrCandidates, BufferSizeIsTheChosenFamilysAndRuns) {
             EXPECT_EQ(this->size(p), want) << name(c, s);
         }
         this->run_pinned(c, p);
-        expect_applied(p, name(c, s) + " exact workspace");
+        expect_applied(*this->ctx, p, name(c, s) + " exact workspace");
     }
     auto p = make_apply<T>(s);
     const std::string pick = this->auto_choice(p);
@@ -511,7 +471,7 @@ TYPED_TEST(OrmqrCandidates, OutOfOrderQueueIsSequenced) {
         auto p = make_apply<T>(s);
         const Pin pin("ormqr", c);
         this->run(p, &ooo);
-        expect_applied(p, name(c, s) + " out-of-order queue");
+        expect_applied(*this->ctx, p, name(c, s) + " out-of-order queue");
     }
 }
 
@@ -545,7 +505,7 @@ TYPED_TEST(OrmqrCandidates, ComplexTransIsRefusedUnderEveryPin) {
             if (!kCx<T>) {
                 if (c && !this->expect_runs(*c, s.trans)) continue;
                 this->run(p);
-                expect_applied(p, what);
+                expect_applied(*this->ctx, p, what);
                 continue;
             }
             for (int call = 0; call < 2; ++call) {
@@ -597,7 +557,7 @@ TYPED_TEST(OrmqrCandidates, ClassWordsAndSpellings) {
             }, &err);
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_ORMQR_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            expect_applied(p, what);
+            expect_applied(*this->ctx, p, what);
         }
     if constexpr (TestFixture::kVendor) {
         auto p = make_apply<T>(s);
@@ -632,14 +592,14 @@ TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device does not read a transcribed ormqr table";
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
                           Spec{Side::Left, Transpose::Trans, 33, 20, 1, 5}, Spec{Side::Right, Transpose::Trans, 2, 1, 700, 3000}}) {
         auto p = make_apply<T>(s);
         if (!TestFixture::defined(s.trans)) continue;
         EXPECT_EQ(this->auto_choice(p), "blocked") << label(s);
-        expect_applied(p, "auto " + label(s));
+        expect_applied(*this->ctx, p, "auto " + label(s));
     }
 }
 
@@ -712,7 +672,7 @@ TYPED_TEST(OrmqrCandidates, VendorFreeLastResortIsBlocked) {
     const std::string got = traced_choice([&] { this->run(p); }, &all);
     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked");
     if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-    expect_applied(p, "vendor-only table");
+    expect_applied(*this->ctx, p, "vendor-only table");
 }
 
 // The coverage row (§5.6): the real backend (the old builder left it AUTO), m/n/k from A, side,
@@ -793,26 +753,27 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::factorization_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_applied(p, "cpu vendor");
+        expect_applied(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: both
-// devices, blocked | vendor except complex Trans (vendor alone), on and off the grid.
-TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
+// blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
                         {"cfloat", "L", "T", 64, 1, 1024, 2048, "vendor", 1}, {"cfloat", "R", "C", 5, 2, 3, 4, "blocked", 2},
                         {"cdouble", "R", "T", 512, 512, 2, 32768, "vendor", 1}, {"cdouble", "L", "N", 1, 1, 1, 1, "blocked", 2}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("ormqr", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

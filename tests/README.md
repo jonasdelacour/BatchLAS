@@ -140,7 +140,7 @@ O(n^3) reference solves (91% of `steqr_tests` runtime). Original CUDA-only vs al
    small batch and large batch at small `n`. A shared-local-memory kernel still needs one
    saturating-batch case at small `n` (`docs/developer/agent-guide.md` §8).
 2. **Watch the reference solve.** `Matrix::Zeros(n, n, batch)` plus `syev` / `ritz_values` /
-   `netlib_ref_eigs_dense` costs O(n^3)·batch on the host for NETLIB instantiations; the
+   `batchlas::verify::eigenvalues` cost O(n^3)·batch on the host for NETLIB instantiations; the
    reference, not the kernel, usually makes a test slow.
 3. If every test body starts with `using float_type = typename base_type<T>::type;` and computes
    only in `float_type`, the complex instantiations are bit-identical re-runs. Use

@@ -144,7 +144,7 @@ Event launch_direct(Queue& ctx,
                 const T b_val = operand_value(b_ptr, ldb, batch_b, kk, col, op_b);
                 sum += a_val * b_val;
             }
-            c_ptr[batch_c + col * ldc + row] = alpha * sum + beta * c_ptr[batch_c + col * ldc + row];
+            LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta, sum);
         });
     });
 

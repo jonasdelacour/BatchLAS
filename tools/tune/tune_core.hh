@@ -4,6 +4,7 @@
 // refinement, the JSONL records, the §6.4 hash. No SYCL: tests/tune_tests.cc links it alone.
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -130,7 +131,11 @@ KernelBlock kernel_block_from_file(const std::string& repo, const std::string& s
 std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,
                                                  const std::vector<std::string>& families);
 
-// sha256 of "<sha256(file)>  <path>\n" lines (sha256sum's format), first 8 hex; nullopt if missing.
+// Hash v2's normalization: /* */ blocks removed (an unterminated one to the end), then // to end of
+// line, then every whitespace byte; string literals are not special. evidence: docs/design/tuning-data.md#tuning-data-kernel-hash
+std::string normalize_source(std::string_view text);
+
+// Hash v2: sha256 of "<sha256(normalized file)>  <path>\n" lines, first 8 hex; nullopt if missing.
 std::optional<std::string> kernel_hash(const std::string& repo, const std::vector<std::string>& paths,
                                        std::string* missing = nullptr);
 
@@ -175,5 +180,12 @@ struct GuardCheck {
 };
 GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign);
 std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+
+// A guard query that fails (nvidia-smi errors while a GPU is reset) is retried after `first_s`,
+// doubling to `max_s`, until `wait_s` of sleeping has passed; then nullopt (the caller stops).
+// evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+std::optional<std::string> query_with_backoff(const std::function<std::optional<std::string>()>& query, double wait_s,
+                                              const std::function<void(double)>& sleep_s, double first_s = 5,
+                                              double max_s = 60);
 
 }  // namespace batchlas::tune

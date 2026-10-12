@@ -76,14 +76,19 @@ struct WorkerTry {
 
 // Consecutive confirmed errors per arm in one (op, dtype): the worker and the fresh child that re-raced
 // the cell both reported `error`. Two in a row bench the arm: it is the candidate, not a poisoned worker.
+inline constexpr int kDropAfterErrors = 5;  // evidence: docs/design/tiered-tuning.md#engine-repeat-crashers-are-dropped
+
 class ArmErrors {
 public:
     bool benched(const std::string& arm) const;
+    bool dropped(const std::string& arm) const;
     void note(const std::string& arm, bool confirmed);  // a confirmed error, or a run without one
+    // A benched arm's own fresh child; true when this error dropped it.
+    bool note_alone(const std::string& arm, bool error);
 
 private:
     mutable std::mutex mu_;
-    std::map<std::string, int> streak_;
+    std::map<std::string, int> streak_, alone_streak_;
 };
 
 // The worker path's failure handling: a failed try restarts the worker (not after a guard discard)

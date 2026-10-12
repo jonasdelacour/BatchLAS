@@ -270,25 +270,6 @@ struct CapConfig {
     static constexpr Backend BackendVal = B;
 };
 
-template <typename T> T mkv(double re, double im);
-template <> float mkv<float>(double re, double) { return static_cast<float>(re); }
-template <> double mkv<double>(double re, double) { return re; }
-template <> std::complex<float> mkv<std::complex<float>>(double re, double im) {
-    return {static_cast<float>(re), static_cast<float>(im)};
-}
-template <> std::complex<double> mkv<std::complex<double>>(double re, double im) {
-    return {re, im};
-}
-
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
-    double next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return double(int32_t(uint32_t(s >> 32))) / 2147483648.0;
-    }
-};
-
 template <typename Config>
 class PackedLeafTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -331,14 +312,16 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
         const int ld = n + 3;
         const int stride = ld * n + 5;
 
-        UnifiedVector<T> packed(static_cast<size_t>(stride) * batch, mkv<T>(-9.75e3, 4.5e3));
-        Rng rg(4242u + 13u * unsigned(n));
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        UnifiedVector<T> packed(static_cast<size_t>(stride) * batch, MV::make(-9.75e3, 4.5e3));
+        const Matrix<T> rnd = Matrix<T>::Random(n, n, false, batch, 4242u + 13u * unsigned(n));
         for (int b = 0; b < batch; ++b) {
             const double scale = 1.0 + b;
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
+                    const T r = rnd(i, j, b);
                     packed[size_t(b) * stride + size_t(j) * ld + i] =
-                        mkv<T>(scale * rg.next(), scale * rg.next());
+                        MV::make(scale * double(std::real(r)), scale * double(std::imag(r)));
                 }
             }
         }
@@ -383,7 +366,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
         // Solo: one matrix per launch, so the same code path runs with G == 1 panels in
         // flight per work-group even though the scope is unchanged.
         for (int b = 0; b < batch; ++b) {
-            UnifiedVector<T> solo(static_cast<size_t>(stride), mkv<T>(-9.75e3, 4.5e3));
+            UnifiedVector<T> solo(static_cast<size_t>(stride), MV::make(-9.75e3, 4.5e3));
             std::copy(a0.begin() + size_t(b) * stride,
                       a0.begin() + size_t(b + 1) * stride, solo.begin());
             UnifiedVector<int> piv_s(static_cast<size_t>(n), -12345);

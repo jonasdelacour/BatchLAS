@@ -9,7 +9,7 @@ routing architecture, measurement rules, GPU kernel facts and repository convent
 SYCL 2020 support **and a backend for your GPU vendor**, netlib LAPACK/LAPACKE + CBLAS.
 Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised configuration is
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
-Ubuntu 22.04; see "Tested platforms" in `.github/README.md`.
+Ubuntu 22.04; see "Tested platforms" in `docs/guide/build.md`.
 
 > **Warning:** NVIDIA targets need a CUDA-capable DPC++. The stock
 > `intel-oneapi-compiler-dpcpp-cpp` package has **no CUDA adapter**: on an NVIDIA machine it
@@ -20,7 +20,7 @@ Ubuntu 22.04; see "Tested platforms" in `.github/README.md`.
 > - `-- Using SYCL targets: spir64_x86_64` in the configure output means a CPU-only build, whatever
 >   GPUs are present. A CUDA configure names the architecture, e.g. `nvidia_gpu_sm_89`.
 > - `-DBATCHLAS_ENABLE_CUDA=ON` means "require it": without a `[cuda:gpu]` the configure aborts with
->   a `FATAL_ERROR` naming the missing entry (see "Common CMake options" in `.github/README.md`).
+>   a `FATAL_ERROR` naming the missing entry (see "CMake options" in `docs/guide/build.md`).
 >   The default `AUTO` silently builds CPU-only.
 
 ## 1. Prerequisite Packages
@@ -83,7 +83,7 @@ cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++
 ```
 
 A consumer of an installed BatchLAS must configure the *whole* consuming project with this same
-compiler ("Consuming BatchLAS from CMake" in `.github/README.md`).
+compiler ("Building against BatchLAS" in `docs/cpp-api.md`).
 
 ## 3. Verifying the Toolchain
 
@@ -306,6 +306,8 @@ passing a wrong answer. Every new or rewritten test needs:
 9. For a capacity guard, a *launch* at the advertised ceiling, not an arithmetic re-derivation.
 10. To verify a revert of an untracked file, use `md5sum` against a pristine copy (`git diff` prints
     nothing).
+11. Verify results with `batchlas::verify` (`EXPECT_VERIFY`; `docs/design/verification.md`). No local
+    residual, reference or tolerance helpers.
 
 ## 9. Architecture: Routing and Dispatch
 
@@ -319,15 +321,16 @@ There is no RouteTable and no `include/batchlas/blas/dispatch/`.
 - `can_run()` is correctness only: false means the launch would throw or give a WRONG ANSWER. Never
   put a speed threshold there, or the shape becomes unservable vendor-free.
 - Speed lives only in tables. `select::choose` (`src/select/select.hh`) takes the first runnable
-  entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`: exact keys must match; `n`/`batch`
+  entry of the nearest row of `tuned/<op>.<device>.txt`: exact keys must match; `n`/`batch`
   are log distance, weighted per key (`n:log:3`: potrf work ~ n^3 x batch). A device with no table
   borrows the nearest one and warns once; the CPU never borrows; nothing runnable falls to the op's
   last resort.
-- Tables are generated, not hand-edited: `scripts/sweep_to_table.py` (`--check` is run by hand as
-  part of the per-op acceptance gate; CI does not run it). A table headed
-  `source=transcribed:<sha>` (entries `<spelling> -`) is an old router's order evaluated per grid
-  cell by a transcriber (deleted after use; provenance in `tuned/README.md`), **untimed**: it
-  reproduces the deleted windows and is not a measurement.
+- Tables are generated, not hand-edited: `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt`
+  from the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` alone, and CI runs
+  `--check` ("Tuned tables equal their ledgers"; `docs/design/tuning-data.md`). A row tagged
+  `# transcribed` (entries `<spelling> -`) is an old router's order evaluated per grid cell,
+  **untimed**: it reproduces the deleted windows and is not a measurement. A `-dirty` tuner run never
+  reaches a table.
 - `BATCHLAS_TUNED_DIR=<dir>` overrides tables without a rebuild; `BATCHLAS_SELECT_TRACE=1` prints
   every choice and the runner-up.
 

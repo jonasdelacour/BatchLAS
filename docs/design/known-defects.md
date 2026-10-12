@@ -1,13 +1,13 @@
 # Known defects, located and not fixed
 
-> **Status:** current · checked 2026-10-06
+> **Status:** current · checked 2026-10-11
 
 Each entry is a defect located to a line and left in the tree. Entries give the symptom, the
 cause with its location, any workaround, and the status. Performance debt is listed per op under
 [../perf/](../perf/README.md), not here.
 
 Entries keep their numbers so that other pages can cite them (for example, "known-defects #13").
-Entries 1, 3, 11, 12 and 14 are cited from code and carry a `Defect N:` heading. Entries 7 to 9 are
+Entries 1, 3 and 11 to 17 are cited from code and carry a `Defect N:` heading. Entries 7 to 9 are
 closed and kept only for numbering.
 
 ## At a glance
@@ -24,9 +24,9 @@ closed and kept only for numbering.
 | 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
-| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | open, worked around in `geqrf_blocked` |
+| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
-| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); gemm workaround redundant |
+| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); complex<double> gemv vendor still refused on CUDA |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
@@ -34,6 +34,7 @@ closed and kept only for numbering.
 | 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
+| — | LOBPCG null P column | fixed 2026-10-09, kept for the misleading symptom |
 
 ## Defect 1: `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -170,17 +171,30 @@ wrote both triangles and was reachable only through those pins.
 
 ## Defect 11: native gemm reads C at beta zero
 
-- **Symptom:** `GeqrfTest.BlockedIgnoresAGarbageWorkspace` (`tests/geqrf_tests.cc`) returns `NaN`
-  for all four scalar types when the trailing update runs as a native gemm. The caller's workspace
-  is `0xff`-filled, and the test is 64 x 64.
-- **Cause:** `LinearEpilogue::apply` in `src/sycl/gemm/epilogue_linear.hh` computes
-  `alpha * acc + beta * prior` unconditionally. `launch_direct` in `src/sycl/gemm_kernels.cc` reads
-  `c_ptr` the same way. `0 * NaN` is `NaN`. Reference BLAS does not read `C` at `beta == 0`.
-- **Workaround:** `geqrf_blocked_dispatch` zero-fills `W1` and `W2` on each call
-  (`src/extensions/geqrf_blocked.cc`).
-- **Fix needs:** the two-line change to skip `C` at `beta == 0` in both places, plus a gemm timing
-  A/B. When it lands, delete the memset. The test stays as the guard.
-- **Status:** open. Found 2026-09-30 on threadripper02 (RTX PRO 6000, sm_120).
+- **Symptom:** a beta = 0 gemm into a dirty workspace returned `NaN` when it ran as the native
+  `direct`, `tiled` or float `reg` family. `geqrf_blocked` (W1/W2) and `potrf_blocked` (the W x W
+  product) zero-filled their scratch to hide it. `orgqr_blocked` had no fill: the blocked `ormqr`
+  apply's `W1 = V^H C` reads the caller's arena. Under the deep sm_120 gemm tables, complex
+  `orgqr` at 1x1 and 33x20 routes that gemm to `direct` and `tiled`, so
+  `OrgqrCandidates.ExactWorkspaceInAPoisonedArena` (0xff arena) went NaN for cfloat and cdouble.
+  The sm_89/old tables sent those shapes to families that skip `C`, which hid it.
+- **Cause:** `LinearEpilogue::apply` (`src/sycl/gemm/epilogue_linear.hh`), used by `tiled_general.hh`
+  and `register_tiled_common.hh`, computed `alpha * acc + beta * prior` unconditionally.
+  `launch_direct` in `src/sycl/gemm_kernels.cc` read `c_ptr` the same way. `0 * NaN` is `NaN`.
+  Reference BLAS does not read `C` at `beta == 0`. `small`, `wide` and the 128x128 tile already
+  skipped it.
+- **Fix:** `LinearEpilogue::store` skips the load at `beta == 0`, and all three families call it.
+  The geqrf and potrf zero fills are deleted. Timing A/B on sm_120 (batch 256-512, 6 alternating
+  reps, medians): beta = 0 is 1-15% faster (the C load is gone), and beta = 1 is within noise
+  (0.998-1.017).
+- **Guards**, each pinning `direct` and `tiled` through `BATCHLAS_GEMM_ROUTE`'s `ScopedPin` so the
+  gemm table cannot hide the family: `GemmCandidates.BetaZeroDoesNotReadC` (every family, NaN `C`,
+  including 1x1x1), `OrgqrCandidates.PoisonedArenaUnderEveryPinnedNativeGemm`,
+  `GeqrfTest.BlockedIgnoresAGarbageWorkspace` and `PotrfBlockedTest.BlockedDoesNotReadUninitialisedWorkspace`.
+  With the epilogues reverted, those four go red for every GPU type, plus
+  `OrgqrCandidates.ExactWorkspaceInAPoisonedArena` and `PotrfCandidates.ExactWorkspaceInAPoisonedArena`
+  for cfloat and cdouble. Nothing else in those suites goes red.
+- **Status:** fixed 2026-10-11 on threadripper02 (RTX PRO 6000, sm_120). Found 2026-09-30.
 
 ## Defect 12: vendor potrf and trsm accept a heterogeneous batch
 
@@ -196,10 +210,10 @@ wrote both triangles and was reachable only through those pins.
   `{Symm,Syrk,Syr2k,Trmm}Candidates{,Cpu}.HeterogeneousBatchHasNoRoute`.
 - **Status:** open for `potrf` and `trsm`.
 
-## Defect 13: complex<double> cuBLAS calls with a unit dimension segfault inside cuBLASLt
+## Defect 13: complex<double> cuBLAS calls segfault inside cuBLASLt
 
 - **Symptom:** every complex<double> `cublasGemmEx`, `cublasGemmStridedBatchedEx` with `m == 1` or
-  `n == 1`, and `cublasZgemvStridedBatched`, segfaults inside `cublasLtZZZMatmul`. This happens only
+  `n == 1`, and complex<double> gemv at any shape, segfaults inside `cublasLtZZZMatmul`. This happens only
   in a BatchLAS process. A standalone program with the same libraries does not crash. Seen on
   threadripper02 (cuBLAS 13.4.1, HPC SDK 26.5, 2026-10-04).
 - **Root cause:** the host `alpha`/`beta` handed to cuBLAS were 8-byte aligned (a
@@ -220,8 +234,19 @@ wrote both triangles and was reachable only through those pins.
     (`cublasGemmStridedBatchedEx`) matches a host reference to 2.3e-15.
 
   The branch can be removed; it is kept until that change lands with its own route diff.
-- **Status:** fixed (gemm and gemv). The cuSPARSE spmm term attributed here
-  (`src/ops/spmm/spmm.cc:68`) was not re-measured.
+- **gemv refused (2026-10-09):** under a pinned vendor every non-trivial `GemvMatrixViewTest/7.*` and
+  `GemvCoverageTest/7.*` case exits 139, batch 1 included (`cublasZgemv_v2 -> cublasLtZZZMatmul`).
+  The deep sm_120 ledger (`benchmarks/results/tuning/ledger/gemv.cdouble.sm_120`) agrees: the vendor
+  arm crashed in all 1458 batch > 1 cells and 191 of 196 batch-1 cells. The five surviving rows
+  (trans=N, red=32768, out >= 64, batch 1) ranked vendor first, so nearest-row lookup sent other
+  shapes into the crash. gemv's `can_run(Vendor)` (`src/ops/gemv/gemv.cc`) therefore refuses
+  complex<double> on the CUDA backend: a strict pin throws `std::invalid_argument`, the `vendor` class
+  word falls back to Auto, and Auto runs `direct`/`cta`. Guard:
+  `GemvVendorRefusalTest/7.ComplexDoubleVendorIsRefusedOnCuda` (segfaults with the term removed).
+  The term is CUDA-wide, not keyed on this cuBLAS version; where Zgemv works it costs speed only.
+  That term predates the alignment fix and was not re-measured with it.
+- **Status:** fixed (gemm and gemv crashes); gemv's vendor refusal still in place. The cuSPARSE
+  spmm term attributed here (`src/ops/spmm/spmm.cc:68`) was not re-measured.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 
@@ -244,7 +269,7 @@ triangle gets a wrong answer today.
   gesvd's `can_run` also refuses blocked Hermitian Upper, which the driver could run by mirroring.
 - **Status:** open.
 
-## 15. cuSOLVER `gesvdjBatched` faults on values-only non-square input
+## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
 - **Symptom:** `BATCHLAS_GESVD_ROUTE=vendor`, float 8x4, jobs N/N, batch 3 gives
   `CUDA_ERROR_ILLEGAL_ADDRESS`.
@@ -253,7 +278,7 @@ triangle gets a wrong answer today.
 - **Workaround:** Auto never sends this shape to the vendor, because a native family runs first.
 - **Status:** open, pinned vendor only.
 
-## 16. `ormqr` blocked throws at batch > 65535
+## Defect 16: `ormqr` blocked throws at batch > 65535
 
 - **Symptom:** `ormqr` float L T m=2 k=1 q=1 batch=65536 under Auto gives "Number of work-groups
   exceed limit for dimension 2".
@@ -265,7 +290,7 @@ triangle gets a wrong answer today.
   `batch <= 65535` term to the driver and `can_run`.
 - **Status:** open.
 
-## 17. cuSPARSE spmm: refused shapes and the alignment waiver
+## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 
 Measured by calling `backend::spmm_vendor` directly, so these are vendor behaviours.
 
@@ -297,6 +322,37 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
   for real general input.
 - **Status:** open, pinned `cta` only.
+
+## LOBPCG picked a spurious zero Ritz value from a null P column
+
+**Fixed 2026-10-09; kept here because the symptom pointed at the wrong component.** With the deep
+sm_120 tables, `syevx_tests` `FindLargestAndSmallest/SyevxJacobiTest.*/Smallest` returned 0 for
+eigenvalues 1-3. The tables route LOBPCG's projected solves (float, jobz=V, n = 12 and 18,
+batch 2) to the cuSOLVER `vendor` family, and pinning `vendor` under the old tables failed the
+same way, so the vendor wrapper was the suspect, specifically its handling of the 12x12 corner
+of an 18x18 slab (ld 18 > n).
+
+That hypothesis is refuted. `SyevTest/*.VendorRouteHonoursLdSubViewsAndBatchStride`
+(`tests/syev_tests.cc`) runs the pinned vendor on packed, ld > n, sub-view, padded-stride and
+batch-1 layouts, all four dtypes, against a closed-form graded spectrum with poisoned padding,
+and passes on the unchanged wrapper. Dumping the vendor's inputs and outputs inside LOBPCG showed
+the eigenpairs it returned were correct. What it returned, though, were Ritz vectors whose P and R
+coefficients were **exactly zero** for two converged columns. LOBPCG builds the next P from those
+coefficients (`C_p`, `src/extensions/syevx_lobpcg.cc`), so two P columns were null, the next
+\f$S^T A S\f$ had zero rows and columns at 6 and 7, and the projected problem gained an
+eigenvalue 0. Taking the smallest end selects it whenever 0 lies below the wanted Ritz values (here
+-0.337, -0.041, **0**, 0.74), which gives a zero column in X. The largest end never reaches it. The
+native `jacobi` family hits it too: `Pinned/SyevxProjectedSyevRouteTest.SmallestDenseMatchesReferenceSyev/jacobi`
+fails on the unfixed tree, as does `/vendor`, while `cta`, `cta_fused` and `blocked` leave
+round-off in those coefficients and pass.
+
+LOBPCG already planted a sentinel \f$\lVert S^T A S\rVert_F + 1\f$ on the diagonal for residual
+columns that soft locking had zeroed. It did not do that for a null P column. It also could not
+do it on a restart, where R sits in the P slot but the sentinel index assumed offset
+`2 * block_vectors`. The deflation kernel now finds null directions from \f$S\f$ itself: every
+column at or after `block_vectors` with \f$\lVert s_c\rVert^2 \le (n\,\varepsilon)^2\f$ gets the
+sentinel, whatever made it null. Guards: the five `Pinned/SyevxProjectedSyevRouteTest.*` cases, which
+pin each family so the result no longer depends on the table.
 
 ## Known defects: the CTA SYTRD Lower path
 

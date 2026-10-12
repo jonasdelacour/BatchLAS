@@ -17,11 +17,9 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/settings.hh>
 
-#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
-#include <lapacke.h>
-#endif
-
 #include "test_utils.hh"
+#include <batchlas/verify/reference.hh>
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/geqrf_native.hh"
 #include "../src/extensions/orgqr_native.hh"
@@ -47,123 +45,48 @@ namespace {
 
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
-
-// References accumulate in double, so a float residual measures the KERNEL's error.
-template <class T> struct Prom { using type = double; };
-template <class R> struct Prom<std::complex<R>> { using type = std::complex<double>; };
-
-inline double up(float x) { return double(x); }
-inline double up(double x) { return x; }
-inline std::complex<double> up(std::complex<float> x) { return {double(x.real()), double(x.imag())}; }
-inline std::complex<double> up(std::complex<double> x) { return x; }
-
-inline double hconj(double x) { return x; }
-inline std::complex<double> hconj(std::complex<double> x) { return std::conj(x); }
-inline double habs(double x) { return std::fabs(x); }
-inline double habs(std::complex<double> x) { return std::abs(x); }
-inline double hreal(double x) { return x; }
-inline double hreal(std::complex<double> x) { return x.real(); }
-inline double himag(double) { return 0.0; }
-inline double himag(std::complex<double> x) { return x.imag(); }
-
-template <class T> inline T mk(double re, double im);
-template <> inline float mk<float>(double re, double) { return float(re); }
-template <> inline double mk<double>(double re, double) { return re; }
-template <> inline std::complex<float> mk<std::complex<float>>(double re, double im) {
-    return {float(re), float(im)};
-}
-template <> inline std::complex<double> mk<std::complex<double>>(double re, double im) {
-    return {re, im};
-}
-
-// A deterministic LCG rather than <random>: tests below assert that two batch items
-// DIFFER, and that assertion has to be about the data, not luck.
-struct Rng {
-    uint64_t s;
-    explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
-    double next() {
-        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-        return double(int32_t(uint32_t(s >> 32))) / 2147483648.0;
-    }
-};
-
-// Q is built by APPLYING the packed reflectors to the first k columns of I_m, in
-// LAPACK's order Q = H_0 H_1 ... H_{k-1}, H_i = I - tau_i v_i v_i^H with
-// v_i = [0 .. 0, 1, F(i+1:m-1, i)].
 template <typename T>
-std::vector<typename Prom<T>::type>
-host_form_Q(const T* F, const T* tau, int m, int k, int ld) {
-    using D = typename Prom<T>::type;
-    std::vector<D> Q(static_cast<size_t>(m) * k, D(0));
-    for (int j = 0; j < k; ++j) Q[static_cast<size_t>(j) * m + j] = D(1);
-    for (int i = k - 1; i >= 0; --i) {
-        const D t = up(tau[i]);
-        if (habs(t) == 0.0) continue;
-        for (int c = 0; c < k; ++c) {
-            // w = v_i^H Q(:, c), with the implicit v_i(i) = 1.
-            D w = Q[static_cast<size_t>(c) * m + i];
-            for (int r = i + 1; r < m; ++r) {
-                w += hconj(up(F[static_cast<size_t>(i) * ld + r])) *
-                     Q[static_cast<size_t>(c) * m + r];
-            }
-            const D f = t * w;
-            Q[static_cast<size_t>(c) * m + i] -= f;
-            for (int r = i + 1; r < m; ++r) {
-                Q[static_cast<size_t>(c) * m + r] -= f * up(F[static_cast<size_t>(i) * ld + r]);
-            }
-        }
-    }
-    return Q;
+using MVof = MatrixView<T, MatrixFormat::Dense>;
+
+// Q = H_0 ... H_{k-1} of one geqrf factor (m x n at ld, tau at stride k), formed by MatrixView::form_q.
+template <typename T>
+Matrix<typename MVof<T>::promoted_type> reflector_q(Queue& ctx, const T* F, const T* tau, int m, int n, int ld) {
+    const int k = std::min(m, n);
+    return MVof<T>::form_q(ctx, MVof<T>(const_cast<T*>(F), m, n, ld), VectorView<T>(const_cast<T*>(tau), k, 1, 1, k), 0, k);
 }
 
-// ||Q R - A||_F / ||A||_F, with Q supplied (m x k, column-major, tight) and R
-// read out of F's upper triangle.
+// ||A0 - QR||_F / ||A0||_F over @p items of a batch laid out as in Problem, R and the reflectors read
+// from F and tau through ld and stride.
 template <typename T>
-double qr_residual(const std::vector<typename Prom<T>::type>& Q,
-                   const T* F, const T* A0, int m, int n, int k, int ld, int ld0) {
-    using D = typename Prom<T>::type;
-    double num = 0.0, den = 0.0;
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i < m; ++i) {
-            D acc(0);
-            const int top = std::min(k - 1, j);
-            for (int p = 0; p <= top; ++p) {
-                acc += Q[static_cast<size_t>(p) * m + i] * up(F[static_cast<size_t>(j) * ld + p]);
-            }
-            const D a = up(A0[static_cast<size_t>(j) * ld0 + i]);
-            const D d = acc - a;
-            num += hreal(d) * hreal(d) + himag(d) * himag(d);
-            den += hreal(a) * hreal(a) + himag(a) * himag(a);
-        }
-    }
-    return den > 0.0 ? std::sqrt(num) / std::sqrt(den) : std::sqrt(num);
+double qr_error(Queue& ctx, const T* F, const T* A0, const T* tau, int m, int n, int ld, int stride, int batch,
+                std::span<const int> items) {
+    const int k = std::min(m, n);
+    const VectorView<T> tv(const_cast<T*>(tau), k, batch, 1, k);
+    return MVof<T>::qr_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld, stride, batch),
+                                MVof<T>(const_cast<T*>(F), m, n, ld, stride, batch), tv, items);
 }
 
 // ||Q^H Q - I||_F / sqrt(k), for a Q held tight in double.
 template <typename D>
-double orth_of_promoted(const std::vector<D>& Q, int m, int k) {
-    double num = 0.0;
-    for (int a = 0; a < k; ++a) {
-        for (int b = 0; b < k; ++b) {
-            D acc(0);
-            for (int r = 0; r < m; ++r)
-                acc += hconj(Q[static_cast<size_t>(a) * m + r]) * Q[static_cast<size_t>(b) * m + r];
-            const D d = acc - D(a == b ? 1 : 0);
-            num += hreal(d) * hreal(d) + himag(d) * himag(d);
-        }
-    }
-    return std::sqrt(num) / std::sqrt(double(k));
+double orth_of_promoted(Queue& ctx, const Matrix<D>& Q, int k) {
+    return MVof<D>::orthogonality(ctx, Q.view()) / std::sqrt(double(k));
 }
 
-// Copy a device Q (ld) into the tight m x k double buffer the probes want.
+// ||Q^H Q - I||_F / sqrt(n) over every item of a Q the code under test PRODUCED (m x n at ldq, qstride).
 template <typename T>
-std::vector<typename Prom<T>::type> promote_Q(const T* Q, int m, int k, int ld) {
-    using D = typename Prom<T>::type;
-    std::vector<D> out(static_cast<size_t>(m) * k);
-    for (int j = 0; j < k; ++j)
-        for (int i = 0; i < m; ++i)
-            out[static_cast<size_t>(j) * m + i] = up(Q[static_cast<size_t>(j) * ld + i]);
-    return out;
+double orth_of_produced(Queue& ctx, const T* Q, int ldq, int qstride, int m, int n, int batch) {
+    const MVof<T> Qv(const_cast<T*>(Q), m, n, ldq, qstride, batch);
+    return MVof<T>::orthogonality(ctx, Qv, Qv.all_items()) / std::sqrt(double(n));
+}
+
+// ||A0 - Q triu(F)||_F / ||A0||_F over every item for a Q the code under test PRODUCED (orgqr, ormqr);
+// Q has its own ldq and qstride.
+template <typename T>
+double product_error(Queue& ctx, const T* Q, int ldq, int qstride, const T* F, const T* A0, int m, int n, int ld,
+                     int stride, int batch) {
+    const MVof<T> Qv(const_cast<T*>(Q), m, n, ldq, qstride, batch);
+    return MVof<T>::qr_reconstruction(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld, stride, batch), Qv,
+                                      MVof<T>(const_cast<T*>(F), m, n, ld, stride, batch), Qv.all_items());
 }
 
 // Exact equality, or both NaN. The NaN half exists because the tiny tier's poison test
@@ -171,34 +94,33 @@ std::vector<typename Prom<T>::type> promote_Q(const T* Q, int m, int k, int ld) 
 // the pad as changed whether or not anything wrote to it.
 template <typename T>
 bool same_or_both_nan(T a, T b) {
-    const auto x = up(a);
-    const auto y = up(b);
-    const bool nx = std::isnan(hreal(x)) || std::isnan(himag(x));
-    const bool ny = std::isnan(hreal(y)) || std::isnan(himag(y));
+    const auto x = MVof<T>::up(a);
+    const auto y = MVof<T>::up(b);
+    const bool nx = std::isnan(std::real(x)) || std::isnan(std::imag(x));
+    const bool ny = std::isnan(std::real(y)) || std::isnan(std::imag(y));
     if (nx || ny) return nx && ny;
-    return hreal(x) == hreal(y) && himag(x) == himag(y);
+    return std::real(x) == std::real(y) && std::imag(x) == std::imag(y);
 }
 
 // Householder QR's backward error is O(m k) eps ||A||; the 0.5 (m + k) term is tight, not
-// slack. The FLOOR under it is what lets the tiny band reach n < 8 at all: below m + k = 16
-// the formula demands one or two eps, which no correct Householder QR meets. It loosens no
-// shape this file tested before the tiny tier.
+// slack. The FLOOR under it (16 u, verify::bound(factorization, 1)) is what lets the tiny band
+// reach n < 8 at all: below m + k = 16 the formula demands one or two eps, which no correct
+// Householder QR meets. It loosens no shape this file tested before the tiny tier.
 // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
+// The pre-migration bounds, as factors on the kind's c m eps (factorization c = 16, orthogonality
+// c = 32). The Frobenius norm of Q^H Q - I is sqrt(k) times the normalised value the old tolerance
+// judged; the orthogonality factor is clamped at 1.
 template <typename T>
-double small_order_tol_floor() {
-    return 8.0 * double(std::numeric_limits<RealOf<T>>::epsilon());
+verify::Slack residual_slack(int m, int k) {
+    return {std::max(double(m + k), 16.0) / (16.0 * std::max(m, 1)),
+            "kept from this file's 0.5 (m+k) eps tolerance with its 16 eps tiny-order floor "
+            "(docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new)"};
 }
 
 template <typename T>
-double residual_tol(int m, int k) {
-    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
-                    small_order_tol_floor<T>());
-}
-
-template <typename T>
-double orth_tol(int m, int k) {
-    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
-                    small_order_tol_floor<T>());
+verify::Slack orth_slack(int m, int k) {
+    return {std::min(1.0, std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (32.0 * std::max(m, 1))),
+            "kept from this file's 0.5 (m+k) eps / sqrt(k) orthonormality tolerance, clamped at the library bound"};
 }
 
 inline bool verbose() { return std::getenv("GEQRF_TESTS_VERBOSE") != nullptr; }
@@ -230,17 +152,15 @@ Problem<T> make_problem(int m, int n, int batch, unsigned seed,
     p.m = m; p.n = n; p.k = std::min(m, n); p.batch = batch;
     p.ld = m + ld_pad;
     p.stride = p.ld * n + stride_pad;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, mk<T>(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(static_cast<size_t>(p.k) * batch, mk<T>(-12345.0, -12345.0));
+    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<T>(static_cast<size_t>(p.k) * batch, MVof<T>::make(-12345.0, -12345.0));
     p.ptrs = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
-    Rng rg(seed);
-    for (int b = 0; b < batch; ++b) {
-        for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < m; ++i) {
-                p.buf[static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i] =
-                    mk<T>(rg.next(), rg.next());
-            }
-        }
+    if (m > 0 && n > 0 && batch > 0) {
+        const auto R = Matrix<T>::Random(m, n, false, batch, seed);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i)
+                    p.buf[static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i] = R(i, j, b);
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
@@ -257,7 +177,7 @@ MatrixView<T, MatrixFormat::Dense> view_of(Problem<T>& p) {
 template <typename T>
 void reset(Problem<T>& p) {
     std::copy(p.a0.begin(), p.a0.end(), p.buf.begin());
-    std::fill(p.tau.begin(), p.tau.end(), mk<T>(-12345.0, -12345.0));
+    std::fill(p.tau.begin(), p.tau.end(), MVof<T>::make(-12345.0, -12345.0));
 }
 
 template <typename Config>
@@ -265,7 +185,7 @@ class GeqrfTest : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     using R = RealOf<T>;
-    using D = typename Prom<T>::type;
+    using D = typename MVof<T>::promoted_type;
     static constexpr Backend BackendType = Config::BackendVal;
 
     // The blocked driver's trailing gemm is required: the public gemm, as src/ops/geqrf passes it.
@@ -346,28 +266,28 @@ protected:
 // Both residuals plus finiteness and batch-distinctness on EVERY batch item. Item 0 sits
 // at offset 0, so only the distinctness check can fail a kernel that broadcast item 0.
 template <typename T>
-void check_one(const Problem<T>& p, const char* what) {
+void check_one(Queue& ctx, const Problem<T>& p, const char* what) {
+    const double res = qr_error<T>(ctx, p.buf.data(), p.a0.data(), p.tau.data(), p.m, p.n, p.ld, p.stride, p.batch,
+                                   MVof<T>(p.buf.data(), p.m, p.n, p.ld, p.stride, p.batch).all_items());
+    EXPECT_VERIFY_SLACK(T, verify::Check::factorization, p.m, res, residual_slack<T>(p.m, p.k))
+        << what << ": ||QR-A||_F/||A||_F too large (m=" << p.m << " n=" << p.n << ")";
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
-        const T* A0 = p.a0.data() + static_cast<size_t>(b) * p.stride;
         const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
 
         for (int i = 0; i < p.k; ++i) {
-            ASSERT_TRUE(std::isfinite(hreal(up(tau[i]))) && std::isfinite(himag(up(tau[i]))))
+            ASSERT_TRUE(std::isfinite(std::real(MVof<T>::up(tau[i]))) && std::isfinite(std::imag(MVof<T>::up(tau[i]))))
                 << what << ": tau[" << i << "] is not finite at b=" << b;
         }
-        const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
-        const double res = qr_residual<T>(Q, F, A0, p.m, p.n, p.k, p.ld, p.ld);
-        const double orth = orth_of_promoted(Q, p.m, p.k);
+        const auto Q = reflector_q<T>(ctx, F, tau, p.m, p.n, p.ld);
+        const double orth = orth_of_promoted(ctx, Q, p.k);
         if (verbose()) {
             std::printf("[verbose] %-28s m=%4d n=%4d b=%d/%d  qr=%.4e orth=%.4e  tol=%.4e\n",
-                        what, p.m, p.n, b, p.batch, res, orth, residual_tol<T>(p.m, p.k));
+                        what, p.m, p.n, b, p.batch, res, orth,
+                        verify::bound<T>(verify::Check::factorization, p.m, residual_slack<T>(p.m, p.k)));
             std::fflush(stdout);
         }
-        EXPECT_LE(res, residual_tol<T>(p.m, p.k))
-            << what << ": ||QR-A||_F/||A||_F too large at b=" << b
-            << " (m=" << p.m << " n=" << p.n << ")";
-        EXPECT_LE(orth, orth_tol<T>(p.m, p.k))
+        EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, p.m, orth * std::sqrt(double(p.k)), orth_slack<T>(p.m, p.k))
             << what << ": the packed reflectors are not orthonormal at b=" << b
             << " (m=" << p.m << " n=" << p.n << ")";
     }
@@ -393,8 +313,8 @@ void check_one(const Problem<T>& p, const char* what) {
         bool differ = false;
         for (int j = 0; j < p.n && !differ; ++j)
             for (int i = 0; i < p.m && !differ; ++i)
-                if (habs(up(f0[static_cast<size_t>(j) * p.ld + i]) -
-                         up(fl[static_cast<size_t>(j) * p.ld + i])) > 0.0)
+                if (std::abs(MVof<T>::up(f0[static_cast<size_t>(j) * p.ld + i]) -
+                         MVof<T>::up(fl[static_cast<size_t>(j) * p.ld + i])) > 0.0)
                     differ = true;
         EXPECT_TRUE(differ) << what << ": the first and last batch items' factors are identical, "
                                "so this shape cannot see a batch-stride defect";
@@ -457,7 +377,7 @@ TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
         ASSERT_TRUE(resident)
             << "the panel took the GLOBAL leaf, which never allocates local memory and so "
                "cannot trip the hole this test exists to catch";
-        check_one(p, "leaf/launch-hole");
+        check_one(*this->ctx, p, "leaf/launch-hole");
         if (this->HasFailure()) return;
     }
 }
@@ -484,7 +404,7 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
         ASSERT_NO_THROW(
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
         this->ctx->wait();
-        check_one(p, "cta");
+        check_one(*this->ctx, p, "cta");
         if (this->HasFailure()) return;
     }
     ASSERT_GE(ran, 6) << "only " << ran << " of the CTA shapes fit; this test has stopped "
@@ -506,9 +426,29 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
         ASSERT_NO_THROW(
             (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam()));
         this->ctx->wait();
-        check_one(p, "blocked");
+        check_one(*this->ctx, p, "blocked");
         if (this->HasFailure()) return;
     }
+}
+
+// W1/W2 are beta = 0 trailing-gemm outputs in a 0xff (NaN) workspace with no zero fill; each
+// native gemm family that once read C there (known-defects.md #11) is pinned.
+TYPED_TEST(GeqrfTest, BlockedIgnoresAGarbageWorkspace) {
+    using T = typename TestFixture::T;
+    for (const char* gemm : {"auto", "direct", "tiled"})
+        for (auto [m, n] : {std::pair{64, 64}, std::pair{100, 72}}) {
+            ASSERT_LT(this->nb(m, n), n) << "no trailing update, so no W1/W2";
+            auto p = make_problem<T>(m, n, 3, 77u + unsigned(m));
+            auto V = view_of(p);
+            const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
+            UnifiedVector<std::byte> w(ws ? ws : 1);
+            std::memset(w.data(), 0xFF, w.size());
+            const select::ScopedPin<ops::geqrf::GeqrfChoice> pin("gemm", std::string_view(gemm));
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam());
+            this->ctx->wait();
+            check_one(*this->ctx, p, (std::string("blocked, gemm=") + gemm).c_str());
+            if (this->HasFailure()) return;
+        }
 }
 
 // G3. The block boundary, straddled on purpose and ASSERTED to be straddled. The rows
@@ -543,7 +483,7 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wbuf.to_span(), this->gemm_seam()));
         this->ctx->wait();
-        check_one(p, (s.n % w) ? "blocked/short-final-panel" : "blocked/exact-multiple");
+        check_one(*this->ctx, p, (s.n % w) ? "blocked/short-final-panel" : "blocked/exact-multiple");
         if (this->HasFailure()) return;
     }
 }
@@ -567,7 +507,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
-        check_one(p, "blocked/resident-leaf");
+        check_one(*this->ctx, p, "blocked/resident-leaf");
         if (this->HasFailure()) return;
     }
 
@@ -585,7 +525,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
-        check_one(p, "blocked/global-leaf");
+        check_one(*this->ctx, p, "blocked/global-leaf");
     }
 }
 
@@ -601,7 +541,7 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
         for (int b = 0; b < p.batch; ++b) {
             const size_t base = static_cast<size_t>(b) * p.stride;
             for (int i = 0; i < m; ++i) {
-                p.buf[base + static_cast<size_t>(5) * p.ld + i] = mk<T>(0, 0);   // zero column
+                p.buf[base + static_cast<size_t>(5) * p.ld + i] = MVof<T>::make(0, 0);   // zero column
                 p.buf[base + static_cast<size_t>(9) * p.ld + i] =
                     p.buf[base + static_cast<size_t>(3) * p.ld + i];             // duplicate
             }
@@ -621,13 +561,13 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
                                                               wb.to_span()));
         }
         this->ctx->wait();
-        check_one(p, pass ? "blocked/rank-deficient" : "cta/rank-deficient");
+        check_one(*this->ctx, p, pass ? "blocked/rank-deficient" : "cta/rank-deficient");
         if (this->HasFailure()) return;
 
         // The identity branch was TAKEN, not merely survived.
         for (int b = 0; b < p.batch; ++b) {
             const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
-            EXPECT_LE(habs(up(F[static_cast<size_t>(5) * p.ld + 5])), 1e-5)
+            EXPECT_LE(std::abs(MVof<T>::up(F[static_cast<size_t>(5) * p.ld + 5])), 1e-5)
                 << "R(5,5) is not ~0 for a rank-deficient column, b=" << b;
         }
     }
@@ -659,7 +599,7 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
                 for (int i = 0; i < p.k; ++i) {
                     // EXACTLY zero, not "small": the LAPACK convention WRITES a real scalar into
                     // A(j,j); it does not merely rotate the imaginary part down to rounding.
-                    ASSERT_EQ(himag(up(F[static_cast<size_t>(i) * p.ld + i])), 0.0)
+                    ASSERT_EQ(std::imag(MVof<T>::up(F[static_cast<size_t>(i) * p.ld + i])), 0.0)
                         << "imag(R(" << i << "," << i << ")) != 0 at m=" << s.m << " n=" << s.n
                         << " b=" << b << " -- the larfg phase convention is not LAPACK's, and "
                            "every residual test in this file is blind to that";
@@ -686,10 +626,10 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     // C = the first n columns of I_m; then C <- Q C, so Q's first n columns come
     // out. C carries its own padded ld and non-default stride.
     const int cld = m + 3, cstride = cld * n + 7;
-    UnifiedVector<T> C(static_cast<size_t>(cstride) * batch, mk<T>(0, 0));
+    UnifiedVector<T> C(static_cast<size_t>(cstride) * batch, MVof<T>::make(0, 0));
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            C[static_cast<size_t>(b) * cstride + static_cast<size_t>(j) * cld + j] = mk<T>(1, 0);
+            C[static_cast<size_t>(b) * cstride + static_cast<size_t>(j) * cld + j] = MVof<T>::make(1, 0);
     UnifiedVector<T*> cptrs(static_cast<size_t>(batch), nullptr);
     MatrixView<T, MatrixFormat::Dense> Cv(C.data(), m, n, cld, cstride, batch, cptrs.data());
 
@@ -700,16 +640,14 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
                 ow.to_span(), 0);
     this->ctx->wait();
 
-    for (int b = 0; b < batch; ++b) {
-        const T* Q = C.data() + static_cast<size_t>(b) * cstride;
-        const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
-        const T* A0 = p.a0.data() + static_cast<size_t>(b) * p.stride;
-        const auto Qp = promote_Q<T>(Q, m, n, cld);
-        EXPECT_LE(orth_of_promoted(Qp, m, n), orth_tol<T>(m, n)) << "b=" << b;
-        EXPECT_LE((qr_residual<T>(Qp, F, A0, m, n, n, p.ld, p.ld)), residual_tol<T>(m, n))
-            << "the routed ormqr does not reproduce A from the NATIVE geqrf's reflectors at b="
-            << b << " -- the tau/reflector convention disagrees";
-    }
+    EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, m,
+                        orth_of_produced<T>(*this->ctx, C.data(), cld, cstride, m, n, batch) * std::sqrt(double(n)),
+                        orth_slack<T>(m, n));
+    EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m,
+                        product_error<T>(*this->ctx, C.data(), cld, cstride, p.buf.data(), p.a0.data(), m, n, p.ld, p.stride, batch),
+                        residual_slack<T>(m, n))
+        << "the routed ormqr does not reproduce A from the NATIVE geqrf's reflectors"
+        << " -- the tau/reflector convention disagrees";
 }
 
 // Direction B -- the VENDOR's geqrf -> the NATIVE orgqr. The `if constexpr` over a
@@ -749,16 +687,14 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
             *this->ctx, V, p.tau.to_span(), ow.to_span(), apply, applybs));
         this->ctx->wait();
 
-        for (int b = 0; b < batch; ++b) {
-            const T* Q = p.buf.data() + static_cast<size_t>(b) * p.stride;
-            const T* Fb = F.data() + static_cast<size_t>(b) * p.stride;
-            const T* A0 = p.a0.data() + static_cast<size_t>(b) * p.stride;
-            const auto Qp = promote_Q<T>(Q, m, n, p.ld);
-            EXPECT_LE(orth_of_promoted(Qp, m, n), orth_tol<T>(m, n)) << "b=" << b;
-            EXPECT_LE((qr_residual<T>(Qp, Fb, A0, m, n, n, p.ld, p.ld)), residual_tol<T>(m, n))
-                << "the native orgqr does not reproduce A from the VENDOR's reflectors at b="
-                << b << " -- the tau/reflector convention disagrees";
-        }
+        EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, m,
+                            orth_of_produced<T>(*this->ctx, p.buf.data(), p.ld, p.stride, m, n, batch) * std::sqrt(double(n)),
+                            orth_slack<T>(m, n));
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m,
+                            product_error<T>(*this->ctx, p.buf.data(), p.ld, p.stride, F.data(), p.a0.data(), m, n, p.ld, p.stride, batch),
+                            residual_slack<T>(m, n))
+            << "the native orgqr does not reproduce A from the VENDOR's reflectors"
+            << " -- the tau/reflector convention disagrees";
     }
 }
 
@@ -778,7 +714,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
         std::vector<D> W(static_cast<size_t>(m) * n);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
-                W[static_cast<size_t>(j) * m + i] = up(A0[static_cast<size_t>(j) * ld + i]);
+                W[static_cast<size_t>(j) * m + i] = MVof<T>::up(A0[static_cast<size_t>(j) * ld + i]);
         rdiag.assign(k, D(0));
         taus.assign(k, D(0));
 
@@ -787,19 +723,19 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             const D alpha = W[static_cast<size_t>(j) * m + j];
             double xnorm2 = 0.0;
             for (int i = j + 1; i < m; ++i) {
-                const double a = habs(W[static_cast<size_t>(j) * m + i]);
+                const double a = std::abs(W[static_cast<size_t>(j) * m + i]);
                 xnorm2 += a * a;
             }
-            if (xnorm2 == 0.0 && himag(alpha) == 0.0) {
+            if (xnorm2 == 0.0 && std::imag(alpha) == 0.0) {
                 // H = I. tau = 0, the column below the diagonal is already zero.
                 rdiag[j] = alpha;
                 taus[j] = D(0);
                 continue;
             }
             const double anorm =
-                std::sqrt(hreal(alpha) * hreal(alpha) + himag(alpha) * himag(alpha) + xnorm2);
+                std::sqrt(std::real(alpha) * std::real(alpha) + std::imag(alpha) * std::imag(alpha) + xnorm2);
             // beta = -SIGN(||[alpha; x]||, Re(alpha)); Fortran SIGN treats +0 as +.
-            const double beta_r = (hreal(alpha) >= 0.0) ? -anorm : anorm;
+            const double beta_r = (std::real(alpha) >= 0.0) ? -anorm : anorm;
             const D beta = D(beta_r);           // REAL beta, the LAPACK convention
             const D tau = (beta - alpha) / beta;
             const D d = alpha - beta;
@@ -813,12 +749,12 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             for (int c = j + 1; c < n; ++c) {
                 D w = W[static_cast<size_t>(c) * m + j];   // v(j) == 1
                 for (int i = j + 1; i < m; ++i)
-                    w += hconj(W[static_cast<size_t>(j) * m + i]) *
+                    w += MVof<D>::conj(W[static_cast<size_t>(j) * m + i]) *
                          W[static_cast<size_t>(c) * m + i];
                 // conj(TAU), NOT TAU: zgeqr2 forms the reflector with zlarfg and applies it with
                 // DCONJG(TAU), because reducing A from the left applies H^H. hconj is the identity
                 // for a real T, so half the type list cannot see this line.
-                const D f = hconj(tau) * w;
+                const D f = MVof<D>::conj(tau) * w;
                 W[static_cast<size_t>(c) * m + j] -= f;
                 for (int i = j + 1; i < m; ++i)
                     W[static_cast<size_t>(c) * m + i] -= f * W[static_cast<size_t>(j) * m + i];
@@ -857,28 +793,28 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
                                double(s.m + s.n);
 
             for (int j = 0; j < p.k; ++j) {
-                const D rj = up(F[static_cast<size_t>(j) * p.ld + j]);
-                const D tj = up(tau[j]);
+                const D rj = MVof<T>::up(F[static_cast<size_t>(j) * p.ld + j]);
+                const D tj = MVof<T>::up(tau[j]);
 
                 if constexpr (!test_utils::is_complex<T>::value) {
                     // Nothing else in this file notices a sign flip; a zero diagonal is the
                     // tau == 0 case and has no sign.
-                    if (habs(rdiag[j]) > 0.0 && habs(rj) > 0.0) {
-                        EXPECT_EQ(hreal(rj) < 0.0, hreal(rdiag[j]) < 0.0)
+                    if (std::abs(rdiag[j]) > 0.0 && std::abs(rj) > 0.0) {
+                        EXPECT_EQ(std::real(rj) < 0.0, std::real(rdiag[j]) < 0.0)
                             << "R(" << j << "," << j << ") has the WRONG SIGN: got "
-                            << hreal(rj) << ", reference LAPACK xGEQR2 gives "
-                            << hreal(rdiag[j]) << " (m=" << s.m << " n=" << s.n
+                            << std::real(rj) << ", reference LAPACK xGEQR2 gives "
+                            << std::real(rdiag[j]) << " (m=" << s.m << " n=" << s.n
                             << " b=" << b << "). geqrf's beta convention is its contract "
                                "with ormqr/orgqr/ormbr/sy2sb, and no residual test sees this.";
                     }
                 }
 
-                EXPECT_LE(habs(tj - taus[j]), tol * std::max(1.0, habs(taus[j])))
+                EXPECT_LE(std::abs(tj - taus[j]), tol * std::max(1.0, std::abs(taus[j])))
                     << "tau[" << j << "] disagrees with reference LAPACK xGEQR2 (m=" << s.m
                     << " n=" << s.n << " b=" << b << ")";
 
-                EXPECT_LE(std::fabs(habs(rj) - habs(rdiag[j])),
-                          tol * std::max(1.0, habs(rdiag[j])))
+                EXPECT_LE(std::fabs(std::abs(rj) - std::abs(rdiag[j])),
+                          tol * std::max(1.0, std::abs(rdiag[j])))
                     << "|R(" << j << "," << j << ")| disagrees with reference LAPACK xGEQR2"
                     << " (m=" << s.m << " n=" << s.n << " b=" << b << ")";
             }
@@ -912,14 +848,14 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
                 for (int i = 0; i < s.m; ++i) {
                     const size_t o = static_cast<size_t>(b) * p.stride +
                                      static_cast<size_t>(j) * p.ld + i;
-                    p.buf[o] = mk<T>(hreal(up(p.buf[o])) * scale, himag(up(p.buf[o])) * scale);
+                    p.buf[o] = MVof<T>::make(std::real(MVof<T>::up(p.buf[o])) * scale, std::imag(MVof<T>::up(p.buf[o])) * scale);
                 }
         p.a0.assign(p.buf.begin(), p.buf.end());
 
         double biggest = 0.0;
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                biggest = std::max(biggest, habs(up(p.buf[static_cast<size_t>(j) * p.ld + i])));
+                biggest = std::max(biggest, std::abs(MVof<T>::up(p.buf[static_cast<size_t>(j) * p.ld + i])));
         ASSERT_GT(biggest, 0.0)
             << "the rescaled problem flushed to all zeros; this test would prove nothing";
         ASSERT_FALSE(std::isfinite(R(1) / static_cast<R>(biggest * 16.0)))
@@ -945,22 +881,22 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
 
             // (1) Finiteness -- the property the division arm exists to preserve.
             for (int i = 0; i < p.k; ++i) {
-                ASSERT_TRUE(std::isfinite(hreal(up(tau[i]))) && std::isfinite(himag(up(tau[i]))))
+                ASSERT_TRUE(std::isfinite(std::real(MVof<T>::up(tau[i]))) && std::isfinite(std::imag(MVof<T>::up(tau[i]))))
                     << what << ": tau[" << i << "] is not finite at b=" << b
                     << " -- the reciprocal guard in geqrf_larfg_scalars is not doing its job";
             }
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i) {
-                    const auto v = up(F[static_cast<size_t>(j) * p.ld + i]);
-                    ASSERT_TRUE(std::isfinite(hreal(v)) && std::isfinite(himag(v)))
+                    const auto v = MVof<T>::up(F[static_cast<size_t>(j) * p.ld + i]);
+                    ASSERT_TRUE(std::isfinite(std::real(v)) && std::isfinite(std::imag(v)))
                         << what << ": factor element (" << i << "," << j << ") is not finite at b="
                         << b << " -- 1/(alpha-beta) overflowed and was used anyway";
                 }
 
             // (2) Orthogonality at a tolerance set by the INPUT's precision, not the kernel's:
             //     v is scale-invariant, and a subnormal carries ~5 bits for float, ~35 for double.
-            const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
-            const double orth = orth_of_promoted(Q, p.m, p.k);
+            const auto Q = reflector_q<T>(*this->ctx, F, tau, p.m, p.n, p.ld);
+            const double orth = orth_of_promoted(*this->ctx, Q, p.k);
             if (verbose()) {
                 std::printf("[verbose] %-28s m=%4d n=%4d b=%d scale=%.1e orth=%.4e\n", what, p.m,
                             p.n, b, scale, orth);
@@ -1019,12 +955,12 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                     for (int i = 0; i < p.m; ++i) {
                         const size_t idx = static_cast<size_t>(b) * p.stride +
                                            static_cast<size_t>(j) * p.ld + i;
-                        scale = std::max(scale, habs(up(Fv[idx])));
-                        worst = std::max(worst, habs(up(Fv[idx]) - up(p.buf[idx])));
+                        scale = verify::nanmax(scale, std::abs(MVof<T>::up(Fv[idx])));
+                        worst = verify::nanmax(worst, std::abs(MVof<T>::up(Fv[idx]) - MVof<T>::up(p.buf[idx])));
                     }
-            for (size_t i = 0; i < tv.size(); ++i) tscale = std::max(tscale, habs(up(tv[i])));
+            for (size_t i = 0; i < tv.size(); ++i) tscale = verify::nanmax(tscale, std::abs(MVof<T>::up(tv[i])));
             for (size_t i = 0; i < tv.size(); ++i)
-                tworst = std::max(tworst, habs(up(tv[i]) - up(p.tau[i])));
+                tworst = verify::nanmax(tworst, std::abs(MVof<T>::up(tv[i]) - MVof<T>::up(p.tau[i])));
             const double dF = scale > 0 ? worst / scale : worst;
             const double dtau = tscale > 0 ? tworst / tscale : tworst;
             const double tol = 64.0 * double(std::numeric_limits<RealOf<T>>::epsilon());
@@ -1197,19 +1133,19 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
             for (int i = 0; i < m; ++i) {
                 const size_t o =
                     static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i;
-                ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
+                ASSERT_EQ(std::real(MVof<T>::up(facade[o])), std::real(MVof<T>::up(p.buf[o])))
                     << "the facade did not run the CTA kernel: its answer differs from "
                        "geqrf_cta_dispatch's at (" << i << "," << j << ") b=" << b;
-                ASSERT_EQ(himag(up(facade[o])), himag(up(p.buf[o])));
+                ASSERT_EQ(std::imag(MVof<T>::up(facade[o])), std::imag(MVof<T>::up(p.buf[o])));
             }
         }
         for (int i = 0; i < p.k; ++i) {
             const size_t o = static_cast<size_t>(b) * p.k + i;
-            ASSERT_EQ(hreal(up(ftau[o])), hreal(up(p.tau[o]))) << "tau differs at " << i;
-            ASSERT_EQ(himag(up(ftau[o])), himag(up(p.tau[o])));
+            ASSERT_EQ(std::real(MVof<T>::up(ftau[o])), std::real(MVof<T>::up(p.tau[o]))) << "tau differs at " << i;
+            ASSERT_EQ(std::imag(MVof<T>::up(ftau[o])), std::imag(MVof<T>::up(p.tau[o])));
         }
     }
-    check_one(p, "cta/facade");
+    check_one(*this->ctx, p, "cta/facade");
 }
 
 TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
@@ -1246,18 +1182,18 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
             for (int i = 0; i < m; ++i) {
                 const size_t o =
                     static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i;
-                ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
+                ASSERT_EQ(std::real(MVof<T>::up(facade[o])), std::real(MVof<T>::up(p.buf[o])))
                     << "the facade did not run the blocked driver: its answer differs from "
                        "geqrf_blocked_dispatch's at (" << i << "," << j << ") b=" << b;
-                ASSERT_EQ(himag(up(facade[o])), himag(up(p.buf[o])));
+                ASSERT_EQ(std::imag(MVof<T>::up(facade[o])), std::imag(MVof<T>::up(p.buf[o])));
             }
         }
         for (int i = 0; i < p.k; ++i) {
             const size_t o = static_cast<size_t>(b) * p.k + i;
-            ASSERT_EQ(hreal(up(ftau[o])), hreal(up(p.tau[o]))) << "tau differs at " << i;
+            ASSERT_EQ(std::real(MVof<T>::up(ftau[o])), std::real(MVof<T>::up(p.tau[o]))) << "tau differs at " << i;
         }
     }
-    check_one(p, "blocked/facade");
+    check_one(*this->ctx, p, "blocked/facade");
 }
 
 // The facade's ORGQR arm, same discipline: the native driver is ormqr on an identity,
@@ -1308,21 +1244,20 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
             for (int i = 0; i < m; ++i) {
                 const size_t o =
                     static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i;
-                ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
+                ASSERT_EQ(std::real(MVof<T>::up(facade[o])), std::real(MVof<T>::up(p.buf[o])))
                     << "the facade did not run the native orgqr at (" << i << "," << j
                     << ") b=" << b;
-                ASSERT_EQ(himag(up(facade[o])), himag(up(p.buf[o])));
+                ASSERT_EQ(std::imag(MVof<T>::up(facade[o])), std::imag(MVof<T>::up(p.buf[o])));
             }
         }
-        // And the thing it produced really is Q for THIS A.
-        const T* Q = p.buf.data() + static_cast<size_t>(b) * p.stride;
-        const T* Fb = F.data() + static_cast<size_t>(b) * p.stride;
-        const T* A0 = p.a0.data() + static_cast<size_t>(b) * p.stride;
-        const auto Qp = promote_Q<T>(Q, m, n, p.ld);
-        EXPECT_LE(orth_of_promoted(Qp, m, n), orth_tol<T>(m, n)) << "b=" << b;
-        EXPECT_LE((qr_residual<T>(Qp, Fb, A0, m, n, n, p.ld, p.ld)), residual_tol<T>(m, n))
-            << "b=" << b;
     }
+    // And the thing it produced really is Q for THIS A.
+    EXPECT_VERIFY_SLACK(T, verify::Check::orthogonality, m,
+                        orth_of_produced<T>(*this->ctx, p.buf.data(), p.ld, p.stride, m, n, batch) * std::sqrt(double(n)),
+                        orth_slack<T>(m, n));
+    EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m,
+                        product_error<T>(*this->ctx, p.buf.data(), p.ld, p.stride, F.data(), p.a0.data(), m, n, p.ld, p.stride, batch),
+                        residual_slack<T>(m, n));
 }
 
 // G11. Two workspace contracts. (a) Neither query may dereference A.data_ptr() or
@@ -1384,7 +1319,7 @@ TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
                                                                Span<std::byte>()))
                 << "n=" << n << " ld_pad=" << ld_pad;
             this->ctx->wait();
-            check_one(p, "tiny/solo");
+            check_one(*this->ctx, p, "tiny/solo");
             if (this->HasFailure()) {
                 FAIL() << "tiny failed at n=" << n << " ld_pad=" << ld_pad << " batch=1";
             }
@@ -1404,7 +1339,7 @@ TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
                                                                Span<std::byte>()))
                 << "n=" << n << " batch=" << batch;
             this->ctx->wait();
-            check_one(p, "tiny/partial-wg");
+            check_one(*this->ctx, p, "tiny/partial-wg");
             if (this->HasFailure()) {
                 FAIL() << "tiny failed at n=" << n << " batch=" << batch
                        << " (pack=" << pack << ") ld_pad=" << ld_pad;
@@ -1420,7 +1355,7 @@ TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
 TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
     using T = typename TestFixture::T;
     const int max_n = this->tiny_max_n();
-    const T kTauPoison = mk<T>(-12345.0, -12345.0);
+    const T kTauPoison = MVof<T>::make(-12345.0, -12345.0);
     int packed_orders = 0;
     for (int n : {5, 8, 12, 16, 24, 32}) {
         if (n > max_n) continue;
@@ -1456,10 +1391,10 @@ TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
                     const T got = packed.buf[static_cast<size_t>(b) * packed.stride +
                                              static_cast<size_t>(j) * packed.ld + i];
                     const T want = solo.buf[static_cast<size_t>(j) * solo.ld + i];
-                    ASSERT_EQ(hreal(up(got)), hreal(up(want)))
+                    ASSERT_EQ(std::real(MVof<T>::up(got)), std::real(MVof<T>::up(want)))
                         << "packed item " << b << " of " << batch << " differs from its solo run "
                         << "at (" << i << "," << j << "), n=" << n;
-                    ASSERT_EQ(himag(up(got)), himag(up(want)));
+                    ASSERT_EQ(std::imag(MVof<T>::up(got)), std::imag(MVof<T>::up(want)));
                 }
             }
             for (int i = 0; i < n; ++i) {
@@ -1468,16 +1403,16 @@ TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
                 // LIVENESS. make_problem poisons tau identically on both sides, so a
                 // kernel that never wrote tau at all would satisfy the equality below
                 // with -12345 against -12345. Each slot must carry a written value.
-                ASSERT_TRUE(hreal(up(got)) != hreal(up(kTauPoison)) ||
-                            himag(up(got)) != himag(up(kTauPoison)))
+                ASSERT_TRUE(std::real(MVof<T>::up(got)) != std::real(MVof<T>::up(kTauPoison)) ||
+                            std::imag(MVof<T>::up(got)) != std::imag(MVof<T>::up(kTauPoison)))
                     << "packed tau[" << i << "] of item " << b << " at n=" << n
                     << " is still the fixture's poison: the kernel never wrote it";
-                ASSERT_TRUE(std::isfinite(hreal(up(got))) && std::isfinite(himag(up(got))))
+                ASSERT_TRUE(std::isfinite(std::real(MVof<T>::up(got))) && std::isfinite(std::imag(MVof<T>::up(got))))
                     << "packed tau[" << i << "] of item " << b << " at n=" << n
                     << " is not finite";
-                ASSERT_EQ(hreal(up(got)), hreal(up(want)))
+                ASSERT_EQ(std::real(MVof<T>::up(got)), std::real(MVof<T>::up(want)))
                     << "packed tau[" << i << "] of item " << b << " differs from the solo run";
-                ASSERT_EQ(himag(up(got)), himag(up(want)));
+                ASSERT_EQ(std::imag(MVof<T>::up(got)), std::imag(MVof<T>::up(want)));
             }
         }
     }
@@ -1510,7 +1445,7 @@ TYPED_TEST(GeqrfTest, TinyPaddingIsInertUnderNaNPoison) {
             const int r = static_cast<int>(o % static_cast<size_t>(p.stride));
             const int col = r / p.ld, row = r - col * p.ld;
             if (b < batch && col < n && row < n) continue;
-            p.buf[o] = mk<T>(qnan, qnan);
+            p.buf[o] = MVof<T>::make(qnan, qnan);
         }
         p.a0.assign(p.buf.begin(), p.buf.end());
 
@@ -1523,9 +1458,9 @@ TYPED_TEST(GeqrfTest, TinyPaddingIsInertUnderNaNPoison) {
         for (int b = 0; b < batch; ++b) {
             for (int j = 0; j < n; ++j) {
                 for (int i = 0; i < n; ++i) {
-                    const auto v = up(p.buf[static_cast<size_t>(b) * p.stride +
+                    const auto v = MVof<T>::up(p.buf[static_cast<size_t>(b) * p.stride +
                                             static_cast<size_t>(j) * p.ld + i]);
-                    ASSERT_TRUE(std::isfinite(hreal(v)) && std::isfinite(himag(v)))
+                    ASSERT_TRUE(std::isfinite(std::real(v)) && std::isfinite(std::imag(v)))
                         << "a NaN from the pad reached the factor at (" << i << "," << j
                         << ") b=" << b << " n=" << n;
                 }
@@ -1533,7 +1468,7 @@ TYPED_TEST(GeqrfTest, TinyPaddingIsInertUnderNaNPoison) {
         }
         // Correct, and the NaN pad untouched -- check_one asserts both (its pad
         // comparison treats NaN-for-NaN as unchanged).
-        check_one(p, "tiny/nan-pad");
+        check_one(*this->ctx, p, "tiny/nan-pad");
         if (this->HasFailure()) FAIL() << "tiny NaN-pad failed at n=" << n;
     }
 }
@@ -1554,7 +1489,7 @@ TYPED_TEST(GeqrfTest, TinyZeroColumnGivesExactlyZeroTauAndStaysFinite) {
         const int bad = 2;
         for (int i = 0; i < n; ++i) {
             p.buf[static_cast<size_t>(bad) * p.stride + static_cast<size_t>(zero_col) * p.ld + i] =
-                mk<T>(0.0, 0.0);
+                MVof<T>::make(0.0, 0.0);
         }
         p.a0.assign(p.buf.begin(), p.buf.end());
 
@@ -1565,16 +1500,16 @@ TYPED_TEST(GeqrfTest, TinyZeroColumnGivesExactlyZeroTauAndStaysFinite) {
 
         // A column that is zero in the ORIGINAL matrix is still zero when its reflector is
         // reached: every preceding H_i is linear, and H_i * 0 = 0.
-        const auto t = up(p.tau[static_cast<size_t>(bad) * n + zero_col]);
-        EXPECT_EQ(hreal(t), 0.0) << "a zero column must give tau = 0 exactly, n=" << n;
-        EXPECT_EQ(himag(t), 0.0);
+        const auto t = MVof<T>::up(p.tau[static_cast<size_t>(bad) * n + zero_col]);
+        EXPECT_EQ(std::real(t), 0.0) << "a zero column must give tau = 0 exactly, n=" << n;
+        EXPECT_EQ(std::imag(t), 0.0);
         for (size_t i = 0; i < p.tau.size(); ++i) {
-            const auto ti = up(p.tau[i]);
-            ASSERT_TRUE(std::isfinite(hreal(ti)) && std::isfinite(himag(ti)))
+            const auto ti = MVof<T>::up(p.tau[i]);
+            ASSERT_TRUE(std::isfinite(std::real(ti)) && std::isfinite(std::imag(ti)))
                 << "tau[" << i << "] is not finite after the planted zero column";
-            ASSERT_NE(hreal(ti), -12345.0) << "tau slot " << i << " was never written";
+            ASSERT_NE(std::real(ti), -12345.0) << "tau slot " << i << " was never written";
         }
-        check_one(p, "tiny/zero-column");
+        check_one(*this->ctx, p, "tiny/zero-column");
         if (this->HasFailure()) FAIL() << "tiny zero-column failed at n=" << n;
     }
 }
@@ -1636,20 +1571,20 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
     (void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
     this->ctx->wait();
     for (size_t o = 0; o < facade.size(); ++o) {
-        ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
+        ASSERT_EQ(std::real(MVof<T>::up(facade[o])), std::real(MVof<T>::up(p.buf[o])))
             << "the facade did not run the tiny kernel: its answer differs at offset " << o;
-        ASSERT_EQ(himag(up(facade[o])), himag(up(p.buf[o])));
+        ASSERT_EQ(std::imag(MVof<T>::up(facade[o])), std::imag(MVof<T>::up(p.buf[o])));
     }
     for (size_t o = 0; o < ftau.size(); ++o) {
-        ASSERT_EQ(hreal(up(ftau[o])), hreal(up(p.tau[o]))) << "tau differs at " << o;
-        ASSERT_EQ(himag(up(ftau[o])), himag(up(p.tau[o])));
+        ASSERT_EQ(std::real(MVof<T>::up(ftau[o])), std::real(MVof<T>::up(p.tau[o]))) << "tau differs at " << o;
+        ASSERT_EQ(std::imag(MVof<T>::up(ftau[o])), std::imag(MVof<T>::up(p.tau[o])));
     }
-    check_one(p, "tiny/facade");
+    check_one(*this->ctx, p, "tiny/facade");
 }
 
 // T9. RELATIVE accuracy against the tier this one would replace, because below m + k = 16
 // an absolute pass/fail says more about the tolerance constant than about the kernel. This
-// is the evidence behind small_order_tol_floor().
+// is the evidence behind the 16 u tiny-order floor (verify::bound(factorization, 1)).
 // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
 TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
     using T = typename TestFixture::T;
@@ -1667,11 +1602,11 @@ TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
         std::vector<double> res_tiny(batch), orth_tiny(batch);
         for (int b = 0; b < batch; ++b) {
             const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
-            const T* A0 = pristine.data() + static_cast<size_t>(b) * p.stride;
             const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
-            const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
-            res_tiny[b] = qr_residual<T>(Q, F, A0, p.m, p.n, p.k, p.ld, p.ld);
-            orth_tiny[b] = orth_of_promoted(Q, p.m, p.k);
+            const auto Q = reflector_q<T>(*this->ctx, F, tau, p.m, p.n, p.ld);
+            const int item[] = {b};
+            res_tiny[b] = qr_error<T>(*this->ctx, p.buf.data(), pristine.data(), p.tau.data(), p.m, p.n, p.ld, p.stride, p.batch, item);
+            orth_tiny[b] = orth_of_promoted(*this->ctx, Q, p.k);
         }
 
         reset(p);
@@ -1682,21 +1617,22 @@ TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
 
         for (int b = 0; b < batch; ++b) {
             const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
-            const T* A0 = pristine.data() + static_cast<size_t>(b) * p.stride;
             const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
-            const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
-            const double res_cta = qr_residual<T>(Q, F, A0, p.m, p.n, p.k, p.ld, p.ld);
-            const double orth_cta = orth_of_promoted(Q, p.m, p.k);
+            const auto Q = reflector_q<T>(*this->ctx, F, tau, p.m, p.n, p.ld);
+            const int item[] = {b};
+            const double res_cta = qr_error<T>(*this->ctx, p.buf.data(), pristine.data(), p.tau.data(), p.m, p.n, p.ld, p.stride, p.batch, item);
+            const double orth_cta = orth_of_promoted(*this->ctx, Q, p.k);
             // The slack must stay NEAR ONE: the two kernels differ only in one column
             // norm's association order, which licenses O(n eps) relative. Widening it to
             // 4 lets the register kernel lose two bits and still pass under a name that
             // claims it loses none; the floor is the half that binds at these orders.
             // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
             const double slack = 2.0;
-            EXPECT_LE(res_tiny[b], std::max(slack * res_cta, small_order_tol_floor<T>()))
+            const double floor = verify::bound<T>(verify::Check::factorization, 1);
+            EXPECT_LE(res_tiny[b], std::max(slack * res_cta, floor))
                 << "tiny is materially less accurate than the CTA route at n=" << n
                 << " b=" << b << " (tiny " << res_tiny[b] << " vs cta " << res_cta << ")";
-            EXPECT_LE(orth_tiny[b], std::max(slack * orth_cta, small_order_tol_floor<T>()))
+            EXPECT_LE(orth_tiny[b], std::max(slack * orth_cta, floor))
                 << "tiny's reflectors are materially less orthonormal than the CTA route's "
                 << "at n=" << n << " b=" << b << " (tiny " << orth_tiny[b] << " vs cta "
                 << orth_cta << ")";
@@ -1737,7 +1673,7 @@ TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 p.buf[static_cast<size_t>(bad) * p.stride + static_cast<size_t>(j) * p.ld + i] =
-                    mk<T>(qnan, qnan);
+                    MVof<T>::make(qnan, qnan);
             }
         }
         auto V = view_of(p);
@@ -1769,12 +1705,12 @@ TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
 }
 
 // T11. tau, ELEMENTWISE, against LAPACKE -- the only assertion in this file whose oracle is
-// NOT host_form_Q, so a convention error shared by the kernel and that oracle cannot hide
+// NOT form_q, so a convention error shared by the kernel and that oracle cannot hide
 // in it. Real types only, deliberately: LAPACK's complex xLARFG has a second freedom this
 // file already guards (the real-beta choice), and mixing the two questions into one
 // assertion would make a failure ambiguous.
 // evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
-#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
 TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
     using T = typename TestFixture::T;
     if constexpr (!(std::is_same_v<T, float> || std::is_same_v<T, double>)) {
@@ -1793,27 +1729,10 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
                 << "n=" << n;
             this->ctx->wait();
 
-            // The reference runs on the SAME column-major buffer with the SAME ld, one
-            // item at a time; LAPACKE overwrites its input, so each item gets a copy.
+            // The reference runs in double on a tight copy of each pristine item.
             for (int b = 0; b < batch; ++b) {
-                std::vector<T> a(static_cast<size_t>(p.ld) * n);
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        a[static_cast<size_t>(j) * p.ld + i] =
-                            pristine[static_cast<size_t>(b) * p.stride +
-                                     static_cast<size_t>(j) * p.ld + i];
-                    }
-                }
-                std::vector<T> ref_tau(static_cast<size_t>(n));
-                lapack_int info = 0;
-                if constexpr (std::is_same_v<T, float>) {
-                    info = LAPACKE_sgeqrf(LAPACK_COL_MAJOR, n, n, a.data(), p.ld,
-                                          ref_tau.data());
-                } else {
-                    info = LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, a.data(), p.ld,
-                                          ref_tau.data());
-                }
-                ASSERT_EQ(info, 0) << "LAPACKE_xgeqrf failed at n=" << n << " b=" << b;
+                std::vector<double> ref_tau;
+                ASSERT_TRUE(verify::geqrf_tau(MVof<T>(const_cast<T*>(pristine.data()), n, n, p.ld, p.stride, batch), b, ref_tau)) << "geqrf_tau failed at n=" << n << " b=" << b;
 
                 // tau is O(1) for a random matrix and the two implementations differ only
                 // in the association order of one column norm, so the tolerance is a few
@@ -1822,8 +1741,8 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
                 const double tol = 256.0 * double(n) *
                                    double(std::numeric_limits<RealOf<T>>::epsilon());
                 for (int i = 0; i < n; ++i) {
-                    const double got = up(p.tau[static_cast<size_t>(b) * n + i]);
-                    const double want = up(ref_tau[static_cast<size_t>(i)]);
+                    const double got = MVof<T>::up(p.tau[static_cast<size_t>(b) * n + i]);
+                    const double want = ref_tau[static_cast<size_t>(i)];
                     ASSERT_NEAR(got, want, tol * std::max(1.0, std::fabs(want)))
                         << "tau[" << i << "] of item " << b << " at n=" << n
                         << " disagrees with LAPACKE (" << got << " vs " << want << ")";
@@ -1832,7 +1751,7 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
         }
     }
 }
-#endif  // BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#endif  // BATCHLAS_VERIFY_HAVE_LAPACKE
 
 // T8. A SOURCE check, because neither property has observable behaviour on this device: a
 // work-group barrier in a partition kernel is a RACE that stays green, and a work-group
@@ -2074,7 +1993,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafResidualAndOrthogonality) {
             this->ctx->wait();
             ASSERT_EQ(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register)
                 << "the forced Register leaf silently ran a different arm at " << m << "x" << n;
-            check_one(p, "panel/register");
+            check_one(*this->ctx, p, "panel/register");
             if (this->HasFailure()) return;
         }
     }
@@ -2113,7 +2032,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafRunsAtItsOwnHeightCeiling) {
             << ", which its own ceiling of " << max_m << " advertises";
         this->ctx->wait();
         ASSERT_EQ(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register);
-        check_one(p, "panel/register-ceiling");
+        check_one(*this->ctx, p, "panel/register-ceiling");
         if (this->HasFailure()) return;
     }
 }
@@ -2158,19 +2077,19 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafAgreesWithTheResidentLeaf) {
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i)
                     scale = std::max(scale,
-                                     habs(up(b.buf[size_t(item) * b.stride +
+                                     std::abs(MVof<T>::up(b.buf[size_t(item) * b.stride +
                                                    size_t(j) * b.ld + i])));
             ASSERT_GT(scale, 0.0) << "the reference factor is all zero; nothing is compared";
             for (int j = 0; j < a.k; ++j) {
                 const size_t t = size_t(item) * a.k + j;
-                EXPECT_LE(habs(up(a.tau[t]) - up(b.tau[t])), tol)
+                EXPECT_LE(std::abs(MVof<T>::up(a.tau[t]) - MVof<T>::up(b.tau[t])), tol)
                     << "tau[" << j << "] disagrees between the register and resident leaves at "
                     << s.m << "x" << s.n << " item " << item;
             }
             for (int j = 0; j < s.n; ++j) {
                 for (int i = 0; i < s.m; ++i) {
                     const size_t o = size_t(item) * a.stride + size_t(j) * a.ld + i;
-                    EXPECT_LE(habs(up(a.buf[o]) - up(b.buf[o])), tol * scale)
+                    EXPECT_LE(std::abs(MVof<T>::up(a.buf[o]) - MVof<T>::up(b.buf[o])), tol * scale)
                         << "the factor disagrees at (" << i << "," << j << ") at " << s.m << "x"
                         << s.n << " item " << item;
                 }
@@ -2226,7 +2145,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafZeroSubColumnGivesTauZero) {
             for (int i = 0; i < m; ++i) {
                 const double v = (i < j) ? (0.25 * (i + 1) + 0.5 * j)
                                          : (i == j ? double(2 + b + j) : 0.0);
-                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = mk<T>(v, 0.0);
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = MVof<T>::make(v, 0.0);
             }
         }
     }
@@ -2238,7 +2157,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafZeroSubColumnGivesTauZero) {
     this->ctx->wait();
 
     for (size_t t = 0; t < p.tau.size(); ++t) {
-        EXPECT_EQ(habs(up(p.tau[t])), 0.0)
+        EXPECT_EQ(std::abs(MVof<T>::up(p.tau[t])), 0.0)
             << "tau[" << t << "] is not exactly zero on an already-triangular panel";
     }
     for (size_t o = 0; o < p.buf.size(); ++o) {
@@ -2265,7 +2184,7 @@ TYPED_TEST(GeqrfTest, BlockedDriverWithTheRegisterLeaf) {
             *this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam(),
             sycl_geqrf::GeqrfPanelLeaf::Register));
         this->ctx->wait();
-        check_one(p, "blocked/register-leaf");
+        check_one(*this->ctx, p, "blocked/register-leaf");
         if (this->HasFailure()) return;
     }
 }
@@ -2321,7 +2240,7 @@ TYPED_TEST(GeqrfTest, AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow) {
                 << "Auto took the register leaf at " << s.m << "x" << s.n
                 << ", above the measured height window, where it is 0.38-0.89x";
         }
-        check_one(p, "panel/auto");
+        check_one(*this->ctx, p, "panel/auto");
         if (this->HasFailure()) return;
     }
     ASSERT_GE(ran, 4) << "only " << ran << " shapes were admitted; this guard is near-vacuous";

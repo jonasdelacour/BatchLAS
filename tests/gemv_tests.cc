@@ -10,6 +10,9 @@
 #include <algorithm>
 #include "test_utils.hh"
 #include "../src/sycl/gemv_native.hh"
+#include "../src/select/select.hh"
+#include "../src/ops/gemv/choice.hh"
+#include <complex>
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment
 // once, before main(), so a bare ::setenv in a test body is read by nothing;
@@ -27,6 +30,17 @@ struct TestConfig {
 
 using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 
+// These tests used a relative tolerance of the old test_utils::tolerance vendor-comparison bound (1e-5 float,
+// 2e-5 cfloat, 1e-10 double, 2e-10 cdouble), which the relative bound exceeds at long reductions in float.
+// The Slack keeps it.
+template <typename T>
+batchlas::verify::Slack old_relative_tolerance(int k) {
+    constexpr double old_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
+                                                                      : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
+    return {std::min(1.0, old_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+            "the old relative tolerance, kept"};
+}
+
 template <typename Config>
 class GemvMatrixViewTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -39,7 +53,6 @@ protected:
     UnifiedVector<ScalarType> A_data;
     UnifiedVector<ScalarType> x_data; 
     UnifiedVector<ScalarType> y_data; 
-    UnifiedVector<ScalarType> y_expected;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -51,7 +64,6 @@ protected:
         this->A_data = UnifiedVector<ScalarType>(this->rows * this->cols * this->batch_size);
         this->x_data = UnifiedVector<ScalarType>(std::max(this->rows, this->cols) * this->batch_size);
         this->y_data = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
-        this->y_expected = UnifiedVector<ScalarType>(this->rows * this->batch_size, static_cast<ScalarType>(0.0));
 
         // Initialize matrix with deterministic values (Column Major for BLAS)
         for (int b = 0; b < this->batch_size; ++b) {
@@ -77,48 +89,13 @@ protected:
         }
     }
 
-    void computeExpectedGemv(ScalarType alpha, ScalarType beta, Transpose transA) {
-        for (int b = 0; b < this->batch_size; ++b) {
-            const ScalarType* A_batch = this->A_data.data() + b * this->rows * this->cols;
-            const ScalarType* x_batch = this->x_data.data() + b * std::max(this->rows, this->cols);
-            ScalarType* y_batch_expected = this->y_expected.data() + b * this->rows;
-            const ScalarType* y_batch_initial = this->y_data.data() + b * this->rows; // beta operand
-
-            if (transA == Transpose::NoTrans) {
-                for (int i = 0; i < this->rows; ++i) {
-                    ScalarType sum = static_cast<ScalarType>(0.0);
-                    for (int j = 0; j < this->cols; ++j) {
-                        sum += A_batch[i + j * this->rows] * x_batch[j];
-                    }
-                    y_batch_expected[i] = alpha * sum + beta * y_batch_initial[i];
-                }
-            } else { 
-                if (this->rows != this->cols) {
-                    GTEST_SKIP() << "Transpose test skipped for non-square matrix in this fixture setup.";
-                    return;
-                }
-
-                for (int j = 0; j < this->cols; ++j) { 
-                    ScalarType sum = static_cast<ScalarType>(0.0);
-                    for (int i = 0; i < this->rows; ++i) { 
-                        sum += A_batch[i + j * this->rows] * x_batch[i]; 
-                    }
-                    y_batch_expected[j] = alpha * sum + beta * y_batch_initial[j];
-                }
-            }
-        }
-    }
-
-    typename base_type<ScalarType>::type get_tolerance() {
-        return test_utils::tolerance<ScalarType>();
-    }
-    
-    typename base_type<ScalarType>::type get_rel_error_floor() {
-        if constexpr (std::is_same_v<ScalarType, float>) {
-            return 1e-6f;
-        } else {
-            return 1e-9;
-        }
+    // y against alpha op(A) x + beta y0 in double, every item. The fixture's data are small integers, so
+    // with beta = 0 the answer is exact; with a fractional beta it is Check::blas with k = the reduction.
+    double gemv_error(const MatrixView<ScalarType, MatrixFormat::Dense>& A, const VectorView<ScalarType>& x,
+                      const VectorView<ScalarType>& y0, const VectorView<ScalarType>& y, ScalarType alpha, ScalarType beta,
+                      Transpose trans) {
+        using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+        return MV::gemv_backward_error(*this->ctx, A, trans, x, y0, y, MV::up(alpha), MV::up(beta), y.all_items());
     }
 };
 
@@ -135,17 +112,11 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
     ScalarType alpha = static_cast<ScalarType>(1.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
 
-    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
-
     (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
-    
-    auto tol = this->get_tolerance();
-    for (int i = 0; i < this->rows; ++i) {
-        EXPECT_NEAR(std::real(this->y_data[i]), std::real(this->y_expected[i]), tol) 
-            << "Mismatch at index " << i;
-    }
+
+    EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::NoTrans), 0.0);
 }
 
 TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
@@ -161,8 +132,6 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
     ScalarType alpha = static_cast<ScalarType>(2.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
 
-    this->computeExpectedGemv(alpha, beta, Transpose::Trans); 
-
     (void)gemv(*(this->ctx),
                       A_view,
                       x_vec,
@@ -171,11 +140,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 
     this->ctx->wait();
 
-    auto tol = this->get_tolerance();
-    for (int i = 0; i < this->cols; ++i) {
-        EXPECT_NEAR(std::real(this->y_data[i]), std::real(this->y_expected[i]), tol)
-        << "Mismatch with transpose at index " << i;
-    }
+    EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::Trans), 0.0);
 }
 
 
@@ -191,21 +156,11 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     ScalarType alpha = static_cast<ScalarType>(1.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
 
-    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans);
-
     (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 
-    auto tol = this->get_tolerance();
-    auto floor_val = this->get_rel_error_floor();
-    for (int b = 0; b < this->batch_size; ++b) {
-        for (int i = 0; i < this->rows; ++i) {
-            auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
-                << "Mismatch at batch " << b << ", index " << i;
-        }
-    }
+    EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::NoTrans), 0.0);
 }
 
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
@@ -222,8 +177,6 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
     ScalarType alpha = static_cast<ScalarType>(2.5);
     ScalarType beta = static_cast<ScalarType>(0.0);
 
-    this->computeExpectedGemv(alpha, beta, Transpose::Trans);
-
     (void)gemv(*(this->ctx),
                       A_view,
                       x_vec,
@@ -232,15 +185,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 
     this->ctx->wait();
 
-    auto tol = this->get_tolerance();
-    auto floor_val = this->get_rel_error_floor();
-    for (int b = 0; b < this->batch_size; ++b) {
-        for (int i = 0; i < this->cols; ++i) { 
-            auto rel_error = std::abs(this->y_data[b * this->cols + i] - this->y_expected[b * this->cols + i]) / std::max(std::abs(this->y_expected[b * this->cols + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
-                << "Mismatch with transpose at batch " << b << ", index " << i;
-        }
-    }
+    EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::Trans), 0.0);
 }
 
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
@@ -257,26 +202,19 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
             this->y_data[b * this->rows + i] = static_cast<ScalarType>(b * 1.0 + i * 0.1);
         }
     }
-     this->y_expected = this->y_data; 
+    const UnifiedVector<ScalarType> y_before = this->y_data;
+    VectorView<ScalarType> y0_vec(const_cast<ScalarType*>(y_before.data()), this->rows, this->batch_size);
 
     ScalarType alpha = static_cast<ScalarType>(1.5);
     ScalarType beta = static_cast<ScalarType>(0.8);
-
-    this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
     (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 
-    auto tol = this->get_tolerance();
-    auto floor_val = this->get_rel_error_floor();
-    for (int b = 0; b < this->batch_size; ++b) {
-        for (int i = 0; i < this->rows; ++i) {
-            auto rel_error = std::abs(this->y_data[b * this->rows + i] - this->y_expected[b * this->rows + i]) / std::max(std::abs(this->y_expected[b * this->rows + i]), floor_val);
-            EXPECT_NEAR(rel_error, static_cast<typename base_type<ScalarType>::type>(0.0), tol)
-                << "Mismatch with alpha/beta at batch " << b << ", index " << i;
-        }
-    }
+    EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, this->cols,
+                        this->gemv_error(A_view, x_vec, y0_vec, y_vec, alpha, beta, Transpose::NoTrans),
+                        old_relative_tolerance<ScalarType>(this->cols));
 }
 
 
@@ -287,8 +225,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
 namespace {
 
-// Magnitudes stay in [-1, 1] so a ~100-term reduction cannot lose the tolerance to
-// cancellation; complex values here have a non-zero imaginary part.
+// Magnitudes stay in [-1, 1] so a ~100-term reduction does not cancel; complex values here have a non-zero imaginary part.
 template <typename T>
 T gemv_cov_value(int seed) {
     using R = typename batchlas::base_type<T>::type;
@@ -330,8 +267,7 @@ protected:
         int stride_pad = 0;
     };
 
-    // Checks every element against a host reference written from the BLAS definition,
-    // not transcribed from either backend.
+    // Checks y against the BLAS definition in double (the library's componentwise backward error).
     void run_case(const Case& c) {
         if (!this->ctx) return;
 
@@ -377,7 +313,7 @@ protected:
             }
         }
 
-        std::vector<ScalarType> y_initial(static_cast<size_t>(std::max(1, y_stride * c.batch)));
+        UnifiedVector<ScalarType> y_initial(static_cast<size_t>(std::max(1, y_stride * c.batch)), ScalarType(0));
         const ScalarType nan_v =
             c.y_starts_nan ? static_cast<ScalarType>(std::numeric_limits<RealType>::quiet_NaN())
                            : ScalarType(0);
@@ -391,6 +327,16 @@ protected:
         }
         const ScalarType guard_v = static_cast<ScalarType>(RealType(-98765));
         for (int t = 0; t < kGuard; ++t) y[y_stride * c.batch + t] = guard_v;
+
+        // alpha == 0 never reads A, so the reference reads a finite copy; the library would otherwise
+        // form 0 * NaN.
+        UnifiedVector<ScalarType> A_ref = A;
+        if (c.a_starts_nan) {
+            for (int b = 0; b < c.batch; ++b)
+                for (int j = 0; j < c.n; ++j)
+                    for (int i = 0; i < c.m; ++i)
+                        A_ref[b * a_stride + j * ld + i] = gemv_cov_value<ScalarType>(b * 7919 + j * 131 + i);
+        }
 
         MatrixView<ScalarType, MatrixFormat::Dense> A_view(
             A.data(), c.m, c.n, ld, a_stride, c.batch);
@@ -410,47 +356,15 @@ protected:
              {.alpha = c.alpha, .beta = c.beta, .transA = c.transA});
         this->ctx->wait();
 
-        const RealType tol = test_utils::tolerance<ScalarType>();
-        for (int b = 0; b < c.batch; ++b) {
-            for (int o = 0; o < out; ++o) {
-                ScalarType sum = ScalarType(0);
-                // alpha == 0 never reads A, here as in the kernel.
-                const bool skip_a = (c.alpha == ScalarType(0));
-                // Backward-error denominator: the BLAS bound is relative to
-                // sum|a_r||x_r| floored at 1, not to |expected| alone.
-                RealType absum = RealType(0);
-                for (int r = 0; skip_a ? false : (r < red); ++r) {
-                    // op(A)(o, r), conjugated for ConjTrans.
-                    ScalarType a;
-                    if (c.transA == Transpose::NoTrans) {
-                        a = A[b * a_stride + r * ld + o];
-                    } else {
-                        a = A[b * a_stride + o * ld + r];
-                        // std::conj on a real scalar returns std::complex,
-                        // so the branch has to be compile-time.
-                        if constexpr (test_utils::is_complex<ScalarType>::value) {
-                            if (c.transA == Transpose::ConjTrans) a = std::conj(a);
-                        }
-                    }
-                    const ScalarType xr = x[b * x_stride + r * c.xinc];
-                    sum += a * xr;
-                    absum += std::abs(a) * std::abs(xr);
-                }
-                ScalarType expected = c.alpha * sum;
-                RealType scale = std::abs(c.alpha) * absum;
-                if (c.beta != ScalarType(0)) {
-                    const ScalarType y0 = y_initial[b * y_stride + o * c.yinc];
-                    expected += c.beta * y0;
-                    scale += std::abs(c.beta) * std::abs(y0);
-                }
-                const ScalarType got = y[b * y_stride + o * c.yinc];
-                const RealType denom =
-                    std::max(std::max(std::abs(expected), scale), RealType(1));
-                EXPECT_LE(std::abs(got - expected) / denom, tol)
-                    << "batch " << b << " out " << o
-                    << " got " << got << " expected " << expected;
-            }
+        using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+        const MV A_ref_view(A_ref.data(), c.m, c.n, ld, a_stride, c.batch);
+        VectorView<ScalarType> y0_vec(y_initial.data(), out, c.batch, c.yinc, y_stride);
+        EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, red,
+                            MV::gemv_backward_error(*(this->ctx), A_ref_view, c.transA, x_vec, y0_vec, y_vec, MV::up(c.alpha),
+                                                    MV::up(c.beta), y_vec.all_items()),
+                            old_relative_tolerance<ScalarType>(red));
 
+        for (int b = 0; b < c.batch; ++b) {
             // The gaps between y's live elements must be untouched: a kernel
             // that ignored yinc writes into them and every check above passes.
             for (int t = 0; t < y_stride; ++t) {
@@ -1108,6 +1022,46 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     // That last destructor restored the outer scope's unset state, so the gates
     // are live again here -- which a latched PRESENCE would not allow.
     EXPECT_GT(width(8, kBig), 1);
+}
+
+// complex<double> cuBLAS gemv segfaults inside cuBLASLt (batched and single), so the vendor
+// family refuses it on CUDA: a pin throws instead of killing the process, and Auto at a shape the
+// sm_120 table ranks vendor first (trans=N red=32768, applied to batch 2 by nearest row) runs a
+// native family. evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
+template <typename Config>
+class GemvVendorRefusalTest : public test_utils::BatchLASTest<Config> {};
+TYPED_TEST_SUITE(GemvVendorRefusalTest, MyTypes);
+
+TYPED_TEST(GemvVendorRefusalTest, ComplexDoubleVendorIsRefusedOnCuda) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B != Backend::CUDA || !std::is_same_v<T, std::complex<double>>) {
+        GTEST_SKIP() << "the refusal is complex<double> on CUDA only";
+    } else {
+        const int m = 64, n = 32768, batch = 2;
+        UnifiedVector<T> a(size_t(m) * n * batch), xs(size_t(n) * batch), ys(size_t(m) * batch, T(0));
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j) {
+                xs[size_t(b) * n + j] = T(1.0 / (1 + j % 7), 0.25 * (b + 1));
+                for (int i = 0; i < m; ++i)
+                    a[size_t(b) * m * n + i + size_t(j) * m] =
+                        T(double((i + 3 * j + b) % 11) - 5.0, double((2 * i + j) % 5) - 2.0);
+            }
+        MatrixView<T, MatrixFormat::Dense> A(a.data(), m, n, m, m * n, batch);
+        VectorView<T> x(xs.data(), n, batch), y(ys.data(), m, batch);
+        {
+            const select::ScopedPin<ops::gemv::GemvChoice> pin("gemv", "vendor", select::StrictPin{});
+            EXPECT_THROW(((void)gemv(*this->ctx, A, x, y, {.alpha = T(1), .beta = T(0)})), std::invalid_argument);
+        }
+        // The env class word falls back to Auto with a warning; either way no cuBLAS call is made.
+        const ScopedEnvVar word("BATCHLAS_GEMV_ROUTE", "vendor");
+        (void)gemv(*this->ctx, A, x, y, {.alpha = T(1), .beta = T(0)});
+        this->ctx->wait();
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        EXPECT_VERIFY(T, verify::Check::blas, n,
+                      MV::gemv_backward_error(*this->ctx, A, Transpose::NoTrans, x, y, y, MV::up(T(1)), MV::up(T(0)),
+                                              y.all_items()));
+    }
 }
 
 int main(int argc, char **argv) {

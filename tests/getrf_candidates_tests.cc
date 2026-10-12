@@ -15,6 +15,9 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
+
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/ops/getrf/choice.hh"
@@ -53,16 +56,6 @@ template <typename T>
 constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
 
 template <typename T>
-T mk(double re, double im) {
-    if constexpr (kCx<T>) return T(RealOf<T>(re), RealOf<T>(im));
-    else return T(re);
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -87,69 +80,40 @@ template <typename T>
 Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
     Lu<T> p;
     p.n = n, p.batch = batch, p.ld = n + 3, p.stride = p.ld * std::max(n, 1) + 5;
-    p.buf = UnifiedVector<T>(std::size_t(p.stride) * std::max(batch, 1), mk<T>(-9.75e3, 4.5e3));
+    p.buf = UnifiedVector<T>(std::size_t(p.stride) * std::max(batch, 1), MVof<T>::make(-9.75e3, 4.5e3));
     p.ptrs = UnifiedVector<T*>(std::size_t(std::max(batch, 1)), nullptr);
     p.piv = UnifiedVector<int64_t>(std::max<std::size_t>(std::size_t(n) * batch, 1), int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(std::max(batch, 1)), int32_t(-12345));
-    for (int b = 0; b < batch; ++b) {
-        std::uint64_t s = (seed + 977u * std::uint64_t(period > 0 ? b % period : b)) * 6364136223846793005ULL + 1;
-        auto next = [&] {
-            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
-            return double(std::int32_t(std::uint32_t(s >> 32))) / 2147483648.0;
-        };
-        for (int j = 0; j < n; ++j)
-            for (int r = 0; r < n; ++r) {
-                const double re = next(), im = next();
-                const double d = r == j ? 4.0 * n : 0.0;
-                p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] = mk<T>(re + d, im);
-            }
+    const int reps = period > 0 ? std::min(period, batch) : batch;
+    if (n > 0 && reps > 0) {
+        const auto R = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, reps, seed);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int r = 0; r < n; ++r) {
+                    const auto v = MVof<T>::up(R(r, j, period > 0 ? b % period : b));
+                    const double d = r == j ? 4.0 * n : 0.0;
+                    p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] =
+                        MVof<T>::make(std::real(v) + d, std::imag(v));
+                }
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
 }
 
-template <typename T>
-double eps() {
-    return double(std::numeric_limits<RealOf<T>>::epsilon());
-}
-
-// ||P A0 - L U||_F / ||A0||_F for one item, P rebuilt from the 1-based interchange list.
-template <typename T>
-double residual(const Lu<T>& p, int b) {
-    const int n = p.n;
-    std::vector<std::complex<double>> pa(std::size_t(n) * n), f(std::size_t(n) * n);
-    double norm = 0.0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            const std::size_t e = std::size_t(b) * p.stride + std::size_t(j) * p.ld + i;
-            pa[std::size_t(j) * n + i] = up(p.a0[e]);
-            f[std::size_t(j) * n + i] = up(p.buf[e]);
-            norm += std::norm(up(p.a0[e]));
-        }
-    for (int k = 0; k < n; ++k) {
-        const int r = p.ip(b)[k] - 1;
-        if (r < k || r >= n) return std::numeric_limits<double>::infinity();
-        for (int j = 0; j < n; ++j) std::swap(pa[std::size_t(j) * n + k], pa[std::size_t(j) * n + r]);
-    }
-    double err = 0.0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> acc = 0.0;
-            for (int k = 0; k <= std::min(i, j); ++k)
-                acc += (k == i ? 1.0 : f[std::size_t(k) * n + i]) * f[std::size_t(j) * n + k];
-            err += std::norm(pa[std::size_t(j) * n + i] - acc);
-        }
-    return std::sqrt(err / std::max(norm, 1e-300));
-}
-
 // info, pivots and the residual of the first and last item, and the padding bit for bit.
 template <typename T>
-void expect_factored(const Lu<T>& p, const std::string& what, bool info_passed = true) {
+void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool info_passed = true) {
     for (int b = 0; info_passed && b < p.batch; ++b) ASSERT_EQ(p.info[b], 0) << what << " item " << b;
-    for (int b : {0, p.batch - 1}) {
-        const double r = residual(p, b);
-        EXPECT_TRUE(std::isfinite(r) && r <= 200.0 * p.n * eps<T>()) << what << " item " << b << " residual " << r;
-    }
+    for (int b : {0, p.batch - 1})
+        for (int k = 0; k < p.n; ++k)
+            ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.n) << what << " item " << b << " pivot " << k << " = " << p.ip(b)[k];
+    // ||P A0 - L U||_F / ||A0||_F, P rebuilt from the 1-based interchange list.
+    const std::vector<int> items = p.batch > 1 ? std::vector<int>{0, p.batch - 1} : std::vector<int>{0};
+    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.n, p.n, p.ld, p.stride, p.batch);
+    const MVof<T> F(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch);
+    const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.ip(0))), p.n, p.batch, 1, p.n);
+    const double r = MVof<T>::getrf_residual(ctx, A0, F, piv, items);
+    EXPECT_VERIFY(T, verify::Check::factorization, p.n, r) << what << " residual " << r;
     for (std::size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stride), i = r % p.ld, j = r / p.ld;
         if (!(i < p.n && j < p.n) || int(e / p.stride) >= p.batch)
@@ -319,7 +283,7 @@ TYPED_TEST(GetrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             const std::string what = TestFixture::name(c, n, 3);
             if (this->expect_runs(c, n)) {
                 ASSERT_NO_THROW(this->run_pinned(c, p)) << what;
-                expect_factored(p, what);
+                expect_factored(*this->ctx, p, what);
             } else {
                 EXPECT_FALSE(this->pin_accepted(c, p.A())) << what;
                 const Pin pin("getrf", c);
@@ -363,7 +327,7 @@ TYPED_TEST(GetrfCandidates, SaturatingBatchIsBitIdentical) {
         auto p = make_lu<T>(n, 1024, 71u, /*period=*/1);
         this->run_pinned(c, p);
         const std::string what = TestFixture::name(c, n, 1024);
-        expect_factored(p, what);
+        expect_factored(*this->ctx, p, what);
         for (int it = 1; it < p.batch; ++it) {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
@@ -406,7 +370,7 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
             disagreements += pin != run;
         }
         // A non-square view: refused by the pin and by the driver alike.
-        UnifiedVector<T> w(std::size_t(24) * 32, mk<T>(1.0, 0.5));
+        UnifiedVector<T> w(std::size_t(24) * 32, MVof<T>::make(1.0, 0.5));
         UnifiedVector<T*> wp(1, nullptr);
         const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
         EXPECT_FALSE(this->pin_accepted(c, W)) << select::to_string(c) << " non-square";
@@ -449,7 +413,7 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
 TYPED_TEST(GetrfCandidates, NonSquareIsTheVendorsOnly) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    UnifiedVector<T> w(std::size_t(24) * 32 * 2, mk<T>(1.0, 0.5));
+    UnifiedVector<T> w(std::size_t(24) * 32 * 2, MVof<T>::make(1.0, 0.5));
     UnifiedVector<T*> wp(2, nullptr);
     const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 2, wp.data());
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
@@ -486,7 +450,7 @@ TYPED_TEST(GetrfCandidates, ExactWorkspaceInAPoisonedArena) {
                 for (std::size_t i = 0; i < kGuard; ++i)
                     ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                         << what << ": wrote " << i << " bytes past the sized workspace";
-                expect_factored(p, what, pass_info);
+                expect_factored(*this->ctx, p, what, pass_info);
             }
         }
     }
@@ -588,7 +552,7 @@ TYPED_TEST(GetrfCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("getrf pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_factored(p, what);
+            expect_factored(*this->ctx, p, what);
         }
     }
 }
@@ -608,7 +572,7 @@ TYPED_TEST(GetrfCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "blocked");
-    expect_factored(p, "blocked over env tiny");
+    expect_factored(*this->ctx, p, "blocked over env tiny");
     const Pin outer("getrf", C{gf::Cta{}});
     {
         const Pin inner("getrf", C{gf::Blocked{}});
@@ -617,46 +581,30 @@ TYPED_TEST(GetrfCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_lu<T>(8, 2, 2u);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "cta") << "the inner pin did not restore the outer";
-    expect_factored(r, "outer cta");
+    expect_factored(*this->ctx, r, "outer cta");
 }
 
-// Auto against the transcribed tables on the real device (getrf_tests' L12/T9 and the RouteGetrf
-// windows, ported): the old tiny window, the old blocked windows on both of cfloat's axes, and
-// the old vendor-free walk (tiny for the single types up to 32, cta for double up to 32, blocked
-// above; cta wherever it fits otherwise). Off-grid orders and batches on purpose.
-TYPED_TEST(GetrfCandidates, AutoReproducesTheOldRouterOnTheRealDevice) {
+// Auto against the shipped tables on the real device (shipped_table_pick.hh), on the cells that
+// straddled the old router's edges (getrf_tests' L12/T9 and the RouteGetrf windows, ported): the
+// tiny window, the blocked windows on both of cfloat's axes; off-grid orders and batches on purpose.
+TYPED_TEST(GetrfCandidates, AutoReadsTheShippedTablesOnTheRealDevice) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const auto tables = select::tables_in_borrow_order("getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed getrf table";
-    constexpr bool kF = std::is_same_v<T, float>, kCF = std::is_same_v<T, std::complex<float>>;
-    constexpr bool kD = std::is_same_v<T, double>;
-    const int cta = this->cta_n();
-    auto old_free = [&](int n, int batch) -> std::string {  // route_getrf.hh's vendor-free walk
-        if (kF && n >= 256) return "blocked";
-        if (kCF && (n >= 512 || (n >= 256 && batch >= 256))) return "blocked";
-        if ((kF || kCF) && n <= 32) return "tiny";
-        if (kD && n > 32) return "blocked";
-        if (n <= cta) return "cta";
-        return n <= this->tiny_n() ? "tiny" : "blocked";
-    };
-    auto old_vendor = [&](int n, int batch) -> std::string {  // preferred(), else the vendor
-        if (kF && n >= 5 && n <= 32) return "tiny";
-        if (kCF && ((n >= 5 && n <= 7) || (n >= 9 && n <= 24))) return "tiny";
-        if (kF && n >= 256) return "blocked";
-        if (kCF && (n >= 512 || (n >= 256 && batch >= 256))) return "blocked";
-        return "vendor";
-    };
     const std::pair<int, int> cells[] = {{3, 3},    {4, 7},     {5, 3},     {7, 300},   {8, 2},    {9, 3},
                                          {13, 600}, {24, 5},    {25, 5},    {31, 1000}, {33, 3},   {40, 2},
                                          {200, 2},  {255, 300}, {256, 2},   {256, 256}, {300, 255}, {300, 257},
                                          {511, 2},  {512, 2},   {600, 3}};
     for (auto [n, batch] : cells) {
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
+            [&, n = n, batch = batch] {
+                auto q = make_lu<T>(n, batch, 41u + n);
+                this->run(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << "n=" << n << " batch=" << batch;
         auto p = make_lu<T>(n, batch, 41u + n);
-        const std::string want = TestFixture::kVendor ? old_vendor(n, batch) : old_free(n, batch);
         EXPECT_EQ(this->auto_choice(p), want) << "n=" << n << " batch=" << batch;
-        expect_factored(p, "auto n=" + std::to_string(n) + " batch=" + std::to_string(batch));
+        expect_factored(*this->ctx, p, "auto n=" + std::to_string(n) + " batch=" + std::to_string(batch));
     }
 }
 
@@ -676,14 +624,14 @@ TYPED_TEST(GetrfCandidates, AutoReadsEveryKeyField) {
                        "n=8 batch=32768 | blocked 1 | cta 2 | tiny 3\n"
                        "n=12 batch=128 | cta 1 | blocked 2 | tiny 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{8, 128, "tiny", "base"}, {8, 30000, "blocked", "batch"}, {12, 128, "cta", "n"}};
     for (const auto& k : probes) {
         if (std::string(k.expect) == "tiny" && this->tiny_n() < 8) continue;
         auto p = make_lu<T>(k.n, k.batch, 43u);
         EXPECT_EQ(this->auto_choice(p), k.expect) << "the " << k.field << " row";
-        expect_factored(p, std::string("the ") + k.field + " row");
+        expect_factored(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -700,7 +648,7 @@ TYPED_TEST(GetrfCandidates, VendorFreeLastResortIsBlocked) {
                        "# keys: n:log:3 batch:log\n"
                        "n=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (int n : {8, 200}) {
         auto p = make_lu<T>(n, 3, 17u);
         std::string all;
@@ -708,7 +656,7 @@ TYPED_TEST(GetrfCandidates, VendorFreeLastResortIsBlocked) {
         const std::string got = traced_choice([&] { this->run(p); }, &all);
         EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : "blocked") << "n=" << n;
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_factored(p, "vendor-only table, n=" + std::to_string(n));
+        expect_factored(*this->ctx, p, "vendor-only table, n=" + std::to_string(n));
     }
 }
 
@@ -790,9 +738,9 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them, on both
-// transcribed devices: each threshold of the old predicates from both sides.
-TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
+// threshold of the old predicates from both sides. sm_120 is deep-measured since 2026-10-09.
+TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
     struct Row { const char* dtype; int n, batch; const char* ranked; };
     const Row rows[] = {
         {"float", 4, 128, "vendor tiny cta blocked"},      {"float", 5, 128, "tiny vendor cta blocked"},
@@ -807,13 +755,13 @@ TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
         {"double", 1024, 32768, "vendor blocked cta"},     {"cdouble", 16, 128, "vendor cta tiny blocked"},
         {"cdouble", 17, 128, "vendor cta blocked"},        {"cdouble", 1024, 32768, "vendor cta blocked"},
     };
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("getrf", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"batch", r.batch}});
             ASSERT_NE(row, nullptr) << t.file;
             std::string got;

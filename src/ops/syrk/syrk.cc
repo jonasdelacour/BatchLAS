@@ -1,5 +1,5 @@
 // syrk (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
-// tuned/syrk.<dtype>.<device>.txt row that can_run() admits. Gram puts all of C in one tile sized to n
+// tuned/syrk.<device>.txt row that can_run() admits. Gram puts all of C in one tile sized to n
 // (n <= 128) and stages A once; Triangular walks 128-wide tiles of the requested triangle only (float).
 
 #include <batchlas/backend_config.h>

@@ -51,6 +51,11 @@ run python3 "$here/check_lfs_pointers.py"
 # only its self-test can fail.
 run python3 "$here/check_tuned_tables.py" --self-test
 run python3 "$here/check_tuned_tables.py"
+# CI's "Tuned tables equal their ledgers": every table is a function of its ledger. Needs the
+# ledgers' LFS objects (git lfs pull --include "benchmarks/results/tuning/ledger/*").
+_root=$(CDPATH= cd -- "$here/../.." && pwd)
+run python3 "$_root/scripts/sweep_to_table.py" --self-test
+run python3 "$_root/scripts/sweep_to_table.py" --check
 # Plans and write-ups outside docs/ are what the documentation site replaced.
 run python3 "$here/check_markdown_locations.py" --self-test
 run python3 "$here/check_markdown_locations.py"

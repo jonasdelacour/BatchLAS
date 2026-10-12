@@ -3,6 +3,7 @@
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct
 // kernel call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/no_route.hh>
@@ -19,6 +20,7 @@
 #include "../src/backends/syrk_gram_tiles.hh"
 #include "../src/backends/syrk_triangular_tiles.hh"
 #include "../src/ops/syrk/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -83,7 +85,7 @@ struct Prob {
     T alpha = T(1.25), beta = T(-0.75);
     Region a, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     UnifiedVector<T*> aptr, cptr;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
@@ -91,10 +93,6 @@ struct Prob {
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
     bool ref(int i, int j) const { return s.uplo == Uplo::Lower ? i >= j : i <= j; }
-    // op(A)(i, l)
-    T opa(const std::vector<T>& m, int it, int i, int l) const {
-        return s.trans == Transpose::NoTrans ? m[ai(it, i, l)] : m[ai(it, l, i)];
-    }
 };
 
 template <typename T>
@@ -124,51 +122,41 @@ Prob<T> make_prob(const Spec& s) {
             for (int i = 0; i < s.n; ++i)
                 if (p.ref(i, j)) p.mem[p.ci(it, i, j)] = it < reps ? u(gen) : p.mem[p.ci(r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
-// Max over C's triangle of |C - ref| / (|alpha| sum |op(A)_il op(A)_jl| + |beta C0_ij|), in double.
+// Worst componentwise backward error over C's triangle of C = alpha op(A) op(A)^T + beta C0 on
+// @p items, through the library, from the pristine copy.
 template <typename T>
-double rel_error(const Prob<T>& p, int it) {
-    double worst = 0;
-    for (int j = 0; j < p.s.n; ++j)
-        for (int i = 0; i < p.s.n; ++i) {
-            if (!p.ref(i, j)) continue;
-            double acc = 0, mag = 0;
-            for (int l = 0; l < p.s.k; ++l) {
-                const double x = double(p.opa(p.mem0, it, i, l)) * double(p.opa(p.mem0, it, j, l));
-                acc += x;
-                mag += std::abs(x);
-            }
-            const double c0 = double(p.mem0[p.ci(it, i, j)]);
-            const double want = double(p.alpha) * acc + double(p.beta) * c0;
-            const double den = std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
-        }
-    return worst;
-}
-
-template <typename T>
-double tol(int k) {
-    return 16.0 * (k + 2) * double(std::numeric_limits<T>::epsilon());
+double rel_error(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const Spec& s = p.s;
+    const MV A0(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
+    const MV C0(p.mem0.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    const bool nt = s.trans == Transpose::NoTrans;
+    return MV::gemm_backward_error(ctx, A0, nt ? Transpose::NoTrans : Transpose::Trans, A0,
+                                   nt ? Transpose::Trans : Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items,
+                                   s.uplo);
 }
 
 // The checked items' triangles against the host reference, every element outside them bit for
 // bit (A, the pads, C's other triangle), and for a repeating batch every item's C bit-identical
 // to its representative's.
 template <typename T>
-::testing::AssertionResult correct(const Prob<T>& p) {
+::testing::AssertionResult correct(Queue& ctx, const Prob<T>& p, bool record = true) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double e = rel_error(p, it);
-        if (!(std::isfinite(e) && e <= tol<T>(s.k)))
-            return ::testing::AssertionFailure() << "item " << it << " relative error " << e;
-    }
+    const double e = rel_error(ctx, p, items);
+    // record = false: results expected to be wrong must not enter the calibration.
+    if (!(record ? batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e)
+                 : batchlas::verify::within<T>(batchlas::verify::Check::blas, s.k, e)))
+        return ::testing::AssertionFailure() << "worst backward error over " << items.size() << " items " << e << " exceeds "
+                                             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
     std::vector<char> owned(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -234,7 +222,7 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
                                                                  "# keys: form:exact trans:exact n:log:2 k:log "
                                                                  "batch:log\n" +
                                                                  rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 // A heterogeneous A or C has no route on any backend: one tile launch has one (n, k, ld, stride),
@@ -403,7 +391,7 @@ TYPED_TEST(SyrkCandidates, PinnedCandidatesStraddleTheirLimits) {
                     auto p = make_prob<T>(s);
                     const bool want = this->expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) EXPECT_TRUE(correct(p)) << name(c, s);
+                    if (want) EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
                     else EXPECT_TRUE(untouched(p)) << name(c, s) << ": a refused pin wrote";
                 }
 }
@@ -423,7 +411,7 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                     auto p = make_prob<T>(s);
                     const bool want = this->expect_runs(c, s);
                     EXPECT_EQ(this->pin_accepted(c, p), want) << name(c, s);
-                    if (want) EXPECT_TRUE(correct(p)) << name(c, s);
+                    if (want) EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
                 }
                 auto p = make_prob<T>(s);
                 const bool no_native = !TestFixture::kFloat && s.n > 128;
@@ -434,7 +422,7 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                 const std::string got = this->auto_choice(p);
                 if (t == Transpose::ConjTrans)
                     EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : (s.n <= 128 ? "gram" : "triangular")) << label(s);
-                EXPECT_TRUE(correct(p)) << "auto " << label(s) << " -> " << got;
+                EXPECT_TRUE(correct(*this->ctx, p)) << "auto " << label(s) << " -> " << got;
             }
 }
 
@@ -468,7 +456,7 @@ TYPED_TEST(SyrkCandidates, SaturatingBatchIsBitIdentical) {
             if (!this->expect_runs(c, s)) continue;
             auto p = make_prob<T>(s);
             this->run_pinned(c, p);
-            EXPECT_TRUE(correct(p)) << name(c, s);
+            EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
         }
     }
 }
@@ -490,7 +478,7 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
                 auto d = make_prob<T>(s);
                 std::string why;
                 const bool launched = this->direct(c, d, &why);
-                const bool right = launched && correct(d);
+                const bool right = launched && correct(*this->ctx, d, false);
                 EXPECT_EQ(accepted, right) << name(c, s) << (launched ? "" : " (direct: " + why + ")");
             }
     }
@@ -509,7 +497,7 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
         at.period = 1;
         auto p = make_prob<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        EXPECT_TRUE(correct(p)) << name(c, at);
+        EXPECT_TRUE(correct(*this->ctx, p)) << name(c, at);
         auto d = make_prob<T>(at);
         EXPECT_TRUE(this->direct(c, d)) << name(c, at) << ": the direct launch at the ceiling";
         Spec past = at;
@@ -527,7 +515,7 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     auto p = make_prob<T>(past);
     if constexpr (TestFixture::kVendor) {
         EXPECT_EQ(this->auto_choice(p), "vendor");
-        EXPECT_TRUE(correct(p)) << "auto past the grid ceiling";
+        EXPECT_TRUE(correct(*this->ctx, p)) << "auto past the grid ceiling";
     } else {
         const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
@@ -693,7 +681,7 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("syrk pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            EXPECT_TRUE(correct(p)) << what;
+            EXPECT_TRUE(correct(*this->ctx, p)) << what;
         }
     // gram is a spelling at n <= 128, and `native` there is gram (the row's first).
     auto p = make_prob<T>(Spec{96, 20, 3});
@@ -702,7 +690,7 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
                   this->run(p);
               }),
               "gram");
-    EXPECT_TRUE(correct(p));
+    EXPECT_TRUE(correct(*this->ctx, p));
     auto q = make_prob<T>(Spec{96, 20, 3});
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("syrk", std::string_view("native"));
@@ -727,7 +715,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               select::to_string(other));
-    EXPECT_TRUE(correct(p));
+    EXPECT_TRUE(correct(*this->ctx, p));
     const Pin outer("syrk", other);
     {
         const Pin inner("syrk", C{sk::Gram{}});
@@ -736,7 +724,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_prob<T>(Spec{48, 8, 2});
     EXPECT_EQ(traced_choice([&] { this->run(r); }), select::to_string(other)) << "the inner pin did not restore";
-    EXPECT_TRUE(correct(r));
+    EXPECT_TRUE(correct(*this->ctx, r));
 }
 
 // Auto against the transcribed table, on each side of every threshold the old rule read:
@@ -748,7 +736,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:ff340fc6")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads another syrk table";
     struct Row { int n, k, batch; const char* f; const char* d; };  // float, double (vendor present)
     const Row rows[] = {{128, 64, 4, "gram", "gram"},           {1, 4096, 2, "gram", "gram"},
@@ -772,7 +760,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
                 continue;
             }
             EXPECT_EQ(this->auto_choice(p), want) << label(s);
-            EXPECT_TRUE(correct(p)) << "auto " << label(s);
+            EXPECT_TRUE(correct(*this->ctx, p)) << "auto " << label(s);
         }
 }
 
@@ -809,7 +797,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     for (const auto& k : probes) {
         auto p = make_prob<T>(Spec{k.n, k.k, k.batch, Uplo::Upper, k.t});
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe";
-        EXPECT_TRUE(correct(p)) << k.field;
+        EXPECT_TRUE(correct(*this->ctx, p)) << k.field;
     }
 }
 
@@ -821,7 +809,7 @@ TYPED_TEST(SyrkCandidates, TraceLineCarriesTheKey) {
         const std::string line = traced_line([&] { this->run(p); });
         const std::string key = std::string("form=wide trans=") + trans_s(t) + " n=12 k=37 batch=5 ->";
         EXPECT_NE(line.find(key), std::string::npos) << line;
-        EXPECT_TRUE(correct(p));
+        EXPECT_TRUE(correct(*this->ctx, p));
     }
 }
 
@@ -845,7 +833,7 @@ TYPED_TEST(SyrkCandidates, VendorFreeLastResort) {
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), want) << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        EXPECT_TRUE(correct(p)) << label(s);
+        EXPECT_TRUE(correct(*this->ctx, p)) << label(s);
     }
 }
 
@@ -974,7 +962,7 @@ TYPED_TEST(SyrkCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        EXPECT_TRUE(correct(p));
+        EXPECT_TRUE(correct(*this->ctx, p));
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
@@ -1009,10 +997,11 @@ TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
     EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
-// The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N
-// and T, the n axis at k = batch = 1 for C), sm_120's rows equal sm_89's, every row untimed under
-// source=transcribed:ff340fc6, and the keys line is choice.hh's key_names.
-TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
+// The sm_89 transcription (no GPU): each table holds exactly choice.hh's grid (the full product
+// for N and T, the n axis at k = batch = 1 for C), every row untimed under
+// source=transcribed:ff340fc6; every syrk table's keys line is choice.hh's key_names. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
     std::set<std::string> want;
     for (const char* f : {"sq", "tall", "wide"})
         for (std::string_view t : sk::grid_trans)
@@ -1025,13 +1014,12 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
     std::string keys = "# keys:";
     for (auto k : sk::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double"}) {
-        std::map<std::string, std::string> rows_89;
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syrk", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 ASSERT_EQ(row.keys.size(), 5u) << t.file << ":" << row.line;
@@ -1039,10 +1027,6 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
                     row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
                 got.insert(key);
                 EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
-                std::string ranked;
-                for (const auto& e : row.ranked) ranked += e.spelling + "|";
-                if (std::string(dev) == "sm_89") rows_89[key] = ranked;
-                else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
             }
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;

@@ -15,12 +15,14 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/getrs_native.hh"
 #include "../src/extensions/solve_native.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/util/resident_capacity.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -54,21 +56,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T cj(T v) {
-    if constexpr (kCx<T>) return std::conj(v);
-    else return v;
-}
-template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -81,11 +68,11 @@ std::vector<T> make_hpd(int n, std::mt19937& gen) {
     std::uniform_real_distribution<R> d(R(0.1), R(1));
     std::vector<T> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = mk<T>(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = mk<T>((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const T v = MatrixView<T, MatrixFormat::Dense>::make((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = cj(v);
+            A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -114,7 +101,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     Sys<T> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch, p.uplo = uplo;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = mk<T>(R(-999), R(777));
+    const T poison = MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777));
     p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
     p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
     p.aptr = UnifiedVector<T*>(batch, nullptr);
@@ -126,7 +113,7 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     for (int it = 0; it < batch; ++it) {
         p.full[it] = (identical && it > 0) ? p.full[0] : make_hpd<T>(n, gen);
         if (!identical || it == 0)
-            for (auto& v : rhs) v = mk<T>(d(gen), d(gen));
+            for (auto& v : rhs) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 if (p.in_tri(i, j))
@@ -139,37 +126,26 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
     return p;
 }
 
-// ||A X - B||_F / (||A||_F ||X||_F) in double.
+// ||A X - B||_F / (||A||_F ||X||_F) in double over the first and last item, A the whole Hermitian matrix.
 template <typename T>
-double residual(const Sys<T>& p, int it) {
-    double num = 0, an = 0, xn = 0;
-    for (const T& e : p.full[it]) an += std::norm(up(e));
-    for (int k = 0; k < p.nrhs; ++k)
-        for (int i = 0; i < p.n; ++i) {
-            const size_t col = size_t(it) * p.strb + size_t(k) * p.ldb;
-            xn += std::norm(up(p.b[col + i]));
-            std::complex<double> acc = -up(p.b0[col + i]);
-            for (int t = 0; t < p.n; ++t) acc += up(p.full[it][i + size_t(t) * p.n]) * up(p.b[col + t]);
-            num += std::norm(acc);
-        }
-    return (an == 0 || xn == 0) ? std::sqrt(num) : std::sqrt(num / (an * xn));
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+double residual(Queue& ctx, const Sys<T>& p) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    Matrix<T> af(p.n, p.n, p.batch);
+    for (int it = 0; it < p.batch; ++it)
+        std::copy(p.full[it].begin(), p.full[it].end(), af.data().data() + size_t(it) * p.n * p.n);
+    const int items[] = {0, p.batch - 1};
+    return MV::solve_residual(ctx, af.view(), MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                              MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // info, the residual of the first and last item, and every element the solve must not touch,
 // bit for bit. `other_is_scratch`: a vendor potrf ran (cuSOLVER Upper writes the lower triangle).
 template <typename T>
-void expect_solved(const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what,
+void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info, const std::string& what,
                    bool other_is_scratch = false) {
     for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << what << " item " << it;
-    for (int it : {0, p.batch - 1}) {
-        const double r = residual(p, it);
-        EXPECT_TRUE(std::isfinite(r) && r <= tol<T>(p.n)) << what << " item " << it << " residual " << r;
-    }
+    const double r = residual(ctx, p);
+    EXPECT_VERIFY(T, verify::Check::solve, p.n, r) << what << " items 0 and " << p.batch - 1 << " residual " << r;
     for (size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stra), i = r % p.lda, j = r / p.lda;
         const bool owned = j < p.n && i < p.n && (other_is_scratch || p.in_tri(i, j));
@@ -404,7 +380,7 @@ TYPED_TEST(PosvCandidates, PinnedCandidatesStraddleTheirLimits) {
                         EXPECT_THROW((void)this->run_pinned(c, p), batchlas::NoRouteError) << what;
                         continue;
                     }
-                    expect_solved(p, this->run_pinned(c, p), what, !this->keeps_other(c, p));
+                    expect_solved(*this->ctx, p, this->run_pinned(c, p), what, !this->keeps_other(c, p));
                     ++ran;
                 }
             }
@@ -431,7 +407,7 @@ TYPED_TEST(PosvCandidates, CtaLaunchesAtItsCapacityAndRefusesOnePast) {
         ASSERT_TRUE(this->pin_accepted(cta, p.A(), p.B(), Uplo::Lower)) << what;
         ASSERT_TRUE(this->direct_launches(cta, p.A(), p.B(), Uplo::Lower)) << what;
         auto q = make_sys<T>(at->first, at->second, 2, Uplo::Lower, 71u);
-        expect_solved(q, this->run_pinned(cta, q), what);
+        expect_solved(*this->ctx, q, this->run_pinned(cta, q), what);
     }
     std::vector<std::pair<int, int>> over{{at->first + 1, at->second}};
     if (past) over.push_back(*past);
@@ -460,7 +436,7 @@ TYPED_TEST(PosvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 UnifiedVector<int32_t> dinfo(3, int32_t(-7));
                 ASSERT_NO_THROW(this->run_direct(c, direct.A(), direct.B(), uplo, dinfo.to_span())) << what;
                 for (int it = 0; it < 3; ++it) ASSERT_EQ(info[it], dinfo[it]) << what;
-                expect_solved(pinned, info, what, !this->keeps_other(c, pinned));
+                expect_solved(*this->ctx, pinned, info, what, !this->keeps_other(c, pinned));
                 for (size_t e = 0; e < pinned.b.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.b[e], direct.b[e]))
                         << what << ": the pinned facade did not run this family's kernels; X element " << e;
@@ -485,7 +461,7 @@ TYPED_TEST(PosvCandidates, SaturatingBatchIsBitIdentical) {
             auto p = make_sys<T>(k.n, k.nrhs, kBatch, uplo, 777u, /*identical=*/true);
             const std::string what = this->name(k.c, uplo, k.n, k.nrhs) + " batch=1024";
             if (this->child_has_no_route(k.c, p)) continue;
-            expect_solved(p, this->run_pinned(k.c, p), what, !this->keeps_other(k.c, p));
+            expect_solved(*this->ctx, p, this->run_pinned(k.c, p), what, !this->keeps_other(k.c, p));
             for (int it = 1; it < kBatch; ++it) {
                 for (int col = 0; col < k.nrhs; ++col)
                     for (int i = 0; i < k.n; ++i) {
@@ -547,8 +523,8 @@ TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = mk<T>(R(i == j ? 4 : -3), R(0));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+            for (int i = 0; i < n; ++i) A(i, j, b) = MatrixView<T, MatrixFormat::Dense>::make(R(i == j ? 4 : -3), R(0));
+    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -611,7 +587,7 @@ TYPED_TEST(PosvCandidates, ExactWorkspaceInAPoisonedArena) {
                     for (std::size_t i = 0; i < kGuard; ++i)
                         ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                             << what << ": wrote " << i << " bytes past the sized workspace";
-                    expect_solved(p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
+                    expect_solved(*this->ctx, p, pass_info ? std::vector<int32_t>(info.begin(), info.end())
                                                : std::vector<int32_t>(p.batch, 0),
                                   what, !this->keeps_other(c, p));
                 }
@@ -695,7 +671,7 @@ TYPED_TEST(PosvCandidates, ClassWordsAndSpellings) {
             const bool warns = std::string(word) == "vendor";
             EXPECT_EQ(err.find("posv pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                 << what << ": " << err;
-            expect_solved(p, info, what);
+            expect_solved(*this->ctx, p, info, what);
         }
     }
 }
@@ -719,7 +695,7 @@ TYPED_TEST(PosvCandidates, ScopedPinBeatsTheEnvironment) {
                   info = this->run_auto(p);
               }),
               "cta");
-    expect_solved(p, info, "cta over env tiny");
+    expect_solved(*this->ctx, p, info, "cta over env tiny");
     std::string auto_pick;
     {
         const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
@@ -733,7 +709,7 @@ TYPED_TEST(PosvCandidates, ScopedPinBeatsTheEnvironment) {
                   info = this->run_auto(q);
               }),
               auto_pick);
-    expect_solved(q, info, "auto over env tiny");
+    expect_solved(*this->ctx, q, info, "auto over env tiny");
 
     const Pin outer("posv", C{ps::Cta{}});
     {
@@ -768,7 +744,7 @@ TYPED_TEST(PosvCandidates, AutoReadsTheSm89TranscribedTable) {
             const std::string what = std::string(uplo == Uplo::Lower ? "L" : "U") + " n=" + std::to_string(r.n) +
                                      " nrhs=" + std::to_string(r.nrhs);
             EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
-            if (!this->child_has_no_route(C{ps::Blocked{}}, p)) expect_solved(p, info, what, !this->potrf_native(p));
+            if (!this->child_has_no_route(C{ps::Blocked{}}, p)) expect_solved(*this->ctx, p, info, what, !this->potrf_native(p));
             ++checked;
         }
     }
@@ -796,7 +772,7 @@ TYPED_TEST(PosvCandidates, AutoReadsEveryKeyField) {
                        "uplo=L n=12 nrhs=1 batch=128 | cta 1 | blocked 2 | tiny 3\n"
                        "uplo=U n=8 nrhs=1 batch=128 | blocked 1 | cta 2 | tiny 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Uplo uplo; int n, nrhs, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Uplo::Lower, 8, 1, 128, "tiny", "base"},
                             {Uplo::Lower, 8, 1, 32768, "cta", "batch"},
@@ -807,7 +783,7 @@ TYPED_TEST(PosvCandidates, AutoReadsEveryKeyField) {
         auto p = make_sys<T>(k.n, k.nrhs, k.batch, k.uplo, 43u);
         std::vector<int32_t> info;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), k.expect) << "the " << k.field << " row";
-        expect_solved(p, info, std::string("the ") + k.field + " row");
+        expect_solved(*this->ctx, p, info, std::string("the ") + k.field + " row");
     }
 }
 
@@ -895,7 +871,7 @@ TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"uplo", r.uplo}, {"n", r.n}, {"nrhs", r.nrhs}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;

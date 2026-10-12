@@ -76,14 +76,16 @@ std::string_view dtype_from_scalar(ScalarKind s) {
     return "?";
 }
 
-// "<op>.<dtype>.<device>.txt" -> {op, dtype, device}; empty strings when it does not fit.
+// "<op>.<device>.txt" -> {op, "", device} (the dtype is a key column); empty strings when it does not fit.
 std::array<std::string, 3> split_file_name(std::string_view file) {
     std::array<std::string, 3> out;
     const auto slash = file.find_last_of('/');
     if (slash != std::string_view::npos) file = file.substr(slash + 1);
     const auto parts = detail::split(file, '.');
-    if (parts.size() == 4 && parts[3] == "txt")
-        for (std::size_t i = 0; i < 3; ++i) out[i] = std::string(parts[i]);
+    if (parts.size() == 3 && parts[2] == "txt" && !parts[0].empty() && !parts[1].empty()) {
+        out[0] = std::string(parts[0]);
+        out[2] = std::string(parts[1]);
+    }
     return out;
 }
 
@@ -116,21 +118,24 @@ TableState& tables_state() {
 std::vector<const Table*> load_tables(const TableState& st, std::string_view op, std::string_view dtype,
                                       const std::string& dir) {
     std::map<std::string, const Table*> by_name;
-    // Only <op>.<dtype>.<device>.txt names take part: a stray README.txt or a .bak.txt copy in
-    // the override dir would otherwise throw from every choose() or compete with the real table.
+    // Only <op>.<device>.txt names take part: a stray README.txt or a .bak.txt copy in the
+    // override dir would otherwise throw from every choose() or compete with the real table.
     // The embed step rejects such names in tuned/ at configure time.
     auto consider = [&](const std::string& name, std::string_view text, bool is_override) {
         const auto f = split_file_name(name);
         if (f[0].empty()) {
             if (is_override && warned().insert("tuned_name:" + dir + "/" + name).second)
-                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR: skipping %s (not <op>.<dtype>.<device>.txt)\n",
+                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR: skipping %s (not <op>.<device>.txt)\n",
                              name.c_str());
             return;
         }
-        if (f[0] != op || f[1] != dtype) return;
-        auto* t = new Table(parse_table(text, name));
-        t->is_override = is_override;
-        if (t->op == op && t->dtype == dtype) by_name[t->file] = t;
+        if (f[0] != op) return;
+        for (Table& part : parse_tables(text, name)) {
+            if (part.op != op || part.dtype != dtype) continue;
+            auto* t = new Table(std::move(part));
+            t->is_override = is_override;
+            by_name[t->file] = t;
+        }
     };
     if (st.test_builtin) {
         for (const auto& [name, text] : *st.test_builtin) consider(name, text, false);
@@ -170,7 +175,11 @@ struct Decision {
     std::string op, spelling, detail, tag;
 };
 
-thread_local std::vector<std::pair<std::string, std::string>> t_pins;
+struct PinEntry {
+    std::string first, second;  // op, pin text
+    bool strict = false;
+};
+thread_local std::vector<PinEntry> t_pins;
 thread_local std::vector<Decision> t_decisions;
 thread_local int t_depth = 0;
 
@@ -230,7 +239,11 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) 
     return memo->emplace(k, std::move(d)).first->second;
 }
 
-Table parse_table(std::string_view text, std::string_view file) {
+namespace {
+
+// One table text. by_dtype: a tuned/<op>.<device>.txt file, whose first key is dtype:exact and
+// whose header names no dtype (parse_tables splits it).
+Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
     Table t;
     t.file = std::string(file);
     if (const auto slash = t.file.find_last_of('/'); slash != std::string::npos) t.file = t.file.substr(slash + 1);
@@ -330,10 +343,18 @@ Table parse_table(std::string_view text, std::string_view file) {
     line_no = 1;
     for (int i = 0; i < 3; ++i) {
         const auto h = header.find(names[i]);
+        if (by_dtype && i == 1) {
+            if (h != header.end()) fail("dtype=" + h->second + " in the header: the dtype is a key column");
+            continue;
+        }
         if (h != header.end() && !from_name[i].empty() && h->second != from_name[i])
             fail(std::string(names[i]) + "=" + h->second + " disagrees with the file name");
         *fields[i] = h != header.end() ? h->second : from_name[i];
         if (fields[i]->empty()) fail(std::string("no ") + names[i] + " in the header or the file name");
+    }
+    if (by_dtype && (t.keys.empty() || t.keys[0].name != "dtype" || t.keys[0].log)) {
+        line_no = 1;
+        fail("the first key must be dtype:exact");
     }
     if (const auto h = header.find("source"); h != header.end()) t.source = h->second;
     // Each row is all-timed or all-untimed (checked above); a table may hold both kinds, but
@@ -357,6 +378,35 @@ Table parse_table(std::string_view text, std::string_view file) {
     t.arch_number = d.arch_number;
     t.memo = std::make_shared<Table::Memo>();
     return t;
+}
+
+}  // namespace
+
+Table parse_table(std::string_view text, std::string_view file) { return parse_one(text, file, false); }
+
+std::vector<Table> parse_tables(std::string_view text, std::string_view file) {
+    const Table all = parse_one(text, file, true);
+    std::vector<Table> out;
+    for (const TableRow& r : all.rows) {
+        const std::string& dtype = r.keys[0];
+        if (dtype != "float" && dtype != "double" && dtype != "cfloat" && dtype != "cdouble")
+            throw std::runtime_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
+        auto t = std::find_if(out.begin(), out.end(), [&](const Table& x) { return x.dtype == dtype; });
+        if (t == out.end()) {
+            Table part = all;
+            part.dtype = dtype;
+            part.keys.erase(part.keys.begin());
+            part.rows.clear();
+            part.memo = std::make_shared<Table::Memo>();
+            out.push_back(std::move(part));
+            t = std::prev(out.end());
+        }
+        TableRow row = r;
+        row.keys.erase(row.keys.begin());
+        row.log2_keys.erase(row.log2_keys.begin());
+        t->rows.push_back(std::move(row));
+    }
+    return out;
 }
 
 namespace {
@@ -517,7 +567,14 @@ std::optional<std::string> pin_text(std::string_view op, std::string* source) {
     return text;
 }
 
-void push_pin(std::string_view op, std::string text) { t_pins.emplace_back(std::string(op), std::move(text)); }
+void push_pin(std::string_view op, std::string text, bool strict) {
+    t_pins.push_back({std::string(op), std::move(text), strict});
+}
+
+bool pin_strict(std::string_view op) {
+    const auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });
+    return it != t_pins.rend() && it->strict;
+}
 
 void pop_pin(std::string_view op) {
     const auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });

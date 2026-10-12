@@ -4,11 +4,14 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <sycl/sycl.hpp>
+#include <cmath>
 #include <complex>
+#include <cstdint>
 #include <random>
 #include <algorithm>
 #include <numeric>
 #include <stdexcept> // Include for std::runtime_error
+#include <string>
 #include <vector>    // Include for std::vector used in scan
 #include "queue.hh"
 #include "backends/backend_handle_impl.hh"
@@ -1128,6 +1131,198 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
     return ctx.get_event();
 }
 
+namespace {
+
+// Uniform [-1, 1) entry (both parts for complex T), a pure function of (seed, flat).
+template <typename T>
+T seeded_uniform(unsigned int seed, std::uint64_t flat) {
+    return philox::uniform_symmetric<T>(seed, 0, flat);
+}
+
+template <typename T>
+T conj_of(const T& x) {
+    if constexpr (is_std_complex_v<T>) return std::conj(x);
+    else return x;
+}
+
+template <typename T>
+float_t<T> abs2_of(const T& x) {
+    if constexpr (is_std_complex_v<T>) return x.real() * x.real() + x.imag() * x.imag();
+    else return x * x;
+}
+
+// Off-diagonal entries reach modulus 1 (real) or sqrt(2) (complex): this shift makes every row
+// strictly diagonally dominant.
+template <typename T>
+float_t<T> dominant_shift(int n) {
+    return float_t<T>(is_std_complex_v<T> ? 2 * n : n);
+}
+
+// Distinct streams for the values, the row permutation and the reflector vectors.
+constexpr unsigned int kPermutationSalt = 0x5bd1e995u;
+constexpr unsigned int kReflectorSalt = 0x9e3779b9u;
+
+std::size_t square_fill_group_size(const Queue& ctx, const char* who, std::size_t local_bytes) {
+    const auto dev = ctx->get_device();
+    if (local_bytes > dev.get_info<sycl::info::device::local_mem_size>())
+        throw batchlas::invalid_argument(std::string(who) + ": n too large for the device's local memory");
+    return std::min<std::size_t>(256, dev.get_info<sycl::info::device::max_work_group_size>());
+}
+
+}  // namespace
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
+Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed) const {
+    if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_spd: the matrix must be square");
+    const std::size_t n = static_cast<std::size_t>(rows_);
+    const std::size_t total = static_cast<std::size_t>(batch_size_) * n * n;
+    if (total == 0) return ctx.get_event();
+    T* data = data_ptr();
+    const std::size_t ld = static_cast<std::size_t>(ld_);
+    const std::size_t stride = static_cast<std::size_t>(stride_);
+    const float_t<T> shift = dominant_shift<T>(rows_);
+    auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        const std::size_t flat = item.get_global_id(0);
+        if (flat >= total) return;
+        const std::size_t b = flat / (n * n);
+        const std::size_t j = (flat / n) % n;
+        const std::size_t i = flat % n;
+        // The upper triangle conjugates the very value the lower one stores: exactly Hermitian.
+        T value = i >= j ? seeded_uniform<T>(seed, (b * n + j) * n + i)
+                         : conj_of(seeded_uniform<T>(seed, (b * n + i) * n + j));
+        if (i == j) value = T(std::real(value) + shift);
+        data[b * stride + j * ld + i] = value;
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
+Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int seed) const {
+    if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_pivoted: the matrix must be square");
+    const int n = rows_;
+    const int batch = batch_size_;
+    if (n == 0 || batch == 0) return ctx.get_event();
+    const std::size_t wg = square_fill_group_size(ctx, "fill_random_pivoted", sizeof(int) * n);
+    T* data = data_ptr();
+    const std::size_t ld = static_cast<std::size_t>(ld_);
+    const std::size_t stride = static_cast<std::size_t>(stride_);
+    const float_t<T> shift = dominant_shift<T>(n);
+    ctx->submit([&](sycl::handler& cgh) {
+        sycl::local_accessor<int, 1> perm(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
+        cgh.parallel_for(sycl::nd_range<1>(wg * batch, wg), [=](sycl::nd_item<1> item) {
+            const std::size_t b = item.get_group(0);
+            const std::size_t lid = item.get_local_id(0);
+            const std::size_t N = static_cast<std::size_t>(n);
+            if (lid == 0) {
+                // Sattolo's shuffle: a uniformly random n-cycle, so no row stays in place.
+                for (int i = 0; i < n; ++i) perm[i] = i;
+                for (int i = n - 1; i > 0; --i) {
+                    const float u = philox::uniform_unit<float>(seed ^ kPermutationSalt, b, static_cast<std::uint64_t>(i));
+                    const int j = sycl::min(static_cast<int>(u * static_cast<float>(i)), i - 1);
+                    const int t = perm[i];
+                    perm[i] = perm[j];
+                    perm[j] = t;
+                }
+            }
+            sycl::group_barrier(item.get_group());
+            for (std::size_t e = lid; e < N * N; e += wg) {
+                const std::size_t i = e % N;
+                const std::size_t c = e / N;
+                const std::size_t r = static_cast<std::size_t>(perm[i]);
+                T value = seeded_uniform<T>(seed, (b * N + c) * N + r);
+                if (r == c) value += T(shift);
+                data[b * stride + c * ld + i] = value;
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
+Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed) const {
+    if (rows_ != cols_) throw batchlas::invalid_argument("fill_graded_hermitian: the matrix must be square");
+    if (!std::isfinite(log10_cond)) throw batchlas::invalid_argument("fill_graded_hermitian: log10_cond must be finite");
+    using R = float_t<T>;
+    const int n = rows_;
+    const int batch = batch_size_;
+    if (n == 0 || batch == 0) return ctx.get_event();
+    const std::size_t wg = square_fill_group_size(ctx, "fill_graded_hermitian", 2 * sizeof(T) * n);
+    T* data = data_ptr();
+    const std::size_t ld = static_cast<std::size_t>(ld_);
+    const std::size_t stride = static_cast<std::size_t>(stride_);
+    const R decades = static_cast<R>(log10_cond);
+    ctx->submit([&](sycl::handler& cgh) {
+        sycl::local_accessor<T, 1> v(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
+        sycl::local_accessor<T, 1> s(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
+        cgh.parallel_for(sycl::nd_range<1>(wg * batch, wg), [=](sycl::nd_item<1> item) {
+            const auto g = item.get_group();
+            const std::size_t b = item.get_group(0);
+            const std::size_t lid = item.get_local_id(0);
+            const std::size_t N = static_cast<std::size_t>(n);
+            T* A = data + b * stride;
+            for (std::size_t e = lid; e < N * N; e += wg) {
+                const std::size_t r = e % N;
+                const std::size_t c = e / N;
+                const R lambda = n == 1 ? R(1) : sycl::pow(R(10), -decades * R(r) / R(n - 1));
+                A[c * ld + r] = r == c ? T(lambda) : T(0);
+            }
+            sycl::group_barrier(g);
+            for (std::size_t k = 0; k < N; ++k) {
+                R partial = 0;
+                for (std::size_t r = lid; r < N; r += wg) {
+                    // Real T needs real reflectors, or the complex Q leaves a non-real result.
+                    v[r] = seeded_uniform<T>(seed ^ kReflectorSalt, (b * N + k) * N + r);
+                    partial += abs2_of(v[r]);
+                }
+                const R vv = sycl::reduce_over_group(g, partial, sycl::plus<R>());
+                if (vv == R(0)) continue;
+                const R inv = R(1) / sycl::sqrt(vv);
+                for (std::size_t r = lid; r < N; r += wg) v[r] *= inv;
+                sycl::group_barrier(g);
+                // M <- H M H, H = I - 2 v v^H: first the columns (H M), then the rows (M H).
+                for (std::size_t c = lid; c < N; c += wg) {
+                    T acc = 0;
+                    for (std::size_t r = 0; r < N; ++r) acc += conj_of(v[r]) * A[c * ld + r];
+                    s[c] = acc;
+                }
+                sycl::group_barrier(g);
+                for (std::size_t e = lid; e < N * N; e += wg) {
+                    const std::size_t r = e % N;
+                    const std::size_t c = e / N;
+                    A[c * ld + r] -= R(2) * v[r] * s[c];
+                }
+                sycl::group_barrier(g);
+                for (std::size_t r = lid; r < N; r += wg) {
+                    T acc = 0;
+                    for (std::size_t c = 0; c < N; ++c) acc += A[c * ld + r] * v[c];
+                    s[r] = acc;
+                }
+                sycl::group_barrier(g);
+                for (std::size_t e = lid; e < N * N; e += wg) {
+                    const std::size_t r = e % N;
+                    const std::size_t c = e / N;
+                    A[c * ld + r] -= R(2) * s[r] * conj_of(v[c]);
+                }
+                sycl::group_barrier(g);
+            }
+            for (std::size_t e = lid; e < N * N; e += wg) {
+                const std::size_t r = e % N;
+                const std::size_t c = e / N;
+                if (r > c) A[r * ld + c] = conj_of(A[c * ld + r]);
+                else if (r == c) A[c * ld + c] = T(std::real(A[c * ld + c]));
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires CsrMatrixFormat<M>
@@ -1470,11 +1665,12 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     T* data_ptr = data_.data();
     int ld = ld_;
     int stride = stride_;
-    auto n = rows_; // Assuming square matrix
+    auto n = std::min(rows_, cols_);  // a tall or wide view has min(rows, cols) diagonal entries
     auto batch_size = batch_size_;
-    
+
     size_t total_elements = static_cast<size_t>(batch_size) * n;
-    
+    if (total_elements == 0) return ctx.get_event();
+
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
@@ -2480,6 +2676,21 @@ template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular_random(co
 template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
+
+template Event MatrixView<float, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, float, float, float) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, double, double, double) const;

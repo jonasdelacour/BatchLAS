@@ -17,6 +17,8 @@
 #include "../src/select/vendor.hh"
 
 #include "test_utils.hh"
+#include <batchlas/verify/tolerance.hh>
+#include "shipped_table_pick.hh"
 
 #include "../src/backends/triangular_expand.hh"
 #include "../src/backends/trmm_triangular_tiles.hh"
@@ -57,16 +59,6 @@ template <typename T>
 constexpr bool kCx = test_utils::is_complex<T>::value;
 
 template <typename T>
-T mk(RealOf<T> r, RealOf<T> i) {
-    if constexpr (kCx<T>) return T(r, i);
-    else return r;
-}
-template <typename T>
-std::complex<double> up(T v) {
-    if constexpr (kCx<T>) return {double(v.real()), double(v.imag())};
-    else return {double(v), 0.0};
-}
-template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
@@ -100,7 +92,7 @@ struct Prob {
     T alpha{};
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
 
     MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
@@ -113,7 +105,7 @@ struct Prob {
 
 template <typename T>
 T poison() {
-    return mk<T>(RealOf<T>(-999), RealOf<T>(777));
+    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
 template <typename T>
@@ -121,7 +113,7 @@ Prob<T> make_prob(const Spec& s) {
     using R = RealOf<T>;
     Prob<T> p;
     p.s = s;
-    p.alpha = mk<T>(R(1.5), R(-0.5));
+    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
     const int br = s.side == Side::Left ? s.n : s.q, bc = s.side == Side::Left ? s.q : s.n;
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
@@ -135,54 +127,35 @@ Prob<T> make_prob(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
                 if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
+                    p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? mk<T>(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.bi(r, i, j)];
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
 }
 
-// ||C - alpha op(A) B|| / (|alpha| ||A|| ||B||) for one item (Right: B op(A)), in double, read
-// from the referenced triangle only (Unit: 1 on the diagonal).
+// Worst componentwise backward error of C = alpha op(A) B (Right: B op(A)) over `items` through the
+// library; A is read as its triangle (Unit: no diagonal), operands from the pristine copy.
 template <typename T>
-double residual(const Prob<T>& p, int it) {
+double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
-    const int n = s.n;
-    std::vector<std::complex<double>> op(std::size_t(n) * n, 0.0);
-    double an = 0, bn = 0, num = 0;
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            std::complex<double> v = 0.0;
-            if (i == j) v = s.diag == Diag::Unit ? 1.0 : up(p.mem0[p.ai(it, i, j)]);
-            else if (p.owned(i, j)) v = up(p.mem0[p.ai(it, i, j)]);
-            const int oi = s.trans == Transpose::NoTrans ? i : j, oj = s.trans == Transpose::NoTrans ? j : i;
-            op[oi + std::size_t(oj) * n] = s.trans == Transpose::ConjTrans ? std::conj(v) : v;
-            an += std::norm(v);
-        }
-    const std::complex<double> al = up(p.alpha);
-    for (int j = 0; j < p.b.cols; ++j)
-        for (int i = 0; i < p.b.rows; ++i) {
-            std::complex<double> acc = 0.0;
-            for (int t = 0; t < n; ++t)
-                acc += s.side == Side::Left ? op[i + std::size_t(t) * n] * up(p.mem0[p.bi(it, t, j)])
-                                            : up(p.mem0[p.bi(it, i, t)]) * op[t + std::size_t(j) * n];
-            num += std::norm(al * acc - up(p.mem[p.ci(it, i, j)]));
-            bn += std::norm(up(p.mem0[p.bi(it, i, j)]));
-        }
-    const double den = std::abs(al) * std::sqrt(an * bn);
-    return den == 0 ? std::sqrt(num) : std::sqrt(num) / den;
-}
-
-template <typename T>
-double tol(int n) {
-    return 64.0 * std::max(n, 1) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    auto at0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
+    const MV B0 = at0(p.b), C0 = at0(p.c);
+    const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
+    MV::copy(ctx, A0.view(), at0(p.a)).wait();
+    A0.view().triangularize(ctx, s.uplo, s.diag).wait();
+    if (s.side == Side::Left)
+        return MV::gemm_backward_error(ctx, A0.view(), s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
+    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), s.trans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
 }
 
 // Residuals of the checked items, every element outside C bit for bit (A's poison included),
 // and, for a repeating batch, every item's C bit-identical to its representative's.
 template <typename T>
-void expect_trmm(const Prob<T>& p, const std::string& what) {
+void expect_trmm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0)
@@ -191,10 +164,10 @@ void expect_trmm(const Prob<T>& p, const std::string& what) {
         for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else
         items = {0, 1, s.batch / 2, s.batch - 1};
-    for (int it : items) {
-        const double r = residual(p, it);
-        ASSERT_TRUE(std::isfinite(r) && r <= tol<T>(s.n)) << what << " item " << it << " residual " << r;
-    }
+    const double r = residual(ctx, p, items);
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.n, r))
+        << what << " worst backward error over " << items.size() << " items " << r << " exceeds "
+        << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.n);
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < p.c.cols; ++j)
@@ -254,8 +227,8 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     using R = RealOf<T>;
     const int n = 16, q = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
-    A.fill(mk<T>(R(0.5), R(0)));
-    Bm.fill(mk<T>(R(1), R(0.5)));
+    A.fill(MatrixView<T, MatrixFormat::Dense>::make(R(0.5), R(0)));
+    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -340,6 +313,31 @@ protected:
         auto p = make_prob<T>(s);
         return traced_choice([&] { run(p); });
     }
+    // What Auto (or, native_only, the class word `native`) must pick, from the shipped tables.
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        const select::Key key{{"side", s.side == Side::Left ? "L" : "R"}, {"order", s.n}, {"q", s.q},
+                              {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_prob<T>(s);
+                                                     run(p);
+                                                 }, native_only);
+    }
+    // This device's trmm table replaced by one row per side (other tables kept), so a test of
+    // can_run's fallthrough does not hang on what the shipped table ranks first. Pair with TableGuard.
+    void rank_trmm(const std::string& left, const std::string& right) {
+        const std::string dtype(select::dtype_name<T>());
+        const std::string dev = select::device_of<B>(*this->ctx).key;
+        std::vector<std::pair<std::string, std::string>> files;
+        for (const auto& t : select::embedded_tables())
+            if (t.name.rfind("trmm.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
+        files.emplace_back("trmm." + dtype + "." + dev + ".txt",
+                           "# op=trmm dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
+                           "# keys: side:exact order:log:2 q:log batch:log\n"
+                           "side=L order=8 q=8 batch=8 | " + left + "\n"
+                           "side=R order=8 q=8 batch=8 | " + right + "\n");
+        select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
+    }
 
     // Each family's own launch: the tile kernel (it takes no side, so it cannot serve Right), the
     // expansion plus the public gemm, the vendor library.
@@ -397,7 +395,7 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
                     const std::string what = name(c, s);
                     if (TestFixture::vendor_word_falls_back(c)) {
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
-                        expect_trmm(p, what + " (vendor-free: Auto)");
+                        expect_trmm(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     if (!this->expect_runs(c, s)) {
@@ -406,7 +404,7 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_trmm(p, what);
+                    expect_trmm(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -414,9 +412,12 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: the exact scratch
-// size runs, one byte less is refused, and Auto then takes the other route.
+// size runs, one byte less is refused, and Auto, under a table ranking expand first, then takes the
+// next route (triangular on the Left, the vendor on the Right).
 TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
     using T = typename TestFixture::T;
+    const TableGuard restore;
+    this->rank_trmm("expand 1 | triangular 2 | vendor 3", "expand 1 | vendor 2");
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Upper, Transpose::Trans, Diag::Unit, 37, 6, 4};
         const std::size_t bytes = this->expand_bytes(s.n, s.batch);
@@ -424,7 +425,7 @@ TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
             const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes).c_str());
             auto p = make_prob<T>(s);
             ASSERT_TRUE(this->pin_accepted(C{tm::Expand{}}, p)) << label(s) << " at " << bytes << " bytes";
-            expect_trmm(p, "expand at the exact budget " + label(s));
+            expect_trmm(*this->ctx, p, "expand at the exact budget " + label(s));
         }
         const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes - 1).c_str());
         auto p = make_prob<T>(s);
@@ -436,7 +437,7 @@ TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
             continue;
         }
         EXPECT_EQ(traced_choice([&] { this->run(r); }), side == Side::Left ? "triangular" : "vendor") << label(s);
-        expect_trmm(r, "auto over budget " + label(s));
+        expect_trmm(*this->ctx, r, "auto over budget " + label(s));
     }
 }
 
@@ -454,7 +455,7 @@ TYPED_TEST(TrmmCandidates, EveryCombinationOnEveryCandidate) {
                             if (!this->expect_runs(c, s)) continue;
                             auto p = make_prob<T>(s);
                             this->run_pinned(c, p);
-                            expect_trmm(p, name(c, s));
+                            expect_trmm(*this->ctx, p, name(c, s));
                             if (::testing::Test::HasFatalFailure()) return;
                         }
 }
@@ -475,7 +476,7 @@ TYPED_TEST(TrmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_trmm(pinned, what);
+                expect_trmm(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's launch; element " << e;
@@ -501,7 +502,7 @@ TYPED_TEST(TrmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             if (!this->expect_runs(k.c, s)) continue;
             auto p = make_prob<T>(s);
             this->run_pinned(k.c, p);
-            expect_trmm(p, name(k.c, s));
+            expect_trmm(*this->ctx, p, name(k.c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
 }
@@ -539,7 +540,7 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         Spec at{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling};
         auto p = make_prob<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_trmm(p, name(c, at));
+        expect_trmm(*this->ctx, p, name(c, at));
         Spec past = at;
         past.batch = ceiling + 1;
         auto r = make_prob<T>(past);
@@ -553,7 +554,7 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
     if constexpr (TestFixture::kVendor) {
         EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor");
-        expect_trmm(p, "auto past the grid ceiling");
+        expect_trmm(*this->ctx, p, "auto past the grid ceiling");
     } else {
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
     }
@@ -563,13 +564,16 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
 // in grid y, capped at 65535. float's row tile is 32 at order 16 (one row tile) and 64 at order 65
 // (two), so the last q that fits is 65535*128 and 32767*128. There the pin launches and writes C's
 // last column; one column past it the direct launch throws, the pin is refused and writes nothing,
-// and Auto takes expand. B and C live on the device (~2.2 GB at order 65).
+// and Auto, under a table ranking triangular first, takes expand. B and C live on the device
+// (~2.2 GB at order 65).
 TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
     static constexpr Backend B = TestFixture::B;
     if constexpr (!std::is_same_v<typename TestFixture::T, float>) {
         GTEST_SKIP() << "one dtype exercises the term; each launch costs GBs";
     } else {
         const ScopedEnvVar tile("BATCHLAS_TRMM_TILE_M", nullptr);
+        const TableGuard restore;
+        this->rank_trmm("triangular 1 | expand 2 | vendor 3", "expand 1 | vendor 2");
         auto& q = batchlas::sycl_queue(*this->ctx);
         for (const auto [n, row_tiles] : {std::pair{16, 1}, std::pair{65, 2}}) {
             const int last = int(65535 / row_tiles) * 128;
@@ -745,7 +749,9 @@ TYPED_TEST(TrmmCandidates, ClassWordsAndSpellings) {
     for (Side side : {Side::Left, Side::Right}) {
         const Spec s{side, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 24, 5, 4};
         const std::string auto_pick = this->auto_choice(s);
-        const std::string native_pick = side == Side::Left ? "triangular" : "expand";
+        EXPECT_EQ(auto_pick, this->table_pick(s)) << "Auto against the shipped table " << label(s);
+        const std::string native_pick = this->table_pick(s, true);  // the row's best runnable non-vendor
+        ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns) << label(s);
         const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
         std::vector<std::pair<const char*, std::string>> expect{
             {"Expand", "expand"}, {" EXPAND ", "expand"}, {"vendor", vendor_pick}, {"native", native_pick},
@@ -768,7 +774,7 @@ TYPED_TEST(TrmmCandidates, ClassWordsAndSpellings) {
                 const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
                 EXPECT_EQ(err.find("trmm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
-                expect_trmm(p, what);
+                expect_trmm(*this->ctx, p, what);
             }
     }
 }
@@ -787,7 +793,7 @@ TYPED_TEST(TrmmCandidates, ScopedPinBeatsTheEnvironment) {
                   const Pin pin("trmm", C{tm::Expand{}});
                   this->run(p);
               }), "expand");
-    expect_trmm(p, "expand over env triangular");
+    expect_trmm(*this->ctx, p, "expand over env triangular");
     const Spec left{Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::Unit, 20, 5, 2};
     const Pin outer("trmm", C{tm::Triangular{}});
     {
@@ -797,7 +803,7 @@ TYPED_TEST(TrmmCandidates, ScopedPinBeatsTheEnvironment) {
     }
     auto r = make_prob<T>(left);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "triangular") << "the inner pin did not restore the outer";
-    expect_trmm(r, "outer triangular");
+    expect_trmm(*this->ctx, r, "outer triangular");
 }
 
 // Auto against the transcribed tables: triangular on Side::Left, expand on Side::Right, at grid
@@ -807,7 +813,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:ff340fc6")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads a measured trmm table";
     struct Row { int n, q, batch; };
     const Row rows[] = {{1, 1, 1}, {16, 16, 128}, {23, 300, 7}, {128, 1, 1024}, {200, 70, 2}, {700, 3, 1}};
@@ -819,7 +825,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
                 auto p = make_prob<T>(s);
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), side == Side::Left ? "triangular" : "expand")
                     << label(s);
-                expect_trmm(p, "auto " + label(s));
+                expect_trmm(*this->ctx, p, "auto " + label(s));
             }
 }
 
@@ -849,7 +855,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
                        "side=R order=8 q=512 batch=8 | triangular 1 | vendor 2 | expand 3\n"
                        "side=R order=128 q=8 batch=8 | triangular 1 | vendor 2 | expand 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     const char* v = TestFixture::kVendor ? "vendor" : "expand";
     struct Probe { Side side; int n, q, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Side::Left, 8, 8, 8, v, "side (Left)"},
@@ -864,7 +870,7 @@ TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make_prob<T>(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row";
-        expect_trmm(p, std::string("the ") + k.field + " row");
+        expect_trmm(*this->ctx, p, std::string("the ") + k.field + " row");
     }
 }
 
@@ -877,7 +883,7 @@ TYPED_TEST(TrmmCandidates, TraceKeyQFollowsSide) {
         const std::string line = traced_line([&] { this->run(p); });
         const std::string want = std::string("side=") + side_s(side) + " order=12 q=37 batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_trmm(p, line);
+        expect_trmm(*this->ctx, p, line);
     }
 }
 
@@ -897,23 +903,26 @@ TYPED_TEST(TrmmCandidates, VendorOnlyTableFallsToTheLastResort) {
                        "side=L order=32 q=32 batch=128 | vendor 1\n"
                        "side=R order=32 q=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 32, 9, 3};
         auto p = make_prob<T>(s);
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "expand") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_trmm(p, "vendor-only table " + label(s));
+        expect_trmm(*this->ctx, p, "vendor-only table " + label(s));
     }
 }
 
 // The coverage row (§5.6): the real backend and scalar (the old recorder hard-coded CUDA/F32),
 // the old key (m = C.rows, n = C.cols, k = A's order, uplo, side, diag, transA), native flags.
+// Under a table ranking the natives first, so the native choice spellings are what is recorded.
 // threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
 TYPED_TEST(TrmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
+    const TableGuard restore;
+    this->rank_trmm("triangular 1 | expand 2 | vendor 3", "expand 1 | vendor 2");
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "trmm_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
@@ -992,7 +1001,7 @@ TYPED_TEST(TrmmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_trmm(p, "cpu vendor");
+        expect_trmm(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
@@ -1006,9 +1015,9 @@ TYPED_TEST(TrmmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// The transcribed tables (no GPU): every dtype on sm_89 and sm_120 holds exactly choice.hh's
-// grid with identical rows, names the transcribed commit and choice.hh's keys, and reads
-// `triangular | expand | vendor` on Side::Left and `expand | vendor` on Side::Right.
+// The sm_89 transcribed tables (no GPU): every dtype holds exactly choice.hh's grid, names the
+// transcribed commit and choice.hh's keys, and reads `triangular | expand | vendor` on Side::Left
+// and `expand | vendor` on Side::Right. sm_120 is deep-measured since 2026-10-09.
 TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
     std::set<std::string> want;
     for (const char* s : {"L", "R"})
@@ -1017,18 +1026,20 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
                 for (int b : tm::grid_batch)
                     want.insert(std::string(s) + " " + std::to_string(o) + " " + std::to_string(q) + " " +
                                 std::to_string(b));
-    std::string keys = "# keys:";
+    std::string keys = "# keys: dtype:exact";
     for (auto k : tm::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-        std::map<std::string, std::string> first;
-        for (const char* dev : {"sm_89", "sm_120"}) {
-            const std::string file = std::string("trmm.") + dt + "." + dev + ".txt";
+        for (const char* dev : {"sm_89"}) {
+            const std::string file = std::string("trmm.") + dev + ".txt";
             const auto& all = select::embedded_tables();
             const auto e = std::find_if(all.begin(), all.end(), [&](const auto& t) { return t.name == file; });
             ASSERT_NE(e, all.end()) << file;
             EXPECT_NE(std::string(e->text).find("\n" + keys + "\n"), std::string::npos) << file;
-            const select::Table t = select::parse_table(e->text, e->name);
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << file;
+            const auto parts = select::parse_tables(e->text, e->name);
+            const auto part = std::find_if(parts.begin(), parts.end(), [&](const select::Table& x) { return x.dtype == dt; });
+            ASSERT_NE(part, parts.end()) << file << " " << dt;
+            const select::Table& t = *part;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
@@ -1037,8 +1048,6 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
                 for (const auto& x : row.ranked) ranked += x.spelling + "|";
                 EXPECT_EQ(ranked, row.keys[0] == "L" ? "triangular|expand|vendor|" : "expand|vendor|") << file << " " << k;
                 EXPECT_FALSE(row.timed) << file;
-                if (std::string(dev) == "sm_89") first[k] = ranked;
-                else EXPECT_EQ(ranked, first[k]) << file << " " << k << ": sm_120 differs from sm_89";
             }
             EXPECT_EQ(got, want) << file;
             EXPECT_EQ(t.rows.size(), want.size()) << file;

@@ -2,6 +2,7 @@
 // docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
+#include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/symm.hh>
@@ -14,6 +15,7 @@
 #include "../src/select/vendor.hh"
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include "../src/backends/triangular_expand.hh"
 #include "../src/expansion_budget.hh"
@@ -77,7 +79,7 @@ struct Prob {
     T alpha = T(1.5), beta = T(-0.75);
     Region a, b, c;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<T> mem0;
     UnifiedVector<T*> aptr, bptr, cptr;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
@@ -120,20 +122,15 @@ Prob<T> make_prob(const Spec& s) {
                 p.mem[p.at(p.c, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.c, r, i, j)];
             }
     }
-    p.mem0.assign(p.mem.begin(), p.mem.end());
+    p.mem0 = p.mem;
     return p;
-}
-
-template <typename T>
-double tol(int k) {
-    return 64.0 * std::max(k, 1) * double(std::numeric_limits<T>::epsilon());
 }
 
 // Each checked item against a double host reference of the symmetric product (A mirrored from
 // its referenced triangle), every element outside C bit for bit, and for a repeating batch
 // every item bit-identical to its representative.
 template <typename T>
-void expect_symm(const Prob<T>& p, const std::string& what) {
+void expect_symm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const Spec& s = p.s;
     const int k = s.k();
     std::vector<int> items;
@@ -144,26 +141,20 @@ void expect_symm(const Prob<T>& p, const std::string& what) {
     } else {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
-    auto asym = [&](int it, int i, int j) {
-        return double(p.referenced(i, j) ? p.mem0[p.at(p.a, it, i, j)] : p.mem0[p.at(p.a, it, j, i)]);
-    };
-    for (int it : items)
-        for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.m; ++i) {
-                double acc = 0, mag = 0;
-                for (int t = 0; t < k; ++t) {
-                    const double x = s.side == Side::Left ? asym(it, i, t) * double(p.mem0[p.at(p.b, it, t, j)])
-                                                          : double(p.mem0[p.at(p.b, it, i, t)]) * asym(it, t, j);
-                    acc += x;
-                    mag += std::abs(x);
-                }
-                const double c0 = double(p.mem0[p.at(p.c, it, i, j)]);
-                const double want = double(p.alpha) * acc + double(p.beta) * c0;
-                const double bound = tol<T>(k) * (std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0)) + 1e-30;
-                const double got = double(p.mem[p.at(p.c, it, i, j)]);
-                ASSERT_TRUE(std::isfinite(got) && std::abs(got - want) <= bound)
-                    << what << " item " << it << " (" << i << "," << j << "): got " << got << " want " << want;
-            }
+    // A mirrored from its referenced triangle by the library; operands and C0 from the pristine copy.
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    auto at0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
+    const MV B0 = at0(p.b), C0 = at0(p.c);
+    const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
+    MV::copy(ctx, A0.view(), at0(p.a)).wait();
+    A0.view().symmetrize(ctx, s.uplo).wait();
+    const double err = s.side == Side::Left
+        ? MV::gemm_backward_error(ctx, A0.view(), Transpose::NoTrans, B0, Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items)
+        : MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items);
+    ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k, err))
+        << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
+        << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k);
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -317,8 +308,6 @@ protected:
         const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
         return traced_choice([&] { run(p); });
     }
-    // What Auto takes where the table ranks `first`: a vendor-free build skips the vendor.
-    static std::string auto_expect(const std::string& first) { return kVendor ? first : "expand"; }
 
     // The family's own code: Expand = expand_mirrored into an arena lease + the public gemm, with
     // the expanded ld the launcher derives; Vendor = the library loop.
@@ -374,11 +363,11 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
                         auto q = make_prob<T>(s);
                         const std::string want = this->auto_choice(q);
                         EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                        expect_symm(p, what + " (vendor-free: Auto)");
+                        expect_symm(*this->ctx, p, what + " (vendor-free: Auto)");
                         continue;
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                    expect_symm(p, what);
+                    expect_symm(*this->ctx, p, what);
                     ++ran;
                 }
     EXPECT_GT(ran, 0);
@@ -390,7 +379,7 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
             auto p = make_prob<T>(s);
             const bool ok = this->pin_accepted(C{sy::Expand{}}, p);
             EXPECT_EQ(ok, cap == bytes) << label(s) << " budget " << cap << " of " << bytes;
-            if (ok) expect_symm(p, label(s) + " at the exact budget");
+            if (ok) expect_symm(*this->ctx, p, label(s) + " at the exact budget");
         }
     }
 }
@@ -407,7 +396,7 @@ TYPED_TEST(SymmCandidates, EveryCombinationOnEveryCandidate) {
                     s.seed = 77u + m;
                     auto p = make_prob<T>(s);
                     this->run_pinned(c, p);
-                    expect_symm(p, name(c, s));
+                    expect_symm(*this->ctx, p, name(c, s));
                     if (::testing::Test::HasFatalFailure()) return;
                 }
     }
@@ -429,7 +418,7 @@ TYPED_TEST(SymmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 this->run_pinned(c, pinned);
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
-                expect_symm(pinned, what);
+                expect_symm(*this->ctx, pinned, what);
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's code; element " << e;
@@ -451,7 +440,7 @@ TYPED_TEST(SymmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             s.seed = 777u + m;
             auto p = make_prob<T>(s);
             this->run_pinned(c, p);
-            expect_symm(p, name(c, s));
+            expect_symm(*this->ctx, p, name(c, s));
             if (::testing::Test::HasFatalFailure()) return;
         }
     }
@@ -658,17 +647,23 @@ TYPED_TEST(SymmCandidates, EmptyProblemIsANoOp) {
     for (std::size_t e = 0; e < c.size(); ++e) ASSERT_EQ(c[e], T(2)) << "an empty problem wrote element " << e;
 }
 
-// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment. Auto
+// is the shipped table's pick (shipped_table_pick.hh).
 TYPED_TEST(SymmCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
-    const Spec s{Side::Right, Uplo::Upper, 20, 24, 2};  // squareish, batch < 4, max < 256: vendor-ranked
+    const Spec s{Side::Right, Uplo::Upper, 20, 24, 2};
     std::string auto_pick;
     {
         auto p = make_prob<T>(s);
         auto_pick = traced_choice([&] { this->run(p); });
     }
-    EXPECT_EQ(auto_pick, TestFixture::auto_expect("vendor"));
+    const select::Key key{{"form", sy::form_of(s.m, s.n)}, {"m", s.m}, {"n", s.n}, {"batch", s.batch}};
+    EXPECT_EQ(auto_pick, test_utils::shipped_table_pick<C>("symm", select::dtype_name<T>(),
+                                                           select::device_of<TestFixture::B>(*this->ctx), key, [&] {
+                                                               auto q = make_prob<T>(s);
+                                                               this->run(q);
+                                                           }));
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
         {"EXPAND", "expand"}, {" expand ", "expand"}, {"native", "expand"}, {"vendor", vendor_pick}, {"Auto", auto_pick}};
@@ -687,7 +682,7 @@ TYPED_TEST(SymmCandidates, ClassWordsAndSpellings) {
             EXPECT_EQ(got, spelling) << what;
             const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
             EXPECT_EQ(err.find("symm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns) << what << ": " << err;
-            expect_symm(p, what);
+            expect_symm(*this->ctx, p, what);
         }
 }
 
@@ -706,7 +701,7 @@ TYPED_TEST(SymmCandidates, ScopedPinBeatsTheEnvironment) {
                   this->run(p);
               }),
               "expand");
-    expect_symm(p, "expand over env bogus");
+    expect_symm(*this->ctx, p, "expand over env bogus");
     const Pin outer("symm", std::string_view("bogus"));
     {
         const Pin inner("symm", C{sy::Expand{}});
@@ -717,15 +712,13 @@ TYPED_TEST(SymmCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_THROW(this->run(r), std::invalid_argument) << "the inner pin did not restore the outer";
 }
 
-// Auto against the transcribed table, at cells on both sides of every threshold the old router
-// read (batch 3|4, max(m, n) 255|256, the squareish form), on and off the grid.
-TYPED_TEST(SymmCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh), at cells on both sides of
+// every threshold the old router read (batch 3|4, max(m, n) 255|256, the squareish form), on and
+// off the grid. On a transcribed table that is the old rule (SymmTranscribedTable checks the rows).
+TYPED_TEST(SymmCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("symm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    ASSERT_FALSE(tables.empty());
-    if (tables.front()->source != "transcribed:ff340fc6") GTEST_SKIP() << "this device reads a measured symm table";
     struct Cell { int m, n, batch; };
     const Cell cells[] = {{64, 64, 3},   {64, 64, 4},   {255, 255, 1}, {256, 256, 1}, {128, 255, 3}, {129, 256, 1},
                           {256, 100, 8}, {100, 256, 8}, {300, 200, 2}, {200, 150, 5}, {200, 150, 3}, {40, 19, 1000},
@@ -734,10 +727,17 @@ TYPED_TEST(SymmCandidates, AutoReadsTheTranscribedTable) {
         for (Side side : {Side::Left, Side::Right}) {
             Spec s{side, Uplo::Lower, c.m, c.n, c.batch};
             s.seed = 41u + c.m;
+            const select::Key key{{"form", sy::form_of(c.m, c.n)}, {"m", c.m}, {"n", c.n}, {"batch", c.batch}};
+            const std::string want = test_utils::shipped_table_pick<C>("symm", select::dtype_name<T>(),
+                                                                       select::device_of<B>(*this->ctx), key, [&] {
+                                                                           auto q = make_prob<T>(s);
+                                                                           this->run(q);
+                                                                       });
+            ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+            if (!TestFixture::kVendor) EXPECT_EQ(want, "expand") << label(s);
             auto p = make_prob<T>(s);
-            EXPECT_EQ(traced_choice([&] { this->run(p); }), TestFixture::auto_expect(old_auto<T>(c.m, c.n, c.batch)))
-                << label(s);
-            expect_symm(p, "auto " + label(s));
+            EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
+            expect_symm(*this->ctx, p, "auto " + label(s));
         }
 }
 
@@ -763,7 +763,7 @@ TYPED_TEST(SymmCandidates, AutoReadsEveryKeyField) {
                        "form=wide m=64 n=160 batch=128 | expand 1 | vendor 2\n"
                        "form=wide m=160 n=64 batch=128 | vendor 1 | expand 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n, batch; const char* expect; const char* field; };
     const Probe probes[] = {{64, 64, 128, "vendor", "base"},          {64, 64, 32768, "expand", "batch"},
                             {64, 32, 128, "expand", "m"},             {32, 64, 128, "vendor", "n (m and n swapped)"},
@@ -774,7 +774,7 @@ TYPED_TEST(SymmCandidates, AutoReadsEveryKeyField) {
             s.seed = 43u;
             auto p = make_prob<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " row, " << label(s);
-            expect_symm(p, std::string("the ") + k.field + " row");
+            expect_symm(*this->ctx, p, std::string("the ") + k.field + " row");
         }
 }
 
@@ -788,7 +788,7 @@ TYPED_TEST(SymmCandidates, TraceKeyIsCsShape) {
         const std::string form = 2 * std::min(m, n) >= std::max(m, n) ? "sq" : (m > n ? "tall" : "wide");
         const std::string want = "form=" + form + " m=" + std::to_string(m) + " n=" + std::to_string(n) + " batch=5 ->";
         EXPECT_NE(line.find(want), std::string::npos) << line;
-        expect_symm(p, line);
+        expect_symm(*this->ctx, p, line);
     }
 }
 
@@ -806,13 +806,13 @@ TYPED_TEST(SymmCandidates, VendorFreeLastResortIsExpand) {
                        "# keys: form:exact m:log n:log batch:log\n"
                        "form=sq m=32 n=32 batch=128 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 32, 32, 64}, Spec{Side::Right, Uplo::Upper, 3, 300, 1}}) {
         auto p = make_prob<T>(s);
         std::string all;
         EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "expand") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-        expect_symm(p, "vendor-only table, " + label(s));
+        expect_symm(*this->ctx, p, "vendor-only table, " + label(s));
     }
 }
 
@@ -905,7 +905,7 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     };
     if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
-        expect_symm(p, "cpu vendor");
+        expect_symm(*this->ctx, p, "cpu vendor");
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
@@ -919,9 +919,9 @@ TYPED_TEST(SymmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// The transcription (no GPU): each table holds exactly choice.hh's grid, sm_89 and sm_120 alike,
-// every row ranks both candidates, and the float first entries restate the old rule at the
-// cell's form representative (double: vendor everywhere).
+// The sm_89 transcription (no GPU): the table holds exactly choice.hh's grid, every row ranks
+// both candidates, and the float first entries restate the old rule at the cell's form
+// representative (double: vendor everywhere). sm_120 is deep-measured since 2026-10-09.
 TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
     auto rep = [](const std::string& form, int m, int n) {
         if (std::string(sy::form_of(m, n)) == form) return std::pair{m, n};
@@ -929,13 +929,12 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
         return form == "sq" ? std::pair{M, M} : (form == "tall" ? std::pair{M, h} : std::pair{h, M});
     };
     for (const char* dt : {"float", "double"}) {
-        std::vector<const select::Table*> both;
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("symm", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             ASSERT_EQ(t.keys.size(), sy::key_names.size()) << t.file;
             for (std::size_t i = 0; i < t.keys.size(); ++i) {
                 const std::string spec = t.keys[i].name + (t.keys[i].log ? ":log" : ":exact");
@@ -958,13 +957,6 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
             }
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;
-            both.push_back(&t);
-        }
-        ASSERT_EQ(both[0]->rows.size(), both[1]->rows.size()) << dt;
-        for (std::size_t i = 0; i < both[0]->rows.size(); ++i) {
-            EXPECT_EQ(both[0]->rows[i].keys, both[1]->rows[i].keys) << dt << " row " << i;
-            for (std::size_t j = 0; j < 2; ++j)
-                EXPECT_EQ(both[0]->rows[i].ranked[j].spelling, both[1]->rows[i].ranked[j].spelling) << dt << " row " << i;
         }
     }
     struct Spot { const char* dt; const char* form; int m, n, batch; const char* first; };

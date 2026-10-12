@@ -10,7 +10,7 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 * **Families** (`src/ops/<op>/choice.hh`, in tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields. See [families and their limits](#lu-families-and-their-limits).
 * **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`. It is the only gate. A `can_run` term must never be a speed term, or the shape becomes unservable in a vendor-free build.
-* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. All 32 LU tables are `source=transcribed:424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The sm_120 rows equal the sm_89 rows, so on sm_120 they are hypotheses until retuned. See [what the tables rank first](#lu-what-the-tables-rank-first).
+* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. All 32 LU tables are `source=transcribed:424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The sm_120 rows equal the sm_89 rows, so on sm_120 they are hypotheses until retuned. See [what the tables rank first](#lu-what-the-tables-rank-first).
 * **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:225-237`).
 * **Pins**: `BATCHLAS_GETRF_ROUTE`, `BATCHLAS_GETRS_ROUTE`, `BATCHLAS_GETRI_ROUTE`, `BATCHLAS_GESV_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or names a family whose `can_run` refuses the shape throws `std::invalid_argument`. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
 * **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), the blocking factor `nb`, the tiny bucket and its launch bound. The launchers work these out. They are not families, keys or `can_run` terms.
@@ -659,6 +659,16 @@ Not established: float's 256 floor at batch 64..128 with the register leaf, and 
 ### Armed breaks (P4)
 
 Eight breaks were armed and observed red, including: dropping the `rowid >= j` candidate mask (an eliminated row wins), dropping barrier B2 (red from float m = 33), and restoring the `regs x wg <= 65536` cap (the cdouble launch fails with `UR_RESULT_ERROR_OUT_OF_RESOURCES`). Publishing the pivot row before the relabel stayed green, since it is a no-op refactor.
+
+| Break (R9, `getrf_panel_reg_device.hh`) | Red cell |
+|---|---|
+| (a) drop `cand`'s `rowid >= j` in the argmax | `RegPanelAgreesWithTheLocalMemoryLeaf`: differing ipiv, pivot ratio above 1 |
+| (b) `rowid = p` for both relabel arms | same test: two work-items claim one row, residual explodes |
+| (c) publish before the relabel | green (the publisher is the same physical item); the break with teeth selects on the pre-swap `rowid == p` |
+| (d) drop barrier B2 | same test, red from the two-sub-group panel m = 33 |
+| (e) `piv_item[j] = p + 1` (drop `piv_base`) | `RegPanelIpivAndInfoAreGlobalAtANonZeroPivBase`; every `piv_base == 0` cell stays green |
+| (f) `info_local = 0` unconditionally | `RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins`, on the second planted column only |
+| (g) store to `a[tid + k*ld]` instead of `a[rowid + k*ld]` | residual explodes at every cell that pivots |
 
 ### The P7 occupancy change moved 27 committed `getrf` baseline cells
 

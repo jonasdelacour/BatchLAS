@@ -1,0 +1,10 @@
+// Kernel hash v2 test vector (docs/design/tuning-data.md#tuning-data-kernel-hash).
+// Checked by tune_tests, scripts/sweep_to_table.py --self-test and check_tuned_tables.py --self-test.
+/* A block comment
+   spanning lines, with // inside it. */
+int  kernel(int n) {   // trailing comment
+	return n *   2; /* inline */ }
+const char* url = "http://example";  // naive rule: the // in the string starts a comment
+int after_star = 3 /* open */ * 4;
+/* unterminated block runs to the end
+int lost = 1;

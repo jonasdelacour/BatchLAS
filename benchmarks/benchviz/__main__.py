@@ -8,6 +8,7 @@
     python3 benchmarks/benchviz compare <baseline> <candidate>   # any two logs, cell by cell
     python3 benchmarks/benchviz ab --build-dir A --build-dir B --ops gemm   # two builds, interleaved
     python3 benchmarks/benchviz list-ops
+    python3 benchmarks/benchviz tune --tier coarse --ops potrf --devices 0,1 [--plan]   # a run /tuning watches
 """
 from __future__ import annotations
 
@@ -25,6 +26,8 @@ sys.path.insert(0, str(HERE))
 from ops import OPS, PRESETS, TYPES, Grid, parse_list, plan_cells  # noqa: E402
 from store import (DEFAULT_ROOT, REPO, Campaign, acpp_env_record, build_info, describe_build,  # noqa: E402
                    impl_name, provenance, sycl_impl_of)
+
+DEFAULT_LEDGER = REPO / "benchmarks" / "results" / "tuning" / "ledger"
 
 
 def _csv_list(s: str, allowed) -> list:
@@ -341,7 +344,43 @@ def cmd_info(a):
 
 def cmd_serve(a):
     import server
-    server.serve(Path(a.root), a.host, a.port, default_build_dirs(), read_only=a.read_only, token=a.token or "")
+    builds = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
+    server.serve(Path(a.root), a.host, a.port, builds, read_only=a.read_only, token=a.token or "",
+                 ledger=Path(a.ledger), tuned=Path(a.tuned) if a.tuned else None)
+
+
+def cmd_tune(a):
+    """Plan or start a tuning run exactly as the Tuning tab would; the page watches it either way."""
+    import tuning as t
+    binary, why = t.find_tuner([Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs())
+    if binary is None:
+        raise SystemExit(why)
+    ops = t.spec_ops()
+    req = {"ops": ops if a.ops == "all" else _csv_list(a.ops, ops),
+           "dtypes": _csv_list(a.dtype, t.DTYPES), "tier": a.tier,
+           "devices": [int(g) for g in a.devices.split(",") if g.strip()], "device_key": a.device_key,
+           "max_dim": a.max_dim, "budget_h": a.budget, "allow_idle_foreign": not a.exclusive,
+           "allow_dirty": a.allow_dirty, "guard_wait_s": a.guard_wait,
+           "remeasure_keys": Path(a.remeasure_keys).read_text() if a.remeasure_keys else ""}
+    try:
+        t.run_argv(binary, req, Path(a.ledger), Path(os.devnull), plan=a.plan)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    if a.plan:
+        p = t.plan(binary, req, Path(a.ledger))
+        if p.get("error"):
+            raise SystemExit(f"plan failed: {p['error']}")
+        for j in p["jobs"]:
+            print(f"{j['op']:6s} {j['dtype']:7s} {j['measure']:6d} to measure of {j['cells']:6d} ({j['mix']}); "
+                  f"~{j['refine_cells']} refinement; est {(j['est_s'] + j['est_refine_s']) / 3600:.2f} h")
+        tot = p["total"]
+        print(f"total: {tot['cells']} cells + ~{tot['refine_cells']} refinement, est {tot['est_total_s'] / 3600:.2f} h")
+        return
+    live = t.live_run(Path(a.root))
+    if live:
+        raise SystemExit(f"tuning run {live} is still running; one at a time")
+    name = t.launch(Path(a.root), binary, req, Path(a.ledger), a.name)
+    print(f"started {name}: {t.runs_dir(Path(a.root)) / name}; watch it at /tuning#/run/{name}")
 
 
 def main():
@@ -405,7 +444,31 @@ def main():
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--read-only", action="store_true", help="no starting/stopping runs (for a copy exposed beyond the box)")
     s.add_argument("--token", help="require this secret as ?t=<token> in the link (then kept in a cookie)")
+    s.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="the tuning ledger root (default: %(default)s)")
+    s.add_argument("--tuned", help="the tables the Tuning tab diffs against (default: the checkout's tuned/)")
+    s.add_argument("--build-dir", action="append", help="build trees for runs and batchlas_tune (repeatable; "
+                   "default: this checkout's build/, then the main checkout's)")
     s.set_defaults(fn=cmd_serve)
+
+    tu = sub.add_parser("tune", parents=[common], help="plan or start a batchlas_tune run the Tuning tab watches")
+    tu.add_argument("--ops", default="all", help="comma list or 'all'")
+    tu.add_argument("--dtype", default="float,double,cfloat,cdouble")
+    tu.add_argument("--tier", required=True, choices=["preview", "coarse", "deep", "custom"],
+                    help="custom measures exactly the --remeasure-keys cells (a rehash sample)")
+    tu.add_argument("--devices", default="0", help="GPU indices, e.g. 0,1,2,3 ('' with --plan --device-key)")
+    tu.add_argument("--device-key", help="--plan: the device whose ledger is planned against (sm_120), no GPU query")
+    tu.add_argument("--remeasure-keys", help="file of '<op> <dtype> <name=v,...>' lines measured again in round 0")
+    tu.add_argument("--allow-dirty", action="store_true",
+                    help="measure from a tree with uncommitted changes (stamped -dirty, never reaches tuned/)")
+    tu.add_argument("--max-dim", type=int, default=2048, help="largest matrix dimension measured (default 2048)")
+    tu.add_argument("--budget", type=float, help="cap refinement time [h]")
+    tu.add_argument("--guard-wait", type=int, default=3600, help="seconds to wait for a busy GPU (default 3600)")
+    tu.add_argument("--exclusive", action="store_true", help="refuse GPUs holding idle foreign contexts too")
+    tu.add_argument("--ledger", default=str(DEFAULT_LEDGER))
+    tu.add_argument("--name", help="run name; default <tier>-<timestamp>")
+    tu.add_argument("--build-dir", action="append")
+    tu.add_argument("--plan", action="store_true", help="print the plan and estimate, measure nothing")
+    tu.set_defaults(fn=cmd_tune)
 
     i = sub.add_parser("info", parents=[common], help="which build runs would use, and each campaign's state")
     i.add_argument("--build-dir", action="append", help="describe this build instead of the default search (repeatable)")
