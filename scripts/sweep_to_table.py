@@ -9,6 +9,7 @@ tier bracketing); docs/design/flat-kernel-selection.md section 5.4 (table format
     scripts/sweep_to_table.py --op potrf --device sm_120 --out DIR
     scripts/sweep_to_table.py --check              # CI: re-derive every table byte for byte
     scripts/sweep_to_table.py --self-test
+    scripts/sweep_to_table.py --emit-sample OUT --op potrf --device sm_120 [--cells N]
 
 The one input is benchmarks/results/tuning/ledger/<op>.<device>.jsonl (--ledger DIR names another
 root). Every line carries "dtype" except `rehash`. Keys and candidates come from each dtype's newest
@@ -766,6 +767,40 @@ def rehash_sample(ledger_path, op, run_id, families=None, at=None, repo=REPO, wr
                   f"{', '.join(x['family'] for x in lines)}"], lines
 
 
+def emit_sample(ledger_path, op, cells=SAMPLE_MIN_CELLS):
+    """--remeasure-keys lines '<op> <dtype> <key>' for a --rehash-sample run: per dtype, every
+    combination of exact keys the measured records hold, each with the cells at the min, median and
+    max of every log key; then cells spread evenly over the rest up to `cells`. Only keys of measured
+    records that are not all-error (the ones --rehash-sample compares with), so every cell sampled
+    is on the tuner's grid and has an old record."""
+    led = read_ledger(ledger_path)
+    heads = defaultdict(list)
+    for r in led.runs:
+        heads[r["dtype"]].append(r)
+    chosen, rest = [], []
+    for d in [t for t in DTYPES if t in heads]:
+        logs = [n for n, is_log, _ in parse_keys(newest(heads[d])["keys"]) if is_log]
+        keys = sorted({c["key"] for c in led.cells if c["dtype"] == d and c["tier"] not in UNHASHED
+                       and not all_error(c)},
+                      key=lambda k: tuple(int(v) if n in logs else 0 for n, v in k) + tuple(k))
+        groups = defaultdict(list)
+        for k in keys:
+            groups[tuple((n, v) for n, v in k if n not in logs)].append(k)
+        for g in groups.values():
+            pick = []
+            for name in logs:
+                vals = sorted({int(dict(k)[name]) for k in g})
+                for v in dict.fromkeys((vals[0], vals[len(vals) // 2], vals[-1])):
+                    at = [k for k in g if int(dict(k)[name]) == v]
+                    pick.append(at[len(at) // 2])
+            pick = list(dict.fromkeys(pick))
+            chosen += [(d, k) for k in pick]
+            rest += [(d, k) for k in g if k not in pick]
+    need = min(max(0, cells - len(chosen)), len(rest))
+    chosen += [rest[i * len(rest) // need] for i in range(need)]
+    return [f"{op} {d} {','.join(f'{n}={v}' for n, v in k)}" for d, k in chosen]
+
+
 def hash_vector_problem(repo=REPO):
     """The shared hash v2 vector (also checked by tune_tests and check_tuned_tables.py)."""
     with open(os.path.join(repo, HASH_VECTOR, "expected.txt")) as f:
@@ -1001,6 +1036,28 @@ def self_test():
         rows5 = ledger_rows(keyspec, read_ledger(s5, "float").cells, family_hashes(parse_kernel_block(
             read_spec_source("posv", repo)), cands, repo))
         expect(ok and rows5[("L", 5, 1, 128)][0] == "deep", f"after the rehash the deep records stand -> {ok}")
+        # the stratified sample: a potrf-shaped ledger, 4 dtypes x 2 uplo x n=1..40, stale by one hash
+        with open(os.path.join(repo, "tools", "tune", "potrf_spec.cc"), "w") as f:
+            f.write('// kernel-sources-begin\n"src/k.cc",\n// kernel-sources-end\n')
+        old = {f"h{i}": "v1old" for i in range(3)}
+        pl = [run_line(r1, "2026-10-01", dtype=t) for t in DTYPES]
+        pl += [dict(cell(r1, "deep", n, dtype=t, uplo=u), **old) for t in DTYPES for u in "LU" for n in range(1, 41)]
+        pp = build(pl, os.path.join(repo, "ledger"), "potrf.sm_s.jsonl")
+        sample = emit_sample(pp, "potrf")
+        got = [ln.split() for ln in sample]
+        combos = {(t, dict(kv.split("=") for kv in k.split(","))["uplo"]) for o, t, k in got}
+        ends = {(t, k) for o, t, k in got if ",n=1," in k or ",n=40," in k}
+        expect(len(set(sample)) == len(sample) >= SAMPLE_MIN_CELLS and all(o == "potrf" for o, _, _ in got)
+               and combos == {(t, u) for t in DTYPES for u in "LU"} and len(ends) == 16,
+               f"emit_sample covers 4 dtypes x 2 uplo, both n ends, >= 64 distinct cells -> {len(sample)} {sorted(combos)}")
+        expect(len(emit_sample(pp, "potrf", 200)) == 200, "emit_sample --cells 200")
+        pl.append(run_line("S", "2026-10-05", tier="custom"))
+        for o, t, k in got:
+            n, u = int(dict(kv.split("=") for kv in k.split(","))["n"]), k[5]
+            pl.append({**cell("S", "custom", n, date="2026-10-05", dtype=t, uplo=u), **{f"h{i}": hk for i in range(3)}})
+        ok, msg, _ = rehash_sample(build(pl, os.path.join(repo, "ledger"), "potrf.sm_s.jsonl"), "potrf", "S",
+                                   repo=repo, write=False)
+        expect(ok, f"--rehash-sample accepts the emitted sample -> {msg}")
         # row kinds
         expect(row_kind_problems({"source": "ledger:x"}, [(("L",), [("a", None), ("b", 1.0)])]) != [], "mixed row")
         expect(row_kind_problems({"source": "x"}, [(("L",), [("a", None)])]) != [], "untimed row needs ledger:")
@@ -1019,7 +1076,18 @@ def main():
                     help="with --op and --device: rehash the stale families if this sample run agrees with the old records")
     ap.add_argument("--family", nargs="+", help="--rehash-sample: only these families")
     ap.add_argument("--at", help="--rehash-sample: the commit to record (default HEAD)")
+    ap.add_argument("--emit-sample", metavar="OUT",
+                    help="with --op and --device: write a stratified --remeasure-keys file for a --rehash-sample run")
+    ap.add_argument("--cells", type=int, default=SAMPLE_MIN_CELLS, help="--emit-sample: at least this many cells")
     args = ap.parse_args()
+    if args.emit_sample:
+        if not args.op or not args.device:
+            raise SystemExit("--emit-sample needs --op and --device")
+        lines = emit_sample(os.path.join(args.ledger, f"{args.op}.{args.device}.jsonl"), args.op, args.cells)
+        with open(args.emit_sample, "w") as fh:
+            fh.write("".join(ln + "\n" for ln in lines))
+        print(f"wrote {args.emit_sample}: {len(lines)} cells")
+        return 0
     if args.rehash_sample:
         if not args.op or not args.device:
             raise SystemExit("--rehash-sample needs --op and --device")

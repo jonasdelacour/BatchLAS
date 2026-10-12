@@ -88,7 +88,11 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
 
 A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
 and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one
-that misses an exact-key combination. The tuner records a sample as tier `custom`:
+that misses an exact-key combination.
+`scripts/sweep_to_table.py --emit-sample FILE --op OP --device DEV [--cells N]` writes such a
+sample from the ledger: per dtype and exact-key combination of the measured records, the cells at
+the min, median and max of every log key, then cells spread evenly over the rest up to `N`
+(default 64). The tuner records a sample as tier `custom`:
 `batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures exactly the named
 cells, every candidate, with no lattice and no refinement.
 
