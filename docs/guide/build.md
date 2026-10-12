@@ -90,7 +90,7 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_BUILD_PYTHON` | build the Python package |
 | `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without a `[cuda:gpu]` in `sycl-ls`) or `OFF`. A cache entry from the old boolean option is migrated on the first re-configure (`OFF` becomes `AUTO`, `ON` stays `ON`); pass `-DBATCHLAS_ENABLE_CUDA=OFF` to force off |
 | `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over cuBLAS/cuSOLVER/cuSPARSE/rocBLAS; `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
-| `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
+| `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to ptxas in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
 | `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
 | `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |

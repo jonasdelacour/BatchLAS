@@ -360,11 +360,6 @@ function(detect_sycl_gpu_architectures)
         list(APPEND _compile_options -fno-sycl-id-queries-fit-in-int)
     endif()
 
-    if(_has_intel_gpu)
-        message(STATUS "Adding Intel GPU-specific flags")
-        list(APPEND _compile_options -fintelfpga)
-    endif()
-
     if(_has_nvidia_gpu OR _has_amd_gpu OR _has_intel_gpu)
         list(APPEND _compile_options -fsycl-dead-args-optimization)
     endif()
@@ -674,6 +669,8 @@ if(BATCHLAS_NATIVE_CPU_DISABLE_VECZ)
     endif()
 endif()
 
+# Every flag-plus-argument pair below is one SHELL: item: CMake de-duplicates options, so a
+# repeated -Xsycl-target-backend / -Xcuda-ptxas would otherwise leave its argument bare.
 if(BATCHLAS_CUDA_ENABLED)
     if(BATCHLAS_DISABLE_CUDA_FTZ)
         # Only the -Xsycl-target-backend half. The '-Xcuda-ptxas --ftz=false'
@@ -682,29 +679,23 @@ if(BATCHLAS_CUDA_ENABLED)
         # used to be skipped for one hardcoded compiler path.
         message(STATUS "Disabling FTZ for CUDA device code (link-time device compilation)")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-            -Xsycl-target-backend=nvptx64-nvidia-cuda
-            --ftz=false
-        )
+            "SHELL:-Xsycl-target-backend=nvptx64-nvidia-cuda --ftz=false")
     endif()
     if(BATCHLAS_CUDA_DEVICE_LINE_INFO
        AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
         message(STATUS "Enabling line info for CUDA device code")
+        # -Xcuda-ptxas, not -Xsycl-target-backend: the latter lands in the image's runtime JIT
+        # options, never on the AOT ptxas line.
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-            -Xsycl-target-backend=nvptx64-nvidia-cuda
-            --generate-line-info
-            -Xcuda-ptxas
-            -w
-        )
+            "SHELL:-Xcuda-ptxas --generate-line-info"
+            "SHELL:-Xcuda-ptxas -w")
     endif()
     if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
         message(STATUS "Preserving CUDA/SYCL CUDA intermediates for device-code inspection")
         file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/cuda-intermediates")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-            -Xsycl-target-backend=nvptx64-nvidia-cuda
-            --save-temps
-            -Xcuda-ptxas
-            -v
-        )
+            "SHELL:-Xsycl-target-backend=nvptx64-nvidia-cuda --save-temps"
+            "SHELL:-Xcuda-ptxas -v")
     endif()
 endif()
 

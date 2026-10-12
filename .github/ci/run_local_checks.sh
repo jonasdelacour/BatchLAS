@@ -31,6 +31,8 @@ run() {
 }
 
 run python3 "$here/check_cmake_syntax.py"
+# Parses CMakePresets.json (every configure, build and test preset) without configuring.
+run cmake -S "$here/../.." --list-presets=all
 run python3 "$here/check_exported_package.py"
 run python3 "$here/check_public_headers.py"
 run python3 "$here/check_no_unprefixed_includes.py"
