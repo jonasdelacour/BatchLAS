@@ -567,7 +567,7 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)gemv<B, T>(*this->ctx, het, X, Y, T(1), T(0), Transpose::NoTrans);
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 

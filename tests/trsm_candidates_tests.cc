@@ -681,7 +681,7 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
             (void)trsm<B, T>(*this->ctx, k.a, k.b, T(1), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit);
             this->ctx->wait();
         };
-        if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error) << k.what;
+        if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call()) << k.what;
         else EXPECT_THROW(call(), batchlas::NoRouteError) << k.what;
     }
 }

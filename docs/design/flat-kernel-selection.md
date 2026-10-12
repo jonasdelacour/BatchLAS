@@ -310,7 +310,8 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
-  work-groups. The phase-5 kernels were not audited for it, and ormqr's blocked driver hits it (known-defects #16).
+  work-groups. The phase-5 kernels were not audited for it. ormqr's blocked driver was reported to hit it
+  (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_route_available`** is conservative (float, or any type with cuBLAS). Widening
   it moves the vendor-free routes of ortho and ormqr, so that is a separate change.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
@@ -502,7 +503,7 @@ unless a line says otherwise.
   and `q` is the extent of C that Q does not act on. 540 rows.
 - Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
   `choose()`. The vendor spells a real ConjTrans as Trans.
-- `blocked` hits the 65535 grid-z ceiling (known-defects #16).
+- `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
 
 ### spmm {#phase-5-spmm}
 

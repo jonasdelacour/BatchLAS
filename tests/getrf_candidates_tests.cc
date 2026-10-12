@@ -391,7 +391,7 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
     if constexpr (TestFixture::kVendor)
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), std::runtime_error);
+        EXPECT_NO_RUNNABLE_KERNEL((void)getrf_buffer_size<B, T>(*this->ctx, het));
     else
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
 }
@@ -411,7 +411,7 @@ TYPED_TEST(GetrfCandidates, NonSquareHasNoRouteOnTheGpuQueue) {
     if constexpr (B == Backend::ROCM && TestFixture::kVendor)
         EXPECT_EQ((getrf_buffer_size<B, T>(*this->ctx, W)), (backend::getrf_vendor_buffer_size<B, T>(*this->ctx, W)));
     else if constexpr (TestFixture::kVendor)
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), std::runtime_error);
+        EXPECT_NO_RUNNABLE_KERNEL((void)getrf_buffer_size<B, T>(*this->ctx, W));
     else
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), batchlas::NoRouteError);
 }

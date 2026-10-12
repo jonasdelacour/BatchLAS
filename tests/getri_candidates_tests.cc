@@ -520,7 +520,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
     EXPECT_FALSE(this->pin_accepted(C{gi::Blocked{}}, het));
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
     if constexpr (TestFixture::kVendor) {
-        EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), std::runtime_error);
+        EXPECT_NO_RUNNABLE_KERNEL((void)(getri_buffer_size<B, T>)(*this->ctx, het));
     } else {
         EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), batchlas::NoRouteError);
     }

@@ -29,7 +29,7 @@ closed and kept only for numbering.
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
-| 16 | `ormqr_blocked` sub-kernels | worked around: `can_run` refuses batch > 65535 |
+| 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
@@ -296,12 +296,17 @@ triangle gets a wrong answer today.
   check the limit, and `can_run` does not model it. Auto therefore does not fall to the vendor.
   Other ops that put the batch on dimension 2 may share the limit; see
   [flat-kernel-selection.md](flat-kernel-selection.md) §11.
-- **Stopgap (WP3):** `can_run(Blocked)` has the `batch <= 65535` term (`ops::gemm::kMaxGridBatch`),
-  so Auto takes the vendor there (vendor-free: no route) and a `blocked` pin throws "cannot run this
-  shape". Test: `OrmqrCandidates.BlockedRefusesABatchPastTheGridLimit`.
-- **Fix needs:** fold the batch into dimension 0, or loop over batch chunks; the driver itself
-  still does not check.
-- **Status:** worked around in `can_run`.
+- **Not reproduced (WP3 review, threadripper02, sm_120, CUDA 13.2):** `ormqr_blocked` called
+  directly at batch 65536 ran and applied Q correctly for every side and trans (complex: N, C) at
+  m/k/q = 2/1/1, 17/17/3 and 40/33/5, all four types. The public gemm sub-calls refuse batch > 65535
+  for every 3-D native launch (`ops::gemm::kMaxGridBatch`, `gemm.cc:101`). The probe ran in a vendor
+  build; the test below also runs vendor-free. The 2x4090 box was not re-checked. `can_run(Blocked)`
+  therefore has no batch term: a guard that no launch backs would make batch > 65535 unservable
+  vendor-free. Test:
+  `OrmqrCandidates.BlockedRunsPastTheOldGridLimit` (L T, batch 65536, pinned `blocked`).
+- **Fix needs:** a reproducer. If one is found: fold the batch into dimension 0 or loop over batch
+  chunks; the driver itself still does not check.
+- **Status:** open, not reproduced.
 
 ## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 

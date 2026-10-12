@@ -572,7 +572,7 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
                          ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 

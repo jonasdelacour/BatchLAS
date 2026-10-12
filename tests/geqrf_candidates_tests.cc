@@ -517,7 +517,7 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     auto size = [&] { (void)geqrf_buffer_size<B, T>(*this->ctx, H, p.tau.to_span()); };
-    if constexpr (TestFixture::kVendor) EXPECT_THROW(size(), std::runtime_error);
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(size());
     else EXPECT_THROW(size(), batchlas::NoRouteError);
 }
 

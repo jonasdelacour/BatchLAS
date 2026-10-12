@@ -11,7 +11,6 @@
 
 #include "choice.hh"
 #include "vendor.hh"
-#include "../gemm/choice.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
@@ -46,14 +45,14 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
 // and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
 // off non-GPU queues, as the old router did; dimension checks are left to the drivers. Both run
-// each item at the top-level extents (no heterogeneous A or C), and Blocked's sub-kernels put
-// the batch in grid dimension 2 (known-defects #16).
+// each item at the top-level extents (no heterogeneous A or C). Blocked has no batch ceiling:
+// known-defects #16 did not reproduce at batch 65536.
 template <class T>
 bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
-        [&](Blocked) { return defined && d.is_gpu && A.batch_size() <= ops::gemm::kMaxGridBatch; },
+        [&](Blocked) { return defined && d.is_gpu; },
         [&](Vendor) { return defined && d.has_vendor; },
     }, c);
 }

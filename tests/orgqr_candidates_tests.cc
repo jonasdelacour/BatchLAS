@@ -502,7 +502,7 @@ TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)orgqr<TestFixture::B, T>(*this->ctx, het, p.tau.to_span(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 

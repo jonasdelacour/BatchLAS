@@ -605,7 +605,7 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
             EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), batchlas::NoRouteError)
                 << k.what;
         else
-            EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), std::runtime_error)
+            EXPECT_NO_RUNNABLE_KERNEL((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans))
                 << k.what;
     }
 }
