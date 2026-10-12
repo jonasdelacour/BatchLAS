@@ -75,9 +75,9 @@ closed and kept only for numbering.
 - **Cause:** `src/extensions/lanczos.cc:112-117`. `padded_vector` and `padded_output` are two
   columns wide (`:56`). The consumer reads only column 0, `local_v_next = Span(v_next_ptr + bid*2*n, n)`
   at `:132`.
-- **Note:** `lanczos_tests` fails the same way under `BATCHLAS_SPMM_ROUTE=vendor`
-  (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`). A route flip here says
-  nothing about routing.
+- **Note:** the red `lanczos_tests` cases are not this defect. One cause, steqr reading item
+  b's off-diagonals at stride n-1, is fixed; the remaining one (whole spectrum ~3x too wide, at
+  batch 1 too) is open and listed in `tests/known-failures.txt`.
 - **Status:** open.
 
 ## 4. rocSPARSE conjugates a real transpose

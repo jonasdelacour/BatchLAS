@@ -287,6 +287,53 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
 
 }
 
+// lanczos eigenvalues of two identical items of the n x n Toeplitz tridiag(b, a, b), descending.
+constexpr int kStrideN = 64;
+constexpr float kStrideA = 2.0f, kStrideB = -5.0f;
+UnifiedVector<float> lanczos_two_identical_items() {
+    constexpr int n = kStrideN, batch = 2;
+    Queue ctx(Device::default_device());
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, kStrideA, kStrideB, kStrideB, batch);
+    auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    auto A_view = A_CSR.view();
+    UnifiedVector<float> W(n * batch);
+    Matrix<float> eigenvectors(n, n, batch);
+    LanczosParams<float> params;
+    params.reorthogonalization_iterations = 2;
+    params.sort_enabled = true;
+    params.ortho_algorithm = OrthoAlgorithm::SVQB2;
+    params.sort_order = SortOrder::Descending;
+    UnifiedVector<std::byte> workspace(
+        lanczos_buffer_size(ctx, A_view, W, JobType::EigenVectors, eigenvectors.view(), params));
+    (void)lanczos(ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors.view(), params);
+    ctx.wait();
+    return W;
+}
+
+// Item 1 must see its own off-diagonals (stride n), not item 0's tail shifted by one.
+TEST(LanczosStride, SecondItemMatchesFirst) {
+    const auto W = lanczos_two_identical_items();
+    for (int i = 0; i < kStrideN; ++i) EXPECT_EQ(W[kStrideN + i], W[i]) << "item 1 differs from item 0 at " << i;
+}
+
+// Closed-form spectrum a + 2 b cos(k pi / (n + 1)) for both items.
+TEST(LanczosStride, ClosedFormSpectrum) {
+    constexpr int n = kStrideN, batch = 2;
+    const double a = kStrideA, b = kStrideB;
+    const auto W = lanczos_two_identical_items();
+    std::vector<double> spectrum(n);
+    for (int k = 1; k <= n; ++k) spectrum[k - 1] = a + 2.0 * b * std::cos(k * M_PI / (n + 1));
+    std::sort(spectrum.rbegin(), spectrum.rend());
+    const std::vector<std::vector<double>> ref(batch, spectrum);
+    const double scale = std::fabs(a) + 2.0 * std::fabs(b);
+    for (int item = 0; item < batch; ++item) {
+        const int items[] = {item};
+        const double err = MatrixView<float, MatrixFormat::Dense>::values_error(
+            VectorView<float>(W.data(), n, batch), ref, scale, items);
+        EXPECT_VERIFY(float, verify::Check::values, n, err);
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

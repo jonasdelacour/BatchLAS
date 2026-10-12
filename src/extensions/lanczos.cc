@@ -170,7 +170,7 @@ namespace batchlas {
         auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
                                                     ctx, 
                                                     VectorView<real_t>(alphas.data(), n, batch_size),
-                                                    VectorView<real_t>(betas.data(), n-1, batch_size),
+                                                    VectorView<real_t>(betas.data(), n - 1, batch_size, 1, n),
                                                     VectorView<real_t>(W.data(), n, batch_size),
                                                     jobz,
                                                     steqr_params));
@@ -180,7 +180,7 @@ namespace batchlas {
         
         (void)steqr<B> (ctx,
             VectorView<real_t>(alphas.data(), n, batch_size),
-            VectorView<real_t>(betas.data(), n-1, batch_size),
+            VectorView<real_t>(betas.data(), n - 1, batch_size, 1, n),
             VectorView<real_t>(W.data(), n, batch_size),
             steqr_ws,
             jobz,
