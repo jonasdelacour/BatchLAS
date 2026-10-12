@@ -370,6 +370,9 @@ class Ledgers:
         of the nearest row (shipped, or the rows ledger_rows gives now) that the cell's record did
         not refuse (status skipped is can_run false); the speedup is the shipped pick's median over
         the new pick's, both at this cell.
+
+        rows / table_rows = [[key values, [candidate index of each entry, -1 if not a candidate]]],
+        the next and the shipped table, so the map can show what either picks where nothing was measured.
         """
         keyspec = v.keyspec if v else (t.keyspec if t and t.ok else [])
         names = [n for n, _, _ in keyspec]
@@ -377,7 +380,7 @@ class Ledgers:
                "keys": [{"name": n, "log": is_log, "weight": w} for n, is_log, w in keyspec],
                "cands": v.cands if v else [], "families": v.families if v else [], "cells": [],
                "table": t.info(dtype) if t else None, "error": v.error if v else None,
-               "family_status": self.families(op, device, [v] if v else [])}
+               "family_status": self.families(op, device, [v] if v else []), "rows": [], "table_rows": []}
         if t and not t.ok:
             out["table_error"] = "the shipped table's first key is not dtype:exact"
         if v is None:
@@ -392,6 +395,8 @@ class Ledgers:
             shipped = []
         if t:
             out["table"]["differ"] = self.sync(v, t)
+        out["rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e]] for k, (_, e) in v.rows.items()]
+        out["table_rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e]] for k, e in shipped]
         old_pick = Nearest(shipped, keyspec).lookup(tkeys) if shipped else [None] * len(cells)
         new_pick = Nearest([(k, e) for k, (_, e) in v.rows.items()], keyspec).lookup(tkeys)
         for c, tk, orow, nrow in zip(cells, tkeys, old_pick, new_pick):

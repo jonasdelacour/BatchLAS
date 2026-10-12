@@ -147,6 +147,11 @@ class Status(unittest.TestCase):
         u8 = by[("U", 8, 128)]
         self.assertEqual(u8[7], u8[9])
         self.assertAlmostEqual(n8[4], 2.0)  # runner-up margin: cta 3.0 over tiny 1.0, minus 1
+        # the map fills unmeasured keys from these: every entry in order, -1 for a spelling the ledger lacks
+        rows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e in v["rows"]}
+        self.assertEqual(rows[("L", 8, 128)], ["tiny", "cta", "vendor"])
+        trows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e in v["table_rows"]}
+        self.assertEqual(trows[("L", 64, 128)], ["blocked", "vendor", "cta"])
 
     def test_cell_lists_every_record_best_first(self):
         write_ledger(self.root, [

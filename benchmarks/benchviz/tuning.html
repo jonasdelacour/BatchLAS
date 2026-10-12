@@ -413,6 +413,53 @@ function drawOp() {
   drawDiff(changed, ix);
 }
 
+// Tuning.Nearest (sweep_to_table.nearest) in the page: exact keys drop from the right until a pool exists,
+// then min sum w*|log2(row/key)| with the 1e-9 tie window, ties to the smaller log keys, then the earlier row.
+function nearestOf(rows) {
+  const ks = OPV.keys, exact = [], logs = [];
+  ks.forEach((k, i) => (k.log ? logs : exact).push(i));
+  const w = logs.map(i => ks[i].weight), pools = new Map(), lr = rows.map(r => logs.map(i => Math.log2(r[0][i])));
+  const pk = (p, k) => p + "|" + JSON.stringify(exact.slice(0, p).map(i => k[i]));
+  for (let p = exact.length; p >= 0; p--) rows.forEach((r, ri) => { const k = pk(p, r[0]); if (!pools.has(k)) pools.set(k, []); pools.get(k).push(ri); });
+  return key => {
+    for (let p = exact.length; p >= 0; p--) {
+      const pool = pools.get(pk(p, key));
+      if (!pool) continue;
+      const q = logs.map(i => Math.log2(Math.max(1, key[i])));
+      const d = pool.map(ri => lr[ri].reduce((a, x, j) => a + w[j] * Math.abs(x - q[j]), 0)), m = Math.min(...d);
+      let best = -1;
+      pool.forEach((ri, j) => {
+        if (d[j] > m + 1e-9) return;
+        if (best < 0) { best = ri; return; }
+        const a = logs.map(i => rows[ri][0][i]), b = logs.map(i => rows[best][0][i]);
+        const c = a.findIndex((x, t) => x !== b[t]);
+        if (c >= 0 && a[c] < b[c]) best = ri;
+      });
+      return rows[best];
+    }
+    return null;
+  };
+}
+// A key with no record: what the next table and the shipped one pick there (their nearest row's first entry).
+function holeOf(key) {
+  if (!OPV.__near) OPV.__near = [nearestOf(OPV.rows || []), nearestOf(OPV.table_rows || [])];
+  const [nr, tr] = OPV.__near.map(f => f(key));
+  return nr || tr ? { key, row: nr, trow: tr, pick: nr ? nr[1][0] : -1, old: tr ? tr[1][0] : -1 } : null;
+}
+function holeFill(h) {
+  if (mode === "diff") {
+    if (h.pick < 0 || h.old < 0 || h.pick === h.old) return ["var(--sunken)", 1];
+    return ["var(--muted)", .35];
+  }
+  if (h.pick < 0) return null;
+  return [famColor(OPV.families, family(OPV.cands[h.pick])), .5];
+}
+function holeTip(h) {
+  const v = OPV, kt = k => v.keys.map((x, q) => `${x.name}=${k[q]}`).join(" "), nm = i => i >= 0 ? v.cands[i] : "a candidate this ledger does not list";
+  return `${kt(h.key)}\nnot measured: extrapolated, no timing` +
+    (h.row ? `\nnext table picks ${nm(h.pick)}, from its nearest row ${kt(h.row[0])}` : "\nthe next table has no row") +
+    (h.trow ? `\nshipped table picks ${nm(h.old)}, from its nearest row ${kt(h.trow[0])}` : "");
+}
 function cellFill(c) {
   const v = OPV;
   if (mode === "diff") {
@@ -431,13 +478,22 @@ function drawMap(pool, ix) {
   const xs = [...new Set(pool.map(c => c[0][xi]))].sort((a, b) => a - b), ys = [...new Set(pool.map(c => c[0][yi]))].sort((a, b) => a - b);
   const L = 58, T = 8, W = 900, B = 34, cw = Math.max(6, Math.min(90, (W - L - 8) / xs.length)), ch = Math.max(10, Math.min(28, 760 / ys.length));
   const H = T + ys.length * ch + B, at = new Map(pool.map(c => [`${c[0][xi]}|${c[0][yi]}`, c]));
-  let h = "";
+  let h = `<defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v5" stroke="var(--surface)" stroke-width="1.6"/></pattern></defs>`, holes = 0;
   ys.forEach((yv, i) => {
     if (ys.length <= 40 || i % Math.ceil(ys.length / 40) === 0)
       h += `<text x="${L - 6}" y="${T + i * ch + ch * .68}" text-anchor="end" font-size="${Math.min(11, ch * .8)}" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(yv)}</text>`;
     xs.forEach((xv, j) => {
       const c = at.get(`${xv}|${yv}`);
-      if (!c) return;
+      if (!c) {
+        const key = v.keys.map(k => k.name === mapCfg.x ? xv : k.name === mapCfg.y ? yv : mapCfg.fixed[k.name]);
+        const hole = holeOf(key), f = hole && holeFill(hole);
+        if (!f) return;
+        holes++;
+        const x0 = L + j * cw, y0 = T + i * ch, isSel = sel && sel.join("|") === key.join("|");
+        h += `<g class="h" data-k="${esc(JSON.stringify(key))}"><rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="${f[0]}" fill-opacity="${f[1]}"
+          stroke="${isSel ? "var(--ink)" : "none"}" stroke-width="2"/><rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="url(#hatch)"/><title>${esc(holeTip(hole))}</title></g>`;
+        return;
+      }
       const [fill, op] = cellFill(c), x0 = L + j * cw, y0 = T + i * ch, tier = v.tiers[c[1]];
       const isSel = sel && sel.join("|") === c[0].join("|");
       const tip = `${v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" ")}\nwinner ${c[3] >= 0 ? v.cands[c[3]] : "none"}${c[4] != null ? `, runner-up +${(100 * c[4]).toFixed(1)}%` : ""}\n${tier}, round ${c[2]}${c[5] ? ", partly stale" : ""}${c[6] && c[6] !== "ok" ? `\naudit: ${c[6]}` : ""}` +
@@ -458,12 +514,13 @@ function drawMap(pool, ix) {
   h += `<text x="${L + xs.length * cw / 2}" y="${H - 4}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7">${esc(mapCfg.x)}</text>`;
   h += `<text x="12" y="${T + ys.length * ch / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7" transform="rotate(-90 12 ${T + ys.length * ch / 2})">${esc(mapCfg.y)}</text>`;
   patch($("op-svg"), `<svg viewBox="0 0 ${Math.max(W, L + xs.length * cw + 8)} ${H}" role="img" aria-label="Winner map">${h}</svg>`);
-  $("op-svg").querySelector("svg").onclick = (e) => { const r = e.target.closest("rect.c"); if (r) selectCell(JSON.parse(r.dataset.k)); };
+  $("op-svg").querySelector("svg").onclick = (e) => { const r = e.target.closest("rect.c, g.h"); if (r) selectCell(JSON.parse(r.dataset.k)); };
+  const hatch = holes ? `<span><i style="background:repeating-linear-gradient(45deg,var(--muted) 0 2px,transparent 2px 4px)"></i>${holes} not measured: the nearest row's pick, extrapolated</span>` : "";
   if (mode === "diff") patch($("op-leg"), `<span><i style="background:var(--win)"></i>the ledger's pick is faster than the table's</span><span><i style="background:var(--lose)"></i>slower</span>
-    <span><i style="background:var(--sunken);border:1px solid var(--hair-2)"></i>same pick</span><span><i style="background:var(--muted);opacity:.35"></i>changed, not timed at the cell</span><span class="muted">full colour at 2×</span>`);
+    <span><i style="background:var(--sunken);border:1px solid var(--hair-2)"></i>same pick</span><span><i style="background:var(--muted);opacity:.35"></i>changed, not timed at the cell</span>${hatch}<span class="muted">full colour at 2×</span>`);
   else {
     const present = [...new Set(pool.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
-    patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") +
+    patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") + hatch +
       `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, ◇ converted, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
   }
 }
@@ -473,7 +530,11 @@ async function selectCell(key) {
   const box = $("op-detail"); box.hidden = false;
   const d = await getJ(`/api/tune/cell?op=${route.op}&dtype=${route.dtype}&device=${encodeURIComponent(device)}&key=${encodeURIComponent(JSON.stringify(key))}`);
   if (!sel || sel.join("|") !== key.join("|")) return;
-  if (!d.records.length) { patch(box, `<div class="empty">No record.</div>`); return; }
+  if (!d.records.length) {
+    const hole = holeOf(key);
+    patch(box, hole ? `<div class="empty" style="white-space:pre-line;text-align:left">${esc(holeTip(hole))}\n\nselect runs the first entry of the row that can_run admits; this shows the first entry.</div>` : `<div class="empty">No record.</div>`);
+    return;
+  }
   patch(box, d.records.map((r, i) => {
     const ok = r.cands.filter(c => c.median > 0 && (c.status === "ok" || c.status === "eliminated"));
     const lo = Math.min(...ok.map(c => c.lo || c.median)), hi = Math.max(...ok.map(c => c.hi || c.median));
