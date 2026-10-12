@@ -837,20 +837,17 @@ TYPED_TEST(GetriVendor, PaddedLdAndStride) {
         }
 }
 
-// cublas<t>getriBatched is out of place only; the entry point refuses C aliasing A.
+// getri is out of place on every backend (the header's contract): the public entry refuses C
+// aliasing A before any route runs, although LAPACKE/rocSOLVER alone could run it in place.
 TYPED_TEST(GetriVendor, AliasedAAndC) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::B != Backend::CUDA) {
-        GTEST_SKIP() << "only cuBLAS refuses an aliased C";
-    } else {
-        auto p = this->make(Spec{8, 2, 0, 3u});
-        const Pin pin("getri", C{gi::Vendor{}});
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getri_buffer_size<TestFixture::B, T>(*this->ctx, p.A())));
-        EXPECT_THROW((void)(getri<TestFixture::B, T>)(*this->ctx, p.A(), p.A(), p.piv.to_span(), ws.to_span(),
-                                                      p.info.to_span()),
-                     batchlas::invalid_argument);
-        this->ctx->wait();
-    }
+    auto p = this->make(Spec{8, 2, 0, 3u});
+    const Pin pin("getri", C{gi::Vendor{}});
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getri_buffer_size<TestFixture::B, T>(*this->ctx, p.A())));
+    EXPECT_THROW((void)(getri<TestFixture::B, T>)(*this->ctx, p.A(), p.A(), p.piv.to_span(), ws.to_span(),
+                                                  p.info.to_span()),
+                 batchlas::invalid_argument);
+    this->ctx->wait();
 }
 
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the

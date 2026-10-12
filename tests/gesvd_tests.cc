@@ -1499,9 +1499,10 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
 // cuSOLVER returns V; the V^H transpose is a SYCL kernel that must run after the vendor call
 // even on an out-of-order Queue. Called directly: the public gesvd hands its drivers an
 // in-order Queue (select::on_in_order_queue), so only the vendor entry point sees one.
-// DPC++/CUDA happens to order get_native's stream before the next kernel (removing both the
-// wait and the barrier stayed green 20/20); the guard is for runtimes that do not (acpp).
-TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVh) {
+// SMOKE TEST, NOT A GUARD: DPC++/CUDA orders get_native's stream before the next kernel, so
+// removing both the wait and the barrier stayed green 20/20. It cannot go red on this toolchain;
+// the cusolver.cc wait is a documented invariant for runtimes that do not order it (acpp).
+TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVhSmoke) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;

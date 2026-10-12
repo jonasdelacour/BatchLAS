@@ -531,10 +531,14 @@ TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
     A.set_active_dims(a_rows.to_span(), a_cols.to_span());
     B.set_active_dims(b_rows.to_span(), b_cols.to_span());
     C.set_active_dims(c_rows.to_span(), c_cols.to_span());
+    auto entry = [](int re, int im) {
+        if constexpr (test_utils::is_complex<ScalarType>::value) return ScalarType(Real(re), Real(im));
+        else return static_cast<ScalarType>(re);
+    };
     for (int col = 0; col < a_cols[0]; ++col)
-        for (int row = 0; row < a_rows[0]; ++row) A(row, col, 0) = static_cast<ScalarType>(1 + row - col);
+        for (int row = 0; row < a_rows[0]; ++row) A(row, col, 0) = entry(1 + row - col, (row % 3) - 1);
     for (int col = 0; col < b_cols[0]; ++col)
-        for (int row = 0; row < b_rows[0]; ++row) B(row, col, 0) = static_cast<ScalarType>(2 + row + col);
+        for (int row = 0; row < b_rows[0]; ++row) B(row, col, 0) = entry(2 + row + col, 1 - (col % 3));
 
     (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(3), ScalarType(0), Transpose::NoTrans,
                Transpose::NoTrans, ComputePrecision::Default);
@@ -547,6 +551,26 @@ TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
                                 ActiveItem(B, 0, b_rows[0], b_cols[0]), Transpose::NoTrans,
                                 ActiveItem(Z, 0, c_rows[0], c_cols[0]), ActiveItem(C, 0, c_rows[0], c_cols[0]),
                                 ScalarType(3), ScalarType(0));
+}
+
+// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item, so on NETLIB it
+// reaches the vendor loop's own k == 0 branch. C is a padded sub-block of a NaN-filled buffer.
+TYPED_TEST(GemmTest, HomogeneousKZeroBetaZeroWritesZeros) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using Real = typename base_type<ScalarType>::type;
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    constexpr int batch = 3, m = 17, n = 11, ldc = m + 5, stride = ldc * n + 9;
+    UnifiedVector<ScalarType> a(1), b(1), c(static_cast<size_t>(stride) * batch);
+    for (auto& x : c) x = ScalarType(std::numeric_limits<Real>::quiet_NaN());
+    const MV A(a.data(), m, 0, m, 0, batch), B(b.data(), 0, n, 1, 0, batch), C(c.data(), m, n, ldc, stride, batch);
+    (void)gemm(*(this->ctx), A, B, C, ScalarType(2), ScalarType(0), Transpose::NoTrans, Transpose::NoTrans,
+               ComputePrecision::Default);
+    this->ctx->wait();
+    for (int i = 0; i < batch; ++i)
+        for (int col = 0; col < n; ++col)
+            for (int row = 0; row < m; ++row)
+                ASSERT_EQ(c[static_cast<size_t>(i) * stride + col * ldc + row], ScalarType(0))
+                    << "item " << i << " at (" << row << "," << col << ")";
 }
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {

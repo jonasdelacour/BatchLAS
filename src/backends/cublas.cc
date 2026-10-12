@@ -367,12 +367,13 @@ namespace batchlas {
         // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
         // wins on every Gram shape measured.
         // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
-        // The terms are syrk's Gram can_run (src/ops/syrk/syrk.cc), not a partial copy of it.
+        // Must stay equal to ops::syrk can_run(Gram) (src/ops/syrk/syrk.cc) for a complex T with
+        // conjugated = true; syrk_gram_supported carries n, k, homogeneity and the batch match.
         if constexpr (Back == Backend::CUDA) {
             const select::Device& d = select::device_of<Back>(ctx);
             if (d.is_gpu && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true) &&
-                batch <= ops::syrk::kMaxGridBatch && d.max_wg >= ops::syrk::gram_threads(n) &&
+                batch >= 1 && batch <= ops::syrk::kMaxGridBatch && d.max_wg >= ops::syrk::gram_threads(n) &&
                 d.slm_budget >= ops::syrk::gram_slm_bytes<T>(n)) {
                 return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
             }
