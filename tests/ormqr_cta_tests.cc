@@ -16,13 +16,6 @@ using namespace batchlas;
 
 namespace {
 
-inline bool is_kernel_not_found_message(const std::string& msg) {
-	// SYCL runtimes vary; keep this loose.
-	return msg.find("No kernel named") != std::string::npos ||
-		   msg.find("kernel bundle") != std::string::npos ||
-		   msg.find("PI_ERROR_INVALID_KERNEL_NAME") != std::string::npos;
-}
-
 inline bool is_missing_subgroup32_message(const std::string& msg) {
 	return msg.find("subgroup size 32") != std::string::npos;
 }
@@ -89,14 +82,14 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 			this->ctx->wait();
 		} catch (const sycl::exception& e) {
 			const std::string msg = e.what();
-			if (is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}
 			throw;
 		} catch (const std::exception& e) {
 			const std::string msg = e.what();
-			if (is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}

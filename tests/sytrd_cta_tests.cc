@@ -262,15 +262,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 
     (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	/* try {
-	} catch (const sycl::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} catch (const std::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} */
-
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 
 	using MV = MatrixView<Real, MatrixFormat::Dense>;
@@ -295,15 +286,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 
     (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	/* try {
-	} catch (const sycl::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} catch (const std::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} */
-
 	// Sanity: compare d/e/tau against a CPU reference implementation.
 	{
 		std::vector<Real> a_ref = extract_host_matrix_colmajor(A0, n);

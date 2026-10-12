@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 #include "test_utils.hh"
@@ -110,6 +111,24 @@ protected:
 };
 
 TYPED_TEST_SUITE(SteqrTest, SteqrTestTypes);
+
+// A missing kernel image is a failure unless the run opts in: the skip below every steqr launch
+// would otherwise keep a dropped instantiation green.
+TEST(MissingKernelPolicy, SkipsOnlyWhenAllowed) {
+    const char* msg = "No kernel named _ZTS10steqr_cta was found";
+    {
+        const ScopedEnvVar unset("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", nullptr);
+        EXPECT_FALSE(test_utils::is_kernel_not_found_message(msg));
+    }
+    {
+        const ScopedEnvVar zero("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "0");
+        EXPECT_FALSE(test_utils::is_kernel_not_found_message(msg));
+    }
+    const ScopedEnvVar allow("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "1");
+    EXPECT_TRUE(test_utils::is_kernel_not_found_message(msg));
+    EXPECT_TRUE(test_utils::is_kernel_not_found_message("PI_ERROR_INVALID_KERNEL_NAME"));
+    EXPECT_FALSE(test_utils::is_kernel_not_found_message("CUDA_ERROR_ILLEGAL_ADDRESS"));
+}
 
 TYPED_TEST(SteqrTest, SingleMatrix) {
     using T = typename TestFixture::ScalarType;
@@ -495,10 +514,6 @@ inline void stress_debug_log(const char* msg) {
     }
 }
 
-inline bool is_kernel_not_found_message(const std::string& msg) {
-    return msg.find("No kernel named") != std::string::npos;
-}
-
 template <typename Real>
 Real stress_large_scale() {
     if constexpr (std::is_same_v<Real, float>) {
@@ -675,12 +690,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
                            /*check_cta_against_ref=*/true);
 
     } catch (const sycl::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::is_kernel_not_found_message(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::is_kernel_not_found_message(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
@@ -1024,7 +1039,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
             (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
             this->ctx->wait();
         } catch (const std::exception& e) {
-            if (is_kernel_not_found_message(e.what())) {
+            if (test_utils::is_kernel_not_found_message(e.what())) {
                 GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
             }
             throw;
@@ -1114,7 +1129,7 @@ bool run_steqr_vectors(Queue& ctx, const std::vector<std::vector<long double>>& 
                              info.to_span());
         ctx.wait();
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::is_kernel_not_found_message(e.what())) {
             skip_reason = e.what();
             return false;
         }
