@@ -47,8 +47,8 @@ template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr in
 template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
 
 // Blocking overrides only, never routing; read per call (a latch ignored every later
-// ScopedEnvVar). Sizing and solve read the same snapshot, so they agree unless a reload lands
-// between them, which settings.hh forbids. 0 = unset: the PotrfBlockedConst default.
+// ScopedEnvVar). A reload between potrf_buffer_size and potrf can change nb/W (settings.hh
+// warns); the bump allocator then throws. 0 = unset: the PotrfBlockedConst default.
 inline int potrf_nb_env() { return batchlas::settings().geometry.potrf_nb; }
 inline int potrf_w_env()  { return batchlas::settings().geometry.potrf_w; }
 

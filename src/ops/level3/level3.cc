@@ -20,7 +20,13 @@
 namespace batchlas {
 
 // rocBLAS is linked but src/backends/rocblas.cc wraps none of these three.
-constexpr const char* kNoRocmWrapper = "rocblas.cc has no hemm/herk/her2k wrapper";
+// No build switch restores these on ROCm: rocblas.cc has no wrapper at all.
+template <class T>
+[[noreturn]] void throw_no_rocm_wrapper(Op op) {
+    coverage::record_miss(op, scalar_kind_of<T>, Backend::ROCM, "rocBLAS");
+    throw NoRouteError(op, Backend::ROCM, scalar_kind_of<T>,
+                       "rocblas.cc has no hemm/herk/her2k wrapper; no build option adds one");
+}
 
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx,
@@ -32,7 +38,7 @@ Event hemm(Queue& ctx,
            Side side,
            Uplo uplo) {
     if constexpr (Back == Backend::ROCM) {
-        throw NoRouteError(Op::hemm, Back, scalar_kind_of<T>, kNoRocmWrapper);
+        throw_no_rocm_wrapper<T>(Op::hemm);
     } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::hemm, Back, select::kLevel3Library<Back>);
@@ -50,7 +56,7 @@ Event herk(Queue& ctx,
            Uplo uplo,
            Transpose transA) {
     if constexpr (Back == Backend::ROCM) {
-        throw NoRouteError(Op::herk, Back, scalar_kind_of<T>, kNoRocmWrapper);
+        throw_no_rocm_wrapper<T>(Op::herk);
     } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::herk, Back, select::kLevel3Library<Back>);
@@ -69,7 +75,7 @@ Event her2k(Queue& ctx,
             Uplo uplo,
             Transpose transA) {
     if constexpr (Back == Backend::ROCM) {
-        throw NoRouteError(Op::her2k, Back, scalar_kind_of<T>, kNoRocmWrapper);
+        throw_no_rocm_wrapper<T>(Op::her2k);
     } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::her2k, Back, select::kLevel3Library<Back>);

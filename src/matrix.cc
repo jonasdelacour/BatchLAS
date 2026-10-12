@@ -2179,8 +2179,8 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
                     
                     // Calculate 3D coordinates from flat index
                     for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += item.get_global_range(0)) {
-                        size_t b = idx / (src_view.rows() * src_view.cols());    // batch index
-                        size_t remainder = idx % (src_view.rows() * src_view.cols());
+                        size_t b = idx / (static_cast<size_t>(src_view.rows()) * src_view.cols());    // batch index
+                        size_t remainder = idx % (static_cast<size_t>(src_view.rows()) * src_view.cols());
                         size_t i = remainder % src_view.rows();            // row index
                         size_t j = remainder / src_view.rows();            // column index
                         
@@ -2410,8 +2410,8 @@ Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
             auto view = matrix.kernel_view();
             cgh.parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
                 for (size_t gid = item.get_global_id(0); gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size(); gid += item.get_global_range(0)) {
-                    size_t b = gid / (view.rows() * view.cols());
-                    size_t rem = gid % (view.rows() * view.cols());
+                    size_t b = gid / (static_cast<size_t>(view.rows()) * view.cols());
+                    size_t rem = gid % (static_cast<size_t>(view.rows()) * view.cols());
                     size_t j = rem / view.rows();
                     size_t i = rem % view.rows();
                     view(i, j, b) *= alpha;

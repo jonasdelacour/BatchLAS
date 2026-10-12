@@ -125,13 +125,14 @@ void load_selection(SelectionSettings& s) {
     // Tri-state from ONE read of the value, as the call site does.
     {
         const char* v = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
-        if (!v) {
-        } else if (env_truthy(v)) {
-            s.sytrd_fuse_panel_update = true;
-        } else if (env_falsy(v)) {
-            s.sytrd_fuse_panel_update = false;
-        } else {
-            s.sytrd_fuse_panel_update.reset();  // unset, or a spelling that is neither
+        if (v) {
+            if (env_truthy(v)) {
+                s.sytrd_fuse_panel_update = true;
+            } else if (env_falsy(v)) {
+                s.sytrd_fuse_panel_update = false;
+            } else {
+                s.sytrd_fuse_panel_update.reset();  // a spelling that is neither
+            }
         }
     }
 }

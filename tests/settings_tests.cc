@@ -78,7 +78,6 @@ TEST(SettingsConfigure, ConfigureBeatsTheEnvironment) {
         << "a Queue already exists, so this case ran after one that builds one; "
            "configure() is closed. See the ordering contract at the top of this file.";
 
-    const Settings original = settings();
 
     // Prove the environment is being honoured first, or the assertion below proves
     // nothing: a configure() that "wins" against a variable nobody read is vacuous.
@@ -96,9 +95,8 @@ TEST(SettingsConfigure, ConfigureBeatsTheEnvironment) {
         << "select's pin reader still reads the environment directly rather than settings()";
     EXPECT_EQ(source, "BATCHLAS_GEMM_ROUTE");
 
-    // Restore the defaults as the base, not `original`: that snapshot carries whatever the
+    // Restore the defaults as the base, not a settings() snapshot: that carries whatever the
     // environment held, and a configured base outlives the variable that produced it.
-    (void)original;
     configure(Settings{});
     detail::reload_settings();
 }
@@ -111,6 +109,13 @@ TEST(SettingsConfigure, ConfigureSurvivesUnrelatedReload) {
     ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);
     ScopedEnvVar clear_trsm("BATCHLAS_TRSM_OUTER_NB", nullptr);
     ScopedEnvVar clear_force("BATCHLAS_LATRD_GRID_FORCE_UNSAFE", nullptr);
+    // Restores the default base on every exit, so a failed ASSERT cannot leak the unsafe flag.
+    struct RestoreBase {
+        ~RestoreBase() {
+            configure(Settings{});
+            detail::reload_settings();
+        }
+    } restore;
 
     Settings s = settings();
     s.geometry.potrf_nb = 24;
@@ -136,10 +141,6 @@ TEST(SettingsConfigure, ConfigureSurvivesUnrelatedReload) {
         EXPECT_EQ(settings().geometry.potrf_nb, 8) << "an exported variable wins over configure()";
     }
     EXPECT_EQ(settings().geometry.potrf_nb, 24);
-
-    configure(Settings{});
-    detail::reload_settings();
-    EXPECT_EQ(settings().geometry.potrf_nb, 0);
 }
 
 // (b) configure() after a Queue exists throws. A route changed halfway through a run
@@ -226,7 +227,8 @@ TEST(SettingsUnsafe, SkipPointerChecksHonoursTheBuildOption) {
 #if BATCHLAS_ALLOW_UNSAFE_ENV
     // pointer_checks_enabled() latches on its FIRST call in the process, so this arm never
     // calls it: its value would depend on which case ran first, and latching it here would
-    // disarm the check for every later case.
+    // disarm the check for every later case. So in this configuration nothing here ties the
+    // field to the predicate the entry points consult: that link is uncovered.
     EXPECT_TRUE(settings().unsafe.skip_pointer_checks)
         << "this build allows the unsafe group, so the variable must take effect";
 #else

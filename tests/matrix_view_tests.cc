@@ -282,6 +282,7 @@ TEST(KernelMatrixView, BadSliceAsserts) {
 #else
     std::vector<float> buf(30, 0.0f);
     KernelMatrixView<float, MatrixFormat::Dense> kv(buf.data(), 6, 5, 6);
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";  // earlier cases started SYCL threads
     EXPECT_DEATH((void)kv(Slice(3, 3), Slice()), "");
     EXPECT_DEATH((void)kv(2, Slice(4, 4)), "");
     EXPECT_DEATH((void)kv(Slice(1, 1), 0), "");

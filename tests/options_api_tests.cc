@@ -571,7 +571,8 @@ TEST(OptionsApi, ShortInfoSpanIsRejected) {
 // The ordinary spelling with non-const lvalue arguments resolves to the queue-dispatch
 // overload, which forwards to the `f<Backend>` option overload: the shape checks must live
 // there too, or a short W/tau/S is written out of bounds. Each short span is a prefix of a
-// full-length buffer, so a missing check cannot corrupt memory.
+// full-length buffer, so a missing check cannot corrupt memory. Only potrf's option check is
+// load-bearing: syev, ormqr, gesvd and getrs also reject these spans in their primaries.
 TEST(OptionsShapeChecks, OrdinarySpellingRejectsShortOutputs) {
     Queue q;
     constexpr int n = 8;

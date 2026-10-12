@@ -939,6 +939,28 @@ TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
     EXPECT_THROW(linalg::svd(q, A.view(), SvdVectors::None), std::invalid_argument);
 }
 
+// posv and syev run an out-of-order caller's call on a temporary in-order queue; the caller's
+// Queue::wait() must still cover that work (the linalg wrappers free their scratch after it).
+TEST(LinalgWrappers, OutOfOrderWaitCoversInOrderDrivers) {
+    Queue base;
+    Queue q(base, false);
+    const int n = 64, nrhs = 4, batch = 4096;
+    auto F = spd(n, batch);
+    auto E = spd(n, batch);
+    auto X = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + (b % 5)); });
+    UnifiedVector<float> W(static_cast<size_t>(n) * batch);
+    auto lease = q.workspace(posv_buffer_size(q, F.view(), X.view(), Uplo::Lower));
+    const auto complete = sycl::info::event_command_status::complete;
+
+    Event solved = posv(q, F.view(), X.view(), Uplo::Lower, lease.span(), Span<int32_t>{});
+    q.wait();
+    EXPECT_EQ(sycl_event(solved).get_info<sycl::info::event::command_execution_status>(), complete) << "posv";
+
+    Event values = syev(q, E.view(), W.to_span(), {.jobz = JobType::NoEigenVectors});
+    q.wait();
+    EXPECT_EQ(sycl_event(values).get_info<sycl::info::event::command_execution_status>(), complete) << "syev";
+}
+
 // The value-returning wrappers own their scratch (the copied A, the factor); returning while
 // the kernels that read it are still enqueued frees it under them. Many calls with no wait in
 // between, on an out-of-order queue, give the freed memory every chance to be reused.
@@ -965,9 +987,10 @@ TEST(LinalgWrappers, ScratchOutlivesKernels) {
         scale = std::max(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
     }
     for (int r = 0; r < reps; ++r) {
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(q, A.view(), X[r].view(), B.view()))
+        // Checked on the in-order `base`: the verify helpers chain kernels and must not race.
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), X[r].view(), B.view()))
             << "solve, rep " << r;
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(q, A.view(), Y[r].view(), B.view()))
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), Y[r].view(), B.view()))
             << "solve_spd, rep " << r;
         const VectorView<float> w(W[r].data(), n, batch);
         EXPECT_VERIFY(float, batchlas::verify::Check::values, n, Dense::values_error(w, ref, scale)) << "eigvalsh, rep " << r;
