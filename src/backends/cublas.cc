@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
+#include <vector>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <complex>
@@ -66,19 +67,19 @@ namespace batchlas {
             // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
             if constexpr (std::is_same_v<T, std::complex<double>>) {
                 if (m == 1 || n == 1) {
-                    cublasZgemmStridedBatched(handle,
+                    check_status(cublasZgemmStridedBatched(handle,
                         enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                         m, n, k, reinterpret_cast<const cuDoubleComplex*>(&alpha_h),
                         reinterpret_cast<const cuDoubleComplex*>(A.data_ptr()), A.ld(), A.stride(),
                         reinterpret_cast<const cuDoubleComplex*>(B.data_ptr()), B.ld(), B.stride(),
                         reinterpret_cast<const cuDoubleComplex*>(&beta_h),
                         reinterpret_cast<cuDoubleComplex*>(C.data_ptr()), C.ld(), C.stride(),
-                        std::max(1, A.batch_size()));
+                        std::max(1, A.batch_size())));
                     return;
                 }
             }
             if (A.batch_size() <= 1) {
-                cublasGemmEx(handle,
+                check_status(cublasGemmEx(handle,
                     enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                     m, n, k,
                     &alpha_h,
@@ -87,9 +88,9 @@ namespace batchlas {
                     &beta_h,
                     C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(),
                     enum_convert<BackendLibrary::CUBLAS, T>(precision),
-                    CUBLAS_GEMM_DFALT);
+                    CUBLAS_GEMM_DFALT));
             } else {
-                cublasGemmStridedBatchedEx(handle,
+                check_status(cublasGemmStridedBatchedEx(handle,
                     enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                     m, n, k,
                     &alpha_h,
@@ -99,7 +100,7 @@ namespace batchlas {
                     C.data_ptr(), BackendScalar<T,BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
                     A.batch_size(),
                     enum_convert<BackendLibrary::CUBLAS, T>(precision),
-                    CUBLAS_GEMM_DFALT);
+                    CUBLAS_GEMM_DFALT));
             }
         });
         return ctx.create_event_after_external_work();
@@ -827,23 +828,32 @@ namespace batchlas {
         auto pool = BumpAllocator(work_space);
         if (batch_size <= 1) {
             cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
-            size_t device_l_work, host_l_work;
-            cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
-            auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
-            auto host_work_space = pool.allocate<std::byte>(ctx, host_l_work);
-            auto d_info = pool.allocate<int>(ctx, 1);
-            impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
-                handle.setStream(stream);
-                cusolverDnXgeqrf(handle, params, m, n,
+            check_status(cusolverDnCreateParams(&params));
+            try {
+                size_t device_l_work = 0, host_l_work = 0;
+                check_status(cusolverDnXgeqrf_bufferSize(handle, params, m, n,
                     BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
                     BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
-                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
-                    device_l_work, host_work_space.data(), host_l_work, d_info.data());
-            });
+                    BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work));
+                auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
+                auto d_info = pool.allocate<int>(ctx, 1);
+                // bufferOnHost is host memory, not a draw from the (device) workspace.
+                std::vector<std::byte> host_work_space(host_l_work);
+                std::byte* host_ptr = host_work_space.data();
+                impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
+                    handle.setStream(stream);
+                    check_status(cusolverDnXgeqrf(handle, params, m, n,
+                        BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                        BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
+                        BackendScalar<T,BackendLibrary::CUSOLVER>::type, device_work_space.data(),
+                        device_l_work, host_ptr, host_l_work, d_info.data()));
+                });
+                if (host_l_work > 0) ctx.wait();  // host_work_space must outlive the call's stream work
+            } catch (...) {
+                cusolverDnDestroyParams(params);
+                throw;
+            }
+            check_status(cusolverDnDestroyParams(params));
         } else {
             auto tau_data = tau.data();
             auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
@@ -851,13 +861,19 @@ namespace batchlas {
                 size_t i = item.get(0);
                 tau_ptrs[i] = tau_data + i * k;
             });
-            auto info = pool.allocate<int>(ctx, batch_size);
             T** a_ptrs = A.data_ptrs(ctx).data();
+            // cublas<t>geqrfBatched's info is a host int: a parameter-error code, set before return.
+            int info_h = 0;
+            int* info_p = &info_h;
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
-                    handle, m, n, a_ptrs, A.ld(), tau_ptrs.data(), info.data(), batch_size);
+                    handle, m, n, a_ptrs, A.ld(), tau_ptrs.data(), info_p, batch_size);
             });
+            if (info_h != 0) {
+                throw batchlas::invalid_argument("geqrf_vendor (CUBLAS): geqrfBatched rejected parameter " +
+                                                 std::to_string(-info_h));
+            }
         }
         return ctx.create_event_after_external_work();
     }
@@ -872,17 +888,19 @@ namespace batchlas {
         auto n = A.cols();
         auto batch_size = A.batch_size();
         if (batch_size <= 1) {
-            size_t device_l_work, host_l_work;
+            size_t device_l_work = 0, host_l_work = 0;
             cusolverDnParams_t params;
-            cusolverDnCreateParams(&params);
-            cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, tau.data(),
-                BackendScalar<T,BackendLibrary::CUBLAS>::type, &device_l_work, &host_l_work);
-            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<std::byte>(ctx, host_l_work) 
-                   + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
+            check_status(cusolverDnCreateParams(&params));
+            const cusolverStatus_t st = cusolverDnXgeqrf_bufferSize(handle, params, m, n,
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, tau.data(),
+                BackendScalar<T,BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
+            check_status(cusolverDnDestroyParams(params));
+            check_status(st);
+            // The run path's draws only: its host buffer and geqrfBatched's info live on the host.
+            return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<int>(ctx, 1);
         } else {
-            return BumpAllocator::allocation_size<T*>(ctx, batch_size) + BumpAllocator::allocation_size<int>(ctx, batch_size);
+            return BumpAllocator::allocation_size<T*>(ctx, batch_size);
         }
     }
 

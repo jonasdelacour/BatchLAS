@@ -159,14 +159,14 @@ namespace batchlas {
                                      T alpha, T beta,
                                      Transpose transA, Transpose transB) {
                 size_t size = 0;
-                cusparseSpMM_bufferSize(
+                check_status(cusparseSpMM_bufferSize(
                     handle,
                     cusparse_op<T>(transA),
                     cusparse_op<T>(transB),
                     &alpha, a, b, &beta, c,
                     BackendScalar<T, BackendLibrary::CUSPARSE>::type,
                     CUSPARSE_SPMM_ALG_DEFAULT,
-                    &size);
+                    &size));
                 return size;
             }
 
@@ -261,10 +261,10 @@ namespace batchlas {
                         LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
                         LocalDnDescr<T> b(B_mat, 0, bs);
                         LocalDnDescr<T> c(C, 0, bs);
-                        cusparseSpMM(handle, cusparse_op<T>(transA), cusparse_op<T>(transB),
+                        check_status(cusparseSpMM(handle, cusparse_op<T>(transA), cusparse_op<T>(transB),
                                      &alpha_h, a, b, &beta_h, c,
                                      BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
+                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
                     } else {
                         // Inexpressible as one strided descriptor: a call per item.
                         for (int i = 0; i < bs; ++i) {
@@ -272,18 +272,18 @@ namespace batchlas {
                                                plan.item_nnz[static_cast<std::size_t>(i)]);
                             LocalDnDescr<T> b(B_mat, i, 1);
                             LocalDnDescr<T> c(C, i, 1);
-                            cusparseSpMM(handle, cusparse_op<T>(transA),
+                            check_status(cusparseSpMM(handle, cusparse_op<T>(transA),
                                          cusparse_op<T>(transB),
                                          &alpha_h, a, b, &beta_h, c,
                                          BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                         CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
+                                         CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
                         }
                     }
                     return;
                 }
             }
 
-            cusparseSpMM(
+            check_status(cusparseSpMM(
                 handle,
                 cusparse_op<T>(transA),
                 cusparse_op<T>(transB),
@@ -295,7 +295,7 @@ namespace batchlas {
                 BackendScalar<T,BackendLibrary::CUSPARSE>::type,
                 CUSPARSE_SPMM_ALG_DEFAULT,
                 buffer.data()
-            );
+            ));
         });
         return ctx.create_event_after_external_work();
     }
