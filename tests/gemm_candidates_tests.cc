@@ -1085,35 +1085,36 @@ TYPED_TEST(GemmCandidates, TraceKeyFoldsAndClassifiesLayout) {
     EXPECT_NE(line.find("layout=strided"), std::string::npos) << line;
 }
 
-// Auto against the transcribed table on a device that reads it (sm_89, sm_120, which carries the
-// same rows, or borrowed): the old router's choice at grid cells, the vendor where it ranks
-// first (the first runnable native entry vendor-free).
+// Auto against the shipped table this device reads (shipped_table_pick.hh) at the cells the old
+// router's windows bracketed: the first entry of the nearest row that runs, the vendor skipped
+// vendor-free. A regenerated table changes the expectation, not the test.
 TYPED_TEST(GemmCandidates, AutoReadsTheSm89TranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("gemm", select::dtype_name<T>(),
-                                                       select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device reads a measured gemm table";
-    struct Row { Spec s; std::string with_vendor, without; };
-    std::vector<Row> rows;
+    std::vector<Spec> rows;
     if constexpr (std::is_same_v<T, float>)
-        rows = {{{kN, kN, 32, 32, 32, 128, Layout::Packed}, "small", "small"},
-                {{kN, kN, 128, 128, 128, 128, Layout::Packed}, "vendor", "reg:m=128:n=128:k=8:u=1"},
-                {{kT, kN, 256, 128, 128, 128, Layout::Strided}, "vendor", "reg:m=128:n=32:k=32:u=1"},
-                {{kN, kT, 256, 32, 96, 2048, Layout::Strided}, "vendor", "tiled"}};
+        rows = {{kN, kN, 32, 32, 32, 128, Layout::Packed}, {kN, kN, 128, 128, 128, 128, Layout::Packed},
+                {kT, kN, 256, 128, 128, 128, Layout::Strided}, {kN, kT, 256, 32, 96, 2048, Layout::Strided}};
     else if constexpr (std::is_same_v<T, double>)
-        rows = {{{kN, kN, 16, 16, 16, 128, Layout::Packed}, "direct", "direct"},
-                {{kN, kN, 256, 256, 256, 128, Layout::Packed}, "wide:m=64:n=64:k=16", "wide:m=64:n=64:k=16"},
-                {{kN, kC, 256, 32, 96, 2048, Layout::Strided}, "tiled", "tiled"}};
+        rows = {{kN, kN, 16, 16, 16, 128, Layout::Packed}, {kN, kN, 256, 256, 256, 128, Layout::Packed},
+                {kN, kC, 256, 32, 96, 2048, Layout::Strided}};
     else
-        rows = {{{kN, kC, 256, 32, 96, 2048, Layout::Strided}, "vendor", "wide:m=128:n=32:k=16"},
-                {{kC, kN, 32, 256, 128, 2048, Layout::Strided}, "vendor", "wide:m=32:n=128:k=16"},
-                {{kN, kN, 256, 256, 256, 128, Layout::Strided}, "vendor", "wide:m=64:n=64:k=16"}};
-    for (const Row& r : rows) {
-        auto p = make_problem<T>(r.s);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), TestFixture::kVendor ? r.with_vendor : r.without) << label(r.s);
-        expect_gemm(*this->ctx, p, "auto " + label(r.s));
+        rows = {{kN, kC, 256, 32, 96, 2048, Layout::Strided}, {kC, kN, 32, 256, 128, 2048, Layout::Strided},
+                {kN, kN, 256, 256, 256, 128, Layout::Strided}};
+    const auto word = [](Transpose t) { return t == kN ? "N" : (!kCx<T> || t == kT ? "T" : "C"); };
+    for (const Spec& s : rows) {
+        const select::Key key{{"ta", word(s.ta)}, {"tb", word(s.tb)},
+                              {"layout", s.layout == Layout::Packed ? "packed" : "strided"},
+                              {"m", s.m}, {"n", s.n}, {"k", s.k}, {"batch", s.batch}};
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "gemm", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx), key, [&] {
+                auto q = make_problem<T>(s);
+                this->run(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+        auto p = make_problem<T>(s);
+        EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
+        expect_gemm(*this->ctx, p, "auto " + label(s));
     }
 }
 
@@ -1252,16 +1253,16 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"ta", r.ta}, {"tb", r.tb}, {"layout", r.layout}, {"m", r.m},
                               {"n", r.n},   {"k", r.k},   {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
+        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        if (row->timed) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         std::vector<std::string> got;
         for (const auto& e : row->ranked) got.push_back(e.spelling);
         EXPECT_EQ(got, r.ranked) << what;
-        EXPECT_FALSE(row->timed) << what;
     }
     // No real table has a C row: key_of folds it to T before the lookup.
     for (const char* dt : {"float", "double"}) {

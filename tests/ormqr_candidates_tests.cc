@@ -593,20 +593,25 @@ TYPED_TEST(OrmqrCandidates, RetiredProviderVariableIsNotRead) {
     }
 }
 
-// Auto against the shipped transcribed tables on a device that reads them: blocked first
-// everywhere. Their complex-Trans rows name the vendor (the old router's choice), but that call
-// is refused before choose() (ComplexTransIsRefusedUnderEveryPin).
+// Auto against the shipped table of this device (shipped_table_pick.hh). Complex-Trans calls are
+// refused before choose() (ComplexTransIsRefusedUnderEveryPin), so they are not probed.
 TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const auto tables = select::tables_in_borrow_order("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device does not read a transcribed ormqr table";
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
                           Spec{Side::Left, Transpose::Trans, 33, 20, 1, 5}, Spec{Side::Right, Transpose::Trans, 2, 1, 700, 3000}}) {
-        auto p = make_apply<T>(s);
         if (!TestFixture::defined(s.trans)) continue;
-        EXPECT_EQ(this->auto_choice(p), "blocked") << label(s);
+        auto p = make_apply<T>(s);
+        const select::Key key{{"side", s.side == Side::Left ? "L" : "R"},
+                              {"trans", s.trans == Transpose::NoTrans ? "N" : (s.trans == Transpose::Trans ? "T" : "C")},
+                              {"m", s.m}, {"k", s.k}, {"q", s.q}, {"batch", s.batch}};
+        const std::string want = test_utils::shipped_table_pick<C>("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                                   key, [&] {
+                                                                       auto q = make_apply<T>(s);
+                                                                       this->run(q);
+                                                                   });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+        EXPECT_EQ(this->auto_choice(p), want) << label(s);
         expect_applied(*this->ctx, p, "auto " + label(s));
     }
 }
@@ -781,15 +786,15 @@ TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (row->timed) continue;
             const std::string what = t.file + ":" + std::to_string(row->line);
             ASSERT_EQ(row->ranked.size(), r.len) << what;
             EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
             EXPECT_EQ(row->ranked.back().spelling, "vendor") << what;
-            EXPECT_FALSE(row->timed) << what;
         }
 }
 

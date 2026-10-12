@@ -766,14 +766,14 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"nrhs", r.nrhs}});
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (row->timed) continue;
             const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(r.n);
             ASSERT_EQ(row->ranked.size(), r.len) << what;
             EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
             EXPECT_EQ(row->ranked.back().spelling, "blocked") << what;
-            EXPECT_FALSE(row->timed) << what;
         }
     }
 }

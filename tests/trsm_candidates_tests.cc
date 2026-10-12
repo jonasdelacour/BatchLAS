@@ -312,6 +312,15 @@ protected:
         auto p = make_solve<T>(s);
         return traced_choice([&] { run(p); });
     }
+    // What Auto must pick for `s`, from the shipped tables (shipped_table_pick.hh); ConjTrans folds to T.
+    std::string table_pick(const Spec& s) {
+        const select::Key key{{"side", s.side == Side::Left ? "L" : "R"}, {"trans", s.trans == Transpose::NoTrans ? "N" : "T"},
+                              {"order", s.n}, {"q", s.q}, {"batch", s.batch}};
+        return test_utils::shipped_table_pick<C>("trsm", select::dtype_name<T>(), select::device_of<B>(*this->ctx), key, [&] {
+            auto p = make_solve<T>(s);
+            run(p);
+        });
+    }
 
     void run(Solve<T>& p) {
         (void)trsm<B, T>(*this->ctx, p.A(), p.B(), p.alpha, p.s.side, p.s.uplo, p.s.trans, p.s.diag);
@@ -762,26 +771,22 @@ TYPED_TEST(TrsmCandidates, ScopedPinBeatsTheEnvironment) {
     expect_solved(*this->ctx, r, "outer cta");
 }
 
-// Auto against the transcribed table on a device that reads it (sm_89, sm_120 complex, which
-// carries the same rows, or borrowed): cta up to order 32, blocked above (33 lands on the
-// order-32 row, where cta cannot run), both sides, every trans, at grid and off-grid batches.
+// Auto against the shipped table of this device (shipped_table_pick.hh) around the old cta cap:
+// orders 1, 8, 32|33, 48, 200, both sides, every trans, at grid and off-grid batches.
 TYPED_TEST(TrsmCandidates, AutoReadsTheSm89TranscribedTable) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("trsm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device reads a measured trsm table";
-    struct Row { int n, q, batch; const char* expect; };
-    const Row rows[] = {{8, 4, 512, "cta"},     {32, 64, 128, "cta"},     {33, 8, 512, "blocked"},
-                        {48, 8, 300, "blocked"}, {200, 3, 128, "blocked"}, {1, 1, 2048, "cta"}};
+    struct Row { int n, q, batch; };
+    const Row rows[] = {{8, 4, 512}, {32, 64, 128}, {33, 8, 512}, {48, 8, 300}, {200, 3, 128}, {1, 1, 2048}};
     for (const Row& r : rows)
         for (Side side : {Side::Left, Side::Right})
             for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
                 Spec s{side, Uplo::Lower, t, Diag::NonUnit, r.n, r.q, r.batch};
                 s.seed = 41u + r.n;
+                const std::string want = this->table_pick(s);
+                ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
                 auto p = make_solve<T>(s);
-                EXPECT_EQ(traced_choice([&] { this->run(p); }), r.expect) << label(s);
+                EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
                 expect_solved(*this->ctx, p, "auto " + label(s));
             }
 }
@@ -845,7 +850,7 @@ TYPED_TEST(TrsmCandidates, TraceKeyQFollowsSide) {
 
 // RouteTrsm.VendorFreeStillFindsANativeRouteAtEveryOrder, ported: with a table naming only the
 // vendor, a vendor-free build takes the last resort, blocked, at order 32 and at order 4096;
-// under the shipped tables Auto runs cta at 32 and blocked at 4096 in every build.
+// under the shipped tables Auto runs the table's first runnable entry at 32.
 TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
@@ -856,9 +861,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
     {
         auto p = make_solve<T>(s32);
         const std::string got = traced_choice([&] { this->run(p); });
-        const auto tables = select::tables_in_borrow_order("trsm", dtype, select::device_of<TestFixture::B>(*this->ctx));
-        if (!tables.empty() && test_utils::transcribed_only(*tables.front())) EXPECT_EQ(got, "cta");
-        else EXPECT_NE(got, "vendor") << "nothing ranks the vendor at order 32 on " << dev;
+        EXPECT_EQ(got, this->table_pick(s32)) << "Auto against the shipped table at order 32 on " << dev;
         expect_solved(*this->ctx, p, "auto order 32");
     }
     std::vector<std::pair<std::string, std::string>> files;
@@ -990,15 +993,15 @@ TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"side", r.side}, {"trans", r.trans}, {"order", r.n}, {"q", r.q}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
+        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        if (row->timed) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         ASSERT_EQ(row->ranked.size(), r.len) << what;
         EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
         EXPECT_EQ(row->ranked.back().spelling, "vendor") << what;
-        EXPECT_FALSE(row->timed) << what;
     }
 }
 

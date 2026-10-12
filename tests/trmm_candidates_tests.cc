@@ -811,15 +811,11 @@ TYPED_TEST(TrmmCandidates, ScopedPinBeatsTheEnvironment) {
     expect_trmm(*this->ctx, r, "outer triangular");
 }
 
-// Auto against the transcribed tables: triangular on Side::Left, expand on Side::Right, at grid
-// and off-grid cells and in both builds (each row ranks a native family first).
+// Auto against the shipped table of this device (table_pick), both sides, at grid and off-grid
+// cells and in both builds.
 TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device reads a measured trmm table";
     struct Row { int n, q, batch; };
     const Row rows[] = {{1, 1, 1}, {16, 16, 128}, {23, 300, 7}, {128, 1, 1024}, {200, 70, 2}, {700, 3, 1}};
     for (const Row& r : rows)
@@ -827,9 +823,10 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
             for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
                 Spec s{side, Uplo::Lower, t, Diag::NonUnit, r.n, r.q, r.batch};
                 s.seed = 41u + r.n;
+                const std::string want = this->table_pick(s);
+                ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
                 auto p = make_prob<T>(s);
-                EXPECT_EQ(traced_choice([&] { this->run(p); }), side == Side::Left ? "triangular" : "expand")
-                    << label(s);
+                EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
                 expect_trmm(*this->ctx, p, "auto " + label(s));
             }
 }
@@ -1044,15 +1041,15 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
             const auto part = std::find_if(parts.begin(), parts.end(), [&](const select::Table& x) { return x.dtype == dt; });
             ASSERT_NE(part, parts.end()) << file << " " << dt;
             const select::Table& t = *part;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
                 got.insert(k);
+                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                if (row.timed) continue;
                 std::string ranked;
                 for (const auto& x : row.ranked) ranked += x.spelling + "|";
                 EXPECT_EQ(ranked, row.keys[0] == "L" ? "triangular|expand|vendor|" : "expand|vendor|") << file << " " << k;
-                EXPECT_FALSE(row.timed) << file;
             }
             EXPECT_EQ(got, want) << file;
             EXPECT_EQ(t.rows.size(), want.size()) << file;
