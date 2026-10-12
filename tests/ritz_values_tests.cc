@@ -147,30 +147,33 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
 }
 
 
-// CSR A: the spmm workspace is carved with allocate<std::byte>, which rounds, so the size query must
-// equal the run path's measured sequence and an exactly sized workspace must be enough.
-TYPED_TEST(RitzValuesTest, SparseWorkspaceMatchesRunPath) {
+// CSR A in a workspace of exactly ritz_values_buffer_size bytes, poisoned with 0x7f, against the
+// analytic Ritz values of the Toeplitz eigenvectors. A contract test: on CUDA the cuSPARSE buffer
+// size is already aligned, so the old hand-summed size cannot be shown short here.
+TYPED_TEST(RitzValuesTest, SparseExactWorkspaceInPoisonedArena) {
     using ScalarType = typename TestFixture::ScalarType;
     using RealType = typename TestFixture::RealType;
     constexpr Backend BackendType = TestFixture::BackendType;
     const int n = 37, k = 5, batch = 3;
-    auto A = Matrix<ScalarType, MatrixFormat::CSR>::RandomSparseHermitian(n, 0.3f, batch, 5u);
-    auto V = Matrix<ScalarType, MatrixFormat::Dense>::Random(n, k, false, batch, 6u);
+    const RealType a = RealType(2.0), b = RealType(-1.0);
+    auto A = Matrix<ScalarType, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, b, batch).template convert_to<MatrixFormat::CSR>();
+    Matrix<ScalarType, MatrixFormat::Dense> V(n, k, batch);
+    for (int bat = 0; bat < batch; ++bat)
+        for (int j = 0; j < k; ++j)
+            for (int i = 0; i < n; ++i)
+                V.view()(i, j, bat) = TestFixture::make_scalar(std::sin((j + 1) * (i + 1) * M_PI / (n + 1)));
+    std::vector<double> expected(k);
+    for (int j = 0; j < k; ++j) expected[j] = double(a) - 2.0 * std::cos((j + 1) * M_PI / (n + 1));
     Vector<RealType> ritz_vals(k, batch);
     const size_t bytes = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::CSR>(*(this->ctx), A, V, ritz_vals);
-
-    auto pool = BumpAllocator::measuring();
-    auto av = pool.allocate<ScalarType>(*(this->ctx), size_t(n) * k * batch);
-    (void)pool.allocate<ScalarType*>(*(this->ctx), batch);
-    const MatrixView<ScalarType, MatrixFormat::Dense> AV(av.data(), n, k, n, n * k, batch);
-    (void)pool.allocate<std::byte>(*(this->ctx), spmm_buffer_size<BackendType>(*(this->ctx), A.view(), V.view(), AV, ScalarType(1),
-                                                                                  ScalarType(0), Transpose::NoTrans, Transpose::NoTrans));
-    EXPECT_EQ(bytes, pool.required_bytes());
-
-    UnifiedVector<std::byte> workspace(bytes);
-    auto run = [&] { (void)ritz_values<BackendType, ScalarType, MatrixFormat::CSR>(*(this->ctx), A, V, ritz_vals, workspace); };
-    EXPECT_NO_THROW(run());
+    UnifiedVector<std::byte> workspace(bytes, std::byte(0x7f));
+    (void)ritz_values<BackendType, ScalarType, MatrixFormat::CSR>(*(this->ctx), A, V, ritz_vals, workspace);
     this->ctx->wait();
+    const std::vector<std::vector<double>> ref(batch, expected);
+    const double norm2 = double(a) + 2.0 * std::cos(M_PI / (n + 1));
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    const VectorView<RealType> w(ritz_vals);
+    EXPECT_VERIFY(ScalarType, verify::Check::values, n, MV::values_error(w, ref, norm2, w.all_items()));
 }
 
 int main(int argc, char** argv) {

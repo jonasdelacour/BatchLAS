@@ -201,7 +201,7 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/sytrd_cta_tests.cc` `ref_sytd2_upper` (host unblocked sytd2) | an independent oracle for d, e, tau and the stored reflectors, a convention no residual sees; its deviations are judged at `factorization` (the similarity itself goes through `similarity_residual`) |
 | `tests/sytrd_sb2st_hh_tests.cc` similarity check | measures with `verify::orthogonality` but keeps its own tolerance |
 | `tests/syev_jacobi_cta_tests.cc` `reference_jacobi_eigenvalues` | an independent cyclic two-sided Jacobi in double on exact float input, with the file's own 2n eps ‖A‖_F bound: it isolates the float kernel's rounding from a LAPACKE reference's |
-| `tests/steqr_tests.cc` `GradedTridiagonalRelativeAccuracy` | a long-double Sturm-bisection oracle and per-eigenvalue relative median/max thresholds; no relative-accuracy kind exists |
+| `tests/steqr_tests.cc` `GradedTridiagonalRelativeAccuracy`, `TridiagSolverGradedAndSaturatingBatch` | a long-double Sturm-bisection oracle and per-eigenvalue relative median/max thresholds; no relative-accuracy kind exists |
 | `tests/sytrd_blocked_tests.cc` `GridMatchesLegacyTridiagonal` `elem_tol` | elementwise d and \|e\| agreement (1e-11 n relative) of two LATRD implementations: intermediate outputs, no kind fits |
 | `tests/sytrd_blocked_tests.cc` `TrailingUpdateRoutesAgree` relation | `syr2k ≤ 4 · gemm + 16 u` compares two measured errors (each route is also checked at its kind) |
 | `tests/syevx_tests.cc` LOBPCG instrumentation tests | staged vs host-read history (rates, residual norms, Ritz values): non-eigen quantities from two paths of the code under test |

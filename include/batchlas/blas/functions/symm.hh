@@ -71,7 +71,8 @@ using symm_vendor = Event(Queue&,
 ///         unless the call is `Backend::CUDA` or `Backend::ROCM` on a GPU, with homogeneous operands,
 ///         batch <= 65535 and an expansion scratch that fits (the `expand` choice;
 ///         @ref md_docs_2perf_2level3).
-/// @note `Backend::ROCM` has no vendor symm: only the `expand` choice serves it.
+/// @note `Backend::ROCM` has no vendor symm: its `vendor` choice symmetrizes a copy of `A`
+///       and calls gemm, and blocks the host until it finishes.
 /// @see hemm, SymmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
 template <Backend Ba, RealScalar T>

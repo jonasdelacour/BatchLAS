@@ -95,10 +95,20 @@ inline void maybe_rescale_vectors(bool do_rescale,
             }
         }
 
-        // Each lane contributes |mant| < 1, so the butterfly product bottoms out
-        // at 0.5^width (>= 2e-10 for width 32) -- no underflow in the reduction.
-        const T mant_all = adapter.reduce_product(mant);
-        const int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
+        // Each lane's |mant| is in [0.5, 1), so one product over a wide group bottoms out at
+        // 0.5^width (2^-256 at width 256 is zero in float). Reduce 32 lanes per round and
+        // renormalize between rounds: every partial stays >= 2^-33.
+        T mant_all = T(1);
+        int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
+        for (int32_t r0 = 0; r0 < width; r0 += 32) {
+            const bool mine = lane >= r0 && lane < r0 + 32;
+            mant_all *= adapter.reduce_product(mine ? mant : T(1));
+            if (mant_all != T(0) && sycl::isfinite(mant_all)) {
+                int e = 0;
+                mant_all = sycl::frexp(mant_all, &e);
+                expo_all += e;
+            }
+        }
 
         if (active && lane == 0) {
             // mag = sqrt(|mant_all| * 2^expo_all), split so neither the square

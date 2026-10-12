@@ -43,9 +43,7 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    // ROCm takes the expansion (its symm was copy + symmetrize + gemm) and has no vendor symm.
     constexpr bool kWired = B == Backend::CUDA || B == Backend::ROCM;
-    constexpr bool kVendorSymm = B != Backend::ROCM;
     const std::int64_t k = A.rows(), batch = A.batch_size();
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
@@ -56,7 +54,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
                                  q, int(k), int(batch),
                                  backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
         },
-        [&](Vendor) { return kVendorSymm && d.has_vendor && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
 
@@ -86,13 +84,33 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
                       ComputePrecision::Default);
 }
 
+// rocBLAS has no symm wrapper: ROCm's vendor arm symmetrizes a copy of A and calls the public
+// gemm, with none of expand's batch or scratch limits. The copy dies here, so the call waits.
+template <Backend B, class T>
+Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
+                      Uplo uplo) {
+    Matrix<T, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
+    MV<T>::copy(q, full.view(), A).wait();
+    full.view().symmetrize(q, uplo).wait();
+    if (side == Side::Left)
+        (void)gemm<B, T>(q, full.view(), Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                         ComputePrecision::Default);
+    else
+        (void)gemm<B, T>(q, Bm, full.view(), C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                         ComputePrecision::Default);
+    q.wait();
+    return q.create_event_after_external_work();
+}
+
 template <Backend B, class T>
 Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
         [&](Expand) { return expand_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo); },
         [&](Vendor) -> Event {
-            if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
+            if constexpr (B == Backend::ROCM && select::has_library<B>(spec.vendor))
+                return symmetrize_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
+            else if constexpr (select::has_library<B>(spec.vendor))
                 return backend::symm_vendor<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
             else select::no_vendor<B, T>(spec);
         },

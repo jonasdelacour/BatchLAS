@@ -1393,6 +1393,15 @@ TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
     double norm2 = 0;
     const auto ref = lapacke_spectra(dense_A.view(), norm2);
     expect_values(VectorView<Real>(w_sorted), ref, norm2, n);
+    // expect_values is norm-relative, blind to the small end: each eigenvalue against the Sturm
+    // oracle, relative (verification.md, "Kept outside").
+    std::vector<long double> hd(n), he(n - 1);
+    for (int i = 0; i < n; ++i) hd[i] = diag(i, 0);
+    for (int i = 0; i < n - 1; ++i) he[i] = sub(i, 0);
+    const auto sturm = sturm_eigenvalues(hd, he);
+    const double rel_tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
+    for (int i = 0; i < n; ++i)
+        EXPECT_LE(double(std::fabs(got[i] - sturm[i]) / std::fabs(sturm[i])), rel_tol) << "eigenvalue " << i;
     const MatrixView<Real, MatrixFormat::Dense> Q0(Qbuf.view().data_ptr(), n, n, ld, ld * n, 1);
     expect_pairs(*this->ctx, dense_A.view(), Q0, VectorView<Real>(w).batch_item(0));
 }
@@ -1458,6 +1467,31 @@ TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
         expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.view().all_items());
         expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<Real>(evals), dense_A.view().all_items());
     }
+}
+
+// NoEigenVectors, sort on, eigenvalues in a view of stride 4n and no eigenvector view: the sort
+// scratch must not follow the caller's padding, which the size query never sees.
+TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4, stride = 4 * n;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    UnifiedVector<Real> evals_buf(std::size_t(stride) * batch, Real(0));
+    const VectorView<Real> evals(evals_buf.data(), n, batch, 1, stride);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    SteqrParams<Real> params = {};
+    params.max_sweeps = 10;
+    params.sort = true;
+    UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::NoEigenVectors, params),
+                                std::byte(0x7f));
+    (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::NoEigenVectors, params,
+                         MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0));
+    this->ctx->wait();
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    expect_values(evals, ref, norm2, n, std::nullopt, dense_A.view().all_items());
 }
 
 int main(int argc, char **argv) {

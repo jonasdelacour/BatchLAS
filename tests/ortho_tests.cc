@@ -128,8 +128,6 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
 
     for (auto transA : transposes) {
         for (auto algo : algos) {
-            // Householder runs geqrf/orgqr on the stored matrix: the row arm is not implemented.
-            if (transA != Transpose::NoTrans && algo == OrthoAlgorithm::Householder) continue;
             SCOPED_TRACE(test_utils::backend_to_string(BackendType));
             SCOPED_TRACE(GetTestName(transA, algo));
 

@@ -858,6 +858,38 @@ TYPED_TEST(StedcTest, StedcFusedN64FloatNoOverflow) {
     }
 }
 
+// The Fused merge at n = 512 (top merge dd up to 512) with 128- and 256-wide work-groups: every
+// lane's Loewner mantissa is in [0.5, 1), so one group-wide product of them leaves float range
+// (about 2^-0.5dd). maybe_rescale_vectors must renormalize the reduction in rounds.
+TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "the fused merge is a GPU kernel"; }
+    const int n = 512, batch = 4;
+    auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(*this->ctx, n, Real(1), NormType::Spectral, batch, 4321u);
+    this->ctx->wait();
+    Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
+    for (int b = 0; b < batch; ++b)
+        for (int i = 0; i < n; ++i) {
+            diag(i, b) = dense_A.view().at(i, i, b);
+            if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+        }
+    for (const int threads : {128, 256}) {
+        SCOPED_TRACE(::testing::Message() << "merge_threads " << threads);
+        auto d = diag;
+        auto e = sub;
+        auto w = Vector<Real>::zeros(n, batch);
+        auto Q = Matrix<Real>::Identity(n, batch);
+        StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
+        UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+        (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+        this->ctx->wait();
+        EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
+        EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

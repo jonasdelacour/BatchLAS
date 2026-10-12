@@ -317,11 +317,11 @@ Event steqr_wg_impl(Queue& ctx,
 
 // Single description of steqr_wg's workspace (as steqr_legacy_layout); see workspace_bytes() in
 // util/mempool.hh. Returns d, e, givens rotations, apply order, deflation indices and the scratch
-// that each pass, then sort(), sub-allocates from. `eigvects` is read for its shape only.
+// that each pass, then sort(), sub-allocates from. Sized from (n, batch, jobz) alone: sort()
+// takes n * batch indices and an n x n x batch copy, whatever the caller's padding.
 template <typename T>
 auto steqr_wg_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_size, JobType jobz,
-                     const SteqrParams<T>& params, const VectorView<T>& eigenvalues,
-                     const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+                     const SteqrParams<T>& params) {
     const bool want_vectors = jobz == JobType::EigenVectors;
     const auto increment = params.transpose_working_vectors ? batch_size : 1;
     const auto d_stride = params.transpose_working_vectors ? 1 : n;
@@ -344,7 +344,8 @@ auto steqr_wg_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_s
     auto deflation_indices = pool.allocate<std::array<int32_t, 3>>(ctx, batch_size * max_subproblems);
 
     const size_t pass_scratch = workspace_bytes([&](BumpAllocator& p) { return steqr_wg_pass_layout(ctx, p, n, batch_size); });
-    const size_t sort_scratch = params.sort ? sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz) : 0;
+    const MatrixView<T, MatrixFormat::Dense> sort_shape(nullptr, n, n, n, n * n, batch_size);
+    const size_t sort_scratch = params.sort ? sort_buffer_size<T>(ctx, Span<T>(), sort_shape, jobz) : 0;
     auto scratch = pool.allocate<std::byte>(ctx, std::max(pass_scratch, sort_scratch));
     return std::make_tuple(d, e, givens_rotations, apply_order, deflation_indices, scratch);
 }
@@ -376,7 +377,7 @@ Event steqr_wg(Queue& ctx,
 
     auto pool = BumpAllocator(ws);
     auto [d, e, givens_rotations, apply_order, deflation_indices, scratch] =
-        steqr_wg_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects);
+        steqr_wg_layout<T>(ctx, pool, n, batch_size, jobz, params);
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
 
@@ -438,11 +439,11 @@ size_t steqr_wg_buffer_size(Queue& ctx,
                             JobType jobz,
                             SteqrParams<T> params) {
     static_cast<void>(e);
+    static_cast<void>(eigenvalues);
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
-    const MatrixView<T, MatrixFormat::Dense> eigvects_shape(nullptr, n, n, n, n * n, batch_size);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return steqr_wg_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects_shape);
+        return steqr_wg_layout<T>(ctx, pool, n, batch_size, jobz, params);
     });
 }
 

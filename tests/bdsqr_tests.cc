@@ -292,6 +292,8 @@ TYPED_TEST(BdsqrTest, GradedNearOverflow) {
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
                   MV::svd_residual(ctx, A0.view(), U.view(), VectorView<Scalar>(s), Vh.view(), A0.view().all_items()));
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U.view(), U.view().all_items()));
+    // Vh is square, so orthonormal columns mean orthonormal rows.
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh.view(), Vh.view().all_items()));
 }
 
 

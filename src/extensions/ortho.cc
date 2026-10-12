@@ -30,6 +30,27 @@ namespace batchlas {
     template <Backend B, typename T>
     struct StridedCopyKernel {};
 
+    template <Backend B, typename T>
+    struct OrthoTransposeCopyKernel {};
+
+    // dst := src^T, unconjugated: the columns of the copy span the rows of src, and back again.
+    template <Backend B, typename T>
+    void ortho_transpose_copy(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& src,
+                              const MatrixView<T, MatrixFormat::Dense>& dst) {
+        const int64_t r = src.rows(), c = src.cols();
+        const int64_t lds = src.ld(), ldd = dst.ld(), ss = src.stride(), sd = dst.stride();
+        const T* s = src.data_ptr();
+        T* d = dst.data_ptr();
+        const size_t total = size_t(r * c * src.batch_size());
+        ctx->parallel_for<OrthoTransposeCopyKernel<B, T>>(sycl::range<1>(total), [=](sycl::id<1> id) {
+            const int64_t lin = int64_t(id[0]);
+            const int64_t b = lin / (r * c), e = lin % (r * c);
+            const int64_t i = e % c, j = e / c;
+            d[b * sd + j * ldd + i] = s[b * ss + i * lds + j];
+        });
+    }
+
     template <typename T>
     struct OrthoWorkspace {
         MatrixView<T, MatrixFormat::Dense> C;   // k x k Gram matrix A^H A
@@ -40,6 +61,7 @@ namespace batchlas {
         Span<T> output_basis;
         Span<T> Ymem;                           // CGS2 only
         Span<T> tau;                            // Householder only
+        MatrixView<T, MatrixFormat::Dense> H;   // Householder's operand: A, or A^T for rows
         Span<std::byte> geqrf_ws;
         Span<std::byte> orgqr_ws;
     };
@@ -68,7 +90,8 @@ namespace batchlas {
                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                    int64_t m,
                                    int64_t k,
-                                   OrthoAlgorithm algo) {
+                                   OrthoAlgorithm algo,
+                                   bool row_arm) {
         using float_t = typename base_type<T>::type;
         constexpr auto fmt = MatrixFormat::Dense;
         const auto batch_size = A.batch_size();
@@ -95,11 +118,16 @@ namespace batchlas {
 
         auto Ymem = pool.allocate<T>(ctx, is_cgs ? batch_size * m : 0);
 
+        // geqrf/orgqr work on columns, so the row arm QRs an m x k transposed copy.
+        const bool transposed_copy = is_householder && row_arm;
+        auto At = pool.allocate<T>(ctx, transposed_copy ? m * k * batch_size : 0);
+        auto Atptrs = pool.allocate<T*>(ctx, transposed_copy ? batch_size : 0);
+        auto H = transposed_copy ? MatrixView<T, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()) : A;
         auto tau = pool.allocate<T>(ctx, is_householder ? k * batch_size : 0);
-        auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, A, tau) : 0);
-        auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, A, tau) : 0);
+        auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, H, tau) : 0);
+        auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, H, tau) : 0);
 
-        return {C, potrf_ws, diags, lambdas, syev_ws, output_basis, Ymem, tau, geqrf_ws, orgqr_ws};
+        return {C, potrf_ws, diags, lambdas, syev_ws, output_basis, Ymem, tau, H, geqrf_ws, orgqr_ws};
     }
 
     template <Backend B, typename T>
@@ -126,7 +154,7 @@ namespace batchlas {
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
         //Else if k > m && transA == Trans the rows of A are linearly dependent
-        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo);
+        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans);
         auto C = wsl.C;
         auto potrf_workspace = wsl.potrf_ws;
         auto ATA_stride = k * k;
@@ -379,8 +407,10 @@ namespace batchlas {
                 shift_chol_alg();
                 break;
             case OrthoAlgorithm::Householder: {
-                (void)geqrf<B>(ctx, A, wsl.tau, wsl.geqrf_ws);
-                (void)orgqr<B>(ctx, A, wsl.tau, wsl.orgqr_ws);
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, A, wsl.H);
+                (void)geqrf<B>(ctx, wsl.H, wsl.tau, wsl.geqrf_ws);
+                (void)orgqr<B>(ctx, wsl.H, wsl.tau, wsl.orgqr_ws);
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, wsl.H, A);
                 break;
             }
             case OrthoAlgorithm::CGS2:
@@ -416,8 +446,9 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
+        const bool row_arm = transA != Transpose::NoTrans;
         return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
-            return ortho_layout<B, T>(ctx, pool, A, m, k, algo);
+            return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm);
         });
     }
 

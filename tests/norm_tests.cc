@@ -384,7 +384,8 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
 }
 // The spectral norm's scratch (copy, eigenvalues, workspace lease) is local to the call, so the call
 // must have finished with it on return: on an out-of-order Queue, read the result with no wait.
-// Item b is (b+1) * ones(n, n), whose spectral norm is n (b+1).
+// Item b is (b+1) * ones(n, n), whose spectral norm is n (b+1). A contract test: the vendor syev
+// path already synchronises the host, so the early free cannot be shown red on CUDA.
 TYPED_TEST(NormTest, SpectralOutOfOrder) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;

@@ -1617,7 +1617,7 @@ TYPED_TEST(GemmTest, BatchOffsetAbove2Pow31) {
         SKIP_UNLESS_NATIVE(*this->ctx);
         constexpr int n = 8, batch = 129, stride = 1 << 24;
         const std::size_t elements = static_cast<std::size_t>(batch - 1) * stride + n * n;
-        if (this->ctx->device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) < 4 * elements * sizeof(T) + (std::size_t(4) << 30)) {
+        if (this->ctx->device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) < 2 * elements * sizeof(T) + (std::size_t(4) << 30)) {
             GTEST_SKIP() << "needs two " << elements * sizeof(T) / (1u << 20) << " MiB buffers and headroom";
         }
         std::optional<UnifiedVector<T>> ab, c;

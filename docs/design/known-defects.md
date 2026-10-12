@@ -59,7 +59,8 @@ closed and kept only for numbering.
 - **Fix:** `A_i` has `ld = A.ld()` and stored-orientation extents, `A_next` is row `i`
   (conjugated around the gemv pair for complex), the normalisation steps by `ld`. SVQB/SVQB2 copy
   the conjugate transpose back on this arm and the projection against `M` uses `ConjTrans`.
-  `tests/ortho_tests.cc` runs both orientations; Householder still has no row arm.
+  Householder (also what every algorithm becomes on a host device) QRs a transposed m x k copy and
+  transposes the factor back. `tests/ortho_tests.cc` runs both orientations for every algorithm.
 - **Status:** fixed (WP8).
 
 ## 2. `cond` calls the vendor `syev` directly
