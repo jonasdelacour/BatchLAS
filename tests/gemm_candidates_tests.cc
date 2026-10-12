@@ -19,6 +19,7 @@
 
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -690,31 +691,23 @@ TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
 }
 
 // beta = 0 with C full of NaN: BLAS does not read C, so the result must be finite and right.
-// direct, tiled and the LinearEpilogue register tiles compute beta * prior unconditionally
-// (known-defects.md #11, unfixed); they are run on a finite C instead and listed, so a fix
-// shows up here as an entry to delete.
+// Every family, aligned and predicated legs, and the 1x1x1 shape orgqr's blocked apply sends to
+// direct (known-defects.md #11: direct, tiled and reg once computed beta * prior unconditionally).
 TYPED_TEST(GemmCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
-    const std::vector<std::string> reads_c{"direct", "tiled", "reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1",
-                                           "reg:m=64:n=64:k=16:u=1", "reg:m=128:n=32:k=16:u=1",
-                                           "reg:m=128:n=32:k=32:u=1", "reg:m=128:n=64:k=16:u=1",
-                                           "reg:m=32:n=128:k=16:u=1", "reg:m=128:n=64:k=32:u=4",
-                                           "reg:m=128:n=64:k=32:u=2"};
     int nan_checked = 0;
     for (const C& c : og::candidates<T>()) {
-        const std::string sp = select::to_string(c);
-        const bool known = std::find(reads_c.begin(), reads_c.end(), sp) != reads_c.end();
         for (Transpose ta : {kN, kC})
-            for (auto [m, n, k] : {std::tuple{128, 128, 64}, std::tuple{45, 51, 38}}) {
+            for (auto [m, n, k] : {std::tuple{128, 128, 64}, std::tuple{45, 51, 38}, std::tuple{1, 1, 1}}) {
                 Spec s{ta, kN, m, n, k, 3, Layout::Strided};
                 s.beta_zero = true;
-                s.nan_c = !known;
+                s.nan_c = true;
                 if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_word_falls_back(c)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
-                expect_gemm(*this->ctx, p, name(c, s) + (known ? " (finite C: known-defects #11)" : " (NaN C)"));
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
                 if (::testing::Test::HasFatalFailure()) return;
-                nan_checked += !known;
+                ++nan_checked;
             }
     }
     EXPECT_GT(nan_checked, 0);
@@ -983,7 +976,7 @@ TYPED_TEST(GemmCandidates, AutoReadsEveryKeyField) {
         rows += "ta=C tb=N layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n"
                 "ta=N tb=C layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n";
     const TableGuard restore;
-    select::testing::set_builtin_tables(with_gemm_table(dtype, dev, rows));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(with_gemm_table(dtype, dev, rows)));
     const std::string conj = kCx<T> ? "wide:m=64:n=64:k=16" : "tiled";
     struct Probe { Spec s; std::string expect; const char* field; };
     const Probe probes[] = {
@@ -1050,7 +1043,7 @@ TYPED_TEST(GemmCandidates, AutoReadsTheSm89TranscribedTable) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("gemm", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:424a45bc")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads a measured gemm table";
     struct Row { Spec s; std::string with_vendor, without; };
     std::vector<Row> rows;
@@ -1081,8 +1074,8 @@ TYPED_TEST(GemmCandidates, VendorFreeLastResortIsDirect) {
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     const TableGuard restore;
-    select::testing::set_builtin_tables(
-        with_gemm_table(dtype, dev, "ta=N tb=N layout=packed m=64 n=64 k=64 batch=128 | vendor 1\n"));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(
+        with_gemm_table(dtype, dev, "ta=N tb=N layout=packed m=64 n=64 k=64 batch=128 | vendor 1\n")));
     for (const Spec& s : {Spec{kN, kN, 64, 64, 64, 4, Layout::Packed}, Spec{kT, kC, 300, 5, 70, 2, Layout::Strided}}) {
         auto p = make_problem<T>(s);
         std::string all;
@@ -1209,7 +1202,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"ta", r.ta}, {"tb", r.tb}, {"layout", r.layout}, {"m", r.m},
                               {"n", r.n},   {"k", r.k},   {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);

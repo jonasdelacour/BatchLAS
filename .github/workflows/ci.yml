@@ -308,6 +308,31 @@ jobs:
       - name: Stale tables are reported (flat-kernel-selection.md §6.5; never fails)
         run: python3 .github/ci/check_tuned_tables.py
 
+  tuned-tables-ledgers:
+    name: Tuned tables equal their ledgers
+    runs-on: ubuntu-latest
+    steps:
+      # No `lfs: true`: only the ledgers' LFS objects are fetched, and only when one changed.
+      - uses: actions/checkout@v4
+      - name: Key the cache on the ledger pointers' oids
+        id: ledger-key
+        run: |
+          key=$(git ls-files -s 'benchmarks/results/tuning/ledger/*' | sha256sum | cut -c1-16)
+          echo "key=tuning-ledgers-$key" >> "$GITHUB_OUTPUT"
+      - name: Restore the ledger LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: ${{ steps.ledger-key.outputs.key }}
+      - name: Fetch the ledger LFS objects (a cache hit downloads nothing)
+        run: |
+          git lfs install --local
+          git lfs pull --include "benchmarks/results/tuning/ledger/*"
+      - name: The generator's rules still hold (docs/design/tuning-data.md)
+        run: python3 scripts/sweep_to_table.py --self-test
+      - name: Every tuned/<op>.<device>.txt is re-derived byte for byte from its ledger
+        run: python3 scripts/sweep_to_table.py --check
+
   # ---------------------------------------------------------------------------
   # THE PRIMARY GATE. Everything above this line is text scanning.
   # ---------------------------------------------------------------------------

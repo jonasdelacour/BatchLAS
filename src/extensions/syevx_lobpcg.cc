@@ -6,6 +6,7 @@
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
+#include <limits>
 #include <stdexcept>
 #include <oneapi/dpl/random>
 #include <batchlas/blas/linalg.hh>
@@ -18,6 +19,9 @@
 #include "../sort.hh"
 #include <batchlas/settings.hh>
 #include "../ops/syev/vendor.hh"
+#include "../ops/syev/choice.hh"
+#include <optional>
+#include <string>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -157,6 +161,30 @@ inline constexpr R jacobi_singular_tolerance() {
 template <typename R>
 inline constexpr R jacobi_definiteness_floor() {
     return R(1e-6);
+}
+
+// The projected solves (XtAX, StAS) run on the CTA solver whenever it can take the shape: the
+// speed tables cannot see that LOBPCG stagnates on a less accurate Ritz solve (cuSOLVER float
+// is ~7x further off at n = 16). An explicit pin (env or an outer ScopedPin) still wins. Cta has
+// CtaFused's can_run, so it is never the fallback; above n = 32 the table decides.
+// evidence: docs/perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev
+using ProjectedSyevPin = std::optional<batchlas::select::ScopedPin<batchlas::ops::syev::SyevChoice>>;
+template <batchlas::Backend B, typename T>
+ProjectedSyevPin projected_syev_pin(const batchlas::Queue& ctx,
+                                    const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& M) {
+    std::string source;
+    if (B == batchlas::Backend::NETLIB || batchlas::select::detail::pin_text("syev", &source)) return std::nullopt;
+    if (!batchlas::blas::dispatch::detail::syev_supports_cta<T>(ctx, M)) return std::nullopt;
+    return ProjectedSyevPin(std::in_place, "syev", batchlas::ops::syev::CtaFused{});
+}
+
+// Sized under the same pin as the call, so the buffer and the run branch identically.
+template <batchlas::Backend B, typename T>
+size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& M,
+                                  batchlas::Span<typename batchlas::base_type<T>::type> w, batchlas::JobType jobz,
+                                  batchlas::Uplo uplo) {
+    const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, M);
+    return batchlas::syev_buffer_size<B>(ctx, M, w, jobz, uplo);
 }
 
 } // namespace
@@ -352,9 +380,9 @@ inline constexpr R jacobi_definiteness_floor() {
         // more than either the block_vectors or the 3*block_vectors one. Size all three.
         auto StAS_restart = MatrixView(StAS_base, block_vectors * 2, block_vectors * 2,
                                        StAS_base.ld(), StAS_base.stride());
-        const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
-        const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
-        const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_xtax = projected_syev_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas_restart = projected_syev_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+        const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
         size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
             const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
@@ -523,6 +551,7 @@ inline constexpr R jacobi_definiteness_floor() {
         if (prefer_vendor_projected_syev) {
             (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
+            const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, XtAX);
             (void)syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
         trace_wait("syevx: syev XtAX done");
@@ -1027,23 +1056,29 @@ inline constexpr R jacobi_definiteness_floor() {
             (void)gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, {.transA = trans});
             trace_wait("syevx: StAS gemm done");
 
-            // A masked residual column zeroes the corresponding row and column of StAS,
-            // so the projected problem gains a spurious eigenvalue 0 that can be selected
-            // as a Ritz pair -- zero columns in X_new, a hard breakdown. Plant a sentinel
-            // on its diagonal instead: ||StAS||_F + 1 is strictly outside the real
-            // spectrum, and the masked rows contribute nothing to that norm.
-            if (mask_this_iteration) {
-                trace("syevx: soft-lock StAS deflation submit");
+            // A null column of the search basis (a masked residual, or a P column whose Ritz
+            // coefficients were exactly zero) zeroes its row and column of StAS, so the
+            // projected problem gains a spurious eigenvalue 0 that can be selected as a Ritz
+            // pair -- zero columns in X_new, a hard breakdown. Plant a sentinel on its
+            // diagonal instead: ||StAS||_F + 1 is strictly outside the real spectrum, and
+            // the null rows contribute nothing to that norm. Detected from S itself, so the
+            // P block and the restart layout (R copied into the P slot) are covered too.
+            // evidence: docs/design/known-defects.md#lobpcg-picked-a-spurious-zero-ritz-value-from-a-null-p-column
+            {
+                trace("syevx: null-direction StAS deflation submit");
                 ctx->submit([&](sycl::handler& h) {
                     auto StAS_ptr = StAS.data_ptr();
                     const int64_t StAS_ld = StAS.ld();
                     const int64_t StAS_stride = StAS.stride();
-                    auto col_conv = col_converged.data();
-                    const size_t nlock = neigs;
-                    const int64_t r_offset = block_vectors * 2;
+                    auto Sdata = S.data_ptr();
+                    const int64_t S_ld = S.ld();
+                    const int64_t S_stride = S.stride();
+                    const int64_t first = block_vectors;
                     const int64_t nv = Nvecs;
+                    const int64_t nrows = n;
+                    const float_type eps_n = std::numeric_limits<float_type>::epsilon() * float_type(n);
+                    const float_type null_tol = eps_n * eps_n;
                     const bool largest = params.find_largest;
-                    auto partials = sycl::local_accessor<float_type, 1>(128, h);
                     h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             const auto tid = item.get_local_linear_id();
@@ -1051,30 +1086,31 @@ inline constexpr R jacobi_definiteness_floor() {
                             const auto local_size = item.get_local_range(0);
                             sycl::group<1> cta = item.get_group();
                             auto* mat = StAS_ptr + int64_t(bid) * StAS_stride;
+                            const auto* basis = Sdata + int64_t(bid) * S_stride;
                             float_type acc = 0;
                             for (int64_t linear = int64_t(tid); linear < nv * nv; linear += int64_t(local_size)) {
                                 const int64_t row = linear % nv;
                                 const int64_t col = linear / nv;
                                 acc += internal::norm_squared(mat[row + col * StAS_ld]);
                             }
-                            partials[tid] = acc;
-                            sycl::group_barrier(cta);
-                            const float_type total =
-                                sycl::joint_reduce(cta, partials.begin(), partials.end(), sycl::plus<float_type>());
+                            const float_type total = sycl::reduce_over_group(cta, acc, sycl::plus<float_type>());
                             const float_type sentinel = sycl::sqrt(total) + float_type(1);
-                            for (size_t j = tid; j < nlock; j += local_size) {
-                                if (col_conv[bid * nlock + j] == 0) continue;
-                                const int64_t d = r_offset + int64_t(j);
-                                mat[d + d * StAS_ld] = T(largest ? -sentinel : sentinel);
+                            for (int64_t c = first; c < nv; ++c) {
+                                float_type part = 0;
+                                for (int64_t i = int64_t(tid); i < nrows; i += int64_t(local_size))
+                                    part += internal::norm_squared(basis[i + c * S_ld]);
+                                const float_type norm2 = sycl::reduce_over_group(cta, part, sycl::plus<float_type>());
+                                if (tid == 0 && norm2 <= null_tol) mat[c + c * StAS_ld] = T(largest ? -sentinel : sentinel);
                             }
                         });
                 });
-                trace_wait("syevx: soft-lock StAS deflation done");
+                trace_wait("syevx: null-direction StAS deflation done");
             }
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
                 (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
+                const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, StAS);
                 (void)syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
             trace_wait("syevx: syev StAS done");
@@ -1262,9 +1298,9 @@ inline constexpr R jacobi_definiteness_floor() {
                 auto StAS_restart_dummy = projected_dummy(block_vectors * 2);
                 auto StAS_base_dummy = projected_dummy(block_vectors * 3);
 
-                const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                const size_t ws_stas_restart = syev_buffer_size<B>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_xtax = projected_syev_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas_restart = projected_syev_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
                 // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.

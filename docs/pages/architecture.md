@@ -8,6 +8,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | --- | --- |
 | @subpage design_flat_selection "Flat kernel selection" | Families, per-device tuned tables, `select::choose`, pins, rules R1-R8. API: @ref api_selection; inventory: @ref selection_tables. |
 | @subpage design_tiered_tuning "Tiered tuning" | The tuning engine behind the tables: tiers, racing, ledgers, workers. |
+| @subpage design_tuning_data "Tuning data layout" | The two files per (op, device): the ledger, the generated table, kernel hashes and the CI check. |
 | @subpage md_docs_2extending "Extending BatchLAS" | Adding an op or entry point: `src/ops/<op>/`, tables, tuner spec, tests. |
 | @subpage md_docs_2design_2vendor-independence "Vendor independence" | The vendor seam, the vendor-free build, the coverage instrument; the replaced RouteTable layer as history. |
 | @subpage md_docs_2design_2vendor-free-status "Vendor-free status" | Current state of the vendor-free build. |

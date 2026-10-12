@@ -1079,14 +1079,16 @@ template <class T> struct FormQCase {
         tau.store();
     }
     Batched<T>& out() { return F; }
+    // The batched overload over the default items; the per-item one is a single-item call of it.
     double value() {
+        const auto items = F.mview().default_items();
+        auto Q = MV<T>::form_q(ctx(), F.mview(), tau.vview(), items, cols);
+        if (Q.rows() != m || Q.cols() != cols || Q.batch_size() != int(items.size())) return kNaN;
         double worst = 0;
-        for (int b : F.mview().default_items()) {
-            auto Q = MV<T>::form_q(ctx(), F.mview(), tau.vview(), b, cols);
-            if (Q.rows() != m || Q.cols() != cols) return kNaN;
+        for (std::size_t g = 0; g < items.size(); ++g)
             for (int j = 0; j < cols; ++j)
-                for (int i = 0; i < m; ++i) worst = batchlas::verify::nanmax(worst, std::abs(cdouble(Q(i, j, 0) - ref[b][j * m + i])));
-        }
+                for (int i = 0; i < m; ++i)
+                    worst = batchlas::verify::nanmax(worst, std::abs(cdouble(Q(i, j, int(g)) - ref[items[g]][j * m + i])));
         return worst;
     }
 };
@@ -1126,10 +1128,91 @@ template <class T> struct QrReconCase {
     }
 };
 
+// U: Hadamard columns (m x ucols, a different set per item); Vh: a phased permutation (vrows x n);
+// s dyadic; A0 = U(:, :k) diag(s) Vh(:k, :) exact. Columns of U and rows of Vh past k hold poison.
+template <class T> struct SvdCase {
+    using type = T;
+    using R = real_t<T>;
+    static constexpr Check kind = Check::factorization;
+    static constexpr int m = 16, n = 6, k = 6;
+    int bound_n = m, hot_r = m - 1, hot_c = k - 1;
+    Batched<T> A0 = Batched<T>::matrix(m, n), U, Vh;
+    Batched<R> s = Batched<R>::vec(k, 3);
+
+    explicit SvdCase(int ucols = k, int vrows = k) : U(Batched<T>::matrix(m, ucols)), Vh(Batched<T>::matrix(vrows, n)) {
+        using D = promoted_t<T>;
+        for (int b = 0; b < kB; ++b) {
+            for (int j = 0; j < k; ++j) {
+                s.ex(b, j, 0) = R(4.0 - 0.5 * j + 0.25 * b);
+                for (int i = 0; i < m; ++i) U.ex(b, i, j) = hadamard<T>(i, (j + 3 * b) % m, b);
+            }
+            for (int l = 0; l < k; ++l)
+                for (int j = 0; j < n; ++j) Vh.ex(b, l, j) = j == (l + b) % n ? phase<T>(l + j + b) : MV<T>::make(0.0, 0.0);
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i) {
+                    D acc = D(0);
+                    for (int l = 0; l < k; ++l) acc += MV<T>::up(U.ex(b, i, l)) * double(s.ex(b, l, 0)) * MV<T>::up(Vh.ex(b, l, j));
+                    A0.ex(b, i, j) = down<T>(acc);
+                }
+        }
+        A0.store();
+        U.store();
+        Vh.store();
+        s.store();
+    }
+    Batched<T>& out() { return U; }
+    double value() { return MV<T>::svd_residual(ctx(), A0.mview(), U.mview(), s.vview(), Vh.mview()); }
+};
+
 }  // namespace
 
 VERIFY_RESIDUAL_SUITE(FormQ, FormQCase)
 VERIFY_RESIDUAL_SUITE(QrReconstruction, QrReconCase)
+VERIFY_RESIDUAL_SUITE(SvdResidual, SvdCase)
+
+TYPED_TEST(FormQ, PerItemOverloadMatchesBatched) {
+    FormQCase<TypeParam> c;
+    const std::vector<int> items{kB - 1, 0};
+    auto Qb = MV<TypeParam>::form_q(ctx(), c.F.mview(), c.tau.vview(), items, c.m);
+    ASSERT_EQ(Qb.batch_size(), 2);
+    for (std::size_t g = 0; g < items.size(); ++g) {
+        auto Q1 = MV<TypeParam>::form_q(ctx(), c.F.mview(), c.tau.vview(), items[g], c.m);
+        for (int j = 0; j < c.m; ++j)
+            for (int i = 0; i < c.m; ++i) EXPECT_EQ(Q1(i, j, 0), Qb(i, j, int(g))) << "item " << items[g];
+    }
+    const std::vector<int> outside{kB};
+    EXPECT_THROW(MV<TypeParam>::form_q(ctx(), c.F.mview(), c.tau.vview(), outside, c.m), std::out_of_range);
+}
+
+// s_{k-1} += d on the last item moves A by d U(:, k-1) Vh(k-1, :), of unit Frobenius norm.
+TYPED_TEST(SvdResidual, KnownValue) {
+    using R = real_t<TypeParam>;
+    SvdCase<TypeParam> c;
+    const int b = kB - 1;
+    const R d = R(0.5);
+    c.s.at(b, c.k - 1, 0) += d;
+    expect_value(c, 0.5 / std::sqrt(frob2(c.A0, b)));
+}
+
+TYPED_TEST(SvdResidual, PerturbedValueAndVhFail) {
+    SvdCase<TypeParam> c;
+    c.s.at(kB - 1, 0, 0) += real_t<TypeParam>(1);
+    expect_fails(c);
+    SvdCase<TypeParam> v;
+    v.Vh.at(kB / 2, v.k - 1, 0) += bump<TypeParam>();
+    expect_fails(v);
+    SvdCase<TypeParam> w;
+    w.Vh.store_wrong_ld();
+    expect_fails(w);
+}
+
+TYPED_TEST(SvdResidual, FullFactorsReadOnlyTheLeadingK) {
+    SvdCase<TypeParam> c(SvdCase<TypeParam>::m, SvdCase<TypeParam>::n + 2);  // the extra columns of U and rows of Vh stay poison
+    expect_small(c);
+    Batched<TypeParam> narrow = Batched<TypeParam>::matrix(c.m, c.k - 1);
+    EXPECT_THROW(MV<TypeParam>::svd_residual(ctx(), c.A0.mview(), narrow.mview(), c.s.vview(), c.Vh.mview()),
+                 std::invalid_argument);
+}
 
 TYPED_TEST(FormQ, LeadingColumnsOnly) {
     FormQCase<TypeParam> c;

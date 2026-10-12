@@ -46,7 +46,7 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  *
  * Computes \f$ A = Q \Lambda Q^H \f$ for every batch item from its `uplo` triangle.
  * The kernel family is the first entry of the nearest row of the device's tuned table
- * (`tuned/syev.<dtype>.<device>.txt`) that can run the call: on a GPU queue a native
+ * (`tuned/syev.<device>.txt`) that can run the call: on a GPU queue a native
  * tier (the n <= 32 sub-group solvers `cta`, `cta_fused` and `jacobi`, which need
  * sub-group size 32; `blocked` or `two_stage` at any n), otherwise `vendor`, the
  * solver library. Pin a family with `BATCHLAS_SYEV_ROUTE` (e.g. `two_stage`, `vendor`).

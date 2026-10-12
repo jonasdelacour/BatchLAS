@@ -14,7 +14,7 @@ RTX 4090 (device 1, 128 SMs, 72 MB L2, 1008 GB/s DRAM roof), CUDA backend, in-or
 | `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch >= 1 |
 | `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, minus three known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B, or `complex<double>` N/N with one column ([known-defects #13](../design/known-defects.md)) |
 
-Selection is the first runnable entry of the nearest row of `tuned/spmm.<dtype>.<device>.txt`, keyed
+Selection is the first runnable entry of the nearest row of `tuned/spmm.<device>.txt`, keyed
 `transA:exact transB:exact m:log nrhs:log batch:log`. `ConjTrans` folds to `T` (`src/ops/spmm/spmm.cc:33-39`). The
 last resort is `vendor`, then `direct`. `BATCHLAS_SPMM_ROUTE` takes `auto`, `native`, `vendor` or `direct`. Any
 other spelling, or one `can_run` refuses for the call, throws.
@@ -26,7 +26,7 @@ is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gathe
 
 ### Ranking in the tables
 
-Every row of `tuned/spmm.<dtype>.<device>.txt` on sm_89, sm_120 and `cpu` is transcribed from the predicate that
+Every row of `tuned/spmm.<device>.txt` on sm_89, sm_120 and `cpu` is transcribed from the predicate that
 preceded flat selection (untimed; provenance in `tuned/README.md`):
 
 | rows | float, double, complex\<double\> | complex\<float\> |

@@ -1,5 +1,5 @@
 // trsm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.2): select::run takes
-// the first entry of the nearest tuned/trsm.<dtype>.<device>.txt row that can_run() admits. Cta and SgLeft
+// the first entry of the nearest tuned/trsm.<device>.txt row that can_run() admits. Cta and SgLeft
 // are register-resident solvers for order <= 32; Blocked solves 32-wide diagonal blocks with Cta and
 // updates the rest with the public gemm, which picks its own kernel.
 

@@ -17,6 +17,7 @@
 
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/orgqr_native.hh"
 #include "../src/ops/orgqr/choice.hh"
@@ -402,6 +403,31 @@ TYPED_TEST(OrgqrCandidates, ExactWorkspaceInAPoisonedArena) {
         }
 }
 
+// The blocked apply's W1 = V^H C is a beta = 0 gemm into the arena. Pinning the native gemm
+// families that once read C there (known-defects.md #11) makes this independent of the gemm table.
+TYPED_TEST(OrgqrCandidates, PoisonedArenaUnderEveryPinnedNativeGemm) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    const C blocked{oq::Blocked{}};
+    int ran = 0;
+    for (const char* gemm : {"direct", "tiled"})
+        for (auto [m, n] : {std::pair{1, 1}, std::pair{33, 20}}) {
+            if (!this->expect_runs(blocked, m, n, 5)) continue;
+            auto p = this->prob(m, n, 5, 7u + m);
+            const Pin pin("orgqr", blocked);
+            const Pin gpin("gemm", std::string_view(gemm));
+            const std::size_t bytes = orgqr_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span());
+            UnifiedVector<std::byte> arena(bytes);
+            std::memset(arena.data(), 0xFF, bytes);
+            (void)orgqr<B, T>(*this->ctx, p.A(), p.tau.to_span(), arena.to_span());
+            this->ctx->wait();
+            expect_q(*this->ctx, p, name(blocked, m, n, 5) + " gemm=" + gemm);
+            if (::testing::Test::HasFatalFailure()) return;
+            ++ran;
+        }
+    if (ran == 0) GTEST_SKIP() << "blocked has no route on this backend";
+}
+
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
@@ -542,21 +568,23 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
     }
 }
 
-// Auto against the transcribed table this device reads (sm_89 or sm_120, the same rows): the old
-// 512 ceiling straddled on each extent, on and off the grid (RouteOrgqr.PreferredIsNative-
+// Auto against the shipped table this device reads (shipped_table_pick.hh): the old 512 ceiling
+// straddled on each extent, on and off the grid (RouteOrgqr.PreferredIsNative-
 // UpToTheMeasuredCeiling and VendorFreeFallbackHandsOverTheNativeRoute, ported, live).
-TYPED_TEST(OrgqrCandidates, AutoReadsTheTranscribedTable) {
+TYPED_TEST(OrgqrCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
-    const auto tables = select::tables_in_borrow_order("orgqr", select::dtype_name<T>(),
-                                                       select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || (tables.front()->device != "sm_89" && tables.front()->device != "sm_120"))
-        GTEST_SKIP() << "this device reads no transcribed orgqr table";
     struct Row { int m, n, batch; };
     const Row rows[] = {{1, 1, 3},     {96, 96, 2},  {200, 150, 2}, {512, 512, 1}, {512, 40, 1},
                         {513, 40, 1},  {520, 8, 1},  {700, 33, 1},  {513, 513, 1}, {530, 500, 1}};
     for (const Row& r : rows) {
         auto p = this->prob(r.m, r.n, r.batch, 41u + r.m);
-        const std::string want = old_first(r.m, r.n, TestFixture::kVendor);
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "orgqr", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx),
+            select::Key{{"m", r.m}, {"n", r.n}}, [&] {
+                auto q = this->prob(r.m, r.n, r.batch, 41u + r.m);
+                (void)this->auto_choice(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(r.m, r.n, r.batch);
         EXPECT_EQ(this->auto_choice(p), want) << label(r.m, r.n, r.batch);
         expect_q(*this->ctx, p, "auto " + label(r.m, r.n, r.batch));
     }
@@ -579,7 +607,7 @@ TYPED_TEST(OrgqrCandidates, AutoReadsEveryKeyField) {
                        "m=256 n=64 | vendor 1 | blocked 2\n"
                        "m=64 n=16 | vendor 1 | blocked 2\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n; const char* expect; const char* field; };
     for (const Probe& k : {Probe{64, 64, "blocked", "base"}, Probe{256, 64, "vendor", "m"},
                            Probe{64, 16, "vendor", "n"}}) {
@@ -611,7 +639,7 @@ TYPED_TEST(OrgqrCandidates, VendorFreeLastResortIsBlocked) {
                        "# op=orgqr dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: m:log n:log:2\nm=64 n=64 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (auto [m, n] : {std::pair{64, 64}, std::pair{600, 520}}) {
         auto p = this->prob(m, n, 1, 53u);
         std::string all;
@@ -705,20 +733,20 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())), batchlas::NoRouteError);
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: at grid
-// and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice on both
-// devices, and every row ranks both candidates.
-TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: at
+// grid and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice, and
+// every row ranks both candidates. sm_120 is deep-measured since 2026-10-09.
+TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
     const std::pair<int, int> points[] = {{1, 1},     {96, 96},    {300, 299},  {511, 511}, {512, 512},
                                           {513, 1},   {513, 513},  {514, 300},  {600, 512}, {640, 513},
                                           {1000, 10}, {2000, 600}, {9000, 9000}, {450, 449}, {512, 384}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("orgqr", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (auto [m, n] : points) {
                 const select::TableRow* row = t.nearest(select::Key{{"m", m}, {"n", n}});
                 ASSERT_NE(row, nullptr) << t.file;

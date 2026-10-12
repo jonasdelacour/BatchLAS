@@ -1,5 +1,5 @@
 // trmm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
-// tuned/trmm.<dtype>.<device>.txt row that can_run() admits. Triangular is the Side::Left tile kernel that
+// tuned/trmm.<device>.txt row that can_run() admits. Triangular is the Side::Left tile kernel that
 // skips the zero half of A (trmm_triangular_tiles.hh); Expand materialises op(A)'s triangle into scratch and
 // hands it to the public gemm; Vendor is cuBLAS / rocBLAS / netlib trmm.
 

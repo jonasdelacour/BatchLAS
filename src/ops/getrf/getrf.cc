@@ -1,5 +1,5 @@
 // getrf (flat-kernel-selection.md §4.3, R1; phase 5): select::run takes the first entry of the nearest
-// tuned/getrf.<dtype>.<device>.txt row that can_run() admits. Tiny holds the whole matrix in registers,
+// tuned/getrf.<device>.txt row that can_run() admits. Tiny holds the whole matrix in registers,
 // Cta in local memory; Blocked factorises Cta-sized panels and updates the rest with the public trsm and
 // gemm, each of which picks its own kernel. PIVOTS: every family packs 1-based int32 into the int64 span's
 // first half (getrf_native.hh), except NETLIB's LAPACKE, which writes int64 -- so no native family runs on

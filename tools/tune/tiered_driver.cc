@@ -7,9 +7,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -22,6 +25,7 @@
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace batchlas::tune {
 
@@ -121,7 +125,7 @@ struct Region {
 
 struct Job {
     const OpSpec* spec = nullptr;
-    std::string dtype, dir;
+    std::string dtype, file;  // file: <ledger root>/<op>.<device>.jsonl, shared by every dtype
     std::vector<std::string> cands;
     std::map<std::string, std::string> fh;
     Ledger ledger;  // read once; plan_round's `stored` pointers point into it
@@ -130,18 +134,36 @@ struct Job {
     std::vector<CellKey> next;
     std::map<CellKey, CellRecord> mine;
     std::map<CellKey, std::vector<std::string>> runnable;
-    std::set<CellKey> planned;  // never planned twice in a run: a skip:cap midpoint would come back forever
+    std::set<CellKey> remeasure;  // --remeasure-keys for this op and dtype
+    std::set<CellKey> planned;  // never planned twice in a run: a skip:cap or skip:dim midpoint would come back forever
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     bool audited = false;  // until set, the next eligible worker cell is audited whatever the hash says
+    LdAuditBook ld;        // under TieredRun::mu_
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
+    // Scheduler state, under TieredRun::sq_. `queue` points into `plan`, which is replaced only
+    // once the round is drained and nothing of it runs (the next round depends on its results).
+    std::vector<PlannedCell> plan;
+    std::deque<const PlannedCell*> queue;
+    std::size_t running = 0;
+    int round = 0;
+    bool planning = false, done = false;
+    double wall = 0;
     PlanSpec plan_spec() const {
-        return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); }};
+        return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); },
+                [s = spec, d = dtype](const CellKey& k) {
+                    const auto v = s->dims(d, k);
+                    return v.empty() ? std::int64_t(0) : *std::max_element(v.begin(), v.end());
+                }};
     }
 };
+
+bool measurable(const PlannedCell& c) {
+    return c.reason.empty() || c.reason == "remeasure" || c.reason.rfind("partial:", 0) == 0;
+}
 
 class TieredRun {
 public:
@@ -157,25 +179,37 @@ private:
     std::vector<std::unique_ptr<Job>> jobs_;
     std::mutex mu_;
     std::chrono::steady_clock::time_point t0_;
+    std::mutex sq_;  // the cell queues; taken before mu_, never inside it
+    std::condition_variable cv_;
+    std::atomic<std::size_t> budget_left_{0};
+    std::vector<double> gpu_max_;  // per GPU: the largest per-item footprint since its last carve-out restart
+    std::vector<const Job*> gpu_job_;
+    std::size_t restarts_ = 0, switch_restarts_ = 0, switches_ = 0;
 
-    void emit(const Json& j);
+    void emit(Json j);
     void build(const std::string& op, const std::string& dtype);
     std::vector<PlannedCell> plan(Job& j);
-    void print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells);
+    std::string print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells);
     double cap_factor() const { return o_.refine_cap_factor >= 0 ? o_.refine_cap_factor : params(o_.tier).refine_cap_factor; }
     std::pair<std::size_t, std::size_t> cap_base(const Job& j) const;
     void cap(Job& j, std::vector<PlannedCell>& plan);
-    std::size_t measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted);
+    std::size_t stage(Job& j);
+    void advance(Job& j);
+    void gpu_loop(std::size_t g);
+    void note_pop(std::size_t g, const Job& j, const PlannedCell& c);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
     void record(Job& j, const CellRecord& r, Tier tier);
+    void retract(Job& j, const std::vector<std::string>& arms);
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
+    bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
     void refine(Job& j);
 };
 
-void TieredRun::emit(const Json& j) {
+void TieredRun::emit(Json j) {
     if (o_.progress_fd < 0) return;
-    const std::string line = j.line();
+    const auto wall = std::chrono::system_clock::now().time_since_epoch();
+    const std::string line = j.num("t", std::chrono::duration<double>(wall).count()).line();
     std::lock_guard<std::mutex> lock(mu_);
     for (std::size_t done = 0; done < line.size();) {
         const ssize_t n = ::write(o_.progress_fd, line.data() + done, line.size() - done);
@@ -192,8 +226,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     j->dtype = dtype;
     j->cands = s.candidates(dtype);
     j->fh = current_hashes(o_.repo, s, dtype);
-    j->dir = ledger_dir(o_.ledger_root, op, dtype, id_.device);
-    j->ledger = read_ledger(j->dir);
+    j->file = ledger_file(o_.ledger_root, op, id_.device);
+    j->ledger = read_ledger(j->file, dtype);
     for (const std::string& w : j->ledger.warnings) std::fprintf(stderr, "batchlas_tune: warning: %s\n", w.c_str());
     auto ax = s.axes();
     for (const auto& [name, values] : o_.grid)
@@ -204,17 +238,36 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
-    j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // A custom or --only-named run is a sample: the named cells only, every candidate, no refinement.
+    if (named_only()) j->next.clear();
+    else j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
+    if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
+        j->remeasure = r->second;
+        if (j->next.empty() && grid.empty())
+            throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " has an empty grid to check the keys against");
+        std::vector<std::string> names;
+        for (const KV& f : j->next.empty() ? grid.front() : j->next.front()) names.push_back(f.name);
+        for (const CellKey& k : r->second) {
+            std::vector<std::string> got;
+            for (const KV& f : k) got.push_back(f.name);
+            if (got != names)
+                throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " " + key_arg(k) + ": want the fields " +
+                                         join(names, ",") + " in that order");
+            if (std::find(j->next.begin(), j->next.end(), k) == j->next.end()) j->next.push_back(k);
+        }
+    }
     j->region = std::make_unique<Region>(grid);
     jobs_.push_back(std::move(j));
 }
 
 std::vector<PlannedCell> TieredRun::plan(Job& j) {
     j.planned.insert(j.next.begin(), j.next.end());
-    return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable);
+    return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable,
+                      o_.max_dim, j.round == 0 ? &j.remeasure : nullptr);
 }
 
-void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
+std::string TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
     std::map<std::string, int> n;
     double est = 0;
     for (const PlannedCell& c : plan) {
@@ -225,7 +278,7 @@ void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, b
     for (const auto& [why, count] : n) mix += (mix.empty() ? "" : ", ") + std::to_string(count) + " " + why;
     std::printf("== plan %s %s %s tier=%s: %zu cells (%s); est %s\n", j.spec->op().c_str(), j.dtype.c_str(),
                 id_.device.c_str(), to_string(o_.tier).c_str(), plan.size(), mix.c_str(), hours(est).c_str());
-    if (!cells) return;
+    if (!cells) return mix;
     for (const PlannedCell& c : plan) {
         std::string line = "  " + key_text(c.key) + "  " + (c.reason.empty() ? std::string("measure") : c.reason);
         if (!c.arms.empty()) line += "  arms=" + join(c.arms, "|");
@@ -233,6 +286,7 @@ void TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, b
         if (c.est_s > 0) line += "  est=" + fmt(c.est_s, "%.2fs");
         std::puts(line.c_str());
     }
+    return mix;
 }
 
 bool TieredRun::over_budget() const {
@@ -245,6 +299,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     if (!j.writer) {
         RunMeta m;
         m.run_id = run_id_;
+        m.dtype = j.dtype;
         m.host = host_name();
         m.device = id_.device;
         m.device_name = id_.device_name;
@@ -257,21 +312,58 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.candidates = join(j.cands, "|");
         m.worker_mode[j.spec->op() + "." + j.dtype] = m_ && m_->persistent() ? "worker" : "fresh";
         j.meta = m;
-        j.writer = std::make_unique<LedgerWriter>(j.dir, m);
+        j.writer = std::make_unique<LedgerWriter>(j.file, m);
     }
     CellRecord c = r;
     c.date = date_;
     c.tier = tier;
+    // Under the lock that note() takes: a cell finishing on another GPU never ranks a failed arm.
+    for (const auto& [arm, why] : j.ld.bad) (void)ld_retract(c, arm, why);
     j.writer->cell(c, tier);
     j.mine[c.key] = c;
 }
 
+// An ld-audit fail condemns the kernel, not the cell: every current record of this (op, dtype) that
+// ranks the arm, from this run or the ledger, is appended again with the arm bad. The newer line
+// wins in best_records and sweep_to_table.py; record() applies j.ld.bad to the copy.
+void TieredRun::retract(Job& j, const std::vector<std::string>& arms) {
+    if (arms.empty()) return;
+    std::vector<CellRecord> hit;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::map<CellKey, const CellRecord*> cur = best_records(j.ledger, j.fh);
+        for (const auto& [k, r] : j.mine) cur[k] = &r;
+        for (const auto& [k, r] : cur) {
+            CellRecord c = *r;
+            bool ranked = false;
+            for (const std::string& a : arms) ranked = ld_retract(c, a, j.ld.bad.at(a)) || ranked;
+            if (ranked) hit.push_back(*r);
+        }
+    }
+    for (const CellRecord& r : hit) record(j, r, r.tier);
+    std::printf("== %s %s ld audit: %s marked bad in %zu recorded cells\n", j.spec->op().c_str(), j.dtype.c_str(),
+                join(arms, ",").c_str(), hit.size());
+    std::fflush(stdout);
+    emit(Json().str("ev", "ld_retract").str("op", j.spec->op()).str("dtype", j.dtype).str("cands", join(arms, ","))
+             .integer("cells", std::int64_t(hit.size())));
+}
+
 // A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
-void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
+void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
+    // The cell already had its ld audit; an arm it failed is a verdict on ld, not on the worker.
+    CellJob job = job_in;
+    job.ld_audit.clear();
+    auto ld_failed = [&](const std::string& arm) {
+        return std::any_of(warm.arms.begin(), warm.arms.end(), [&](const ArmOutcome& x) {
+            return x.arm == arm && x.ld_audit == "fail";
+        });
+    };
+    job.arms.erase(std::remove_if(job.arms.begin(), job.arms.end(), ld_failed), job.arms.end());
     const ArmBatch f = m_->measure_fresh(job);
     std::vector<ArmOutcome> on_worker;
     for (const ArmOutcome& x : warm.arms)
-        if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end()) on_worker.push_back(x);
+        if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end() && !ld_failed(x.arm))
+            on_worker.push_back(x);
     const AuditResult a = audit_compare(on_worker, f.arms, j.cands);
     const std::string od = j.spec->op() + "." + j.dtype;
     bool flipped = false;
@@ -294,14 +386,36 @@ void TieredRun::audit(Job& j, const CellJob& job, const ArmBatch& warm) {
 void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const std::string& op = j.spec->op();
     emit(Json().str("ev", "cell_start").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu));
-    CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(j.spec->bytes(j.dtype, c.key), c.key)};
+    const double bytes = j.spec->bytes(j.dtype, c.key);
+    CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(bytes, c.key)};
     bool worker = false;
+    std::vector<ArmOutcome> ld_bad;  // failed the ld audit at an earlier cell: not timed again
     {
         std::lock_guard<std::mutex> lock(mu_);
-        job.arms = seed_order(j.mine, c.key, c.arms);
-        worker = m_->persistent() && !j.fresh;
+        std::vector<std::string> arms;
+        for (const std::string& a : c.arms)
+            if (const auto it = j.ld.bad.find(a); it != j.ld.bad.end()) ld_bad.push_back({a, "bad", it->second, {}, {}, 0, 0});
+            else arms.push_back(a);
+        job.arms = seed_order(j.mine, c.key, arms);
+        job.ld_audit = j.ld.want(job.arms);
+        worker = m_->persistent() && !j.fresh && !job.arms.empty();
     }
-    ArmBatch b = worker ? m_->measure(job) : m_->measure_fresh(job);
+    ArmBatch b = job.arms.empty() ? ArmBatch{} : worker ? m_->measure(job) : m_->measure_fresh(job);
+    b.arms.insert(b.arms.end(), ld_bad.begin(), ld_bad.end());
+    std::vector<std::string> ld_failed;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        ld_failed = j.ld.note(c.key, b.arms);
+    }
+    retract(j, ld_failed);
+    for (const ArmOutcome& a : b.arms) {
+        if (std::find(ld_failed.begin(), ld_failed.end(), a.arm) == ld_failed.end()) continue;
+        std::printf("[gpu%d] %s %s %s ld audit FAILED: %s %s\n", gpu, op.c_str(), j.dtype.c_str(),
+                    key_text(c.key).c_str(), a.arm.c_str(), a.reason.c_str());
+        std::fflush(stdout);
+        emit(Json().str("ev", "ld_audit").str("op", op).str("dtype", j.dtype).key(c.key).str("cand", a.arm)
+                 .str("verdict", "fail").str("reason", a.reason));
+    }
     if (b.worker_restarts > 0)
         emit(Json().str("ev", "worker_restart").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
                  .integer("restarts", b.worker_restarts).boolean("fallback", b.fallback));
@@ -320,9 +434,10 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                     key_text(c.key).c_str(), round, b.error.c_str());
         std::fflush(stdout);
         emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key).str("ranked", "")
-                 .str("tier", to_string(c.tier)).str("error", b.error));
+                 .str("tier", to_string(c.tier)).integer("round", round).str("error", b.error));
         return;
     }
+    if (c.round >= 0) round = c.round;  // a re-measured refinement midpoint stays a refinement record
     CellRecord r = record_from_arms(c.key, round, b.arms, j.cands, j.fh, c.stored);
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -341,7 +456,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                 summary.empty() ? "(nothing ranked)" : summary.c_str());
     std::fflush(stdout);
     emit(Json().str("ev", "cell_done").str("op", op).str("dtype", j.dtype).key(c.key)
-             .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)));
+             .str("ranked", join(r.ranked, "|")).str("tier", to_string(c.tier)).integer("round", round));
     const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(c.tier).audit_fraction;
     bool pick = audit_pick(run_id_, c.key, fraction);
     if (worker && !b.fallback && b.error.empty()) {
@@ -352,37 +467,96 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     if (worker && !b.fallback && b.error.empty() && pick) audit(j, job, b);
 }
 
-std::size_t TieredRun::measure_round(Job& j, const std::vector<PlannedCell>& plan, int round, bool budgeted) {
+// Records j.plan's skip:single cells and queues the rest sorted by (per-item footprint, bytes), so
+// every GPU popping the queue runs ascending footprints: the carve-out order. Returns the cells queued.
+std::size_t TieredRun::stage(Job& j) {
     std::vector<const PlannedCell*> todo;
-    for (const PlannedCell& c : plan) {
+    for (const PlannedCell& c : j.plan) {
         if (c.reason == "skip:single") {
-            record(j, single_record(c.key, round, c.arms.empty() ? "" : c.arms[0], j.cands, j.fh), c.tier);
+            record(j, single_record(c.key, j.round, c.arms.empty() ? "" : c.arms[0], j.cands, j.fh), c.tier);
             emit(Json().str("ev", "cell_done").str("op", j.spec->op()).str("dtype", j.dtype).key(c.key)
                      .str("ranked", join(c.arms, "|")).str("tier", to_string(c.tier)));
-        } else if (c.reason.empty() || c.reason.rfind("partial:", 0) == 0) {
+        } else if (measurable(c)) {
             todo.push_back(&c);
         }
     }
     std::printf("== %s %s %s round %d (%s): %zu of %zu cells to measure\n", j.spec->op().c_str(), j.dtype.c_str(),
-                id_.device.c_str(), round, to_string(o_.tier).c_str(), todo.size(), plan.size());
+                id_.device.c_str(), j.round, to_string(o_.tier).c_str(), todo.size(), j.plan.size());
     std::fflush(stdout);
-    // Round-robin shards; each GPU's share runs in ascending per-item footprint (the carve-out order).
-    std::vector<std::vector<const PlannedCell*>> shares(o_.devices.size());
-    for (std::size_t i = 0; i < todo.size(); ++i) shares[i % shares.size()].push_back(todo[i]);
-    for (auto& s : shares) sort_for_worker(s, [&](const CellKey& k) { return j.spec->bytes(j.dtype, k); });
-    std::vector<std::thread> workers;
-    for (std::size_t g = 0; g < o_.devices.size(); ++g)
-        workers.emplace_back([&, g] {
-            for (const PlannedCell* c : shares[g]) {
-                if (budgeted && over_budget()) return;
-                measure_one(j, *c, o_.devices[g], round);
-            }
-        });
-    for (auto& w : workers) w.join();
+    sort_for_worker(todo, [&](const CellKey& k) { return j.spec->bytes(j.dtype, k); });
+    j.per_round.push_back(todo.size());
+    std::lock_guard<std::mutex> lock(sq_);
+    j.queue.assign(todo.begin(), todo.end());
     return todo.size();
 }
 
-bool measurable(const PlannedCell& c) { return c.reason.empty() || c.reason.rfind("partial:", 0) == 0; }
+// The job's round is fully recorded: refine, plan and queue the next one, or finish the job.
+// Runs without sq_; no other thread touches j meanwhile (its queue is empty and nothing of it runs).
+void TieredRun::advance(Job& j) {
+    for (;;) {
+        if (j.capped || named_only()) j.next.clear();
+        else refine(j);
+        if (!j.next.empty() && over_budget()) budget_left_ += j.next.size(), j.next.clear();
+        if (j.next.empty()) break;
+        j.plan = plan(j);
+        cap(j, j.plan);
+        ++j.round;
+        if (stage(j) > 0) return;
+    }
+    j.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
+    std::lock_guard<std::mutex> lock(sq_);
+    j.done = true;
+}
+
+// Under sq_. Mirrors WorkerGate's rule to count the carve-out restarts the pop order costs.
+void TieredRun::note_pop(std::size_t g, const Job& j, const PlannedCell& c) {
+    const double fp = item_footprint(j.spec->bytes(j.dtype, c.key), c.key);
+    const bool moved = gpu_job_[g] && gpu_job_[g] != &j;
+    switches_ += moved;
+    gpu_job_[g] = &j;
+    if (fp < gpu_max_[g]) ++restarts_, switch_restarts_ += moved, gpu_max_[g] = fp;
+    else gpu_max_[g] = std::max(gpu_max_[g], fp);
+}
+
+// One thread per GPU: the next cell of the earliest job (op order) with queued cells. A job whose
+// round is drained but still running waits for its stragglers while this GPU works on later jobs.
+void TieredRun::gpu_loop(std::size_t g) {
+    std::unique_lock<std::mutex> lk(sq_);
+    for (;;) {
+        Job* j = nullptr;
+        for (auto& x : jobs_)
+            if (!x->queue.empty()) {
+                j = x.get();
+                break;
+            }
+        if (!j) {
+            if (std::all_of(jobs_.begin(), jobs_.end(), [](const auto& x) { return x->done; })) return;
+            cv_.wait(lk);
+            continue;
+        }
+        const PlannedCell* c = j->queue.front();
+        j->queue.pop_front();
+        if (j->round == 0 || !over_budget()) {  // round 0 is never budgeted
+            note_pop(g, *j, *c);
+            ++j->running;
+            const int round = j->round;
+            lk.unlock();
+            measure_one(*j, *c, o_.devices[g], round);
+            lk.lock();
+            --j->running;
+        } else {
+            ++budget_left_;  // a refinement cell the budget stopped
+        }
+        if (j->queue.empty() && j->running == 0 && !j->planning && !j->done) {
+            j->planning = true;
+            lk.unlock();
+            advance(*j);
+            lk.lock();
+            j->planning = false;
+            cv_.notify_all();
+        }
+    }
+}
 
 // (round-0, refined) records at the running tier: the ledger's current ones overlaid by this run's,
 // so a resumed or budget-stopped run refines against the lattice an earlier run measured.
@@ -447,23 +621,36 @@ void TieredRun::refine(Job& j) {
 
 int TieredRun::go() {
     for (const std::string& op : o_.ops)
-        for (const std::string& dtype : o_.dtypes) build(op, dtype);
-    std::vector<std::vector<PlannedCell>> plans;
+        for (const std::string& dtype : o_.dtypes) {
+            const OpSpec* s = find_spec(op);
+            if (s && o_.ops.size() > 1) {
+                try {
+                    (void)s->candidates(dtype);
+                } catch (const std::invalid_argument& e) {
+                    std::printf("== note: skipping %s %s: %s\n", op.c_str(), dtype.c_str(), e.what());
+                    continue;
+                }
+            }
+            build(op, dtype);
+        }
+    for (const auto& [od, keys] : o_.remeasure)
+        if (std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& j) { return j->spec->op() + "." + j->dtype == od; }))
+            throw std::runtime_error("--remeasure-keys names " + od + ", which this run does not tune");
     double est = 0, est_refine = 0, refine_cells = 0;
     std::size_t to_measure = 0;
     for (auto& j : jobs_) {
-        plans.push_back(plan(*j));
-        print_plan(*j, plans.back(), o_.plan);
-        double est_measure = 0;
+        j->plan = plan(*j);
+        const std::string mix = print_plan(*j, j->plan, o_.plan);
+        double est_measure = 0, est_job = 0;
         std::size_t n_measure = 0;
-        for (const PlannedCell& c : plans.back()) {
-            est += c.est_s;
+        for (const PlannedCell& c : j->plan) {
+            est += c.est_s, est_job += c.est_s;
             to_measure += measurable(c) || c.reason == "skip:single";
             if (measurable(c)) est_measure += c.est_s, ++n_measure;
         }
         // Refinement cells follow the lattice cells measured now, at their mean estimate.
         bool history = false;
-        const double ratio = refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
+        const double ratio = named_only() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
         j->est_refine_cells = ratio * double(n_measure);
         const double s = n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;
@@ -472,6 +659,10 @@ int TieredRun::go() {
                     "(%zu stored, %zu refined stored, %zu to measure)\n", j->est_refine_cells, ratio,
                     history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(), cap_factor(), stored,
                     refined, n_measure);
+        emit(Json().str("ev", "plan_job").str("op", j->spec->op()).str("dtype", j->dtype).str("device", id_.device)
+                 .integer("cells", std::int64_t(j->plan.size())).integer("measure", std::int64_t(n_measure))
+                 .str("mix", mix).num("est_s", est_job).integer("refine_cells", std::llround(j->est_refine_cells))
+                 .num("est_refine_s", s));
     }
     std::printf("== plan total: %zu cells to measure or probe; est %s lattice only, %s with refinement (~%.0f refinement "
                 "cells; %.2f s per child)\n", to_measure, hours(est).c_str(), hours(est + est_refine).c_str(), refine_cells,
@@ -484,43 +675,53 @@ int TieredRun::go() {
     if (o_.plan) return 0;
     if (!m_) throw std::logic_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
-    t0_ = std::chrono::steady_clock::now();
-    for (std::size_t i = 0; i < jobs_.size(); ++i) jobs_[i]->per_round.push_back(measure_round(*jobs_[i], plans[i], 0, false));
-    for (int round = 1;; ++round) {
-        std::size_t pending = 0;
-        for (auto& j : jobs_) {
-            if (j->capped) j->next.clear();
-            else refine(*j);
-            pending += j->next.size();
-        }
-        if (pending == 0) break;
-        if (over_budget()) {
-            std::printf("== budget %.2f h spent: %zu refinement cells left for a later run\n", o_.budget_h, pending);
-            break;
-        }
-        for (auto& j : jobs_) {
-            if (j->next.empty()) continue;
-            std::vector<PlannedCell> p = plan(*j);
-            cap(*j, p);
-            j->per_round.push_back(measure_round(*j, p, round, true));
-        }
-    }
-    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
+    if (batchlas_.ends_with("-dirty") && !o_.allow_dirty)
+        throw std::runtime_error("the tree at --repo " + o_.repo + " has uncommitted changes to tracked files (" + batchlas_ +
+                                 "): commit them, or pass --allow-dirty (such a run never reaches tuned/)");
+    t0_ =std::chrono::steady_clock::now();
+    for (auto& j : jobs_)
+        if (stage(*j) == 0) advance(*j);
+    gpu_max_.assign(o_.devices.size(), 0);
+    gpu_job_.assign(o_.devices.size(), nullptr);
+    std::vector<std::thread> gpus;
+    for (std::size_t g = 0; g < o_.devices.size(); ++g) gpus.emplace_back([this, g] { gpu_loop(g); });
+    for (auto& t : gpus) t.join();
+    if (budget_left_ > 0)
+        std::printf("== budget %.2f h spent: %zu refinement cells left for a later run\n", o_.budget_h,
+                    budget_left_.load());
     for (auto& j : jobs_) {
         std::string rounds;
         for (std::size_t n : j->per_round) rounds += (rounds.empty() ? "" : ",") + std::to_string(n);
         const std::size_t refined = std::accumulate(j->per_round.begin() + 1, j->per_round.end(), std::size_t(0));
         std::printf("== summary %s %s: measured %zu lattice + %zu refinement cells, per round %s; planned ~%.0f "
                     "refinement%s; wall %.1f s\n", j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], refined,
-                    rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", wall);
+                    rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", j->wall);
     }
     for (auto& j : jobs_) {
-        if (!j->writer) continue;
-        std::printf("== wrote %s/%s.jsonl: %zu cells\n", j->dir.c_str(), run_id_.c_str(), j->mine.size());
-        if (o_.out.empty()) continue;
-        const std::string cmd = "python3 '" + o_.repo + "/scripts/sweep_to_table.py' --ledger '" + j->dir + "' --out '" + o_.out + "'";
-        if (std::system(cmd.c_str()) != 0) throw std::runtime_error("table generation failed: " + cmd);
+        std::printf("== summary %s %s ld audit (ld +%d): %zu passed, %zu skipped, %zu failed\n", j->spec->op().c_str(),
+                    j->dtype.c_str(), kLdAuditPad, j->ld.passed, j->ld.skipped(), j->ld.failed.size());
+        for (const std::string& f : j->ld.failed) std::printf("   ld audit FAILED %s\n", f.c_str());
+        emit(Json().str("ev", "ld_audit_summary").str("op", j->spec->op()).str("dtype", j->dtype)
+                 .integer("passed", std::int64_t(j->ld.passed)).integer("skipped", std::int64_t(j->ld.skipped()))
+                 .integer("failed", std::int64_t(j->ld.failed.size())).str("failures", join(j->ld.failed, "; ")));
     }
+    std::printf("== summary workers: %zu (op, dtype) switches; %zu carve-out restarts by footprint order, %zu of "
+                "them at a switch\n", switches_, restarts_, switch_restarts_);
+    std::fflush(stdout);
+    emit(Json().str("ev", "schedule").integer("switches", std::int64_t(switches_))
+             .integer("restarts", std::int64_t(restarts_)).integer("switch_restarts", std::int64_t(switch_restarts_)));
+    std::set<std::string> written;
+    for (auto& j : jobs_) {
+        if (!j->writer) continue;
+        std::printf("== wrote %s: %zu %s cells (run %s)\n", j->file.c_str(), j->mine.size(), j->dtype.c_str(), run_id_.c_str());
+        written.insert(j->spec->op());
+    }
+    if (!o_.out.empty())
+        for (const std::string& op : written) {
+            const std::string cmd = "python3 '" + o_.repo + "/scripts/sweep_to_table.py' --ledger '" + o_.ledger_root +
+                                    "' --op '" + op + "' --device '" + id_.device + "' --out '" + o_.out + "'";
+            if (std::system(cmd.c_str()) != 0) throw std::runtime_error("table generation failed: " + cmd);
+        }
     emit(Json().str("ev", "done"));
     return 0;
 }
@@ -541,7 +742,7 @@ struct StatusRow {
 
 std::string tier_mix(const std::map<Tier, int>& t) {
     std::string s;
-    for (Tier x : {Tier::deep, Tier::coarse, Tier::preview, Tier::custom, Tier::transcribed})
+    for (Tier x : {Tier::deep, Tier::coarse, Tier::preview, Tier::custom, Tier::converted, Tier::transcribed})
         if (t.count(x)) s += (s.empty() ? "" : ",") + to_string(x) + ":" + std::to_string(t.at(x));
     return s.empty() ? "-" : s;
 }
@@ -569,7 +770,11 @@ std::string table_summary(const fs::path& p) {
 
 std::string git_head(const std::string& repo) {
     std::string sha = capture("git -C '" + repo + "' rev-parse --short=8 HEAD 2>/dev/null");
-    if (!capture("git -C '" + repo + "' status --porcelain --untracked-files=no 2>/dev/null").empty()) sha += "-dirty";
+    // The tuner's own outputs (ledger, tables) do not make a tree dirty: a run appends to the ledger.
+    if (!capture("git -C '" + repo + "' status --porcelain --untracked-files=no -- . ':(exclude)benchmarks/results/tuning' "
+                 "':(exclude)tuned' 2>/dev/null")
+             .empty())
+        sha += "-dirty";
     return sha.empty() ? "unknown" : sha;
 }
 
@@ -590,42 +795,53 @@ int status_main(const std::string& repo, const std::string& ledger_root, const s
             }
         return it->second;
     };
-    auto ident = [](const std::string& name) -> std::optional<std::tuple<std::string, std::string, std::string>> {
-        const auto p = split(name, '.');
-        if (p.size() < 3) return std::nullopt;
-        return std::tuple(p[0], p[1], join(std::vector<std::string>(p.begin() + 2, p.end()), "."));
+    // "<op>.<device>" -> {op, device}
+    auto ident = [](const std::string& stem) -> std::optional<std::pair<std::string, std::string>> {
+        const auto p = split(stem, '.');
+        if (p.size() != 2) return std::nullopt;
+        return std::pair(p[0], p[1]);
     };
+    const std::vector<std::string> dtypes{"float", "double", "cfloat", "cdouble"};
     std::error_code ec;
     if (fs::is_directory(ledger_root, ec))
         for (const auto& e : fs::directory_iterator(ledger_root)) {
-            const auto id = e.is_directory() ? ident(e.path().filename().string()) : std::nullopt;
-            if (!id) continue;
-            StatusRow& r = rows[*id];
-            r.ledger = true;
-            try {
-                const Ledger l = read_ledger(e.path().string());
-                const auto& fh = hashes_of(std::get<0>(*id), std::get<1>(*id));
-                const auto best = best_records(l, fh);
-                std::set<CellKey> keys;
-                for (const CellRecord& c : l.cells) keys.insert(c.key);
-                r.runs = l.runs.size();
-                r.cells = keys.size();
-                r.stale = keys.size() - best.size();
-                for (const auto& [k, c] : best) {
-                    r.tiers[c->tier]++;
-                    r.partial += freshness(*c, fh) == Freshness::partly_stale;
+            const auto od = e.path().extension() == ".jsonl" ? ident(e.path().stem().string()) : std::nullopt;
+            if (!od) continue;
+            for (const std::string& dtype : dtypes) {
+                const std::tuple<std::string, std::string, std::string> id(od->first, dtype, od->second);
+                try {
+                    const Ledger l = read_ledger(e.path().string(), dtype);
+                    if (l.runs.empty() && l.cells.empty()) continue;
+                    StatusRow& r = rows[id];
+                    r.ledger = true;
+                    const auto& fh = hashes_of(od->first, dtype);
+                    const auto best = best_records(l, fh);
+                    std::set<CellKey> keys;
+                    for (const CellRecord& c : l.cells) keys.insert(c.key);
+                    r.runs = l.runs.size();
+                    r.cells = keys.size();
+                    r.stale = keys.size() - best.size();
+                    for (const auto& [k, c] : best) {
+                        r.tiers[c->tier]++;
+                        r.partial += freshness(*c, fh) == Freshness::partly_stale;
+                    }
+                    for (const RunMeta& m : l.runs) r.newest = std::max(r.newest, m.date);
+                } catch (const std::exception& ex) {
+                    rows[id].ledger = true;
+                    rows[id].error = ex.what();
                 }
-                for (const RunMeta& m : l.runs) r.newest = std::max(r.newest, m.date);
-            } catch (const std::exception& ex) {
-                r.error = ex.what();
             }
         }
     if (fs::is_directory(tuned_dir, ec))
         for (const auto& e : fs::directory_iterator(tuned_dir)) {
             if (e.path().extension() != ".txt") continue;
-            const auto id = ident(e.path().stem().string());
-            if (!id || (!find_spec(std::get<0>(*id)) && !rows.count(*id))) continue;
-            rows[*id].table = table_summary(e.path());
+            const auto od = ident(e.path().stem().string());
+            if (!od) continue;
+            const std::string summary = table_summary(e.path());  // one table per (op, device), every dtype
+            bool any = false;
+            for (auto& [id, r] : rows)
+                if (std::get<0>(id) == od->first && std::get<2>(id) == od->second) r.table = summary, any = true;
+            if (!any && find_spec(od->first)) rows[{od->first, "-", od->second}].table = summary;
         }
     const std::time_t now = std::time(nullptr);
     std::printf("%-6s %-7s %-7s | %4s %6s %-40s %5s %7s %-16s | %s\n", "op", "dtype", "device", "runs", "cells",
@@ -655,7 +871,7 @@ int import_raw_main(const std::string& repo, const std::string& ledger_root, con
     if (!spec) throw std::runtime_error(raw + ": no spec for op '" + op + "'");
     const auto op_hash = kernel_hash(repo, spec->kernel_sources());
     import_schema1(raw, ledger_root, current_hashes(repo, *spec, dtype), op_hash.value_or(""), Tier::deep, spec->axes());
-    std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_dir(ledger_root, op, dtype, device).c_str(),
+    std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_file(ledger_root, op, device).c_str(),
                 op_hash && *op_hash == meta->get("kernels") ? "" : " (kernels changed since: hashes are legacy:<kernels>)");
     return 0;
 }

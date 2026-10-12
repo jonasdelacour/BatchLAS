@@ -50,7 +50,7 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 
 | Where | Contents |
 | --- | --- |
-| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `solve_residual` (an empty B for getri; 8 seeded probe columns above 2^28 multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator`, `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
+| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`; one item, or a list of items packed in order), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `svd_residual` (`‖A − U·diag(s)·Vh‖_F / ‖A‖_F` over the leading min(m, n) singular triplets, judged as `factorization` at n = max(m, n)), `solve_residual` (an empty B for getri; 8 seeded probe columns above 2^28 multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator`, `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
 | `MatrixView` / `VectorView` members | `all_items()`, `default_items()`, `astype<U>(items)` (the listed items, promoted and packed) |
 | `verify/tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()`, `eps<T>()`, `nanmax` |
 | `verify/reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` tau, `?sterf`; each on a packed vector or on `(view, item)`. Each returns `false` without LAPACKE, empty input included, and the caller skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
@@ -70,7 +70,7 @@ with `bound`. Items are processed in groups that keep each promoted operand unde
 
 | `Check` | Quantity | f(n) | c |
 | --- | --- | --- | --- |
-| `factorization` | `‖A − LLᴴ‖_F / ‖A‖_F`, `‖PA − LU‖_F / ‖A‖_F`, `‖A − QR‖_F / ‖A‖_F` | n | 16 |
+| `factorization` | `‖A − LLᴴ‖_F / ‖A‖_F`, `‖PA − LU‖_F / ‖A‖_F`, `‖A − QR‖_F / ‖A‖_F`, `‖A − UΣVᴴ‖_F / ‖A‖_F` | n (`svd_residual`: max(m, n)) | 16 |
 | `solve` | `‖AX − B‖_F / (‖A‖_F ‖X‖_F)`; `trsm_residual`'s normwise `‖op(A)X − αB‖_F / (‖A‖_F‖X‖_F + |α|‖B‖_F)` | n | 16 |
 | `blas` | componentwise backward error (gemm, gemv, spmm, rank-k, trmm; the tuner's componentwise trsm check) | k + 2 (k the inner dimension; trmm and trsm: the order of A) | 8 |
 | `orthogonality` | `‖QᴴQ − I‖_F`, Q built from Householder reflectors or by a direct orthogonalization of given columns (geqrf, orgqr, `form_q`; every `ortho` algorithm) | n = rows of Q | 32 |
@@ -197,7 +197,7 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/device_blas_tests.cc` `reference_rankk` (herk with complex α, 2 sites) | the device herk applies a complex α and then zeroes the imaginary part of the diagonal; no library check expresses that |
 | `tests/geqrf_tests.cc` `host_geqr2` (`ConventionMatchesReferenceLapackWithoutAVendor`) | an independent host xGEQR2 is the oracle for LAPACK's reflector sign convention, which every residual (and `form_q`, which shares the convention) passes by construction |
 | `tests/syev_blocked_tests.cc` `syev<Backend::NETLIB>` reference | a second implementation of the op under test, compared result to result |
-| `tests/gesvd_tests.cc` `expect_reconstruction` (with its per-type `gesvd_recon_tol`), `tests/gesvdj_cta_tests.cc`, `tests/bdsdc_tests.cc` and `tests/bdsqr_tests.cc` reconstruction | `‖A − UΣVᴴ‖_F / ‖A‖_F` has no library residual: `qr_reconstruction` reads R as upper triangular and ΣVᴴ is not, and a componentwise `gemm_backward_error` of U·(ΣVᴴ) against A judges the SVD's normwise backward error elementwise. The library covers U and V orthogonality and the values |
+| `tests/gesvd_tests.cc` `expect_reconstruction` (with its per-type `gesvd_recon_tol`), `tests/gesvdj_cta_tests.cc`, `tests/bdsdc_tests.cc` and `tests/bdsqr_tests.cc` reconstruction | not yet migrated: `svd_residual` (added for the tuner's gesvd spec, 2026-10-11) is the library's `‖A − UΣVᴴ‖_F / ‖A‖_F`; these sites keep their per-type tolerances until a calibration over them sets its need. A componentwise `gemm_backward_error` of U·(ΣVᴴ) against A would judge the SVD's normwise backward error elementwise |
 | `tests/sytrd_cta_tests.cc` `ref_sytd2_upper` (host unblocked sytd2) | an independent oracle for d, e, tau and the stored reflectors, a convention no residual sees; its deviations are judged at `factorization` (the similarity itself goes through `similarity_residual`) |
 | `tests/sytrd_sb2st_hh_tests.cc` similarity check | measures with `verify::orthogonality` but keeps its own tolerance |
 | `tests/syev_jacobi_cta_tests.cc` `reference_jacobi_eigenvalues` | an independent cyclic two-sided Jacobi in double on exact float input, with the file's own 2n eps ‖A‖_F bound: it isolates the float kernel's rounding from a LAPACKE reference's |
@@ -223,7 +223,13 @@ syev's closed-form spectra, the candidates tests' scalar helpers, getrf's LAPACK
 
 The tiered-tuning PR (19 specs) follows it and writes its specs against this library, so
 `lu_residuals.hh`, `qr_common.hh` and `host_reference.hh` from the `tuning-deep-sm120` branch
-never land.
+never land. It added the item-list `form_q` (ormqr's and geqrf's Q for one batch call) and
+`svd_residual` (gesvd's reconstruction). `svd_residual` keeps the `factorization` constant 16: its
+measured need is 3.73 float / 1.29 double over gesvd_tests and 5.17 / 5.68 over the tuner's native
+arms, but 25.3 for cuSOLVER's 2x2 Hermitian double cells, which the tuner therefore records `bad`
+(the rule would give 128, an 8x loosening that needs the maintainer's acceptance; not adopted).
+The `cta` arm is `bad` on square vectors cells too: U's orthogonality goes like eps·κ² on the
+normal-equations path (docs/perf/gesvd.md, defect A), up to 2.3e4 n eps; no slack.
 
 ## Verification: acceptance
 

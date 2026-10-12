@@ -1,6 +1,6 @@
 // Host-only tests of the tuner core (tools/tune/tune_core.cc; flat-kernel-selection.md §6):
-// the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, the §6.4 hash, and
-// the round trip through scripts/sweep_to_table.py --tuner. No GPU.
+// the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, kernel hash v2, the
+// ledger, and the round trip through scripts/sweep_to_table.py. No GPU.
 
 #include "../tools/tune/grid.hh"
 #include "../tools/tune/ledger.hh"
@@ -14,9 +14,11 @@
 
 #include <gtest/gtest.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,10 +27,12 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <random>
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace batchlas::tune;
@@ -163,10 +167,10 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
     EXPECT_EQ(sha256_hex(std::string(1000000, 'a')),
               "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
     const fs::path d = scratch("hash");
-    std::ofstream(d / "a.cc") << "one\n";
-    std::ofstream(d / "b.hh") << "two";
-    const std::string manifest = sha256_hex("one\n") + "  a.cc\n" + sha256_hex("two") + "  b.hh\n";
-    EXPECT_EQ(kernel_hash(d.string(), {"a.cc", "b.hh"}), sha256_hex(manifest).substr(0, 8));
+    std::ofstream(d / "a.cc") << "one // c\n";
+    std::ofstream(d / "b.hh") << "t w\to";
+    const std::string manifest = sha256_hex("one") + "  a.cc\n" + sha256_hex("two") + "  b.hh\n";
+    EXPECT_EQ(kernel_hash(d.string(), {"a.cc", "b.hh"}), sha256_hex(manifest).substr(0, 8)) << "hash v2: normalized files";
     std::string missing;
     EXPECT_FALSE(kernel_hash(d.string(), {"a.cc", "nope.cc"}, &missing));
     EXPECT_EQ(missing, "nope.cc");
@@ -175,9 +179,26 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
     EXPECT_EQ(parse_kernel_list(spec), (std::vector<std::string>{"a.cc", "b.hh"}));
 }
 
+// Hash v2's normalization, and the vector sweep_to_table.py --self-test and check_tuned_tables.py
+// --self-test check too (tests/data/kernel_hash_v2): one rule in three implementations.
+TEST(TuneHash, V2IgnoresCommentsAndWhitespaceAndMatchesTheSharedVector) {
+    EXPECT_EQ(normalize_source("a /* x */ b // y\n c"), "abc");
+    EXPECT_EQ(normalize_source("a/* open"), "a") << "an unterminated block runs to the end";
+    EXPECT_EQ(normalize_source("/* // */x"), "x");
+    EXPECT_EQ(normalize_source("// /* \nq */r"), "") << "blocks are removed before line comments";
+    EXPECT_EQ(normalize_source("\"s // t\""), "\"s") << "naive: string literals are not special";
+    EXPECT_EQ(normalize_source(" \t\r\n\f\v"), "");
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    std::istringstream want(read_file(fs::path(repo) / "tests/data/kernel_hash_v2/expected.txt"));
+    std::string hash, path;
+    want >> hash >> path;
+    ASSERT_FALSE(path.empty());
+    EXPECT_EQ(kernel_hash(repo, {path}), hash);
+}
+
 TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
-    for (const char* op : {"potrf", "posv"}) {
+    for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv", "gemv", "trmm", "symm", "syrk", "syr2k", "syev", "gesvd", "spmm"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
         ASSERT_FALSE(list.empty()) << op;
         std::string missing;
@@ -290,12 +311,12 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
     EXPECT_THROW(family_hashes(d.string(), b, fams), std::runtime_error);
 }
 
-// Values computed before the family annotations were added: comment markers must not move the
-// op-level hash that CMake and CI compare against the table headers.
+// Hash v2 values of the shipped sources (the tables' kernels=): the family markers in the specs
+// must not move the op-level hash. A real kernel edit changes these; a comment edit does not.
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "b8d9ff55"}, {"potrf", "f4043f40"}, {"posv", "b905a231"}, {"trsm", "6446e809"}};
+        {"gemm", "ea07a304"}, {"potrf", "0ad6e00a"}, {"posv", "b0bdeee4"}, {"trsm", "a0d3dc71"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -319,7 +340,7 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     for (const char* f : {"tiled", "small", "reg", "wide"}) EXPECT_TRUE(block("gemm").family.count(f)) << f;
     EXPECT_TRUE(block("trsm").family.count("sg_left"));
     const KernelBlock posv = block("posv");
-    for (const char* op : {"gemm", "potrf", "posv", "trsm"})  // can_run lives there: every family depends on it
+    for (const char* op : {"gemm", "potrf", "posv", "trsm", "syev", "gesvd", "spmm"})  // can_run lives there
         EXPECT_EQ(block(op).deps_common, std::vector<std::string>{"src/ops/" + std::string(op) + "/" + op + ".cc"}) << op;
     for (const char* f : {"cta", "blocked"}) {
         ASSERT_TRUE(posv.deps.count(f)) << f;
@@ -327,6 +348,109 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         EXPECT_NE(std::find(d.begin(), d.end(), "src/extensions/potrf_cta.cc"), d.end()) << f;
         EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/trsm_native.cc"), d.end()) << f;
     }
+    // LU: getrf_cta.cc holds cta's kernel and blocked's panel leaf, so it is common, not a family.
+    for (const char* op : {"getrf", "getrs", "getri", "gesv"}) {
+        const KernelBlock b = block(op);
+        EXPECT_EQ(b.deps_common, std::vector<std::string>{"src/ops/" + std::string(op) + "/" + op + ".cc"}) << op;
+        for (const auto& [fam, files] : b.deps) {
+            EXPECT_FALSE(files.empty()) << op << " " << fam;
+            EXPECT_TRUE(kernel_hash(repo, files)) << op << " " << fam;
+        }
+    }
+    for (const char* f : {"tiny", "blocked"}) EXPECT_TRUE(block("getrf").family.count(f)) << f;
+    const auto& getrf_common = block("getrf").common;
+    EXPECT_NE(std::find(getrf_common.begin(), getrf_common.end(), "src/extensions/getrf_cta.cc"), getrf_common.end());
+    for (const char* f : {"cta", "blocked"}) EXPECT_TRUE(block("getrs").family.count(f)) << f;
+    EXPECT_TRUE(block("getri").family.count("blocked"));
+    EXPECT_TRUE(block("gesv").family.count("tiny"));
+    const auto has = [](const KernelBlock& b, const char* fam, const char* file) {
+        if (!b.deps.count(fam)) return false;
+        const auto& d = b.deps.at(fam);
+        return std::find(d.begin(), d.end(), file) != d.end();
+    };
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/gemm_kernels.cc"));
+    EXPECT_TRUE(has(block("getrs"), "blocked", "src/sycl/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getri"), "blocked", "src/sycl/trsm_native.cc"));
+    for (const char* file : {"src/extensions/getrf_tiny.cc", "src/extensions/getrf_cta.cc", "src/extensions/getrs_fused.cc",
+                             "src/extensions/getrs_native.cc", "src/sycl/trsm_native.cc", "src/sycl/gemm_kernels.cc"})
+        EXPECT_TRUE(has(block("gesv"), "blocked", file)) << file;
+    // gemv cta and direct share gemv_native.cc: common only, like gemm direct.
+    for (const char* op : {"gemv", "trmm", "symm", "syrk", "syr2k"}) {
+        const auto dc = block(op).deps_common;
+        EXPECT_NE(std::find(dc.begin(), dc.end(), "src/ops/" + std::string(op) + "/" + op + ".cc"), dc.end()) << op;
+    }
+    for (const char* f : {"triangular", "expand"}) EXPECT_TRUE(block("trmm").family.count(f)) << f;
+    EXPECT_TRUE(block("symm").family.count("expand"));
+    for (const char* f : {"gram", "triangular"}) EXPECT_TRUE(block("syrk").family.count(f)) << f;
+    EXPECT_TRUE(block("syr2k").family.count("triangular"));
+    // syrk's two tile kernels share triangular_tiles.hh: common, never one family's.
+    const auto syrk_common = block("syrk").common;
+    EXPECT_NE(std::find(syrk_common.begin(), syrk_common.end(), "src/backends/triangular_tiles.hh"), syrk_common.end());
+    for (const char* op : {"trmm", "symm"}) {  // expand calls the public gemm: gemm's kernels and can_run count
+        const KernelBlock b = block(op);
+        ASSERT_TRUE(b.deps.count("expand")) << op;
+        const auto& d = b.deps.at("expand");
+        for (const char* g : {"src/sycl/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
+            EXPECT_NE(std::find(d.begin(), d.end(), g), d.end()) << op << " " << g;
+    }
+    for (const char* f : {"cta", "cta_fused", "jacobi", "blocked", "two_stage"}) EXPECT_TRUE(block("syev").family.count(f)) << f;
+    for (const char* f : {"jacobi", "cta", "blocked"}) EXPECT_TRUE(block("gesvd").family.count(f)) << f;
+    EXPECT_TRUE(block("spmm").family.count("direct"));
+    // A file two families share is common, never one family's (syev blocked and two_stage both run stedc).
+    for (const char* op : {"syev", "gesvd", "spmm"}) {
+        const KernelBlock b = block(op);
+        std::map<std::string, int> owners;
+        for (const auto& [fam, files] : b.family)
+            for (const auto& f : files) ++owners[f];
+        for (const auto& [f, n] : owners) {
+            EXPECT_EQ(n, 1) << op << " " << f;
+            EXPECT_EQ(std::find(b.common.begin(), b.common.end(), f), b.common.end()) << op << " " << f;
+        }
+    }
+    const KernelBlock syev = block("syev");
+    EXPECT_NE(std::find(syev.common.begin(), syev.common.end(), "src/extensions/stedc.cc"), syev.common.end());
+    for (const char* f : {"blocked", "two_stage"}) {  // both call the public gemm: its kernels count too
+        ASSERT_TRUE(syev.deps.count(f)) << f;
+        const auto& d = syev.deps.at(f);
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/gemm_kernels.cc"), d.end()) << f;
+    }
+}
+
+// The QR specs: every listed file exists, every family hashes, can_run's <op>.cc is the one common
+// dep, and the composed sub-ops are declared (geqrf blocked -> gemm; orgqr blocked -> ormqr -> gemm,
+// trmm; ormqr blocked -> gemm, trmm).
+TEST(TuneHash, QrSpecsDeclareTheirFamiliesAndCompositions) {
+    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const std::map<std::string, std::vector<std::string>> families{
+        {"geqrf", {"tiny", "cta", "blocked", "vendor"}}, {"orgqr", {"blocked", "vendor"}}, {"ormqr", {"blocked", "vendor"}}};
+    const std::map<std::string, std::vector<std::string>> blocked_deps{
+        {"geqrf", {"src/ops/gemm/gemm.cc", "src/sycl/gemm_kernels.cc"}},
+        {"orgqr", {"src/ops/ormqr/ormqr.cc", "src/extensions/ormqr_blocked.cc", "src/sycl/gemm_kernels.cc",
+                   "src/ops/trmm/trmm.cc"}},
+        {"ormqr", {"src/sycl/gemm_kernels.cc", "src/ops/trmm/trmm.cc", "include/batchlas/tuning_params.hh"}}};
+    for (const auto& [op, fams] : families) {
+        const std::string spec = "tools/tune/" + op + "_spec.cc";
+        const KernelBlock b = kernel_block_from_file(repo, spec);
+        std::string missing;
+        const auto op_hash = kernel_hash(repo, b.all, &missing);
+        ASSERT_TRUE(op_hash) << op << ": " << missing;
+        if (const std::string py = BATCHLAS_TUNE_PYTHON; !py.empty())
+            EXPECT_EQ(run("cd '" + repo + "' && '" + py +
+                          "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
+                          "print(c.kernel_hash('.', c.parse_kernel_list(open('" + spec + "').read()))[0])\""),
+                      *op_hash) << op;
+        EXPECT_EQ(b.deps_common.front(), "src/ops/" + op + "/" + op + ".cc") << op;
+        EXPECT_TRUE(b.family.count("blocked")) << op;
+        const auto h = family_hashes(repo, b, fams);
+        EXPECT_EQ(h.size(), fams.size()) << op;
+        const auto& d = b.deps.at("blocked");
+        for (const std::string& f : blocked_deps.at(op)) EXPECT_NE(std::find(d.begin(), d.end(), f), d.end()) << op << " " << f;
+        for (const auto& [fam, files] : b.family)
+            for (const std::string& f : files) EXPECT_EQ(std::count(b.all.begin(), b.all.end(), f), 1) << op << " " << f;
+    }
+    for (const char* f : {"tiny", "cta"})
+        EXPECT_TRUE(kernel_block_from_file(repo, "tools/tune/geqrf_spec.cc").family.count(f)) << f;
 }
 
 TEST(TuneGate, FailsOnlyWhenBothPassesLose) {
@@ -337,58 +461,10 @@ TEST(TuneGate, FailsOnlyWhenBothPassesLose) {
     EXPECT_EQ(gate_verdict(1.2, 1.3, true), "FAIL");
 }
 
-// The tuner writes JSONL and the converter writes the table (one formatter). The driver's own
-// ranking (rank() on the mean of final-attempt pass medians) must agree with what lands there.
-TEST(TuneConverter, TunerJsonlRoundTripsThroughSweepToTable) {
-    const std::string py = BATCHLAS_TUNE_PYTHON;
-    if (py.empty()) GTEST_SKIP() << "no python3";
-    const fs::path d = scratch("convert");
-    const std::vector<std::string> cands{"tiny", "cta", "lpanel:panel=8", "lpanel:panel=16", "blocked", "vendor"};
-    std::ofstream f(d / "potrf.float.sm_999.jsonl");
-    f << Json().str("kind", "meta").integer("schema", 1).str("op", "potrf").str("dtype", "float")
-             .str("device", "sm_999").str("batchlas", "abc12345").str("kernels", "0badf00d").str("date", "2026-01-02")
-             .str("keys", "uplo:exact n:log:3 batch:log").str("candidates", "tiny|cta|lpanel:panel=8|lpanel:panel=16|blocked|vendor")
-             .integer("reps", 16).num("warm_s", 1.5).integer("passes", 2).integer("ld_pad", 0).line();
-    struct P { std::string n, cand, status; int pass, attempt; double ms; };
-    const std::vector<P> rows{
-        // n=64: lpanel wins clearly; vendor errored in pass 2 and must be dropped.
-        {"64", "lpanel:panel=8", "ok", 1, 0, 0.30}, {"64", "lpanel:panel=8", "ok", 2, 0, 0.31},
-        {"64", "cta", "ok", 1, 0, 0.53}, {"64", "cta", "ok", 2, 0, 0.53},
-        {"64", "vendor", "ok", 1, 0, 0.49}, {"64", "vendor", "error", 2, 0, 0},
-        {"64", "tiny", "skipped", 1, 0, 0}, {"64", "tiny", "skipped", 2, 0, 0},
-        // n=512: attempt 0 was noisy, attempt 1 replaces it; blocked and vendor tie (3%).
-        {"512", "blocked", "ok", 1, 0, 30.0}, {"512", "blocked", "ok", 2, 0, 14.1},
-        {"512", "vendor", "ok", 1, 0, 13.7}, {"512", "vendor", "ok", 2, 0, 13.8},
-        {"512", "blocked", "ok", 1, 1, 14.10}, {"512", "blocked", "ok", 2, 1, 14.10},
-        {"512", "vendor", "ok", 1, 1, 13.70}, {"512", "vendor", "ok", 2, 1, 13.78},
-        // n=96: still noisy after the re-measure: kept, marked # noisy.
-        {"96", "cta", "ok", 1, 1, 1.0}, {"96", "cta", "ok", 2, 1, 1.2},
-    };
-    for (const P& r : rows) {
-        f << Json().str("kind", "pass").str("op", "potrf").str("dtype", "float").key({{"uplo", "L"}, {"n", r.n}, {"batch", "8192"}})
-                 .integer("pass", r.pass).integer("attempt", r.attempt).str("cand", r.cand).str("status", r.status)
-                 .num("median_ms", r.status == "ok" ? r.ms : NAN).line();
-        f << Json().str("kind", "rep").str("op", "potrf").key({{"uplo", "L"}, {"n", r.n}, {"batch", "8192"}})
-                 .integer("pass", r.pass).str("cand", r.cand).num("ms", 99.0).line();
-    }
-    f.close();
-    const std::string conv = std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/scripts/sweep_to_table.py";
-    ASSERT_EQ(run("'" + py + "' '" + conv + "' --tuner '" + (d / "potrf.float.sm_999.jsonl").string() + "' --out '" +
-                  d.string() + "'").rfind("FAILED", 0), std::string::npos);
-    const std::string table = read_file(d / "potrf.float.sm_999.txt");
-    EXPECT_NE(table.find("# op=potrf dtype=float device=sm_999 batchlas=abc12345 kernels=0badf00d date=2026-01-02\n"),
-              std::string::npos) << table;
-    EXPECT_NE(table.find("# keys: uplo:exact n:log:3 batch:log\n"), std::string::npos);
-    EXPECT_NE(table.find("uplo=L n=64 batch=8192 | lpanel:panel=8 0.3050 | cta 0.5300\n"), std::string::npos) << table;
-    EXPECT_NE(table.find("uplo=L n=96 batch=8192 | cta 1.100   # noisy\n"), std::string::npos) << table;
-    // The C++ rank of the final attempt agrees with the converter's first entry.
-    const auto first = rank({{"blocked", 14.10}, {"vendor", 13.74}}, cands).front();
-    EXPECT_NE(table.find("uplo=L n=512 batch=8192 | " + first + " 14.10 | vendor 13.74\n"), std::string::npos) << table;
-}
-
 // A ledger written by LedgerWriter becomes a table: deep and coarse rows kept, a preview row
 // inside the deep bracket dropped, the header carries the C++ family hashes (the Python port of
-// the kernel-block manifest rule must agree with family_hashes), and --check re-derives it.
+// the kernel-block manifest rule must agree with family_hashes), and --check re-derives it. A
+// dirty run and a rehash line read the same in C++ (best_records) and Python (the table rows).
 TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
     const std::string py = BATCHLAS_TUNE_PYTHON;
     if (py.empty()) GTEST_SKIP() << "no python3";
@@ -398,20 +474,23 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
     const auto fh = family_hashes(repo, block, cands);
     const fs::path d = scratch("ledger");
     fs::remove_all(d / "out");
-    const std::string dir = ledger_dir((d / "ledger").string(), "posv", "float", "sm_999");
-    fs::remove_all(dir);
+    fs::remove_all(d / "ledger");
+    const std::string file = ledger_file((d / "ledger").string(), "posv", "sm_999");
     const std::string keys = "uplo:exact n:log:3 nrhs:log batch:log";
-    auto write = [&](Tier tier, const std::string& id, const std::string& date, const std::vector<int>& ns) {
+    auto write = [&](Tier tier, const std::string& id, const std::string& date, const std::vector<int>& ns,
+                     const std::string& dtype = "float", const std::string& batchlas = "abc12345",
+                     const std::string& tiny_hash = "") {
         RunMeta m;
         m.run_id = id;
+        m.dtype = dtype;
         m.host = "box";
         m.device = "sm_999";
-        m.batchlas = "abc12345";
+        m.batchlas = batchlas;
         m.date = date;
         m.tier = tier;
         m.keys = keys;
         m.candidates = "tiny|cta|blocked";
-        LedgerWriter w(dir, m);
+        LedgerWriter w(file, m);
         for (int n : ns) {
             CellRecord c;
             c.key = {{"uplo", "L"}, {"n", std::to_string(n)}, {"nrhs", "1"}, {"batch", "128"}};
@@ -419,7 +498,7 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
             for (const auto& name : cands) {
                 CandResult r;
                 r.cand = name;
-                r.hash = fh.at(name);
+                r.hash = name == "tiny" && !tiny_hash.empty() ? tiny_hash : fh.at(name);
                 r.status = name == "blocked" ? "skipped" : "ok";
                 if (r.status == "ok") r.median_ms = name == "cta" ? 0.5 : 1.25, r.lo = r.median_ms, r.hi = r.median_ms, r.reps = 8;
                 c.cands.push_back(r);
@@ -430,88 +509,47 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
     };
     write(Tier::deep, "20261001T000000-box-1", "2026-10-01", {64});
     write(Tier::preview, "20261002T000000-box-2", "2026-10-02", {8, 16, 32, 128, 512});
+    write(Tier::deep, "20261003T000000-box-3", "2026-10-03", {64}, "double");
+    write(Tier::deep, "20261004T000000-box-4", "2026-10-04", {2048}, "float", "abc12345-dirty");  // excluded
+    // A runner-up stored as 'oldtiny' is partly stale; the rehash line below makes the record current.
+    write(Tier::deep, "20261006T000000-box-6", "2026-10-02", {8192}, "double", "abc12345", "oldtiny");
+    const Ledger before = read_ledger(file, "double");
+    ASSERT_EQ(before.cells.size(), 2u);
+    EXPECT_EQ(freshness(before.cells[1], fh), Freshness::partly_stale);
+    std::ofstream(file, std::ios::app) << Json().str("kind", "rehash").str("family", "tiny").str("from", "oldtiny")
+                                              .str("to", fh.at("tiny")).str("at", "x").str("why", "test").line();
+    const Ledger lf = read_ledger(file, "float");
+    EXPECT_EQ(lf.runs.size(), 2u) << "the dirty run is left out";
+    ASSERT_EQ(lf.warnings.size(), 1u);
+    EXPECT_NE(lf.warnings[0].find("abc12345-dirty"), std::string::npos);
+    for (const CellRecord& c : lf.cells) EXPECT_NE(key_int(c.key, "n"), 2048) << "a dirty run's cells are left out";
+    EXPECT_EQ(best_records(lf, fh).size(), 6u);
+    const Ledger ld = read_ledger(file, "double");
+    for (const auto& [k, r] : best_records(ld, fh)) EXPECT_EQ(freshness(*r, fh), Freshness::current) << key_arg(k);
     const std::string conv = repo + "/scripts/sweep_to_table.py";
-    ASSERT_EQ(run("'" + py + "' '" + conv + "' --ledger '" + dir + "' --out '" + (d / "out").string() + "'")
-                  .rfind("FAILED", 0), std::string::npos);
-    const std::string table = read_file(d / "out/posv.float.sm_999.txt");
+    ASSERT_EQ(run("'" + py + "' '" + conv + "' --ledger '" + (d / "ledger").string() + "' --op posv --device sm_999 --out '" +
+                  (d / "out").string() + "' 2>/dev/null").rfind("FAILED", 0), std::string::npos);
+    const std::string table = read_file(d / "out/posv.sm_999.txt");
     std::string fam;
     for (const auto& name : cands) fam += (fam.empty() ? "" : ",") + name + ":" + fh.at(name);
-    EXPECT_NE(table.find("device=sm_999 batchlas=abc12345 kernels="), std::string::npos) << table;
-    EXPECT_NE(table.find(" family_kernels=" + fam + " date=2026-10-02\n"), std::string::npos) << table;
-    EXPECT_NE(table.find(" tiers=deep:1,coarse:0,preview:3,custom:0,transcribed:0\n"), std::string::npos) << table;
-    EXPECT_NE(table.find("uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
-    EXPECT_NE(table.find("n=8 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
-    EXPECT_NE(table.find("n=512 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
-    EXPECT_NE(table.find("n=16 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
-    for (const char* gone : {"n=32 ", "n=128 "})
-        EXPECT_EQ(table.find(gone), std::string::npos) << gone << " sits next to the deep row and is dropped:\n" << table;
+    EXPECT_NE(table.find("# op=posv device=sm_999 batchlas=abc12345 kernels="), std::string::npos) << table;
+    EXPECT_NE(table.find(" family_kernels=" + fam + " date=2026-10-03\n"), std::string::npos) << table;
+    EXPECT_NE(table.find(" tiers=deep:3,coarse:0,preview:3,custom:0,converted:0,transcribed:0\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("# keys: dtype:exact " + keys + "\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("dtype=float uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("dtype=float uplo=L n=8 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("dtype=float uplo=L n=512 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("dtype=float uplo=L n=16 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
+    EXPECT_NE(table.find("dtype=double uplo=L n=8192 "), std::string::npos) << "rehashed record kept:\n" << table;
+    EXPECT_NE(table.find("dtype=double uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
+    for (const char* gone : {"n=32 ", "n=128 ", "n=2048 "})
+        EXPECT_EQ(table.find(gone), std::string::npos) << gone << " is dropped:\n" << table;
     const std::string chk = run("'" + py + "' '" + conv + "' --self-test");
     EXPECT_NE(chk.find("--self-test: OK"), std::string::npos) << chk;
     EXPECT_EQ(run("cd '" + repo + "' && '" + py + "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as s; "
                   "b = s.parse_kernel_block(open('tools/tune/posv_spec.cc').read()); "
-                  "print(','.join(f + ':' + h for f, h in s.family_hashes(s.REPO, b, ['tiny', 'cta', 'blocked']).items()))\""),
+                  "print(','.join(f + ':' + h for f, h in s.family_hashes(b, ['tiny', 'cta', 'blocked']).items()))\""),
               fam);
-}
-
-// rank() in C++ and in the converter on random times, ties straddled on both sides of 3%.
-TEST(TuneConverter, RankAgreesWithTheConverterOnRandomTimes) {
-    const std::string py = BATCHLAS_TUNE_PYTHON;
-    if (py.empty()) GTEST_SKIP() << "no python3";
-    const fs::path d = scratch("rank");
-    std::mt19937 gen(20261004);
-    std::uniform_real_distribution<double> base(0.05, 20.0), spread(0.0, 0.2);
-    const std::vector<double> edges{0.0, 0.01, 0.0299, 0.03, 0.0301, 0.05};
-    std::ofstream in(d / "cases.txt");
-    std::vector<std::string> want;
-    for (int c = 0; c < 400; ++c) {
-        std::vector<std::string> pool = kPotrfOrder;
-        std::shuffle(pool.begin(), pool.end(), gen);
-        pool.resize(1 + gen() % pool.size());
-        const double best = base(gen);
-        std::map<std::string, double> times;
-        for (const auto& cand : pool)
-            times[cand] = best * (1.0 + (gen() % 2 ? edges[gen() % edges.size()] : spread(gen)));
-        for (const auto& [cand, t] : times) {
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%.17g", t);
-            in << cand << "=" << buf << " ";
-        }
-        in << "\n";
-        std::string r;
-        for (const auto& s : rank(times, kPotrfOrder)) r += (r.empty() ? "" : "|") + s;
-        want.push_back(r);
-    }
-    in.close();
-    std::ofstream(d / "rank.py") << "import sys\nsys.path.insert(0, sys.argv[1] + '/scripts')\n"
-                                    "import sweep_to_table as s\norder = s.POTRF.candidate_order\n"
-                                    "for line in open(sys.argv[2]):\n"
-                                    "    t = {c: float(v) for c, v in (f.rsplit('=', 1) for f in line.split())}\n"
-                                    "    print('|'.join(s.rank(t, order)))\n";
-    const std::string got = run("'" + py + "' '" + (d / "rank.py").string() + "' '" + BATCHLAS_TUNE_SOURCE_DIR +
-                                "' '" + (d / "cases.txt").string() + "'");
-    ASSERT_EQ(got.rfind("FAILED", 0), std::string::npos) << got;
-    std::istringstream lines(got);
-    std::string line;
-    for (std::size_t i = 0; i < want.size(); ++i) {
-        ASSERT_TRUE(std::getline(lines, line)) << "converter printed " << i << " of " << want.size() << " rankings";
-        EXPECT_EQ(line, want[i]) << "case " << i;
-    }
-}
-
-// The configure-time staleness check computes the same hash as the driver.
-TEST(TuneHash, CmakeStalenessHashAgreesWithTheDriver) {
-    const std::string repo = BATCHLAS_TUNE_SOURCE_DIR, cmake = BATCHLAS_TUNE_CMAKE;
-    const fs::path d = scratch("cmake_hash");
-    std::ofstream(d / "hash.cmake") << "include(\"" << repo << "/cmake/BatchLASTunedStaleness.cmake\")\n"
-                                    << "_batchlas_tune_kernel_hash(\"${SPEC}\" h)\nmessage(\"HASH=${h}\")\n";
-    for (const char* op : {"potrf", "posv"}) {
-        const std::string spec = repo + "/tools/tune/" + op + "_spec.cc";
-        const std::string out = run("'" + cmake + "' -DPROJECT_SOURCE_DIR='" + repo + "' -DSPEC='" + spec + "' -P '" +
-                                    (d / "hash.cmake").string() + "' 2>&1");
-        const auto h = kernel_hash(repo, parse_kernel_list(read_file(spec)));
-        ASSERT_TRUE(h) << op;
-        EXPECT_EQ(out, "HASH=" + *h) << op;
-    }
 }
 
 TEST(TuneCsv, EmptyFieldsSurviveAndErrorTextIsQuoted) {
@@ -695,6 +733,35 @@ TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
     EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), 0, 5, true).refuse, "compute processes [610696,[N/A]]");
 }
 
+// evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+TEST(TuneGuard, AFailedQueryRetriesWithDoublingBackoffUntilTheWaitExpires) {
+    std::vector<double> slept;
+    const auto sleep = [&](double s) { slept.push_back(s); };
+    int calls = 0;
+    const auto fails_until = [&](int ok_at) {
+        return [&calls, ok_at]() -> std::optional<std::string> {
+            return ++calls >= ok_at ? std::optional<std::string>("123\n") : std::nullopt;
+        };
+    };
+    EXPECT_EQ(query_with_backoff(fails_until(1), 300, sleep), "123\n");
+    EXPECT_TRUE(slept.empty()) << "a working query never sleeps";
+
+    calls = 0;
+    EXPECT_EQ(query_with_backoff(fails_until(4), 300, sleep), "123\n") << "a reset that ends within the wait";
+    EXPECT_EQ(slept, (std::vector<double>{5, 10, 20}));
+    EXPECT_EQ(calls, 4);
+
+    calls = 0, slept.clear();
+    EXPECT_EQ(query_with_backoff(fails_until(1000), 300, sleep), std::nullopt);
+    EXPECT_EQ(slept, (std::vector<double>{5, 10, 20, 40, 60, 60, 60, 45})) << "capped at 60 s, clipped to the wait";
+    EXPECT_EQ(calls, 9) << "one last query once the wait is spent";
+
+    calls = 0, slept.clear();
+    EXPECT_EQ(query_with_backoff(fails_until(1000), 0, sleep), std::nullopt);
+    EXPECT_TRUE(slept.empty()) << "--guard-wait 0: one try";
+    EXPECT_EQ(calls, 1);
+}
+
 namespace {
 
 // Feeds rounds of {a, b} times from `gen(round)` until race_step stops asking for more.
@@ -779,18 +846,47 @@ TEST(TuneRace, AnArmAloneOrBeatenByDefaultStillRunsMinReps) {
     EXPECT_TRUE(race_over(RaceVerdict::cap, 1, params(Tier::preview)));
 }
 
-TEST(TuneRace, SingleRoundNeverEliminates) {
+TEST(TuneRace, SingleRoundNeverEliminatesBelowTheGrossLoserRatio) {
     for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
         const auto& p = params(t);
-        const auto r = run_race(p, [&](int) { return std::pair(1.0, 10.0); });
+        const auto r = run_race(p, [&](int) { return std::pair(1.0, 3.9); });
         EXPECT_EQ(r.rounds, p.min_reps) << to_string(t);
         EXPECT_FALSE(r.s.alive[1]) << to_string(t);
         RaceState s;
         s.cands = {"a", "b"};
-        s.ms = {{1.0}, {10.0}};
+        s.ms = {{1.0}, {3.9}};
         s.alive = {true, true};
         EXPECT_EQ(race_step(s, p), RaceVerdict::more);
         EXPECT_TRUE(s.alive[1]);
+    }
+}
+
+TEST(TuneRace, GrossLoserDiesAfterTheSecondRoundInEveryTier) {
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) {
+        const auto& p = params(t);
+        RaceState s;
+        s.cands = {"a", "b", "c"};
+        s.ms = {{1.0}, {40.0}, {3.9}};
+        s.alive = {true, true, true};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t);
+        EXPECT_EQ(s.alive, (std::vector<bool>{true, true, true})) << to_string(t) << ": one round is never enough";
+        s.ms = {{1.0, 1.0}, {40.0, 1.2}, {3.9, 1.0}};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t);
+        EXPECT_TRUE(s.alive[1]) << to_string(t) << ": one stalled round of two is no gross loss";
+        s.ms = {{1.0, 1.0}, {4.1, 4.2}, {3.9, 3.9}};
+        EXPECT_EQ(race_step(s, p), RaceVerdict::more) << to_string(t) << ": c is under the ratio and stays";
+        EXPECT_EQ(s.alive, (std::vector<bool>{true, false, true})) << to_string(t);
+        EXPECT_EQ(race_ranking(s, {"a", "b", "c"}), (std::vector<std::string>{"a", "c", "b"}));
+        RaceState later;  // the median paired ratio decides: one slow round among three is no gross loss
+        later.cands = {"a", "b"};
+        later.ms = {{1.0, 1.0, 1.0}, {1.5, 9.0, 1.5}};
+        later.alive = {true, true};
+        (void)race_step(later, p);
+        EXPECT_TRUE(later.alive[1] || p.min_reps <= 3) << to_string(t);
+        later.ms = {{1.0, 1.0, 1.0}, {4.5, 1.5, 4.5}};
+        later.alive = {true, true};
+        (void)race_step(later, p);
+        EXPECT_FALSE(later.alive[1]) << to_string(t) << ": median paired ratio 4.5";
     }
 }
 
@@ -1480,6 +1576,7 @@ struct TempDir {
     }
     ~TempDir() { fs::remove_all(path); }
     std::string str() const { return path.string(); }
+    std::string led() const { return (path / "op.sm_0.jsonl").string(); }  // a one-file ledger in it
 };
 
 CandResult cres(const std::string& cand, const std::string& hash, const std::string& status = "ok", double ms = 1.0) {
@@ -1502,10 +1599,11 @@ CellRecord cell_rec(std::vector<CandResult> cands, std::vector<std::string> rank
 // Writes one run file holding `r` at `tier`/`date`; run ids are distinct per call.
 void write_run(const TempDir& d, Tier tier, const std::string& date, const CellRecord& r, const std::string& id) {
     RunMeta m;
+    m.dtype = "float";
     m.run_id = id;
     m.tier = tier;
     m.date = date;
-    LedgerWriter w(d.str(), m);
+    LedgerWriter w(d.led(), m);
     CellRecord c = r;
     c.date = date;
     w.cell(c);
@@ -1525,7 +1623,7 @@ std::string append_to(const fs::path& p, const std::string& text) {
 
 // The fixture is shared with sweep_to_table.py's self-test (ledger_all_error_record_counts_as_no_record).
 TEST(TuneLedger, AllErrorRecordCountsAsNoRecord) {
-    const Ledger l = read_ledger(std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/tests/data/ledger_all_error/posv.float.sm_0");
+    const Ledger l = read_ledger(std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/tests/data/ledger_all_error/posv.sm_0.jsonl", "float");
     ASSERT_EQ(l.cells.size(), 2u);
     ASSERT_TRUE(all_error(l.cells[1]));
     const std::map<std::string, std::string> stored{{"tiny", "htiny"}, {"cta", "hcta"}, {"blocked", "hblocked"}};
@@ -1537,9 +1635,9 @@ TEST(TuneLedger, AllErrorRecordCountsAsNoRecord) {
 
 TEST(TuneLedger, AGitLfsPointerIsNamed) {
     TempDir d;
-    std::ofstream(d.path / "20261001T000000-a-1.jsonl") << "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n";
+    std::ofstream(fs::path(d.led())) << "version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n";
     try {
-        (void)read_ledger(d.str());
+        (void)read_ledger(d.led(), "float");
         ADD_FAILURE() << "read an LFS pointer as a ledger";
     } catch (const std::runtime_error& e) {
         EXPECT_NE(std::string(e.what()).find("Git LFS pointer: run git lfs pull"), std::string::npos) << e.what();
@@ -1550,7 +1648,7 @@ TEST(TuneLedger, CoarseNeverDisplacesCurrentDeep) {
     TempDir d;
     write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
     write_run(d, Tier::coarse, "2026-10-05", two_family_cell(), "20261005T000000-b-2");
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     ASSERT_EQ(l.cells.size(), 2u);
     const auto best = best_records(l, kHashes);
     ASSERT_EQ(best.size(), 1u);
@@ -1564,7 +1662,7 @@ TEST(TuneLedger, CoarseDisplacesStaleDeep) {
     write_run(d, Tier::coarse, "2026-10-05", two_family_cell(), "20261005T000000-b-2");
     auto changed = kHashes;
     changed["lpanel"] = "h2";  // the deep winner's family changed
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     EXPECT_EQ(freshness(l.cells[0], changed), Freshness::stale);
     // The coarse record shares the stale hash for lpanel, so rewrite it against the new hash.
     TempDir d2;
@@ -1572,7 +1670,7 @@ TEST(TuneLedger, CoarseDisplacesStaleDeep) {
     write_run(d2, Tier::coarse, "2026-10-05",
               cell_rec({cres("lpanel:panel=8", "h2", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)}, {"lpanel:panel=8", "vendor"}),
               "20261005T000000-b-2");
-    const Ledger l2 = read_ledger(d2.str());
+    const Ledger l2 = read_ledger(d2.led(), "float");
     const auto best = best_records(l2, changed);
     ASSERT_EQ(best.size(), 1u);
     EXPECT_EQ(best.begin()->second->tier, Tier::coarse);
@@ -1586,7 +1684,7 @@ TEST(TuneLedger, PartlyStaleKeepsItsTier) {
               "20261005T000000-b-2");
     auto now = kHashes;
     now["vendor"] = "v2";  // the deep record's runner-up changed
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     const CellRecord& deep = l.cells[0].tier == Tier::deep ? l.cells[0] : l.cells[1];
     EXPECT_EQ(freshness(deep, now), Freshness::partly_stale);
     EXPECT_EQ(stale_candidates(deep, now), std::vector<std::string>{"vendor"});
@@ -1629,20 +1727,21 @@ TEST(TuneLedger, RemovedWinnerIsStale) {
 TEST(TuneLedger, TruncatedLastLineIsSkippedWithAWarning) {
     TempDir d;
     write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
-    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    const fs::path f = fs::path(d.led());
     CellRecord second = two_family_cell();
     second.key = {{"n", "128"}, {"batch", "1024"}};
     RunMeta m;
+    m.dtype = "float";
     m.run_id = "20261001T000000-a-1";
     {
-        LedgerWriter w(d.str(), m);  // reopen in append mode: adds a second run line, then a cell
+        LedgerWriter w(d.led(), m);  // reopen in append mode: adds a second run line, then a cell
         w.cell(second);
     }
     std::string text = [&] { std::ifstream in(f); std::stringstream s; s << in.rdbuf(); return s.str(); }();
     ASSERT_EQ(text.back(), '\n');
     text.resize(text.size() - 25);  // kill mid-write: the last cell line loses its tail
     { std::ofstream out(f, std::ios::trunc); out << text; }
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     ASSERT_EQ(l.cells.size(), 1u) << "only the intact cell survives";
     EXPECT_EQ(key_arg(l.cells[0].key), "n=64,batch=1024");
     ASSERT_EQ(l.warnings.size(), 1u);
@@ -1652,16 +1751,16 @@ TEST(TuneLedger, TruncatedLastLineIsSkippedWithAWarning) {
 TEST(TuneLedger, MalformedMiddleLineThrows) {
     TempDir d;
     write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
-    append_to(d.path / "20261001T000000-a-1.jsonl", "{\"kind\": \"cell\", \"oops\n");
-    append_to(d.path / "20261001T000000-a-1.jsonl", two_family_cell().ranked.empty() ? "" : "{\"kind\": \"audit\"}\n");
-    EXPECT_THROW(read_ledger(d.str()), std::runtime_error);
+    append_to(fs::path(d.led()), "{\"kind\": \"cell\", \"oops\n");
+    append_to(fs::path(d.led()), two_family_cell().ranked.empty() ? "" : "{\"kind\": \"audit\"}\n");
+    EXPECT_THROW(read_ledger(d.led(), "float"), std::runtime_error);
 }
 
 TEST(TuneLedger, EmptyRankingIsARecordNotARerun) {
     TempDir d;
     write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("lpanel:panel=8", "h1", "bad"), cres("vendor", "v1", "skipped")}, {}),
               "20261001T000000-a-1");
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     const auto best = best_records(l, kHashes);
     ASSERT_EQ(best.size(), 1u);
     EXPECT_TRUE(best.begin()->second->ranked.empty());
@@ -1677,7 +1776,7 @@ TEST(TuneLedger, TwoRunFilesUnion) {
     write_run(d, Tier::coarse, "2026-10-06", two_family_cell(), "20261006T000000-boxb-9");
     write_run(d, Tier::coarse, "2026-10-06", cell_rec({cres("lpanel:panel=8", "h1"), cres("vendor", "v1", "ok", 0.5)}, {"vendor", "lpanel:panel=8"}, 128),
               "20261006T000001-boxb-9");
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     EXPECT_EQ(l.runs.size(), 4u);
     const auto best = best_records(l, kHashes);
     ASSERT_EQ(best.size(), 2u);
@@ -1694,7 +1793,7 @@ TEST(TuneLedger, EqualTierAndDateTakesTheLargerRunId) {
     TempDir d;
     write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("vendor", "v1")}, {"vendor"}), "20261001T000000-a-1");
     write_run(d, Tier::coarse, "2026-10-01", cell_rec({cres("vendor", "v1")}, {"vendor"}), "20261001T000000-a-2");
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     const auto best = best_records(l, {{"vendor", "v1"}});
     EXPECT_EQ(best.begin()->second->run_id, "20261001T000000-a-2");
 }
@@ -1702,11 +1801,12 @@ TEST(TuneLedger, EqualTierAndDateTakesTheLargerRunId) {
 TEST(TuneLedger, WriterRoundTripsEveryField) {
     TempDir d;
     RunMeta m;
+    m.dtype = "float";
     m.run_id = make_run_id();
     m.host = "h \"q\"";
     m.device = "sm_89";
     m.device_name = "RTX 4090";
-    m.batchlas = "abc1234-dirty";
+    m.batchlas = "abc1234";  // a -dirty run is excluded on read (DirtyRun... in LedgerRoundTrips)
     m.argv = "--tier coarse --ops trsm";
     m.date = "2026-10-07";
     m.tier = Tier::preview;
@@ -1721,11 +1821,11 @@ TEST(TuneLedger, WriterRoundTripsEveryField) {
     c.cands[2].reason = "cuda error, \"bad\"\nline";
     c.cands[0].reps = 12;
     {
-        LedgerWriter w(ledger_dir(d.str(), "trsm", "float", "sm_89"), m);
+        LedgerWriter w(ledger_file(d.str(), "trsm", "sm_89"), m);
         w.cell(c);
         w.audit(c.key, "pass", 1.5, 1.4);
     }
-    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    const Ledger l = read_ledger(ledger_file(d.str(), "trsm", "sm_89"), "float");
     ASSERT_EQ(l.runs.size(), 1u);
     const RunMeta& r = l.runs[0];
     EXPECT_EQ(r.run_id, m.run_id);
@@ -1786,7 +1886,7 @@ TEST(TuneLedger, ImportSchema1BuildsADeepRunFromPassRecords) {
     }
     const std::map<std::string, std::string> now{{"cta", "c9"}, {"vendor", "v9"}, {"blocked", "b9"}};
     import_schema1(raw, d.str(), now, "k1");
-    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    const Ledger l = read_ledger(ledger_file(d.str(), "trsm", "sm_89"), "float");
     ASSERT_EQ(l.runs.size(), 1u);
     EXPECT_EQ(l.runs[0].tier, Tier::deep);
     ASSERT_EQ(l.cells.size(), 2u);
@@ -1812,12 +1912,12 @@ TEST(TuneLedger, ImportSchema1BuildsADeepRunFromPassRecords) {
     EXPECT_EQ(freshness(*a, now), Freshness::current);
     const std::string other = d.str() + "/other";
     import_schema1(raw, other, now, "k2");
-    const Ledger legacy = read_ledger(ledger_dir(other, "trsm", "float", "sm_89"));
+    const Ledger legacy = read_ledger(ledger_file(other, "trsm", "sm_89"), "float");
     EXPECT_EQ(legacy.cells[0].cands[0].hash, "legacy:k1");
     EXPECT_EQ(freshness(legacy.cells[0], now), Freshness::stale);
     const std::string custom = d.str() + "/custom";  // a protocol-flag run records itself this way
     import_schema1(raw, custom, now, "k1", Tier::custom);
-    const Ledger c = read_ledger(ledger_dir(custom, "trsm", "float", "sm_89"));
+    const Ledger c = read_ledger(ledger_file(custom, "trsm", "sm_89"), "float");
     ASSERT_EQ(c.runs.size(), 1u);
     EXPECT_EQ(c.runs[0].tier, Tier::custom);
     EXPECT_EQ(c.runs[0].keys, "n:log:3 batch:log");
@@ -1847,7 +1947,7 @@ TEST(TuneLedger, ImportSchema1KeysCellsByTheGridAxesLikeTheDriver) {
     const std::vector<std::pair<std::string, std::vector<std::string>>> axes{
         {"uplo", {"L"}}, {"n", {"16", "32"}}, {"batch", {"256"}}};
     import_schema1(raw, d.str(), now, "k1", Tier::deep, axes);
-    const Ledger l = read_ledger(ledger_dir(d.str(), "trsm", "float", "sm_89"));
+    const Ledger l = read_ledger(ledger_file(d.str(), "trsm", "sm_89"), "float");
     ASSERT_EQ(l.cells.size(), 2u);
     std::set<std::string> keys;
     for (const CellRecord& c : l.cells) keys.insert(key_arg(c.key));
@@ -1861,19 +1961,20 @@ TEST(TuneLedger, ImportSchema1KeysCellsByTheGridAxesLikeTheDriver) {
 TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
     TempDir d;
     write_run(d, Tier::coarse, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
-    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    const fs::path f = fs::path(d.led());
     append_to(f, "{\"kind\": \"cell\", \"run_id\": \"20261001T00");  // killed mid-write
     CellRecord second = two_family_cell();
     second.key = {{"n", "128"}, {"batch", "1024"}};
     RunMeta m;
+    m.dtype = "float";
     m.run_id = "20261001T000000-a-1";
     m.tier = Tier::coarse;
     {
-        LedgerWriter w(d.str(), m);
+        LedgerWriter w(d.led(), m);
         w.cell(second);
     }
     Ledger l;
-    ASSERT_NO_THROW(l = read_ledger(d.str()));
+    ASSERT_NO_THROW(l = read_ledger(d.led(), "float"));
     EXPECT_EQ(l.cells.size(), 2u);
     EXPECT_TRUE(l.warnings.empty());
 }
@@ -1881,27 +1982,29 @@ TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
 TEST(TuneLedger, ValidLastLineWithoutNewlineParses) {
     TempDir d;
     write_run(d, Tier::coarse, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
-    const fs::path f = d.path / "20261001T000000-a-1.jsonl";
+    const fs::path f = fs::path(d.led());
     std::string text = [&] { std::ifstream in(f); std::stringstream s; s << in.rdbuf(); return s.str(); }();
     text.pop_back();
     { std::ofstream out(f, std::ios::trunc); out << text; }
-    EXPECT_EQ(read_ledger(d.str()).cells.size(), 1u);
+    EXPECT_EQ(read_ledger(d.led(), "float").cells.size(), 1u);
     RunMeta m;
+    m.dtype = "float";
     m.run_id = "20261001T000000-a-1";
     m.tier = Tier::coarse;
     CellRecord second = two_family_cell();
     second.key = {{"n", "128"}, {"batch", "1024"}};
-    { LedgerWriter w(d.str(), m); w.cell(second); }
-    EXPECT_EQ(read_ledger(d.str()).cells.size(), 2u) << "the complete last record was kept";
+    { LedgerWriter w(d.led(), m); w.cell(second); }
+    EXPECT_EQ(read_ledger(d.led(), "float").cells.size(), 2u) << "the complete last record was kept";
 }
 
 TEST(TuneLedger, LaterRecordInSameRunWins) {
     TempDir d;
     RunMeta m;
+    m.dtype = "float";
     m.run_id = "20261001T000000-a-1";
     m.tier = Tier::coarse;
     {
-        LedgerWriter w(d.str(), m);
+        LedgerWriter w(d.led(), m);
         CellRecord a = cell_rec({cres("vendor", "v1")}, {"vendor"});
         a.date = "2026-10-01";
         w.cell(a);
@@ -1910,10 +2013,72 @@ TEST(TuneLedger, LaterRecordInSameRunWins) {
         b.round = 7;
         w.cell(b);
     }
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     const auto best = best_records(l, {{"vendor", "v1"}});
     ASSERT_EQ(best.size(), 1u);
     EXPECT_EQ(best.begin()->second->round, 7);
+}
+
+// Several writer processes append to one ledger file: under flock every line stays whole.
+TEST(TuneLedger, ConcurrentWritersAppendWholeLines) {
+    TempDir d;
+    const int kProcs = 4, kCells = 200;
+    std::vector<pid_t> kids;
+    for (int p = 0; p < kProcs; ++p) {
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            RunMeta m;
+            m.run_id = "20261001T000000-p-" + std::to_string(p);
+            m.dtype = p % 2 ? "double" : "float";
+            m.tier = Tier::coarse;
+            LedgerWriter w(d.led(), m);
+            for (int i = 0; i < kCells; ++i) {
+                CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)},
+                                        {"lpanel:panel=8", "vendor"}, 1 + i);
+                c.cands[0].reason = std::string(3000, 'x');  // long lines: a torn interleave would show
+                w.cell(c);
+            }
+            ::_exit(0);
+        }
+        kids.push_back(pid);
+    }
+    for (pid_t k : kids) ::waitpid(k, nullptr, 0);
+    const Ledger f = read_ledger(d.led(), "float"), g = read_ledger(d.led(), "double");
+    EXPECT_TRUE(f.warnings.empty() && g.warnings.empty());
+    EXPECT_EQ(f.cells.size(), std::size_t(kProcs / 2 * kCells));
+    EXPECT_EQ(g.cells.size(), std::size_t(kProcs / 2 * kCells));
+    EXPECT_EQ(f.runs.size() + g.runs.size(), std::size_t(kProcs));
+}
+
+TEST(TuneLedger, AWriterRepairsAnotherWritersTornLine) {
+    TempDir d;
+    RunMeta m;
+    m.run_id = "20261001T000000-a-1";
+    m.dtype = "float";
+    m.tier = Tier::coarse;
+    LedgerWriter w(d.led(), m);
+    w.cell(two_family_cell());
+    append_to(d.led(), "{\"kind\": \"cell\", \"dtype\": \"float\", \"run_id\": \"20261001T00");  // another writer killed
+    CellRecord second = two_family_cell();
+    second.key = {{"n", "128"}, {"batch", "1024"}};
+    w.cell(second);  // the open writer repairs the tail under the lock before its line
+    const Ledger l = read_ledger(d.led(), "float");
+    EXPECT_EQ(l.cells.size(), 2u);
+    EXPECT_TRUE(l.warnings.empty());
+}
+
+TEST(TuneLedger, UnhashedTiersAreNeverStale) {
+    CellRecord r = two_family_cell();
+    for (CandResult& c : r.cands) c.hash.clear();
+    r.tier = Tier::coarse;
+    EXPECT_EQ(freshness(r, kHashes), Freshness::stale);
+    for (Tier t : {Tier::transcribed, Tier::converted}) {
+        r.tier = t;
+        EXPECT_EQ(freshness(r, kHashes), Freshness::current) << to_string(t);
+        EXPECT_TRUE(stale_candidates(r, kHashes).empty());
+    }
+    EXPECT_LT(tier_rank(Tier::converted), tier_rank(Tier::custom));
+    EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::converted));
 }
 
 namespace {
@@ -2009,6 +2174,30 @@ TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
     EXPECT_EQ(freshness(merged, now), Freshness::current);
 }
 
+// The fixture is shared with sweep_to_table.py's self-test (ledger_dominated_skip_is_partly_stale).
+// evidence: docs/design/tiered-tuning.md#engine-dominance-carry-forward-removed
+TEST(TuneSchedule, ADominatedSkipIsPartlyStaleAndReRacedAgainstTheTopTwo) {
+    const Ledger l = read_ledger(std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/tests/data/ledger_dominated/posv.sm_0.jsonl", "float");
+    ASSERT_EQ(l.cells.size(), 2u);
+    const std::vector<std::string> cands{"tiny", "cta", "blocked"};
+    const std::map<std::string, std::string> fh{{"tiny", "htiny"}, {"cta", "hcta"}, {"blocked", "hblocked"}};
+    EXPECT_EQ(stale_candidates(l.cells[0], fh), (std::vector<std::string>{"blocked"}));
+    EXPECT_EQ(freshness(l.cells[0], fh), Freshness::partly_stale) << "dominated: never tried there";
+    EXPECT_EQ(freshness(l.cells[1], fh), Freshness::current) << "a refused pin could not run there";
+    const auto plan = plan_round(plan_spec(cands), Tier::deep, {l.cells[1].key, l.cells[0].key}, l, fh, 4, 0);
+    ASSERT_EQ(plan.size(), 2u);
+    EXPECT_EQ(plan[0].key, l.cells[0].key);
+    EXPECT_EQ(plan[0].reason, "partial:blocked");
+    EXPECT_EQ(plan[0].arms, cands) << "the dominated arm plus the stored winner and runner-up";
+    EXPECT_EQ(plan[0].tier, Tier::deep);
+    EXPECT_EQ(plan[1].reason, "skip:current");
+    const CellRecord merged = record_from_arms(l.cells[0].key, 0,
+                                               {arm("tiny", "ok", {1.0}), arm("cta", "ok", {2.0}), arm("blocked", "ok", {0.5})},
+                                               cands, fh, plan[0].stored);
+    EXPECT_EQ(merged.ranked, (std::vector<std::string>{"blocked", "tiny", "cta"}));
+    EXPECT_EQ(freshness(merged, fh), Freshness::current);
+}
+
 TEST(TuneSchedule, SingleRunnableCandidateIsNotTimed) {
     std::map<std::string, std::string> h;
     for (const char* f : {"tiny", "cta", "lpanel", "blocked", "vendor"}) h[f] = "x";
@@ -2054,10 +2243,34 @@ TEST(TuneSchedule, AscendingBytesOrder) {
 
 TEST(TuneSchedule, PosvAfterPotrfAndTrsm) {
     using V = std::vector<std::string>;
-    EXPECT_EQ(op_order({"posv", "gemm", "potrf", "trsm"}), (V{"gemm", "potrf", "trsm", "posv"}));
-    EXPECT_EQ(op_order({"potrf", "posv", "trsm"}), (V{"potrf", "trsm", "posv"}));
-    EXPECT_EQ(op_order({"trsm", "potrf", "posv", "gemm"}), (V{"trsm", "potrf", "posv", "gemm"}));
+    EXPECT_EQ(op_order({"posv", "gemm", "potrf", "trsm"}), (V{"gemm", "trsm", "potrf", "posv"}));
+    EXPECT_EQ(op_order({"potrf", "posv", "trsm"}), (V{"trsm", "potrf", "posv"})) << "blocked potrf calls the public trsm";
+    EXPECT_EQ(op_order({"trsm", "potrf", "posv", "gemm"}), (V{"gemm", "trsm", "potrf", "posv"}));
     EXPECT_EQ(op_order({"gemm", "posv"}), (V{"gemm", "posv"}));
+    EXPECT_EQ(op_order({"trsm", "gemm"}), (V{"gemm", "trsm"})) << "blocked trsm calls the public gemm";
+    EXPECT_EQ(op_order({"potrf", "gemm"}), (V{"gemm", "potrf"})) << "blocked potrf calls the public gemm";
+}
+
+TEST(TuneSchedule, AllNineteenOpsFollowTheirDependencies) {
+    using V = std::vector<std::string>;
+    const V want{"gemm", "trsm", "syr2k", "gemv", "spmm", "trmm", "symm", "syrk", "potrf", "getrf",
+                 "getrs", "geqrf", "ormqr", "getri", "posv", "gesv", "orgqr", "syev", "gesvd"};
+    V shuffled = want;
+    std::reverse(shuffled.begin(), shuffled.end());
+    std::rotate(shuffled.begin(), shuffled.begin() + 7, shuffled.end());
+    EXPECT_EQ(op_order(all_ops(shuffled)), want) << "`all` in any registration order";
+    EXPECT_EQ(canonical_op_order(), want);
+    for (const V& in : {shuffled, want, V(want.rbegin(), want.rend())}) {
+        const V out = op_order(in);
+        ASSERT_TRUE(out.size() == in.size() && std::is_permutation(out.begin(), out.end(), in.begin()));
+        for (const auto& [op, deps] : op_dependencies())
+            for (const std::string& d : deps)
+                EXPECT_LT(std::find(out.begin(), out.end(), d), std::find(out.begin(), out.end(), op)) << d << " before " << op;
+    }
+    EXPECT_EQ(op_order({"syev", "orgqr", "ormqr", "trmm", "gemm"}), (V{"gemm", "trmm", "ormqr", "syev", "orgqr"}));
+    EXPECT_EQ(op_order({"gesv", "spmm", "getrs", "getrf"}), (V{"spmm", "getrs", "getrf", "gesv"}))
+        << "input order breaks ties; a missing dependency (trsm, gemm) does not hold anything back";
+    EXPECT_EQ(all_ops({"zeta", "posv", "gemm", "alpha"}), (V{"gemm", "posv", "zeta", "alpha"}));
 }
 
 TEST(TuneSchedule, BudgetBelowLatticeWarnsAndStillPlansTheLattice) {
@@ -2213,7 +2426,7 @@ TEST(TuneTieredDriver, RoundsRefineToTheEdgeRecordAndSkipOnRerun) {
     EXPECT_EQ(std::vector<std::string>(m.keys.begin(), m.keys.begin() + 4), (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
     EXPECT_EQ(sorted(m.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}));
     EXPECT_EQ(m.max_reps, params(Tier::preview).max_reps);
-    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     ASSERT_EQ(l.runs.size(), 1u);
     EXPECT_EQ(l.runs[0].tier, Tier::preview);
     EXPECT_EQ(l.runs[0].keys, "n:log:3");
@@ -2225,8 +2438,12 @@ TEST(TuneTieredDriver, RoundsRefineToTheEdgeRecordAndSkipOnRerun) {
         EXPECT_EQ(c.cands[1].hash, *kernel_hash(repo.str(), {"k.cc", "b.cc"}));
     }
     const std::string ev = read_file(events);
-    EXPECT_EQ(ev.rfind("{\"ev\": \"plan\", \"cells\": 4", 0), 0u) << ev;
-    EXPECT_NE(ev.find("{\"ev\": \"done\"}"), std::string::npos);
+    // plan_job events (one per op and dtype) come first, then the run's plan; every event carries t.
+    EXPECT_EQ(ev.rfind("{\"ev\": \"plan_job\", \"op\": \"fakeop\", \"dtype\": \"float\"", 0), 0u) << ev;
+    EXPECT_NE(ev.find("\n{\"ev\": \"plan\", \"cells\": 4"), std::string::npos) << ev;
+    EXPECT_NE(ev.find("{\"ev\": \"done\", \"t\": "), std::string::npos) << ev;
+    for (std::size_t b = 0, e; (e = ev.find('\n', b)) != std::string::npos; b = e + 1)
+        EXPECT_NE(ev.substr(b, e - b).find(", \"t\": "), std::string::npos) << ev.substr(b, e - b);
     std::size_t done = 0;
     for (std::size_t p = 0; (p = ev.find("\"cell_done\"", p)) != std::string::npos; ++p) ++done;
     EXPECT_EQ(done, 8u);
@@ -2254,6 +2471,216 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0) << "--plan needs no measurer";
 }
 
+// --remeasure-keys: a named cell counts as missing whatever the ledger holds, at the running tier,
+// with every candidate; the other cells keep their skip reasons.
+// evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
+TEST(TuneRemeasure, PlanRoundTreatsANamedCellAsMissing) {
+    Ledger l;
+    CellRecord r = two_family_cell();
+    r.tier = Tier::deep;
+    r.round = 3;
+    l.cells.push_back(r);
+    const std::set<CellKey> named{nkey(64)};
+    const auto plan = plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64), nkey(128)}, l, kHashes, 4, kChildOverheadS,
+                                 nullptr, 0, &named);
+    ASSERT_EQ(plan.size(), 2u);
+    EXPECT_EQ(plan[0].reason, "remeasure") << "a current deep record does not save a named cell";
+    EXPECT_EQ(plan[0].arms, kTwo);
+    EXPECT_EQ(plan[0].tier, Tier::coarse) << "the running tier, not the stored one";
+    EXPECT_EQ(plan[0].round, 3) << "the stored record's round";
+    EXPECT_EQ(plan[0].stored, nullptr) << "a fresh record, not a merge";
+    EXPECT_GT(plan[0].est_s, kChildOverheadS);
+    EXPECT_EQ(plan[1].reason, "");
+    EXPECT_EQ(plan[1].round, -1);
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::coarse, {nkey(64, 1 << 20)}, l, kHashes, 1e-9, 0, nullptr, 0,
+                         &named)[0].reason, "skip:cap") << "a different key is not named";
+    PlanSpec capped = plan_spec(kTwo);
+    capped.max_dim = [](const CellKey& k) { return key_int(k, "n"); };
+    const auto dim = plan_round(capped, Tier::coarse, {nkey(64), nkey(128)}, l, kHashes, 4, 0, nullptr, 32, &named);
+    EXPECT_EQ(dim[0].reason, "remeasure") << "named, so measured past --max-dim (it was measured before the cap)";
+    EXPECT_EQ(dim[1].reason, "skip:dim");
+    EXPECT_EQ(plan_round(capped, Tier::coarse, {nkey(64)}, l, kHashes, 1e-9, 0, nullptr, 32, &named)[0].reason,
+              "skip:cap") << "the byte cap still holds";
+}
+
+TEST(TuneRemeasure, ReadsOpDtypeKeyLinesAndRefusesMalformedOnes) {
+    TempDir d;
+    const fs::path f = d.path / "keys.txt";
+    std::ofstream(f) << "# outliers\n\ntrsm float side=L,n=64,batch=128   # a comment\ntrsm float n=8\ngemv cdouble m=4\n";
+    const auto k = read_remeasure_keys(f.string());
+    ASSERT_EQ(k.size(), 2u);
+    EXPECT_EQ(k.at("trsm.float"), (std::set<CellKey>{{{"side", "L"}, {"n", "64"}, {"batch", "128"}}, {{"n", "8"}}}));
+    EXPECT_EQ(k.at("gemv.cdouble"), (std::set<CellKey>{{{"m", "4"}}}));
+    for (const char* bad : {"trsm float\n", "trsm float n=8 extra\n", "trsm float n\n"}) {
+        std::ofstream(f) << bad;
+        EXPECT_THROW((void)read_remeasure_keys(f.string()), std::runtime_error) << bad;
+    }
+    EXPECT_THROW((void)read_remeasure_keys((d.path / "missing").string()), std::runtime_error);
+}
+
+TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPastTheBudget) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.run_id = "20261009T000001-box-1";  // make_run_id() repeats within one second and pid
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    ASSERT_EQ(sorted(first.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}));
+    const Ledger before = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    int round9 = -1;
+    for (const CellRecord& c : before.cells)
+        if (key_arg(c.key) == "n=9") round9 = c.round;
+    ASSERT_GT(round9, 0) << "n=9 is a refinement midpoint";
+
+    o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "9"}}}}};
+    o.budget_h = 1e-12;  // spent before round 0 ends: refinement never starts, round 0 still runs
+    o.run_id = "20261009T000002-box-1";
+    FakeMeasurer again;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_EQ(sorted(again.keys), sorted({"n=4", "n=9"}));
+    const Ledger after = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    ASSERT_EQ(after.runs.size(), 2u) << "the re-measure appends its own run file";
+    ASSERT_EQ(after.cells.size(), before.cells.size() + 2);
+    std::map<std::string, std::string> fh;  // the hashes the new run stored are the current ones
+    for (const CandResult& c : after.cells.back().cands) fh[c.cand] = c.hash;  // fakeop: family == spelling
+    const auto best = best_records(after, fh);
+    for (const auto& [k, round] : {std::pair{std::string("n=4"), 0}, std::pair{std::string("n=9"), round9}}) {
+        const auto it = std::find_if(best.begin(), best.end(), [&](const auto& b) { return key_arg(b.first) == k; });
+        ASSERT_NE(it, best.end()) << k;
+        EXPECT_EQ(it->second->run_id, after.runs[1].run_id) << k << ": the new record wins";
+        EXPECT_EQ(it->second->round, round) << k;
+        EXPECT_EQ(it->second->tier, Tier::preview) << k;
+    }
+
+    o.budget_h = 0;  // no budget: the converged ledger plans no refinement either
+    o.run_id = "20261009T000003-box-1";
+    FakeMeasurer third;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &third), 0);
+    EXPECT_EQ(sorted(third.keys), sorted({"n=4", "n=9"}));
+
+    o.remeasure = {{"fakeop.float", {{{"m", "4"}}}}};
+    FakeMeasurer none;
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "a key with the wrong fields";
+    o.remeasure = {{"fakeop.double", {{{"n", "4"}}}}};
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "an op and dtype not in the run";
+    EXPECT_TRUE(none.keys.empty());
+}
+
+// --tier custom is a rehash sample (docs/design/tuning-data.md): exactly the named cells, every
+// candidate, no lattice and no refinement, recorded at tier custom below the deeper records.
+TEST(TuneRemeasure, CustomTierRunMeasuresOnlyTheNamedCellsAsASample) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.run_id = "20261009T000001-box-1";
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    o.tier = Tier::custom;
+    o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "6"}}}}};
+    o.run_id = "20261009T000002-box-1";
+    FakeMeasurer sample;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &sample), 0);
+    EXPECT_EQ(sorted(sample.keys), sorted({"n=4", "n=6"})) << "no lattice cell and no refinement midpoint";
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    std::size_t custom = 0;
+    for (const CellRecord& c : l.cells)
+        if (c.run_id == o.run_id) {
+            ++custom;
+            EXPECT_EQ(c.tier, Tier::custom) << key_arg(c.key);
+        }
+    EXPECT_EQ(custom, 2u);
+}
+
+// --only-named: a kernel change leaves every record stale, so a plain deep run with named cells
+// plans the whole stale lattice too; --only-named plans and measures exactly the named cells, at deep.
+TEST(TuneRemeasure, OnlyNamedOnAStaleLedgerMeasuresExactlyTheNamedCellsAtTheRunsTier) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::deep);
+    o.run_id = "20261009T000001-box-1";
+    FakeMeasurer first;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
+    std::ofstream(repo.path / "k.cc") << "k changed";
+    o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "9"}}}}};
+    o.plan = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string stale = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(stale.find("tier=deep: 2 cells"), std::string::npos) << "control: the stale lattice is planned\n" << stale;
+    o.only_named = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string named = testing::internal::GetCapturedStdout();
+    EXPECT_NE(named.find("== plan fakeop float sm_fake tier=deep: 2 cells (2 remeasure)"), std::string::npos) << named;
+    EXPECT_NE(named.find("(~0 refinement cells"), std::string::npos) << "no refinement is estimated\n" << named;
+    o.plan = false;
+    o.run_id = "20261009T000002-box-1";
+    FakeMeasurer again;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_EQ(sorted(again.keys), sorted({"n=4", "n=9"})) << "no stale lattice cell and no refinement";
+    std::size_t n = 0;
+    for (const CellRecord& c : read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float").cells)
+        if (c.run_id == o.run_id) {
+            ++n;
+            EXPECT_EQ(c.tier, Tier::deep) << key_arg(c.key);
+        }
+    EXPECT_EQ(n, 2u);
+}
+
+namespace {
+
+// m is derived (4 n), as geqrf's and orgqr's extents are: the keys alone name only n.
+class DerivedDimsSpec : public FakeSpec {
+public:
+    std::string op() const override { return "derivedop"; }
+    std::vector<std::int64_t> dims(const std::string&, const CellKey& k) const override { return {4 * key_int(k, "n"), key_int(k, "n")}; }
+};
+
+std::int64_t max_of(const std::vector<std::int64_t>& v) { return v.empty() ? 0 : *std::max_element(v.begin(), v.end()); }
+
+}  // namespace
+
+TEST(TuneMaxDim, DefaultDimsTakeEveryIntegerKeyButBatch) {
+    const FakeSpec s;
+    const CellKey k{{"uplo", "L"}, {"n", "64"}, {"nrhs", "3"}, {"batch", "99999"}, {"form", "tall"}};
+    EXPECT_EQ(s.dims("float", k), (std::vector<std::int64_t>{64, 3})) << "words and batch are no extent";
+    EXPECT_EQ(max_of(s.dims("float", {{"n", "4096"}, {"batch", "2"}})), 4096);
+}
+
+TEST(TuneMaxDim, DerivedDimsCapOnTheDerivedExtent) {
+    const DerivedDimsSpec s;
+    const CellKey k{{"n", "1024"}, {"batch", "8"}};
+    EXPECT_EQ(max_of(s.dims("float", k)), 4096) << "n alone is under 2048, the derived m is not";
+    PlanSpec ps = plan_spec(kTwo);
+    ps.max_dim = [&](const CellKey& c) { return max_of(s.dims("float", c)); };
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {k}, Ledger{}, kHashes, 4, 0, nullptr, 2048)[0].reason, "skip:dim");
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {nkey(512)}, Ledger{}, kHashes, 4, 0, nullptr, 2048)[0].reason, "")
+        << "4 x 512 = 2048 is allowed";
+}
+
+TEST(TuneMaxDim, PlanRoundMarksSkipDimBeforeCapAndLeavesTheRestAlone) {
+    PlanSpec ps = plan_spec(kTwo);
+    ps.max_dim = [](const CellKey& k) { return key_int(k, "n"); };
+    const auto plan = plan_round(ps, Tier::coarse, {nkey(2048), nkey(2049), nkey(64, 1 << 20)}, Ledger{}, kHashes,
+                                 1e-9, 0, nullptr, 2048);
+    std::map<std::string, std::string> why;
+    for (const PlannedCell& c : plan) why[key_arg(c.key)] = c.reason;
+    EXPECT_EQ(why["n=2049,batch=1024"], "skip:dim");
+    EXPECT_EQ(why["n=2048,batch=1024"], "skip:cap") << "2048 is not above the limit; the byte cap still applies";
+    EXPECT_EQ(why["n=64,batch=1048576"], "skip:cap") << "batch is no dimension";
+    for (const PlannedCell& c : plan) if (c.reason == "skip:dim") EXPECT_TRUE(c.arms.empty());
+    EXPECT_EQ(plan_round(ps, Tier::coarse, {nkey(4096)}, Ledger{}, kHashes, 4, 0)[0].reason, "")
+        << "max_dim 0 is off";
+}
+
+TEST(TuneMaxDim, TieredRunNeverMeasuresACellOverTheLimit) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    o.max_dim = 8;
+    FakeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ASSERT_FALSE(m.keys.empty());
+    for (const std::string& k : m.keys) EXPECT_LE(std::stoi(k.substr(2)), 8) << k;
+}
+
 TEST(TuneSchedule, AllErrorRecordCountsAsMissing) {
     Ledger l;
     CellRecord failed = cell_rec({cres("lpanel:panel=8", "h1", "error"), cres("vendor", "v1", "error")}, {});
@@ -2273,7 +2700,7 @@ TEST(TuneTieredDriver, TransientChildFailureWritesNoRecord) {
     broken.fail = true;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &broken), 0);
     EXPECT_EQ(broken.keys.size(), 4u);
-    EXPECT_TRUE(read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake")).cells.empty());
+    EXPECT_TRUE(read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float").cells.empty());
     FakeMeasurer m;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     EXPECT_EQ(m.keys.size(), 8u) << "the next run measures every cell";
@@ -2365,17 +2792,18 @@ TEST(TuneSchedule, AuditPickIsAStableHashFraction) {
 TEST(TuneLedger, UpdatedRunLineReplacesTheEarlierOne) {
     TempDir d;
     RunMeta m;
+    m.dtype = "float";
     m.run_id = "r1";
     m.tier = Tier::preview;
     m.worker_mode["potrf.float"] = "worker";
     {
-        LedgerWriter w(d.str(), m);
+        LedgerWriter w(d.led(), m);
         w.cell(cell_rec({cres("a", "1")}, {"a"}));
         m.worker_mode["potrf.float"] = "fresh";
         w.update_run(m);
         w.audit(nkey(64), "mismatch:winner a/b", 1.0, 2.0);
     }
-    const Ledger l = read_ledger(d.str());
+    const Ledger l = read_ledger(d.led(), "float");
     ASSERT_EQ(l.runs.size(), 1u);
     EXPECT_EQ(l.runs[0].worker_mode.at("potrf.float"), "fresh");
     EXPECT_EQ(l.cells.size(), 1u);
@@ -2504,12 +2932,12 @@ TEST(TuneTieredDriver, AuditMismatchSendsTheRestOfTheOpDtypeToFreshChildren) {
     ASSERT_GE(m.fresh_keys.size(), 4u);
     EXPECT_EQ(std::vector<std::string>(m.fresh_keys.begin(), m.fresh_keys.begin() + 4),
               (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
-    const std::string dir = ledger_dir(ledger.str(), "fakeop", "float", "sm_fake");
-    const Ledger l = read_ledger(dir);
+    const std::string dir = ledger_file(ledger.str(), "fakeop", "sm_fake");
+    const Ledger l = read_ledger(dir, "float");
     ASSERT_EQ(l.runs.size(), 1u);
     EXPECT_EQ(l.runs[0].worker_mode.at("fakeop.float"), "fresh");
     std::string text;
-    for (const auto& e : fs::directory_iterator(dir)) text += read_file(e.path());
+    text = read_file(dir);
     EXPECT_EQ(count_of(text, "\"kind\": \"audit\""), 3u) << text;
     EXPECT_EQ(count_of(text, "\"verdict\": \"ok\""), 2u);
     EXPECT_NE(text.find("\"wm.fakeop.float\": \"worker\""), std::string::npos) << "the run starts on the worker";
@@ -2534,11 +2962,153 @@ TEST(TuneTieredDriver, AuditMatchKeepsTheWorkerAndReportsRestarts) {
     EXPECT_EQ(m.worker_keys.size(), 8u);
     EXPECT_EQ(m.fresh_keys, m.worker_keys) << "every cell audited, none moved to fresh children";
     EXPECT_EQ(m.footprints, (std::vector<double>{1e3, 4e3, 16e3, 64e3, 8e3, 11e3, 9e3, 10e3})) << "no batch key: bytes";
-    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     EXPECT_EQ(l.runs.at(0).worker_mode.at("fakeop.float"), "worker");
     const std::string ev = read_file(events);
     EXPECT_EQ(count_of(ev, "\"ev\": \"worker_restart\""), 1u) << ev;
     EXPECT_NE(ev.find("\"restarts\": 1"), std::string::npos) << ev;
+}
+
+namespace {
+
+// Thread-safe, several GPUs, uneven per-cell sleeps; float n=`slow_n` is the straggler.
+class PipeMeasurer : public CellMeasurer {
+public:
+    struct Call {
+        std::string dtype, key;
+        int gpu = 0;
+        double footprint = 0, t0 = 0, t1 = 0;
+        std::size_t done_before = 0;  // this dtype's cell_done events when the cell started
+    };
+    fs::path events;
+    int slow_n = -1;
+    std::mutex mu;
+    std::vector<Call> calls;
+    ArmBatch measure(const CellJob& j) override {
+        Call c{j.dtype, key_arg(j.key), j.gpu, j.footprint, now(), 0, 0};
+        if (!events.empty()) c.done_before = count_of(read_file(events), "\"cell_done\", \"op\": \"fakeop\", \"dtype\": \"" + j.dtype + "\"");
+        const std::int64_t n = key_int(j.key, "n");
+        const bool slow = j.dtype == "float" && n == slow_n;
+        std::this_thread::sleep_for(std::chrono::milliseconds(slow ? 400 : 2 + (n * 7 + std::int64_t(j.dtype.size()) * 3) % 5 * 3));
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const double t = a == "a" ? 1.0 : n <= 10 ? 0.5 : 2.0;
+            b.arms.push_back(arm(a, "ok", {t, t, t}));
+        }
+        c.t1 = now();
+        std::lock_guard<std::mutex> lock(mu);
+        calls.push_back(c);
+        return b;
+    }
+
+private:
+    const std::chrono::steady_clock::time_point t0_ = std::chrono::steady_clock::now();
+    double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
+};
+
+// (dtype, key) -> (round, ranked) from a run's ledgers.
+std::map<std::pair<std::string, std::string>, std::pair<int, std::string>> records_of(const TempDir& ledger, const std::vector<std::string>& dtypes) {
+    std::map<std::pair<std::string, std::string>, std::pair<int, std::string>> out;
+    for (const std::string& d : dtypes)
+        for (const CellRecord& c : read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), d).cells) {
+            std::string ranked;
+            for (const std::string& r : c.ranked) ranked += r + "|";
+            out[{d, key_arg(c.key)}] = {c.round, ranked};
+        }
+    return out;
+}
+
+const std::vector<std::string> kPipeDtypes{"float", "double", "cfloat"};
+
+TieredOpts pipe_opts(const TempDir& repo, const TempDir& ledger, std::vector<int> devices, Tier tier = Tier::preview) {
+    TieredOpts o = fake_opts(repo, ledger, tier);
+    o.dtypes = kPipeDtypes;
+    o.devices = std::move(devices);
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneTieredPipeline, IdleGpusRunLaterJobsWhileAStragglerFinishesItsRound) {
+    TempDir repo, ledger;
+    TieredOpts o = pipe_opts(repo, ledger, {0, 1, 2, 3});
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    PipeMeasurer m;
+    m.events = events;
+    m.slow_n = 64;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    double slow_end = 0;
+    for (const auto& c : m.calls)
+        if (c.dtype == "float" && c.key == "n=64") slow_end = c.t1;
+    ASSERT_GT(slow_end, 0.3);
+    std::size_t later = 0;
+    for (const auto& c : m.calls)
+        if (c.dtype != "float") {
+            ++later;
+            EXPECT_LT(c.t1, slow_end) << c.dtype << " " << c.key << ": waited for float's straggler";
+        }
+    EXPECT_EQ(later, 16u) << "double and cfloat: 4 lattice + 4 refinement cells each";
+    const auto recs = records_of(ledger, kPipeDtypes);
+    for (const auto& c : m.calls) {
+        const int round = recs.at({c.dtype, c.key}).first;
+        std::size_t earlier = 0;
+        for (const auto& [k, r] : recs) earlier += k.first == c.dtype && r.first < round;
+        EXPECT_GE(c.done_before, earlier) << c.dtype << " " << c.key << " round " << round
+                                          << " started before every earlier-round cell was recorded";
+    }
+    EXPECT_NE(read_file(events).find("\"ev\": \"schedule\", \"switches\": "), std::string::npos);
+}
+
+TEST(TuneTieredPipeline, EachGpuRunsAscendingFootprintsWithinAJobRound) {
+    TempDir repo, ledger;
+    TieredOpts o = pipe_opts(repo, ledger, {0, 1}, Tier::coarse);
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    PipeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    ::close(fd);
+    const auto recs = records_of(ledger, kPipeDtypes);
+    std::map<int, std::vector<const PipeMeasurer::Call*>> per_gpu;
+    std::vector<PipeMeasurer::Call> calls = m.calls;
+    std::sort(calls.begin(), calls.end(), [](const auto& a, const auto& b) { return a.t0 < b.t0; });
+    for (const auto& c : calls) per_gpu[c.gpu].push_back(&c);
+    ASSERT_EQ(per_gpu.size(), 2u);
+    std::size_t restarts = 0, same = 0;
+    for (const auto& [gpu, seq] : per_gpu) {
+        double max = 0;
+        for (std::size_t i = 0; i < seq.size(); ++i) {
+            restarts += seq[i]->footprint < max;
+            max = seq[i]->footprint < max ? seq[i]->footprint : std::max(max, seq[i]->footprint);
+            if (i == 0 || seq[i]->dtype != seq[i - 1]->dtype) continue;
+            const int r0 = recs.at({seq[i - 1]->dtype, seq[i - 1]->key}).first, r1 = recs.at({seq[i]->dtype, seq[i]->key}).first;
+            if (r0 != r1) continue;
+            ++same;
+            EXPECT_GE(seq[i]->footprint, seq[i - 1]->footprint) << "gpu" << gpu << " " << seq[i]->dtype << " round " << r1;
+        }
+    }
+    EXPECT_GE(same, 6u) << "the coarse lattice's 7 cells per dtype split over two GPUs";
+    EXPECT_NE(read_file(events).find("\"restarts\": " + std::to_string(restarts) + ","), std::string::npos)
+        << "the summary counts the carve-out restarts the pop order costs";
+}
+
+TEST(TuneTieredPipeline, RecordsMatchTheSingleGpuRun) {
+    TempDir repo, one, four;
+    TieredOpts o = pipe_opts(repo, one, {0});
+    PipeMeasurer m1;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m1), 0);
+    o = pipe_opts(repo, four, {0, 1, 2, 3});
+    PipeMeasurer m4;
+    m4.slow_n = 16;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m4), 0);
+    const auto a = records_of(one, kPipeDtypes), b = records_of(four, kPipeDtypes);
+    EXPECT_EQ(a, b);
+    ASSERT_EQ(a.size(), 24u);
+    for (const std::string& d : kPipeDtypes)
+        for (const char* k : {"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}) EXPECT_TRUE(a.count({d, k})) << d << " " << k;
 }
 
 TEST(TuneSchedule, WorkerShareRunsInAscendingPerItemFootprint) {
@@ -2685,6 +3255,43 @@ TEST(TuneWorker, AllBenchedArmsAreAFallbackAndMarkedAlone) {
     ASSERT_EQ(b.arms.size(), 2u);
 }
 
+TEST(TuneWorker, ABenchedArmErringInFiveFreshCellsIsDropped) {
+    ArmErrors errs;
+    for (int i = 0; i < 2; ++i) errs.note("b", true);
+    int b_runs = 0;
+    bool b_errors = true;
+    auto attempt = [](const std::vector<std::string>& arms) {
+        WorkerTry t{true, false, "", {}};
+        for (const std::string& a : arms) t.arms.push_back(arm(a, "ok", {1.0}));
+        return t;
+    };
+    auto fresh = [&](const std::vector<std::string>& arms) {
+        ArmBatch b;
+        for (const std::string& a : arms) {
+            b_runs += a == "b";
+            b.arms.push_back(a == "b" && b_errors ? arm("b", "error") : arm(a, "ok", {2.0}));
+        }
+        return b;
+    };
+    for (int i = 0; i < kDropAfterErrors - 1; ++i) race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    b_errors = false;
+    race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);  // one clean cell resets the streak
+    b_errors = true;
+    for (int i = 0; i < kDropAfterErrors - 1; ++i) race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_FALSE(errs.dropped("b")) << "4 errors, a clean cell, 4 errors: not consecutive";
+    race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_TRUE(errs.dropped("b"));
+    EXPECT_FALSE(errs.dropped("a"));
+    const int runs = b_runs;
+    const ArmBatch b = race_on_worker({"a", "b"}, errs, attempt, [] {}, fresh);
+    EXPECT_EQ(b_runs, runs) << "a dropped arm is not run";
+    ASSERT_EQ(b.arms.size(), 2u);
+    EXPECT_EQ(b.arms[0].status, "ok");
+    EXPECT_EQ(b.arms[1].status, "error");
+    EXPECT_EQ(b.arms[1].reason, "dropped after 5 consecutive errors");
+    EXPECT_EQ(b.alone, (std::vector<std::string>{"b"})) << "kept out of the audit's worker side";
+}
+
 TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
@@ -2709,7 +3316,7 @@ TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
     ::close(fd);
     EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64", "n=8", "n=11"}));
     const std::string ev = read_file(events);
-    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1}"),
+    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1, \"t\": "),
               std::string::npos) << ev;
     EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
 }
@@ -2785,6 +3392,7 @@ TEST(TuneTieredDriver, BudgetStoppedRunResumesRefinementWithinTheCap) {
     FakeMeasurer resumed;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
     ::close(fd);
+    o.progress_fd = -1;  // closed: a later run must not write events into whatever reuses the fd
     EXPECT_EQ(resumed.keys, (std::vector<std::string>{"n=8", "n=11"})) << "the stored lattice is the cap base";
     EXPECT_NE(read_file(events).find("\"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1"), std::string::npos)
         << read_file(events);
@@ -2795,7 +3403,7 @@ TEST(TuneTieredDriver, BudgetStoppedRunResumesRefinementWithinTheCap) {
     FakeMeasurer fourth;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &fourth), 0);
     EXPECT_EQ(sorted(fourth.keys), sorted({"n=9", "n=10"}));
-    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     std::size_t lattice = 0, refined = 0;
     for (const CellRecord& c : l.cells) ++(c.round == 0 ? lattice : refined);
     EXPECT_EQ(lattice, 4u);
@@ -2861,6 +3469,332 @@ TEST(TuneTieredDriver, ArmsRacedAloneStayOutOfTheAuditsWarmSide) {
     m.disagree = false;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     EXPECT_EQ(m.fresh_keys, (std::vector<std::string>{"n=1"}));
-    const Ledger l = read_ledger(ledger_dir(ledger.str(), "fakeop", "float", "sm_fake"));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     EXPECT_EQ(l.runs.back().worker_mode.at("fakeop.float"), "worker");
+}
+
+// ---- deep-run readiness: no dominance carry-forward, refused dtype pairs -------------------------
+
+namespace {
+
+// a loses to b by 20x at every cell: an old carry-forward would stop timing a past the first one.
+class DomMeasurer : public FakeMeasurer {
+public:
+    std::vector<std::pair<std::string, std::vector<std::string>>> calls;
+    ArmBatch measure(const CellJob& j) override {
+        calls.emplace_back(key_arg(j.key), j.arms);
+        ArmBatch out;
+        for (const std::string& a : j.arms)
+            out.arms.push_back(a == "b" ? arm("b", "ok", {1.0, 1.0}) : arm("a", "eliminated", {20.0}));
+        return out;
+    }
+};
+
+}  // namespace
+
+// evidence: docs/design/tiered-tuning.md#engine-dominance-carry-forward-removed
+TEST(TuneTieredDriver, ATwentyfoldLoserIsStillTimedAtEveryLargerCell) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    DomMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    using V = std::vector<std::string>;
+    ASSERT_GE(m.calls.size(), 3u);
+    for (const auto& [key, arms] : m.calls) EXPECT_EQ(sorted(arms), (V{"a", "b"})) << key;
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    for (const CellRecord& c : l.cells)
+        for (const CandResult& r : c.cands) EXPECT_EQ(r.reason.rfind("dominated:", 0), std::string::npos) << key_arg(c.key);
+}
+
+namespace {
+
+class FakeRealSpec : public FakeSpec {
+public:
+    std::string op() const override { return "fakereal"; }
+    std::vector<std::string> candidates(const std::string& d) const override {
+        if (d != "float") throw std::invalid_argument("fakereal is real-only: no '" + d + "' (float)");
+        return {"a", "b"};
+    }
+};
+const FakeRealSpec kFakeReal;
+
+}  // namespace
+
+TEST(TuneTieredDriver, AMultiOpRunSkipsTheDtypesASpecRefusesWithOneNote) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    if (!find_spec("fakereal")) register_spec(&kFakeReal);
+    o.ops = {"fakeop", "fakereal"};
+    o.dtypes = {"float", "cfloat"};
+    FakeMeasurer m;
+    ::testing::internal::CaptureStdout();
+    int rc = -1;
+    std::string thrown;
+    try {
+        rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    } catch (const std::exception& e) {
+        thrown = e.what();
+    }
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << thrown << "\n" << out;
+    const std::string note = "== note: skipping fakereal cfloat: fakereal is real-only: no 'cfloat' (float)\n";
+    EXPECT_NE(out.find(note), std::string::npos) << out;
+    EXPECT_EQ(out.find("== note: skipping", out.find(note) + 1), std::string::npos) << "one note: " << out;
+    for (const char* dt : {"float", "cfloat"})
+        EXPECT_FALSE(read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), dt).cells.empty()) << dt;
+    EXPECT_FALSE(read_ledger(ledger_file(ledger.str(), "fakereal", "sm_fake"), "float").cells.empty());
+    EXPECT_TRUE(read_ledger(ledger_file(ledger.str(), "fakereal", "sm_fake"), "cfloat").cells.empty());
+    o.ops = {"fakereal"};
+    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake"}, &m), std::invalid_argument) << "a single-op run still refuses";
+}
+
+// ---- the ld audit (spec.hh kLdAuditPad) ------------------------------------------------------
+
+namespace {
+
+// verify at a padded ld: "a" fails its residual, "b" passes, "c" is refused; race: everything ok but "d".
+class LdAuditSpec : public FakeSpec {
+public:
+    mutable std::vector<CellRequest> calls;
+    bool throw_on_verify = false;
+    std::string op() const override { return "ldauditop"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+        calls.push_back(req);
+        if (req.mode == "verify" && throw_on_verify) throw std::runtime_error("device lost");
+        std::vector<ArmOutcome> out;
+        for (const std::string& a : req.arms) {
+            ArmOutcome o = arm(a, "ok", {1.0});
+            if (req.mode == "verify" && req.ld_pad > 0 && a == "a") o.status = "bad", o.reason = "residual", o.residual = 0.5;
+            if (req.mode == "verify" && a == "c") o.status = "skipped", o.reason = "pin refused";
+            if (req.mode != "verify" && a == "d") o.status = "bad", o.reason = "residual";
+            out.push_back(o);
+        }
+        return out;
+    }
+};
+
+const ArmOutcome& outcome(const std::vector<ArmOutcome>& v, const std::string& a) {
+    return *std::find_if(v.begin(), v.end(), [&](const ArmOutcome& o) { return o.arm == a; });
+}
+
+}  // namespace
+
+TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
+    LdAuditSpec s;
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b", "c", "d", "e"};
+    r.mode = "race";
+    r.ld_pad = 1;
+    r.ld_audit = {"a", "b", "c", "d"};
+    const auto out = run_cell_audited(s, r);
+    ASSERT_EQ(s.calls.size(), 2u);
+    EXPECT_EQ(s.calls[1].mode, "verify");
+    EXPECT_EQ(s.calls[1].ld_pad, 1 + kLdAuditPad);
+    EXPECT_EQ(s.calls[1].arms, (std::vector<std::string>{"a", "b", "c"})) << "d failed at the natural ld; e was not asked";
+    EXPECT_EQ(outcome(out, "a").status, "bad");
+    EXPECT_EQ(outcome(out, "a").ld_audit, "fail");
+    EXPECT_EQ(outcome(out, "a").reason.rfind("ld audit", 0), 0u) << outcome(out, "a").reason;
+    EXPECT_DOUBLE_EQ(outcome(out, "a").residual, 0.5);
+    EXPECT_EQ(outcome(out, "a").ms, std::vector<double>{1.0}) << "the timing stays; the status makes it unrankable";
+    EXPECT_EQ(outcome(out, "b").status, "ok");
+    EXPECT_EQ(outcome(out, "b").ld_audit, "pass");
+    EXPECT_EQ(outcome(out, "c").status, "ok");
+    EXPECT_EQ(outcome(out, "c").ld_audit, "skipped");
+    EXPECT_EQ(outcome(out, "d").ld_audit, "");
+    EXPECT_EQ(outcome(out, "e").ld_audit, "");
+
+    s.calls.clear();
+    r.mode = "jit";
+    (void)run_cell_audited(s, r);
+    EXPECT_EQ(s.calls.size(), 1u) << "only a timed cell is audited";
+    s.calls.clear();
+    r.mode = "race";
+    r.ld_audit.clear();
+    (void)run_cell_audited(s, r);
+    EXPECT_EQ(s.calls.size(), 1u) << "nothing asked, nothing audited";
+
+    s.throw_on_verify = true;
+    r.ld_audit = {"b"};
+    const auto thrown = run_cell_audited(s, r);
+    EXPECT_EQ(outcome(thrown, "b").status, "bad");
+    EXPECT_EQ(outcome(thrown, "b").ld_audit, "fail");
+    EXPECT_NE(outcome(thrown, "b").reason.find("device lost"), std::string::npos);
+}
+
+TEST(TuneLdAudit, TheBookAuditsEachArmOnceAndKeepsUnverifiedArmsWanted) {
+    LdAuditBook book;
+    EXPECT_EQ(book.want({"a", "b", "c"}), (std::vector<std::string>{"a", "b", "c"}));
+    std::vector<ArmOutcome> cell{arm("a", "bad"), arm("b", "ok"), arm("c", "skipped")};
+    cell[0].ld_audit = "fail", cell[0].reason = "ld audit: residual";
+    cell[1].ld_audit = "pass";
+    EXPECT_EQ(book.note(nkey(4), cell), std::vector<std::string>{"a"});
+    EXPECT_EQ(book.want({"a", "b", "c"}), std::vector<std::string>{"c"}) << "c was never verified, so never audited";
+    EXPECT_EQ(book.passed, 1u);
+    ASSERT_EQ(book.failed.size(), 1u);
+    EXPECT_EQ(book.failed[0], "a @ n=4 batch=1024: ld audit: residual");
+    ASSERT_EQ(book.bad.count("a"), 1u);
+    EXPECT_EQ(book.bad.at("a"), "ld audit failed @ n=4 batch=1024");
+    EXPECT_TRUE(book.note(nkey(8), cell).empty()) << "a second verdict for an audited arm is not counted";
+    EXPECT_EQ(book.passed, 1u);
+    std::vector<ArmOutcome> later{arm("c", "ok")};
+    later[0].ld_audit = "skipped";
+    (void)book.note(nkey(16), later);
+    EXPECT_EQ(book.skipped(), 1u);
+    EXPECT_EQ(book.want({"a", "b", "c"}), std::vector<std::string>{"c"}) << "a refused padded shape is asked again";
+    later[0].ld_audit = "pass";
+    (void)book.note(nkey(32), later);
+    EXPECT_EQ(book.skipped(), 0u) << "audited at a later cell";
+    EXPECT_EQ(book.passed, 2u);
+    EXPECT_TRUE(book.want({"a", "b", "c"}).empty());
+}
+
+TEST(TuneLdAudit, RetractMarksTheArmBadAndUnranksIt) {
+    CellRecord r;
+    r.key = nkey(8);
+    for (const char* s : {"a", "b", "c"}) {
+        CandResult c;
+        c.cand = s;
+        c.status = std::string(s) == "c" ? "eliminated" : "ok";
+        c.median_ms = 1.0;
+        r.cands.push_back(c);
+    }
+    r.ranked = {"a", "b", "c"};
+    CellRecord x = r;
+    EXPECT_TRUE(ld_retract(x, "a", "ld audit failed @ n=4"));
+    EXPECT_EQ(x.ranked, (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(x.cands[0].status, "bad");
+    EXPECT_EQ(x.cands[0].reason, "ld audit failed @ n=4");
+    EXPECT_FALSE(ld_retract(x, "a", "again")) << "already bad";
+    EXPECT_TRUE(ld_retract(x, "c", "e")) << "an eliminated arm is ranked too";
+    EXPECT_EQ(x.ranked, std::vector<std::string>{"b"});
+    EXPECT_FALSE(ld_retract(x, "zz", "e"));
+}
+
+TEST(TuneLdAudit, RequestsAndOutcomesCarryTheAudit) {
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b"};
+    r.mode = "race";
+    r.warm_s = 0.1;
+    r.ld_audit = {"b", "a"};
+    const auto got = parse_request(request_line("fakeop", r));
+    ASSERT_TRUE(got);
+    EXPECT_EQ(got->second.ld_audit, r.ld_audit);
+    r.ld_audit.clear();
+    EXPECT_TRUE(parse_request(request_line("fakeop", r))->second.ld_audit.empty());
+
+    std::vector<ArmOutcome> arms{arm("a", "bad", {1.0}), arm("b", "ok", {2.0})};
+    arms[0].ld_audit = "fail";
+    arms[1].ld_audit = "pass";
+    std::vector<Record> recs;
+    std::istringstream text(outcome_text(arms));
+    for (std::string line; std::getline(text, line);) recs.push_back(*parse_record(line));
+    const auto back = outcomes_from_records(recs);
+    EXPECT_EQ(outcome(back, "a").ld_audit, "fail");
+    EXPECT_EQ(outcome(back, "b").ld_audit, "pass");
+}
+
+namespace {
+
+// Honours CellJob::ld_audit as a child would: "a" fails the audit, every other audited arm passes.
+class LdAuditMeasurer : public CellMeasurer {
+public:
+    std::vector<std::vector<std::string>> asked, timed;
+    bool worker = false;  // persistent: the first worker cell gets the carve-out audit too
+    int refuse_a = 0;     // the first refuse_a audits of "a" are skipped (padded shape refused)
+    bool persistent() const override { return worker; }
+    ArmBatch measure(const CellJob& j) override {
+        asked.push_back(j.ld_audit);
+        timed.push_back(sorted(j.arms));
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            ArmOutcome o = arm(a, "ok", {a == "a" ? 0.5 : 1.0});
+            if (std::find(j.ld_audit.begin(), j.ld_audit.end(), a) != j.ld_audit.end()) {
+                o.ld_audit = a != "a" ? "pass" : refuse_a-- > 0 ? "skipped" : "fail";
+                if (o.ld_audit == "fail") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
+            }
+            b.arms.push_back(o);
+        }
+        return b;
+    }
+};
+
+}  // namespace
+
+TEST(TuneLdAudit, TheTieredDriverAuditsEachCandidatesFirstCellAndReportsTheFailure) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    LdAuditMeasurer m;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ::close(fd);
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_FALSE(m.asked.empty());
+    EXPECT_EQ(sorted(m.asked[0]), (std::vector<std::string>{"a", "b"}));
+    for (std::size_t i = 1; i < m.asked.size(); ++i) EXPECT_TRUE(m.asked[i].empty()) << "cell " << i;
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    std::size_t bad = 0;
+    for (const CellRecord& c : l.cells)
+        for (const CandResult& r : c.cands)
+            if (r.status == "bad") {
+                ++bad;
+                EXPECT_EQ(r.cand, "a");
+                EXPECT_EQ(r.reason.rfind("ld audit", 0), 0u) << r.reason;
+                EXPECT_NE(c.ranked.front(), "a") << "a bad arm is never ranked";
+            }
+    EXPECT_EQ(bad, l.cells.size()) << "a fail condemns the kernel in every cell, not only the audited one";
+    for (std::size_t i = 1; i < m.timed.size(); ++i) EXPECT_EQ(m.timed[i], std::vector<std::string>{"b"}) << "cell " << i;
+    EXPECT_NE(out.find("ld audit FAILED: a ld audit"), std::string::npos) << out;
+    EXPECT_NE(out.find("== summary fakeop float ld audit (ld +3): 1 passed, 0 skipped, 1 failed"), std::string::npos) << out;
+    const std::string ev = read_file(events);
+    EXPECT_NE(ev.find("\"ev\": \"ld_audit\""), std::string::npos) << ev;
+    EXPECT_NE(ev.find("\"ev\": \"ld_audit_summary\""), std::string::npos) << ev;
+}
+
+TEST(TuneLdAudit, ARefusedAuditIsAskedAgainAndALaterFailUnranksEarlierCells) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    LdAuditMeasurer m;
+    m.refuse_a = 1;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_GE(m.asked.size(), 3u);
+    EXPECT_EQ(sorted(m.asked[0]), (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(m.asked[1], std::vector<std::string>{"a"}) << "refused at cell 0, so wanted again at cell 1";
+    EXPECT_TRUE(m.asked[2].empty());
+    EXPECT_NE(out.find("ld audit: a marked bad in 1 recorded cells"), std::string::npos) << out;
+    EXPECT_NE(out.find("ld audit (ld +3): 1 passed, 0 skipped, 1 failed"), std::string::npos) << out;
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    std::map<CellKey, const CellRecord*> last;  // equal tier, date and run: the later line wins
+    for (const CellRecord& c : l.cells) last[c.key] = &c;
+    EXPECT_EQ(l.cells.size(), last.size() + 1) << "cell 0 appended once more, with a bad";
+    for (const auto& [k, c] : last) {
+        EXPECT_EQ(c->ranked, std::vector<std::string>{"b"}) << key_text(k);
+        const auto a = std::find_if(c->cands.begin(), c->cands.end(), [](const CandResult& x) { return x.cand == "a"; });
+        ASSERT_NE(a, c->cands.end()) << key_text(k);
+        EXPECT_EQ(a->status, "bad") << key_text(k);
+    }
+}
+
+TEST(TuneLdAudit, AnLdAuditFailureIsNotACarveOutMismatch) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    LdAuditMeasurer m;
+    m.worker = true;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find(" audit: ok"), std::string::npos) << out;
+    EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos)
+        << "the fresh child re-verifies at the natural ld, where the arm passes: no worker defect\n" << out;
 }

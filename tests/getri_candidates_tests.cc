@@ -17,6 +17,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "shipped_table_pick.hh"
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -187,7 +188,7 @@ void install_getri_table(const std::string& dtype, const std::string& dev, const
         if (t.name.rfind("getri.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
     files.emplace_back("getri." + dtype + "." + dev + ".txt", "# op=getri dtype=" + dtype + " device=" + dev +
                                                                   " kernels=unknown\n# keys: n:log:3 batch:log\n" + rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 // A view whose data is never dereferenced: getri_buffer_size reads metadata only.
@@ -616,23 +617,25 @@ TYPED_TEST(GetriCandidates, ScopedPinBeatsTheEnvironment) {
     this->expect_inverted(r, "outer blocked");
 }
 
-// Auto against the transcribed table on a device that reads it (sm_89 and sm_120 own one; other
-// sm devices borrow): the old preference at both sides of each window edge, on and off the grid,
-// at batch 2 and 3 (inverse_tests' extents, below the grid) and 300. Vendor-free: Blocked
-// everywhere (RouteGetri.VendorFreeFallbackHandsOverTheNativeRoute and getrf_tests' L12 getri
-// readbacks, ported).
-TYPED_TEST(GetriCandidates, AutoReadsTheTranscribedTable) {
+// Auto against the shipped table of this device (shipped_table_pick.hh): both sides of each old
+// window edge, on and off the grid, at batch 2 and 3 (inverse_tests' extents, below the grid) and
+// 300. Vendor-free that is Blocked everywhere (RouteGetri.VendorFreeFallbackHandsOverTheNativeRoute
+// and getrf_tests' L12 getri readbacks, ported).
+TYPED_TEST(GetriCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    ASSERT_FALSE(tables.empty());
-    ASSERT_EQ(tables.front()->source.rfind("transcribed:", 0), 0u) << tables.front()->file;
     for (const auto& [n, batch] : {std::pair{40, 2}, std::pair{127, 3}, std::pair{128, 3}, std::pair{129, 300},
                                    std::pair{200, 2}, std::pair{255, 2}, std::pair{256, 2}, std::pair{512, 2}}) {
         const Spec s{n, batch, 0, 23u + unsigned(n)};
         auto p = this->make(s);
-        const std::string want = TestFixture::kVendor ? old_auto<T>(n) : "blocked";
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
+            [&] {
+                auto q = this->make(s);
+                this->run(q);
+            });
+        if (!TestFixture::kVendor) EXPECT_EQ(want, "blocked") << label(s);
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
         this->expect_inverted(p, "auto " + label(s));
     }
@@ -809,16 +812,17 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: the old
-// preference on both devices' tables, every dtype, at on-grid, edge and off-grid keys.
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
+// old preference, every dtype, at on-grid, edge and off-grid keys. sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getri", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (int n : {1, 5, 100, 112, 126, 127, 128, 129, 160, 254, 255, 256, 257, 300, 3000, 9000})
                 for (int batch : {1, 2, 3, 300, 100000}) {
                     const select::TableRow* row = t.nearest({{"n", n}, {"batch", batch}});

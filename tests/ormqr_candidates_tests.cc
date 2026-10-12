@@ -20,6 +20,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/ormqr/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -227,7 +228,7 @@ void install_table(const std::string& dtype, const std::string& dev, const std::
     files.emplace_back("ormqr." + dtype + "." + dev + ".txt",
                        "# op=ormqr dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: side:exact trans:exact m:log k:log q:log batch:log\n" + rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 template <typename T, Backend B>
@@ -591,7 +592,7 @@ TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device does not read a transcribed ormqr table";
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
                           Spec{Side::Left, Transpose::Trans, 33, 20, 1, 5}, Spec{Side::Right, Transpose::Trans, 2, 1, 700, 3000}}) {
@@ -758,20 +759,21 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them: both
-// devices, blocked | vendor except complex Trans (vendor alone), on and off the grid.
-TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnBothDevices) {
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
+// blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
                         {"cfloat", "L", "T", 64, 1, 1024, 2048, "vendor", 1}, {"cfloat", "R", "C", 5, 2, 3, 4, "blocked", 2},
                         {"cdouble", "R", "T", 512, 512, 2, 32768, "vendor", 1}, {"cdouble", "L", "N", 1, 1, 1, 1, "blocked", 2}};
-    for (const char* dev : {"sm_89", "sm_120"})
+    for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("ormqr", r.dtype, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;

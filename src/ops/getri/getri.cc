@@ -1,5 +1,5 @@
 // getri (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
-// tuned/getri.<dtype>.<device>.txt row that can_run() admits. Blocked writes P into C and solves with two
+// tuned/getri.<device>.txt row that can_run() admits. Blocked writes P into C and solves with two
 // public trsm calls (each picks its own kernel); Vendor is cublas<t>getriBatched / rocsolver / LAPACKE.
 //
 // getri_buffer_size has no C, so the key and can_run read A alone and both entry points reach the same

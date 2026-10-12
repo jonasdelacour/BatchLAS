@@ -20,16 +20,16 @@ so a transcribed sm_120 table holds the sm_89 decisions. "Branch-only" sections 
 | Section | On main | sm_120 selection on main |
 |---|---|---|
 | [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:294`), `scripts/check_device_calls.py` | n/a |
-| [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/sycl/spmm_native.cc`) | `tuned/spmm.*.sm_120.txt`, transcribed: `direct` first for `transA=N` |
+| [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/sycl/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, transcribed: `direct` first for `transA=N` |
 | [compute-capability key](#compute-capability-key) | yes | n/a |
-| [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.*.sm_120.txt`, transcribed |
-| [potrf LPanel vector sB](#potrf-lpanel-vector-sb) | yes | `tuned/potrf.*.sm_120.txt`, converted from sweeps that include vector sB |
+| [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.sm_120.txt`, transcribed |
+| [potrf LPanel vector sB](#potrf-lpanel-vector-sb) | yes | `tuned/potrf.sm_120.txt`, converted from sweeps that include vector sB |
 | potrf LPanel auto window, native cap, Blocked nb/W | no | converted rows: float `tiny` to n = 32, `lpanel` first at most cells 36..288, `vendor` or `blocked` above; cfloat `lpanel` first at n = 36 and from 40 to 320 at the larger batches (switch between batch 512 and 8192 depending on n), `vendor` from 384 |
-| [posv on sm_120](#posv-on-sm_120) | no posv change | `tuned/posv.*.sm_120.txt`, converted from `sm120_posv_sweep.jsonl` |
-| [LU getrs tiny](#lu-getrs-tiny) | no (getrs has `cta`, `blocked`, `vendor`) | `tuned/getrs.*.sm_120.txt`, transcribed (same CSV as sm_89) |
+| [posv on sm_120](#posv-on-sm_120) | no posv change | `tuned/posv.sm_120.txt`, converted from `sm120_posv_sweep.jsonl` |
+| [LU getrs tiny](#lu-getrs-tiny) | no (getrs has `cta`, `blocked`, `vendor`) | `tuned/getrs.sm_120.txt`, transcribed (same CSV as sm_89) |
 | [LU getrs fused](#lu-getrs-fused), [NR 1](#lu-getrs-fused-nr-1), [sm89 rows](#lu-getrs-fused-sm89-rows) | yes (`c9352406`) | transcribed; the branch's vendor-present sm_120 getrs window is not in the table |
 | [getrf windows](#lu-getrf-windows), [native tier](#lu-getrf-native-tier), [gesv](#lu-gesv), [end to end](#lu-end-to-end), [getrs windows](#getrs-windows-after-the-trsm-fix) | no | transcribed (getrf, getrs, gesv) |
-| [geqrf skinny panels](#geqrf-skinny-panels) | no (no `geqrf_skinny.cc`) | `tuned/geqrf.*.sm_120.txt`, transcribed (same CSV as sm_89) |
+| [geqrf skinny panels](#geqrf-skinny-panels) | no (no `geqrf_skinny.cc`) | `tuned/geqrf.sm_120.txt`, transcribed (same CSV as sm_89) |
 | [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.cc:97`) | n/a |
 | [trsm sub-group Left kernel](#trsm-sub-group-left-kernel), [side right](#trsm-side-right-on-sm120) | kernel yes (candidate `sg_left`); windows no | float and double measured (`tuned/trsm.{float,double}.sm_120.txt`); cfloat and cdouble are the sm_89 transcription, which never ranks `sg_left` |
 | [gemm](#gemm-native-register-tiled-selector) | 16x16 and 32x32 wide NN tiles yes; selector windows no | sm_89 transcription: float rows rank `vendor` first on 11154 of 11226 rows and `small` on the other 72; neither small wide tile appears in any sm_120 row, so they run only when pinned |
@@ -586,7 +586,7 @@ cfloat 128x8 1.00 / 0.90 / 0.55; float 256x8 0.77 / 0.72 / 0.46; float 512x4 0.6
 ### geqrf sm120 tall window
 
 On the branch, the route-era `route_geqrf.hh` had two sm_120-only clauses. Under flat selection the same
-decisions are rows of a measured `tuned/geqrf.*.sm_120.txt` that rank `cta` first in these cells:
+decisions are rows of a measured `tuned/geqrf.sm_120.txt` that rank `cta` first in these cells:
 
 - `geqrf_skinny_window`: float n <= 8 with m <= 256, or m <= 512 with n >= 2; cfloat n <= 8 with m <= 256;
   strictly tall (m > n). Square shapes stay with the tiny tier.
@@ -800,7 +800,7 @@ alternating reps, medians. BASE is 502ad378 (`BATCHLAS_GEMM_ROUTE=native`). Rati
 Kernel choice was checked with `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 
 > **Note:** None of the windows in this section is code on main. `select_kernel_variant` and
-> `is_sm120_family` routing are deleted, and gemm chooses from `tuned/gemm.<dtype>.<device>.txt`
+> `is_sm120_family` routing are deleted, and gemm chooses from `tuned/gemm.<device>.txt`
 > ([gemm.md](gemm.md#choices-flat-selection-p34)). The sm_120 gemm tables are the transcribed sm_89 rows
 > (no gemm sweep has run), so Auto on sm_120 runs what the 4090 router chose. The tiles below are ordinary
 > candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only; `wide:m=64:n=64:k=16`,

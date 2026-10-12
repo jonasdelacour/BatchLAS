@@ -16,6 +16,7 @@
 
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
+#include "shipped_table_pick.hh"
 
 #include "../src/extensions/geqrf_native.hh"
 #include "../src/ops/geqrf/can_run.hh"
@@ -253,6 +254,16 @@ protected:
         const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
         auto p = make_qr<T>(s);
         return traced_choice([&] { run(p); });
+    }
+    // What Auto (or, native_only, the class word `native`) must pick, from the shipped tables.
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        const select::Key key{{"form", s.m == s.n ? "sq" : (s.m > s.n ? "tall" : "wide")}, {"n", s.n},
+                              {"aspect", gq::aspect_of(s.m, s.n)}};
+        return test_utils::shipped_table_pick<C>("geqrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                 key, [&] {
+                                                     auto p = make_qr<T>(s);
+                                                     run(p);
+                                                 }, native_only);
     }
 
     // The family's own driver: Tiny, Cta, Blocked with the public gemm, or the vendor.
@@ -511,16 +522,20 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
 }
 
 // §5.3, and RouteGeqrf.BatchlasGeqrfRouteIsActuallyRead ported: spellings (case-folded) and the
-// class words, via ScopedPin and via BATCHLAS_GEQRF_ROUTE. Bare `native` is the row's best
-// runnable non-vendor; bare `vendor` falls back to Auto where there is no vendor.
+// class words, via ScopedPin and via BATCHLAS_GEQRF_ROUTE. Auto and bare `native` (the row's best
+// runnable non-vendor) come from the shipped table; bare `vendor` falls back to Auto where there
+// is no vendor.
 TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const Spec s{40, 24, 3};
     const std::string auto_pick = this->auto_choice(s);
+    EXPECT_EQ(auto_pick, this->table_pick(s)) << "Auto against the shipped table";
+    const std::string native_pick = this->table_pick(s, true);
+    ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
         {"CTA", "cta"}, {"cta", "cta"},
-        {"Blocked", "blocked"}, {"vendor", vendor_pick},       {"native", "cta"},    {"auto", auto_pick}};
+        {"Blocked", "blocked"}, {"vendor", vendor_pick},       {"native", native_pick},    {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
             auto p = make_qr<T>(s);
@@ -578,7 +593,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
     if (this->budget() != 97280) GTEST_SKIP() << "the expectations are read at a 97,280 B budget";
     const auto tables = select::tables_in_borrow_order("geqrf", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device's first geqrf table is not the transcription";
     struct Row { int m, n; const char* vendor; const char* native; };
     std::vector<Row> rows;
@@ -638,7 +653,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsEveryKeyField) {
                        "form=tall n=16 aspect=2 | blocked 1 | cta 2\n"
                        "form=wide n=8 aspect=2 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { int m, n; const char* expect; const char* field; };
     const Probe probes[] = {{8, 8, "tiny", "base"},           {16, 16, "blocked", "n (square)"},
                             {17, 8, "cta", "form"},           {64, 8, "blocked", "aspect"},
@@ -680,7 +695,7 @@ TYPED_TEST(GeqrfCandidates, VendorFreeWalkIsTheOldTieBreak) {
                        "# keys: form:exact n:log:3 aspect:log\n"
                        "form=tall n=16 aspect=4 | vendor 1\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     for (auto [m, n] : {std::pair{64, 16}, std::pair{20, 20}}) {
         auto p = make_qr<T>(Spec{m, n, 2});
         std::string all;
@@ -781,8 +796,9 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
 }
 
-// The transcribed rows, read with Table::nearest directly so every device checks them, on
-// both devices: they are the same old preference (the old predicates read no architecture).
+// The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
+// the old preference (the old predicates read no architecture). sm_120 is deep-measured since
+// 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
     struct Row { const char* dtype; const char* form; int n, aspect; const char* ranked; };
     const Row rows[] = {
@@ -794,13 +810,13 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
         {"cfloat", "sq", 20, 1, "vendor|cta|tiny|blocked"},     {"cfloat", "sq", 22, 1, "vendor|tiny|cta|blocked"},
         {"cdouble", "sq", 255, 1, "vendor|cta|tiny|blocked"},   {"cdouble", "tall", 32, 8, "cta|blocked|vendor"},
         {"cdouble", "wide", 64, 4, "vendor"}};
-    for (const char* device : {"sm_89", "sm_120"})
+    for (const char* device : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("geqrf", r.dtype, select::device_from_key(device));
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, device) << r.dtype;
-            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest({{"form", r.form}, {"n", r.n}, {"aspect", r.aspect}});
             ASSERT_NE(row, nullptr) << t.file;
             std::string got;

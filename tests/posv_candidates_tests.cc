@@ -22,6 +22,7 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/util/resident_capacity.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -771,7 +772,7 @@ TYPED_TEST(PosvCandidates, AutoReadsEveryKeyField) {
                        "uplo=L n=12 nrhs=1 batch=128 | cta 1 | blocked 2 | tiny 3\n"
                        "uplo=U n=8 nrhs=1 batch=128 | blocked 1 | cta 2 | tiny 3\n");
     const TableGuard restore;
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Uplo uplo; int n, nrhs, batch; const char* expect; const char* field; };
     const Probe probes[] = {{Uplo::Lower, 8, 1, 128, "tiny", "base"},
                             {Uplo::Lower, 8, 1, 32768, "cta", "batch"},
@@ -870,7 +871,7 @@ TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
         ASSERT_FALSE(tables.empty()) << r.dtype;
         const select::Table& t = *tables.front();
         ASSERT_EQ(t.device, "sm_89") << r.dtype;
-        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
         const select::Key key{{"uplo", r.uplo}, {"n", r.n}, {"nrhs", r.nrhs}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;

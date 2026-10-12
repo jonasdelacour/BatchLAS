@@ -20,6 +20,7 @@
 #include "../src/backends/syrk_gram_tiles.hh"
 #include "../src/backends/syrk_triangular_tiles.hh"
 #include "../src/ops/syrk/choice.hh"
+#include "shipped_table_pick.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -221,7 +222,7 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
                                                                  "# keys: form:exact trans:exact n:log:2 k:log "
                                                                  "batch:log\n" +
                                                                  rows);
-    select::testing::set_builtin_tables(std::move(files));
+    select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
 // A heterogeneous A or C has no route on any backend: one tile launch has one (n, k, ld, stride),
@@ -735,7 +736,7 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const auto tables = select::tables_in_borrow_order("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->source != "transcribed:ff340fc6")
+    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
         GTEST_SKIP() << "this device reads another syrk table";
     struct Row { int n, k, batch; const char* f; const char* d; };  // float, double (vendor present)
     const Row rows[] = {{128, 64, 4, "gram", "gram"},           {1, 4096, 2, "gram", "gram"},
@@ -996,10 +997,11 @@ TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
     EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
-// The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N
-// and T, the n axis at k = batch = 1 for C), sm_120's rows equal sm_89's, every row untimed under
-// source=transcribed:ff340fc6, and the keys line is choice.hh's key_names.
-TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
+// The sm_89 transcription (no GPU): each table holds exactly choice.hh's grid (the full product
+// for N and T, the n axis at k = batch = 1 for C), every row untimed under
+// source=transcribed:ff340fc6; every syrk table's keys line is choice.hh's key_names. sm_120 is
+// deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
+TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
     std::set<std::string> want;
     for (const char* f : {"sq", "tall", "wide"})
         for (std::string_view t : sk::grid_trans)
@@ -1012,13 +1014,12 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
     std::string keys = "# keys:";
     for (auto k : sk::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double"}) {
-        std::map<std::string, std::string> rows_89;
-        for (const char* dev : {"sm_89", "sm_120"}) {
+        for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syrk", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
+            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 ASSERT_EQ(row.keys.size(), 5u) << t.file << ":" << row.line;
@@ -1026,10 +1027,6 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
                     row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
                 got.insert(key);
                 EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
-                std::string ranked;
-                for (const auto& e : row.ranked) ranked += e.spelling + "|";
-                if (std::string(dev) == "sm_89") rows_89[key] = ranked;
-                else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
             }
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;

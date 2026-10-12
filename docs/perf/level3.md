@@ -11,7 +11,7 @@ for the four are transcribed from the deleted hand-written gates (at `ff340fc6`)
 `src/ops/<op>/choice.hh` lists the families. `src/ops/<op>/<op>.cc` validates shapes (throwing
 `std::invalid_argument` on every backend), returns a no-op event for an empty problem, and calls
 `select::run`, which takes the first runnable entry of the nearest row of
-`tuned/<op>.<dtype>.<device>.txt`. @ref selection_tables lists the families per op.
+`tuned/<op>.<device>.txt`. @ref selection_tables lists the families per op.
 
 ### Level-3: the families and their can_run terms
 

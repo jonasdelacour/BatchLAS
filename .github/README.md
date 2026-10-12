@@ -77,7 +77,7 @@ Matrices are column-major in device-accessible (USM) memory.
 
 ## Tune
 
-Each op chooses its kernel from `tuned/<op>.<dtype>.<device>.txt`. A GPU without tables borrows
+Each op chooses its kernel from `tuned/<op>.<device>.txt`. A GPU without tables borrows
 the nearest device's and warns once, so retune on new hardware:
 
 ```bash

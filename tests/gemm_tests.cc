@@ -242,13 +242,14 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
     ASSERT_FALSE(tables.empty());
     const select::Table& t = *tables.front();
     ASSERT_EQ(t.device, "sm_89");
-    EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+    EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/gemm.sm_89.jsonl") << t.file;
     for (const Row& r : rows) {
         const select::Key key{{"ta", r.ta}, {"tb", "N"}, {"layout", r.layout}, {"m", r.m},
                               {"n", r.n},   {"k", r.k},  {"batch", 1}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr);
         const std::string what = t.file + ":" + std::to_string(row->line);
+        EXPECT_FALSE(row->timed) << what << ": the sm_89 rows are the transcription";
         const auto it = std::find_if(row->ranked.begin(), row->ranked.end(),
                                      [](const auto& e) { return e.spelling != "vendor"; });
         ASSERT_NE(it, row->ranked.end()) << what;

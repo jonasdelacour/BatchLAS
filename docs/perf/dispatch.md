@@ -34,7 +34,7 @@ inline constexpr bool level3_vendor_available =
 
 `src/ops/<op>/choice.hh` lists each op's families, and `src/ops/<op>/<op>.cc` holds `key_of`, `can_run`, the
 launch and the workspace. `select::run` takes the first runnable entry of the nearest row of
-`tuned/<op>.<dtype>.<device>.txt`. Every family is fieldless. Derived legs (gram's tile width, the triangular
+`tuned/<op>.<device>.txt`. Every family is fieldless. Derived legs (gram's tile width, the triangular
 kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and her2k still choose by hand in
 `cublas.cc` (vendor builds only) and have no `BATCHLAS_<OP>_ROUTE`.
 

@@ -249,9 +249,9 @@ struct TableRow {
     bool timed = true;
 };
 
-/// One parsed `tuned/<op>.<dtype>.<device>.txt` file.
+/// One dtype's table: a `tuned/<op>.<device>.txt` file holds one per dtype.
 struct Table {
-    std::string file;  ///< basename, e.g. "potrf.float.sm_120.txt"
+    std::string file;  ///< basename, e.g. "potrf.sm_120.txt"
     std::string op, dtype, device, family;
     int arch_number = 0;
     std::string source;  ///< the header's source= value, e.g. "transcribed:2b46acab"
@@ -271,8 +271,14 @@ struct Table {
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
-/// Parses one table file. @throws std::runtime_error `"<file>:<line>: <reason>"`.
+/// Parses one single-dtype table (the header or file name gives op, dtype and device).
+/// @throws std::runtime_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
+
+/// Parses one tuned table file, named op.device.txt with the exact key dtype first, into one
+/// Table per dtype without that key.
+/// @throws std::runtime_error as parse_table does.
+BATCHLAS_API std::vector<Table> parse_tables(std::string_view text, std::string_view file);
 
 /// A `tuned/*.txt` file compiled into the library: its basename and text.
 struct EmbeddedTable {
@@ -301,7 +307,8 @@ BATCHLAS_API std::string format_detail(double ms, const std::string* next, doubl
 // The trace detail for a ranked entry: "transcribed" on an untimed row, else format_detail.
 BATCHLAS_API std::string entry_detail(const TableRow& row, std::size_t i, const TableEntry* next);
 BATCHLAS_API std::optional<std::string> pin_text(std::string_view op, std::string* source);
-BATCHLAS_API void push_pin(std::string_view op, std::string text);
+BATCHLAS_API void push_pin(std::string_view op, std::string text, bool strict = false);
+BATCHLAS_API bool pin_strict(std::string_view op);  // the innermost ScopedPin of op is strict
 BATCHLAS_API void pop_pin(std::string_view op);
 struct NativeFacts;
 // `fields` is what the trace line prints after the dtype; empty means the shape's n and batch.
@@ -377,23 +384,28 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
 
 // §5.3 / R6. nullopt means "auto": the caller runs the normal walk. The class words
 // `native` and `vendor` fall back to auto with a warning; every other spelling throws.
+// `strict` (the tuner's arms): a class word that cannot serve the shape throws too, and
+// `vendor` must resolve to the candidate spelled `vendor`.
 template <class Choice, std::size_t N, class CanRun>
 std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
                                   const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
-                                  const std::string& text, const std::string& source) {
+                                  const std::string& text, const std::string& source, bool strict = false) {
     const std::string where = std::string(op) + ": " + source + "=\"" + text + "\"";
     if (text == "auto") return std::nullopt;
+    const std::string refused = where + " (strict): no " + text + " candidate can run this shape on " + d.key;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;
+        if (strict) throw std::invalid_argument(refused);
         warn_pin_fallback(op, "native", d);
         return std::nullopt;
     }
     if (text == "vendor") {
         for (const Choice& k : candidates)
-            if (family_of(k) == "vendor" && can_run(k)) {
+            if (family_of(k) == "vendor" && (!strict || to_string(k) == text) && can_run(k)) {
                 if (trace_enabled()) note_decision(op, to_string(k), "", "pinned");
                 return k;
             }
+        if (strict) throw std::invalid_argument(refused);
         warn_pin_fallback(op, "vendor", d);  // a vendor-free build: the old router fell through too
         return std::nullopt;
     }
@@ -413,11 +425,18 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 
 // ---- pins (§5.3) ------------------------------------------------------------------------
 
+/// Tag for a strict ScopedPin: a class word ("native", "vendor") that cannot serve the shape
+/// throws std::invalid_argument instead of falling back to auto.
+struct StrictPin {};
+
 /// RAII pin for @p op: wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer
 /// pin on exit. Takes a choice, or any pin word ("auto", "native", "vendor", a spelling).
 template <class Choice>
 class ScopedPin {
 public:
+    ScopedPin(std::string_view op, std::string_view word, StrictPin) : op_(op) {
+        detail::push_pin(op_, std::string(word), true);
+    }
     ScopedPin(std::string_view op, const Choice& c) : op_(op) { detail::push_pin(op_, to_string(c)); }
     ScopedPin(std::string_view op, std::string_view word) : op_(op) { detail::push_pin(op_, std::string(word)); }
     ~ScopedPin() { detail::pop_pin(op_); }
@@ -438,7 +457,8 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
               const std::array<Choice, N>& candidates, CanRun&& can_run, const Rules& rules = {}) {
     std::string source;
     if (auto text = detail::pin_text(op, &source))
-        if (auto c = detail::resolve_pin(op, dtype, d, key, candidates, can_run, rules, *text, source))
+        if (auto c = detail::resolve_pin(op, dtype, d, key, candidates, can_run, rules, *text, source,
+                                         detail::pin_strict(op)))
             return *c;
     return *detail::walk(op, dtype, d, key, candidates, can_run, rules, false);
 }

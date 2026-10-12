@@ -376,7 +376,7 @@ that area's objects.
 
 ## Embedded tuned tables {#embedded-tuned-tables}
 
-The tuned selection tables (`tuned/<op>.<dtype>.<device>.txt`; format in `tuned/README.md` and
+The tuned selection tables (`tuned/<op>.<device>.txt`; format in `tuned/README.md` and
 [flat kernel selection](flat-kernel-selection.md)) are compiled into the library. An installed
 BatchLAS therefore needs no data files at run time.
 
@@ -385,8 +385,9 @@ BatchLAS therefore needs no data files at run time.
   depends on the tables. The script writes `<build>/generated/select/tuned_tables.cc`, which defines
   `select::embedded_tables()` (declared in `src/select/select.hh`) as a sorted array of
   `{file name, text}` pairs. The TU is compiled into `batchlas_dispatch_obj`.
-- A file not named `<op>.<dtype>.<device>.txt` is a configure error. The loader would otherwise skip
-  it silently.
+- A file not named `<op>.<device>.txt` is a configure error. The loader would otherwise skip
+  it silently. At run time `select::parse_tables` splits each file into one table per dtype (its
+  first key, `dtype:exact`; @ref design_tuning_data).
 - Each table is embedded as `R"batchlas_tbl(...)batchlas_tbl"`. A table that contains the delimiter is
   a configure error.
 - Each table is one `char` array whose length comes from `sizeof`. A `string_view` built from a bare
@@ -396,10 +397,11 @@ BatchLAS therefore needs no data files at run time.
 - An unchanged table set leaves the generated file untouched, so its timestamp holds and the TU is not
   recompiled.
 
-**Staleness.** `cmake/BatchLASTunedStaleness.cmake` recomputes at configure time the kernel-source hash
-that each table header records (`kernels=<hash>`, over the sources listed in `tools/tune/<op>_spec.cc`)
-and warns on a mismatch. It is a warning only: a stale table stays in use, since a slightly stale
-ranking beats none. `.github/ci/check_tuned_tables.py` and the tuner compute the same hash.
+**Staleness.** `scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py`
+recompute the kernel-source hash that each table header records (`kernels=<hash>`, kernel hash v2 over
+the sources listed in `tools/tune/<op>_spec.cc`) and warn on a mismatch. It is a warning only: a stale
+table stays in use, since a slightly stale ranking beats none. The tuner computes the same hash. There
+is no configure-time check.
 
 **Run time.** Tables are parsed lazily per `(op, dtype)`, on the first selection that needs them, and
 cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in

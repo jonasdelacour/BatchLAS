@@ -276,12 +276,6 @@ Event potrf_blocked_dispatch(Queue& ctx,
     // Not optional: the merge reads info[b] for an earlier panel's failure; info_out is dirty.
     ctx->fill(info.data(), int32_t(0), static_cast<std::size_t>(batch));
 
-    // Not hygiene: the gemm epilogue reads prior even at beta == 0, so arena poison gives NaN.
-    // evidence: docs/perf/potrf.md#potrf-correctness-findings
-    if (!ws.product.empty()) {
-        ctx->fill(ws.product.data(), T(0), ws.product.size());
-    }
-
     if (!ctx.in_order()) ctx.wait();
 
     const int ld = A.ld();
