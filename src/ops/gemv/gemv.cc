@@ -47,9 +47,8 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 // Correctness only (R3). There is no gemv validator, deliberately: a throw would turn a live
 // silent misuse (ortho's transposed arm) into a crash, so the native terms carry the agreement checks:
 // one launch reads A.batch_size() items of all three views with one (m, n), so x and y must
-// match A in batch and length or a native kernel indexes past them. The vendor takes any homogeneous call
-// (the complex<double> CUDA refusal went with defect 13's fix). m == 0 or n == 0 is legal; the drivers
-// quick-return.
+// match A in batch and length or a native kernel indexes past them. The vendor takes any homogeneous
+// call (defect 13 fixed). m == 0 or n == 0 is legal; the drivers quick-return.
 // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
 // evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
 template <Backend B, class T>

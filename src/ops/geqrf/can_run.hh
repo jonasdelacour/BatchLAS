@@ -21,9 +21,8 @@ using select::overloaded;
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-/// Correctness only (R3): false means `c` throws or answers wrongly. Each clause is its driver's check; one
-/// launch serves one (m, n, ld, stride) and a wide view's update runs off the panel, so natives take neither;
-/// the vendor runs each item at the top-level (m, n), so it takes no heterogeneous batch either.
+/// Correctness only (R3): each clause is its driver's check. One (m, n, ld, stride) per launch and a wide view's
+/// off-panel update: natives take neither; the vendor (top-level (m, n) per item) takes no heterogeneous batch.
 template <class T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
