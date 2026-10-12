@@ -264,10 +264,15 @@ python3 .github/ci/compare_failures.py \
     --junit ctest.xml \
     --gtest-dir build/presets/dev-tests/gtest-xml \
     --require consumer_package_tests \
-    --expected-tests "$(ctest --preset dev-tests -N | sed -n 's/^Total Tests: //p')"
+    --expected-tests "$N"
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
+- `N` is a fixed count, recorded once from `ctest --preset dev-tests -N` ("Total Tests") on a
+  known-good full configure of `main`, never from the tree under test. Taking it from the same tree
+  makes the guard self-referential: a configure that registers fewer tests (smoke set, CPU tests
+  off, a dropped `add_test`) then still passes. CI's own counts are in
+  `.github/workflows/ci.yml` (its `--expected-tests` arguments) and cover different trees.
 - `--known` defaults to `tests/known-failures.txt`. An AdaptiveCpp tree has its own self-contained
   ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
   (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
@@ -418,5 +423,5 @@ with a `<skipped>` child, which includes never-built binaries. The root summary 
   variable gives an all-green run.
 - **Defences:** CI sets neither `BATCHLAS_TEST_BACKEND` nor `BATCHLAS_TEST_FLOAT_TYPE`, and their
   absence from `env:` is a gate. `compare_failures.py` names such binaries under `SKIPPED`, read that
-  section rather than the exit code. `--expected-tests` catches missing executables. The
+  section rather than the exit code. `--expected-tests` with a fixed count catches missing executables. The
   assertions in [The environment trap](#the-environment-trap) catch a CPU-only build.

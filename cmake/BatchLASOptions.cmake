@@ -56,7 +56,7 @@ endif()
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
 # this. PROJECT_IS_TOP_LEVEL would be the idiomatic spelling but needs CMake
-# 3.21 and this project declares 3.14.
+# 3.21 and this project declares 3.17.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(BATCHLAS_IS_TOP_LEVEL ON)
 else()

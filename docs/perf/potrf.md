@@ -50,7 +50,7 @@ transform. `blocked` has no lower order bound, because a correctness gate must n
 
 ### Known gaps
 
-* `lpanel:panel=16` is timed on sm_120 only: all 165 float `uplo=L` rows rank it, 21 of them first. sm_89 has no
+* `lpanel:panel=16` is timed on sm_120 only: 165 of the 189 float `uplo=L` rows rank it, 21 of them first. sm_89 has no
   timing of it.
 * A table ranks a family only where its sweep timed it. Off-grid cells are guesses.
 * `factor_bench`'s posv `composed` arm pins potrf to `tiny` only up to the type's tiny ceiling; above it, the pin is `native`.

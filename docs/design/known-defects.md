@@ -31,7 +31,7 @@ closed and kept only for numbering.
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
-| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
+| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | LOBPCG null P column | fixed 2026-10-09, kept for the misleading symptom |
@@ -54,7 +54,7 @@ closed and kept only for numbering.
   is column `i`, but on this arm the vectors are rows of `A`.
 - **Why it is not live:** gemv's `can_run` (`src/ops/gemv/gemv.cc`) refuses every native family
   when `X.size() != red_len` or `Y.size() != out_len`, so the call always goes to the vendor.
-- **Test gap:** `tests/ortho_tests.cc:111` and `:293` use only `{Transpose::NoTrans}`. The
+- **Test gap:** `tests/ortho_tests.cc:111` and `:154` use only `{Transpose::NoTrans}`. The
   transposed arm has never run in the suite.
 - **Fix needs:** `A_i` with `ld = A.ld()` and stored-orientation extents, `A_next` as the i-th row
   vector, and a transposed test.
@@ -73,8 +73,8 @@ closed and kept only for numbering.
 
 - **Symptom:** the result is correct, but both the sparse and dense arms do twice the level-3 work.
 - **Cause:** `src/extensions/lanczos.cc:111-116`. `padded_vector` and `padded_output` are two
-  columns wide (`:56`). The consumer reads only column 0, `local_v_next = Span(v_next_ptr + bid*2*n, n)`
-  at `:132`.
+  columns wide (`:57`). The consumer reads only column 0, `local_v_next = Span(v_next_ptr + bid*2*n, n)`
+  at `:131`.
 - **Note:** `lanczos_tests` fails the same way under `BATCHLAS_SPMM_ROUTE=vendor`
   (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`). A route flip here says
   nothing about routing.
@@ -159,13 +159,13 @@ wrote both triangles and was reachable only through those pins.
   | deleted | default, x40 | red | green, 40 of 40 |
   | restored | amplified, x20 | green | green |
 
-  The red leg fails at `tests/sytrd_blocked_tests.cc:389`.
+  The red leg fails at `tests/sytrd_blocked_tests.cc:390`.
 - **Not established:** the residual rate at the default geometry. The default window is about 16
   times narrower than the amplified one, so 40 runs cannot see it. The barrier removes the hazard by
   the memory model. Confirming that needs many more default runs or
   `compute-sanitizer --tool racecheck`.
 - **Warning:** forcing a larger work-group does not reproduce the defect. The window depends on the
-  group count. Forcing `G` down raises `chunk`. `tests/sytrd_blocked_tests.cc:439-454` is an
+  group count. Forcing `G` down raises `chunk`. `tests/sytrd_blocked_tests.cc:440-455` is an
   unreliable guard, not a blind one.
 - **Status:** fixed, armed on the amplified geometry.
 
@@ -317,14 +317,15 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Reached by:** on sm_89 a `cta` pin only: no real general row of `tuned/gesvd.sm_89.txt` ranks `cta`
   first, and `jacobi`'s `can_run` admits every real shape that `cta` admits. On sm_120 Auto reaches it:
   the deep table ranks `cta` first in 14 double `vec=all` non-square rows (for example `m=8 n=32`,
-  `m=32 n=8`) and in float `vec=none` rows. Double's error is \f$\varepsilon_d\kappa^2\f$; no double
+  `m=32 n=8`); float `vec=none` rows also reach `cta`, but compute no vectors, so they cannot
+  show the defect. Double's error is \f$\varepsilon_d\kappa^2\f$; no double
   failure has been reproduced.
 - **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations`, float/CUDA, listed in
   `tests/known-failures.txt`. Since the Philox generator, its `AN` matrix has \f$\kappa = 497\f$;
   8 of 80 seeds fail. The double instantiation still covers the four job combinations.
 - **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
   for real general input.
-- **Status:** open, pinned `cta` only.
+- **Status:** open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
@@ -403,7 +404,7 @@ refuted.
   buffer. See [stedc: eigenvalues-only still builds eigenvectors](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
 - **`compute_optimal_wg_size` assumes a 32-bit `long`.** `include/batchlas/util/kernel-heuristics.hh:103,108`
   uses `__builtin_clzl` with a 31 shift. On LP64 this shifts by a negative count, which is undefined
-  behaviour. Fix with `63 - __builtin_clzl` or `std::bit_floor`. Callers: `src/matrix.cc:384,487`.
+  behaviour. Fix with `63 - __builtin_clzl` or `std::bit_floor`. Callers: `src/matrix.cc:384,484,514`.
 - **The generic (MKL-instantiated) `trmm` recursion reads the whole square of `A`.** Its base case
   at n <= 256 is a `gemm` with `beta = 1` on the diagonal block. It reads the unreferenced triangle
   and, under `Diag::Unit`, the stored diagonal. It accumulates into `C` instead of overwriting.
@@ -466,7 +467,7 @@ shown to be blind by applying a deliberate break, rebuilding, and running.
 
 | guard | why it was blind | fix |
 |---|---|---|
-| `trsm` barrier regression | drove V1 at n=16, which never has more than one sub-group | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:451`). Orders 48, 77, 80 and 109 fail 90-128 of 128 items. |
+| `trsm` barrier regression | drove V1 at n=16, which never has more than one sub-group | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:476-486`). Orders 48, 77, 80 and 109 fail 90-128 of 128 items. |
 | all 232 `gemv` cases | every case used the natural batch stride | four `stride_pad` cases, one per kernel body |
 | `spmm` transposed `nnz` bound | a NaN at an out-of-range column is discarded by the kernel's own guard | poison with an in-range column and a large finite value |
 | `gemv` tail sub-group | out-of-range writes went unseen | a guard band, poisoned before the call and checked after |

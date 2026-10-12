@@ -17,7 +17,7 @@ beside it). A leading VAR=value in a --run command sets that variable for it.
 
 Three checks, every one a FAIL:
   calls     SSCP inlines every callee: any PTX `call` or `.extern .func` is a finding. This
-            is where an unresolved libcall (__mulsc3, design page R1) or a builtin that stayed
+            is where an unresolved libcall (__mulsc3, design page A1) or a builtin that stayed
             out of line (__spirv_*, __acpp_sscp_*) shows up. The PTX is cached even when
             ptxas then rejects it, so a kernel that failed to load is still scanned.
   required  with --run (or --require), each REQUIRED family must have been JIT-compiled at

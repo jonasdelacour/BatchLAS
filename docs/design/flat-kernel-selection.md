@@ -306,7 +306,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   `{expand, vendor}`, herk `{gram, fold, vendor}` and her2k `{fold, vendor}`.
 - **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/extensions/potrf_blocked.cc:309`). `Blocked`
   has no fields: `nb` and `W` come from `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`.
-  `lpanel:panel=16` is timed only in the sm_120 table (165 float `uplo=L` rows, 21 ranking it first).
+  `lpanel:panel=16` is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
@@ -555,7 +555,7 @@ The four level-3 ops use the same structure as the op files above, with `NoField
 vendor family calls `backend::<op>_vendor` under `has_library<B>(spec.vendor)`, not the public entry,
 so there is no recursion. Float-only kernels are instantiated only in `if constexpr` arms.
 
-| op | candidates | keys (rows) | Auto (sm_89 and sm_120 transcription) | last resort |
+| op | candidates | keys (rows) | Auto (sm_89 transcription) | last resort |
 |---|---|---|---|---|
 | syrk | float `gram, triangular, vendor`; double `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` (18,450) | n ≤ 128 `gram`; above, `triangular` when squareish or (n ≥ 257, k ≥ 8, batch·T(T+1)/2 ≥ 160, T = ceil(n/128)), else `vendor`; ConjTrans `vendor` first; double above 128 `vendor` | `triangular, gram, vendor` |
 | syr2k | float `triangular, vendor`; double `vendor` | `n:log:2 k:log batch:log` (455) | float batch ≥ 2 `triangular`; batch 1 `vendor`; double `vendor` | `triangular, vendor` |

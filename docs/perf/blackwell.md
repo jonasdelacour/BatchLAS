@@ -364,11 +364,11 @@ sm_89 row handed out a 768-lane launch that the driver refused (`FusedGetrsLaunc
 sm_120 the cap reads a probed row.
 
 On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/extensions/getrs_fused.cc:243-244`)
-and the sm_120 register rows (`:125`). Branch-only: a vendor-present sm_120 window (float nrhs <= 8 at
+and the sm_120 register rows (`:127`). Branch-only: a vendor-present sm_120 window (float nrhs <= 8 at
 n >= 256; cfloat nrhs <= 4 at n >= 128 and nrhs <= 8 at n >= 512), later moved to float n >= 192 and
 cfloat n >= 96 / n >= 384 ([getrs windows](#getrs-windows-after-the-trsm-fix)). Main's sm_120 getrs
-table is the sm_89 transcription (`cta` first at `n >= 32` with `nrhs <= 2`; float also nrhs 3-4,
-[small-n-baseline.md](small-n-baseline.md#getrs)), so nrhs 3-8 cells go to the vendor.
+table is deep-measured (`tuned/getrs.sm_120.txt`): over its deep rows with `n >= 32`, nrhs 3-8 and
+batch >= 128, `cta` ranks first in 172 of 182 float rows and 170 of 230 cfloat rows (`vendor` in 60).
 
 ### LU getrs fused NR 1
 
@@ -410,7 +410,7 @@ standalone TU compiles.
 
 ### LU getrf windows
 
-Branch-only. On main the sm_120 getrf table is the sm_89 transcription. BASE build, ms, vendor /
+Branch-only. On main the sm_120 getrf table is deep-measured (`tuned/getrf.sm_120.txt`). BASE build, ms, vendor /
 blocked (loss = blocked slower):
 
 Blocked loses at n48-64 b256 (float 0.067 vs 0.095; n64 cfloat 0.106 vs 0.149), n128 b64 (0.25 vs 0.27) and cfloat n48 b1024; it wins at n64 b1024 (0.22 vs 0.15), n128 b256 (0.34 vs 0.29) and n192 b64 (0.69 vs 0.44).
@@ -454,8 +454,7 @@ bound by TrsmCta; the nrhs >= 16 windows were re-bracketed in
 ### getrs windows after the trsm fix
 
 Branch-only. Every window here is an sm_120 clause of the deleted route-era getrs router; main's sm_120
-getrs table is the sm_89 transcription, so this grid is the evidence a measured sm_120 getrs table
-should reproduce. Measured after the trsm V1 ladder cap and the sub-group Left kernel
+getrs table is deep-measured, and this grid is the independent bracket it can be checked against. Measured after the trsm V1 ladder cap and the sub-group Left kernel
 (`worktree-blackwell-tuning` @ d776064b), GPU 3.
 
 `factor_bench getrs`, arms vendor, auto, `native:blocked`, `native:cta` (nrhs <= 8) and `native:tiny`
@@ -521,7 +520,7 @@ medians. BASE is `worktree-blackwell-tuning` @ 502ad378. Ratios are time/vendor.
 were on the native-pinned walk; Auto sent them to the vendor.
 
 Branch-only. Neither the skinny leg (`geqrf_skinny.cc`), the tile-bytes width rule nor the windows are
-on main. Main's sm_120 geqrf table is the sm_89 transcription (`geqrf.csv`), and `BATCHLAS_GEQRF_LEAF`
+on main. Main's sm_120 geqrf table is deep-measured (`tuned/geqrf.sm_120.txt`), and `BATCHLAS_GEQRF_LEAF`
 has no `skinny` value. On the branch the changes applied to float and cfloat on sm_120 only; cc 0, cc 89
 and fp64 keep BASE behaviour (`SkinnyWindowIsSm120OnlyAndPicksOneTier`, `Sm120LeafWidthFollowsTileBytes`).
 
@@ -759,8 +758,9 @@ lost 9.
 
 getrs `native:blocked` (the TrsmCta-bound case), BASE -> new: float n64 q16 0.71 -> 2.17, n256 q16 0.75 ->
 1.41, n512 q64 3.10 -> 3.10; cfloat n64 q16 0.53 -> 1.41, n512 q16 1.26 -> 1.52. All 16 cells (n =
-64..512, nrhs 16 and 64) now win; BASE lost 6. On main the sm_120 getrs rows (the sm_89 transcription)
-still rank `vendor` first at nrhs >= 16.
+64..512, nrhs 16 and 64) now win; BASE lost 6. On main the deep-measured sm_120 getrs rows rank
+`blocked` first in every deep float and double row at n = 64..512, nrhs >= 16, batch >= 128 (cfloat:
+192 of 195).
 
 ### trsm side right on sm120
 

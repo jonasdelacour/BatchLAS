@@ -151,10 +151,13 @@ scripts/sweep_to_table.py --rehash-sample RUN_ID --op gemm --device sm_120   # "
   proves that the table equals the function of the ledger, whatever the sources say today.
 - **Stale kernels** (header hashes against `tools/tune/<op>_spec.cc`'s kernel-sources block) are
   a warning. A kernel edit does not fail CI; it makes the table stale until the op is retuned, and a
-  stale table stays in use. `check_tuned_tables.py` reports the same per op; there is no
-  configure-time check. Both checkers compare the header's op-level `kernels=` as well as
-  `family_kernels=`, so a table without measured rows (every sm_89 table) is reported stale when its
-  op's kernel sources change, although its `converted` and `transcribed` rows carry no hash.
+  stale table stays in use; there is no configure-time check. `sweep_to_table.py --check` compares
+  the header's op-level `kernels=` and every `family_kernels=` hash (kernel-deps included), so a
+  table without measured rows (every sm_89 table) is reported stale when its op's kernel sources
+  change, although its `converted` and `transcribed` rows carry no hash.
+  `.github/ci/check_tuned_tables.py` compares only the op-level `kernels=` over the kernel-sources
+  block, so it misses a change in a kernel-deps file alone (today getri and orgqr: 35 stale tables
+  against `--check`'s 39).
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.
 
