@@ -2,6 +2,8 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include "test_utils.hh"
+#include <batchlas/blas/extra.hh>
+#include <batchlas/verify/tolerance.hh>
 #include "../src/queue.hh"
 #include "../src/extensions/stedc_levels_plan.hh"
 #include <batchlas/util/group-collectives.hh>
@@ -821,6 +823,41 @@ TYPED_TEST(StedcTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
         }
     }
 }
+// The Fused merge at n = 64 in float, one merge of two 32-leaves, at two work-group widths: the
+// Loewner product of up to 64 ratios (d_i - lambda_j) / (d_i - d_j) is carried as mantissa and
+// exponent (maybe_rescale_vectors), as in the CTA merges. eigen_residual and orthogonality on the
+// dense tridiagonal.
+TYPED_TEST(StedcTest, StedcFusedN64FloatNoOverflow) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "the fused merge is a GPU kernel"; }
+    const int n = 64, batch = 32;
+    for (const Real log10_cond : {Real(1), Real(5)}) {
+        auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(*this->ctx, n, log10_cond, NormType::Spectral, batch, 1234u);
+        this->ctx->wait();
+        Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i) {
+                diag(i, b) = dense_A.view().at(i, i, b);
+                if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+            }
+        for (const int threads : {8, 128}) {
+            SCOPED_TRACE(::testing::Message() << "log10_cond " << log10_cond << ", merge_threads " << threads);
+            auto d = diag;
+            auto e = sub;
+            auto w = Vector<Real>::zeros(n, batch);
+            auto Q = Matrix<Real>::Identity(n, batch);
+            StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
+            UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+            (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+            this->ctx->wait();
+            EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
+            EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

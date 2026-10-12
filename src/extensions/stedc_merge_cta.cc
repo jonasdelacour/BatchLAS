@@ -162,38 +162,6 @@ struct PartitionAdapter {
     inline void sync() const {}
 };
 
-struct WorkgroupAdapter {
-    sycl::group<1> wg;
-    int32_t tid;
-    int32_t bdim;
-
-    inline int32_t lane_id() const {
-        return tid;
-    }
-
-    inline int32_t width() const {
-        return bdim;
-    }
-
-    template <typename T>
-    inline T reduce_product(T value) const {
-        return batchlas::portable::reduce_over_group(wg, value, sycl::multiplies<T>());
-    }
-
-    inline void sync() const {
-        sycl::group_barrier(wg);
-    }
-
-    template <typename T>
-    inline T reduce_sum(T value) const {
-        return batchlas::portable::reduce_over_group(wg, value, sycl::plus<T>());
-    }
-
-    template <typename T>
-    inline T broadcast(T value) const {
-        return sycl::group_broadcast(wg, value, 0);
-    }
-};
 
 template <typename T>
 inline void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
@@ -810,88 +778,6 @@ inline T nrm2_column(const Adapter& adapter,
     }
 
     return scl * sycl::sqrt(sumsq);
-}
-
-// Löwner rescale. `first`/`stride` select which eigen-indices this reduction group
-// owns: (0, 1) walks every index (WG reference variant), (part_id, parts_per_wg)
-// gives one index per partition with no work-group barrier. Iteration `eid` reads
-// row `eid` of Q (never written here) and writes only v(eid).
-//
-// The product is a (mantissa, exponent) pair, REQUIRED: narrow partitions lengthen
-// each serial product and the naive one leaves float range at n=64. frexp scaling is
-// by exact powers of two, so in-range results are bit-identical to the naive product.
-// evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
-template <typename T, typename Adapter, typename QBatch, typename VView>
-inline void maybe_rescale_vectors(bool do_rescale,
-                                  const Adapter& adapter,
-                                  int32_t first,
-                                  int32_t stride,
-                                  int32_t dd,
-                                  QBatch& Q_bid,
-                                  const VectorView<T>& d_prob,
-                                  const VView& v,
-                                  int32_t bid) {
-    if (!do_rescale) {
-        return;
-    }
-
-    const int32_t lane = adapter.lane_id();
-    const int32_t width = adapter.width();
-
-    // Trip count is deliberately identical for every reduction group: `dd` is
-    // rarely a multiple of `stride` (deflation makes it arbitrary), so a plain
-    // `eid < dd` bound would let some partitions run one iteration longer than
-    // others. The reductions below are sub-group shuffles, which require every
-    // lane of the warp to participate -- a partition that has already exited the
-    // loop makes the shuffle read garbage. Iterate a uniform number of times and
-    // mask the work instead.
-    const int32_t iters = (dd + stride - 1) / stride;
-
-    // Löwner rescale: native T is sufficient once deflation uses the
-    // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
-
-    for (int32_t it = 0; it < iters; ++it) {
-        const int32_t eid = first + it * stride;
-        const bool active = (eid < dd);
-        const T Di = active ? d_prob(eid) : T(0);
-        T mant = T(1);
-        int32_t expo = 0;
-        for (int32_t j = lane; active && j < dd; j += width) {
-            const T q_elem = Q_bid(eid, j);
-            T ratio;
-            if (j == eid) {
-                ratio = q_elem;
-            } else {
-                const T denom = Di - d_prob(j);
-                ratio = q_elem / denom;
-            }
-            mant *= ratio;
-            // Renormalize every factor so |mant| stays in [0.5, 1); exact,
-            // since frexp only rescales by a power of two.
-            if (mant != T(0) && sycl::isfinite(mant)) {
-                int e = 0;
-                mant = sycl::frexp(mant, &e);
-                expo += e;
-            }
-        }
-
-        // Each lane contributes |mant| < 1, so the butterfly product bottoms out
-        // at 0.5^width (>= 2e-10 for width 32) -- no underflow in the reduction.
-        const T mant_all = adapter.reduce_product(mant);
-        const int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
-
-        if (active && lane == 0) {
-            // mag = sqrt(|mant_all| * 2^expo_all), split so neither the square
-            // root's argument nor its result can leave range.
-            const int32_t half = expo_all >> 1;              // floor(expo_all / 2)
-            const int32_t rem = expo_all - 2 * half;         // 0 or 1
-            T mag = sycl::sqrt(sycl::fabs(mant_all) * (rem ? T(2) : T(1)));
-            mag = sycl::ldexp(mag, half);
-            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-            v(eid, bid) = sgn * mag;
-        }
-        adapter.sync();
-    }
 }
 
 // Reciprocate-and-normalize. Same `first`/`stride` convention as
