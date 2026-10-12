@@ -19,6 +19,9 @@
 
 namespace batchlas {
 
+// rocBLAS is linked but src/backends/rocblas.cc wraps none of these three.
+constexpr const char* kNoRocmWrapper = "rocblas.cc has no hemm/herk/her2k wrapper";
+
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -28,7 +31,9 @@ Event hemm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw NoRouteError(Op::hemm, Back, scalar_kind_of<T>, kNoRocmWrapper);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::hemm, Back, select::kLevel3Library<Back>);
     } else {
@@ -44,7 +49,9 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw NoRouteError(Op::herk, Back, scalar_kind_of<T>, kNoRocmWrapper);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::herk, Back, select::kLevel3Library<Back>);
     } else {
@@ -61,7 +68,9 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw NoRouteError(Op::her2k, Back, scalar_kind_of<T>, kNoRocmWrapper);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::her2k, Back, select::kLevel3Library<Back>);
     } else {
@@ -84,11 +93,15 @@ Event her2k(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above
-// compile to a throw when the library is absent, so the public entry point is a
-// symbol in every build that has the device. rocblas.cc has no hemm/herk/her2k
-// wrapper, so ROCm instantiates none of them.
+// compile to a throw when the library is absent (always on ROCm), so the public
+// entry point is a symbol in every build that has the device; the dispatch macro
+// emits a <ROCM> call in every ROCm build.
 #if BATCHLAS_HAS_CUDA_BACKEND
 LEVEL3_INSTANTIATE(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+LEVEL3_INSTANTIATE(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

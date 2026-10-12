@@ -20,7 +20,7 @@ namespace batchlas::select {
 
 inline constexpr bool kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS;
 
-template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k
+template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
 inline constexpr bool level3_vendor_available =
     B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
