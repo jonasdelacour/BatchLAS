@@ -1,9 +1,8 @@
 // Tests for gesvdj_cta, the one-sided Jacobi SVD.
-// Checks are host-side and self-contained rather than shared with
-// gesvd_tests.cc, deliberately: the tolerances there are solver-aware and
-// absolute (and fall back to 5e-2 / 2e-1 / 3e-1 under the normal-equations
-// bidiagonal), too loose to detect a regression in this kernel.
-// evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
+// Checks are the batchlas::verify kinds at their library bounds: svd_residual at
+// Check::factorization, orthogonality at Check::orthogonality_rotations and LAPACKE
+// singular values at Check::values -- not the normal-equations tolerances gesvd once
+// needed. evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
 // The rectangular, complex and rank-deficient cases are the ones NOT covered by
 // the n=32 square benchmark shape, so they are the reason this file exists.
 
@@ -16,9 +15,11 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 #include "../src/extensions/gesvd_native.hh"
 #include "../src/util/resident_capacity.hh"
 
+#include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
@@ -68,9 +69,6 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    static Real recon_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
-    static Real ortho_tol() { return std::is_same_v<Real, float> ? Real(2e-4f) : Real(1e-11); }
-
     // gesvdj_cta's cap with vectors at THIS device's local memory budget. At the 99 KiB opt-in
     // only complex<double> (138,816 B at C=64) is capped at 32 (JacobiCapAtBothBudgets pins it).
     int max_dim_with_vectors() const {
@@ -83,35 +81,24 @@ protected:
         return cap;
     }
 
-    // ||A - U diag(s) Vh||_F / ||A||_F, computed on the host in double.
-    // u_ld / vh_ld are passed explicitly rather than assumed to be m and n:
-    // a thin V^H is k x n, so its leading dimension is k, and hardcoding n
-    // would silently read the wrong elements.
-    static double reconstruction(int m, int n, int batch,
-                                 const std::vector<Scalar>& A,
-                                 const Scalar* U, int64_t u_stride, int u_ld,
-                                 const Scalar* Vh, int64_t vh_stride, int vh_ld,
-                                 const Real* s) {
-        const int k = std::min(m, n);
-        double worst = 0.0;
-        for (int b = 0; b < batch; ++b) {
-            double num = 0.0, den = 0.0;
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < m; ++i) {
-                    std::complex<double> acc(0.0, 0.0);
-                    for (int t = 0; t < k; ++t) {
-                        const std::complex<double> u = MatrixView<Scalar, MatrixFormat::Dense>::up(U[b * u_stride + static_cast<size_t>(t) * u_ld + i]);
-                        const std::complex<double> v = MatrixView<Scalar, MatrixFormat::Dense>::up(Vh[b * vh_stride + static_cast<size_t>(j) * vh_ld + t]);
-                        acc += u * static_cast<double>(s[b * k + t]) * v;
-                    }
-                    const std::complex<double> a = MatrixView<Scalar, MatrixFormat::Dense>::up(A[static_cast<size_t>(b) * m * n + static_cast<size_t>(j) * m + i]);
-                    num += std::norm(a - acc);
-                    den += std::norm(a);
-                }
+    // s (k per item, packed) against LAPACKE singular values of A0 at Check::values; skips
+    // without LAPACKE.
+    static void expect_values(const Matrix<Scalar>& A0, const UnifiedVector<Real>& s) {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        const int k = std::min(A0.rows(), A0.cols()), batch = A0.batch_size();
+        if constexpr (!batchlas::verify::have_reference) {
+            GTEST_SKIP() << "no host LAPACKE reference in this build";
+        } else {
+            const auto items = A0.view().all_items();
+            std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
+            double smax = 0.0;
+            for (int b : items) {
+                ASSERT_TRUE(batchlas::verify::singular_values(A0.view(), b, ref[static_cast<size_t>(b)])) << "item " << b;
+                if (k > 0) smax = std::max(smax, ref[static_cast<size_t>(b)].front());
             }
-            worst = batchlas::verify::nanmax(worst, den > 0.0 ? std::sqrt(num / den) : std::sqrt(num));
+            const VectorView<Real> sv(const_cast<Real*>(s.data()), k, batch);
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, MV::values_error(sv, ref, smax, items));
         }
-        return worst;
     }
 
     // ||M^H M - I||_F over the leading `cols` columns of an ld x cols block, worst over the batch.
@@ -136,6 +123,7 @@ protected:
             }
         }
 
+        const Matrix<Scalar> A0 = A;
         Matrix<Scalar> U(m, m, batch);
         Matrix<Scalar> Vh(n, n, batch);
         UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
@@ -155,12 +143,11 @@ protected:
             }
         }
 
-        EXPECT_LE(reconstruction(m, n, batch, host_A,
-                                 U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
-                                 Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
-                                 s.data()),
-                  static_cast<double>(recon_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, std::max(m, n),
+                      (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(
+                          ctx, A0.view(), U.view(), VectorView<Real>(s, k, batch), Vh.view(), A0.view().all_items())))
             << "reconstruction m=" << m << " n=" << n;
+        expect_values(A0, s);
 
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(ctx, m, m, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
@@ -203,6 +190,7 @@ protected:
             }
         }
 
+        const Matrix<Scalar> A0 = A;
         Matrix<Scalar> U(m, k, batch);
         Matrix<Scalar> Vh(k, n, batch);
         UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
@@ -223,12 +211,11 @@ protected:
 
         // A = U S V^H must still hold exactly: the discarded columns of a full U
         // multiply zero singular values, so thin loses nothing here.
-        EXPECT_LE(reconstruction(m, n, batch, host_A,
-                                 U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
-                                 Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
-                                 s.data()),
-                  static_cast<double>(recon_tol()))
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, std::max(m, n),
+                      (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(
+                          ctx, A0.view(), U.view(), VectorView<Real>(s, k, batch), Vh.view(), A0.view().all_items())))
             << "thin reconstruction m=" << m << " n=" << n;
+        expect_values(A0, s);
 
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, m, k, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
@@ -255,7 +242,9 @@ protected:
         std::vector<Scalar> v(static_cast<size_t>(m) * n * batch);
         for (auto& x : v) {
             if constexpr (is_cplx_v<Scalar>) {
-                x = Scalar(static_cast<Real>(d(rng)), static_cast<Real>(d(rng)));
+                const auto re = static_cast<Real>(d(rng));
+                const auto im = static_cast<Real>(d(rng));
+                x = Scalar(re, im);
             } else {
                 x = static_cast<Scalar>(d(rng));
             }
@@ -464,32 +453,19 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
     const int n = 12, batch = 3;
     auto host = this->random_matrix(n, n, batch, 900u);
 
-    // Values from the full-vector call are the reference.
-    UnifiedVector<Real> s_ref(static_cast<size_t>(n) * batch);
-    {
-        Matrix<Scalar> A(n, n, batch);
-        std::copy(host.begin(), host.end(), A.view().data_ptr());
-        Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
-        (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s_ref.to_span(), U.view(), Vh.view(),
-                              SvdVectors::All, SvdVectors::All);
-        ctx.wait_and_throw();
-    }
-
+    Matrix<Scalar> A0(n, n, batch);
+    std::copy(host.begin(), host.end(), A0.view().data_ptr());
     for (int ju = 0; ju < 2; ++ju) {
         for (int jv = 0; jv < 2; ++jv) {
-            Matrix<Scalar> A(n, n, batch);
-            std::copy(host.begin(), host.end(), A.view().data_ptr());
+            SCOPED_TRACE("jobu=" + std::to_string(ju) + " jobvh=" + std::to_string(jv));
+            Matrix<Scalar> A = A0;
             Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
             UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
             (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                                   ju ? SvdVectors::All : SvdVectors::None,
                                   jv ? SvdVectors::All : SvdVectors::None);
             ctx.wait_and_throw();
-            for (size_t i = 0; i < s.size(); ++i) {
-                const Real scale = std::max<Real>(Real(1), std::abs(s_ref[i]));
-                EXPECT_NEAR(s[i], s_ref[i], TestFixture::recon_tol() * scale)
-                    << "jobu=" << ju << " jobvh=" << jv << " i=" << i;
-            }
+            TestFixture::expect_values(A0, s);
         }
     }
 }
@@ -513,6 +489,7 @@ TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
 
     Matrix<Scalar> A(n, n, batch);
     std::copy(host.begin(), host.end(), A.view().data_ptr());
+    const Matrix<Scalar> A0 = A;
     Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
     UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
 
@@ -523,15 +500,12 @@ TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
                      SvdVectors::All, SvdVectors::All, ws.to_span());
     ctx.wait_and_throw();
 
-    EXPECT_LE(TestFixture::reconstruction(n, n, batch, host,
-                                          U.view().data_ptr(), U.view().stride(), static_cast<int>(U.view().ld()),
-                                          Vh.view().data_ptr(), Vh.view().stride(), static_cast<int>(Vh.view().ld()),
-                                          s.data()),
-              // Loose because the point of this test is that it dispatches and
-              // reconstructs at all, not how well. (It used to reach the
-              // normal-equations CTA path for real T; Auto now routes n <= 32
-              // to gesvdj_cta, so the achieved value is far below this.)
-              0.3);
+    // Auto routes n <= 32 to gesvdj_cta, so the factorization bound holds; the normal-equations
+    // CTA path it used to reach for real T would not.
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
+                  (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(ctx, A0.view(), U.view(), VectorView<Real>(s, n, batch),
+                                                                         Vh.view(), A0.view().all_items())));
+    TestFixture::expect_values(A0, s);
 }
 
 // ---------------------------------------------------------------------------
@@ -615,13 +589,8 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
                           SvdVectors::Thin, SvdVectors::Thin);
     ctx.wait_and_throw();
 
-    const double tol = static_cast<double>(TestFixture::ortho_tol());
+    test_utils::expect_eigenvalues_agree<Scalar>(s_thin, s_all, k, batch);
     for (int b = 0; b < batch; ++b) {
-        for (int i = 0; i < k; ++i) {
-            EXPECT_NEAR(static_cast<double>(s_thin[b * k + i]),
-                        static_cast<double>(s_all[b * k + i]), tol)
-                << "sigma mismatch b=" << b << " i=" << i;
-        }
         for (int c = 0; c < k; ++c) {
             // Compare |<u_thin, u_all>| == 1 rather than entrywise: the sign or
             // phase of a singular vector is not determined.
@@ -632,7 +601,8 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
                      * MatrixView<Scalar, MatrixFormat::Dense>::up(
                            U_all.view().data_ptr()[b * U_all.view().stride() + static_cast<size_t>(c) * U_all.view().ld() + i]);
             }
-            EXPECT_NEAR(std::abs(acc), 1.0, 1e-3) << "U column " << c << " differs at b=" << b;
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, std::fabs(1.0 - std::abs(acc)))
+                << "U column " << c << " differs at b=" << b;
         }
     }
 }

@@ -6,8 +6,8 @@
 // it into gesvd_blocked it needs evidence that it works at all -- dead code
 // carries none.
 //
-// The reference is a host Golub-Kahan SVD of the same bidiagonal matrix computed
-// in double, not a second call to anything in this library.
+// The reference is LAPACKE ?gesdd of the same bidiagonal matrix in double
+// (batchlas::verify), not a second call to anything in this library.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <string>
 #include <random>
 #include <tuple>
 #include <vector>
@@ -55,50 +56,31 @@ struct bdsqr_types {
 
 using BdsqrTestTypes = typename bdsqr_types<BdsqrConfig>::type;
 
-// Singular values of an upper bidiagonal matrix: LAPACKE in double on the dense form (NaN when
-// the reference is unavailable, so a check against it fails).
-std::vector<double> reference_singular_values(const std::vector<double>& d,
-                                              const std::vector<double>& e,
-                                              int n) {
-    std::vector<double> A(static_cast<size_t>(n) * n, 0.0);
-    for (int i = 0; i < n; ++i) {
-        A[static_cast<size_t>(i) * n + i] = d[static_cast<size_t>(i)];
-        if (i + 1 < n) A[static_cast<size_t>(i + 1) * n + i] = e[static_cast<size_t>(i)];
-    }
-    std::vector<double> s;
-    if (!batchlas::verify::singular_values(n, n, A, s)) s.assign(static_cast<size_t>(n), std::nan(""));
-    return s;
-}
-
 template <typename Config>
 class BdsqrTest : public test_utils::BatchLASTest<Config> {
 protected:
     using Scalar = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    static double sv_tol() { return std::is_same_v<Scalar, float> ? 2e-4 : 1e-11; }
-    static double vec_tol() { return std::is_same_v<Scalar, float> ? 5e-4 : 1e-10; }
-
-    // Runs bdsqr on (d,e) and checks singular values, plus -- when vectors are
-    // requested -- that U S Vh reconstructs B and that U, Vh are orthogonal.
-    void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0) {
+    // Runs bdsqr on (d,e) and checks singular values against LAPACKE, plus -- when vectors are
+    // requested -- that U S Vh reconstructs B and that U, Vh are orthogonal. U and Vh start at the
+    // identity, so they accumulate the rotations of B itself.
+    void run_and_check(const std::vector<double>& dh, const std::vector<double>& eh, int n, int batch,
+                       bool vectors, const char* label) {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        SCOPED_TRACE(std::string(label) + " n=" + std::to_string(n));
         auto& ctx = *this->ctx;
-        std::mt19937 rng(seed);
-        std::uniform_real_distribution<double> dist(0.3, 1.7);
-
-        std::vector<double> dh(static_cast<size_t>(n) * batch), eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
         UnifiedVector<Scalar> d(static_cast<size_t>(n) * batch);
         UnifiedVector<Scalar> e(static_cast<size_t>(std::max(1, n - 1)) * batch);
+        Matrix<Scalar> B0 = Matrix<Scalar>::Zeros(n, n, batch);
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
-                const double v = dist(rng) * std::pow(dscale, i);
-                dh[static_cast<size_t>(b) * n + i] = v;
-                d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(v);
+                d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(dh[static_cast<size_t>(b) * n + i]);
+                B0.view().at(i, i, b) = d[static_cast<size_t>(b) * n + i];
             }
             for (int i = 0; i < n - 1; ++i) {
-                const double v = dist(rng) * 0.5 * std::pow(dscale, i);
-                eh[static_cast<size_t>(b) * (n - 1) + i] = v;
-                e[static_cast<size_t>(b) * (n - 1) + i] = static_cast<Scalar>(v);
+                e[static_cast<size_t>(b) * (n - 1) + i] = static_cast<Scalar>(eh[static_cast<size_t>(b) * (n - 1) + i]);
+                B0.view().at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
             }
         }
 
@@ -109,60 +91,48 @@ protected:
         const size_t ws_bytes = bdsqr_buffer_size<Scalar>(ctx, dv, ev, s.to_span());
         UnifiedVector<std::byte> ws(ws_bytes);
 
-        Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
+        auto U = Matrix<Scalar>::Identity(n, batch);
+        auto Vh = Matrix<Scalar>::Identity(n, batch);
         if (vectors) {
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        const Scalar v = (i == j) ? Scalar(1) : Scalar(0);
-                        U.view().data_ptr()[b * U.view().stride() + static_cast<size_t>(j) * U.view().ld() + i] = v;
-                        Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(j) * Vh.view().ld() + i] = v;
-                    }
-                }
-            }
             (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
         } else {
             (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         }
         ctx.wait_and_throw();
 
-        for (int b = 0; b < batch; ++b) {
-            std::vector<double> db(dh.begin() + static_cast<size_t>(b) * n,
-                                   dh.begin() + static_cast<size_t>(b + 1) * n);
-            std::vector<double> eb(eh.begin() + static_cast<size_t>(b) * std::max(0, n - 1),
-                                   eh.begin() + static_cast<size_t>(b + 1) * std::max(0, n - 1));
-            const auto ref = reference_singular_values(db, eb, n);
-            const double smax = ref.front();
-            for (int i = 0; i < n; ++i) {
-                EXPECT_NEAR(static_cast<double>(s[static_cast<size_t>(b) * n + i]), ref[static_cast<size_t>(i)],
-                            sv_tol() * smax)
-                    << "n=" << n << " b=" << b << " i=" << i;
-            }
+        const auto items = B0.view().all_items();
+        const VectorView<Scalar> sv(s.to_span(), n, batch, 1, n);
+        if (vectors) {
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
+                          MV::svd_residual(ctx, B0.view(), U.view(), sv, Vh.view(), items));
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U.view(), items))
+                << "U";
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh.view(), items))
+                << "Vh (square: orthonormal columns iff orthonormal rows)";
         }
 
-        if (!vectors) return;
-
-        // U * diag(s) * Vh should reconstruct the ORIGINAL bidiagonal B, since U
-        // and Vh started at the identity.
-        for (int b = 0; b < batch; ++b) {
-            double num = 0.0, den = 0.0;
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < n; ++i) {
-                    double acc = 0.0;
-                    for (int t = 0; t < n; ++t) {
-                        acc += static_cast<double>(U.view().data_ptr()[b * U.view().stride() + static_cast<size_t>(t) * U.view().ld() + i])
-                             * static_cast<double>(s[static_cast<size_t>(b) * n + t])
-                             * static_cast<double>(Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(j) * Vh.view().ld() + t]);
-                    }
-                    double bij = 0.0;
-                    if (i == j) bij = dh[static_cast<size_t>(b) * n + i];
-                    else if (j == i + 1) bij = eh[static_cast<size_t>(b) * (n - 1) + i];
-                    num += (bij - acc) * (bij - acc);
-                    den += bij * bij;
-                }
+        if constexpr (!batchlas::verify::have_reference) {
+            GTEST_SKIP() << "no host LAPACKE reference in this build";
+        } else {
+            std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
+            double smax = 0.0;
+            for (int b : items) {
+                ASSERT_TRUE(batchlas::verify::singular_values(B0.view(), b, ref[static_cast<size_t>(b)])) << "item " << b;
+                smax = std::max(smax, ref[static_cast<size_t>(b)].front());
             }
-            EXPECT_LE(std::sqrt(num / std::max(den, 1e-300)), vec_tol()) << "reconstruction n=" << n << " b=" << b;
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, MV::values_error(sv, ref, smax, items));
         }
+    }
+
+    void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0) {
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<double> dist(0.3, 1.7);
+        std::vector<double> dh(static_cast<size_t>(n) * batch), eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) dh[static_cast<size_t>(b) * n + i] = dist(rng) * std::pow(dscale, i);
+            for (int i = 0; i < n - 1; ++i) eh[static_cast<size_t>(b) * (n - 1) + i] = dist(rng) * 0.5 * std::pow(dscale, i);
+        }
+        run_and_check(dh, eh, n, batch, vectors, "random");
     }
 
 // The generator above produces only POSITIVE d and e in [0.3, 1.7], which is a
@@ -170,58 +140,29 @@ protected:
 // carry mixed signs, exact zeros (deflation), and entries spanning many orders
 // of magnitude. This variant covers that; it is what caught bdsqr stagnating
 // when gesvd_blocked was first wired onto it.
-protected:
     void check_hostile(int n, int batch, unsigned seed) {
-        auto& ctx = *this->ctx;
         std::mt19937 rng(seed);
         std::uniform_real_distribution<double> mag(-3.0, 3.0);   // 1e-3 .. 1e3
         std::uniform_int_distribution<int> sign(0, 1);
         std::uniform_int_distribution<int> zero(0, 9);
-
         std::vector<double> dh(static_cast<size_t>(n) * batch);
         std::vector<double> eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
-        UnifiedVector<Scalar> d(static_cast<size_t>(n) * batch);
-        UnifiedVector<Scalar> e(static_cast<size_t>(std::max(1, n - 1)) * batch);
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
-                double v = std::pow(10.0, mag(rng)) * (sign(rng) ? 1.0 : -1.0);
+                const double m10 = std::pow(10.0, mag(rng));
+                double v = m10 * (sign(rng) ? 1.0 : -1.0);
                 if (zero(rng) == 0) v = 0.0;
                 dh[static_cast<size_t>(b) * n + i] = v;
-                d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(v);
             }
             for (int i = 0; i < n - 1; ++i) {
-                double v = std::pow(10.0, mag(rng)) * (sign(rng) ? 1.0 : -1.0);
+                const double m10 = std::pow(10.0, mag(rng));
+                double v = m10 * (sign(rng) ? 1.0 : -1.0);
                 if (zero(rng) == 0) v = 0.0;
                 eh[static_cast<size_t>(b) * (n - 1) + i] = v;
-                e[static_cast<size_t>(b) * (n - 1) + i] = static_cast<Scalar>(v);
             }
         }
-
-        VectorView<Scalar> dv(d.to_span(), n, batch, 1, n);
-        VectorView<Scalar> ev(e.to_span(), std::max(0, n - 1), batch, 1, std::max(1, n - 1));
-        UnifiedVector<Scalar> s(static_cast<size_t>(n) * batch);
-        const size_t ws_bytes = bdsqr_buffer_size<Scalar>(ctx, dv, ev, s.to_span());
-        UnifiedVector<std::byte> ws(ws_bytes);
-
-        (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
-        ctx.wait_and_throw();
-
-        for (int b = 0; b < batch; ++b) {
-            std::vector<double> db(dh.begin() + static_cast<size_t>(b) * n,
-                                   dh.begin() + static_cast<size_t>(b + 1) * n);
-            std::vector<double> eb(eh.begin() + static_cast<size_t>(b) * std::max(0, n - 1),
-                                   eh.begin() + static_cast<size_t>(b + 1) * std::max(0, n - 1));
-            const auto ref = reference_singular_values(db, eb, n);
-            const double smax = std::max(ref.front(), 1e-300);
-            for (int i = 0; i < n; ++i) {
-                EXPECT_NEAR(static_cast<double>(s[static_cast<size_t>(b) * n + i]),
-                            ref[static_cast<size_t>(i)], sv_tol() * smax)
-                    << "hostile n=" << n << " b=" << b << " i=" << i;
-            }
-        }
+        run_and_check(dh, eh, n, batch, /*vectors=*/false, "hostile");
     }
-
-public:
 };
 
 TYPED_TEST_SUITE(BdsqrTest, BdsqrTestTypes);
