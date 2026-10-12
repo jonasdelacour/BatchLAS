@@ -21,6 +21,7 @@
 // evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 #include "util/internal-api.hh"
 #include "util/kernel-trace.hh"
+#include "sycl/impl.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 
@@ -29,15 +30,6 @@
 #define BATCHLAS_QUEUE_EXPORTED_INLINE inline
 #else
 #define BATCHLAS_QUEUE_EXPORTED_INLINE [[gnu::used]] inline
-#endif
-
-// [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(T, B)]]. NVPTX only: on SPIR-V the
-// attributes break the icpx CPU AOT link. evidence: docs/design/runtime-internals.md#runtime-internals-queue-thread-ownership-and-the-last-event-holder
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks) \
-    intel::max_work_group_size(1, 1, max_threads), intel::min_work_groups_per_cu(min_blocks)
-#else
-#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks)
 #endif
 
 // The whole single-thread enforcement: owner thread id vs caller. Deliberately NOT a mutex:
@@ -338,14 +330,27 @@ struct QueueImpl : public sycl::queue{
     template <typename SubmitOp>
     sycl::event submit_and_record(const char* default_label, SubmitOp&& submit_op) {
         sycl::event event = std::forward<SubmitOp>(submit_op)();
+        // Recorded first: on acpp the error thrown may be an older one parked by another queue.
         last_event_ = event;
+        impl::throw_launch_errors(*this);
         batchlas_kernel_trace::record_event(*this, event, trace_label_or_default(default_label), trace_tid_);
         return event;
     }
+
+    // impl::run_native's submission: ordered and recorded like submit(), absent from the trace.
+    template <typename SubmitFunc>
+    sycl::event submit_untraced(SubmitFunc&& f) {
+        sycl::event event = sycl::queue::submit(std::forward<SubmitFunc>(f));
+        last_event_ = event;
+        impl::throw_launch_errors(*this);
+        return event;
+    }
     
+    // impl::on_async_errors: wait_and_throw throws instead of the default std::terminate.
     QueueImpl(Device dev, bool in_order)
         : sycl::queue(shared_context(dev),
                       device_arrays.at((int)dev.type).at(dev.idx),
+                      impl::on_async_errors,
                       make_queue_properties(in_order)),
           device_(dev),
           trace_tid_(allocate_trace_tid()) {}
@@ -353,6 +358,7 @@ struct QueueImpl : public sycl::queue{
     QueueImpl(const sycl::context& ctx, const sycl::device& dev, Device logical_dev, bool in_order)
         : sycl::queue(ctx,
                       dev,
+                      impl::on_async_errors,
                       make_queue_properties(in_order)),
           device_(logical_dev),
           trace_tid_(allocate_trace_tid()) {}
@@ -360,9 +366,35 @@ struct QueueImpl : public sycl::queue{
     QueueImpl()
         : sycl::queue(shared_context(Device{0, DeviceType::CPU}),
                       device_arrays.at((int)DeviceType::CPU).at(0),
+                      impl::on_async_errors,
                       make_queue_properties(false)),
           device_(Device{0, DeviceType::CPU}),
           trace_tid_(allocate_trace_tid()) {}
+
+    // USM copies and fills are recorded like submit(): get_event() on an in-order queue returns
+    // the last RECORDED event, so an unrecorded copy outlives a caller's wait on it.
+    template <typename... Args>
+    sycl::event memcpy(Args&&... args) {
+        return record_untraced(sycl::queue::memcpy(std::forward<Args>(args)...));
+    }
+    template <typename... Args>
+    sycl::event memset(Args&&... args) {
+        return record_untraced(sycl::queue::memset(std::forward<Args>(args)...));
+    }
+    template <typename... Args>
+    sycl::event fill(Args&&... args) {
+        return record_untraced(sycl::queue::fill(std::forward<Args>(args)...));
+    }
+#if defined(SYCL_EXT_ONEAPI_MEMCPY2D)
+    template <typename... Args>
+    sycl::event ext_oneapi_memcpy2d(Args&&... args) {
+        return record_untraced(sycl::queue::ext_oneapi_memcpy2d(std::forward<Args>(args)...));
+    }
+#endif
+    sycl::event record_untraced(sycl::event event) {
+        last_event_ = event;
+        return event;
+    }
 
     template <typename SubmitFunc>
     sycl::event submit(SubmitFunc&& f) {
@@ -390,6 +422,7 @@ struct QueueImpl : public sycl::queue{
 
     template <int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::nd_range<Dimensions>& exec_range, KernelFunc&& kernel_func) {
+        impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for(exec_range, std::forward<KernelFunc>(kernel_func));
         });
@@ -414,6 +447,7 @@ struct QueueImpl : public sycl::queue{
 
     template <typename KernelName, int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::nd_range<Dimensions>& exec_range, KernelFunc&& kernel_func) {
+        impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for<KernelName>(exec_range, std::forward<KernelFunc>(kernel_func));
         });
@@ -458,22 +492,9 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
     impl_->rebind_thread_owner();
 }
 
+// CUstream / hipStream_t, else nullptr (also acpp's out-of-order queues: no stream outside a CG).
 BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
-    switch (impl_->get_backend()) {
-#if SYCL_EXT_ONEAPI_BACKEND_CUDA
-        case sycl::backend::ext_oneapi_cuda:
-            // CUstream, i.e. cudaStream_t.
-            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_cuda>(*impl_));
-#endif
-#if SYCL_EXT_ONEAPI_BACKEND_HIP
-        case sycl::backend::ext_oneapi_hip:
-            // HIPstream, i.e. hipStream_t.
-            return static_cast<void*>(sycl::get_native<sycl::backend::ext_oneapi_hip>(*impl_));
-#endif
-        default:
-            // Deliberately nullptr elsewhere: no other backend yields an unowned stream pointer.
-            return nullptr;
-    }
+    return impl::native_stream(*impl_);
 }
 
 BATCHLAS_QUEUE_EXPORTED_INLINE sycl::queue& sycl_queue(const Queue& ctx) { return *ctx.impl_; }

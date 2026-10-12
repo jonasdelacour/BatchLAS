@@ -1,4 +1,5 @@
 #include "../queue.hh"
+#include "../sycl/local_mem.hh"
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -140,8 +141,18 @@ Queue& Queue::operator=(Queue&& other) {
     return *this;
 }
 
+#if BATCHLAS_SYCL_IMPL_ACPP
+// acpp's wait() only registers a failure; report it here, where DPC++ has already thrown it.
+// evidence: docs/design/sycl-implementations.md#sycl-impl-asynchronous-errors
+void Queue::wait() const {
+    impl_->wait();
+    impl::throw_async_errors(*impl_);
+}
+void Queue::wait_and_throw() const { wait(); }
+#else
 void Queue::wait() const {impl_->wait();}
 void Queue::wait_and_throw() const {impl_->wait_and_throw();}
+#endif
 
 batchlas::WorkspaceLease Queue::workspace(size_t bytes) {
     auto loan = impl_->arena_.acquire(*impl_, bytes);
@@ -225,16 +236,13 @@ void Queue::enqueue(Event& event) {
     // Ensure the queue is ordered after `event`.
     // A command group with only depends_on() is not guaranteed to create an actual
     // scheduling node on all backends. Use a barrier when available, else fall
-    // back to a no-op kernel. The barrier is sycl_ext_oneapi_enqueue_barrier, so
-    // an implementation without it compiles straight to the fallback.
-#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
+    // back to a no-op kernel.
     try {
-        sycl::event e = impl_->ext_oneapi_submit_barrier({static_cast<sycl::event>(*event)});
+        sycl::event e = impl::submit_barrier(*impl_, {static_cast<sycl::event>(*event)});
         impl_->last_event_ = e;
         return;
     } catch (const sycl::exception&) {
     }
-#endif
     impl_->submit([&](sycl::handler& h) {
         h.depends_on(static_cast<sycl::event>(*event));
         h.single_task<QueueEnqueueNoopKernel>([]() {});
@@ -254,9 +262,8 @@ Event Queue::get_event() const {
     // event that is ordered after all previously enqueued work.
     // Submitting an unnamed `single_task` can fail under AOT/kernel-bundle
     // builds ("No kernel named ... was found"), especially on CUDA backends.
-#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
     try {
-        sycl::event e = impl_->ext_oneapi_submit_barrier();
+        sycl::event e = impl::submit_barrier(*impl_);
         impl_->last_event_ = e;
         EventImpl event = std::move(e);
         return event;
@@ -264,7 +271,6 @@ Event Queue::get_event() const {
         // Some backends (notably certain CUDA/UR stacks) don't support
         // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
     }
-#endif
     EventImpl event = impl_->submit([&](sycl::handler& h) {
         h.single_task<QueueGetEventNoopKernel>([]() {});
     });
@@ -275,15 +281,13 @@ Event Queue::create_event_after_external_work() {
     // Always create a new barrier event, never use the cached last_event_.
     // This ensures the returned event properly depends on external library calls
     // (cuBLAS, rocBLAS, etc.) that execute on the stream but don't update last_event_.
-#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
     try {
-        sycl::event e = impl_->ext_oneapi_submit_barrier();
+        sycl::event e = impl::submit_barrier(*impl_);
         impl_->last_event_ = e;
         EventImpl event = std::move(e);
         return event;
     } catch (const sycl::exception&) {
     }
-#endif
     EventImpl event = impl_->submit([&](sycl::handler& h) {
         h.single_task<QueueExternalWorkBarrierKernel>([]() {});
     });
@@ -315,7 +319,7 @@ size_t Device::get_property(DeviceProperty property) const {
         case 2: return d.get_info<sycl::info::device::max_compute_units>();
         case 3: return d.get_info<sycl::info::device::max_mem_alloc_size>();
         case 4: return d.get_info<sycl::info::device::global_mem_size>();
-        case 5: return d.get_info<sycl::info::device::local_mem_size>();
+        case 5: return impl::local_mem_bytes(d);
         case 6: return d.get_info<sycl::info::device::max_num_sub_groups>();
         case 7: return d.get_info<sycl::info::device::sub_group_sizes>()[0];
         case 8: return d.get_info<sycl::info::device::mem_base_addr_align>();
@@ -333,6 +337,11 @@ size_t Device::get_property(DeviceProperty property) const {
 // header.
 bool Device::supports_sub_group_size(size_t size) const {
     const auto& d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
+#if BATCHLAS_SYCL_IMPL_ACPP
+    // acpp ignores BATCHLAS_REQD_SG_SIZE: a kernel runs at `size` only if that is the one size.
+    const auto sizes = d.get_info<sycl::info::device::sub_group_sizes>();
+    return sizes.size() == 1 && sizes[0] == size;
+#endif
     for (size_t s : d.get_info<sycl::info::device::sub_group_sizes>()) {
         if (s == size) return true;
     }
@@ -347,11 +356,7 @@ int Device::cuda_compute_capability() const {
     if (auto it = memo.find(key); it != memo.end()) return it->second;
     const auto& d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
     int cc = 0;
-    if (d.get_backend() == sycl::backend::ext_oneapi_cuda) {
-        const std::string v = d.get_info<sycl::info::device::version>();
-        int major = 0, minor = 0;
-        if (std::sscanf(v.c_str(), "%d.%d", &major, &minor) == 2) cc = major * 10 + minor;
-    }
+    if (impl::is_cuda(impl::backend_of(d))) cc = impl::cuda_cc(d);
     memo.emplace(key, cc);
     return cc;
 }

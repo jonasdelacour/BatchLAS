@@ -50,7 +50,39 @@ python3 benchmarks/benchviz info     # the build a run would use now, and every 
 (`~sha`), its build time, and a warning when it is behind (source changed after the build, or
 main has commits it lacks). Each campaign records its builds in `campaign.json` under
 `provenance.builds`; every result row records its `binary` path. Older campaigns show
-"not recorded".
+"not recorded". `info --build-dir <dir>` (repeatable) describes other trees.
+
+### Toolchain and SYCL implementation
+
+Each `provenance.builds[]` entry records how its binaries were compiled:
+
+| Field | Source |
+|---|---|
+| `sycl_impl` | `BATCHLAS_SYCL_IMPL_RESOLVED` in `CMakeCache.txt` (`DPCPP` or `ACPP`); trees configured before it existed are inferred from `-fsycl-targets` / `--acpp-targets` (`sycl_impl_inferred`) |
+| `sycl_impl_version` | acpp: the `AdaptiveCpp version:` line of `acpp --acpp-version`; DPC++: release and intel/llvm commit from `clang++ --version` |
+| `compiler`, `compiler_id`, `compiler_version` | `CMAKE_CXX_COMPILER`, CMake's compiler id (`Clang` for both), the `--version` head |
+| `build_type` | `CMAKE_BUILD_TYPE` |
+| `fp_model`, `fp_contract`, `fp_flags` | the last `-ffp-model=` / `-ffp-contract=` and every result-changing fp flag in `batchlas_sycl_obj`'s `flags.make` |
+| `fp_contract_effective` | the flag, else the driver default at -O2+: `on` for DPC++, `fast` for acpp |
+| `sycl_targets` | `-fsycl-targets=` or `--acpp-targets=` |
+| `acpp_env` (acpp only) | the `ACPP_*` variables its runs got, which came from the environment, and whether the JIT database is per campaign |
+| `acpp_coarse_grained_events` (acpp only) | whether `src/` or `include/` uses the queue property; it is not an environment knob |
+
+Warnings (in `info`, run logs and `warnings`):
+
+- an icpx build without `-ffp-model=precise`;
+- an acpp build whose effective fp contract is not `on`: `cmake/BatchLASSyclAcpp.cmake` passes
+  `-ffp-contract=on` to match DPC++ (design page R11);
+- an NVIDIA box with targets that cannot reach it (acpp `generic` can).
+
+**acpp runtime knobs.** Every process run from an acpp tree gets `ACPP_ADAPTIVITY_LEVEL=1`,
+`ACPP_RT_SCHEDULER=direct` and `ACPP_APPDB_DIR=<campaign>/acpp-appdb` (per-campaign JIT and
+adaptivity database), unless the environment already sets them; any `ACPP_*` variable in the
+environment wins and is recorded. Each acpp row records `sycl_impl`, its `acpp_env`, and
+`acpp_jit`: true when the process printed acpp's "new binaries being JIT-compiled" warning. The
+harness warm-up keeps a first-launch JIT out of the timed iterations. For throwaway passes that
+fill the JIT cache before the measured campaign (design page section 7), export one
+`ACPP_APPDB_DIR` for all of them, since resuming a campaign skips the cells it has.
 
 `export` writes a static, read-only copy with downscaled figures:
 
@@ -203,6 +235,28 @@ re-reads both logs on each load, so it fills in while a campaign runs.
 
 For figures you will quote, measure both campaigns back to back on the same card with the same
 grid.
+
+- **Toolchains.** A comparison carries each side's `toolchain` (implementation and version,
+  compiler, build type, fp model and contract, targets, commit, acpp knobs) in
+  `provenance.base` / `provenance.new`, and `compare` prints them. It warns on any difference
+  besides the one under test: a different build type, fp model or effective fp contract always;
+  a different compiler version or targets unless the implementations differ.
+
+### Implementation A/B (DPC++ vs AdaptiveCpp)
+
+```sh
+python3 benchmarks/benchviz ab --build-dir build-dpcpp --build-dir build-acpp-rel \
+    --ops gemm,potrf --types float,double --preset saturation --gpu 3 --campaign impl-ab
+```
+
+`ab` takes exactly two `--build-dir` (baseline first) and the grid flags of `run`. Every cell runs
+on both builds back to back on one card; the build that goes first alternates from cell to cell.
+Rows land in `<campaign>-dpcpp` and `<campaign>-acpp` (`-base` / `-new` when both builds are one
+implementation), and `<campaign>` is their comparison, paired with `--exact`. When the two logs
+differ in implementation, figures and reports name the arms `DPC++` and `AdaptiveCpp`, adding
+the commit only when the commits differ (which is also a warning). The vendor control then
+includes each implementation's vendor interop path, not only the machine state. Compare
+implementations at saturation only, from Release trees.
 
 ## Rectangular ops
 

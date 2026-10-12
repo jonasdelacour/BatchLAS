@@ -10,6 +10,7 @@
 #include "getrf_cta_device.hh"
 
 #include "../sycl/device_scalar.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -46,7 +47,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
     const std::ptrdiff_t ldp = static_cast<std::ptrdiff_t>(ld);
 
     D rA[NB];  // top level, never a parameter: tiny_device.hh invariant 1
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) {
         D v = lu_zero<D>();   // a STATEMENT, not `?:`: see spelling 3
         if (live && c < ncols) v = a[tid + static_cast<std::ptrdiff_t>(c) * ldp];
@@ -56,7 +57,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
     int rowid = live ? tid : -1;   // -1: never a candidate, never == j, never > j
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int j = 0; j < NB; ++j) {
         if (j >= kmax) continue;   // see spelling 1 at the top of this file
 
@@ -95,7 +96,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
 
         // --- 3. publish the pivot row; exactly one item now carries rowid == j.
         if (rowid == j) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = j; k < NB; ++k) sx[static_cast<std::size_t>(k)] = rA[k];
         }
         sycl::group_barrier(g);                                        // B2
@@ -116,7 +117,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
 
         // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled.
         // evidence: docs/perf/lu.md#why-the-rank-1-update-starts-at-k--j--1
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int k = j + 1; k < NB; ++k) {
             if (k >= ncols) continue;
             const D u = sx[static_cast<std::size_t>(k)];
@@ -128,7 +129,7 @@ template <typename D, int NB, typename SxAcc, typename ValAcc, typename IdxAcc>
 
     // --- 5. store to the RELABELLED row: rowid is where this data belongs in P A.
     if (live) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int k = 0; k < NB; ++k) {
             if (k >= ncols) continue;
             a[rowid + static_cast<std::ptrdiff_t>(k) * ldp] = rA[k];

@@ -14,6 +14,8 @@
 
 #include "sytrd_cta_device.hh"
 #include "steqr_cta_device.hh"
+#include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 
 #include <complex>
 #include <cstdint>
@@ -115,14 +117,11 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // Clamp by local memory (real path: one tile + two length-P vectors, as sytrd_cta).
         {
-            const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
             const std::size_t bytes_per_prob = (kATileElems + 2 * static_cast<std::size_t>(P)) * sizeof(T)
                                              + (kSeparateQTile ? kQTileElems * sizeof(Real) : 0);
-            const int32_t max_probs = (bytes_per_prob == 0)
-                                          ? int32_t(1)
-                                          : std::max<int32_t>(int32_t(1),
-                                                              static_cast<int32_t>(local_mem_bytes / bytes_per_prob));
-            wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
+            wg_size_multiplier = impl::cta_wg_multiplier("syev_cta_fused", wg_size_multiplier,
+                                                         base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
+                                                         impl::local_mem_bytes(dev));
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
@@ -152,7 +151,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         cgh.parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
@@ -267,7 +266,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // subscript into Qc must stay a compile-time constant.
                     // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
                     Real Qc[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         Qc[r] = Real(0);
                     }
@@ -289,18 +288,18 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         if (lane < k) {
                             // Existing column: apply H(k).
                             Real dot = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 dot += V_local[base_v + r] * Qc[r];
                             }
                             const Real gamma = tau_k * dot;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 Qc[r] -= V_local[base_v + r] * gamma;
                             }
                         } else if (lane == k) {
                             // New column: H(k) e_k = e_k - tau_k v_k.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 Qc[r] = (r < k) ? (-tau_k * V_local[base_v + r])
                                                 : ((r == k) ? (Real(1) - tau_k) : Real(0));
@@ -315,12 +314,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // the pad columns must hold defined values because the sweeps
                     // run unguarded on all P lanes.
                     if (lane >= nn) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             Qc[r] = Real(0);
                         }
                     } else if (lane == nn - 1) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             Qc[r] = (r == nn - 1) ? Real(1) : Real(0);
                         }
@@ -328,7 +327,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                     // Hand the tile over: from here it is the accumulator.
                     group_barrier(part);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         A_local[base_a + r + lane * LDA] = Qc[r];
                     }
@@ -376,7 +375,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // into C_col must stay compile-time constants, or the array spills
                     // to local memory.
                     T C_col[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         C_col[r] = T(0);
                     }
@@ -387,7 +386,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     group_barrier(part);
 
                     if (lane < nn) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                             if (r < nn) {
                                 const Real z = Q_local[base_q + r + lane * LDQ];
@@ -415,12 +414,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                         if (lane < nn && tau_ii != T(0)) {
                             T dot = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 dot += conj_if_complex(V_local[base_v + r]) * C_col[r];
                             }
                             const T gamma = tau_ii * dot;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                                 C_col[r] -= V_local[base_v + r] * gamma;
                             }
@@ -484,6 +483,8 @@ Event syev_cta_fused(Queue& ctx,
             throw batchlas::unsupported("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
+    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
+    if (batch64 == 0) return ctx.get_event();
 
     // Match syev_cta's robustness bump so the two solve the tridiagonal problem
     // with identical settings unless the caller tuned them.

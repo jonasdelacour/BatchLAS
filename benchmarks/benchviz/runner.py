@@ -24,12 +24,13 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ops import OPS, Cell, Grid, plan_cells
-from store import Campaign
+from store import Campaign, acpp_env, impl_name, sycl_impl_of
 
 GUARD_CONTAMINATED = 5
+ACPP_JIT_WARNING = "new binaries being JIT-compiled"  # acpp 25.10 runtime/kernel_cache.hpp:335
 
 
 def find_binary(name: str, build_dirs: List[Path]) -> Optional[Path]:
@@ -112,12 +113,16 @@ class Stopped(Exception):
 class Runner:
     """Runs a campaign on one or more GPUs. With several, each GPU gets its own
     worker pulling whole cells from one shared queue: both arms of a cell always
-    run on the same card, so every ratio compares like with like."""
+    run on the same card, so every ratio compares like with like.
+
+    An A/B run passes `sides`, one (campaign, build_dirs) per build: every cell
+    runs on every side back to back on one card, the side order alternating from
+    cell to cell, and each side's rows land in its own campaign."""
 
     def __init__(self, camp: Campaign, build_dirs: List[Path], gpus, guard: bool,
-                 backend: str, log=print):
-        self.camp = camp
-        self.build_dirs = build_dirs
+                 backend: str, log=print, sides: Optional[List[Tuple[Campaign, List[Path]]]] = None):
+        self.sides = list(sides) if sides else [(camp, build_dirs)]
+        self.camp, self.build_dirs = self.sides[0]
         self.gpus = [int(g) for g in (gpus if isinstance(gpus, (list, tuple)) else [gpus])]
         self.guard = guard and shutil.which("nvidia-smi") is not None and backend == "cuda"
         self.backend = backend
@@ -136,7 +141,7 @@ class Runner:
         self._stop.set()
 
     def stopping(self) -> bool:
-        if not self._stop.is_set() and self.camp.stop_requested():
+        if not self._stop.is_set() and any(c.stop_requested() for c, _ in self.sides):
             self._stop.set()
         return self._stop.is_set()
 
@@ -172,19 +177,26 @@ class Runner:
         out, err = p.communicate()
         return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
-    def _run_arm(self, gpu: int, cell: Cell, arm_key: str, reps: int, tmp: str) -> dict:
+    def _run_arm(self, gpu: int, cell: Cell, arm_key: str, reps: int, tmp: str, side: int = 0) -> dict:
         op = OPS[cell.op]
         arm = next(a for a in op.arms if a.key == arm_key)
-        binary = find_binary(op.binary, self.build_dirs)
+        camp, build_dirs = self.sides[side]
+        binary = find_binary(op.binary, build_dirs)
         base = dict(asdict(cell), arm=arm_key, backend=self.backend, gpu=gpu, t=time.time(),
                     binary=str(binary) if binary else None)
         if binary is None:
             return {**base, "ok": False, "reason": f"binary {op.binary} not built"}
+        impl = sycl_impl_of(next((d for d in build_dirs if Path(d).resolve() in binary.resolve().parents),
+                                 binary.parent))
+        base["sycl_impl"] = impl
         csv_path = os.path.join(tmp, "out.csv")
         cov = os.path.join(tmp, "cov")
         for f in os.listdir(tmp):
             os.remove(os.path.join(tmp, f))
-        env = dict(arm.env)
+        env = acpp_env(camp.dir) if impl == "ACPP" else {}
+        if env:
+            base["acpp_env"] = dict(env)
+        env.update(arm.env)
         env["BATCHLAS_COVERAGE_OUT"] = cov
         if op.harness == "factor_bench":
             argv = [str(binary), cell.op, cell.dtype, str(cell.m), str(cell.n), str(cell.nrhs),
@@ -207,6 +219,8 @@ class Runner:
         else:
             return {**base, "ok": False, "reason": "GPU never exclusive"}
         wall = time.time() - t0
+        if impl == "ACPP":  # the process JIT-compiled something new: not yet at its steady state
+            base["acpp_jit"] = ACPP_JIT_WARNING in (p.stderr or "") + (p.stdout or "")
         rows = []
         if os.path.exists(csv_path):
             with open(csv_path) as fh:
@@ -240,21 +254,24 @@ class Runner:
         return classify(rec, op, arm_key)
 
     # ------------------------------------------------------------ campaign
-    def _measure(self, gpu: int, cell: Cell, arm: str, reps: int, tmp: str) -> dict:
+    def _measure(self, gpu: int, cell: Cell, arm: str, reps: int, tmp: str, side: int = 0) -> dict:
         with self._lock:
-            missing = self._failed_ops.get(cell.op, "")
+            missing = self._failed_ops.get((side, cell.op), "")
         if missing:  # an op whose binary is missing fails every cell the same way
             return dict(asdict(cell), arm=arm, gpu=gpu, ok=False, reason=missing)
-        rec = self._run_arm(gpu, cell, arm, reps, tmp)
+        rec = self._run_arm(gpu, cell, arm, reps, tmp, side)
         for _ in range(2):  # factor_bench's noise gate: re-measure rather than leave a hole
             if rec.get("ok") or "relsd" not in str(rec.get("reason")):
                 break
             self.log(f"  GPU {gpu}: noisy ({rec['reason']}); re-measuring")
-            rec = self._run_arm(gpu, cell, arm, reps, tmp)
+            rec = self._run_arm(gpu, cell, arm, reps, tmp, side)
         if not rec["ok"] and rec["reason"].startswith("binary"):
             with self._lock:
-                self._failed_ops[cell.op] = rec["reason"]
+                self._failed_ops[(side, cell.op)] = rec["reason"]
         return rec
+
+    def _side_label(self, side: int) -> str:
+        return f" {self._labels[side]}" if len(self.sides) > 1 else ""
 
     def _worker(self, gpu: int, reps: int):
         tmp = tempfile.mkdtemp(prefix=f"benchviz_gpu{gpu}_")
@@ -263,20 +280,26 @@ class Runner:
                 with self._lock:
                     if not self._queue:
                         return
-                    cell, arms = self._queue.pop(0)
+                    k, cell, per_side = self._queue.pop(0)
                 shape = OPS[cell.op].shape_text(cell.m, cell.n, cell.nrhs)
-                for arm in arms:
-                    with self._lock:
-                        self._current[gpu] = f"{cell.op} {cell.dtype} {shape} batch={cell.batch} [{arm}]"
-                        self._status()
-                    rec = self._measure(gpu, cell, arm, reps, tmp)
-                    with self._lock:
-                        self.camp.append(rec)
-                        self._done += 1
-                        n = self._done
-                    status = f"{rec['time_ms']:.4f} ms {rec.get('route', '')}" if rec.get("ok") else rec["reason"]
-                    self.log(f"[{n}/{self._total}] GPU {gpu} {cell.op} {cell.dtype} {shape} "
-                             f"batch={cell.batch} {arm}: {status}")
+                # Alternate which build goes first, cell by cell (agent guide section 10).
+                order = per_side[k % len(per_side):] + per_side[:k % len(per_side)]
+                for side, arms in order:
+                    for arm in arms:
+                        with self._lock:
+                            self._current[gpu] = (f"{cell.op} {cell.dtype} {shape} batch={cell.batch} "
+                                                  f"[{arm}{self._side_label(side)}]")
+                            self._status()
+                        rec = self._measure(gpu, cell, arm, reps, tmp, side)
+                        with self._lock:
+                            self.sides[side][0].append(rec)
+                            self._done += 1
+                            n = self._done
+                        status = f"{rec['time_ms']:.4f} ms {rec.get('route', '')}" if rec.get("ok") else rec["reason"]
+                        if rec.get("acpp_jit"):
+                            status += " (acpp JIT-compiled)"
+                        self.log(f"[{n}/{self._total}] GPU {gpu} {cell.op} {cell.dtype} {shape} "
+                                 f"batch={cell.batch} {arm}{self._side_label(side)}: {status}")
         except Stopped:
             pass
         except Exception as e:  # surface in the dashboard rather than die silently
@@ -292,25 +315,33 @@ class Runner:
             cur = "  |  ".join(f"GPU {g}: {c}" for g, c in sorted(self._current.items()))
         else:
             cur = next(iter(self._current.values()), "")
-        self.camp.set_status(state, done=self._done, total=self._total, current=cur, gpus=self.gpus, **kw)
+        for camp, _ in self.sides:
+            camp.set_status(state, done=self._done, total=self._total, current=cur, gpus=self.gpus, **kw)
 
     def run(self):
         cfg = self.camp.config
         grid = Grid.from_config(cfg)
         req = cfg.get("request", cfg)
         cells = plan_cells(req["ops"], req["types"], grid)
-        done = self.camp.done_keys()
+        done = [camp.done_keys() for camp, _ in self.sides]
+        self._labels = [impl_name(sycl_impl_of(dirs[0])) if dirs else "" for _, dirs in self.sides]
+        if len(set(self._labels)) < len(self._labels):
+            self._labels = [camp.name for camp, _ in self.sides]
         self._queue = []
-        for c in cells:
-            arms = [a.key for a in OPS[c.op].arms if c.key(a.key) not in done]
-            if arms:
-                self._queue.append((c, arms))
-        self._total = sum(len(OPS[c.op].arms) for c in cells)
-        self._done = self._total - sum(len(a) for _, a in self._queue)
+        for k, c in enumerate(cells):
+            per_side = [(s, [a.key for a in OPS[c.op].arms if c.key(a.key) not in done[s]])
+                        for s in range(len(self.sides))]
+            per_side = [(s, arms) for s, arms in per_side if arms]
+            if per_side:
+                self._queue.append((k, c, per_side))
+        self._total = len(self.sides) * sum(len(OPS[c.op].arms) for c in cells)
+        self._done = self._total - sum(len(a) for _, _, ps in self._queue for _, a in ps)
         self._current, self._failed_ops, self._errors = {}, {}, []
-        self.camp.set_status("running", total=self._total, done=self._done, pid=os.getpid(),
-                             gpus=self.gpus, error=None, current="")
-        self.log(f"campaign {self.camp.name}: {self._total - self._done} of {self._total} arm-cells to run "
+        for camp, _ in self.sides:
+            camp.set_status("running", total=self._total, done=self._done, pid=os.getpid(),
+                            gpus=self.gpus, error=None, current="")
+        names = " vs ".join(f"{camp.name}{self._side_label(s)}" for s, (camp, _) in enumerate(self.sides))
+        self.log(f"campaign {names}: {self._total - self._done} of {self._total} arm-cells to run "
                  f"on GPU {', '.join(map(str, self.gpus))}")
         threads = [threading.Thread(target=self._worker, args=(g, grid.reps), daemon=True) for g in self.gpus]
         for t in threads:

@@ -92,8 +92,8 @@ prefix="${work_dir}/prefix"
 log_dir="${work_dir}/logs"
 mkdir -p "${prefix}" "${log_dir}"
 
-# The DPC++ runtime lives next to the compiler and is not on any RUNPATH: the
-# installed libraries record DT_NEEDED libsycl.so.9 and nothing that finds it.
+# The SYCL runtime (DPC++ libsycl, AdaptiveCpp libacpp-rt) lives in <compiler>/../lib and
+# is not on any RUNPATH: the installed libraries record DT_NEEDED on it and nothing finds it.
 compiler_bin_dir="$(cd "$(dirname "${compiler}")" && pwd)"
 sycl_lib_dir="$(cd "${compiler_bin_dir}/.." && pwd)/lib"
 
@@ -171,8 +171,8 @@ fi
 if ! "${cmake_bin}" --build "${consumer_build}" --parallel >"${log_dir}/build.log" 2>&1; then
     tail -n 40 "${log_dir}/build.log" >&2
     # If the failure is in the SYCL driver rather than in BatchLAS's headers,
-    # -DBATCHLAS_CONSUMER_USE_FSYCL=OFF isolates it: the example submits no
-    # kernels of its own and compiles without the flag.
+    # -DBATCHLAS_CONSUMER_USE_SYCL_FLAGS=OFF isolates it: the example submits no
+    # kernels of its own and compiles without the package's SYCL flags.
     fail "consumer build failed (full log: ${log_dir}/build.log)"
 fi
 say "consumer configured and built"

@@ -13,6 +13,7 @@
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
 #include "../sycl/device_scalar.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -52,7 +53,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
         // (1) prefetch; `row >= j + i` keeps the strictly upper diagonal block unread.
         D rp[NB];
         D rS[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = 0; i < NB; ++i) {
             D v{};
             if (live && i < ib && row >= j + i) {
@@ -84,7 +85,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
 
             if (live) {
                 D rA[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int kk = 0; kk < NB; ++kk) {
                     rA[kk] = (kk < kb)
                                  ? Ag[row + static_cast<std::ptrdiff_t>(k + kk) * ldg]
@@ -98,15 +99,15 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                 auto sBv = sycl::address_space_cast<sycl::access::address_space::local_space,
                                                     sycl::access::decorated::no>(
                     reinterpret_cast<V*>(sB));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int kk = 0; kk < NB; ++kk) {
                     D col[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int v = 0; v < NB / VW; ++v) {
                         const V x = sBv[(kk * NB) / VW + v];
                         __builtin_memcpy(&col[v * VW], &x, 16);
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < NB; ++i) {
                         sycl_device::fma_acc(rS[i], rA[kk], col[i]);
                     }
@@ -117,7 +118,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
 
         // (3) publish; the strictly upper diagonal block is ZEROED, not left indeterminate.
         if (live) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int i = 0; i < NB; ++i) {
                 if (i < ib) {
                     D v{};

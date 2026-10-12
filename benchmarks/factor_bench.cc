@@ -69,7 +69,7 @@ using namespace batchlas;
 // CUDA, rocSOLVER/rocBLAS on ROCm.
 #if BATCHLAS_HAS_CUDA_BACKEND
 static constexpr Backend BE = Backend::CUDA;
-#else
+#elif BATCHLAS_HAS_ROCM_BACKEND
 static constexpr Backend BE = Backend::ROCM;
 #endif
 
@@ -305,6 +305,10 @@ static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
 // ------------------------------------------------------------- driver
 template <typename T>
 static int run(const Cfg& c) {
+#if !BATCHLAS_HAS_GPU_BACKEND
+    (void)c;
+    throw std::runtime_error("factor_bench measures a GPU backend; this build has none");
+#else
     auto q = std::make_shared<Queue>(Device("gpu"), BE);
     using MV = MatrixView<T, MatrixFormat::Dense>;
 
@@ -608,6 +612,7 @@ static int run(const Cfg& c) {
     for (const Arm& a : arms) { emit(c, a, csv); rc |= a.bad; }
     if (csv) std::fclose(csv);
     return rc;
+#endif
 }
 
 // ------------------------------------------------------------- main

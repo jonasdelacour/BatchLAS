@@ -915,8 +915,12 @@ namespace batchlas{
                 return solver_handle_;
             }
 
+            // Enqueuing calls set the stream inside impl::run_native; this overload is for queries.
             void setStream(const Queue& ctx) {
-                cudaStream_t stream = sycl::get_native<sycl::backend::ext_oneapi_cuda>(*ctx);
+                setStream(static_cast<cudaStream_t>(impl::query_stream<impl::Native::Cuda>(*ctx)));
+            }
+
+            void setStream(cudaStream_t stream) {
                 cublasSetStream(blas_handle_, stream);
                 cusparseSetStream(sparse_handle_, stream);
                 cusolverDnSetStream(solver_handle_, stream);
@@ -928,6 +932,7 @@ namespace batchlas{
         template <>
         struct LinalgHandle<Backend::CUDA> {
             void setStream(const Queue&) {}
+            void setStream(cudaStream_t) {}
         };
 #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
@@ -959,7 +964,10 @@ namespace batchlas{
             constexpr inline operator rocsparse_handle() const { return sparse_handle_; }
 
             void setStream(const Queue& ctx) {
-                hipStream_t stream = sycl::get_native<sycl::backend::ext_oneapi_hip>(*ctx);
+                setStream(static_cast<hipStream_t>(impl::query_stream<impl::Native::Hip>(*ctx)));
+            }
+
+            void setStream(hipStream_t stream) {
                 rocblas_set_stream(blas_handle_, stream);
                 rocsparse_set_stream(sparse_handle_, stream);
             }
@@ -977,11 +985,8 @@ namespace batchlas{
     template <typename KernelName>
     size_t get_kernel_max_wg_size(const Queue& ctx){
         try {
-            auto kernel_id = sycl::get_kernel_id<KernelName>();
-            auto kernel_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx -> get_context(), {kernel_id});
-            auto kernel = kernel_bundle.get_kernel(kernel_id);
-            return kernel.template get_info<sycl::info::kernel_device_specific::work_group_size>(ctx -> get_device());
-        } catch (...) {   
+            return impl::kernel_max_wg_size_all_devices<KernelName>(ctx -> get_context(), ctx -> get_device());
+        } catch (...) {
             return (ctx -> get_device()).get_info<sycl::info::device::max_work_group_size>();
         }
     }

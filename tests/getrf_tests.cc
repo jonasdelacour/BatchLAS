@@ -797,6 +797,9 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
 TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
     using T = typename TestFixture::T;
     const int cap = this->cta_max_n();
+    if (test_utils::kSlmCappedAt48KiB && cap < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << cap << "";
+    }
     ASSERT_GE(cap, 32) << "the CTA tier advertises a capacity of " << cap
                        << ", so this test cannot reach it";
 
@@ -1235,6 +1238,10 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
             p.a0[size_t(b) * p.stride + size_t(col) * p.ld + i] = MVof<T>::make(1.0 / 1024.0, 0.0);
     for (int b = 0; b < batch; ++b)
         p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = MVof<T>::make(64.0, -64.0);
+    // Row `row` is small left of `col`, so no earlier column takes it as its pivot (any seed).
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < col; ++j)
+            p.a0[size_t(b) * p.stride + size_t(j) * p.ld + row] = MVof<T>::make(1.0 / 1024.0, 0.0);
     repanel(p);
 
     ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
@@ -2222,6 +2229,9 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     // Derived from the tier's own ceiling, not hardcoded: the occupancy rule moves it,
     // and a pin that cannot be exercised is a red test rather than a lost guard.
     const int n = std::min(64, this->cta_max_n()), batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32) << "the CTA pin cannot be exercised at a useful order on this device";
 
     for (const char* pin : {"cta", "blocked"}) {
@@ -2413,6 +2423,9 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = std::min(64, this->cta_max_n()), batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32);
 
     // NULL data, exactly as a measuring pass presents it.
@@ -2674,6 +2687,9 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = std::min(40, this->cta_max_n()), nrhs = 3, batch = 3;
+    if (test_utils::kSlmCappedAt48KiB && n < 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the CTA tier holds n <= " << n << "";
+    }
     ASSERT_GE(n, 32);
 
     auto solve_and_check = [&](Lu<T>& p, const char* who) {

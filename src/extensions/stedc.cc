@@ -3,6 +3,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../sort.hh"
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
@@ -206,12 +207,12 @@ void stedc_merge_step(Queue& ctx,
         // tolerance under-deflates clustered small eigenvalues (bad orthogonality).
         // evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max = sycl::joint_reduce(cta,
+        auto eig_max = batchlas::portable::joint_reduce(cta,
                           util::get_raw_ptr(norm_mem),
                           util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid)); }
-        auto v_max_pre = sycl::joint_reduce(cta,
+        auto v_max_pre = batchlas::portable::joint_reduce(cta,
                           util::get_raw_ptr(norm_mem),
                           util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
@@ -246,14 +247,14 @@ void stedc_merge_step(Queue& ctx,
         //LAPACK LAED8 based tolerance (small-|z| deflation), using same absolute tolerance.
 
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(eigenvalues(k, bid)); }
-        auto eig_max2 = sycl::joint_reduce(cta,
+        auto eig_max2 = batchlas::portable::joint_reduce(cta,
                           util::get_raw_ptr(norm_mem),
                           util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
 
         auto v_norm = internal::nrm2<T>(cta, v);
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid) / v_norm); }
-        auto v_max = sycl::joint_reduce(cta,
+        auto v_max = batchlas::portable::joint_reduce(cta,
                         util::get_raw_ptr(norm_mem),
                         util::get_raw_ptr(norm_mem) + n,
                         sycl::maximum<T>());
@@ -270,13 +271,13 @@ void stedc_merge_step(Queue& ctx,
         sycl::group_barrier(cta);
 
         //Exclusive scan to determine the indices to keep
-        sycl::joint_exclusive_scan(cta,
+        batchlas::portable::joint_exclusive_scan(cta,
                        keep_indices.batch_item(bid).data_ptr(),
                        keep_indices.batch_item(bid).data_ptr() + n,
                        util::get_raw_ptr(scan_mem_include),
                        0,
                        sycl::plus<int32_t>());
-        sycl::joint_exclusive_scan(cta,
+        batchlas::portable::joint_exclusive_scan(cta,
                        util::get_raw_ptr(scan_mem_exclude),
                        util::get_raw_ptr(scan_mem_exclude) + n,
                        util::get_raw_ptr(scan_mem_exclude),
@@ -391,7 +392,7 @@ void stedc_merge_step(Queue& ctx,
                             partial *= ratio;
                         }
 
-                        T valf = sycl::reduce_over_group(g, partial, sycl::multiplies<T>());
+                        T valf = batchlas::portable::reduce_over_group(g, partial, sycl::multiplies<T>());
                         if(tid == 0)
                         {
                             T mag  = std::sqrt(std::fabs(valf));
@@ -730,7 +731,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
                     scratch[i] = std::abs(d(i, bid)) + lo + hi;
                 }
                 sycl::group_barrier(cta);
-                const T gersh = sycl::joint_reduce(cta,
+                const T gersh = batchlas::portable::joint_reduce(cta,
                                                    util::get_raw_ptr(scratch),
                                                    util::get_raw_ptr(scratch) + n,
                                                    sycl::maximum<T>());

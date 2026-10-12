@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
 
@@ -146,11 +147,11 @@ template <typename T>
 inline T reduce_sum_group(const sycl::group<1>& g, T x) {
     if constexpr (internal::is_complex<T>::value) {
         using R = typename T::value_type;
-        const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
+        const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
+        const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
         return T(re, im);
     } else {
-        return sycl::reduce_over_group(g, x, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
     }
 }
 
@@ -158,7 +159,7 @@ template <typename T>
 inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
                                                         typename base_type<T>::type x) {
     using R = typename base_type<T>::type;
-    return sycl::reduce_over_group(g, x, sycl::plus<R>());
+    return batchlas::portable::reduce_over_group(g, x, sycl::plus<R>());
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +364,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     if (lid == 0 && i + 1 < n) {
                         alpha = Ab(i + 1, i);
                     }
-                    alpha = sycl::group_broadcast(g, alpha);
+                    alpha = batchlas::portable::group_broadcast(g, alpha);
 
                     T tau_i = T(0);
                     T beta = alpha;
@@ -401,8 +402,8 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         Ab(i + 1, i) = T(1);
                     }
 
-                    tau_i = sycl::group_broadcast(g, tau_i);
-                    scale = sycl::group_broadcast(g, scale);
+                    tau_i = batchlas::portable::group_broadcast(g, tau_i);
+                    scale = batchlas::portable::group_broadcast(g, scale);
 
                     if (tau_i != T(0)) {
                         for (int r = x0 + lid; r < n; r += wg) {

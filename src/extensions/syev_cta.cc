@@ -129,6 +129,8 @@ Event syev_cta(Queue& ctx,
     if (eigenvalues.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("syev_cta: eigenvalues span too small for n*batch.");
     }
+    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
+    if (batch == 0) return ctx.get_event();
 
     // We overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);

@@ -16,6 +16,7 @@
 //   evidence: docs/perf/potrf.md#register-gate
 
 #include "../sycl/device_scalar.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -47,7 +48,7 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
     // Out-of-range entries are zeroed, not left indeterminate: lanes ib..31 still
     // take part in every select_from_group below.
     D d[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < NB; ++c) {
         d[c] = (lane < ib && c < ib && c <= lane)
                    ? S[(j + lane) + static_cast<std::ptrdiff_t>(j + c) * lda]
@@ -55,7 +56,7 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
     }
 
     bool alive = true;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int k = 0; k < NB; ++k) {
         // The pivot is lane k's register d[k], not S(j+k, j+k), which still holds
         // the ORIGINAL value: reading the tile gives wrong columns and `info == 0`
@@ -96,7 +97,7 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
 
         // No WAR hazard, hence no second barrier: step k+1 publishes a later column.
         if (active) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int c = k + 1; c < NB; ++c) {
                 if (c < ib && lane < ib && lane >= c) {
                     d[c] = sycl_device::dev_sub(
@@ -121,16 +122,16 @@ inline void potrf_panel_solve_rows(int tid, int L,
         const int i = j + ib + row;
 
         D x[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int c = 0; c < NB; ++c) {
             x[c] = (c < ib) ? S[i + static_cast<std::ptrdiff_t>(j + c) * lda] : D{};
         }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int c = 0; c < NB; ++c) {
             if (c < ib) {
                 D s = x[c];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int p = 0; p < NB; ++p) {
                     if (p < c) {
                         s = sycl_device::dev_sub(
@@ -147,7 +148,7 @@ inline void potrf_panel_solve_rows(int tid, int L,
             }
         }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int c = 0; c < NB; ++c) {
             if (c < ib) S[i + static_cast<std::ptrdiff_t>(j + c) * lda] = x[c];
         }
@@ -182,38 +183,38 @@ inline void potrf_trailing_tiles(int tid, int L,
         const int c0 = ct * TS;
 
         D acc[TS][TS];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int a = 0; a < TS; ++a) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int b = 0; b < TS; ++b) acc[a][b] = D{};
         }
 
         for (int k = 0; k < ib; ++k) {
             D va[TS], vb[TS];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int a = 0; a < TS; ++a) {
                 va[a] = (r0 + a < m2)
                             ? S[(base + r0 + a) + static_cast<std::ptrdiff_t>(j + k) * lda]
                             : D{};
             }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int b = 0; b < TS; ++b) {
                 vb[b] = (c0 + b < m2)
                             ? S[(base + c0 + b) + static_cast<std::ptrdiff_t>(j + k) * lda]
                             : D{};
             }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int a = 0; a < TS; ++a) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int b = 0; b < TS; ++b) {
                     sycl_device::fma_acc(acc[a][b], va[a], sycl_device::dev_conj(vb[b]));
                 }
             }
         }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int a = 0; a < TS; ++a) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int b = 0; b < TS; ++b) {
                 const int ra = r0 + a;
                 const int cb = c0 + b;

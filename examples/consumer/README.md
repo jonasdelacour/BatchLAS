@@ -31,9 +31,11 @@ cmake -S examples/consumer -B build-consumer \
       -DCMAKE_PREFIX_PATH="$HOME/inst"
 ```
 
-- A consumer that submits its own kernels needs `-fsycl`. This example adds it
-  (`BATCHLAS_CONSUMER_USE_FSYCL`, on by default). The exported package does not force SYCL flags
-  onto consumer translation units.
+- A consumer that submits its own kernels needs the SYCL flags of the implementation BatchLAS was
+  built with: `-fsycl` for DPC++, `--acpp-targets=...` for AdaptiveCpp. The package names them in
+  `BatchLAS_SYCL_COMPILE_OPTIONS` / `BatchLAS_SYCL_LINK_OPTIONS` (`BatchLAS_SYCL_IMPL` says which
+  implementation). This example applies them (`BATCHLAS_CONSUMER_USE_SYCL_FLAGS`, on by default).
+  The exported package does not force SYCL flags onto consumer translation units.
 - BatchLAS's public templates carry C++20 `requires` clauses. Clang mangles the constraint into the
   symbol name; GCC 11 and Clang 15 and older do not. Headers compile under `g++`, then the link fails
   with `undefined reference to batchlas::Matrix<float, ...>::Matrix<float, ...>(int, int, int, int, int)`,
@@ -52,14 +54,15 @@ and the entry points that take their backend from the `Queue` throw `std::invali
 the argument. A CPU backend reads host memory without complaint, so run the check on the device you
 ship on. The owning `Matrix` allocates USM shared memory, so host-side fills are fine.
 
-**3. `LD_LIBRARY_PATH` must cover the DPC++ runtime.**
+**3. `LD_LIBRARY_PATH` must cover the SYCL runtime.**
 
 ```bash
 LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:"$HOME/inst/lib" ./build-consumer/hello_batched_gemm
 ```
 
-The installed libraries need `libsycl.so.9` and carry no RUNPATH that finds it, so add the
-compiler's runtime directory (`<dir of the compiler>/../lib`). CMake gives the executable an RPATH
+The installed libraries need the SYCL runtime (`libsycl.so.9` for DPC++, `libacpp-rt.so` for
+AdaptiveCpp) and carry no RUNPATH that finds it, so add the compiler's runtime directory
+(`<dir of the compiler>/../lib`, the same layout for both). CMake gives the executable an RPATH
 for the BatchLAS libraries it links. Adding `<prefix>/lib` is harmless if the package is relocated.
 
 ## Layout contract

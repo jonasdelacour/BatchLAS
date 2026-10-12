@@ -46,6 +46,7 @@ BAD_FLAGS = (
     "-Xsycl-target-backend",
     "-fno-sycl",
     "--offload-arch",
+    "--acpp-targets",
 )
 
 # Absolute host paths. An exported package addresses everything it installs
@@ -83,13 +84,14 @@ SOURCE_SKIP_DIRS = {".git", ".claude", "build", "_deps", "__pycache__"}
 PACKAGE_FILES = re.compile(r"^BatchLAS(Config|Targets)[A-Za-z0-9_-]*\.cmake$")
 MESSAGE_CALL = re.compile(r"(^|[^A-Za-z0-9_])message\s*\(", re.IGNORECASE)
 INFORMATIONAL_SET = re.compile(
-    r"set\s*\(\s*(BatchLAS_CXX_COMPILER|BatchLAS_SYCL_TARGETS)\b", re.IGNORECASE)
+    r"set\s*\(\s*(BatchLAS_CXX_COMPILER|BatchLAS_SYCL_(TARGETS|BACKEND_OPTIONS|IMPL"
+    r"|COMPILE_OPTIONS|LINK_OPTIONS))\b", re.IGNORECASE)
 
 
 def source_files():
     files = []
     for dirpath, dirnames, filenames in os.walk(REPO):
-        dirnames[:] = [d for d in dirnames if d not in SOURCE_SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames if d not in SOURCE_SKIP_DIRS and not d.startswith("build-")]
         for name in filenames:
             if name == "CMakeLists.txt" or name.endswith(".cmake") or name.endswith(".cmake.in"):
                 files.append(os.path.join(dirpath, name))
@@ -194,9 +196,10 @@ def check_package(root):
                     if message_depth < 0:
                         message_depth = 0
                     continue
-                # Informational variables, not usage requirements. Nothing
-                # consumes them as a path or a flag; BatchLASConfig.cmake only
-                # compares and prints them. Everything else is still checked.
+                # Informational variables, not usage requirements: no target
+                # carries them. BatchLASConfig.cmake compares and prints them, and
+                # a consumer opts in to BatchLAS_SYCL_COMPILE_OPTIONS explicitly.
+                # Everything else is still checked.
                 if INFORMATIONAL_SET.match(line.lstrip()):
                     continue
                 # $<BUILD_INTERFACE:...> is dropped by CMake when it generates the

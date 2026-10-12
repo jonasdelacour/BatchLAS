@@ -8,6 +8,8 @@
 
 #include "../sycl/device_scalar.hh"
 
+#include <batchlas/util/group-collectives.hh>
+
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
@@ -233,7 +235,7 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         if constexpr (SC == GeqrfScope::SubGroup) {
             smax = geqrf_sg_max<R>(sg, smax);
         } else {
-            smax = sycl::reduce_over_group(g, smax, sycl::maximum<R>());
+            smax = batchlas::portable::reduce_over_group(g, smax, sycl::maximum<R>());
         }
 
         // The collective sits outside the `smax > 0` test: all items reach it.
@@ -246,7 +248,7 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         if constexpr (SC == GeqrfScope::SubGroup) {
             ssq = geqrf_sg_sum<R>(sg, ssq);
         } else {
-            ssq = sycl::reduce_over_group(g, ssq, sycl::plus<R>());
+            ssq = batchlas::portable::reduce_over_group(g, ssq, sycl::plus<R>());
         }
 
         const LarfgScalars<D> h = geqrf_larfg_scalars<D>(alpha, smax, ssq);

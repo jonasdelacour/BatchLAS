@@ -26,11 +26,12 @@ closed and kept only for numbering.
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
-| 13 | `src/backends/cublas.cc`, cuBLASLt | gemm worked around; complex<double> gemv vendor refused on CUDA |
+| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); complex<double> gemv vendor still refused on CUDA |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
+| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | LOBPCG null P column | fixed 2026-10-09, kept for the misleading symptom |
@@ -215,13 +216,24 @@ wrote both triangles and was reachable only through those pins.
   `n == 1`, and complex<double> gemv at any shape, segfaults inside `cublasLtZZZMatmul`. This happens only
   in a BatchLAS process. A standalone program with the same libraries does not crash. Seen on
   threadripper02 (cuBLAS 13.4.1, HPC SDK 26.5, 2026-10-04).
-- **Root cause:** unknown.
+- **Root cause:** the host `alpha`/`beta` handed to cuBLAS were 8-byte aligned (a
+  `std::complex<double>` parameter or closure member), and cuBLASLt loads them with a 16-byte
+  vector load. Fixed in 9f551ab0: every cuBLAS call copies them into `alignas(16)` locals inside
+  `impl::run_native` (`src/backends/cublas.cc`).
 - **Reached by:** `trsm` with `blocked` and one right-hand side. The parent build crashes on
   `trsm cdouble L/R order 64-384 q 1 batch 128` under Auto, and also in `getrf_tests`
   (`LuTest/7`) and `ortho_tests` (`OrthoMatrixTest/7`).
-- **Workaround (gemm):** `gemm_vendor_impl` in `src/backends/cublas.cc` calls
+- **Workaround (gemm), now redundant:** `gemm_vendor_impl` in `src/backends/cublas.cc` still calls
   `cublasZgemmStridedBatched` when `m` or `n` is 1. Guard:
-  `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`.
+  `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. With the branch disabled (DPC++,
+  threadripper02, sm_120, 2026-10-09), under `BATCHLAS_GEMM_ROUTE=vendor`:
+  - `TrsmNativeBlocked.*` (13), `getrf_tests LuTest/7.*` (46), `ortho_tests` (16) and
+    `gemm_tests */7.*` (28) pass;
+  - coverage shows complex<double> vendor gemm reached at m or n = 1;
+  - a direct call at m, n in {1, 64}, k in {64, 384}, batch 1 (`cublasGemmEx`) and 128
+    (`cublasGemmStridedBatchedEx`) matches a host reference to 2.3e-15.
+
+  The branch can be removed; it is kept until that change lands with its own route diff.
 - **gemv refused (2026-10-09):** under a pinned vendor every non-trivial `GemvMatrixViewTest/7.*` and
   `GemvCoverageTest/7.*` case exits 139, batch 1 included (`cublasZgemv_v2 -> cublasLtZZZMatmul`).
   The deep sm_120 ledger (`benchmarks/results/tuning/ledger/gemv.cdouble.sm_120`) agrees: the vendor
@@ -232,7 +244,9 @@ wrote both triangles and was reachable only through those pins.
   word falls back to Auto, and Auto runs `direct`/`cta`. Guard:
   `GemvVendorRefusalTest/7.ComplexDoubleVendorIsRefusedOnCuda` (segfaults with the term removed).
   The term is CUDA-wide, not keyed on this cuBLAS version; where Zgemv works it costs speed only.
-- **Status:** gemm worked around; gemv refused. `gemv_tests` and `ortho_tests` pass.
+  That term predates the alignment fix and was not re-measured with it.
+- **Status:** fixed (gemm and gemv crashes); gemv's vendor refusal still in place. The cuSPARSE
+  spmm term attributed here (`src/ops/spmm/spmm.cc:68`) was not re-measured.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 
@@ -288,6 +302,26 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **R3 waiver:** cuSPARSE silently mishandles operands that are off their natural alignment.
   Alignment is a property of the pointers, not of the selection key, so `can_run` does not model
   it. `spmm_tests` skips misaligned cases unless the route is pinned to `native`.
+
+## 18. `gesvd_cta` left vectors lose orthogonality as eps times kappa squared
+
+- **Symptom:** float, real general 16x16, `BATCHLAS_GESVD_ROUTE=cta`, 160 matrices drawn by
+  `Matrix::Random`: \f$\max|U^T U - I|\f$ is 0.003 to 0.77 times \f$\varepsilon\kappa^2\f$. It is
+  1.1e-3 at \f$\kappa = 174\f$, 0.20 at \f$2.9 \cdot 10^3\f$ and 0.996 at \f$10^4\f$. V stays at
+  1.5e-6. `jacobi` and `blocked` stay at or below 6e-6 on the same matrices.
+- **Cause:** CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag`,
+  `src/extensions/gesvd_blocked.cc:68-71`). V comes from the eigenvectors of \f$B^T B\f$, and
+  `build_bidiag_vectors` forms \f$u_i = B v_i / \sigma_i\f$ (`:596`), which scales the error of
+  \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
+  [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
+- **Reached by:** a `cta` pin only. Every real general row of `tuned/gesvd.*.txt` ranks `jacobi`
+  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits.
+- **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations`, float/CUDA, listed in
+  `tests/known-failures.txt`. Since the Philox generator, its `AN` matrix has \f$\kappa = 497\f$;
+  8 of 80 seeds fail. The double instantiation still covers the four job combinations.
+- **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
+  for real general input.
+- **Status:** open, pinned `cta` only.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 

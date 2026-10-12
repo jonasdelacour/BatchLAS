@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include "../math-helpers.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -46,7 +47,7 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     for (int i = tix; i < n; i += bdim){
         local_max = std::max(local_max, std::abs(D[i]) + 2*std::abs(L[i]));
     }
-    T max_norm = sycl::reduce_over_group(cta, local_max, sycl::maximum<T>());
+    T max_norm = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<T>());
     (void)max_norm;
     T numerical_zero = 10*std::numeric_limits<T>::epsilon();
     T d_n, l_n, l_nm1;
@@ -179,10 +180,10 @@ Event tridiagonal_solver(Queue& ctx,
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
 
-            auto D = Span(smem_possible ? D_smem.begin() : D_global.data() + bid*(n+1), n+1);
-            auto L = Span(smem_possible ? L_smem.begin() : L_global.data() + bid*n, n);
-            auto U = Span(smem_possible ? U_smem.begin() : U_global.data() + bid*2*(n+1), 2 * (n + 1));
-            auto Vlocal = Span(smem_possible ? V_smem.begin() : V_reflectors.data() + bid*2*n, 2 * n);
+            auto D = Span(smem_possible ? &D_smem[0] : D_global.data() + bid*(n+1), n+1);
+            auto L = Span(smem_possible ? &L_smem[0] : L_global.data() + bid*n, n);
+            auto U = Span(smem_possible ? &U_smem[0] : U_global.data() + bid*2*(n+1), 2 * (n + 1));
+            auto Vlocal = Span(smem_possible ? &V_smem[0] : V_reflectors.data() + bid*2*n, 2 * n);
 
             auto batch_alphas = Span(alphas.data() + bid * n, n);
             auto batch_betas = Span(betas.data() + bid * n, n);

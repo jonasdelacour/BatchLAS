@@ -56,6 +56,11 @@ struct RegCfg {
     Forms forms;
     bool aligned_leg;
     constexpr int threads() const { return (m / tr) * (n / tc); }
+    /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
+    constexpr std::int64_t slm_bytes() const {
+        if (m == 128 && n == 128) return std::int64_t(4) * ((32 * 132 > 2 * k * m ? 32 * 132 : 2 * k * m) + 2 * k * n);
+        return std::int64_t(4) * stages * ((m + 1) * k + (k + 1) * n);
+    }
 };
 inline constexpr std::array<RegCfg, 10> reg_configs{{
     {32, 32, 8, 1, 2, 2, 1, {true, false, false, false}, false},

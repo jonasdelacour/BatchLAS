@@ -4,6 +4,7 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
+#include <batchlas/util/group-collectives.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -192,11 +193,11 @@ sycl::event ormbr_larft_forward_columnwise_batched_wg(Queue& q,
     auto reduce_sum = [](const sycl::group<1>& g, T x) {
         if constexpr (internal::is_complex<T>::value) {
             using R = typename T::value_type;
-            const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
+            const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
+            const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
             return T(re, im);
         } else {
-            return sycl::reduce_over_group(g, x, sycl::plus<T>());
+            return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
         }
     };
 

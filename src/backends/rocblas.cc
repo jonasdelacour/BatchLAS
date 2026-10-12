@@ -46,32 +46,36 @@ namespace batchlas {
         }
 
         static LinalgHandle<Back> handle;
-        handle.setStream(ctx);
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
         auto compute_type = enum_convert<BackendLibrary::ROCBLAS, T>(precision);
-        if (A.batch_size() <= 1) {
-            call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm, rocblas_dgemm, rocblas_cgemm, rocblas_zgemm,
-                             handle, transA, transB,
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            if (A.batch_size() <= 1) {
+                call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm, rocblas_dgemm, rocblas_cgemm, rocblas_zgemm,
+                                 handle, transA, transB,
+                                    m, n, k,
+                                    &alpha_h,
+                                    A.data_ptr(), A.ld(),
+                                    B.data_ptr(), B.ld(),
+                                    &beta_h,
+                                    C.data_ptr(), C.ld());
+            } else {
+                call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm_strided_batched, rocblas_dgemm_strided_batched,
+                                rocblas_cgemm_strided_batched, rocblas_zgemm_strided_batched,
+                                handle,
+                                transA, transB,
                                 m, n, k,
-                                &alpha,
-                                A.data_ptr(), A.ld(),
-                                B.data_ptr(), B.ld(),
-                                &beta,
-                                C.data_ptr(), C.ld());
-        } else {
-            call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm_strided_batched, rocblas_dgemm_strided_batched,
-                            rocblas_cgemm_strided_batched, rocblas_zgemm_strided_batched,
-                            handle,
-                            transA, transB,
-                            m, n, k,
-                            &alpha,
-                            A.data_ptr(), A.ld(), A.stride(),
-                            B.data_ptr(), B.ld(), B.stride(),
-                            &beta,
-                            C.data_ptr(), C.ld(), C.stride(),
-                            A.batch_size());
-        }
+                                &alpha_h,
+                                A.data_ptr(), A.ld(), A.stride(),
+                                B.data_ptr(), B.ld(), B.stride(),
+                                &beta_h,
+                                C.data_ptr(), C.ld(), C.stride(),
+                                A.batch_size());
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -88,20 +92,24 @@ namespace batchlas {
         T beta,
         Transpose transA) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto m = A.rows();
         auto n = A.cols();
         auto batch_size = A.batch_size();
-        if (batch_size <= 1) {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv, rocblas_dgemv, rocblas_cgemv, rocblas_zgemv,
-                handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha,
-                A.data_ptr(), A.ld(), X.data_ptr(), 1, &beta, Y.data_ptr(), 1);
-        } else {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv_strided_batched, rocblas_dgemv_strided_batched,
-                rocblas_cgemv_strided_batched, rocblas_zgemv_strided_batched,
-                handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha,
-                A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), 1, X.stride(), &beta, Y.data_ptr(), 1, Y.stride(), batch_size);
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            if (batch_size <= 1) {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv, rocblas_dgemv, rocblas_cgemv, rocblas_zgemv,
+                    handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
+                    A.data_ptr(), A.ld(), X.data_ptr(), 1, &beta_h, Y.data_ptr(), 1);
+            } else {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv_strided_batched, rocblas_dgemv_strided_batched,
+                    rocblas_cgemv_strided_batched, rocblas_zgemv_strided_batched,
+                    handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
+                    A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), 1, X.stride(), &beta_h, Y.data_ptr(), 1, Y.stride(), batch_size);
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -124,22 +132,25 @@ namespace batchlas {
         // now that one declaration serves every backend, they have to agree.
 
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
         auto batch_size = A.batch_size();
         trsm_validate_params(A, Bmat, side, uplo, transA, diag);
-        if (batch_size == 1) {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm, rocblas_dtrsm, rocblas_ctrsm, rocblas_ztrsm,
-                handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
-                enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
-                kB, n, &alpha, A.data_ptr(), A.ld(), Bmat.data_ptr(), Bmat.ld());
-        } else {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm_strided_batched, rocblas_dtrsm_strided_batched,
-                rocblas_ctrsm_strided_batched, rocblas_ztrsm_strided_batched,
-                handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
-                enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
-                kB, n, &alpha, A.data_ptr(), A.ld(), A.stride(), Bmat.data_ptr(), Bmat.ld(), Bmat.stride(), batch_size);
-        }
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            if (batch_size == 1) {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm, rocblas_dtrsm, rocblas_ctrsm, rocblas_ztrsm,
+                    handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
+                    enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
+                    kB, n, &alpha_h, A.data_ptr(), A.ld(), Bmat.data_ptr(), Bmat.ld());
+            } else {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm_strided_batched, rocblas_dtrsm_strided_batched,
+                    rocblas_ctrsm_strided_batched, rocblas_ztrsm_strided_batched,
+                    handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
+                    enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
+                    kB, n, &alpha_h, A.data_ptr(), A.ld(), A.stride(), Bmat.data_ptr(), Bmat.ld(), Bmat.stride(), batch_size);
+            }
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -156,21 +167,25 @@ namespace batchlas {
                Uplo uplo,
                Transpose transA) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because this overload is
         // constrained to a real T; the complex rank-k update is herk.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyrk, rocblas_dsyrk, nullptr, nullptr,
-                handle, uplo, transA, n, k, &alpha,
-                A_i.data_ptr(), A_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyrk, rocblas_dsyrk, nullptr, nullptr,
+                    handle, uplo, transA, n, k, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        backend::for_each_batch_item(launch_single, A, C);
+            backend::for_each_batch_item(launch_single, A, C);
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -188,22 +203,26 @@ namespace batchlas {
                 Uplo uplo,
                 Transpose transA) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
 
         const auto [n, k] = backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, Bmat, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because this overload is
         // constrained to a real T; the complex rank-2k update is her2k.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyr2k, rocblas_dsyr2k, nullptr, nullptr,
-                handle, uplo, transA, n, k, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            alignas(16) auto beta_h = beta;
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyr2k, rocblas_dsyr2k, nullptr, nullptr,
+                    handle, uplo, transA, n, k, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        backend::for_each_batch_item(launch_single, A, Bmat, C);
+            backend::for_each_batch_item(launch_single, A, Bmat, C);
+        });
         return ctx.create_event_after_external_work();
     }
 
@@ -222,22 +241,25 @@ namespace batchlas {
                Transpose transA,
                Diag diag) {
         static LinalgHandle<B> handle;
-        handle.setStream(ctx);
 
         const auto [m, n, k] = backend::shape::validate_product<std::invalid_argument>("TRMM", A, Bmat, C, side);
         static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
 
         // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strmm, rocblas_dtrmm, rocblas_ctrmm, rocblas_ztrmm,
-                handle, side, uplo, transA, diag, m, n, &alpha,
-                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(),
-                C_i.data_ptr(), C_i.ld());
-        };
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
+                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strmm, rocblas_dtrmm, rocblas_ctrmm, rocblas_ztrmm,
+                    handle, side, uplo, transA, diag, m, n, &alpha_h,
+                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(),
+                    C_i.data_ptr(), C_i.ld());
+            };
 
-        backend::for_each_batch_item(launch_single, A, Bmat, C);
+            backend::for_each_batch_item(launch_single, A, Bmat, C);
+        });
         return ctx.create_event_after_external_work();
     }
 

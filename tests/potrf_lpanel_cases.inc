@@ -209,6 +209,9 @@ TYPED_TEST(PotrfLpanelTest, AgreesWithTheCtaKernel) {
     using R = typename TestFixture::R;
 
     const int cap = std::min(this->ceiling(), this->lp_ceiling());
+    if (test_utils::kSlmCappedAt48KiB && cap <= 32) {
+        GTEST_SKIP() << test_utils::kSlmCappedReason << ": the tiers overlap only up to n = " << cap << "";
+    }
     ASSERT_GT(cap, 32) << "the two tiers do not overlap above n = 32 on this device; "
                           "the oracle would be vacuous";
 

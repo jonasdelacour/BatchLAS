@@ -8,6 +8,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/util/mempool.hh>
+#include <batchlas/util/group-collectives.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -195,8 +196,8 @@ void bdsdc_extract_vectors(Queue& ctx,
                 p2 += pv * pv;
                 q2 += qv * qv;
             }
-            p2 = sycl::reduce_over_group(it.get_group(), p2, sycl::plus<T>());
-            q2 = sycl::reduce_over_group(it.get_group(), q2, sycl::plus<T>());
+            p2 = batchlas::portable::reduce_over_group(it.get_group(), p2, sycl::plus<T>());
+            q2 = batchlas::portable::reduce_over_group(it.get_group(), q2, sycl::plus<T>());
             const T pn = sycl::sqrt(p2);
             const T qn = sycl::sqrt(q2);
 
@@ -297,8 +298,8 @@ void bdsdc_repair_degenerate(Queue& ctx,
                         }
                         if (acc < best) { best = acc; best_c = c; }
                     }
-                    const T best_all = sycl::reduce_over_group(grp, best, sycl::minimum<T>());
-                    const int32_t c_star = sycl::reduce_over_group(
+                    const T best_all = batchlas::portable::reduce_over_group(grp, best, sycl::minimum<T>());
+                    const int32_t c_star = batchlas::portable::reduce_over_group(
                         grp, (best == best_all) ? best_c : nn, sycl::minimum<int32_t>());
 
                     // Seed w := e_c*, project out the final columns, twice -- one
@@ -319,7 +320,7 @@ void bdsdc_repair_degenerate(Queue& ctx,
                                 const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
                                 dot += wr * tr;
                             }
-                            dot = sycl::reduce_over_group(grp, dot, sycl::plus<T>());
+                            dot = batchlas::portable::reduce_over_group(grp, dot, sycl::plus<T>());
                             for (int32_t r = lid; r < nn; r += kGroup) {
                                 const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
                                 if (which == 0) { Vh(j, r, b) -= dot * tr; }
@@ -334,7 +335,7 @@ void bdsdc_repair_degenerate(Queue& ctx,
                         const T wr = (which == 0) ? Vh(j, r, b) : U(r, j, b);
                         acc += wr * wr;
                     }
-                    const T nrm2 = sycl::reduce_over_group(grp, acc, sycl::plus<T>());
+                    const T nrm2 = batchlas::portable::reduce_over_group(grp, acc, sycl::plus<T>());
                     // c_star is the best axis available, so a residual too small to normalise
                     // means the final columns already span the space; leave the column as
                     // extracted rather than amplifying noise.

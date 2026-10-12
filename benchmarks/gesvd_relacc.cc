@@ -358,7 +358,9 @@ void ACC_GESVD_RELACC_JACOBI(miniacc::State& state) {
 }
 
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_BATCHLAS, GesvdRelAccSizes)
+#if BATCHLAS_HAS_CUSOLVER  // the vendor row needs the library, not just the CUDA backend
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_CUSOLVER, GesvdRelAccSizes)
+#endif
 template <typename Real, Backend B>
 void ACC_GESVD_RELACC_QR(miniacc::State& state) {
     run_gesvd_relacc<Real, B, RelAccImpl::QrPrecond>(state);

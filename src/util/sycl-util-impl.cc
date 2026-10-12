@@ -9,6 +9,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/reference-wrapper.hh>
 #include "../queue.hh"
+#include <batchlas/backend_config.h>
 
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
@@ -18,7 +19,7 @@
 // UR_USM_ADVICE_FLAG_* ones are DPC++'s Unified Runtime. Advice is only a hint
 // and these wrappers already return an empty Event on failure, so elsewhere
 // they are no-ops.
-#if defined(SYCL_IMPLEMENTATION_ONEAPI)
+#if BATCHLAS_SYCL_IMPL_DPCPP
     #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) static_cast<EventImpl>((q)->mem_advise((ptr), (bytes), (flag)))
 #else
     #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) ((void)(q), (void)(ptr), (void)(bytes), Event{})

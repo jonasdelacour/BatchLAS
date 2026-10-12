@@ -15,6 +15,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/util/mempool.hh>
 
@@ -95,7 +96,7 @@ Event potrf_tiny_launch(Queue& ctx,
         h.parallel_for<PotrfTinyKernel<T, N>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(kTinySubGroupSize)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kTinySubGroupSize) {
                 const auto sg = it.get_sub_group();
                 const auto part = make_partition<N>(sg);
                 const int lane = static_cast<int>(part.get_local_linear_id());
@@ -124,7 +125,7 @@ Event potrf_tiny_launch(Queue& ctx,
                 // The order guard is a PREDICATE, never a `break`: a runtime break
                 // defeats the unroll at N >= 16, after which rA[j] is a dynamic index.
                 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < N; ++j) {
                     const bool col_live = (j < n);
 
@@ -156,7 +157,7 @@ Event potrf_tiny_launch(Queue& ctx,
                                                  sycl_device::dev_mul_real(rA[j], rinv)),
                         rA[j]);
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int k = j + 1; k < N; ++k) {
                         // The lane guard is INSIDE the collective, never around it.
                         const D vk = tiny_native::tiny_bcast<D>(part, rA[j],

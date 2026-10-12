@@ -9,6 +9,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <algorithm>
 #include <complex>
@@ -131,7 +132,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(WG)),
                               sycl::range<1>(static_cast<std::size_t>(WG))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const auto part = make_partition<N>(sg);
                 const int lane = static_cast<int>(part.get_local_linear_id());
@@ -222,7 +223,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                         // P2: lane l sums column l in ROW order -- LAPACK's association.
                         if (lane < C) {
                             D acc = D{};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int r = 0; r < N; ++r) {
                                 if (r >= j) acc = gn::dev_add(acc, sP[r * SLDA + lane]);
                             }

@@ -14,6 +14,9 @@
 
 using namespace batchlas;
 
+// Runs on test_utils::gpu_backend, which exists only with a GPU backend.
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+
 namespace {
 
 template <typename Real>
@@ -384,6 +387,8 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
     // Item 0 is unaffected by its neighbour's empty request.
     expect_stein_pairs(*this->ctx, dense_tridiag(f.d, f.e, n), Z.view(), f.w.data(), n, k, 0, k, /*residual_only=*/true);
 }
+
+#endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

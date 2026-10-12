@@ -66,7 +66,8 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
     const bool square = m == n;
     return std::visit(overloaded{
         [&](Jacobi) {
-            return native && d.has_sg32 && !j.herm && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(j.vectors());
+            const auto budget = static_cast<std::size_t>(std::max<std::int64_t>(0, d.slm_budget));
+            return native && d.has_sg32 && !j.herm && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(j.vectors(), budget);
         },
         [&](Cta) {
             const bool form = j.herm ? square : kReal;

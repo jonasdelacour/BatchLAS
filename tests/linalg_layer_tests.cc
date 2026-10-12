@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
@@ -305,13 +306,24 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         [[maybe_unused]] Event external = ctx.create_event_after_external_work();
 
         sycl::queue& my_queue = batchlas::sycl_queue(ctx);
+#if BATCHLAS_SYCL_IMPL_DPCPP
         sycl::event mine = my_queue.ext_oneapi_submit_barrier();
+#else
+        sycl::event mine = my_queue.single_task([] {});        // acpp: no ext_oneapi_submit_barrier
+#endif
         Event e = batchlas::event_from_sycl(mine);
         ctx.enqueue(e);                                        // `enqueue` takes an lvalue
         (void)batchlas::potrf(ctx, A, {.uplo = Uplo::Lower});
 
         // ... and in the other direction:
+#if BATCHLAS_SYCL_IMPL_DPCPP
         my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
+#else
+        my_queue.submit([&](sycl::handler& h) {
+            h.depends_on(batchlas::sycl_event(ctx.get_event()));
+            h.single_task([] {});
+        });
+#endif
     }
 
     // "The linalg convenience layer"

@@ -14,6 +14,7 @@
 #include <complex>
 #include <cstddef>
 #include <type_traits>
+#include "../kernel_attrs.hh"
 
 namespace batchlas::sycl_gemm_small {
 
@@ -60,7 +61,7 @@ Event launch_small_batched(Queue& ctx,
         h.parallel_for<GemmSmallBatchedKernel<T, NB>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int t = static_cast<int>(it.get_local_id(0));
                 const int slot = t / kTpm;
                 const int tt = t % kTpm;
@@ -87,7 +88,7 @@ Event launch_small_batched(Queue& ctx,
 
                 // Row r of op(A), unrolled so the array stays in registers.
                 T a[NB];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int l = 0; l < NB; ++l) {
                     T v = T(0);
                     if (live && r < m && l < k) v = ta ? Ab[l + r * lda] : Ab[r + l * lda];
@@ -96,18 +97,18 @@ Event launch_small_batched(Queue& ctx,
                 it.barrier(sycl::access::fence_space::local_space);
 
                 T acc[kCpt];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < kCpt; ++j) acc[j] = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int l = 0; l < NB; ++l) {
                     if (l >= k) continue;   // uniform; `continue` keeps the unroll, so a[] stays put
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) acc[j] += a[l] * sB[l + (c0 + j) * kLdb];
                 }
 
                 if (live && r < m) {
                     T* const Cb = c_ptr + bi * sc;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
                         if (c < n) {
@@ -178,9 +179,9 @@ Event launch_small_tiled(Queue& ctx,
                 const int tr = t % kTr, tc = t / kTr;
                 T prior[4][4];
                 if constexpr (PrefetchC) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < 4; ++j) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             const int r = tr * 4 + i, c = tc * 4 + j;
                             prior[i][j] = (r < m && c < n) ? Cb[r + c * ldc] : T(0);
@@ -190,32 +191,32 @@ Event launch_small_tiled(Queue& ctx,
                 it.barrier(sycl::access::fence_space::local_space);
 
                 T acc[4][4];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < 4; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < 4; ++j) acc[i][j] = T(0);
                 }
                 for (int l0 = 0; l0 < kp; l0 += 4) {
                     V4 bv[4];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < 4; ++j) {
                         bv[j] = *reinterpret_cast<const V4*>(&sB[(tc * 4 + j) * kLd + l0]);
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int ll = 0; ll < 4; ++ll) {
                         const V4 av = *reinterpret_cast<const V4*>(&sA[(l0 + ll) * kLd + tr * 4]);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < 4; ++j) acc[i][j] += av[i] * bv[j][ll];
                         }
                     }
                 }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < 4; ++j) {
                     const int c = tc * 4 + j;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int r = tr * 4 + i;
                         if (r < m && c < n) {

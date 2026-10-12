@@ -11,8 +11,6 @@ BatchLAS").
 
 - CMake 3.14+ (3.21+ for `cmake --preset`; `CMakePresets.json` is schema version 3).
 - A C++20 compiler with SYCL support: a DPC++/Clang-family compiler, clang 16 or newer.
-- oneDPL headers, a hard dependency (several sources include `<oneapi/dpl/...>`). The build looks
-  under `/opt/intel/oneapi/dpl/latest/include`; set `ONEDPL_ROOT` otherwise.
 - Optional: CUDA Toolkit (NVIDIA), ROCm (AMD), LAPACKE and CBLAS (netlib host backend), Python 3 +
   pybind11 + NumPy + SciPy (Python bindings).
 
@@ -67,6 +65,7 @@ cmake --build --preset dev
 | `cuda` | CUDA-enabled build with tests; the pre-push gate |
 | `dev-gpu` / `dev-gpu-tests` | drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`) |
 | `release` | `Release`, no tests or benchmarks, one shared library |
+| `acpp` / `acpp-tests` | `dev` / `dev-tests` built with the AdaptiveCpp 25.10 driver (`--acpp-targets=generic`) into `build-acpp` / `build-acpp-tests` ([SYCL implementations](../design/sycl-implementations.md)) |
 
 `dev-gpu` is 13-25% off a cold build of the default target on one 4-GPU box, but it is **GPU
 coverage only**: about half of every typed test suite is not instantiated and `ctest` still reports
@@ -93,7 +92,6 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over cuBLAS/cuSOLVER/cuSPARSE/rocBLAS; `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
 | `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
-| `ONEDPL_ROOT` | root of a oneDPL installation not on the default search path; configure fails without oneDPL |
 | `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
 | `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |
 | `BATCHLAS_ENABLE_TUNING` | enable tuning targets; for benchmark builds |
@@ -106,7 +104,9 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_CCACHE_BASEDIR` | ccache base directory (default: deepest common parent of source and build directories, or `$HOME` if that is `/`) |
 | `BATCHLAS_TEST_GPUS` | GPUs written to `<build>/ctest_resources.json` for `scripts/ctest_gpus.sh`: `auto` (`nvidia-smi --list-gpus`), a count, or `0` to disable. Needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error |
 | `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` |
-| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the SYCL device link (default `4`, `1` disables) |
+| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link (default `4`, `1` disables) |
+| `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted |
+| `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
 
 ## Tests
 

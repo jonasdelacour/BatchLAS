@@ -72,7 +72,8 @@ WHAT THIS DOES NOT CATCH
 
 Usage:
     python3 .github/ci/compare_failures.py --junit FILE [--gtest-dir DIR]
-                                           [--known FILE] [--require NAME]...
+                                           [--known FILE | --sycl-impl DPCPP|ACPP
+                                            | --build-dir DIR] [--require NAME]...
                                            [--expected-tests N]
 Exit code 0 = gated clean (warnings are still possible), 1 = gate failed.
 """
@@ -85,6 +86,21 @@ import xml.etree.ElementTree as ET
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_KNOWN = os.path.join(REPO, "tests", "known-failures.txt")
+# An AdaptiveCpp build has its own, self-contained ledger: the shared defects are listed in both,
+# because an entry that passes under one implementation would otherwise fail the other's gate.
+DEFAULT_KNOWN_ACPP = os.path.join(REPO, "tests", "known-failures-acpp.txt")
+
+
+def sycl_impl_of(build_dir):
+    """BATCHLAS_SYCL_IMPL_RESOLVED from a configured tree's cache, or None."""
+    try:
+        with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.startswith("BATCHLAS_SYCL_IMPL_RESOLVED:"):
+                    return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
 
 # The only two <skipped message> values ctest 3.28 emits for a real skip. A
 # third value means something else went wrong -- "Unable to find executable"
@@ -276,6 +292,17 @@ def reconcile(junit_results, gtest_results, gtest_binaries):
     for r in junit_results:
         if r.outcome == FAILED and r.ident in failing_binaries:
             continue  # already accounted for, case by case
+        # A route-pinned rerun (<exe>_native) writes its XML as <exe>.xml or <exe>_1.xml, so
+        # its failing cases are already there under those names. A process death is not. Only
+        # when every failing run left its own failing file: two concurrent runs can write one
+        # <exe>.xml, and the surviving file then holds only the other run's cases.
+        if r.outcome == FAILED and r.ident.endswith("_native") and not _is_process_death(r.detail):
+            stem = r.ident[:-len("_native")]
+            files = set(b for b in gtest_binaries
+                        if b == stem or (RERUN_SUFFIX.match(b) and RERUN_SUFFIX.match(b).group(1) == stem))
+            runs_failed = sum(1 for j in junit_results if j.outcome == FAILED and j.ident in (stem, r.ident))
+            if len(files & failing_binaries) >= runs_failed:
+                continue
         if r.outcome in (PASSED, SKIPPED, DISABLED) and r.ident in gtest_binaries:
             continue  # the gtest layer is strictly more precise
         by_ident[r.ident] = r
@@ -298,13 +325,31 @@ def main(argv):
                         help="ctest --output-junit report")
     parser.add_argument("--gtest-dir", metavar="DIR",
                         help="directory written by GTEST_OUTPUT=xml:DIR/ (one file per binary)")
-    parser.add_argument("--known", metavar="FILE", default=DEFAULT_KNOWN,
-                        help="the ledger (default: tests/known-failures.txt)")
+    parser.add_argument("--known", metavar="FILE",
+                        help="the ledger (default: tests/known-failures.txt, or "
+                             "tests/known-failures-acpp.txt for an AdaptiveCpp build)")
+    parser.add_argument("--sycl-impl", choices=("DPCPP", "ACPP"),
+                        help="the SYCL implementation the run was built with; picks the default "
+                             "ledger (default: read from --build-dir, else DPCPP)")
+    parser.add_argument("--build-dir", metavar="DIR",
+                        help="the tested build tree; its CMakeCache.txt names the SYCL implementation")
     parser.add_argument("--require", metavar="NAME", action="append", default=[],
                         help="test that MUST have actually run; repeatable, or comma-separated")
     parser.add_argument("--expected-tests", metavar="N", type=int,
                         help="fail unless the junit holds exactly N testcases")
     args = parser.parse_args(argv[1:])
+
+    impl = args.sycl_impl
+    if impl is None and args.build_dir:
+        impl = sycl_impl_of(args.build_dir)
+        if impl is None:
+            print("compare_failures: %s/CMakeCache.txt names no BATCHLAS_SYCL_IMPL_RESOLVED; "
+                  "reconfigure it or pass --sycl-impl" % args.build_dir)
+            return 1
+    if args.known is None:
+        args.known = DEFAULT_KNOWN_ACPP if impl == "ACPP" else DEFAULT_KNOWN
+    print("compare_failures: ledger %s (SYCL implementation %s)"
+          % (os.path.relpath(args.known, REPO), impl or "DPCPP, by default"))
 
     if not args.junit and not args.gtest_dir:
         print("compare_failures: nothing to read -- pass --junit and/or --gtest-dir")
@@ -489,13 +534,13 @@ def main(argv):
         print("compare_failures: warning: %s" % text)
     if newly_passing:
         print("compare_failures: %d listed failure(s) now PASS. Someone fixed them. Delete those "
-              "lines from tests/known-failures.txt -- while they stay, the ledger hides the "
+              "lines from %s -- while they stay, the ledger hides the "
               "regression that re-breaks them.\n"
               "  This FAILS the gate rather than warning, so that deleting the line is "
               "unavoidable rather than optional. A warning inside a green tick is how the "
               "SytrdBlockedLatrdGridCudaTest entry went stale in the first place: the GPU job "
               "uploads its report only on failure, so on a green run the warning exists nowhere "
-              "but in scrollback." % len(newly_passing))
+              "but in scrollback." % (len(newly_passing), ledger))
     for text in errors:
         print(text)
 

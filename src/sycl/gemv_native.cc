@@ -6,6 +6,7 @@
 
 #include "../queue.hh"
 #include "device_scalar.hh"
+#include "kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -304,7 +305,7 @@ Event gemv_seg_notrans(Queue& ctx,
         h.parallel_for<GemvSegNKernel<T, W>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(kSg)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int64_t b =
@@ -496,7 +497,7 @@ Event gemv_cta_trans(Queue& ctx,
         h.parallel_for<GemvCtaTKernel<T>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(kSg)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int64_t sg_out =
@@ -606,7 +607,7 @@ Event gemv_seg_trans(Queue& ctx,
         h.parallel_for<GemvSegTKernel<T, W>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(kSg)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int64_t sg_id =

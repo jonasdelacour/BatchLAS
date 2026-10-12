@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -8,7 +9,7 @@
 #include <complex>
 #include <limits>
 #include <stdexcept>
-#include <oneapi/dpl/random>
+#include "../util/philox.hh"
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/extra.hh>
@@ -470,8 +471,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             local_max = sycl::max(local_max, sycl::fabs(dr));
                             local_min = sycl::min(local_min, dr);
                         }
-                        const float_type dmax = sycl::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
-                        const float_type dmin = sycl::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
+                        const float_type dmax = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
+                        const float_type dmin = batchlas::portable::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
                         if (tid == 0) {
                             // Decided once per batch item, not per entry: a mixed-sign
                             // diagonal makes the whole operator indefinite, which no
@@ -484,7 +485,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         }
 
         // Only the X block of S is filled: P and R are recomputed from the first
-        // Rayleigh-Ritz onwards. The linear index below reproduces fill_random's exactly
+        // Rayleigh-Ritz onwards. The linear index and the philox key (seed, 0, idx) below
+        // reproduce fill_random's exactly
         // -- fill_random ignores ld/stride and walks the buffer flat -- so the starting
         // block stays bit-for-bit reproducible.
         {
@@ -502,15 +504,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         const int c = static_cast<int>(rem / nn);
                         const size_t idx = static_cast<size_t>(b) * (3 * kk * nn) +
                                            static_cast<size_t>(c) * nn + static_cast<size_t>(r);
-                        oneapi::dpl::uniform_real_distribution<float_type> dist(-1.0, 1.0);
-                        oneapi::dpl::minstd_rand engine(seed, idx);
-                        const auto r1 = dist(engine);
-                        if constexpr (is_std_complex_v<T>) {
-                            const auto r2 = dist(engine);
-                            Xk(r, c, b) = T(r1, r2);
-                        } else {
-                            Xk(r, c, b) = T(r1);
-                        }
+                        Xk(r, c, b) = philox::uniform_symmetric<T>(seed, 0, idx);
                     });
             });
         }
@@ -779,7 +773,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             const bool check_convergence =
                 (it % convergence_check_every == 0) || last_iteration;
             if (instrumentation_host_readback || check_convergence) {
-                residual_evt.wait_and_throw();
+                impl::wait_and_throw(residual_evt, *ctx);
             }
             trace("syevx: residual kernel done");
 
@@ -896,7 +890,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                 float_type acc = 0;
                                 for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
                                     acc += internal::norm_squared(col[i]);
-                                const float_type s = sycl::reduce_over_group(cta, acc, sycl::plus<float_type>());
+                                const float_type s = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
                                 if (tid == 0) colnorm[j] = sycl::sqrt(s);
                             }
                             sycl::group_barrier(cta);
@@ -1093,13 +1087,13 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                 const int64_t col = linear / nv;
                                 acc += internal::norm_squared(mat[row + col * StAS_ld]);
                             }
-                            const float_type total = sycl::reduce_over_group(cta, acc, sycl::plus<float_type>());
+                            const float_type total = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
                             const float_type sentinel = sycl::sqrt(total) + float_type(1);
                             for (int64_t c = first; c < nv; ++c) {
                                 float_type part = 0;
                                 for (int64_t i = int64_t(tid); i < nrows; i += int64_t(local_size))
                                     part += internal::norm_squared(basis[i + c * S_ld]);
-                                const float_type norm2 = sycl::reduce_over_group(cta, part, sycl::plus<float_type>());
+                                const float_type norm2 = batchlas::portable::reduce_over_group(cta, part, sycl::plus<float_type>());
                                 if (tid == 0 && norm2 <= null_tol) mat[c + c * StAS_ld] = T(largest ? -sentinel : sentinel);
                             }
                         });

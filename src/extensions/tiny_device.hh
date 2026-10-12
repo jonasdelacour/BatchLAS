@@ -11,6 +11,7 @@
 #include "sg_compat.hh"
 
 #include "../sycl/device_scalar.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -67,7 +68,7 @@ template <typename D, int N>
 inline void tiny_pad_identity(D* rA, int lane) {
     const D one = sycl_device::dev_one<D>();
     const D zero = D{};
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) rA[c] = tiny_select(c == lane, one, zero);
 }
 
@@ -76,7 +77,7 @@ inline void tiny_load_lower(D* rA, const D* __restrict a, int ld,
                             int lane, bool row_live,
                             bool real_diag) {  // as LAPACK and cuSOLVER, diag is real
     tiny_pad_identity<D, N>(rA, lane);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c <= lane) {
             D v = a[lane + static_cast<std::ptrdiff_t>(c) * ld];
@@ -94,7 +95,7 @@ template <typename D, int N>
 inline void tiny_load_upper(D* rA, const D* __restrict a, int ld,
                             int lane, bool row_live, bool real_diag) {
     tiny_pad_identity<D, N>(rA, lane);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c <= lane) {
             D v = sycl_device::dev_conj(a[c + static_cast<std::ptrdiff_t>(lane) * ld]);
@@ -109,7 +110,7 @@ inline void tiny_load_upper(D* rA, const D* __restrict a, int ld,
 template <typename D, int N>
 inline void tiny_store_lower(const D* rA, D* __restrict a, int ld,
                              int lane, bool row_live) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c <= lane) a[lane + static_cast<std::ptrdiff_t>(c) * ld] = rA[c];
     }
@@ -118,7 +119,7 @@ inline void tiny_store_lower(const D* rA, D* __restrict a, int ld,
 template <typename D, int N>
 inline void tiny_store_upper(const D* rA, D* __restrict a, int ld,
                              int lane, bool row_live) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c <= lane) {
             a[c + static_cast<std::ptrdiff_t>(lane) * ld] = sycl_device::dev_conj(rA[c]);
@@ -130,7 +131,7 @@ template <typename D, int N>  // the full square, for the non-triangular tiers (
 inline void tiny_load_full(D* rA, const D* __restrict a, int ld,
                            int lane, int n, bool row_live) {
     tiny_pad_identity<D, N>(rA, lane);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c < n) rA[c] = a[lane + static_cast<std::ptrdiff_t>(c) * ld];
     }
@@ -140,7 +141,7 @@ template <typename D, int N>
 inline void tiny_store_full(const D* rA, D* __restrict a, int ld,
                             int row,  // not `lane`: LU relabels rows instead of moving them
                             int n, bool row_live) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (int c = 0; c < N; ++c) {
         if (row_live && c < n) a[row + static_cast<std::ptrdiff_t>(c) * ld] = rA[c];
     }
@@ -219,7 +220,7 @@ inline D tiny_load_pad_identity(const D* __restrict base, int r, int c, int n,
 // and the lanes disagree about the winner. evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
 template <int N, typename R, typename Part>
 inline void tiny_argmax_pair(const Part& part, R& a, int& key) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
     for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
         const R ov = permute_group_by_xor(part, a, mask);
         const int ok = permute_group_by_xor(part, key, mask);

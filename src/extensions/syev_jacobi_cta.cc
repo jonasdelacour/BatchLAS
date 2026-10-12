@@ -11,6 +11,7 @@
 #include "../queue.hh"
 #include "info_span.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/local_mem.hh"
 #include <complex>
 #include <limits>
 #include <numeric>
@@ -156,17 +157,15 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         constexpr std::size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
         constexpr bool kNeedPhase = internal::is_complex<T>::value;
         {
-            const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
+            const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
             const std::size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
             const std::size_t z_elems = ComputeVectors ? kTileElems : 0;
             const std::size_t bytes_per_prob = (kTileElems + z_elems) * sizeof(T)
                                              + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
                                              + 2 * kRotSlots * sizeof(Real);
-            const int32_t max_probs = (bytes_per_prob == 0)
-                                          ? int32_t(1)
-                                          : std::max<int32_t>(int32_t(1),
-                                                              static_cast<int32_t>(avail / bytes_per_prob));
-            wg_size_multiplier = std::min(wg_size_multiplier, max_probs);
+            wg_size_multiplier = impl::cta_wg_multiplier("syev_jacobi_cta", wg_size_multiplier,
+                                                         base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
+                                                         avail);
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
@@ -560,6 +559,8 @@ Event syev_jacobi_cta(Queue& ctx,
             throw batchlas::unsupported("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
+    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
+    if (batch64 == 0) return ctx.get_event();
 
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
     auto* w_ptr = eigenvalues.data();

@@ -651,6 +651,7 @@ TYPED_TEST(PotrfCandidates, ClassWordsAndSpellingsSelectTheirChoice) {
 // `native` are read off the shipped table of this device (shipped_table_pick.hh).
 TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const auto& dev = select::device_of<B>(*this->ctx, select::Lib::solver);
@@ -756,6 +757,7 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
 // can_run reads no batch beyond >= 1, so batch 1 stands in for the row's batch.
 TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const select::Device& d = select::device_of<B>(*this->ctx);
@@ -794,6 +796,7 @@ TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
 // based tests bypass the key entirely. (Blocked and lpanel run Lower only.)
 TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
+    if (test_utils::kSlmCappedAt48KiB) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the shipped sm_120 table rows were measured at the 99 KiB budget; per-implementation tables are deferred (sycl-implementations.md)";
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const std::string dev = select::device_of<B>(*this->ctx).key;

@@ -7,6 +7,8 @@
 /// tree wholesale); no public header includes it. Not a stable interface.
 /// @ingroup api_internal_helpers
 
+#include <batchlas/util/group-collectives.hh>
+
 #include <sycl/sycl.hpp>
 
 #include <functional>
@@ -29,7 +31,7 @@ inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
         // SubGroupPartition<P> (sg_partition.hh) provides sg_leader_broadcast() via ADL.
         return sg_leader_broadcast(group, value);
     } else {
-        return sycl::group_broadcast(group, value);
+        return batchlas::portable::group_broadcast(group, value);
     }
 }
 
@@ -53,7 +55,7 @@ inline constexpr void invoke_one(const Group& group, Fn&& fn, Args&&... args) {
 /// @brief Returns the leader's `value` on every work-item of `group`. Collective.
 ///
 /// Uses the group's `sg_leader_broadcast` when one is found by ADL (sub-group
-/// partitions), else `sycl::group_broadcast`.
+/// partitions), else `batchlas::portable::group_broadcast` (group-collectives.hh).
 /// @pre `T` is trivially copyable.
 template <typename Group, typename T>
 inline constexpr T broadcast_from_leader(const Group& group, T value) {

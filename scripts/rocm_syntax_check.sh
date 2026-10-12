@@ -18,11 +18,11 @@
 #
 # THE ONE EXPECTED ERROR
 #
-# This DPC++ is built for CUDA only, so `sycl::get_native<ext_oneapi_hip>` at
-# linalg-impl.hh:1030 has no matching overload. That is a property of the
-# toolchain, not of the code, and it is the ONLY error each TU produces. So the
-# gate is: exactly that error and nothing else. Any other diagnostic is a real
-# defect in the ROCm sources.
+# This DPC++ is built for CUDA only, so `sycl::get_native<ext_oneapi_hip>` in
+# src/sycl/impl.hh has no matching overload, once per run_native/query_stream
+# instantiation. That is a property of the toolchain, not of the code. So the
+# gate is: only that error (any count, hence -ferror-limit=0) and nothing else.
+# Any other diagnostic is a real defect in the ROCm sources.
 #
 # Turning the CUDA macros OFF is not incidental -- it is most of what makes this
 # a real check, since it exercises the per-library #if structure S2 introduced
@@ -84,7 +84,7 @@ check() {
         return
     fi
 
-    "$CXX" -fsyntax-only -std=c++20 -fsycl \
+    "$CXX" -fsyntax-only -std=c++20 -fsycl -ferror-limit=0 \
         -Iinclude -I"$BUILD_INCLUDE" -Isrc -I"$ROCM/include" \
         -include "$WORK/force_rocm.h" \
         -Wno-unused-command-line-argument \

@@ -30,6 +30,7 @@ lives on as table rows.
 | [iluk.md](iluk.md) | `iluk` (ILU(k) numeric phase and apply) | n/a; host or device chosen on batch size |
 | [tuning.md](tuning.md) | the `tuning_params.hh` constants and `BATCHLAS_TUNE_*` overrides | n/a; kernel parameters, not a routing choice |
 | [gesvd.md](gesvd.md) | `gesvd` | **yes**: `jacobi` for real general max(m,n) <= 32 and complex general input up to its ceiling; `blocked` above for real general; `cta` for square Hermitian to n = 32 |
+| [sycl-implementations.md](sycl-implementations.md) | gemm, potrf, getrf, geqrf, the CTA eigensolvers, stedc and syev built with DPC++ and with AdaptiveCpp: performance and accuracy A/B | n/a; both builds read the same tables and take the same Auto routes |
 
 ## perf index: two rules
 
@@ -138,3 +139,5 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 @subpage perf_tuning "Tuning constants"
 
 @subpage md_docs_2perf_2blackwell "Blackwell (sm_120) retune"
+
+@subpage perf_sycl_implementations "DPC++ vs AdaptiveCpp"

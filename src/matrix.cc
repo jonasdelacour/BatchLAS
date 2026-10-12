@@ -3,8 +3,8 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/kernel-heuristics.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <sycl/sycl.hpp>
-#include <oneapi/dpl/random>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -16,6 +16,7 @@
 #include <vector>    // Include for std::vector used in scan
 #include "queue.hh"
 #include "backends/backend_handle_impl.hh"
+#include "util/philox.hh"
 
 namespace batchlas {
 
@@ -116,16 +117,7 @@ inline T csr_random_make_diagonal(csr_random_real_t<T> value) {
 
 template <typename T>
 inline T csr_random_scalar(std::uint64_t seed, std::uint64_t stream_id) {
-    oneapi::dpl::uniform_real_distribution<csr_random_real_t<T>> dist(csr_random_real_t<T>(-1), csr_random_real_t<T>(1));
-    // Two draws per complex element: stream 2k, so element k's imaginary part is not element k+1's real one.
-    oneapi::dpl::minstd_rand engine(static_cast<std::uint32_t>(seed),
-                                    static_cast<std::uint32_t>(is_std_complex_v<T> ? 2 * stream_id : stream_id));
-    const auto r0 = dist(engine);
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-        return T(r0, dist(engine));
-    } else {
-        return static_cast<T>(r0);
-    }
+    return philox::uniform_symmetric<T>(seed, 0, stream_id);
 }
 
 inline int csr_random_nnz_per_matrix(int n, float density) {
@@ -881,19 +873,8 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
             size_t i = remainder % n;               // row index
             size_t j = remainder / n;               // column index
             
-            oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-            oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * remainder : remainder);
-            T rand_value;
-            if constexpr (std::is_same_v<T, std::complex<float>> || 
-                          std::is_same_v<T, std::complex<double>>) {
-                // For complex numbers, generate both real and imaginary parts
-                auto r1 = dist(engine);
-                auto r2 = dist(engine);
-                rand_value = T(r1, r2);
-            } else {
-                // For real numbers
-                rand_value = dist(engine);
-            }
+            // Keyed on the in-matrix position only: every item gets the same matrix (documented).
+            const T rand_value = philox::uniform_symmetric<T>(seed, 0, remainder);
             if (i == j) {
                 // Diagonal elements
                 data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
@@ -1101,16 +1082,7 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
         // Bounds check
         if (idx >= total_elements) return;
         
-        oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-        oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * idx : idx);  // two draws per complex element
-        auto r1 = dist(engine);
-        if constexpr (std::is_same_v<T, std::complex<float>> ||
-                      std::is_same_v<T, std::complex<double>>) {
-            auto r2 = dist(engine);
-            data_ptr[idx] = T(r1, r2);
-        } else {
-            data_ptr[idx] = T(r1);
-        }
+        data_ptr[idx] = philox::uniform_symmetric<T>(seed, 0, idx);
     });
     
     // If hermitian flag is set, enforce Hermitian property using a kernel
@@ -1165,15 +1137,7 @@ namespace {
 // Uniform [-1, 1) entry (both parts for complex T), a pure function of (seed, flat).
 template <typename T>
 T seeded_uniform(unsigned int seed, std::uint64_t flat) {
-    oneapi::dpl::uniform_real_distribution<float_t<T>> dist(-1.0, 1.0);
-    oneapi::dpl::minstd_rand engine(seed, is_std_complex_v<T> ? 2 * flat : flat);
-    const auto re = dist(engine);
-    if constexpr (is_std_complex_v<T>) {
-        const auto im = dist(engine);
-        return T(re, im);
-    } else {
-        return T(re);
-    }
+    return philox::uniform_symmetric<T>(seed, 0, flat);
 }
 
 template <typename T>
@@ -1258,10 +1222,9 @@ Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int s
             if (lid == 0) {
                 // Sattolo's shuffle: a uniformly random n-cycle, so no row stays in place.
                 for (int i = 0; i < n; ++i) perm[i] = i;
-                oneapi::dpl::uniform_real_distribution<float> unit(0.0f, 1.0f);
-                oneapi::dpl::minstd_rand engine(seed ^ kPermutationSalt, b * N);
                 for (int i = n - 1; i > 0; --i) {
-                    const int j = sycl::min(static_cast<int>(unit(engine) * static_cast<float>(i)), i - 1);
+                    const float u = philox::uniform_unit<float>(seed ^ kPermutationSalt, b, static_cast<std::uint64_t>(i));
+                    const int j = sycl::min(static_cast<int>(u * static_cast<float>(i)), i - 1);
                     const int t = perm[i];
                     perm[i] = perm[j];
                     perm[j] = t;
@@ -1319,7 +1282,7 @@ Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10
                     v[r] = seeded_uniform<T>(seed ^ kReflectorSalt, (b * N + k) * N + r);
                     partial += abs2_of(v[r]);
                 }
-                const R vv = sycl::reduce_over_group(g, partial, sycl::plus<R>());
+                const R vv = portable::reduce_over_group(g, partial, sycl::plus<R>());
                 if (vv == R(0)) continue;
                 const R inv = R(1) / sycl::sqrt(vv);
                 for (std::size_t r = lid; r < N; r += wg) v[r] *= inv;

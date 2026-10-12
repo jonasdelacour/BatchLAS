@@ -46,8 +46,6 @@ numerical surface, plus `Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and 
 - **A clang-based SYCL compiler, clang 16 or newer.** Developed with intel/llvm DPC++ built with
   `--cuda` at `/opt/dpcpp-cuda`; substitute your prefix. Build the library and every consumer with
   the same compiler, or the link fails with undefined references to the constrained entry points.
-- **oneDPL headers**, which DPC++ does not bundle: `-DONEDPL_ROOT=<oneapi-dpl-prefix>`, or
-  `ONEDPL_ROOT` / `DPL_ROOT` in the environment. Configure fails without them.
 - **LAPACKE and CBLAS** for the host backend (`BATCHLAS_ENABLE_NETLIB`, on by default; configure
   warns and builds without it when they are missing).
 - **The CUDA toolkit** whenever the CUDA backend is on, which `AUTO` does as soon as the SYCL
@@ -58,7 +56,6 @@ numerical surface, plus `Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and 
 git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS
 cmake -S . -B build \
       -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ \
-      -DONEDPL_ROOT=<oneapi-dpl-prefix> \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DBATCHLAS_BUILD_TESTS=OFF
 cmake --build build -j"$(nproc)"

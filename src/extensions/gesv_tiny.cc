@@ -21,6 +21,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -95,7 +96,7 @@ struct GesvTinyBody {
     int32_t* info_ptr;
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
-    [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)]]
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
@@ -113,7 +114,7 @@ struct GesvTinyBody {
         const D* const srcB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
 
         D rA[NC];  // top level, never a parameter: tiny_device.hh invariant 1
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int c = 0; c < NC; ++c) {
             rA[c] = tn::tiny_load_pad_identity<D>(srcA, lane, c, n, ldap, live);
         }
@@ -122,7 +123,7 @@ struct GesvTinyBody {
         // stops at nrhs, so no column nobody asked for can manufacture a NaN.
         D rB[NR];
         D rX[NR];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int k = 0; k < NR; ++k) {
             // A BRANCH, not a `?:` over a 16-byte aggregate: LLVM will not build
             // a `select` of one, SROA then declines to promote the array and it
@@ -142,7 +143,7 @@ struct GesvTinyBody {
         int32_t linfo = 0;     // partition-uniform: from the broadcast pivot
 
         // Full unroll needs the TU's raised -pragma-unroll-threshold; see getrf_tiny.cc.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int j = 0; j < NC; ++j) {
             // `continue`, NOT `break`: a break makes the trip count
             // data-dependent, the unroll is declined and rA/rB leave the register
@@ -174,12 +175,12 @@ struct GesvTinyBody {
             if constexpr (Slm) {
                 sp = &slm[((j & 1) * kMpw + pidx) * kRowV];
                 if (lane == static_cast<int>(pl)) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int v = 0; v < kNCV; ++v) {
                         if (v < j / kW) continue;
                         sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
                     }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int v = 0; v < kNRV; ++v) {
                         if (v * kW >= nrhs) continue;
                         sp[kNCV + v] = BATCHLAS_TINY_R4_PACK(D, R, NR, rB, v);
@@ -212,11 +213,11 @@ struct GesvTinyBody {
             // update applied to the RHS with the multiplier step 4 just produced, so
             // L y = P b costs no launch, no reload and no barrier of its own.
             if constexpr (Slm) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int v = 0; v < kNCV; ++v) {
                     if (v < j / kW || v * kW >= n) continue;
                     const R4 x = sp[v];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int e = 0; e < kW; ++e) {
                         const int k = v * kW + e;
                         if (k <= j || k >= NC || k >= n) continue;
@@ -224,11 +225,11 @@ struct GesvTinyBody {
                         if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
                     }
                 }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int v = 0; v < kNRV; ++v) {
                     if (v * kW >= nrhs) continue;
                     const R4 x = sp[kNCV + v];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int e = 0; e < kW; ++e) {
                         const int k = v * kW + e;
                         if (k >= NR || k >= nrhs) continue;
@@ -237,13 +238,13 @@ struct GesvTinyBody {
                     }
                 }
             } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int k = j + 1; k < NC; ++k) {
                     if (k >= n) continue;
                     const D u = tn::tiny_bcast<D>(part, rA[k], pl);
                     if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
                 }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int k = 0; k < NR; ++k) {
                     if (k >= nrhs) continue;   // kernel-uniform
                     const D ub = tn::tiny_bcast<D>(part, rB[k], pl);
@@ -255,7 +256,7 @@ struct GesvTinyBody {
         // --- 6. back substitution, U x = y. `il` is the lane holding row i, read
         // from lane i's `row_lane` with a partition-UNIFORM source, as
         // tiny_device.hh's tiny_bcast contract requires.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = NC - 1; i >= 0; --i) {
             if (i >= n) continue;
 
@@ -267,7 +268,7 @@ struct GesvTinyBody {
             const bool use_mul =
                 !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
                 const D yi = tn::tiny_bcast<D>(part, rB[k], il);
@@ -293,13 +294,13 @@ struct GesvTinyBody {
         if (live && lane < n) {  // not `rowid < n`: equivalent, loop-invariant
             D* const dstA = ap + static_cast<std::ptrdiff_t>(b) * strap;
             D* const dstB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NC; ++k) {
                 if (k >= n) continue;
                 dstA[static_cast<std::ptrdiff_t>(rowid) +
                      static_cast<std::ptrdiff_t>(k) * ldap] = rA[k];
             }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;
                 dstB[static_cast<std::ptrdiff_t>(rowid) +

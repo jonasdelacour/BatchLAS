@@ -11,6 +11,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/util/mempool.hh>
 
@@ -155,7 +156,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
@@ -251,7 +252,7 @@ Event getrf_panel_global_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 gn::LuGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
                 // Always WorkGroup: the global leaf's panel is a full column block,

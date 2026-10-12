@@ -9,6 +9,7 @@
 
 #include "../queue.hh"
 #include "device_scalar.hh"
+#include "kernel_attrs.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -96,7 +97,7 @@ Event trsm_native_sg_left(Queue& ctx,
         h.parallel_for<TrsmSgLeftKernel<T, N, QC>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(nwg) * kSgPerWg * kSg),
                               sycl::range<1>(kSgPerWg * kSg)),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int64_t gsg = static_cast<int64_t>(it.get_group_linear_id()) * kSgPerWg +
                                     static_cast<int64_t>(sg.get_group_linear_id());
@@ -115,7 +116,7 @@ Event trsm_native_sg_left(Queue& ctx,
 
                 // nL[t] = -Lc(r,t) for t < r, else 0; pad rows are identity rows.
                 D nL[N];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int t = 0; t < N; ++t) {
                     D v{};
                     if (okr && t < r) {
@@ -135,7 +136,7 @@ Event trsm_native_sg_left(Queue& ctx,
                 // V1's fallback, per matrix: any non-finite reciprocal in this
                 // matrix's N lanes switches all of them to division.
                 int bad = sycl_device::dev_isfinite(rinv) ? 0 : 1;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int off = N / 2; off > 0; off /= 2) {
                     bad |= sycl::permute_group_by_xor(sg, bad, off);
                 }
@@ -143,7 +144,7 @@ Event trsm_native_sg_left(Queue& ctx,
 
                 const int c0 = chunk * QC;
                 D x[QC];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < QC; ++j) {
                     D v{};
                     if (okr && c0 + j < q) {
@@ -164,25 +165,25 @@ Event trsm_native_sg_left(Queue& ctx,
                     }
                     if (r == s && !unit) {
                         if (any_divide) [[unlikely]] {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < QC; ++j) {
                                 x[j] = divide ? sycl_device::dev_div(x[j], dd)
                                               : sycl_device::dev_mul(x[j], rinv);
                             }
                         } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < QC; ++j) x[j] = sycl_device::dev_mul(x[j], rinv);
                         }
                     }
                     const D l = nL[s];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < QC; ++j) {
                         const D xs = sg_bcast(sg, x[j], base + s);
                         sycl_device::fma_acc(x[j], l, xs);
                     }
                 }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int j = 0; j < QC; ++j) {
                     if (okr && c0 + j < q) Bb[rs + (c0 + j) * ldb] = x[j];
                 }

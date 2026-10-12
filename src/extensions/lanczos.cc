@@ -4,11 +4,12 @@
 #include "../util/template-instantiations.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../queue.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include <oneapi/dpl/random>
+#include "../util/philox.hh"
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../sort.hh"
@@ -80,16 +81,14 @@ namespace batchlas {
                     auto bdim = item.get_local_range()[0];
                     auto cta = item.get_group();
                     
-                    oneapi::dpl::uniform_real_distribution<typename base_type<T>::type> distr(0.0, 1.0);            
-                    oneapi::dpl::minstd_rand engine(42, tid);
-
                     auto localV = Vmem.subspan(bid*(n+1)*n, n);
 
+                    // Same start vector for every item: keyed on the row only.
                     for (int i = tid; i < n; i += bdim) {
-                        localV[i] = distr(engine); //Random initialization of the first Ritz vector
+                        localV[i] = philox::uniform_unit<typename base_type<T>::type>(42, 0, static_cast<std::uint64_t>(i));
                         reduce_mem[i] = localV[i] * localV[i];
                     }
-                    auto norm = sycl::sqrt(real_part(sycl::joint_reduce(cta, reduce_mem.begin(), reduce_mem.end(), T(0), sycl::plus<T>())));
+                    auto norm = sycl::sqrt(real_part(batchlas::portable::joint_reduce(cta, &reduce_mem[0], &reduce_mem[0] + reduce_mem.size(), T(0), sycl::plus<T>())));
                     for (int i = tid; i < n; i += bdim) {
                         localV[i] /= norm; //Normalize the Ritz vector
                     }
@@ -138,7 +137,7 @@ namespace batchlas {
                         for (int i = tid; i < n; i += wg) {
                             dot_mem[i] = local_v_current[i] * local_v_next[i];
                         }
-                        auto alpha = sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.end(), T(0), sycl::plus<T>());
+                        auto alpha = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>());
                         localAlphas[it] = alpha;
                         if (it > 0) {
                             for (int i = tid; i < n; i += wg) {
@@ -152,7 +151,7 @@ namespace batchlas {
                         for (int i = tid; i < n; i += wg) {
                             dot_mem[i] = local_v_next[i] * local_v_next[i];
                         }
-                        auto beta = sycl::sqrt(real_part(sycl::joint_reduce(cta, dot_mem.begin(), dot_mem.end(), T(0), sycl::plus<T>())));
+                        auto beta = sycl::sqrt(real_part(batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>())));
                         localBetas[it] = beta;
                         
                         if( it < iterations - 1) {

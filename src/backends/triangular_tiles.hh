@@ -8,6 +8,7 @@
 #include <complex>
 #include <type_traits>
 #include <sycl/sycl.hpp>
+#include "../sycl/kernel_attrs.hh"
 
 namespace batchlas::backend::detail {
 
@@ -68,7 +69,7 @@ inline void tile_store4(T* p, const TileVec4<T>& in) {
     if constexpr (sizeof(T) == sizeof(float)) {
         tile_vec4(p) = in;
     } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = 0; i < 4; ++i) {
             p[i] = in.v[i];
         }
@@ -84,7 +85,7 @@ inline TileVec4<T> tile_load4(const T* p) {
         return tile_vec4(p);
     } else {
         TileVec4<T> out;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = 0; i < 4; ++i) {
             out.v[i] = p[i];
         }

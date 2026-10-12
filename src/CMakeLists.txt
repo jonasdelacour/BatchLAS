@@ -67,12 +67,15 @@ set_target_properties(
 
 # The tiny tiers fully unroll an n x n step; above LLVM's default pragma threshold the
 # unroll is declined and rA[] leaves the register file. evidence: docs/perf/lu.md#the-column-bucket
-set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/getrf_tiny.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/gesv_tiny.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/posv_tiny.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/sycl/trsm_sg_left.cc
-    PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
+# DPC++ only: the acpp JIT never sees stage-1 -mllvm options (BATCHLAS_UNROLL_FULL covers it).
+if(NOT BATCHLAS_SYCL_IMPL_ACPP)
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/getrf_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/gesv_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/posv_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/sycl/trsm_sg_left.cc
+        PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
+endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})
     if(_obj STREQUAL "batchlas_extensions_cta_obj")
@@ -446,6 +449,18 @@ if(TARGET batchlas_backends_cuda_obj)
     # libbatchlas_backends_cuda.so already records DT_NEEDED on libcudart.so.13
     # et al, and no public header includes a CUDA header.
     target_link_libraries(${_batchlas_backends_cuda_lib} PRIVATE ${BATCHLAS_CUDA_LINK_LIBRARIES})
+endif()
+
+if(BATCHLAS_ACPP_SLM_OPTIN)
+    # Every component DT_NEEDs it (via batchlas_dep_options), so it precedes libcuda.so.1 in
+    # the global lookup scope that acpp's dlopen'ed CUDA backend resolves cuLaunchKernel in.
+    find_package(CUDAToolkit REQUIRED)
+    add_library(batchlas_acpp_slm_optin SHARED sycl/acpp_slm_optin.cc)
+    target_link_libraries(batchlas_acpp_slm_optin PRIVATE CUDA::cuda_driver ${CMAKE_DL_LIBS})
+    set_target_properties(batchlas_acpp_slm_optin PROPERTIES
+        VERSION "${PROJECT_VERSION}" SOVERSION "${PROJECT_VERSION_MAJOR}")
+    target_link_libraries(batchlas_dep_options INTERFACE batchlas_acpp_slm_optin)
+    install(TARGETS batchlas_acpp_slm_optin LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endif()
 
 if(BATCHLAS_HAS_ROCM_BACKEND)

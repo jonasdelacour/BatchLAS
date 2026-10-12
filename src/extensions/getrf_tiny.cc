@@ -15,6 +15,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -85,7 +86,7 @@ struct GetrfTinyBody {
     int32_t* info_ptr;
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
-    [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)]]
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
@@ -102,7 +103,7 @@ struct GetrfTinyBody {
         const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
 
         D rA[NC];  // top level, never a parameter: tiny_device.hh invariant 1
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int c = 0; c < NC; ++c) {
             rA[c] = tn::tiny_load_pad_identity<D>(src, lane, c, n, ldp, live);
         }
@@ -114,7 +115,7 @@ struct GetrfTinyBody {
         // The unroll is FULL only under the TU's raised -pragma-unroll-threshold
         // (src/CMakeLists.txt): above LLVM's default it is declined silently and rA[]
         // lands on the stack with zero spill. evidence: docs/perf/lu.md#the-column-bucket
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int j = 0; j < NC; ++j) {
             // `continue`, NOT `break`. A break makes the trip count data-dependent,
             // the toolchain declines the unroll, rA becomes dynamically indexed and
@@ -149,7 +150,7 @@ struct GetrfTinyBody {
             if constexpr (Slm) {
                 sp = &slm[((j & 1) * kMpw + pidx) * kNCV];
                 if (lane == static_cast<int>(pl)) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int v = 0; v < kNCV; ++v) {
                         if (v < j / kW) continue;
                         sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
@@ -184,11 +185,11 @@ struct GetrfTinyBody {
             // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled.
             // evidence: docs/perf/lu.md#why-the-rank-1-update-starts-at-k--j--1
             if constexpr (Slm) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int v = 0; v < kNCV; ++v) {
                     if (v < j / kW || v * kW >= n) continue;
                     const R4 x = sp[v];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int e = 0; e < kW; ++e) {
                         const int k = v * kW + e;
                         if (k <= j || k >= NC || k >= n) continue;
@@ -197,7 +198,7 @@ struct GetrfTinyBody {
                     }
                 }
             } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int k = j + 1; k < NC; ++k) {
                     if (k >= n) continue;      // kernel-uniform, as above
                     const D u = tn::tiny_bcast<D>(part, rA[k], pl);
@@ -208,7 +209,7 @@ struct GetrfTinyBody {
 
         if (live) {
             D* const dst = ap + static_cast<std::ptrdiff_t>(b) * strp;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NC; ++k) {
                 if (k >= n) continue;
                 if (lane < n) {  // not `rowid < n`: equivalent, and loop-invariant

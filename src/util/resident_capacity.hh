@@ -102,4 +102,14 @@ constexpr bool sm89_fits(int regs_per_thread, int work_group_size) {
     return per_partition * kLanesPerWarp * sm89_alloc_regs(regs_per_thread) <= kRegsPerPartition;
 }
 
+// A CTA work-group multiplier clamped to local memory in whole steps of probs_per_step problems
+// (lcm(P, 32) lanes); 0 when one step does not fit. evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
+constexpr int cta_fit_wg_multiplier(int requested, int probs_per_step, std::size_t bytes_per_prob,
+                                    std::size_t local_mem_bytes) {
+    const std::size_t step = static_cast<std::size_t>(probs_per_step > 0 ? probs_per_step : 1) * bytes_per_prob;
+    if (step == 0) return requested;
+    const std::size_t fit = local_mem_bytes / step;
+    return fit < static_cast<std::size_t>(requested) ? static_cast<int>(fit) : requested;
+}
+
 }  // namespace batchlas::resident

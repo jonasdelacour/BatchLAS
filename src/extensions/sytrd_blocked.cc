@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <batchlas/util/group-collectives.hh>
 #include "../select/vendor.hh"
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
@@ -132,11 +133,11 @@ template <typename T>
 inline T reduce_sum_group(const sycl::group<1>& g, T x) {
     if constexpr (internal::is_complex<T>::value) {
         using R = typename T::value_type;
-        const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
+        const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
+        const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
         return T(re, im);
     } else {
-        return sycl::reduce_over_group(g, x, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
     }
 }
 
@@ -144,7 +145,7 @@ template <typename T>
 inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
                                                         typename base_type<T>::type x) {
     using R = typename base_type<T>::type;
-    return sycl::reduce_over_group(g, x, sycl::plus<R>());
+    return batchlas::portable::reduce_over_group(g, x, sycl::plus<R>());
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +344,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     if (lane == alpha_row) {
                         alpha = Al(alpha_row, k);
                     }
-                    alpha = sycl::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
+                    alpha = batchlas::portable::group_broadcast(g, alpha, sycl::id<1>(alpha_row));
 
                     T tau_k = T(0);
                     T beta = alpha;
@@ -381,8 +382,8 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                         Al(alpha_row, k) = T(1);
                     }
 
-                    tau_k = sycl::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
-                    scale = sycl::group_broadcast(g, scale, sycl::id<1>(alpha_row));
+                    tau_k = batchlas::portable::group_broadcast(g, tau_k, sycl::id<1>(alpha_row));
+                    scale = batchlas::portable::group_broadcast(g, scale, sycl::id<1>(alpha_row));
 
                     if (tau_k != T(0)) {
                         if (lane >= x0 && lane < n) {

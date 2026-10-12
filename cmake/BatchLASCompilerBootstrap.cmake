@@ -10,6 +10,18 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         message(STATUS "BatchLAS is a subproject: leaving CMAKE_CXX_COMPILER to the parent project. "
                        "BatchLAS needs a SYCL compiler (e.g. DPC++/icpx); set CMAKE_CXX_COMPILER accordingly.")
     endif()
+elseif(NOT DEFINED CMAKE_CXX_COMPILER AND
+       (BATCHLAS_SYCL_IMPL MATCHES "^[Aa][Cc][Pp][Pp]$" OR "$ENV{CXX}" MATCHES "(^|/)(acpp|syclcc|syclcc-clang)$"))
+    # AdaptiveCpp: never fall through to the sycl-ls search below, which picks a DPC++ clang++.
+    if("$ENV{CXX}" STREQUAL "")
+        find_program(BATCHLAS_ACPP_COMPILER acpp)
+        if(BATCHLAS_ACPP_COMPILER)
+            message(STATUS "Auto-detected AdaptiveCpp driver: ${BATCHLAS_ACPP_COMPILER}")
+            set(CMAKE_CXX_COMPILER "${BATCHLAS_ACPP_COMPILER}" CACHE FILEPATH "C++ compiler" FORCE)
+        else()
+            message(WARNING "BATCHLAS_SYCL_IMPL=ACPP but no acpp on PATH; set -DCMAKE_CXX_COMPILER=<prefix>/bin/acpp.")
+        endif()
+    endif()
 elseif(NOT DEFINED CMAKE_CXX_COMPILER)
     find_program(SYCL_LS sycl-ls)
     if(SYCL_LS)

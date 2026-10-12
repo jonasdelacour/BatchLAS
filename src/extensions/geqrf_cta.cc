@@ -11,6 +11,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/util/mempool.hh>
 
@@ -128,7 +129,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
 
@@ -209,7 +210,7 @@ Event geqrf_panel_global_launch(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 gn::GeqrfGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
@@ -266,7 +267,7 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                 sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                                  static_cast<std::size_t>(wg)),
                                   sycl::range<1>(static_cast<std::size_t>(wg))),
-                [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+                [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                     const int b = static_cast<int>(it.get_group_linear_id());
                     gn::geqr2_panel_reg_device<D, N, R>(
                         it, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,

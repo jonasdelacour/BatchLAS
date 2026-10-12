@@ -14,6 +14,7 @@
 // itself, and a getenv here would tie geqrf's kernel choice to ormqr's variable.
 
 #include <batchlas/blas/device.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
 
 #include "../math-helpers.hh"
@@ -64,11 +65,11 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
     auto reduce_sum = [](const sycl::group<1>& g, T x) {
         if constexpr (batchlas::internal::is_complex<T>::value) {
             using R = typename T::value_type;
-            const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
+            const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
+            const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
             return T(re, im);
         } else {
-            return sycl::reduce_over_group(g, x, sycl::plus<T>());
+            return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
         }
     };
 

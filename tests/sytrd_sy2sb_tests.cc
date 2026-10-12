@@ -32,7 +32,7 @@ Matrix<Real, MatrixFormat::Dense> band_to_dense(const MatrixView<Real, MatrixFor
     return D;
 }
 
-template <typename Real, Backend B = test_utils::gpu_backend>
+template <typename Real, Backend B>
 void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
                                        const MatrixView<Real, MatrixFormat::Dense>& A_sy2sb,
                                        const VectorView<Real>& tau,

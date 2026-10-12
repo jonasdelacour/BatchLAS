@@ -342,8 +342,11 @@ extracted once, and the apply is one in-place kernel over R. `DISABLED_Iteration
   against X annihilates the new direction. It measured 0.85x to 1.2x on random symmetric input and 0.2x to 0.9x on
   graded input. It is kept only as the one Jacobi form legal for `find_largest`.
 - Neither is selected by `Auto`. On a constant diagonal `JacobiShifted` is a per-column scalar, and LOBPCG is
-  invariant to that, so its counts equal the unpreconditioned ones. `SyevxJacobiIterations.ShiftedIsANoOpOnConstantDiagonal`
-  checks that the shift tracks the right Ritz value; it must run without soft locking.
+  invariant to that, so its counts equal the unpreconditioned ones up to rounding. Float, n=128, 200 start
+  seeds: shifted minus plain was 0 in 369 of 400 runs and at most 3 with a check every iteration; at the
+  default check interval of 4 it was 0 or ±4. `SyevxJacobiIterations.ShiftedIsANoOpOnConstantDiagonal` allows
+  one interval. It catches a shift that is not a per-column scalar (indexed by row: 200 iterations, the cap)
+  but not a swapped Ritz index, which is still a per-column scalar. It must run without soft locking.
 - The Chebyshev "preconditioner" (a low-degree \f$p(A)\f$ applied to R) is not attempted.
 
 ### LOBPCG: the projected syev provider

@@ -12,6 +12,8 @@
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "info_span.hh"
+#include "../sycl/kernel_attrs.hh"
+#include "../sycl/local_mem.hh"
 #include <algorithm>
 #include <complex>
 #include <limits>
@@ -164,8 +166,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
         static_assert(kChunks * kGramChunk == kRotSlots, "round must split evenly into Gram chunks");
         constexpr bool kNeedPhase = internal::is_complex<T>::value;
 
-        // Clamp probs_per_wg DIRECTLY, not the multiplier as syev_jacobi_cta
-        // does: that under-counts by 32/P, a launch failure with two tiles.
+        // Clamp probs_per_wg DIRECTLY, not a multiplier: a clamp in problems
+        // under-counts it by 32/P, a launch failure with two tiles.
         // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
         const int32_t probs_per_warp = sg_size / static_cast<int32_t>(P);
         constexpr size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
@@ -176,7 +178,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
             + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
             + C * sizeof(int16_t);
 
-        const size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
+        const size_t local_mem_bytes = impl::local_mem_bytes(dev);
         const size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
         const int32_t max_probs = std::max<int32_t>(
             int32_t(1), static_cast<int32_t>(avail / std::max<size_t>(size_t(1), bytes_per_prob)));
@@ -193,6 +195,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         const int32_t probs_per_wg = pw;
         const int32_t wg_size = pw * static_cast<int32_t>(P);
+        if (static_cast<size_t>(pw) * bytes_per_prob + kPairTabBytes > local_mem_bytes) {
+            throw batchlas::unsupported("gesvdj_cta: one work-group needs " +
+                                        std::to_string(static_cast<size_t>(pw) * bytes_per_prob + kPairTabBytes) +
+                                        " B of local memory; the device launches " + std::to_string(local_mem_bytes));
+        }
         const int32_t nb = static_cast<int32_t>(batch_size);
         const int32_t num_wg = (nb + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
@@ -242,7 +249,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
         cgh.parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
@@ -316,23 +323,23 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     for (int32_t h = 0; h < static_cast<int32_t>(kRPL); ++h) {
                         const int32_t col0 = h * static_cast<int32_t>(P);
                         Real x[P];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                             Real acc = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 acc += norm2_g(A_local[base_a + lane + rr * static_cast<int32_t>(P)
                                                        + (col0 + c) * LD]);
                             }
                             x[c] = acc;
                         }
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t step = 0; step < 5; ++step) {
                             const uint32_t mask = static_cast<uint32_t>(P) >> (step + 1);
                             if (mask == 0u) break;
                             const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
                             const int32_t half = static_cast<int32_t>(mask);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t j = 0; j < half; ++j) {
                                 const Real own = hi ? x[j + half] : x[j];
                                 const Real send = hi ? x[j] : x[j + half];
@@ -416,7 +423,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         T aq[kGramChunk][kRPL];
                         T g[kGramChunk];
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
                             const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + k]);
                             pk[k] = pq & 0xFF;
@@ -426,7 +433,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             const int32_t iq = ok ? qk[k] : 0;
                             // conj(A_p)*A_q over this lane's rows, then across lanes.
                             T acc = T(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 const int32_t row = lane + rr * static_cast<int32_t>(P);
                                 ap[k][rr] = A_local[base_a + row + ip * LD];
@@ -439,14 +446,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32.
                         // Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t step = 0; step < 4; ++step) {
                             const uint32_t mask = static_cast<uint32_t>(kGramChunk) >> step;
                             if (mask == 0u) break;
                             const bool hi = (static_cast<uint32_t>(lane) & mask) != 0u;
                             const int32_t half = static_cast<int32_t>(mask) / 2;
                             if (half == 0) break;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t j = 0; j < half; ++j) {
                                 const T own = hi ? g[j + half] : g[j];
                                 const T send = hi ? g[j] : g[j + half];
@@ -537,7 +544,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
                         // ---- A <- A*U, V <- V*U, reusing ap/aq from the Gram.
                         // Deliberately no A <- U^H A phase: that is two-sided.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
                             const sycl::vec<Real, 2> cs =
                                 Rcs_local[base_r + ch * static_cast<int32_t>(kGramChunk) + k];
@@ -556,7 +563,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 u22 = dk * T(ck);
                             }
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                 const int32_t row = lane + rr * static_cast<int32_t>(P);
                                 A_local[base_a + row + pk[k] * LD] = ap[k][rr] * u11 + aq[k][rr] * u21;
@@ -693,7 +700,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             while (jcur < RR && !filled) {
                                 const int32_t j = jcur++;
                                 T v[kRPL];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                                     v[rr] = (row == j) ? T(1) : T(0);
@@ -705,21 +712,21 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                         const int32_t c2 = static_cast<int32_t>(Inv_local[base_p + d2]);
                                         T part_dot = T(0);
                                         T qv[kRPL];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                             const int32_t row = lane + rr * static_cast<int32_t>(P);
                                             qv[rr] = (row < RR) ? A_local[base_a + row + c2 * LD] : T(0);
                                             part_dot = part_dot + conj_if_complex_g(qv[rr]) * v[rr];
                                         }
                                         const T dot = part_sum_g(part, part_dot);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                             v[rr] = v[rr] - qv[rr] * dot;
                                         }
                                     }
                                 }
                                 Real part_n2 = Real(0);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                                     if (row < RR) part_n2 += norm2_g(v[rr]);
@@ -727,7 +734,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 const Real nrm2 = part_sum_g(part, part_n2);
                                 if (nrm2 > accept_tol) {
                                     const Real inv_nr = Real(1) / sycl::sqrt(nrm2);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                         const int32_t row = lane + rr * static_cast<int32_t>(P);
                                         A_local[base_a + row + cdst * LD] = v[rr] * T(inv_nr);
@@ -794,15 +801,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
     });
 }
 
-// Largest max(m, n) this kernel accepts, per scalar type. Local memory sets it,
-// and occupancy rather than the hard cap binds: complex<double> with a V tile
-// does not launch at C=64, and values-only (no V tile) halves the budget, so the
-// cap is job-dependent. The values live in gesvd_native.hh so gesvd's can_run
-// states the same ceiling.
+// Largest max(m, n) this kernel accepts on ctx's device: the device's local memory budget
+// sets it, and it is job-dependent (values-only drops the V tile). gesvd_native.hh holds the
+// formula so gesvd's can_run states the same ceiling.
 // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
 template <typename T>
-constexpr int32_t gesvdj_cta_max_dim(bool want_vectors) {
-    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors));
+int32_t gesvdj_cta_max_dim(Queue& ctx, bool want_vectors) {
+    const std::size_t budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device()));
+    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors, budget));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {
@@ -872,7 +878,7 @@ Event gesvdj_cta(Queue& ctx,
         jobu = canonical_jobu(jobu, m, k);
         jobvh = canonical_jobvh(jobvh, n, k);
     }
-    if (std::max(m, n) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(m, n) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta: max(m, n) exceeds the supported cap for this scalar type "
             "(see gesvdj_cta_max_dim)");
@@ -954,10 +960,9 @@ size_t gesvdj_cta_buffer_size(Queue& ctx,
                               SvdVectors jobu,
                               SvdVectors jobvh,
                               GesvdjParams<T> params) {
-    (void)ctx;
     (void)params;
     validate_gesvdj_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta_buffer_size");
-    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta_buffer_size: max(m, n) exceeds the supported cap for this scalar type");
     }

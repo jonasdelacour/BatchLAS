@@ -10,6 +10,7 @@
 #include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include "../math-helpers.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <array>
 #include <cstdint>
@@ -258,7 +259,7 @@ namespace batchlas {
     // lane active, no local memory or barriers (boundary searches run once per sweep).
     template <size_t P, typename Partition>
     inline int32_t partition_reduce_min(const Partition& partition, int32_t value) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t mask = 1u; mask < static_cast<uint32_t>(P); mask <<= 1) {
             const int32_t other = permute_group_by_xor(partition, value, mask);
             value = (other < value) ? other : value;
@@ -268,7 +269,7 @@ namespace batchlas {
 
     template <size_t P, typename Partition>
     inline int32_t partition_reduce_max(const Partition& partition, int32_t value) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t mask = 1u; mask < static_cast<uint32_t>(P); mask <<= 1) {
             const int32_t other = permute_group_by_xor(partition, value, mask);
             value = (other > value) ? other : value;
@@ -278,7 +279,7 @@ namespace batchlas {
 
     template <size_t P, typename T, typename Partition>
     inline T partition_reduce_fmax(const Partition& partition, T value) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t mask = 1u; mask < static_cast<uint32_t>(P); mask <<= 1) {
             value = sycl::fmax(value, permute_group_by_xor(partition, value, mask));
         }

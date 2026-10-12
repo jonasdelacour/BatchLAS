@@ -173,7 +173,9 @@ static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
+#if BATCHLAS_HAS_CUSOLVER  // the vendor row needs the library, not just the CUDA backend
 BATCHLAS_BENCH_CUDA(BM_GESVD_CUSOLVER_JACOBI, GesvdVendorBenchSizes)
+#endif
 BATCHLAS_BENCH_CUDA(BM_GESVD_BATCHLAS_CTA, GesvdVendorBenchSizes)
 BATCHLAS_BENCH_CUDA(BM_GESVD_BATCHLAS_JACOBI, GesvdVendorBenchSizes)
 

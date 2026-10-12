@@ -16,6 +16,7 @@
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
+#include "../sycl/kernel_attrs.hh"
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -90,7 +91,7 @@ struct PosvTinyBody {
     int32_t* info_ptr;
     sycl::local_accessor<R4, 1> slm;   // 2 phases x 2 parities x Mpw; one element when !Slm
 
-    [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)]]
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
@@ -120,7 +121,7 @@ struct PosvTinyBody {
 
         D rB[NR];   // b, then y
         D rX[NR];   // y on the pivot lane, then x
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int k = 0; k < NR; ++k) {
             // A BRANCH, not a `?:` over a 16-byte aggregate; see tiny_device.hh.
             D v = D{};
@@ -139,7 +140,7 @@ struct PosvTinyBody {
         // `break`: a runtime break defeats the unroll at N >= 16, after which rA[j] is a
         // dynamic index. Skipping the collectives is legal only because n is
         // kernel-uniform (the entry point rejects a heterogeneous batch).
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int j = 0; j < NC; ++j) {
             if (j >= n) continue;
             const bool col_live = (j < n);
@@ -175,12 +176,12 @@ struct PosvTinyBody {
                     rp[lane] = rA[j];
                 }
                 sycl::group_barrier(sg);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int v = 0; v < kNV; ++v) {
                     if ((v + 1) * kW <= j + 1) continue;
                     if (v * kW >= n || v * kW >= NC) continue;
                     const R4 x = sp[v];
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int e = 0; e < kW; ++e) {
                         const int k = v * kW + e;
                         if (k <= j || k >= NC || k >= n) continue;
@@ -190,7 +191,7 @@ struct PosvTinyBody {
                     }
                 }
             } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int k = j + 1; k < NC; ++k) {
                     if (k >= n) continue;
                     const D vk = tn::tiny_bcast<D>(part, rA[j], static_cast<uint32_t>(k));
@@ -205,14 +206,14 @@ struct PosvTinyBody {
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,
         // so the only cross-lane traffic is the pivot row's own values.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = 0; i < NC; ++i) {
             if (i >= n) continue;
             const D lii = tn::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
             const bool zero = sd::dev_is_zero(lii);
             const D rc = sd::dev_recip(lii);
             const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
                 const D bi = tn::tiny_bcast<D>(part, rB[k], static_cast<uint32_t>(i));
@@ -236,7 +237,7 @@ struct PosvTinyBody {
 
         // --- 3. backward solve L^H x = y. rX now holds y on lane i; rB is reused
         // for x. The transpose read is the header's subject.
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (int i = NC - 1; i >= 0; --i) {
             if (i >= n) continue;
 
@@ -246,7 +247,7 @@ struct PosvTinyBody {
             if constexpr (Slm) {
                 R4* const sp = &slm[((2 + (i & 1)) * kMpw + pidx) * kNV];
                 if (lane == i) {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                     for (int v = 0; v < kNV; ++v) {
                         if (v * kW >= i) continue;
                         sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
@@ -262,7 +263,7 @@ struct PosvTinyBody {
                     }
                 }
             } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
                 for (int c = 0; c < NC; ++c) {
                     if (c >= i) continue;   // compile-time once both loops are unrolled
                     const D v = tn::tiny_bcast<D>(part, rA[c], static_cast<uint32_t>(i));
@@ -276,7 +277,7 @@ struct PosvTinyBody {
             const D rc = sd::dev_recip(dii);
             const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
 
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
                 const D yi = tn::tiny_bcast<D>(part, rX[k], static_cast<uint32_t>(i));
@@ -303,7 +304,7 @@ struct PosvTinyBody {
 
         if (row_live) {
             D* const dstB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;
                 // No permutation: x_i is the i-th unknown and lane i holds it.

@@ -41,6 +41,10 @@ class DeviceBlasMatrixKernel;
 template <typename Tag>
 class DeviceBlasMatrixTileKernel;
 
+// The workspace launch of each launcher; one name per lambda.
+template <typename KernelName>
+class WithWorkspace;
+
 constexpr device::DeviceBlasPolicy kPolicy = static_cast<device::DeviceBlasPolicy>(DEVICE_BLAS_POLICY);
 constexpr Transpose kRank2kTrans = static_cast<Transpose>(DEVICE_BLAS_MATRIX_TRANS);
 
@@ -118,7 +122,7 @@ void launch_batched_matrix_kernel_with_workspace(Queue& queue,
         }
 
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
-        h.parallel_for<KernelName>(
+        h.parallel_for<WithWorkspace<KernelName>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size), sycl::range<1>(local_size)),
             [=](sycl::nd_item<1> item) {
                 kernel_fn(item, static_cast<int>(item.get_group(0)), batchlas::util::get_raw_ptr(workspace));
@@ -153,7 +157,7 @@ void launch_batched_matrix_tile_kernel_with_workspace(Queue& queue,
         }
 
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(workspace_elements), h);
-        h.parallel_for<KernelName>(
+        h.parallel_for<WithWorkspace<KernelName>>(
             sycl::nd_range<3>(sycl::range<3>(static_cast<std::size_t>(batch), group_rows * local_rows, group_cols * local_cols),
                               sycl::range<3>(1, local_rows, local_cols)),
             [=](sycl::nd_item<3> item) {
@@ -352,8 +356,8 @@ MINI_BENCHMARK(device_blas_matrix_benchmark) {
                     [](Queue& queue, auto xvec, auto yvec, auto a) {
                         const auto a_view = a.kernel_view();
                         const std::size_t local_size = device_blas_rank_update_local_size(queue);
-                        launch_batched_matrix_kernel<DeviceBlasMatrixKernel<std::integral_constant<int, 400 + DEVICE_BLAS_POLICY>>>(
-                            queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
+                        launch_batched_matrix_kernel_with_workspace<float, DeviceBlasMatrixKernel<std::integral_constant<int, 400 + DEVICE_BLAS_POLICY>>>(
+                            queue, a.batch_size(), local_size, 0, [=](sycl::nd_item<1> item, int bid, float*) {
                                 batchlas::device::ger<kPolicy>(item.get_group(),
                                                        xvec.batch_item(bid),
                                                        yvec.batch_item(bid),

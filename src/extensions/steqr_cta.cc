@@ -15,6 +15,7 @@
 #include "../sort.hh"
 #include "steqr_cta_device.hh"
 #include "info_span.hh"
+#include "../sycl/kernel_attrs.hh"
 #include <array>
 #include <numeric>
 #include <type_traits>
@@ -83,7 +84,7 @@ namespace batchlas {
                 sycl::range<1>(ComputeVecs ? (probs_per_wg * P * P) : 1), cgh);
             cgh.parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(
                 sycl::nd_range<1>(global_size, wg_size),
-                [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(sg_size)]] {
+                [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(sg_size) {
                     const auto wg = it.get_group();
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 

@@ -1,4 +1,5 @@
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
@@ -104,7 +105,7 @@ void stedc_merge_fused(Queue& ctx,
                             partial *= ratio;
                         }
 
-                        T valf = sycl::reduce_over_group(cta, partial, sycl::multiplies<T>());
+                        T valf = batchlas::portable::reduce_over_group(cta, partial, sycl::multiplies<T>());
                         if (tid == 0) {
                             T mag = std::sqrt(std::fabs(valf));
                             T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);

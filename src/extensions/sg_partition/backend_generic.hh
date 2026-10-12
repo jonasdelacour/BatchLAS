@@ -1,11 +1,13 @@
 #pragma once
-// Generic backend: plain sycl::sub_group collectives (host pass, Native CPU).
+// Generic backend: plain sycl::sub_group collectives (host pass, Native CPU, non-PTX acpp JIT).
 // Those are defined only for a converged sub-group, so a diverging Masked
 // partition here relies on SIMD hardware tolerating it.
 
 #include <sycl/sycl.hpp>
 
 #include <cstdint>
+
+#include <batchlas/backend_config.h>
 
 namespace batchlas::sgp {
 
@@ -20,6 +22,9 @@ struct GenericBackend {
 
     // mask < P, so lane ^ mask stays in the chunk.
     static uint32_t shfl_xor(const sycl::sub_group& sg, uint32_t, uint32_t v, uint32_t mask) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (mask == 0u) return v;  // acpp 25.10 CPU gives 0 for xor 0 (sscp/host/shuffle.cpp:35)
+#endif
         return sycl::permute_group_by_xor(sg, v, mask);
     }
 

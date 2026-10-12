@@ -19,6 +19,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/extensions/gesvd_native.hh"
+#include "../src/util/resident_capacity.hh"
 #include "../src/ops/gesvd/choice.hh"
 
 #include <algorithm>
@@ -222,6 +223,9 @@ std::optional<Uplo> uplo_of(char h) {
     return std::nullopt;
 }
 
+// The device's resident::device_slm_budget (set by the fixture): gesvdj_cta's cap reads it.
+std::size_t g_slm_budget = 0;
+
 template <typename Config>
 class GesvdCandidates : public test_utils::BatchLASTest<Config> {
 protected:
@@ -237,6 +241,7 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
+        g_slm_budget = resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
     }
 
     // ---- the limit oracle: the drivers' own ceilings and checks, not gesvd.cc's can_run ----
@@ -248,7 +253,7 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         const int md = std::max(s.m, s.n);
         if (std::holds_alternative<gs::Jacobi>(c))
-            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s));
+            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
         if (std::holds_alternative<gs::Cta>(c))
             return md <= sycl_gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
         if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' ? kReal : (s.m == s.n && s.herm == 'L');
@@ -733,8 +738,11 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
         if (want != "vendor") expect_solved(p, "auto " + label(s));
     }
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
-    auto big = make_svd<T>(Spec{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None});
-    EXPECT_TRUE(this->pin_accepted(C{gs::Jacobi{}}, big));
+    const Spec big_s{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None};
+    auto big = make_svd<T>(big_s);
+    const bool fits = 64 <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
+    EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), fits);
+    if (!test_utils::kSlmCappedAt48KiB) EXPECT_TRUE(fits);
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with herm,
