@@ -267,7 +267,7 @@ The reasons behind the tile kernels' shapes. The headers keep the invariants and
 
 `src/backends/trmm_triangular_tiles.hh`.
 
-- **The triangle was never exploited before.** `src/extensions/trmm.cc` recursed to a 256-wide block and then
+- **The triangle was never exploited before.** The generic `src/extensions/trmm.cc` (deleted) recursed to a 256-wide block and then
   called the GEMM it was meant to replace. On CUDA the `expand` family (now second on every Left row) ran a full GEMM.
 - **A loop bound, not a mask.** For `C = alpha*op(A)*B` with op(A) upper triangular, output row i touches only
   p >= i, so an output tile rooted at row m0 starts its reduction at p = m0. Only the k-tile straddling the
@@ -397,9 +397,10 @@ n2=256 batch 1024 (**7.7x slower**), because double syr2k has only the per-batch
 
 ### Level-3: generic syrk and syr2k fallbacks fold one triangle
 
-The generic fallbacks in `src/extensions/syrk.cc` and `syr2k.cc` (used where no native `?syrk`/`?syr2k` is wired,
-MKL) once wrote **both** triangles and overwrote the half the caller owns. The product now goes to scratch, and
-`fold_symmetric_product_into_triangle` (`src/extensions/symmetric_product_fold.hh`) folds only the named triangle:
+The generic fallbacks in `src/extensions/syrk.cc` and `syr2k.cc` once wrote **both** triangles and overwrote the
+half the caller owns. Both files are deleted: no backend instantiated them, and they redefined the public templates.
+`fold_symmetric_product_into_triangle` (`src/extensions/symmetric_product_fold.hh`, still used by `potrf_blocked`)
+folds only the named triangle:
 `C(i,j) := product(i,j) + beta*C(i,j)`. With beta == 0, C is not read, so a poisoned C cannot produce NaN.
 
 ### her2k alpha alignment fault
@@ -451,11 +452,9 @@ netlib's host tasks throw `std::runtime_error`.
 
 ### trmm: the generic recursion reads the whole square of A
 
-`src/extensions/trmm.cc` (the MKL instantiation) ends its recursion at n <= 256 in a plain `gemm` on the diagonal block
-with `beta = 1`. Read as written, the base case uses A's unreferenced triangle and its stored diagonal under
-`Diag::Unit`, and accumulates into C rather than overwriting it. It matches BLAS only when the caller zeroed the
-opposite triangle and C. This was found by reading and is **not confirmed by a test**. A poison test in the style of
-[the trmm poison test](#the-trmm-poison-test) against the MKL backend would settle it.
+`src/extensions/trmm.cc` ended its recursion at n <= 256 in a plain `gemm` with `beta = 1` on the diagonal block,
+reading A's unreferenced triangle. It was never instantiated by any backend and is deleted; every trmm goes through
+`src/ops/trmm/trmm.cc`.
 
 ## Open debts {#level3-open-debts}
 

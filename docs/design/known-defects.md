@@ -403,11 +403,6 @@ refuted.
 - **`compute_optimal_wg_size` assumes a 32-bit `long`.** `include/batchlas/util/kernel-heuristics.hh:103,108`
   uses `__builtin_clzl` with a 31 shift. On LP64 this shifts by a negative count, which is undefined
   behaviour. Fix with `63 - __builtin_clzl` or `std::bit_floor`. Callers: `src/matrix.cc:387,487`.
-- **The generic (MKL-instantiated) `trmm` recursion reads the whole square of `A`.** Its base case
-  at n <= 256 is a `gemm` with `beta = 1` on the diagonal block. It reads the unreferenced triangle
-  and, under `Diag::Unit`, the stored diagonal. It accumulates into `C` instead of overwriting.
-  See [the trmm generic recursion](../perf/level3.md#trmm-the-generic-recursion-reads-the-whole-square-of-a)
-  (`src/extensions/trmm.cc:22-26`).
 - **Matrix and vector containers.** Five defects in `matrix.hh` and `src/matrix.cc` are listed in
   [Matrix model: open debts](matrix-model.md#matrix-model-open-debts). They are an undefined
   `MatrixView::transpose`, packed-only addressing in `fill_triangular_random` and

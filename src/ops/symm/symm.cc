@@ -43,7 +43,9 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    constexpr bool kWired = B == Backend::CUDA;  // the old reach: ROCm and the host stay vendor
+    // ROCm takes the expansion (its symm was copy + symmetrize + gemm) and has no vendor symm.
+    constexpr bool kWired = B == Backend::CUDA || B == Backend::ROCM;
+    constexpr bool kVendorSymm = B != Backend::ROCM;
     const std::int64_t k = A.rows(), batch = A.batch_size();
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
@@ -54,7 +56,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
                                  q, int(k), int(batch),
                                  backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
         },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Vendor) { return kVendorSymm && d.has_vendor && homogeneous; },
     }, c);
 }
 
@@ -90,7 +92,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Expand) { return expand_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo); },
         [&](Vendor) -> Event {
-            if constexpr (select::has_library<B>(spec.vendor))
+            if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
                 return backend::symm_vendor<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
             else select::no_vendor<B, T>(spec);
         },
@@ -117,9 +119,9 @@ Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
         [&](const auto& c) { return ops::symm::launch<Back, T>(ctx, c, A, B, C, alpha, beta, side, uplo); });
 }
 
-// ROCm/MKL symm is src/extensions/symm.cc; this file instantiates CUDA and NETLIB only (as before).
 #define SYMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, symm)
 BATCHLAS_IF_CUDA(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::CUDA))
+BATCHLAS_IF_ROCM(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::ROCM))
 BATCHLAS_IF_HOST(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::NETLIB))
 #undef SYMM_INSTANTIATE
 
