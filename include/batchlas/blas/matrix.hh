@@ -1632,16 +1632,16 @@ namespace batchlas {
 
         /// @brief Writes diagonal @p k (k > 0 above the main diagonal, k < 0 below).
         ///
-        /// @p diag_values holds either n - |k| values used for every item, or
-        /// (n - |k|) * batch_size() values, one run per item. Other entries are untouched.
-        /// @pre rows() == cols() == n
+        /// The diagonal has d = max(0, min(rows() - max(-k, 0), cols() - max(k, 0))) entries.
+        /// @p diag_values holds either d values used for every item, or d * batch_size()
+        /// values, one run per item. Other entries are untouched; d = 0 writes nothing.
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k = 0) const;
 
         /// @brief Writes diagonal @p k from a VectorView: per item when its batch size equals
         ///        batch_size(), otherwise its item 0 for every item.
-        /// @pre rows() == cols(), `diag_values.size() >= n - |k|`
+        /// @pre `diag_values.size() >= d`, d as in the Span overload
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k = 0) const;
