@@ -1,6 +1,6 @@
 # Running the BatchLAS tests {#testing}
 
-> **Status:** current · counts measured under the `dev-tests` preset on the primary machine
+> **Status:** current · test counts are whatever `ctest -N` lists for your tree
 
 Run the narrowest scope that covers your change. The full suite takes 15-20 minutes and a few
 binaries hold nearly all of it.
@@ -10,10 +10,11 @@ binaries hold nearly all of it.
 | one test case | `./build/tests/stedc_tests --gtest_filter='StedcTest/0.BatchedMatrices'` |
 | one binary | `ctest -R '^stedc_tests$'` |
 | one component | `ctest -L tridiag` |
-| everything quick | `ctest -LE slow` (65 of 70 tests, about 95 s) |
-| everything | `ctest` (70 tests) |
+| everything quick | `ctest -LE slow` (count: `ctest -N -LE slow`) |
+| everything | `ctest` (count: `ctest -N`) |
 
-Counts move as binaries are added (see [the CI page](../docs/ci.md#running-all-of-it-locally)).
+Counts move as binaries are added, so none is written here: read them off `ctest -N` (see
+[the CI page](../docs/ci.md#running-all-of-it-locally)).
 `ctest -R` is a substring regex: `-R syev` matches `syev_tests`, `syevx_tests`, `syev_cta_tests`.
 Anchor with `^...$` for one binary.
 
