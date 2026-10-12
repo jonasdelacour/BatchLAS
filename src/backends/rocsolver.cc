@@ -137,16 +137,9 @@ namespace batchlas {
                                                              C.data_ptr(), C.ld());
             });
         } else {
-            Queue sub_queue(ctx.device(), false);
+            // On ctx: a fresh Queue is not ordered after ctx's pending work (the geqrf).
             for (int i = 0; i < A.batch_size(); ++i) {
-                // (void) on an Event: deliberate, but NOT because of queue ordering --
-                // Queue(device, false) above is explicitly OUT-OF-ORDER, so these
-                // per-item submissions are not ordered against each other and must
-                // not be assumed to be. What makes dropping the Events safe is the
-                // explicit sub_queue.wait() after the loop: it joins all of them
-                // before this function returns, and the caller's ordering then comes
-                // from create_event_after_external_work().
-                (void)ormqr_vendor<B, T>(sub_queue,
+                (void)ormqr_vendor<B, T>(ctx,
                                    A.batch_item(i),
                                    C.batch_item(i),
                                    side,
@@ -154,7 +147,6 @@ namespace batchlas {
                                    tau.subspan(i * k, k),
                                    {});
             }
-            sub_queue.wait();
         }
         return ctx.create_event_after_external_work();
     }
@@ -198,11 +190,10 @@ namespace batchlas {
                                                              tau.data());
             });
         } else {
-            Queue sub_queue(ctx.device(), false);
+            // On ctx, the vendor per item: a fresh Queue is not ordered after ctx's pending geqrf.
             for (int i = 0; i < A.batch_size(); ++i) {
-                (void)orgqr<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
+                (void)orgqr_vendor<B, T>(ctx, A.batch_item(i), tau.subspan(i * k, k), {});
             }
-            sub_queue.wait();
         }
         return ctx.create_event_after_external_work();
     }

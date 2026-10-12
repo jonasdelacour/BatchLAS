@@ -1496,6 +1496,38 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
     expect_singular_values_near(s, exact, n, batch, converged);
 }
 
+// cuSOLVER returns V; the V^H transpose is a SYCL kernel that must run after the vendor call
+// even on an out-of-order Queue. Called directly: the public gesvd hands its drivers an
+// in-order Queue (select::on_in_order_queue), so only the vendor entry point sees one.
+// DPC++/CUDA happens to order get_native's stream before the next kernel (removing both the
+// wait and the barrier stayed green 20/20); the guard is for runtimes that do not (acpp).
+TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVh) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA) {
+        GTEST_SKIP() << "the V -> V^H transpose is cuSOLVER's binding only";
+    } else {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        const int n = 32, batch = 2048;
+        const auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 4711u);
+        Matrix<Scalar, MatrixFormat::Dense> A = A0.clone(), U(n, n, batch), Vh(n, n, batch);
+        Vh.fill(Scalar(-9.75e3));
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+        this->ctx->wait();
+        Queue ooo(*this->ctx, false);
+        UnifiedVector<std::byte> ws(std::max<size_t>(
+            1, backend::gesvd_vendor_buffer_size<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(),
+                                                            SvdVectors::All, SvdVectors::All)));
+        (void)backend::gesvd_vendor<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+                                               SvdVectors::All, ws.to_span());
+        ooo.wait();
+        EXPECT_VERIFY(Scalar, verify::Check::factorization, n,
+                      MV::svd_residual(*this->ctx, A0.view(), U.view(), VectorView<Real>(s, n, batch, 1, n), Vh.view(),
+                                       A0.view().all_items()));
+    }
+}
+
 // An empty span is "not requested": neither the workspace query nor the answer
 // may move. gesvd_buffer_size takes no `info` argument at all, so the first half
 // holds by construction; the second is what a caller could observe.

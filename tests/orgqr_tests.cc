@@ -8,6 +8,7 @@
 #include <limits>
 #include <vector>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/env.hh>
 
 using namespace batchlas;
 
@@ -156,6 +157,40 @@ TYPED_TEST(OrgqrTest, QIsOrthonormalAndReconstructsAAtEveryBatchItem) {
         }
         if (this->HasFailure()) return;
     }
+}
+
+// geqrf then orgqr back to back on an out-of-order Queue, no wait between them, vendor pinned:
+// the vendor orgqr must order its per-item calls after the geqrf still in flight. The factors
+// it is checked against come from the same input on the in-order Queue.
+TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const ScopedEnvVar geqrf_route("BATCHLAS_GEQRF_ROUTE", "vendor");
+    const ScopedEnvVar orgqr_route("BATCHLAS_ORGQR_ROUTE", "vendor");
+    const int m = 96, n = 96, batch = 16, ld = m + 3, stride = ld * n + 7;
+    const auto R = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, batch, 777u);
+    UnifiedVector<T> a0(static_cast<size_t>(stride) * batch, T(0)), f(a0.size()), q(a0.size());
+    UnifiedVector<T*> fptrs(batch, nullptr), qptrs(batch, nullptr);
+    const MV A0v(a0.data(), m, n, ld, stride, batch), Fv(f.data(), m, n, ld, stride, batch, fptrs.data()),
+        Qv(q.data(), m, n, ld, stride, batch, qptrs.data());
+    MV::copy(*this->ctx, A0v, R.view()).wait();
+    MV::copy(*this->ctx, Fv, A0v).wait();
+    UnifiedVector<T> tau_ref(static_cast<size_t>(n) * batch), tau(static_cast<size_t>(n) * batch);
+    UnifiedVector<std::byte> wg(std::max<size_t>(1, geqrf_buffer_size<B, T>(*this->ctx, Fv, tau_ref.to_span())));
+    (void)geqrf<B, T>(*this->ctx, Fv, tau_ref.to_span(), wg.to_span());
+    this->ctx->wait();
+
+    Queue ooo(*this->ctx, false);
+    MV::copy(*this->ctx, Qv, A0v).wait();
+    UnifiedVector<std::byte> wg2(std::max<size_t>(1, geqrf_buffer_size<B, T>(ooo, Qv, tau.to_span())));
+    UnifiedVector<std::byte> wo(std::max<size_t>(1, orgqr_buffer_size<B, T>(ooo, Qv, tau.to_span())));
+    (void)geqrf<B, T>(ooo, Qv, tau.to_span(), wg2.to_span());
+    (void)orgqr<B, T>(ooo, Qv, tau.to_span(), wo.to_span());
+    ooo.wait();
+
+    EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, Qv, Qv.all_items()));
+    EXPECT_VERIFY(T, verify::Check::factorization, m, MV::qr_reconstruction(*this->ctx, A0v, Qv, Fv, Qv.all_items()));
 }
 
 int main(int argc, char **argv) {

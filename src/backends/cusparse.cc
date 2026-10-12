@@ -237,6 +237,7 @@ namespace batchlas {
         }
 
         BumpAllocator pool(workspace);
+        handle.setStream(ctx);  // for the in-function size query below
         // spmm_vendor_buffer_size below must build an identical plan from the same
         // views, or the caller's workspace can be too small for the shape that fires.
         auto buffer_size = BumpAllocator::allocation_size<std::byte>(

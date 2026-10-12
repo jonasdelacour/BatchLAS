@@ -827,6 +827,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         auto pool = BumpAllocator(work_space);
         if (batch_size <= 1) {
+            handle.setStream(ctx);  // the query below runs on whatever stream the static handle last had
             cusolverDnParams_t params;
             check_status(cusolverDnCreateParams(&params));
             try {
@@ -862,6 +863,7 @@ namespace batchlas {
                 tau_ptrs[i] = tau_data + i * k;
             });
             T** a_ptrs = A.data_ptrs(ctx).data();
+            if (!ctx.in_order()) ctx.wait();  // tau_ptrs' kernel is not ordered before the native call
             // cublas<t>geqrfBatched's info is a host int: a parameter-error code, set before return.
             int info_h = 0;
             int* info_p = &info_h;
@@ -919,6 +921,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         BumpAllocator pool(workspace);
         if (batch_size == 1) {
+            handle.setStream(ctx);
             int lwork;
             call_backend<T, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
@@ -1002,6 +1005,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         BumpAllocator pool(workspace);
         if (batch_size == 1) {
+            handle.setStream(ctx);
             int lwork;
             call_backend<T, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSorgqr_bufferSize, cusolverDnDorgqr_bufferSize,
@@ -1025,13 +1029,12 @@ namespace batchlas {
                     device_ws.data(), lwork, info.data());
             });
         } else {
-            Queue sub_queue(ctx.device(), false);
+            // On ctx, as ormqr_vendor: a fresh Queue is not ordered after ctx's pending geqrf.
             size_t single_ws = orgqr_vendor_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k));
             for (int i = 0; i < batch_size; ++i) {
-                auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
-                (void)orgqr_vendor<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), sub_ws);
+                auto sub_ws = pool.allocate<std::byte>(ctx, single_ws);
+                (void)orgqr_vendor<B>(ctx, A.batch_item(i), tau.subspan(i * k, k), sub_ws);
             }
-            sub_queue.wait();
         }
         return ctx.create_event_after_external_work();
     }

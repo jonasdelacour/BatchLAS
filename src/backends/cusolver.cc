@@ -90,6 +90,7 @@ namespace batchlas {
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
+            handle.setStream(ctx);  // for the in-function bufferSize queries below
             BumpAllocator pool(workspace);
             size_t l_work_device_bytes = 0;
             size_t l_work_host_bytes = 0;
@@ -470,6 +471,7 @@ namespace batchlas {
             }
 
             static LinalgHandle<B> handle;
+            handle.setStream(ctx);  // for the in-function bufferSize query below
             BumpAllocator pool(workspace);
 
             gesvdjInfo_t params;
@@ -540,7 +542,9 @@ namespace batchlas {
 
             Event e = ctx.create_event_after_external_work();
             if (want_vh) {
-                // cuSOLVER hands back V; the BatchLAS contract is V^H.
+                // cuSOLVER hands back V; the BatchLAS contract is V^H. An out-of-order queue orders
+                // nothing across the SYCL/native boundary, so there the vendor call is waited out.
+                if (!ctx.in_order()) ctx.wait();
                 gesvd_detail::write_vh_from_v<T>(ctx, v_ptr, n, batch, Vh);
                 e = ctx.get_event();
             }
