@@ -12,7 +12,8 @@ namespace {
 template <Backend B, typename T>
 inline bool should_use_cta(const Queue& ctx, int64_t n) {
     // steqr_cta uses chunked sub-group operations that produce incorrect
-    // eigenvalues on AMD gfx1200. Disable the CTA path only for ROCm.
+    // eigenvalues on AMD gfx1200. Disable the CTA path only for ROCm; syev's Cta and CtaFused
+    // can_run (src/ops/syev/syev.cc) carry the same exclusion.
     if constexpr (B == Backend::ROCM) {
         (void)ctx; (void)n;
         return false;
