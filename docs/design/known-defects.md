@@ -34,6 +34,7 @@ closed and kept only for numbering.
 | 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
+| — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
 | — | LOBPCG null P column | fixed 2026-10-09, kept for the misleading symptom |
 
 ## Defect 1: `ortho`'s transposed arm builds a view that does not describe the memory
@@ -77,7 +78,7 @@ closed and kept only for numbering.
   at `:132`.
 - **Note:** the red `lanczos_tests` cases are not this defect. One cause, steqr reading item
   b's off-diagonals at stride n-1, is fixed; the remaining one (whole spectrum ~3x too wide, at
-  batch 1 too) is open and listed in `tests/known-failures.txt`.
+  batch 1 too) is open: see [lanczos returns a spectrum about three times too wide](#lanczos-returns-a-spectrum-about-three-times-too-wide).
 - **Status:** open.
 
 ## 4. rocSPARSE conjugates a real transpose
@@ -382,6 +383,24 @@ outlives one call first: arena reuse, a static, or a stale event.
 
 **To fix:** locate the cross-call state with the two-call repro, then add the wrapper with that
 repro as its guard.
+
+## lanczos returns a spectrum about three times too wide
+
+**Status:** observed 2026-10-12 on threadripper02; cause not located.
+
+Toeplitz tridiag(-5, 2, -5), n = 64, float, CSR: `lanczos` returns eigenvalues spanning about
+[-28, 32] where the exact spectrum is [-8, 12], at batch 1 as well as batch 2. Each item of a
+batch still matches that item solved in a uniform batch (`LanczosStride.MixedBatchItemsMatchUniformBatches`),
+so this is not the steqr stride bug fixed 2026-10-12 (defect 3, note). Red tests, listed in `tests/known-failures.txt`:
+`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`, `LanczosStride.ClosedFormSpectrum`.
+
+**Lead (unconfirmed):** the SVQB2 re-orthogonalization in `lanczos_iteration`
+(`src/extensions/lanczos.cc`) rotates the column pair \f$[v_{it-1}, v_{it}]\f$ after their
+alphas and betas were recorded, which breaks the three-term recurrence the tridiagonal assumes.
+Raising steqr's `max_sweeps` from 10 to 50 changed nothing.
+
+**To fix:** compare the recorded alphas/betas against \f$V^T A V\f$ for one item; if they differ,
+re-orthogonalize only against earlier vectors, or recompute alpha and beta after the rotation.
 
 ## Unverified candidates
 
