@@ -18,7 +18,7 @@ foreach(_f IN LISTS _files)
         message(FATAL_ERROR "${_f} contains the raw-string delimiter )batchlas_tbl")
     endif()
     # One char array per table, its length from sizeof: a string_view built from a bare literal
-    # runs a constexpr strlen, and ~0.5 MB of tables exceeds clang's constexpr step limit.
+    # runs a constexpr strlen, and tens of MB of tables exceed clang's constexpr step limit.
     string(APPEND _arrays "constexpr char kText${_n}[] = R\"batchlas_tbl(${_text})batchlas_tbl\";\n")
     string(APPEND _body "    {\"${_name}\", {kText${_n}, sizeof(kText${_n}) - 1}},\n")
     math(EXPR _n "${_n} + 1")

@@ -203,8 +203,7 @@ vocabulary in about four comment lines. A new op copies it and needs no page edi
 6. **`spec`, `last_resort`, `key_names`, `grid_*`**: a trailing `///<` (on the first or last line
    of a multi-line initialiser) or a short preceding `///` block where the file has budget. Key
    comments say what each key measures and why its `:log` weight is what it is (work
-   \f$\sim n^3\f$ means weight 3); grid comments say which old thresholds the grid straddles and
-   that the transcriber (`tuned/README.md`) spells the same grid.
+   \f$\sim n^3\f$ means weight 3); grid comments say which old thresholds the grid straddles.
 7. **Section numbers** `§x.y` and rule ids `R1`-`R8` refer to
    `docs/design/flat-kernel-selection.md`. Cite a section by number with a page-only pointer,
    `evidence: docs/design/flat-kernel-selection.md (§5.4)`: numbered headings get `autotoc_md`
