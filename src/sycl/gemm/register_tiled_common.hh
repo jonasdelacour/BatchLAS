@@ -163,8 +163,8 @@ Event launch_register_tiled(Queue& ctx,
         const bool packet_a = use_packet_a;
         const bool packet_b = use_packet_b;
 
-        h.parallel_for<
-            GemmRegisterTiledKernel<T, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>>(
+        batchlas::impl::parallel_for<
+            GemmRegisterTiledKernel<T, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>>(h, 
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 const int local_row = static_cast<int>(item.get_local_id(1));

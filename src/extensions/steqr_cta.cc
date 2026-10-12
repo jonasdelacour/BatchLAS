@@ -80,7 +80,7 @@ namespace batchlas {
 
             auto Q_local = sycl::local_accessor<T, 1>(
                 sycl::range<1>(ComputeVecs ? (probs_per_wg * P * P) : 1), cgh);
-            cgh.parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(
+            impl::parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(cgh, 
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(sg_size) {
                     const auto wg = it.get_group();

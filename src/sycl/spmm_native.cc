@@ -174,7 +174,7 @@ Event spmm_gather(Queue& ctx,
         const int64_t rowblocks = rc;
         const int64_t total = items;
 
-        h.parallel_for<SpmmGatherKernel<T, NC, Pair>>(
+        batchlas::impl::parallel_for<SpmmGatherKernel<T, NC, Pair>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -291,7 +291,7 @@ Event spmm_scale(Queue& ctx,
         const int64_t stride_out = per;
         const int64_t total = elems;
 
-        h.parallel_for<SpmmScaleKernel<T>>(
+        batchlas::impl::parallel_for<SpmmScaleKernel<T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -373,7 +373,7 @@ Event spmm_scatter(Queue& ctx,
 
         constexpr int NCS = 4;
 
-        h.parallel_for<SpmmScatterKernel<T>>(
+        batchlas::impl::parallel_for<SpmmScatterKernel<T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {

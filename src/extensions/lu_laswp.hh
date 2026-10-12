@@ -158,7 +158,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
             sycl::range<1>(2u * static_cast<std::size_t>(rmax)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        h.parallel_for<LuLaswpGatherKernel<Tag, T>>(
+        batchlas::impl::parallel_for<LuLaswpGatherKernel<Tag, T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(nblk) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
@@ -275,7 +275,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
         sycl::local_accessor<int, 1> idxs(sycl::range<1>(static_cast<std::size_t>(R)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        h.parallel_for<LuLaswpRightGatherKernel<Tag, T>>(
+        batchlas::impl::parallel_for<LuLaswpRightGatherKernel<Tag, T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(ntile) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),

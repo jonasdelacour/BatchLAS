@@ -127,7 +127,7 @@ Event launch_direct(Queue& ctx,
         const Transpose op_a = transA;
         const Transpose op_b = transB;
 
-        h.parallel_for<GemmDirectKernel<T>>(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for<GemmDirectKernel<T>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
             const int row = static_cast<int>(item.get_global_id(1));
             const int col = static_cast<int>(item.get_global_id(2));

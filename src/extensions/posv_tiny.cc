@@ -350,7 +350,7 @@ Event posv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(ldb), static_cast<std::ptrdiff_t>(stride_b),
             upper, n, nrhs, batch, info_ptr,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        h.parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks>>(
+        batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),

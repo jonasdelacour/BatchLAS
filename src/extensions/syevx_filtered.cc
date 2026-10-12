@@ -271,7 +271,7 @@ Event syevx_filtered(Queue& ctx,
         const int64_t nn = n;
         const size_t rg = row_groups;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(h, 
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
                                   sycl::range{kBoundsWG}),
                 [=](sycl::nd_item<1> item) {
@@ -299,7 +299,7 @@ Event syevx_filtered(Queue& ctx,
         auto hi = hi_span.data();
         const size_t rwg = 128;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(h, 
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
                                   sycl::range{rwg}),
                 [=](sycl::nd_item<1> item) {
@@ -384,7 +384,7 @@ Event syevx_filtered(Queue& ctx,
             const Real tolv = use_tol;
             const size_t wg = 128;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(h, 
                     sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
                                       sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
@@ -646,7 +646,7 @@ Event syevx_filtered(Queue& ctx,
         const bool large = find_largest;
         const size_t wg = 128;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(h, 
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
                     const int b = static_cast<int>(item.get_group_linear_id());

@@ -367,7 +367,7 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
         sycl::local_accessor<T, 1> tile_b(sycl::range<1>(2 * Body::TileK * Body::BStride), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
                   A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b};
-        h.parallel_for<GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue>>(
+        batchlas::impl::parallel_for<GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue>>(h, 
             sycl::nd_range<3>(global, local), body);
     });
 

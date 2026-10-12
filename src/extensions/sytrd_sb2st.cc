@@ -478,7 +478,7 @@ Event btrd_lower_inplace(Queue& q,
         const size_t global = groups * static_cast<size_t>(kWorkGroupSize);
         sycl::local_accessor<int, 1> shared_ints(4, h); // {nr, j1, j2, k}
 
-        h.parallel_for<BtrdLowerKernel<T>>(sycl::nd_range<1>(sycl::range<1>(global),
+        batchlas::impl::parallel_for<BtrdLowerKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(global),
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
                                            [=](sycl::nd_item<1> it) {
             using Real = typename base_type<T>::type;

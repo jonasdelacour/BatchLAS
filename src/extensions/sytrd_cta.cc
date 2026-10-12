@@ -91,7 +91,7 @@ namespace batchlas {
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            cgh.parallel_for<Sytd2CTAKernel<T, P, Upper>>(
+            impl::parallel_for<Sytd2CTAKernel<T, P, Upper>>(cgh, 
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto wg = it.get_group();

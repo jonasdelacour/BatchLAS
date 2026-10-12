@@ -155,7 +155,7 @@ Event gebrd_blocked_real(Queue& ctx,
             auto Y = y_mat.kernel_view();
             auto work_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(2 * nb)), h);
 
-            h.parallel_for(sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(panel_wg)),
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(panel_wg)),
                                              sycl::range<1>(static_cast<size_t>(panel_wg))),
                            [=](sycl::nd_item<1> item) {
                 const int32_t b = static_cast<int32_t>(item.get_group_linear_id());

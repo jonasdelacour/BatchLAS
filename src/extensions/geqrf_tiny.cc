@@ -128,7 +128,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         sycl::local_accessor<D, 1> scratch(
             sycl::range<1>(static_cast<std::size_t>(M) * kPerMatrix), h);
 
-        h.parallel_for<GeqrfTinyKernel<T, N, C>>(
+        batchlas::impl::parallel_for<GeqrfTinyKernel<T, N, C>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(WG)),
                               sycl::range<1>(static_cast<std::size_t>(WG))),

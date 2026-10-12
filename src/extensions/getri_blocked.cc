@@ -76,7 +76,7 @@ Event getri_perm_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<int, 1> slot(sycl::range<1>(1), h);
-        h.parallel_for<GetriPermKernel<T>>(
+        batchlas::impl::parallel_for<GetriPermKernel<T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),

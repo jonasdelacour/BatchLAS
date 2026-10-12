@@ -94,7 +94,7 @@ Event trsm_native_sg_left(Queue& ctx,
     __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<TrsmSgLeftKernel<T, N, QC>>(
+        batchlas::impl::parallel_for<TrsmSgLeftKernel<T, N, QC>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(nwg) * kSgPerWg * kSg),
                               sycl::range<1>(kSgPerWg * kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {

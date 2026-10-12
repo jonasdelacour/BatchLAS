@@ -1547,6 +1547,28 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 // converge and the dense ones do not, which is the mixed outcome this case needs
 // in order to assert both directions.
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+// Batch 0 into gebrd_cta: no launch, no throw, nothing written (acpp 25.10 launches an empty
+// nd_range as a 0-block grid).
+TYPED_TEST(GesvdTest, GebrdCtaEmptyBatchIsANoOp) {
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "gebrd_cta requires sub-group 32";
+    } else {
+        const int n = 16;
+        UnifiedVector<Real> sentinel(3 * n * n, Real(7));
+        MatrixView<Real, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 2, (n + 2) * n, 0);
+        Real* v = sentinel.data() + 2 * n * n + 2 * n;
+        VectorView<Real> d(v, n, 0), e(v + n, n - 1, 0), tauq(v + 2 * n, n, 0), taup(v + 3 * n, n, 0);
+        const auto run = [&] {
+            (void)gebrd_cta<B, Real>(*this->ctx, A, d, e, tauq, taup, 1);
+            this->ctx->wait();
+        };
+        EXPECT_NO_THROW(run());
+        for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+    }
+}
+
 TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;

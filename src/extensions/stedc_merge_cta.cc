@@ -945,7 +945,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedCtaMerge<B, T, P>>(
+        batchlas::impl::parallel_for<StedcFusedCtaMerge<B, T, P>>(h, 
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -1051,7 +1051,7 @@ void stedc_merge_fused_wg(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedWgMerge<B, T>>(
+        batchlas::impl::parallel_for<StedcFusedWgMerge<B, T>>(h, 
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());

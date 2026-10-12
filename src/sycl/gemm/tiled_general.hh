@@ -44,7 +44,7 @@ Event launch_tiled_general(Queue& ctx,
         const int stride_c = C.stride();
         const int batch = A.batch_size();
 
-        h.parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
             const int local_row = static_cast<int>(item.get_local_id(1));
             const int local_col = static_cast<int>(item.get_local_id(2));

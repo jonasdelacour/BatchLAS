@@ -88,7 +88,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
         const int stride_c = C.stride();
         const bool lower = uplo == Uplo::Lower;
 
-        h.parallel_for<SyrkGramTilesKernel<T, NTile, ThreadTile, KC, TransOperand, Conjugate>>(
+        batchlas::impl::parallel_for<SyrkGramTilesKernel<T, NTile, ThreadTile, KC, TransOperand, Conjugate>>(h, 
             sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {

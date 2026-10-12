@@ -128,7 +128,7 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
         sycl::local_accessor<int, 1> ridx(
             sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
 
-        h.parallel_for<GetrfPanelRegKernel<T, NB>>(
+        batchlas::impl::parallel_for<GetrfPanelRegKernel<T, NB>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),

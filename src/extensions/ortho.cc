@@ -210,7 +210,7 @@ namespace batchlas {
                     auto A_stride = A.stride();
                     auto Aspan = Span(A.data_ptr(), A_stride * batch_size);
 
-                    h.parallel_for<OrthoNormalizeVector<B, T>>(
+                    batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h, 
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
                         [=](sycl::nd_item<1> item){
                             auto tid = item.get_local_linear_id();
@@ -240,7 +240,7 @@ namespace batchlas {
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
@@ -274,7 +274,7 @@ namespace batchlas {
             //Compute D = diag(A^H * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
@@ -292,7 +292,7 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto ATA_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();
@@ -314,7 +314,7 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(k, h);
                 auto C_ptr = C.data_ptr();
-                h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();

@@ -395,7 +395,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
         sycl::local_accessor<Real, 1> c_local(sycl::range<1>(cw_local_elems), h);
         sycl::local_accessor<T, 1> work_local(sycl::range<1>(cw_local_elems), h);
 
-        h.parallel_for<BtrdLowerSubgroupKernel<T, P>>(
+        impl::parallel_for<BtrdLowerSubgroupKernel<T, P>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(global)),
                               sycl::range<1>(static_cast<size_t>(wg_size))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {

@@ -178,7 +178,7 @@ void bdsdc_extract_vectors(Queue& ctx,
         const bool wu = want_u;
         const bool wv = want_vh;
 
-        h.parallel_for<BdsdcExtract<B, T>>(
+        batchlas::impl::parallel_for<BdsdcExtract<B, T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
@@ -258,7 +258,7 @@ void bdsdc_repair_degenerate(Queue& ctx,
         const T tol_factor =
             (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
 
-        h.parallel_for<BdsdcRepair<B, T>>(
+        batchlas::impl::parallel_for<BdsdcRepair<B, T>>(h, 
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
