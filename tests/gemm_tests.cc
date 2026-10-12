@@ -101,9 +101,7 @@ template <typename T, class VA, class VB, class VC0, class VC>
                                                  const VC& C, T alpha, T beta, int k, double old_scale = 100) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const double err = MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta), C.all_items());
-    double den = 0;
-    for (int item : C.all_items())
-        den = std::max(den, MV::gemm_max_denominator(ctx, A, ta, B, tb, C0, MV::up(alpha), MV::up(beta), item));
+    const double den = MV::gemm_max_denominator(ctx, A, ta, B, tb, C0, MV::up(alpha), MV::up(beta), C.all_items());
     const double old_tol = old_vendor_tolerance<T>() * old_scale;
     const batchlas::verify::Slack slack{
         std::min(1.0, old_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),

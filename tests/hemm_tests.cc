@@ -213,7 +213,7 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
             double worst = 0;
             for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, std::abs(double(XhAX(i, i, b).imag())));
             const double scale = MV::gemm_max_denominator(*(this->ctx), X.view(), Transpose::ConjTrans, AX.view(), Transpose::NoTrans,
-                                                          XhAX.view(), 1.0, 0.0, b);
+                                                          XhAX.view(), 1.0, 0.0, std::span<const int>(&b, 1));
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * n, worst / scale)
                 << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                 << ", batch=" << b;

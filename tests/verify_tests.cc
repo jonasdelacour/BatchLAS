@@ -69,6 +69,74 @@ TEST(Items, DefaultIncludesLastAndMiddle) {
     EXPECT_EQ(batch_of(9).default_items(), (std::vector<int>{0, 4, 8}));
     EXPECT_EQ(batch_of(3).all_items(), (std::vector<int>{0, 1, 2}));
     EXPECT_EQ(batchlas::VectorView<double>(buf.data(), 2, 3, 1, 3).all_items(), (std::vector<int>{0, 1, 2}));
+    const auto vec_of = [&](int b) { return batchlas::VectorView<double>(buf.data(), 1, b); };
+    EXPECT_EQ(vec_of(0).default_items(), (std::vector<int>{}));
+    EXPECT_EQ(batch_of(0).default_items(), (std::vector<int>{}));
+    EXPECT_EQ(vec_of(1).default_items(), (std::vector<int>{0}));
+    EXPECT_EQ(vec_of(2).default_items(), (std::vector<int>{0, 1}));
+    EXPECT_EQ(vec_of(9).default_items(), (std::vector<int>{0, 4, 8}));
+}
+
+// One empty-batch policy: an empty item set (batch 0, items defaulted) checks nothing and returns 0.
+TEST(VerifyEmptyBatch, AllChecksReturnZero) {
+    using T = std::complex<float>;
+    using batchlas::Transpose;
+    using batchlas::Uplo;
+    batchlas::Queue ctx;
+    constexpr int n = 4;
+    std::vector<T> buf(64, T(1.0f, -2.0f));
+    std::vector<float> rbuf(64, 1.0f);
+    std::vector<std::int32_t> ibuf(64, 1);
+    const MV<T> A(buf.data(), n, n, n, n * n, 0);
+    const batchlas::VectorView<T> v(buf.data(), n, 0);
+    const batchlas::VectorView<float> w(rbuf.data(), n, 0);
+    const batchlas::VectorView<std::int32_t> piv(ibuf.data(), n, 0);
+    int ro[n + 1] = {0, 0, 0, 0, 0}, ci[1] = {0};
+    const MatrixView<T, MatrixFormat::CSR> S(buf.data(), ro, ci, n, n, batchlas::NonZeros{1}, 1, n + 1, 0);
+    const T one(1.0f, 0.0f);
+    const std::pair<const char*, double> got[] = {
+        {"potrf_residual", MV<T>::potrf_residual(ctx, A, A, Uplo::Lower)},
+        {"similarity_residual", MV<T>::similarity_residual(ctx, A, A, A)},
+        {"getrf_residual", MV<T>::getrf_residual(ctx, A, A, piv)},
+        {"qr_residual", MV<T>::qr_residual(ctx, A, A, v)},
+        {"qr_reconstruction", MV<T>::qr_reconstruction(ctx, A, A, A)},
+        {"svd_residual", MV<T>::svd_residual(ctx, A, A, w, A)},
+        {"solve_residual", MV<T>::solve_residual(ctx, A, Transpose::NoTrans, A, A)},
+        {"lu_solve_residual", MV<T>::lu_solve_residual(ctx, A, piv, Transpose::NoTrans, A, A)},
+        {"gemm_backward_error", MV<T>::gemm_backward_error(ctx, A, Transpose::NoTrans, A, Transpose::NoTrans, A, A, one, one)},
+        {"gemm_max_denominator", MV<T>::gemm_max_denominator(ctx, A, Transpose::NoTrans, A, Transpose::NoTrans, A, one, one)},
+        {"gemv_backward_error", MV<T>::gemv_backward_error(ctx, A, Transpose::NoTrans, v, v, v, one, one)},
+        {"trsm_residual", MV<T>::trsm_residual(ctx, A, batchlas::Side::Left, Uplo::Upper, Transpose::NoTrans, batchlas::Diag::NonUnit, A, A, one)},
+        {"spmm_backward_error", MV<T>::spmm_backward_error(ctx, S, Transpose::NoTrans, A, Transpose::NoTrans, A, A, one, one)},
+        {"rank2k_backward_error", MV<T>::rank2k_backward_error(ctx, A, A, Transpose::NoTrans, A, A, Uplo::Lower, one, one, true)},
+        {"orthogonality", MV<T>::orthogonality(ctx, A)},
+        {"eigen_residual", MV<T>::eigen_residual(ctx, A, A, w)},
+        {"values_error", MV<T>::values_error(w, {}, 1.0)},
+        {"pivot_ratio", MV<T>::pivot_ratio(A)},
+    };
+    for (const auto& [name, value] : got) EXPECT_EQ(value, 0.0) << name;
+    EXPECT_EQ(MV<T>::form_q(ctx, A, v, std::span<const int>{}, n).batch_size(), 0);
+    EXPECT_TRUE(MV<T>::pivots_valid(piv, n));
+}
+
+// Item b of A and B is s_b I (s = 1, 10, 3), beta = 0: the largest denominator of item b is s_b^2.
+TEST(VerifyItems, GemmMaxDenominatorTakesSpan) {
+    batchlas::Queue ctx;
+    constexpr int n = 2, ld = 3, stride = 7;
+    const double s[3] = {1.0, 10.0, 3.0};
+    std::vector<double> a(3 * stride, 1e6);
+    for (int b = 0; b < 3; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) a[b * stride + j * ld + i] = i == j ? s[b] : 0.0;
+    const MV<double> A(a.data(), n, n, ld, stride, 3);
+    const auto den = [&](std::span<const int> items) {
+        return MV<double>::gemm_max_denominator(ctx, A, batchlas::Transpose::NoTrans, A, batchlas::Transpose::NoTrans, A, 1.0, 0.0,
+                                                items);
+    };
+    const int ends[] = {0, 2}, middle[] = {1};
+    EXPECT_EQ(den(ends), 9.0);
+    EXPECT_EQ(den(middle), 100.0);
+    EXPECT_EQ(den({}), 100.0);
 }
 
 TEST(Tolerance, BoundAndPass) {
@@ -286,6 +354,23 @@ template <class T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
 }  // namespace
 
 // ---------------------------------------------------------------------------- reference.hh
+
+// eigenvalues/singular_values read D as double or complex<double>: any other D would be reinterpreted
+// and read past the buffer, so it must not compile.
+namespace {
+template <class D>
+constexpr bool takes_eigenvalues = requires(std::vector<D>& a, std::vector<double>& w) { batchlas::verify::eigenvalues(4, a, w); };
+template <class D>
+constexpr bool takes_singular_values =
+    requires(std::vector<D>& a, std::vector<double>& w) { batchlas::verify::singular_values(4, 4, a, w); };
+}  // namespace
+
+TEST(VerifyReference, RejectsFloat) {
+    static_assert(!takes_eigenvalues<float> && !takes_eigenvalues<cfloat>);
+    static_assert(!takes_singular_values<float> && !takes_singular_values<cfloat>);
+    static_assert(takes_eigenvalues<double> && takes_eigenvalues<cdouble>);
+    static_assert(takes_singular_values<double> && takes_singular_values<cdouble>);
+}
 
 TEST(Reference, AstypeItemIsPackedAndPromoted) {
     constexpr int m = 3, n = 2, ld = 5, batch = 2;

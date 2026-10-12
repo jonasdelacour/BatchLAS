@@ -58,7 +58,9 @@ template <class U, class T> std::vector<U> item_vector(const MatrixView<T, Matri
 }  // namespace detail
 
 /// Ascending eigenvalues of the n x n Hermitian @p a (column-major, ld = n, both triangles valid; destroyed).
-template <class D> bool eigenvalues(int n, std::vector<D>& a, std::vector<double>& w) {
+template <class D>
+    requires(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>)
+bool eigenvalues(int n, std::vector<D>& a, std::vector<double>& w) {
     w.assign(static_cast<std::size_t>(n), 0.0);
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (n == 0) return true;
@@ -75,7 +77,9 @@ template <class D> bool eigenvalues(int n, std::vector<D>& a, std::vector<double
 }
 
 /// Descending singular values of the m x n @p a (column-major, ld = m; destroyed).
-template <class D> bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
+template <class D>
+    requires(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>)
+bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
     s.assign(static_cast<std::size_t>(std::min(m, n)), 0.0);
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if (s.empty()) return true;
