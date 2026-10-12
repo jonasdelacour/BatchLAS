@@ -267,7 +267,6 @@ TYPED_TEST(SyevCtaFusedTest, WgMultiplierIsClampedToLocalMemoryInWholeSteps) {
 	} else {
 		const int n = 16;
 		const int batch = 203;  // ragged final work-group at every clamped width
-		const Real tol = test_utils::tolerance<Scalar>() * Real(5);
 		auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4242);
 		for (size_t mult : {8u, 16u, 32u}) {
 			SCOPED_TRACE(::testing::Message() << "wg_multiplier=" << mult);
@@ -279,10 +278,8 @@ TYPED_TEST(SyevCtaFusedTest, WgMultiplierIsClampedToLocalMemoryInWholeSteps) {
 					.wait();
 			};
 			ASSERT_NO_THROW(run());
-			for (int b : {0, batch / 2, batch - 1}) {
-				check_orthonormal_columns(A.view(), n, b, tol);
-				check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
-			}
+			const int items[] = {0, batch / 2, batch - 1};
+			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, items);
 		}
 	}
 }
