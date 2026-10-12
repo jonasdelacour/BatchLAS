@@ -3,9 +3,9 @@
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda
 
 gemm selects through flat kernel selection (@ref design_flat_selection). This page lists the choices, the
-`tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The tables are
-transcribed from the old router (`source=transcribed:424a45bc`) and are untimed, so these windows are what Auto
-runs on sm_89.
+`tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The sm_89 table is
+transcribed from the old router (`424a45bc`) and is untimed, so these windows are what Auto runs on sm_89. The
+sm_120 table is deep-measured (`tuned/README.md`).
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
@@ -80,9 +80,8 @@ weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CP
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
 build (`gemm.cc:156-164`), and each item chooses separately.
 
-sm_89 and sm_120 tables are both transcribed; `tuned/gemm.sm_120.txt` is the same CSV written for sm_120, so
-sm_120 runs the 4090 decision until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`) replaces it. No gemm sweep
-has been run (maintainer, 2026-10-05).
+The sm_89 table is transcribed. `tuned/gemm.sm_120.txt` comes from the `--tier deep` campaign
+(`tools/tune/gemm_spec.cc`): 32225 deep rows, plus 14733 `transcribed` rows where the lattice measured nothing near.
 
 **Callers.** Every library gemm goes through the public `gemm` and its table: the blocked drivers' trailing
 updates (`src/ops/potrf/potrf.cc:75`, `getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77`), the level-3 `expand` families
@@ -103,7 +102,7 @@ updates (`src/ops/potrf/potrf.cc:75`, `getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77`
 
 ## GEMM: what the transcribed sm_89 rows rank first
 
-Counts read from `tuned/gemm.<dtype>.sm_89.txt` (all four headed `source=transcribed:424a45bc`): the first
+Counts read from `tuned/gemm.sm_89.txt` (every row `transcribed`, run `transcribed-424a45bc`): the first
 entry of every row, and the first entry other than `vendor` (what the native walk and a vendor-free build run).
 The real tables have edge rows at batch 1, 63 and 64 and, for double, k = 1 and 2. The complex tables have
 batch 128, 2048 and 32768 only.
@@ -222,12 +221,12 @@ window ends at 48 (see [The small tiled kernel](#the-small-tiled-kernel)).
 n=64..768 all 48 cells lose, 0.23–0.55×. The transposed register family plateaus near 15–18 TFLOP/s against
 cuBLAS SGEMM at 45+.
 
-**Decides:** `tuned/gemm.float.sm_89.txt` ranks `vendor` first in 11154 of 11226 rows. The other 72 are the NN
+**Decides:** the float rows of `tuned/gemm.sm_89.txt` rank `vendor` first in 11154 of 11226 rows. The other 72 are the NN
 squares up to 48 at batch ≥ 64, which rank `small`.
 
 ### Complex is refused
 
-**Decides:** all 7464 rows of each of `tuned/gemm.cfloat.sm_89.txt` and `tuned/gemm.cdouble.sm_89.txt` rank
+**Decides:** all 7464 cfloat and all 7464 cdouble rows of `tuned/gemm.sm_89.txt` rank
 `vendor` first.
 
 The native complex kernels ran 3.2–7.1× slower than cuBLAS when the window was set (cdouble 0.386–0.392 vs
@@ -459,7 +458,7 @@ population and `vendor` stays first. Against `Tiled16`, raggedness costs little 
 cfloat), which is why the tiles are the rows' first native entry. **A macro-tiled kernel must be swept at sizes
 that are not multiples of its tile**, or the sweep reports its best case as the average.
 
-**Rows.** In `tuned/gemm.cfloat.sm_89.txt` and `tuned/gemm.cdouble.sm_89.txt` (0 exceptions):
+**Rows.** In the cfloat and cdouble rows of `tuned/gemm.sm_89.txt` (0 exceptions):
 
 | rows (per type) | first entry | first native entry |
 |---|---|---|
@@ -717,7 +716,7 @@ before the barrier (48³ β=1: 0.91× → 1.09×). At β = 0 that prefetch is co
 float, square NN, batch ≥ 64, through 48. 49..56 runs the tiled kernel natively but stays vendor first, because 56³
 β=1 is 1.08×. Non-square NN with min_dim ≤ 32 and max 33..56 is unmeasured.
 
-**In the table:** `small` ranks first in exactly 72 rows of `tuned/gemm.float.sm_89.txt`: the NN squares 1, 2, 4, 8,
+**In the table:** `small` ranks first in exactly 72 float rows of `tuned/gemm.sm_89.txt`: the NN squares 1, 2, 4, 8,
 16, 24, 32, 40 and 48 at batch 64, 128, 2048 and 32768, both layouts. The squares 49, 56, 64 and every batch-1 or
 batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheOldVendorEdges`
 (48³ `small`, 49³ and 52³ `vendor`, 32³ b16 `vendor`, b64 `small`). The (NB/4)² work-group and sub-group-32 need

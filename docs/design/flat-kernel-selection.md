@@ -306,7 +306,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   `{expand, vendor}`, herk `{gram, fold, vendor}` and her2k `{fold, vendor}`.
 - **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/extensions/potrf_blocked.cc:309`). `Blocked`
   has no fields: `nb` and `W` come from `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`.
-  `lpanel:panel=16` has never been timed, so no table contains it.
+  `lpanel:panel=16` is timed only in the sm_120 table (165 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
@@ -327,7 +327,7 @@ unless a line says otherwise.
 ### potrf (Lower and Upper)
 
 - **Families:** `tiny`, `cta`, `lpanel:panel=8`, `blocked`, `vendor`. Float also has
-  `lpanel:panel=16`, which no table times yet. Float has 6 candidates, the other dtypes 5.
+  `lpanel:panel=16`, which only the sm_120 table times. Float has 6 candidates, the other dtypes 5.
 - **Keys:** `uplo:exact n:log:3 batch:log`. `n` weighs 3 because the work grows as n³.
 - **`can_run`:** native needs a GPU, sub-group 32, a homogeneous batch, `n >= 1` and `batch >= 1`.
   - `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= 64`.

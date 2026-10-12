@@ -11,7 +11,7 @@ Design rationale: @ref design_gesvd. Raw head-to-head grid: `benchmarks/results/
 ## gesvd: what routes today {#gesvd-what-routes-today}
 
 `gesvd` lives in `src/ops/gesvd/gesvd.cc`, its families in `src/ops/gesvd/choice.hh`. `select::run` takes the
-first family whose `can_run` admits the shape, from the nearest row of `tuned/gesvd.<dtype>.<arch>.txt`,
+first family whose `can_run` admits the shape, from the nearest row of `tuned/gesvd.<arch>.txt` for the call's dtype,
 keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kernel-selection.md).
 
 | family | kernel | `can_run` (correctness only) |
@@ -21,8 +21,8 @@ keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kern
 | `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
 | `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked |
 
-The tables are `source=transcribed:424a45bc` (the old router's order replayed per cell, not timed). First
-family per input:
+The sm_89 table is transcribed at `424a45bc` (the old router's order replayed per cell, not timed); the sm_120
+table is deep-measured. First family per input on sm_89:
 
 | input | first family |
 |---|---|

@@ -236,7 +236,7 @@ wrote both triangles and was reachable only through those pins.
   The branch can be removed; it is kept until that change lands with its own route diff.
 - **gemv refused (2026-10-09):** under a pinned vendor every non-trivial `GemvMatrixViewTest/7.*` and
   `GemvCoverageTest/7.*` case exits 139, batch 1 included (`cublasZgemv_v2 -> cublasLtZZZMatmul`).
-  The deep sm_120 ledger (`benchmarks/results/tuning/ledger/gemv.cdouble.sm_120`) agrees: the vendor
+  The deep sm_120 ledger (the cdouble cells of `benchmarks/results/tuning/ledger/gemv.sm_120.jsonl`) agrees: the vendor
   arm crashed in all 1458 batch > 1 cells and 191 of 196 batch-1 cells. The five surviving rows
   (trans=N, red=32768, out >= 64, batch 1) ranked vendor first, so nearest-row lookup sent other
   shapes into the crash. gemv's `can_run(Vendor)` (`src/ops/gemv/gemv.cc`) therefore refuses
@@ -314,8 +314,11 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `build_bidiag_vectors` forms \f$u_i = B v_i / \sigma_i\f$ (`:596`), which scales the error of
   \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
   [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
-- **Reached by:** a `cta` pin only. Every real general row of `tuned/gesvd.*.txt` ranks `jacobi`
-  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits.
+- **Reached by:** on sm_89 a `cta` pin only: no real general row of `tuned/gesvd.sm_89.txt` ranks `cta`
+  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits. On sm_120 Auto reaches it:
+  the deep table ranks `cta` first in 14 double `vec=all` non-square rows (for example `m=8 n=32`,
+  `m=32 n=8`) and in float `vec=none` rows. Double's error is \f$\varepsilon_d\kappa^2\f$; no double
+  failure has been reproduced.
 - **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations`, float/CUDA, listed in
   `tests/known-failures.txt`. Since the Philox generator, its `AN` matrix has \f$\kappa = 497\f$;
   8 of 80 seeds fail. The double instantiation still covers the four job combinations.

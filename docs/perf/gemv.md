@@ -1,6 +1,6 @@
 # GEMV {#perf_gemv}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-08/09, tables transcribed 2026-10-05
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-08/09, sm_89 table transcribed 2026-10-05, sm_120 table deep 2026-10-11
 
 Native batched `gemv` for all four scalar types and all three `transA`. This page gives the
 families, the five kernel bodies, the gates that pick a body, the `complex<double>` transposed
@@ -17,7 +17,8 @@ tables, which use `body3_ms / body5_ms`.
 `gemv` decides in `src/ops/gemv/gemv.cc` by flat selection (@ref design_flat_selection).
 `select::run` takes the first entry of the nearest row of `tuned/gemv.<device>.txt` that
 `can_run` admits. The last resort is `vendor`, then `direct` (`src/ops/gemv/choice.hh:30`). The
-tables are transcribed, not timed (`source=transcribed:424a45bc`, `tuned/README.md`).
+sm_89 table is transcribed, not timed (run `transcribed-424a45bc`); the sm_120 table was re-measured at deep
+on 2026-10-11 (`tuned/README.md`).
 
 | spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:55-66`) |
 |---|---|---|---|
@@ -330,8 +331,8 @@ worst is 0.75×, the median 1.14×.
   `red_len` 64..352, `out_len >= 256`, `batch >= 320`. The body-5 pass was diffed (0 decisions removed,
   60 added, all gemv). The transcription reproduces the old decision at 100.00% of random off-grid points
   per (device, dtype, scenario) ([Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)).
-* **The tables are untimed.** No tuner sweep of gemv exists on either device. The sm_120 rankings are the
-  sm_89 window carried over.
+* **The sm_89 table is untimed.** The sm_120 table is deep-measured (8558 deep rows, 29 `custom`, 620
+  `transcribed` where the lattice measured nothing near).
 
 ## Raw evidence
 

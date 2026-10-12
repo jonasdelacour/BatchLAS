@@ -1,6 +1,6 @@
 # QR: geqrf, orgqr and ormqr {#perf_qr}
 
-> **Status:** current · GPU 1 of a 2x RTX 4090 (sm_89), CUDA 13.2 · measured 2026-09-10 to 2026-09-26; tables transcribed 2026-10-05 (`source=transcribed:424a45bc`, untimed)
+> **Status:** current · GPU 1 of a 2x RTX 4090 (sm_89), CUDA 13.2 · measured 2026-09-10 to 2026-09-26; sm_89 tables transcribed 2026-10-05 (run `transcribed-424a45bc`, untimed); sm_120 tables deep (`tuned/README.md`)
 
 Native QR families (`geqrf`: `tiny`, `cta`, `blocked`; `orgqr` and `ormqr`: `blocked`), each against its `vendor` family: what `can_run` admits, which family the shipped `tuned/{geqrf,orgqr,ormqr}.*.txt` rows rank first, and the measurements behind the rows. Selection is flat (@ref design_flat_selection). The windows are rows transcribed from the deleted route-era predicates; none has been re-timed as a table.
 
@@ -244,7 +244,7 @@ Git tag `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-inde
 
 ## The shipped `orgqr` ceiling
 
-`tuned/orgqr.*.txt` ranks `blocked` first only up to m = 512, every type, both devices (`m=512` rows `blocked, vendor`; `m=513` rows `vendor, blocked`), transcribing `rows <= 512 && cols <= 512` (`cols` is implied by `n <= m`). Grid: [small-n-baseline.md](small-n-baseline.md#orgqr); bracketing losses: [orgqr grid](#orgqr-grid). Every ratio is "beats the per-item loop", not "beats cuSOLVER".
+`tuned/orgqr.sm_89.txt` ranks `blocked` first only up to m = 512, every type (`m=512` rows `blocked, vendor`; `m=513` rows `vendor, blocked`), transcribing `rows <= 512 && cols <= 512` (`cols` is implied by `n <= m`). Grid: [small-n-baseline.md](small-n-baseline.md#orgqr); bracketing losses: [orgqr grid](#orgqr-grid). Every ratio is "beats the per-item loop", not "beats cuSOLVER".
 
 The window has no floor: the margin is smallest at the largest order. Native over vendor at n = 512 / 256 / 64 / n <= 16: float 3.64 / 5.30 / 27.10 / >= 181; cfloat 2.54 / 4.04 / 15.09 / >= 172; double 4.61 / 8.46 / 27.09 / **>= 97.72**; cdouble 2.77 / 4.75 / 11.31 / >= 42. That is 66 square cells, orders 4..512, zero losses, minimum 2.54. The double floor is from `benchmarks/results/factor_baseline_orgqr_double.csv` (`double 16x16 b32768`: vendor 1642.61 ms, native 16.8097 ms); the predicate comment's `>= 98` overreaches by 0.28.
 
@@ -472,7 +472,7 @@ Square `m = n` through the blocked driver (capped / uncapped): n=16 **0.98** / 0
 
 ### The double order floor moves to 76
 
-The double floor was 96 in the route-era `preferred()` and is now **76**: the transcribed `tuned/geqrf.double.*.txt` rows rank `blocked` first from square n = 76 (n = 75 ranks `vendor, blocked, ...`). `t_vendor / t_native` with the register leaf in the native arm:
+The double floor was 96 in the route-era `preferred()` and is now **76**: the transcribed double rows of `tuned/geqrf.sm_89.txt` rank `blocked` first from square n = 76 (n = 75 ranks `vendor, blocked, ...`). `t_vendor / t_native` with the register leaf in the native arm:
 
 | n | 64 | 72 | 76 | 80 | 96 |
 |---|---|---|---|---|---|
@@ -527,7 +527,7 @@ complex<float>    5 <= n <=  8,  11 <= n <= 16,  24 <= n <= 32
 double, cdouble   refused
 ```
 
-These are the square rows of `tuned/geqrf.<dtype>.sm_89.txt` (and sm_120) that rank `tiny` first, transcribed from the route-era `tiny_window()` and untimed as table rows. Grid points sit on both sides of every edge (n = 3, 4, 16, 17, 20, 21, 32, 33, ... in `src/ops/geqrf/choice.hh:39-42`), so nearest-row lookup cannot move an edge.
+These are the square rows of `tuned/geqrf.sm_89.txt` that rank `tiny` first, transcribed from the route-era `tiny_window()` and untimed as table rows. Grid points sit on both sides of every edge (n = 3, 4, 16, 17, 20, 21, 32, 33, ... in `src/ops/geqrf/choice.hh:39-42`), so nearest-row lookup cannot move an edge.
 
 **The holes are measured; do not tidy them away.** `tiny_n_is_legal` admits N in {8, 16, 32} only (partition butterflies), and the loop `continue`s rather than `break`s, which keeps the array in registers with zero spill. So every order from 17 to 32 runs the full 32-iteration trip count, and the same fill penalty hits the bottom of each bucket (n = 9, 10 in N=16; n = 4 in N=8). Float absorbs it; complex does not. The same mechanism is the n = 17 cliff in `getrf` ([lu.md](lu.md)).
 

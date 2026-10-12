@@ -13,14 +13,15 @@ driver 595.84, unless a table says otherwise. Times are µs per matrix unless a 
 
 The families live in `src/ops/syev/choice.hh`: `cta`, `cta_fused` and `jacobi` (the three n ≤ 32
 sub-group solvers), `blocked`, `two_stage` and `vendor`. `select::choose` takes the first runnable
-entry of the nearest row of `tuned/syev.<dtype>.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on
+entry of the nearest row of `tuned/syev.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on
 `jobz`, `n` and `batch`. `can_run` is correctness only: the native families need a non-NETLIB GPU
 backend and a square A with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group.
 Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
 
-> **Note:** every syev table (all dtypes, sm_89 and sm_120) is `source=transcribed:424a45bc`: it replays the
-> previous router's order per grid cell (`tuned/README.md`, [flat kernel selection](../design/flat-kernel-selection.md)),
-> identical across batch. A retune with `tools/tune/` is what would make batch matter.
+> **Note:** the sm_89 syev table is `transcribed` at `424a45bc`: it replays the previous router's order per
+> grid cell, identical across batch, and the rule table below reads its rows. The sm_120 table is deep-measured
+> (1226 rows, plus 260 `transcribed` rows where the lattice measured nothing near), and batch matters there
+> (`tuned/README.md`, [flat kernel selection](../design/flat-kernel-selection.md)).
 
 | decision | where | rule |
 |---|---|---|
@@ -176,7 +177,7 @@ Build `7911847`. Median of 5 process-level repeats with IQR, each cell at its kn
 
 Double (n = 4, 8, 16, 32, both modes): Jacobi wins every cell, 1.37×–3.59×. Full grid:
 `benchmarks/results/syev_retune_phaseA.jsonl`. `syev_cta`, where Auto sent every n ≤ 32, won no cell. The rule is
-the n ≤ 32 rows of `tuned/syev.{float,double}.*.txt`: double Jacobi everywhere; float Jacobi to n = 8, `cta_fused`
+the float and double n ≤ 32 rows of `tuned/syev.sm_89.txt`: double Jacobi everywhere; float Jacobi to n = 8, `cta_fused`
 above. The float rule rests on the vector cells; n = 9..15 was not swept. A later A/B found fused with its tuned
 multiplier beats Jacobi from n = 7; the 8 | 9 boundary stays for Jacobi's relative accuracy on graded input (4.5e-07
 against 2.7e+28 for `syev_cta`, quoted from the uncommitted Jacobi plan, see
@@ -202,7 +203,7 @@ fused leads `cta` by only 1.03×–1.08× at n = 4..16 (neutral), so that range 
 
 ### syev: the complex double vendor handover
 
-The complex<double> `jobz=V` rows of `tuned/syev.cdouble.*.txt` put `vendor` first for n = 25..32. 2026-08-07,
+The complex<double> `jobz=V` rows of `tuned/syev.sm_89.txt` put `vendor` first for n = 25..32. 2026-08-07,
 median of 3, µs per matrix (cta / cta_fused / vendor): n = 20 3.0015 / 3.4597 / 3.1085 (cta); n = 24 4.0806 /
 4.6301 / 3.8184 (tie); n = 26 5.4993 / 5.3048 / 4.4835 (vendor 1.23×); n = 32 8.0253 / 7.4929 / 5.6531 (vendor
 1.42×). An FP64-rate artifact and machine-specific. complex<float> does not cross over (`cta` beats the vendor
@@ -557,8 +558,8 @@ also uses a literal the tuning parameter does not reach (see [stedc: open debts]
 - **Grid residency cap (A5):** unlikely to pay (no starvation at batch ≥ 128).
 - **Profile `stedc` internally (B4), port the grid barrier:** stedc is 20.7% of the float eigenvector solve at
   n = 256; profile at batch 1 first.
-- **Routing-audit benchmark (`BM_SYEV_RoutingAudit`):** not built; the syev tables stay untimed transcriptions until
-  `tools/tune/` is run.
+- **Routing-audit benchmark (`BM_SYEV_RoutingAudit`):** not built; the sm_89 syev table stays an untimed transcription
+  (sm_120 is deep-measured by `tools/tune/`).
 - Grid-resident whole solve at batch 1 (speculative; the vendor leads by up to 15.3×); values-mode n ≤ 32 vendor
   comparison; rocSOLVER (nothing measured).
 

@@ -10,7 +10,7 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 * **Families** (`src/ops/<op>/choice.hh`, in tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields. See [families and their limits](#lu-families-and-their-limits).
 * **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`. It is the only gate. A `can_run` term must never be a speed term, or the shape becomes unservable in a vendor-free build.
-* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. All 32 LU tables are `source=transcribed:424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The sm_120 rows equal the sm_89 rows, so on sm_120 they are hypotheses until retuned. See [what the tables rank first](#lu-what-the-tables-rank-first).
+* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The four sm_89 tables are `transcribed` at `424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The four sm_120 tables are deep-measured; getrf, getri and getrs keep 45, 94 and 790 `transcribed` rows where the deep lattice measured nothing near ([tuned/README.md](../../tuned/README.md)). See [what the tables rank first](#lu-what-the-tables-rank-first).
 * **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:225-237`).
 * **Pins**: `BATCHLAS_GETRF_ROUTE`, `BATCHLAS_GETRS_ROUTE`, `BATCHLAS_GETRI_ROUTE`, `BATCHLAS_GESV_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or names a family whose `can_run` refuses the shape throws `std::invalid_argument`. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
 * **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), the blocking factor `nb`, the tiny bucket and its launch bound. The launchers work these out. They are not families, keys or `can_run` terms.
@@ -174,7 +174,7 @@ On the saturating grid, nrhs=1 moves from 0.256x (0 of 28 wins) to 2.117x (28 of
 
 **Why clause B is float-only.** Mid-ladder dips refute the wider candidates: double n=128 at 0.940x (batch 2048); cdouble n=32 at 0.577x. Rejected: float `nrhs <= 8` (3 losses, worst 0.686x), `nrhs <= 4` every type (20 losses, worst 0.577x), the whole capability (55 losses, worst 0.294x). The thinnest margin is cdouble n=32 nrhs=2 at 1.116 (batch 16384); it flattens rather than falls.
 
-**In the tables:** every `tuned/getrs.<dtype>.sm_89.txt` row with nrhs 1-2 and n >= 32 reads `cta vendor blocked`; float rows also at nrhs 3-4.
+**In the tables:** every `tuned/getrs.sm_89.txt` row with nrhs 1-2 and n >= 32 reads `cta vendor blocked`; float rows also at nrhs 3-4.
 
 ### `getrs` order floor evidence
 

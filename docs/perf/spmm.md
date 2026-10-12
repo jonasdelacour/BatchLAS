@@ -26,8 +26,9 @@ is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gathe
 
 ### Ranking in the tables
 
-Every row of `tuned/spmm.<device>.txt` on sm_89, sm_120 and `cpu` is transcribed from the predicate that
-preceded flat selection (untimed; provenance in `tuned/README.md`):
+Every row of `tuned/spmm.sm_89.txt` and `tuned/spmm.cpu.txt` is transcribed from the predicate that
+preceded flat selection (untimed; provenance in `tuned/README.md`); `tuned/spmm.sm_120.txt` is deep-measured, with
+24 transcribed rows left:
 
 | rows | float, double, complex\<double\> | complex\<float\> |
 |---|---|---|
@@ -358,8 +359,8 @@ vendor returning a status code instead of throwing is not covered by the skip. `
 ## Open debts
 
 * **The transposed scatter has no winning row, and zero in-tree C++ callers.** Nothing exercises it in practice.
-* **The tables are transcribed, not timed.** The grid above is sm_89 only. The sm_120 and CPU rows carry the same
-  clause without measurement. The next retune would replace them with timed rows.
+* **The sm_89 and CPU tables are transcribed, not timed.** The grid above is sm_89 only. The CPU rows carry the
+  same clause without measurement; the sm_120 table is deep-measured.
 * **The `cfloat` gather margin is about 3 %.** A kernel change costing 5 % on `complex<float>` turns admitted cells
   into losses, and no test notices.
 * **The `nrhs >= 16` narrowing** passes `verdict.txt` at worst 0.968 and would move 183 cells instead of 176. It is

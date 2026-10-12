@@ -1,10 +1,11 @@
 # Level-3: symm, hemm, syrk, herk, syr2k, her2k, trmm {#perf_level3}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2, `RelWithDebInfo` · measured 2026-09-05; tables transcribed 2026-10-06
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2, `RelWithDebInfo` · measured 2026-09-05; sm_89 tables transcribed 2026-10-06, sm_120 tables deep
 
 Routing and measurements for the seven level-3 ops. `symm`, `syrk`, `syr2k` and `trmm` choose from
-tuned tables. `hemm`, `herk` and `her2k` choose by fixed rules in the cuBLAS backend. The table rows
-for the four are transcribed from the deleted hand-written gates (at `ff340fc6`) and are untimed.
+tuned tables. `hemm`, `herk` and `her2k` choose by fixed rules in the cuBLAS backend. The sm_89 table rows
+for the four are transcribed from the deleted hand-written gates (at `ff340fc6`) and are untimed; the sm_120
+tables are deep-measured (`tuned/README.md`).
 
 ## Level-3: how the table-selected four choose
 
@@ -39,9 +40,9 @@ vendor. The last resort when nothing runs is `expand, vendor` (symm), `triangula
 
 ### Level-3: what the shipped tables rank first
 
-The twenty tables (`tuned/{symm,syrk,syr2k}.{float,double}.*`, `tuned/trmm.{float,double,cfloat,cdouble}.*`,
-for `sm_89` and `sm_120`, identical because the old rules read no architecture) are
-`source=transcribed:ff340fc6`. Per grid cell they put the old Auto choice first. From the `sm_89` rows:
+The sm_89 tables (`tuned/{symm,syrk,syr2k,trmm}.sm_89.txt`: float and double for the three real-only ops, all
+four dtypes for trmm) are `transcribed` at `ff340fc6`. Per grid cell they put the old Auto choice first. The sm_120
+tables are deep-measured, with `transcribed` rows kept where the lattice measured nothing near. From the `sm_89` rows:
 
 | op, dtype | ranked first |
 |---|---|
@@ -101,7 +102,7 @@ the effective window, not the predicates.
 
 ## Boundaries and their evidence
 
-The windows below were measured against the old gates. The transcribed tables reproduce them cell by cell.
+The windows below were measured against the old gates. The transcribed sm_89 tables reproduce them cell by cell.
 
 ### syrk triangular tiles
 
@@ -464,7 +465,7 @@ opposite triangle and C. This was found by reading and is **not confirmed by a t
 - **ROCm has no native level-3 path** and no hemm, herk or her2k; its `syrk`, `syr2k` and `trmm` take the rocBLAS loop.
 - **`her2k_gemm_preferred` was swept only over square rank-k shapes.** The narrow panel case (k = nb in {16,24,32},
   n2 up to 480) awaits an A/B at n2 in {224,480}, `complex<float>`. `complex<double>` is unmeasured.
-- **The tables are transcribed, not timed.** Suspects: `sq` rows that rank `triangular` from n = 129 (only n >= 384
+- **The sm_89 tables are transcribed, not timed.** Suspects: `sq` rows that rank `triangular` from n = 129 (only n >= 384
   was measured to win); double `symm` rows that rank `vendor` first; `complex<float>` Left `trmm` rows that rank
   `triangular` first (it loses below m = 512). Retune by sweeping the families on the saturated grid (`tools/tune`).
 - **Unverified boundaries:** `257 <= n <= 383` for `syrk` `triangular`; batch 3 and `769 <= n <= 895` for herk; batch 1

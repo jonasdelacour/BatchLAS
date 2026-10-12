@@ -200,7 +200,7 @@ Public `syev`, batch 65,536, Jacobi / fused (above 1 means fused is faster):
   Jacobi (0.62), launch-bound, and left alone.
 - Complex float keeps the fused kernel for n <= 8.
 
-The current boundary lives in the n <= 32 rows of `tuned/syev.float.*.txt`. Select the kernel with
+The current boundary lives in the float n <= 32 rows of `tuned/syev.*.txt`. Select the kernel with
 `BATCHLAS_SYEV_ROUTE=jacobi|cta_fused`; `BATCHLAS_SYEV_SMALL_KERNEL` is retired.
 
 ## CTA STEQR: chase micro-structure decisions

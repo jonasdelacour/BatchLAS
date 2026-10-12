@@ -1,6 +1,6 @@
 # Dispatch and coverage {#perf_dispatch}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · level-3 tables transcribed 2026-10-06; WP0/WP1 measurements before 2026-09-30
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · sm_89 level-3 tables transcribed 2026-10-06, sm_120 deep; WP0/WP1 measurements before 2026-09-30
 
 The shared dispatch rules for every op, and the level-3 four (`symm`, `syrk`, `syr2k`, `trmm`): vendor availability,
 candidate families, `can_run` terms, pin spellings, what the tuned tables rank, and the measurements behind the
@@ -65,9 +65,9 @@ gram); 65536 throws `Number of work-groups exceed limit`, confirmed by launch.
 syrk is real-only, so `ConjTrans` reaches its kernels as `Trans`. It is not a `can_run` term; the exact `trans` key
 keeps real `ConjTrans` on the vendor.
 
-**What the tables rank.** All level-3 tables are **transcribed, untimed** (`source=transcribed:ff340fc6`, entries
-`<spelling> -`). They are identical for sm_89 and sm_120, and ship for float and double only for the three real-only
-ops (`tuned/README.md`). Each row is the old vendor-present Auto choice, then every other structurally runnable
+**What the tables rank.** The sm_89 level-3 tables are **transcribed, untimed** (run `transcribed-ff340fc6`,
+entries `<spelling> -`); the sm_120 tables are deep-measured. Both ship float and double only for the three
+real-only ops (`tuned/README.md`). Each row is the old vendor-present Auto choice, then every other structurally runnable
 candidate, with `vendor` last unless it was the Auto choice. The off-grid gate agreed with the old choice on 100.00%
 of 2500-3000 random points per (op, dtype, device) (flat-kernel-selection.md §12).
 
@@ -110,9 +110,8 @@ Two neighbouring variables are not pins of these four ops. `herk` reaches syrk's
 
 ## Measured boundaries {#dispatch-measured-boundaries}
 
-These measurements are the evidence behind the level-3 tables. Each boundary is a row edge in
-`tuned/<op>.float.sm_89.txt`. The windows are route-era decisions that have not been re-timed; the phase-4 retune
-would replace the transcribed rows with timed ones. Gate sources quoted here are at `ff340fc6`
+These measurements are the evidence behind the sm_89 level-3 tables. Each boundary is a row edge in the float
+rows of `tuned/<op>.sm_89.txt`. The windows are route-era decisions that have not been re-timed on sm_89. Gate sources quoted here are at `ff340fc6`
 (`git show ff340fc6:src/backends/<file>`).
 
 All figures: RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU via `experiments/gpu_guard.sh`, at a
@@ -122,7 +121,7 @@ saturating batch (batch 1 is not a design target).
 
 The old rule: expand when `batch >= 4 || max_dim >= 256` (`kExpandMinBatch`/`kExpandMinDim` in
 `src/backends/triangular_expand.hh`). In code it survives only in `expansion_preferred`, which decides **hemm** and
-reads `BATCHLAS_EXPAND_ROUTE` first. For **symm** the rule is the `form=sq` rows of `tuned/symm.float.sm_89.txt`.
+reads `BATCHLAS_EXPAND_ROUTE` first. For **symm** the rule is the float `form=sq` rows of `tuned/symm.sm_89.txt`.
 
 Measured against a per-batch loop over the vendor's triangular primitive (float symm n 16..2048 x batch 1..512;
 complex64 hemm n 16..512 x batch 1..16), expansion wins **1.2x to 72x** everywhere except **batch <= 2 with n <= 128**,
@@ -217,7 +216,7 @@ whenever either route changes.
 Against the GEMM spelling, `trmm` wins everywhere in `double` (1.29x–2.02x) and `complex<double>` (1.05x–1.95x), and
 at 8 of 10 float shapes. It **loses below m = 512 in `complex<float>`** (0.69x–0.93x): a register-file ceiling, since
 cuBLAS's cgemm runs near FP32 FMA peak on these shapes while a complex accumulator costs twice the registers. The
-cfloat table ranks `triangular` first on every `side=L` row; `triangular` vs `expand` for cfloat below m = 512 is
+cfloat sm_89 rows rank `triangular` first on every `side=L` row; `triangular` vs `expand` for cfloat below m = 512 is
 untimed.
 
 ### herk and her2k crossovers
@@ -372,10 +371,10 @@ created when no CUDA math library is present (`src/CMakeLists.txt:18-20`).
 
 1. **`syr2k` has no non-float native route.** `syr2k_triangular_tiles` is float only.
 2. **hemm, herk and her2k have no tables and no `BATCHLAS_<OP>_ROUTE`.** Vendor-free, they throw `NoRouteError`.
-3. **The level-3 tables are transcribed and untimed.** The phase-4 retune measures them.
+3. **The sm_89 level-3 tables are transcribed and untimed.** Only sm_120 has measured level-3 tables.
 4. **Unverified windows**, each a transcribed row edge with no bracketing grid: the 257 <= n <= 383 band that
-   `tuned/syrk.float.*` ranks `triangular` first; the batch-3 and 128 < n < 256 `form=sq` cells that
-   `tuned/symm.float.*` ranks `vendor` first (and the same constants in hemm's `expansion_preferred`); and the old
+   the float rows of `tuned/syrk.sm_89.txt` rank `triangular` first; the batch-3 and 128 < n < 256 `form=sq` cells that
+   the float rows of `tuned/symm.sm_89.txt` rank `vendor` first (and the same constants in hemm's `expansion_preferred`); and the old
    squareish 2:1 aspect ratio (the `form=sq` edge of the syrk table).
 5. **A coverage row cannot confirm that a particular shape ran.** Rows are keyed on a power-of-two `shape_class` and
    are first-writer-wins, so the m/n/k/batch columns can describe a different call. Prove a shape with a break that is

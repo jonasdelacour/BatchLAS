@@ -150,7 +150,7 @@ Full grid, including the `*dropped*` small-n cells: `benchmarks/results/factor_b
 - **No kept cell loses.** The minimum over 210 kept cells is **1.58** (cfloat `1024x128` b2048).
   The excluded paging cells read below 1.00 (cdouble `1024x128` b8192 at 0.892) and are the same
   artefact as the excluded `512x64` cell.
-- **Shipped table:** `tuned/orgqr.<dtype>.sm_89.txt` ranks `blocked` first for `m <= 512` and
+- **Shipped table:** `tuned/orgqr.sm_89.txt` ranks `blocked` first for `m <= 512` and
   `vendor` first for `m >= 513`. The `1024x128` cells, where native wins 1.63-2.91x, are
   vendor-first: an unflipped win, not a measured loss.
 - **Discards.** All 52 orgqr discards are on the native arm (`rel_sd` 0.10-0.12, vendor 0.02-0.07).
@@ -163,7 +163,7 @@ Full grid, including the `*dropped*` small-n cells: `benchmarks/results/factor_b
 Two right-hand-side widths: `nrhs <= 2` (route-era clause A, every type) and `nrhs = 4` (clause B,
 float only). Both carried live traffic when this grid was measured.
 
-Today getrs chooses from `tuned/getrs.<dtype>.sm_89.txt` (transcribed at `424a45bc`, untimed).
+Today getrs chooses on sm_89 from `tuned/getrs.sm_89.txt` (transcribed at `424a45bc`, untimed).
 `cta` ranks first for `n >= 32` with `nrhs <= 2` (every type) and `nrhs` 3-4 (float). `vendor`
 ranks first everywhere else: `n=31 nrhs=1` is vendor-first, `n=32 nrhs=1` is cta-first, and
 `n=32 nrhs=3` is cta-first for float and vendor-first for the other three types.
@@ -258,7 +258,7 @@ and 512 move the other way (+37%, +62%).
 **geqrf n = 128 is a tier mismatch, and it is exact.** Pinned: `cta` 15.419 ms, `blocked` 9.349 ms,
 vendor 31.024 ms (float). `docs/perf/qr.md` records "30.9 -> 15.4 ms (2.01x)"; its native number is
 the CTA time, while its own tier table gives the default at that cell as blocked, 9.97 ms. The
-`form=sq n=128` row of `tuned/geqrf.float.sm_89.txt` ranks `tiny` (which cannot run at this
+float `form=sq n=128` row of `tuned/geqrf.sm_89.txt` ranks `tiny` (which cannot run at this
 order), then `blocked`, then `cta`, then `vendor`.
 
 **The other geqrf cells (+22% to +77%) are not explained.** Ruled out: the tier, the vendor arm

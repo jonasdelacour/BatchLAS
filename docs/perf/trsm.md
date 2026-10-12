@@ -1,6 +1,6 @@
 # TRSM {#perf_trsm}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · step-9 to step-16 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-05 (sm_120)
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · step-9 to step-16 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-11 (sm_120, deep)
 
 Native batched `trsm` on the GPU: the `cta` (V1), `blocked` (V2) and `sg_left` kernels, the routing
 tables that choose among them, and the measurements behind those tables. The page gives the
@@ -36,12 +36,13 @@ Grid: batch from 128 up (`src/ops/trsm/choice.hh:31-34`). Provenance is in `tune
 
 | table | source | first entry |
 |---|---|---|
-| `trsm.<all four>.sm_89.txt` | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32; `blocked \| vendor` on all 2400 rows above. `sg_left` in no row |
-| `trsm.{cfloat,cdouble}.sm_120.txt` | the sm_89 transcription, relabelled | the same |
-| `trsm.float.sm_120.txt` | measured (`benchmarks/results/tuning/trsm.float.sm_120.jsonl`) | order <= 32: Left `sg_left` 876 / `cta` 310 rows, Right `cta` 921 / `vendor` 92; above 32: Left `blocked` 601 / `vendor` 538, Right `blocked` 645 / `vendor` 469 |
-| `trsm.double.sm_120.txt` | measured (`trsm.double.sm_120.jsonl`) | order <= 32: Left `sg_left` 587 / `cta` 523 / `vendor` 15 / `blocked` 1, Right `cta` 898 / `vendor` 95; above 32: Left `blocked` 874 / `vendor` 144, Right `blocked` 905 / `vendor` 56 |
+| `trsm.sm_89.txt`, every dtype | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32; `blocked \| vendor` on all 2400 rows above. `sg_left` in no row |
+| `trsm.sm_120.txt`, float rows | deep | order <= 32: Left `sg_left` 1156 / `cta` 473 / `blocked` 1, Right `cta` 946 / `vendor` 95; above 32: Left `blocked` 957 / `vendor` 744, Right `blocked` 955 / `vendor` 545 |
+| `trsm.sm_120.txt`, double rows | deep | order <= 32: Left `cta` 777 / `sg_left` 733 / `vendor` 17, Right `cta` 1016 / `vendor` 122 / `blocked` 1; above 32: Left `blocked` 1163 / `vendor` 149, Right `blocked` 1003 / `vendor` 48 |
+| `trsm.sm_120.txt`, cfloat rows | deep, plus 508 transcribed | order <= 32: Left `sg_left` 1220 / `cta` 1078 / `vendor` 266 / `blocked` 121, Right `cta` 887 / `vendor` 591; above 32: Left `blocked` 1156 / `vendor` 26, Right `blocked` 1162 / `vendor` 64 |
+| `trsm.sm_120.txt`, cdouble rows | deep, plus 732 transcribed | order <= 32: Left `cta` 743 / `sg_left` 596 / `vendor` 323 / `blocked` 1, Right `cta` 882 / `vendor` 465; above 32: Left `blocked` 1107 / `vendor` 92, Right `blocked` 1100 / `vendor` 95 |
 
-On sm_89, `sg_left` runs only when pinned. The vendor runs only where no native family can: a
+On sm_89, `sg_left` runs only when pinned, and the vendor only where no native family can: a
 heterogeneous batch, or a CPU queue. The sm_120 result is on the
 [Blackwell page](blackwell.md#trsm-on-sm_120-result).
 

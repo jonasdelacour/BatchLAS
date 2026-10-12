@@ -677,7 +677,7 @@ op chooses one **kernel family** for the call: a native kernel (`tiny`, `cta`, `
 `blocked`, ...) or `vendor` (the cuBLAS/cuSOLVER/rocBLAS/host LAPACK call). The decision for an op
 is `src/ops/<op>/<op>.cc`, with its vocabulary in `src/ops/<op>/choice.hh`.
 
-- **Tables, per device.** `tuned/<op>.<dtype>.<arch>.txt` is embedded at build time. A call finds
+- **Tables, per device.** `tuned/<op>.<arch>.txt` (one row set per dtype) is embedded at build time. A call finds
   the nearest measured shape and takes the first family in that row whose correctness predicate
   (`can_run`) admits the call; if none does it tries the next table in borrow order, then the op's
   last-resort order. A GPU with no table borrows the nearest and prints one warning per op. The CPU

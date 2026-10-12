@@ -50,8 +50,8 @@ transform. `blocked` has no lower order bound, because a correctness gate must n
 
 ### Known gaps
 
-* `lpanel:panel=16` has never been timed on any device.
-* sm_120 has `uplo=U` rows for float only; other types' Upper take the nearest `uplo=L` row.
+* `lpanel:panel=16` is timed on sm_120 only: all 165 float `uplo=L` rows rank it, 21 of them first. sm_89 has no
+  timing of it.
 * A table ranks a family only where its sweep timed it. Off-grid cells are guesses.
 * `factor_bench`'s posv `composed` arm pins potrf to `tiny` only up to the type's tiny ceiling; above it, the pin is `native`.
 
@@ -748,7 +748,7 @@ at the excluded n = 10 Auto is the vendor, 1.000x).
 Four breaks were planted against the deleted route-era predicate. Three went red: admitting the fp64 hole at n = 9..11,
 refusing Upper, and letting Upper reach the Lower-only LPanel. The fourth, firing the window with no tier linked, stayed
 green and is **unfalsifiable**, not covered. Under flat selection the fp64 hole and Upper rows are table data; for
-example, `tuned/potrf.double.sm_89.txt` ranks `vendor` first at n = 9 and 10.
+example, the double rows of `tuned/potrf.sm_89.txt` rank `vendor` first at n = 9 and 10.
 
 ## The fused potrs solve {#the-fused-potrs-solve}
 
