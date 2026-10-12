@@ -1324,7 +1324,8 @@ namespace batchlas {
                                           promoted_type beta, std::span<const int> items = {},
                                           std::optional<Uplo> c_triangle = std::nullopt);
 
-        /// @brief The largest denominator of gemm_backward_error() over @p items (empty: A's default_items()).
+        /// @brief The largest denominator of gemm_backward_error() over @p items (empty: A's default_items(),
+        ///        while gemm_backward_error() defaults to C's: pass both the same span when A's batch differs).
         static double gemm_max_denominator(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B,
                                            Transpose tb, const MatrixView& C0, promoted_type alpha, promoted_type beta,
                                            std::span<const int> items = {});

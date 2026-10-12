@@ -18,6 +18,7 @@
 #include <cstring>
 #include <complex>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <span>
 #include <sstream>
@@ -304,10 +305,11 @@ TEST(Engine, SecondGroupKeepsItsItemIndices) {
     EXPECT_EQ(MV<float>::orthogonality(ctx, Q, clean), 0.0);
 }
 
-// Each check chains kernels (triangularize, product, difference, norm) and waits once at the end:
-// on an out-of-order Queue a link may run before the one it reads, so the value must not depend on
-// the Queue's ordering. The operands are random, so the factor's other triangle is garbage that only
-// an ordered triangularize hides.
+// Each check chains kernels (triangularize, product, difference, norm) and waits per item group: on an
+// out-of-order Queue a link may run before the one it reads, so every check runs on an in-order sibling.
+// Random operands leave garbage in the factor's other triangle that only an ordered triangularize hides.
+// With every guard removed only qr_residual reorders on the CUDA adapter (svd_residual sometimes); the
+// other rows pin each guard's forwarding of its arguments (items, full_limit, c_triangle, ...).
 TEST(VerifyOutOfOrder, SameAsInOrder) {
     using T = float;
     using batchlas::Matrix;
@@ -323,24 +325,66 @@ TEST(VerifyOutOfOrder, SameAsInOrder) {
     std::vector<std::int32_t> ipiv(std::size_t(n) * batch);
     for (std::size_t i = 0; i < ipiv.size(); ++i) ipiv[i] = std::int32_t((i * 7) % n) + 1;
     const batchlas::VectorView<std::int32_t> piv(ipiv.data(), n, batch);
-    const batchlas::VectorView<T> tv(tau.data().data(), n, batch), sv(s.data().data(), n, batch);
-    const auto all = A0.view().all_items();
-    const auto run = [&](batchlas::Queue& q, int check) {
-        switch (check) {
-            case 0: return MV<T>::potrf_residual(q, A0.view(), F.view(), batchlas::Uplo::Lower, all);
-            case 1: return MV<T>::getrf_residual(q, A0.view(), F.view(), piv, all);
-            case 2: return MV<T>::qr_residual(q, A0.view(), F.view(), tv, all);
-            case 3: return MV<T>::svd_residual(q, A0.view(), U.view(), sv, Vh.view(), all);
-            default: return MV<T>::trsm_residual(q, F.view(), batchlas::Side::Left, batchlas::Uplo::Upper, Transpose::NoTrans,
-                                                 batchlas::Diag::NonUnit, X.view(), B0.view(), 1.0, all);
+    auto y = Matrix<T>::Random(n, 1, false, batch, 19);
+    const batchlas::VectorView<T> tv(tau.data().data(), n, batch), sv(s.data().data(), n, batch), yv(y.data().data(), n, batch);
+    std::vector<std::int32_t> ro(std::size_t(n + 1) * batch), ci(std::size_t(n) * batch);
+    for (int b = 0; b < batch; ++b)
+        for (int r = 0; r <= n; ++r) {
+            ro[std::size_t(b) * (n + 1) + r] = r;
+            if (r < n) ci[std::size_t(b) * n + r] = (r * 5 + b) % n;
         }
+    const MatrixView<T, MatrixFormat::CSR> S(y.data().data(), ro.data(), ci.data(), n, n, batchlas::NonZeros{n}, n, n + 1, batch);
+    const auto all = A0.view().all_items();
+    using Q = batchlas::Queue;
+    using batchlas::Uplo;
+    const auto checksum = [](const auto& M) {
+        double s = 0;
+        for (std::size_t i = 0; i < M.data().size(); ++i) s += double(M.data()[i]) * double(i % 7 + 1);
+        return s;
     };
-    const char* names[] = {"potrf_residual", "getrf_residual", "qr_residual", "svd_residual", "trsm_residual"};
-    for (int check = 0; check < 5; ++check) {
-        const double want = run(in_order, check);
+    const std::pair<const char*, std::function<double(Q&)>> cases[] = {
+        {"potrf_residual", [&](Q& q) { return MV<T>::potrf_residual(q, A0.view(), F.view(), Uplo::Lower, all); }},
+        {"getrf_residual", [&](Q& q) { return MV<T>::getrf_residual(q, A0.view(), F.view(), piv, all); }},
+        {"qr_residual", [&](Q& q) { return MV<T>::qr_residual(q, A0.view(), F.view(), tv, all); }},
+        {"svd_residual", [&](Q& q) { return MV<T>::svd_residual(q, A0.view(), U.view(), sv, Vh.view(), all); }},
+        {"trsm_residual", [&](Q& q) {
+             return MV<T>::trsm_residual(q, F.view(), batchlas::Side::Left, Uplo::Upper, Transpose::NoTrans, batchlas::Diag::NonUnit,
+                                         X.view(), B0.view(), 1.0, all);
+         }},
+        {"similarity_residual", [&](Q& q) { return MV<T>::similarity_residual(q, A0.view(), U.view(), F.view(), all); }},
+        {"form_q", [&](Q& q) { return checksum(MV<T>::form_q(q, F.view(), tv, all, n)); }},
+        {"qr_reconstruction", [&](Q& q) { return MV<T>::qr_reconstruction(q, A0.view(), U.view(), F.view(), all); }},
+        {"solve_residual", [&](Q& q) { return MV<T>::solve_residual(q, A0.view(), Transpose::NoTrans, X.view(), B0.view(), all); }},
+        {"solve_residual probe", [&](Q& q) {
+             return MV<T>::solve_residual(q, A0.view(), Transpose::NoTrans, X.view(), B0.view(), all, 0.0);
+         }},
+        {"lu_solve_residual", [&](Q& q) { return MV<T>::lu_solve_residual(q, F.view(), piv, Transpose::NoTrans, X.view(), B0.view(), all); }},
+        {"lu_solve_residual probe", [&](Q& q) {
+             return MV<T>::lu_solve_residual(q, F.view(), piv, Transpose::NoTrans, X.view(), B0.view(), all, 0.0);
+         }},
+        {"orthogonality", [&](Q& q) { return MV<T>::orthogonality(q, U.view(), all); }},
+        {"eigen_residual", [&](Q& q) { return MV<T>::eigen_residual(q, A0.view(), U.view(), sv, all); }},
+        {"gemm_backward_error", [&](Q& q) {
+             return MV<T>::gemm_backward_error(q, A0.view(), Transpose::Trans, F.view(), Transpose::NoTrans, U.view(), X.view(), 1.0, 0.5,
+                                               all, Uplo::Lower);
+         }},
+        {"gemm_max_denominator", [&](Q& q) {
+             return MV<T>::gemm_max_denominator(q, A0.view(), Transpose::Trans, F.view(), Transpose::NoTrans, U.view(), 1.0, 0.5, all);
+         }},
+        {"gemv_backward_error", [&](Q& q) { return MV<T>::gemv_backward_error(q, A0.view(), Transpose::Trans, tv, sv, yv, 1.0, 0.5, all); }},
+        {"spmm_backward_error", [&](Q& q) {
+             return MV<T>::spmm_backward_error(q, S, Transpose::NoTrans, F.view(), Transpose::NoTrans, U.view(), X.view(), 1.0, 0.5, all);
+         }},
+        {"rank2k_backward_error", [&](Q& q) {
+             return MV<T>::rank2k_backward_error(q, A0.view(), F.view(), Transpose::NoTrans, U.view(), X.view(), Uplo::Lower, 1.0, 0.5,
+                                                 false, all);
+         }},
+    };
+    for (const auto& [name, run] : cases) {
+        const double want = run(in_order);
         int differ = 0;
-        for (int rep = 0; rep < 20; ++rep) differ += run(ooo, check) != want;
-        EXPECT_EQ(differ, 0) << names[check] << " on an out-of-order Queue differs from in-order (" << want << ")";
+        for (int rep = 0; rep < 20; ++rep) differ += run(ooo) != want;
+        EXPECT_EQ(differ, 0) << name << " on an out-of-order Queue differs from in-order (" << want << ")";
     }
 }
 

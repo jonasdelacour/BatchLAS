@@ -84,7 +84,7 @@ inline void check_slack(const Slack& s) {
 
 // "kind dtype n value bound factor reason"; bound is the kind's, never the slacked one, and value is raw.
 // BATCHLAS_VERIFY_RECORD is a raw getenv on every check, deliberately not the settings snapshot: this
-// header has no library state and tests setenv it mid-process. The handle stays open while the path is
+// header is outside the library's Settings snapshot (uninstalled batchlas::verify) and tests setenv it mid-process. The handle stays open while the path is
 // unchanged; a new path reopens, unset closes, and a path fopen refuses is retried (nothing recorded).
 inline void record(const char* kind, const char* dtype, int n, double value, double b, double factor, const char* reason) {
     static std::mutex mu;

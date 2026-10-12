@@ -209,7 +209,7 @@ selection coverage (`$BATCHLAS_COVERAGE_OUT.<pid>`) and the band-reduction dump
 ## BATCHLAS_VERIFY_RECORD is read raw {#environment-verify-record-is-read-raw}
 
 `BATCHLAS_VERIFY_RECORD=<path>` makes every `verify::pass` append one calibration row to `<path>`
-(@ref design_verification). It is the one `BATCHLAS_*` variable outside `Settings`, deliberately:
+(@ref design_verification). It is the one `BATCHLAS_*` variable read under `include/` outside `Settings`, deliberately:
 `verify/tolerance.hh` belongs to the uninstalled `batchlas::verify` target (tests, benchmarks, the
 tuner), not the library, and tests set it with a bare `setenv` mid-process.
 
