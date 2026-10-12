@@ -110,7 +110,8 @@ option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 set(BATCHLAS_ENABLE_CUDA "AUTO" CACHE STRING
     "CUDA backend: AUTO (enable when the SYCL runtime exposes a CUDA device), ON (require it), OFF")
 set_property(CACHE BATCHLAS_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
-option(BATCHLAS_DISABLE_CUDA_FTZ "Disable flush-to-zero (FTZ) for CUDA device code" ON)
+option(BATCHLAS_DISABLE_CUDA_FTZ
+    "Pass --ftz=false to the CUDA image's runtime JIT options; the AOT ptxas step never sees it" ON)
 option(BATCHLAS_CUDA_DEVICE_LINE_INFO
     "Pass --generate-line-info to ptxas in Debug/RelWithDebInfo builds (useful for ncu/nsight)"
     OFF)

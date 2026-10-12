@@ -62,12 +62,16 @@ WHAT COUNTS AS A FAILURE, AND THE JUNIT BLIND SPOT
 WHAT THIS DOES NOT CATCH
     * A vacuous green run. GTEST_SKIP inside BatchLASTest::SetUp exits 0, and
       should_run_backend treats an unrecognised BATCHLAS_TEST_BACKEND value as
-      "skip everything", so one typo in a CI env var yields 70/70 green with
+      "skip everything", so one typo in a CI env var turns every test green with
       zero assertions. The SKIPPED section below reports every binary in which
       no case executed, but reporting is all it does -- CI must also simply not
       set BATCHLAS_TEST_BACKEND or BATCHLAS_TEST_FLOAT_TYPE.
-    * A shrunken run, unless you pass --expected-tests-from. Thirty missing
-      executables is thirty extra "skips" as far as the file is concerned.
+    * A truncated run, unless you pass --expected-tests or --expected-tests-from.
+      A count from the tested tree (--expected-tests-from) sees only a run that
+      stopped early; a configure that registered fewer tests shrinks the count
+      with it, which only the checked-in --min-tests floor catches. A never-built
+      executable is not a count problem: it is still registered, and its
+      notrun testcase is classified FAILED below.
     * Anything about the build. This reads reports; it never compiles.
     * Flakiness. One run in, one verdict out.
 
@@ -76,7 +80,7 @@ Usage:
                                            [--known FILE | --sycl-impl DPCPP|ACPP
                                             | --build-dir DIR] [--require NAME]...
                                            [--expected-tests N | --expected-tests-from DIR
-                                            [--label-exclude REGEX]]
+                                            [--label-exclude REGEX]] [--min-tests N]
     python3 .github/ci/compare_failures.py --self-test
 Exit code 0 = gated clean (warnings are still possible), 1 = gate failed.
 """
@@ -365,6 +369,10 @@ def self_test():
             (["--expected-tests-from", os.path.join(tmp, "absent")], 1,
              "no tree to count is a failure, not a pass"),
             (["--expected-tests", "1"], 0, "the literal form still works"),
+            (["--expected-tests-from", build, "--label-exclude", "slow", "--min-tests", "2"], 1,
+             "registered and run agree at 1, under a floor of 2: the suite shrank"),
+            (["--expected-tests-from", build, "--label-exclude", "slow", "--min-tests", "1"], 0,
+             "at the floor passes"),
         ]
         for extra, expect, why in cases:
             try:
@@ -405,6 +413,9 @@ def main(argv):
                             "DIR -N` registers (with --label-exclude, as the run filtered)")
     parser.add_argument("--label-exclude", metavar="REGEX",
                         help="the -LE filter the run used; applied to the --expected-tests-from count")
+    parser.add_argument("--min-tests", metavar="N", type=int,
+                        help="fail if the junit holds fewer than N testcases: a checked-in floor "
+                             "that a tree-derived --expected-tests-from count cannot supply")
     args = parser.parse_args(argv[1:])
     if args.expected_tests_from is not None:
         args.expected_tests = registered_tests(args.expected_tests_from, args.label_exclude)
@@ -587,9 +598,13 @@ def main(argv):
     # tests were supposed to exist, and a binary that was never built writes no
     # gtest XML to be missed.
     if args.expected_tests is not None and args.junit and len(junit_results) != args.expected_tests:
-        errors.append("compare_failures: junit holds %d test(s), expected %d -- the run was "
-                      "truncated or the suite shrank"
+        errors.append("compare_failures: junit holds %d test(s), expected %d -- the run stopped "
+                      "early or was filtered differently from the count"
                       % (len(junit_results), args.expected_tests))
+    if args.min_tests is not None and args.junit and len(junit_results) < args.min_tests:
+        errors.append("compare_failures: junit holds %d test(s), under the --min-tests floor of "
+                      "%d -- the suite shrank (fewer tests registered); lower the floor only if "
+                      "the tests were removed on purpose" % (len(junit_results), args.min_tests))
 
     # Diff-shaped, NEW FAILURES first, and every section prints even when empty:
     # a human scanning a CI log needs "0 new failures" to be visible, not

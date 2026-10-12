@@ -676,8 +676,9 @@ if(BATCHLAS_CUDA_ENABLED)
         # Only the -Xsycl-target-backend half. The '-Xcuda-ptxas --ftz=false'
         # pair that used to follow is a hard build failure on CUDA >= 12.8
         # ("ptxas fatal : Unknown option '-ftz'"), which is why this whole block
-        # used to be skipped for one hardcoded compiler path.
-        message(STATUS "Disabling FTZ for CUDA device code (link-time device compilation)")
+        # used to be skipped for one hardcoded compiler path. Like --save-temps below, this
+        # reaches only the image's runtime JIT -compile-opts (driver -###), never the AOT step.
+        message(STATUS "Passing --ftz=false to the CUDA image's runtime JIT options (not the AOT ptxas)")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
             "SHELL:-Xsycl-target-backend=nvptx64-nvidia-cuda --ftz=false")
     endif()
