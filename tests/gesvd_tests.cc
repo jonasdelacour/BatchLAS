@@ -1506,7 +1506,7 @@ TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVhSmoke) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA) {
+    if constexpr (B != Backend::CUDA || !BATCHLAS_HAS_CUSOLVER) {
         GTEST_SKIP() << "the V -> V^H transpose is cuSOLVER's binding only";
     } else {
         using MV = MatrixView<Scalar, MatrixFormat::Dense>;
