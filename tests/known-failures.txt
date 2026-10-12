@@ -47,7 +47,7 @@
 
 # --- lanczos ------------------------------------------------------------------
 # Re-verified 2026-10-12 on threadripper02 after the B1 fix (steqr now reads each
-# item's off-diagonals at stride n; LanczosStride.SecondItemMatchesFirst passes).
+# item's off-diagonals at stride n; LanczosStride.MixedBatchItemsMatchUniformBatches passes).
 # Cause still open and NOT docs/design/known-defects.md entry 3 (that one is 2x
 # work with a right answer): every item's whole spectrum comes out ~3x too wide
 # (Toeplitz n=64, a=2, b=-5: [-28, 32] for [-8, 12]), at batch 1 too.

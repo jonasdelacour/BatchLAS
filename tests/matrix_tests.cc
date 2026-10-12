@@ -1610,6 +1610,16 @@ TEST(FillDiagonalVector, WideViewAndOffsets) {
         m.view().fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait();
         EXPECT_EQ(diagonal_mismatches(m, k), 0u);
     }
+    // A strided source (inc 2, stride 19) with poison in the skipped slots.
+    UnifiedVector<float> strided(19 * 2, kDiagPoison);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 9; ++i) strided[b * 19 + 2 * i] = float(100 * b + i + 1);
+    for (int k : {-4, 3}) {
+        SCOPED_TRACE("inc=2 k=" + std::to_string(k));
+        auto m = poisoned_wide();
+        m.view().fill_diagonal(ctx, VectorView<float>(strided, 9, 2, Inc{2}, Stride{19}), k).wait();
+        EXPECT_EQ(diagonal_mismatches(m, k), 0u);
+    }
     // The Span overload packs one run of exactly min(...) values per item.
     const int d = 5;  // k = 3 on 5x9
     UnifiedVector<float> packed(d * 2);

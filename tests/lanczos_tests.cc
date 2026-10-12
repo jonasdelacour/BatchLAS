@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 
 using namespace batchlas;
@@ -287,13 +288,20 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
 
 }
 
-// lanczos eigenvalues of two identical items of the n x n Toeplitz tridiag(b, a, b), descending.
+// lanczos eigenvalues (descending) of a batch of two n x n Toeplitz tridiag(b, a, b); item k is
+// built from its {a, b} pair.
 constexpr int kStrideN = 64;
 constexpr float kStrideA = 2.0f, kStrideB = -5.0f;
-UnifiedVector<float> lanczos_two_identical_items() {
+using ToeplitzCoef = std::pair<float, float>;
+UnifiedVector<float> lanczos_two_items(ToeplitzCoef item0, ToeplitzCoef item1) {
     constexpr int n = kStrideN, batch = 2;
     Queue ctx(Device::default_device());
-    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, kStrideA, kStrideB, kStrideB, batch);
+    auto dense = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, item0.first, item0.second, item0.second, batch);
+    auto dv = dense.view();
+    for (int i = 0; i < n; ++i) {
+        dv.at(i, i, 1) = item1.first;
+        if (i + 1 < n) dv.at(i + 1, i, 1) = dv.at(i, i + 1, 1) = item1.second;
+    }
     auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
     auto A_view = A_CSR.view();
     UnifiedVector<float> W(n * batch);
@@ -310,17 +318,25 @@ UnifiedVector<float> lanczos_two_identical_items() {
     return W;
 }
 
-// Item 1 must see its own off-diagonals (stride n), not item 0's tail shifted by one.
-TEST(LanczosStride, SecondItemMatchesFirst) {
-    const auto W = lanczos_two_identical_items();
-    for (int i = 0; i < kStrideN; ++i) EXPECT_EQ(W[kStrideN + i], W[i]) << "item 1 differs from item 0 at " << i;
+// Each item of a mixed batch must equal that item in a batch of two copies of it (same batch
+// size, so every routed sub-op picks the same kernel). A steqr view that reads another item's
+// off-diagonals (stride n-1, or stride 0) breaks item 1 against its reference.
+TEST(LanczosStride, MixedBatchItemsMatchUniformBatches) {
+    constexpr ToeplitzCoef m0{kStrideA, kStrideB}, m1{3.0f, -4.0f};
+    const auto mixed = lanczos_two_items(m0, m1);
+    const auto ref0 = lanczos_two_items(m0, m0);
+    const auto ref1 = lanczos_two_items(m1, m1);
+    for (int i = 0; i < kStrideN; ++i) {
+        EXPECT_EQ(mixed[i], ref0[i]) << "item 0 differs at " << i;
+        EXPECT_EQ(mixed[kStrideN + i], ref1[kStrideN + i]) << "item 1 differs at " << i;
+    }
 }
 
 // Closed-form spectrum a + 2 b cos(k pi / (n + 1)) for both items.
 TEST(LanczosStride, ClosedFormSpectrum) {
     constexpr int n = kStrideN, batch = 2;
     const double a = kStrideA, b = kStrideB;
-    const auto W = lanczos_two_identical_items();
+    const auto W = lanczos_two_items({kStrideA, kStrideB}, {kStrideA, kStrideB});
     std::vector<double> spectrum(n);
     for (int k = 1; k <= n; ++k) spectrum[k - 1] = a + 2.0 * b * std::cos(k * M_PI / (n + 1));
     std::sort(spectrum.rbegin(), spectrum.rend());

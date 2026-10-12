@@ -1054,7 +1054,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
 // steqr_legacy (NETLIB stedc's only solver) must orient each block like dsteqr: item 0 is graded
 // large-at-top, item 1 is its reversal; every eigenvalue is checked relative to its own magnitude.
 // The inverted rule measured 2.6e-12 / 1.9e-11 here, the dsteqr rule 2.4e-15 / 4.4e-15 (bound 1.7e-13).
-#if BATCHLAS_HAS_CPU_TARGET
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
 TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
     constexpr int n = 48, batch = 2;
     Queue ctx(Device("cpu"), Backend::NETLIB, true);
