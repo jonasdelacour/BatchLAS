@@ -643,8 +643,8 @@ TYPED_TEST(TrsmCandidates, BlockedServesPastTheCtaCeiling) {
 }
 
 // A heterogeneous A or B: no native family can run it (one launch has one order), so every
-// native pin throws. Auto takes the vendor, which runs at the full storage order (known-defects
-// #12); vendor-free there is no route.
+// native pin throws, and the vendor runs at the full storage order (known-defects #12), so it
+// is refused too. Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     using R = RealOf<T>;
@@ -681,7 +681,7 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
             (void)trsm<B, T>(*this->ctx, k.a, k.b, T(1), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit);
             this->ctx->wait();
         };
-        if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor") << k.what;
+        if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error) << k.what;
         else EXPECT_THROW(call(), batchlas::NoRouteError) << k.what;
     }
 }

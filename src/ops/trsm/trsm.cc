@@ -40,7 +40,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side, Transpose transA) 
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. One launch covers
 // the batch with a single (order, q, ld, stride), so no native family takes a heterogeneous
-// batch. The vendor accepts one and runs at the full storage order (known-defects #12), as before.
+// batch, and neither does the vendor, which runs at the full storage order (known-defects #12).
 template <class T>
 bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, Side side) {
     const std::int64_t order = A.rows(), q = rhs_count<T>(B, side);
@@ -56,7 +56,7 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const
                    d.max_wg >= sycl_trsm::kTrsmSgLeftWgSize;
         },
         [&](Blocked) { return native && v1_fits && sycl_trsm::trsm_blocked_available<T>() && cta_max >= 1; },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous(); },
     }, c);
 }
 

@@ -545,7 +545,8 @@ TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
 }
 
 // RouteSpmm.HeterogeneousBatchRefused, ported: a heterogeneous B or C has no native route (one
-// launch has one ld/stride per dense operand); Auto takes the vendor, or there is no route.
+// launch has one ld/stride per dense operand), nor a vendor route (no vendor reads per-item
+// dense extents). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -575,12 +576,8 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
                          ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) {
-        bool threw = false;
-        EXPECT_EQ(traced_choice(call, nullptr, &threw), "vendor");
-    } else {
-        EXPECT_THROW(call(), batchlas::NoRouteError);
-    }
+    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
 // R6: a spelling that names nothing compiled throws instead of meaning Auto (RouteSpmm's

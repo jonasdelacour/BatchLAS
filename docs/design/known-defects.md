@@ -25,11 +25,11 @@ closed and kept only for numbering.
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
-| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/backends/cusolver.cc:72-77` | open, silent wrong answer on a direct call |
+| 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); complex<double> gemv vendor still refused on CUDA |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
-| 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
+| 16 | `ormqr_blocked` sub-kernels | worked around: `can_run` refuses batch > 65535 |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
@@ -196,19 +196,26 @@ wrote both triangles and was reachable only through those pins.
   for cfloat and cdouble. Nothing else in those suites goes red.
 - **Status:** fixed 2026-10-11 on threadripper02 (RTX PRO 6000, sm_120). Found 2026-09-30.
 
-## Defect 12: vendor potrf and trsm accept a heterogeneous batch
+## Defect 12: vendor families accepted a heterogeneous batch
 
-- **Symptom:** a direct heterogeneous call factors or solves the padded matrix with no error. The
-  backward `L^H` solve couples the active rows to the padding. `posv` refuses the input upstream.
-- **Cause:** `potrf`'s and `trsm`'s `can_run(Vendor)` have no heterogeneity term, whereas the native
-  families do. `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes `descrA.rows()`, the full
-  storage order, to `cusolverDn?potrf[Batched]`. The cuBLAS `trsm` path has no active-dims handling.
-- **Fix needs:** a `!A.is_heterogeneous()` term on each vendor `can_run`, or a per-item loop.
-- **Test gap:** no test constructs a heterogeneous `potrf` or `trsm`.
-- **Level-3 four: closed.** `symm`, `syrk`, `syr2k` and `trmm` refuse a heterogeneous operand in
-  `can_run(Vendor)` as well as natively. Auto throws, or `NoRouteError` when vendor-free. Tests:
+- **Symptom:** a heterogeneous call (per-item active dims) factored, solved or decomposed the padded
+  storage with no error. `BatchPolicy.HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt`
+  (`tests/select_tests.cc`, batch 4, active orders {8, 5, 8, 3}) found it returning on CUDA for
+  `trsm`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`
+  (dense B), and `gemv` (float).
+- **Cause:** each vendor arm passes the top-level extents (`descrA.rows()`) to a batched or
+  per-item library call; `syev`'s and `gesvd`'s native families had no term either, and `ormqr`'s
+  `can_run` read only `trans`. `hemm`, `herk` and `her2k` (no selection) reached gemm's per-item
+  loop, which threw an unrelated dimension error.
+- **Fix (WP3):** `!A.is_heterogeneous()` (and B, C where the op reads them) on every family of
+  `potrf`, `trsm`, `getrf`, `getrs`, `getri`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `gemv` and
+  `spmm`'s vendor. Under Auto such a call finds no runnable kernel (`std::runtime_error`), vendor-free
+  `NoRouteError`; a pin throws "cannot run this shape". `hemm`, `herk` and `her2k` throw
+  `batchlas::invalid_argument` after their shape check. `gesv` and `posv` already refused upstream.
+  Only `gemm` serves a heterogeneous batch (its per-item loop).
+- **Level-3 four:** `symm`, `syrk`, `syr2k` and `trmm` already refused one in every family. Tests:
   `{Symm,Syrk,Syr2k,Trmm}Candidates{,Cpu}.HeterogeneousBatchHasNoRoute`.
-- **Status:** open for `potrf` and `trsm`.
+- **Status:** fixed.
 
 ## Defect 13: complex<double> cuBLAS calls segfault inside cuBLASLt
 
@@ -286,9 +293,12 @@ triangle gets a wrong answer today.
   check the limit, and `can_run` does not model it. Auto therefore does not fall to the vendor.
   Other ops that put the batch on dimension 2 may share the limit; see
   [flat-kernel-selection.md](flat-kernel-selection.md) §11.
-- **Fix needs:** fold the batch into dimension 0, or loop over batch chunks. As a stopgap, add a
-  `batch <= 65535` term to the driver and `can_run`.
-- **Status:** open.
+- **Stopgap (WP3):** `can_run(Blocked)` has the `batch <= 65535` term (`ops::gemm::kMaxGridBatch`),
+  so Auto takes the vendor there (vendor-free: no route) and a `blocked` pin throws "cannot run this
+  shape". Test: `OrmqrCandidates.BlockedRefusesABatchPastTheGridLimit`.
+- **Fix needs:** fold the batch into dimension 0, or loop over batch chunks; the driver itself
+  still does not check.
+- **Status:** worked around in `can_run`.
 
 ## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 

@@ -11,6 +11,7 @@
 
 #include "choice.hh"
 #include "vendor.hh"
+#include "../gemm/choice.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
@@ -44,12 +45,15 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
 // and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
-// off non-GPU queues, as the old router did; dimension checks are left to the drivers.
+// off non-GPU queues, as the old router did; dimension checks are left to the drivers. Both run
+// each item at the top-level extents (no heterogeneous A or C), and Blocked's sub-kernels put
+// the batch in grid dimension 2 (known-defects #16).
 template <class T>
-bool can_run(const OrmqrChoice& c, const select::Device& d, Transpose trans) {
-    const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans);
+bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
+    const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
+                         !C.is_heterogeneous();
     return std::visit(overloaded{
-        [&](Blocked) { return defined && d.is_gpu; },
+        [&](Blocked) { return defined && d.is_gpu && A.batch_size() <= ops::gemm::kMaxGridBatch; },
         [&](Vendor) { return defined && d.has_vendor; },
     }, c);
 }
@@ -119,7 +123,7 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     const select::Key key = ops::ormqr::key_of<T>(A, C, side, trans);
     return select::run<Back, T>(
         ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, trans); }, shape, key,
+        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, A, C, trans); }, shape, key,
         [&](const auto& c) {
             if (workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
                 throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
@@ -138,7 +142,7 @@ size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<T>(k, d, trans); });
+        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<T>(k, d, A, C, trans); });
     return ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint);
 }
 

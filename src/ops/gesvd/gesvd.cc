@@ -57,12 +57,14 @@ select::Key key_of(const MV<T>& A, const Job& j) {
 // Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
 // Hermitian form; Cta and Blocked run complex input only through the Hermitian shortcut
 // (gesvd_native_impl throws `unsupported` for complex general); Cta cannot write a genuinely thin
-// U; Blocked's Hermitian arm is Lower-only, as the old router had it (Upper is unverified).
+// U; Blocked's Hermitian arm is Lower-only, as the old router had it (Upper is unverified). Every
+// family, the vendor included, runs each item at the top-level (m, n): no heterogeneous batch.
 template <class T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
-    const bool native = d.is_gpu && m >= 1 && n >= 1 && A.batch_size() >= 1;
+    const bool homogeneous = !A.is_heterogeneous();
+    const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
     return std::visit(overloaded{
         [&](Jacobi) {
@@ -74,7 +76,7 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) { return native && (j.herm ? square && *j.herm == Uplo::Lower : kReal); },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
 

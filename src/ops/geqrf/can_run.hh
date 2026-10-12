@@ -22,7 +22,8 @@ template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 /// Correctness only (R3): false means `c` throws or answers wrongly. Each clause is its driver's check; one
-/// launch serves one (m, n, ld, stride) and a wide view's update runs off the panel, so natives take neither.
+/// launch serves one (m, n, ld, stride) and a wide view's update runs off the panel, so natives take neither;
+/// the vendor runs each item at the top-level (m, n), so it takes no heterogeneous batch either.
 template <class T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
@@ -36,7 +37,7 @@ bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
             return native && sycl_geqrf::geqrf_blocked_available<T>() &&
                    sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
     }, c);
 }
 

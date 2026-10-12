@@ -554,7 +554,8 @@ TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
 }
 
 // RouteGemv.HeterogeneousBatchIsRefusedByBothNativeTiers, ported: a heterogeneous A has no
-// native family; Auto is the vendor, and vendor-free there is no route.
+// native family, and the vendor runs each item at the top-level (m, n). Auto finds no runnable
+// kernel; vendor-free, NoRouteError.
 TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -578,11 +579,8 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)gemv<B, T>(*this->ctx, het, X, Y, T(1), T(0), Transpose::NoTrans);
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) {
-        if (TestFixture::vendor_launch_ok()) EXPECT_EQ(traced_choice(call), "vendor");
-    } else {
-        EXPECT_THROW(call(), batchlas::NoRouteError);
-    }
+    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Auto and

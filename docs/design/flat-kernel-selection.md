@@ -316,7 +316,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
 
 Known defects that affect routing are in [known defects](known-defects.md) (for example #12, heterogeneous batches
-on the vendor, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
+on the vendor, closed by refusing them in every family's `can_run`, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
 `gemm_vendor_impl` works around with the typed `cublasZgemmStridedBatched`).
 
 ## 12. Per-op families

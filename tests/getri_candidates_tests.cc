@@ -402,8 +402,9 @@ TYPED_TEST(GetriCandidates, CanRunEqualsLaunch) {
             EXPECT_EQ(accepted, this->expect_runs(c, s.n, s.n, s.batch)) << name(c, s);
         }
     }
-    // The degenerate and non-square shapes: Blocked's driver throws, so the pin must refuse.
-    for (const auto& [r, cc, batch] : {std::tuple{0, 0, 2}, std::tuple{8, 8, 0}, std::tuple{8, 6, 2}}) {
+    // The degenerate and non-square shapes: Blocked's driver throws, so the pin must refuse (an
+    // empty batch returns before selection, so no pin sees it).
+    for (const auto& [r, cc, batch] : {std::tuple{0, 0, 2}, std::tuple{8, 6, 2}}) {
         UnifiedVector<T> a(std::max(1, r * cc * std::max(batch, 1)) + 64, T(1)), cm(a.size(), T(0));
         const MVof<T> A(a.data(), r, cc, std::max(r, 1), std::max(r * cc, 1), batch);
         const MVof<T> Cm(cm.data(), r, cc, std::max(r, 1), std::max(r * cc, 1), batch);
@@ -506,7 +507,7 @@ TYPED_TEST(GetriCandidates, CanRunFalsePinsThrow) {
 }
 
 // A heterogeneous A: the pivot list is read at b * n + k with one n, so Blocked cannot run it and
-// its pin throws. Auto takes the vendor; vendor-free there is no route.
+// its pin throws; no family, the vendor included, takes it (WP3 batch policy). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -519,7 +520,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
     EXPECT_FALSE(this->pin_accepted(C{gi::Blocked{}}, het));
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
     if constexpr (TestFixture::kVendor) {
-        EXPECT_NO_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het)) << "Auto must take the vendor";
+        EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), std::runtime_error);
     } else {
         EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), batchlas::NoRouteError);
     }

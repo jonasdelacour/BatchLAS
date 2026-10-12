@@ -28,7 +28,8 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
 }
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause
-// is the argument check at the top of that driver's *_dispatch.
+// is the argument check at the top of that driver's *_dispatch. The vendor factors each item at
+// the storage order, so no family takes a heterogeneous batch (known-defects #12).
 template <class T>
 bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              Uplo uplo) {
@@ -52,7 +53,7 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
             return native && uplo == Uplo::Lower && sycl_potrf::potrf_blocked_available<T>() &&
                    sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
     }, c);
 }
 

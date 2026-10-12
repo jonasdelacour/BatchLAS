@@ -600,8 +600,12 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
                 << k.what << " " << select::to_string(c);
         }
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
+        // No family, the vendor included, takes it (WP3 batch policy).
         if constexpr (!TestFixture::kVendor)
             EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), batchlas::NoRouteError)
+                << k.what;
+        else
+            EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), std::runtime_error)
                 << k.what;
     }
 }

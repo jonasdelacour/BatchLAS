@@ -49,7 +49,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
-        [&](Vendor) { return select::factorization_vendor_available<B>; },
+        [&](Vendor) { return select::factorization_vendor_available<B> && !A.is_heterogeneous(); },
     }, c);
 }
 

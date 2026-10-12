@@ -67,7 +67,7 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // unwritten, a silent wrong answer), and complex<double> N/N with one column segfaults on the host
 // (known-defects #13).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
-// falls to Direct; an empty batch never reaches the throw.
+// falls to Direct. No vendor reads per-item dense extents: no heterogeneous B or C.
 template <Backend B, class T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
@@ -86,7 +86,8 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
             constexpr bool zz = std::is_same_v<T, std::complex<double>>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
-            return d.has_vendor && !(B == Backend::NETLIB && !nn && A.batch_size() > 0) &&
+            return d.has_vendor && !Bm.is_heterogeneous() && !C.is_heterogeneous() &&
+                   !(B == Backend::NETLIB && !nn) &&
                    !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1) &&
                    !(B == Backend::CUDA && zz && nn && C.cols() == 1);
         },

@@ -50,7 +50,7 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
                    static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
         },
         [&](Blocked) { return native && sycl_getrs::getrs_blocked_available<T>(); },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !Bm.is_heterogeneous(); },
     }, c);
 }
 

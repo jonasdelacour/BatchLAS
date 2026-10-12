@@ -293,7 +293,7 @@ TYPED_TEST(OrgqrCandidates, PinnedCandidatesStraddleTheirLimits) {
     int ran = 0, refused = 0;
     const std::tuple<int, int, int> shapes[] = {{1, 1, 3},   {16, 16, 3},  {33, 17, 2}, {24, 24, 3}, {24, 25, 2},
                                                 {40, 24, 3}, {7, 40, 2},   {512, 64, 1}, {513, 33, 1},
-                                                {300, 300, 1}, {16, 0, 2}, {16, 8, 0}};
+                                                {300, 300, 1}, {16, 0, 2}};
     for (const C& c : oq::candidates<typename TestFixture::T>())
         for (auto [m, n, batch] : shapes) {
             const std::string what = name(c, m, n, batch);
@@ -353,7 +353,7 @@ TYPED_TEST(OrgqrCandidates, CanRunEqualsLaunch) {
     for (const C& c : oq::candidates<T>())
         for (auto [m, n, batch, het] : {std::tuple{8, 8, 2, false}, std::tuple{8, 9, 2, false}, std::tuple{30, 1, 2, false},
                                         std::tuple{1, 30, 2, false}, std::tuple{24, 16, 4, true}, std::tuple{8, 0, 2, false},
-                                        std::tuple{0, 0, 2, false}, std::tuple{8, 8, 0, false}}) {
+                                        std::tuple{0, 0, 2, false}}) {
             if (TestFixture::vendor_word_falls_back(c)) continue;
             if (std::holds_alternative<oq::Vendor>(c) && (n > m || n < 1 || batch < 1 || het)) continue;
             auto a = this->prob(m, n, batch, 61u + m);
@@ -484,8 +484,9 @@ TYPED_TEST(OrgqrCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous batch: no native family can run it (one identity, one apply), so Auto takes the
-// vendor at the full storage order, as before; vendor-free there is no route.
+// A heterogeneous batch: no native family can run it (one identity, one apply) and the vendor
+// runs each item at the full storage order, so Auto finds no runnable kernel (WP3 batch policy);
+// vendor-free, NoRouteError. An empty batch returns before selection, so no shape list has one.
 TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     auto p = this->prob(32, 16, 4, 71u);
@@ -501,7 +502,7 @@ TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)orgqr<TestFixture::B, T>(*this->ctx, het, p.tau.to_span(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor");
+    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 

@@ -354,6 +354,25 @@ std::vector<Spec> straddles() {
 
 // §8.1: each candidate on every straddle; accepted shapes are correct, refused ones throw from
 // the pin with "cannot run this shape".
+// Blocked's sub-kernels put the batch in grid dimension 2 (known-defects #16): a launch at 65535
+// runs, 65536 is refused by the pin; Auto then takes the vendor, or there is no route.
+TYPED_TEST(OrmqrCandidates, BlockedRefusesABatchPastTheGridLimit) {
+    using T = typename TestFixture::T;
+    const C blocked{om::Blocked{}};
+    Spec s{Side::Left, Transpose::NoTrans, 2, 1, 1, 65535};
+    s.period = 3;
+    auto at = make_apply<T>(s);
+    ASSERT_TRUE(this->pin_accepted(blocked, at));
+    this->run_pinned(blocked, at);
+    expect_applied(*this->ctx, at, name(blocked, s));
+    s.batch = 65536;
+    auto past = make_apply<T>(s);
+    EXPECT_FALSE(this->pin_accepted(blocked, past));
+    const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
+    if constexpr (TestFixture::kVendor) EXPECT_EQ(this->auto_choice(past), "vendor");
+    else EXPECT_THROW(this->run(past), batchlas::NoRouteError);
+}
+
 TYPED_TEST(OrmqrCandidates, PinnedCandidatesStraddleTheirLimits) {
     using T = typename TestFixture::T;
     int ran = 0, refused = 0;

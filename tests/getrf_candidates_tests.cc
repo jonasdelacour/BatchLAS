@@ -374,8 +374,8 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// One launch covers the batch with a single order: no native family takes a heterogeneous batch.
-// Auto takes the vendor; vendor-free there is no route.
+// One launch covers the batch with a single order and the vendor runs each item at the top-level
+// order: no family, the vendor included, takes it (WP3 batch policy). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -390,18 +390,10 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
         EXPECT_FALSE(this->pin_accepted(c, het)) << select::to_string(c);
     }
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
-    if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(traced_choice([&] {
-                      const std::size_t bytes = getrf_buffer_size<B, T>(*this->ctx, het);
-                      UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-                      (void)getrf<B, T>(*this->ctx, het, p.piv.to_span(), Span<std::byte>(ws.data(), bytes),
-                                        p.info.to_span());
-                      this->ctx->wait();
-                  }),
-                  "vendor");
-    } else {
+    if constexpr (TestFixture::kVendor)
+        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), std::runtime_error);
+    else
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
-    }
 }
 
 // The squareness gate (route_vocabulary's RouteGetrf.Squareness..., ported): a non-square getrf

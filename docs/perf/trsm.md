@@ -472,7 +472,7 @@ but V2 calls the direct entry on its diagonal blocks.
     strided rows is arguable, not a win.
 12. ~~**Heterogeneous-batch gate.**~~ Withdrawn 2026-09-15: the gate is armed. The native `can_run` has the term
     (`trsm.cc:47`), and `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc:686`)
-    pins it. The vendor's `can_run` lacks the term ([known-defects 12](../design/known-defects.md#defect-12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
+    pins it. The vendor's `can_run` has had it too since WP3 ([known-defects 12](../design/known-defects.md#defect-12-vendor-families-accepted-a-heterogeneous-batch)).
 13. ~~**`OpShape::compute_units` is dead.**~~ Closed: `OpShape` was deleted with the route layer. A speed rule
     belongs in the tables, never in `can_run`.
 14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`matrix.hh:1008`). Reported and

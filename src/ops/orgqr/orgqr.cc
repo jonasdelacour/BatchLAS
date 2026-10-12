@@ -35,7 +35,7 @@ select::Key key_of(const MV<T>& A) {
 // Correctness only (R3): false means the driver would throw. Blocked's clauses are
 // orgqr_blocked_dispatch's own checks (one identity and one apply serve the whole batch, and
 // Q's columns live in C^m, so n <= m); its tau-length check is an argument error, left to the
-// driver. The vendor accepts every shape, a heterogeneous batch included, as before.
+// driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
 template <class T>
 bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
@@ -43,7 +43,7 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
     }, c);
 }
 
