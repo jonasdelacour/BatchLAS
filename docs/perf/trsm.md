@@ -21,7 +21,7 @@ tie-break order. `can_run` (`trsm.cc:45-61`) is correctness only. Every native f
 | `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) (`trsm.cc:49-53`) |
 | `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) (`trsm.cc:54-57`) |
 | `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1` (`trsm.cc:58`) |
-| `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked (`d.has_vendor`, `trsm.cc:59`) |
+| `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked, and homogeneous A and B (`d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous()`, `trsm.cc:59`) |
 
 Selection takes the first runnable entry of the nearest row of `tuned/trsm.<device>.txt`
 (@ref selection_tables). The key is `side:exact trans:exact order:log:2 q:log batch:log`

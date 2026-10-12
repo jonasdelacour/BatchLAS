@@ -16,9 +16,9 @@ Families in tie-break order, the `can_run` that admits them, and the sm_89 rows.
 
 | op | families (`choice.hh`) | `can_run` (correctness only) |
 |---|---|---|
-| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` (`src/ops/geqrf/choice.hh:15-24`) | native: `d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && batch >= 1` (`can_run.hh:29`); `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)` (:32); `cta` is `geqrf_cta_fits<T>(m, n, budget)` (:33); `blocked` needs `geqrf_cta_max_elems_for_slm<T>(budget) >= 1` (:35-38); `vendor` is `d.has_vendor` (:39) |
-| `orgqr` | `blocked`, `vendor`; last resort `vendor`, then `blocked` (`choice.hh:14-22`) | `blocked`: `d.is_gpu && orgqr_blocked_available<T>() && !heterogeneous && A.cols() <= A.rows()` (`orgqr.cc:43-44`); `vendor`: `d.has_vendor` (:46) |
-| `ormqr` | `blocked`, `vendor` (`choice.hh:14-20`) | not complex `Trans`, and `d.is_gpu` / `d.has_vendor` (`ormqr.cc:49-55`) |
+| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` (`src/ops/geqrf/choice.hh:15-24`) | native: `d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && batch >= 1` (`can_run.hh:29`); `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)` (:32); `cta` is `geqrf_cta_fits<T>(m, n, budget)` (:33); `blocked` needs `geqrf_cta_max_elems_for_slm<T>(budget) >= 1` (:35-38); `vendor` is `d.has_vendor && !A.is_heterogeneous()` (:39) |
+| `orgqr` | `blocked`, `vendor`; last resort `vendor`, then `blocked` (`choice.hh:14-22`) | `blocked`: `d.is_gpu && orgqr_blocked_available<T>() && !heterogeneous && A.cols() <= A.rows()` (`orgqr.cc:43-44`); `vendor`: `d.has_vendor && !heterogeneous` (:46) |
+| `ormqr` | `blocked`, `vendor` (`choice.hh:14-20`) | not complex `Trans`, homogeneous A and C, and `d.is_gpu` / `d.has_vendor` (`ormqr.cc:50-58`); no batch term (known-defects #16 not reproduced) |
 
 Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n` (columns) and `aspect` = `max(m,n) / min(m,n)` by integer division. First-ranked family per type:
 

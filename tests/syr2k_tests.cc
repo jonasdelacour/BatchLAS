@@ -377,7 +377,8 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
 }
 // A real ConjTrans is Trans: pinned to the tile kernel it runs (it used to be refused) and gives
 // Trans's answer bit for bit, at padded ld and stride, beta != 0, on the predicated path (n, k
-// not tile multiples). The Trans result is checked against the definition too.
+// not tile multiples). The Trans result is checked against the definition too. The kernel already
+// reads every non-NoTrans as Trans, so the launch's fold is defensive and this cannot see it removed.
 TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is CUDA GPU only";

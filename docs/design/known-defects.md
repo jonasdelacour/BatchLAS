@@ -256,6 +256,12 @@ wrote both triangles and was reachable only through those pins.
   `SpmmCoverageTest/3.*` call (48 pass, one N/N nrhs 1) to cuSPARSE, and `spmm_candidates_tests` ran
   the N/N nrhs 1 vendor at m 9/4/5 correctly. No process crashed, so both terms are deleted. Guard:
   `GemvVendorRefusalTest.ComplexDoubleVendorRunsOnCuda` (a strict vendor pin, verified answer).
+- **Auto moved:** gemv rows that rank `vendor` first now run cuBLAS for complex<double>. All are
+  untimed (`transcribed`): 188 of 1568 cdouble rows on sm_120 and 1360 of 1408 on sm_89. The Auto
+  route diff of `gemv_tests`/`spmm_tests` on threadripper02 moved one decision (`m=64 n=32768
+  batch=2` NoTrans, `direct` to `vendor`). spmm did not move. Details:
+  [gemv.md](../perf/gemv.md#gemv-complex-double-vendor-route-change). The 2x4090 box was not
+  re-checked.
 - **Status:** fixed; no complex<double> refusal remains in `can_run`.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle

@@ -577,8 +577,8 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
   because the kernel would answer wrongly. It also needs `max_wg >= gram_threads(n)`. `triangular`
   is float only, and needs `max_wg >= 256` and `T(T+1)/2 <= 65535` tiles. ConjTrans is passed as
   Trans, and the `trans` key keeps real ConjTrans on the vendor.
-- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms, and `transA != ConjTrans`.
-  Real ConjTrans stays on the vendor.
+- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms. The launch folds a
+  real ConjTrans to Trans, and the key has no `trans`, so it follows the Trans rows.
 - **symm.** `expand` is the mirrored expansion into a queue workspace, then the public gemm. It needs
   `max_wg >= 256` and `expansion_fits(q, k, batch, bytes)`. `BATCHLAS_EXPAND_MAX_BYTES` lowers the
   limit. symm does not read `BATCHLAS_EXPAND_ROUTE`.

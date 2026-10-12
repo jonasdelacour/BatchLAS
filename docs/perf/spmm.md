@@ -12,7 +12,7 @@ RTX 4090 (device 1, 128 SMs, 72 MB L2, 1008 GB/s DRAM roof), CUDA backend, in-or
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
 | `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch >= 1 |
-| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, minus three known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B, or `complex<double>` N/N with one column ([known-defects #13](../design/known-defects.md)) |
+| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library and no heterogeneous dense B or C, minus two known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md)). The `complex<double>` N/N one-column refusal is gone (defect 13 fixed; `spmm.cc:85-90`) |
 
 Selection is the first runnable entry of the nearest row of `tuned/spmm.<device>.txt`, keyed
 `transA:exact transB:exact m:log nrhs:log batch:log`. `ConjTrans` folds to `T` (`src/ops/spmm/spmm.cc:33-39`). The
@@ -53,7 +53,8 @@ The other three types move at all three `transB` spellings.
 
 The `direct` `can_run` terms (`src/ops/spmm/spmm.cc:71-84`) are correctness gates only: CSR format (`:76`), the
 capability flag of the body that will run (`:79-80`), `one_spmm()` (`:44-59`: matching extents and batch, positive
-`ld`s, an offset stride of at least `m + 1`), no heterogeneous dense batch (`:81-82`), and no empty batch (`:82`).
+`ld`s, an offset stride of at least `m + 1`), no heterogeneous dense batch (`:81-82`), and `batch >= 1` (`:82`). An empty batch returns before selection, so
+that term is never the reason a call has no route.
 A CSR view is never heterogeneous in the `active_rows_` sense. Per-item `nnz` variation is handled exactly through
 the row offsets.
 
