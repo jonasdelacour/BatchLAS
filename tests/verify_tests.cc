@@ -236,6 +236,46 @@ TEST(Engine, SecondGroupKeepsItsItemIndices) {
     EXPECT_EQ(MV<float>::orthogonality(ctx, Q, clean), 0.0);
 }
 
+// Each check chains kernels (triangularize, product, difference, norm) and waits once at the end:
+// on an out-of-order Queue a link may run before the one it reads, so the value must not depend on
+// the Queue's ordering. The operands are random, so the factor's other triangle is garbage that only
+// an ordered triangularize hides.
+TEST(VerifyOutOfOrder, SameAsInOrder) {
+    using T = float;
+    using batchlas::Matrix;
+    using batchlas::Transpose;
+    batchlas::Queue in_order;
+    batchlas::Queue ooo(in_order, false);
+    ASSERT_FALSE(ooo.in_order());
+    constexpr int n = 128, batch = 192;
+    auto A0 = Matrix<T>::Random(n, n, false, batch, 11), F = Matrix<T>::Random(n, n, false, batch, 12);
+    auto U = Matrix<T>::Random(n, n, false, batch, 13), Vh = Matrix<T>::Random(n, n, false, batch, 14);
+    auto X = Matrix<T>::Random(n, n, false, batch, 15), B0 = Matrix<T>::Random(n, n, false, batch, 16);
+    auto tau = Matrix<T>::Random(n, 1, false, batch, 17), s = Matrix<T>::Random(n, 1, false, batch, 18);
+    std::vector<std::int32_t> ipiv(std::size_t(n) * batch);
+    for (std::size_t i = 0; i < ipiv.size(); ++i) ipiv[i] = std::int32_t((i * 7) % n) + 1;
+    const batchlas::VectorView<std::int32_t> piv(ipiv.data(), n, batch);
+    const batchlas::VectorView<T> tv(tau.data().data(), n, batch), sv(s.data().data(), n, batch);
+    const auto all = A0.view().all_items();
+    const auto run = [&](batchlas::Queue& q, int check) {
+        switch (check) {
+            case 0: return MV<T>::potrf_residual(q, A0.view(), F.view(), batchlas::Uplo::Lower, all);
+            case 1: return MV<T>::getrf_residual(q, A0.view(), F.view(), piv, all);
+            case 2: return MV<T>::qr_residual(q, A0.view(), F.view(), tv, all);
+            case 3: return MV<T>::svd_residual(q, A0.view(), U.view(), sv, Vh.view(), all);
+            default: return MV<T>::trsm_residual(q, F.view(), batchlas::Side::Left, batchlas::Uplo::Upper, Transpose::NoTrans,
+                                                 batchlas::Diag::NonUnit, X.view(), B0.view(), 1.0, all);
+        }
+    };
+    const char* names[] = {"potrf_residual", "getrf_residual", "qr_residual", "svd_residual", "trsm_residual"};
+    for (int check = 0; check < 5; ++check) {
+        const double want = run(in_order, check);
+        int differ = 0;
+        for (int rep = 0; rep < 20; ++rep) differ += run(ooo, check) != want;
+        EXPECT_EQ(differ, 0) << names[check] << " on an out-of-order Queue differs from in-order (" << want << ")";
+    }
+}
+
 namespace {
 
 using cfloat = std::complex<float>;

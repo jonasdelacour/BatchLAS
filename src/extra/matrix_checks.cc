@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "../queue.hh"
+#include "../select/select.hh"
 #include "../sycl/device_scalar.hh"
 
 namespace batchlas {
@@ -247,6 +248,8 @@ Event MatrixView<T, MType>::product(const Queue& ctx, const MatrixView& A, Trans
 
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::potrf_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F, Uplo uplo, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return potrf_residual(q, A0, F, uplo, items); });
     using P = promoted_type;
     const int n = F.rows();
     if (F.cols() != n || A0.rows() != n || A0.cols() != n) bad("potrf_residual", "square matrices of equal order only");
@@ -272,6 +275,8 @@ double MatrixView<T, MType>::potrf_residual(Queue& ctx, const MatrixView& A0, co
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::similarity_residual(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& B,
                                                  std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return similarity_residual(q, A0, Q, B, items); });
     using P = promoted_type;
     const int n = A0.rows();
     if (A0.cols() != n || Q.rows() != n || Q.cols() != n || B.rows() != n || B.cols() != n)
@@ -295,6 +300,8 @@ double MatrixView<T, MType>::similarity_residual(Queue& ctx, const MatrixView& A
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::getrf_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F, const VectorView<std::int32_t>& piv,
                                             std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return getrf_residual(q, A0, F, piv, items); });
     using P = promoted_type;
     const int m = F.rows(), n = F.cols(), mn = std::min(m, n);
     if (A0.rows() != m || A0.cols() != n) bad("getrf_residual", "A0 and F differ in shape");
@@ -324,6 +331,8 @@ double MatrixView<T, MType>::getrf_residual(Queue& ctx, const MatrixView& A0, co
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::qr_residual(Queue& ctx, const MatrixView& A0, const MatrixView& F, const VectorView<T>& tau,
                                          std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return qr_residual(q, A0, F, tau, items); });
     using P = promoted_type;
     const int m = F.rows(), n = F.cols(), k = std::min(m, n);
     if (A0.rows() != m || A0.cols() != n) bad("qr_residual", "A0 and F differ in shape");
@@ -357,6 +366,8 @@ template <typename T, MatrixFormat MType>
 Matrix<typename MatrixView<T, MType>::promoted_type, MType> MatrixView<T, MType>::form_q(Queue& ctx, const MatrixView& F,
                                                                                       const VectorView<T>& tau,
                                                                                       std::span<const int> items, int cols) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return form_q(q, F, tau, items, cols); });
     using P = promoted_type;
     const int m = F.rows(), k = std::min(m, F.cols());
     if (cols < 0 || cols > m) bad("form_q", "cols must lie in [0, rows]");
@@ -373,6 +384,8 @@ Matrix<typename MatrixView<T, MType>::promoted_type, MType> MatrixView<T, MType>
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::svd_residual(Queue& ctx, const MatrixView& A0, const MatrixView& U, const VectorView<float_t<T>>& s,
                                           const MatrixView& Vh, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return svd_residual(q, A0, U, s, Vh, items); });
     using P = promoted_type;
     const int m = A0.rows(), n = A0.cols(), k = std::min(m, n);
     if (U.rows() != m || U.cols() < k || Vh.cols() != n || Vh.rows() < k)
@@ -413,6 +426,8 @@ double MatrixView<T, MType>::svd_residual(Queue& ctx, const MatrixView& A0, cons
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::qr_reconstruction(Queue& ctx, const MatrixView& A0, const MatrixView& Q, const MatrixView& R,
                                                std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return qr_reconstruction(q, A0, Q, R, items); });
     using P = promoted_type;
     const int m = A0.rows(), n = A0.cols(), k = Q.cols();
     if (Q.rows() != m || R.cols() != n || R.rows() < k) bad("qr_reconstruction", "need A0 m x n, Q m x k, R at least k x n");
@@ -475,6 +490,8 @@ double solve_core(Queue& ctx, const MV<P>& M, Transpose ta, const MV<P>& X, cons
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::solve_residual(Queue& ctx, const MatrixView& A0, Transpose ta, const MatrixView& X, const MatrixView& B0,
                                             std::span<const int> items, double full_limit) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return solve_residual(q, A0, ta, X, B0, items, full_limit); });
     using P = promoted_type;
     const auto [m, k] = op_dims(A0.rows(), A0.cols(), ta);
     const bool identity_rhs = B0.rows() == 0;
@@ -499,6 +516,8 @@ double MatrixView<T, MType>::solve_residual(Queue& ctx, const MatrixView& A0, co
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::lu_solve_residual(Queue& ctx, const MatrixView& F, const VectorView<std::int32_t>& piv, Transpose ta,
                                                const MatrixView& X, const MatrixView& B0, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return lu_solve_residual(q, F, piv, ta, X, B0, items); });
     using P = promoted_type;
     const int n = F.rows();
     if (F.cols() != n) bad("lu_solve_residual", "square factors only");
@@ -528,6 +547,8 @@ template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::gemm_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B, Transpose tb,
                                                  const MatrixView& C0, const MatrixView& C, promoted_type alpha, promoted_type beta,
                                                  std::span<const int> items, std::optional<Uplo> c_triangle) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return gemm_backward_error(q, A, ta, B, tb, C0, C, alpha, beta, items, c_triangle); });
     using P = promoted_type;
     const auto [am, ak] = op_dims(A.rows(), A.cols(), ta);
     const auto [bk, bn] = op_dims(B.rows(), B.cols(), tb);
@@ -550,6 +571,8 @@ double MatrixView<T, MType>::gemm_backward_error(Queue& ctx, const MatrixView& A
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::gemm_max_denominator(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B, Transpose tb,
                                                   const MatrixView& C0, promoted_type alpha, promoted_type beta, int item) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return gemm_max_denominator(q, A, ta, B, tb, C0, alpha, beta, item); });
     using P = promoted_type;
     const auto [am, ak] = op_dims(A.rows(), A.cols(), ta);
     const auto [bk, bn] = op_dims(B.rows(), B.cols(), tb);
@@ -568,6 +591,8 @@ template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::gemv_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const VectorView<T>& x,
                                                  const VectorView<T>& y0, const VectorView<T>& y, promoted_type alpha,
                                                  promoted_type beta, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return gemv_backward_error(q, A, ta, x, y0, y, alpha, beta, items); });
     using P = promoted_type;
     const auto [am, ak] = op_dims(A.rows(), A.cols(), ta);
     if (x.size() != ak || y.size() != am) bad("gemv_backward_error", "dimension mismatch");
@@ -588,6 +613,8 @@ double MatrixView<T, MType>::gemv_backward_error(Queue& ctx, const MatrixView& A
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::trsm_residual(Queue& ctx, const MatrixView& A, Side side, Uplo uplo, Transpose ta, Diag diag, const MatrixView& X,
                                            const MatrixView& B0, promoted_type alpha, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return trsm_residual(q, A, side, uplo, ta, diag, X, B0, alpha, items); });
     using P = promoted_type;
     const bool left = side == Side::Left;
     const int na = A.rows();
@@ -616,6 +643,8 @@ template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::spmm_backward_error(Queue& ctx, const MatrixView<T, MatrixFormat::CSR>& A, Transpose ta, const MatrixView& B,
                                                  Transpose tb, const MatrixView& C0, const MatrixView& C, promoted_type alpha,
                                                  promoted_type beta, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return spmm_backward_error(q, A, ta, B, tb, C0, C, alpha, beta, items); });
     using P = promoted_type;
     if (A.is_heterogeneous()) bad("spmm_backward_error", "heterogeneous views are not supported");
     const auto [am, ak] = op_dims(A.rows(), A.cols(), ta);
@@ -653,6 +682,8 @@ template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::rank2k_backward_error(Queue& ctx, const MatrixView& A, const MatrixView& B, Transpose trans,
                                                    const MatrixView& C0, const MatrixView& C, Uplo uplo, promoted_type alpha,
                                                    promoted_type beta, bool hermitian, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return rank2k_backward_error(q, A, B, trans, C0, C, uplo, alpha, beta, hermitian, items); });
     using P = promoted_type;
     if constexpr (is_std_complex_v<T>) {
         if (hermitian && trans == Transpose::Trans) bad("rank2k_backward_error", "her2k takes NoTrans or ConjTrans");
@@ -699,6 +730,8 @@ double MatrixView<T, MType>::rank2k_backward_error(Queue& ctx, const MatrixView&
 
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::orthogonality(Queue& ctx, const MatrixView& Q, std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return orthogonality(q, Q, items); });
     using P = promoted_type;
     const int m = Q.rows(), c = Q.cols();
     const auto all = pick(Q, items);
@@ -720,6 +753,8 @@ double MatrixView<T, MType>::orthogonality(Queue& ctx, const MatrixView& Q, std:
 template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::eigen_residual(Queue& ctx, const MatrixView& A, const MatrixView& V, const VectorView<float_t<T>>& w,
                                             std::span<const int> items) {
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return eigen_residual(q, A, V, w, items); });
     using P = promoted_type;
     const int n = V.rows(), nv = V.cols();
     if (A.rows() != A.cols() || A.rows() != n || w.size() < nv) bad("eigen_residual", "dimension mismatch");
