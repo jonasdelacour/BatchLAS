@@ -559,6 +559,11 @@ TYPED_TEST(GemmTest, HomogeneousKZeroBetaZeroWritesZeros) {
     using ScalarType = typename TestFixture::ScalarType;
     using Real = typename base_type<ScalarType>::type;
     using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    constexpr Backend Ba = TestFixture::BackendType;
+    // No native gemm family takes k == 0, so vendor-free this shape has no route (NoRouteError).
+    constexpr bool kVendor = Ba == Backend::NETLIB ? bool(BATCHLAS_HAS_CBLAS)
+                           : Ba == Backend::ROCM ? bool(BATCHLAS_HAS_ROCBLAS) : bool(BATCHLAS_HAS_CUBLAS);
+    if (!kVendor) GTEST_SKIP() << "k == 0 is vendor-only";
     constexpr int batch = 3, m = 17, n = 11, ldc = m + 5, stride = ldc * n + 9;
     UnifiedVector<ScalarType> a(1), b(1), c(static_cast<size_t>(stride) * batch);
     for (auto& x : c) x = ScalarType(std::numeric_limits<Real>::quiet_NaN());

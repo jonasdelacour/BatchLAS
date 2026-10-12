@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -328,8 +329,8 @@ TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     constexpr Backend Ba = TestFixture::BackendType;
-    if constexpr (Ba != Backend::CUDA) {
-        GTEST_SKIP() << "the gram opt-in is CUDA's";
+    if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
+        GTEST_SKIP() << "the gram opt-in is cuBLAS's herk (no route vendor-free)";
     } else {
         const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
         const int n = 8, k = 5, batch = 65536;

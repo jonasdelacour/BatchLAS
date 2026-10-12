@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <algorithm>
@@ -166,6 +167,10 @@ TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr bool kVendor = B == Backend::NETLIB ? bool(BATCHLAS_HAS_LAPACKE)
+                             : B == Backend::ROCM ? bool(BATCHLAS_HAS_ROCSOLVER)
+                                                  : bool(BATCHLAS_HAS_CUBLAS && BATCHLAS_HAS_CUSOLVER);
+    if (!kVendor) GTEST_SKIP() << "the vendor geqrf/orgqr pair is not built in";
     const ScopedEnvVar geqrf_route("BATCHLAS_GEQRF_ROUTE", "vendor");
     const ScopedEnvVar orgqr_route("BATCHLAS_ORGQR_ROUTE", "vendor");
     const int m = 96, n = 96, batch = 16, ld = m + 3, stride = ld * n + 7;
