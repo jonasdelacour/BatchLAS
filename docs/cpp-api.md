@@ -50,7 +50,7 @@ numerical surface, plus `Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and 
   warns and builds without it when they are missing).
 - **The CUDA toolkit** whenever the CUDA backend is on, which `AUTO` does as soon as the SYCL
   runtime exposes a CUDA device.
-- **CMake 3.14+** for BatchLAS, 3.21+ for a consuming project.
+- **CMake 3.17+** for BatchLAS, 3.21+ for a consuming project.
 
 ```bash
 git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS

@@ -9,7 +9,8 @@ BatchLAS").
 
 ## Requirements
 
-- CMake 3.14+ (3.21+ for `cmake --preset`; `CMakePresets.json` is schema version 3).
+- CMake 3.17+ (`FindCUDAToolkit` is 3.17, ctest `RESOURCE_GROUPS` 3.16; 3.21+ for `cmake --preset`,
+  `CMakePresets.json` is schema version 3).
 - A C++20 compiler with SYCL support: a DPC++/Clang-family compiler, clang 16 or newer.
 - Optional: CUDA Toolkit (NVIDIA), ROCm (AMD), LAPACKE and CBLAS (netlib host backend), Python 3 +
   pybind11 + NumPy + SciPy (Python bindings).
