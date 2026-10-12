@@ -197,7 +197,6 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/device_blas_tests.cc` `reference_rankk` (herk with complex α, 2 sites) | the device herk applies a complex α and then zeroes the imaginary part of the diagonal; no library check expresses that |
 | `tests/geqrf_tests.cc` `host_geqr2` (`ConventionMatchesReferenceLapackWithoutAVendor`) | an independent host xGEQR2 is the oracle for LAPACK's reflector sign convention, which every residual (and `form_q`, which shares the convention) passes by construction |
 | `tests/syev_blocked_tests.cc` `syev<Backend::NETLIB>` reference | a second implementation of the op under test, compared result to result |
-| `tests/gesvd_tests.cc` `expect_reconstruction` (with its per-type `gesvd_recon_tol`), `tests/gesvdj_cta_tests.cc`, `tests/bdsdc_tests.cc` and `tests/bdsqr_tests.cc` reconstruction | not yet migrated: `svd_residual` (added for the tuner's gesvd spec, 2026-10-11) is the library's `‖A − UΣVᴴ‖_F / ‖A‖_F`; these sites keep their per-type tolerances until a calibration over them sets its need. A componentwise `gemm_backward_error` of U·(ΣVᴴ) against A would judge the SVD's normwise backward error elementwise |
 | `tests/sytrd_cta_tests.cc` `ref_sytd2_upper` (host unblocked sytd2) | an independent oracle for d, e, tau and the stored reflectors, a convention no residual sees; its deviations are judged at `factorization` (the similarity itself goes through `similarity_residual`) |
 | `tests/sytrd_sb2st_hh_tests.cc` similarity check | measures with `verify::orthogonality` but keeps its own tolerance |
 | `tests/syev_jacobi_cta_tests.cc` `reference_jacobi_eigenvalues` | an independent cyclic two-sided Jacobi in double on exact float input, with the file's own 2n eps ‖A‖_F bound: it isolates the float kernel's rounding from a LAPACKE reference's |
@@ -207,6 +206,11 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/syevx_tests.cc` LOBPCG instrumentation tests | staged vs host-read history (rates, residual norms, Ritz values): non-eigen quantities from two paths of the code under test |
 | `tests/cond_tests.cc` log10 and `ztol` checks | the random log-cond tolerances against the generator's target, the log10 tolerances and the band-structure zero checks are properties of the inputs and the estimator, not a residual |
 | `tests/norm_tests.cc` `expect_norm_close`, `tests/potrf_tests.cc` `host_real` / `host_imag` | a four-line scalar relative error (judged at `blas`) and scalar part accessors: the library has no scalar-vs-scalar error or part accessor |
+| `tests/linalg_layer_tests.cc` `NormMatchesTheHostFrobeniusNorm`, `CondMatchesTheDiagonalReference` | one scalar per item against a closed form on exact small-integer data: no scalar-vs-scalar kind |
+| `tests/device_blas_tests.cc` `expect_vector_near` / `expect_matrix_near` and the gemv/dot/conj spot checks | hand-computed results on small-integer data, exact in float: any error is a bug, and a componentwise kind would loosen them |
+| `tests/iluk_tests.cc` MILU diagonal value, generator Hermitian symmetry, host-vs-device factor entries, the 2D-Laplacian smallest eigenvalue | one exactly computable factor entry; a property of the input generator; two factorization implementations compared entry by entry (intermediate output); an iterative LOBPCG run judged at its own convergence tolerance, not a residual |
+| `tests/geqrf_tests.cc` tau against `host_geqr2` and `verify::geqrf_tau`, the native-vs-vendor drop-in and Register-vs-Resident panel comparisons | LAPACK's reflector convention (a residual passes any sign) and two implementations of the op compared result to result, normwise |
+| `tests/getrf_tests.cc` tiny-vs-cta elementwise factor agreement | two kernels compared element by element, the pivots exactly: the identity pad must not change the selection or the arithmetic |
 
 ## Rollout
 

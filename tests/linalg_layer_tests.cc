@@ -4,6 +4,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
+#include "eigen_verify.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -443,12 +444,9 @@ TEST(LinalgLayer, MultiplyIsHadamardNotMatmul) {
                             at(A.view(), i, j, 0) * at(B.view(), i, j, 0));
 
     // ...and matmul really is the matrix product.
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            float acc = 0.0f;
-            for (int k = 0; k < n; ++k) acc += at(A.view(), i, k, 0) * at(B.view(), k, j, 0);
-            ASSERT_NEAR(at(mm.view(), i, j, 0), acc, 1e-4f) << "matmul at " << i << "," << j;
-        }
+    EXPECT_VERIFY(float, verify::Check::blas, n,
+                  Dense::gemm_backward_error(q, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, mm.view(), mm.view(),
+                                             1.0, 0.0, mm.view().all_items()));
 }
 
 TEST(LinalgLayer, ScaleIsInPlaceAndAxpbyAccumulates) {
@@ -519,7 +517,7 @@ TEST(LinalgLayer, ValueReturningWrappersLeaveInputsAlone) {
 
     // eigvalsh and eigh must agree on the eigenvalues.
     ASSERT_EQ(w.size(), e.values.size());
-    for (size_t i = 0; i < w.size(); ++i) ASSERT_NEAR(w[i], e.values[i], 1e-4f) << "at " << i;
+    test_utils::expect_eigenvalues_agree<float>(w, e.values, n, batch);
 }
 
 // L L^T must reproduce the lower triangle of A.
@@ -530,15 +528,8 @@ TEST(LinalgLayer, CholeskyFactorReproducesInput) {
     auto L = linalg::cholesky(q, A.view(), Uplo::Lower);
     q.wait();
 
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = j; i < n; ++i) {  // lower triangle only
-                float acc = 0.0f;
-                for (int k = 0; k <= std::min(i, j); ++k)
-                    acc += at(L.view(), i, k, b) * at(L.view(), j, k, b);
-                ASSERT_NEAR(acc, at(A.view(), i, j, b), 1e-3f)
-                    << "L L^T at (" << i << "," << j << ") batch " << b;
-            }
+    EXPECT_VERIFY(float, verify::Check::factorization, n,
+                  Dense::potrf_residual(q, A.view(), L.view(), Uplo::Lower, A.view().all_items()));
 }
 
 // A X == B, checked by multiplying back.
@@ -551,14 +542,7 @@ TEST(LinalgLayer, SolveSatisfiesTheSystem) {
     auto X = linalg::solve(q, A.view(), B.view());
     q.wait();
 
-    auto AX = linalg::matmul(q, A.view(), X.view());
-    q.wait();
-
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i)
-                ASSERT_NEAR(at(AX.view(), i, j, b), at(B.view(), i, j, b), 1e-2f)
-                    << "A X != B at (" << i << "," << j << ") batch " << b;
+    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A.view(), X.view(), B.view(), A.view().all_items()));
 }
 
 // ---- linalg::solve after the gesv rewire -----------------------------------
@@ -706,16 +690,7 @@ TEST(LinalgLayer, EighProducesConsistentEigenpairs) {
     auto e = linalg::eigh(q, A.view());
     q.wait();
 
-    auto AV = linalg::matmul(q, A.view(), e.vectors.view());
-    q.wait();
-
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j) {
-            const float lambda = e.values[b * n + j];
-            for (int i = 0; i < n; ++i)
-                ASSERT_NEAR(at(AV.view(), i, j, b), lambda * at(e.vectors.view(), i, j, b), 1e-3f)
-                    << "eigenpair " << j << " batch " << b << " row " << i;
-        }
+    test_utils::expect_eigenpairs<float>(q, A.view(), e.vectors.view(), e.values, n, std::span<const int>(A.view().all_items()));
 }
 
 // The convenience layer leases from the arena; repeated calls must not grow it.
@@ -749,17 +724,15 @@ TEST(LinalgLayer, MatmulAlphaScalesTheProduct) {
     auto transposed = linalg::matmul(q, A.view(), B.view(), {.transA = Transpose::Trans});
     q.wait();
 
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                ASSERT_NEAR(at(scaled_product.view(), i, j, b),
-                            2.0f * at(plain.view(), i, j, b), 1e-3f)
-                    << "alpha at (" << i << "," << j << ") batch " << b;
-                float acc = 0.0f;
-                for (int k = 0; k < n; ++k) acc += at(A.view(), k, i, b) * at(B.view(), k, j, b);
-                ASSERT_NEAR(at(transposed.view(), i, j, b), acc, 1e-3f)
-                    << "transA at (" << i << "," << j << ") batch " << b;
-            }
+    const auto items = A.view().all_items();
+    EXPECT_VERIFY(float, verify::Check::blas, n,
+                  Dense::gemm_backward_error(q, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, plain.view(),
+                                             scaled_product.view(), 2.0, 0.0, items))
+        << "alpha";
+    EXPECT_VERIFY(float, verify::Check::blas, n,
+                  Dense::gemm_backward_error(q, A.view(), Transpose::Trans, B.view(), Transpose::NoTrans, plain.view(),
+                                             transposed.view(), 1.0, 0.0, items))
+        << "transA";
 }
 
 // triu/tril mask an existing matrix; fill_triangular generates one. The k
@@ -812,14 +785,10 @@ TEST(LinalgLayer, InvReproducesTheIdentity) {
     auto A = spd(n, batch);
     auto Ai = linalg::inv(q, A.view());
     q.wait();
-    auto I = linalg::matmul(q, A.view(), Ai.view());
-    q.wait();
 
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                ASSERT_NEAR(at(I.view(), i, j, b), i == j ? 1.0f : 0.0f, 1e-3f)
-                    << "A A^-1 at (" << i << "," << j << ") batch " << b;
+    // ||A A^-1 - I||_F / (||A||_F ||A^-1||_F): an empty B0 is the identity.
+    EXPECT_VERIFY(float, verify::Check::solve, n,
+                  Dense::solve_residual(q, A.view(), Ai.view(), Dense(nullptr, 0, 0, 1), A.view().all_items()));
 }
 
 TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
@@ -894,13 +863,7 @@ TEST(LinalgLayer, LuFactorsAndPivotsSolveTheSystem) {
     (void)getrs(q, f.factors.view(), X.view(), f.pivots.to_span());
     q.wait();
 
-    auto AX = linalg::matmul(q, A.view(), X.view());
-    q.wait();
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i)
-                ASSERT_NEAR(at(AX.view(), i, j, b), at(B.view(), i, j, b), 1e-2f)
-                    << "A X != B at (" << i << "," << j << ") batch " << b;
+    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A.view(), X.view(), B.view(), A.view().all_items()));
 }
 
 // U diag(S) Vh == A, on a square well-conditioned input.
@@ -918,16 +881,9 @@ TEST(LinalgLayer, SvdReconstructsInput) {
     ASSERT_EQ(s.Vh.view().cols(), n);
     ASSERT_EQ(s.values.size(), size_t(n) * size_t(batch));
 
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                float acc = 0.0f;
-                for (int k = 0; k < n; ++k)
-                    acc += at(s.U.view(), i, k, b) * s.values[b * n + k] *
-                           at(s.Vh.view(), k, j, b);
-                ASSERT_NEAR(acc, at(A.view(), i, j, b), 1e-2f)
-                    << "U S Vh != A at (" << i << "," << j << ") batch " << b;
-            }
+    EXPECT_VERIFY(float, verify::Check::factorization, n,
+                  Dense::svd_residual(q, A.view(), s.U.view(), VectorView<float>(s.values, n, batch), s.Vh.view(),
+                                      A.view().all_items()));
 }
 
 TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
