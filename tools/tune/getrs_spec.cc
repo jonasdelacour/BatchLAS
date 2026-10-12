@@ -92,6 +92,7 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
             // family: cta
             "src/extensions/getrs_fused.cc",
             // family: blocked

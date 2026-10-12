@@ -129,6 +129,7 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
             // family: direct
             "src/sycl/spmm_native.cc",
             "src/sycl/spmm_native.hh",

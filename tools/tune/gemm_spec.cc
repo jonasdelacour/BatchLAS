@@ -201,6 +201,7 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
             "src/sycl/gemm_kernels.cc",
             "src/sycl/gemm_kernels.hh",
             "src/sycl/gemm/accessors.hh",
