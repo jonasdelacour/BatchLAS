@@ -1,5 +1,6 @@
 #pragma once
 
+#include <complex>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -10,6 +11,8 @@
 #include <batchlas/settings.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-vector.hh>
 
 /// @file
 /// @brief Backend deduction from the Queue, owning-argument acceptance and the USM pointer check.
@@ -48,6 +51,79 @@ namespace batchlas {
  * @{
  */
 
+namespace detail {
+
+// Element type of a container argument (Matrix, MatrixView, Vector, VectorView, Span,
+// UnifiedVector); void for anything else. Scalars are deliberately not containers: a
+// float op may take a double knob (fill_graded_hermitian's condition number).
+template <class A> struct container_elem { using type = void; };
+template <class T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
+template <class T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
+template <class T> struct container_elem<Vector<T>> { using type = T; };
+template <class T> struct container_elem<VectorView<T>> { using type = T; };
+template <class T> struct container_elem<Span<T>> { using type = T; };
+template <class T> struct container_elem<UnifiedVector<T>> { using type = T; };
+
+template <class T>
+inline constexpr bool is_fp64_scalar_v =
+    std::is_same_v<std::remove_cv_t<T>, double> || std::is_same_v<std::remove_cv_t<T>, std::complex<double>>;
+
+// True when any container argument holds double or complex<double>: Backend::SYCL
+// instantiates those types only when BATCHLAS_HAS_DEVICE_FP64.
+template <class... A>
+inline constexpr bool needs_fp64_v =
+    (is_fp64_scalar_v<typename container_elem<std::remove_cvref_t<A>>::type> || ...);
+
+[[noreturn]] inline void throw_no_device_fp64(const Queue& ctx, const char* op) {
+    throw batchlas::unsupported(
+        std::string("BatchLAS: ") + (op ? op : "this call") +
+        " was called with double or complex<double> data on a queue whose device (" +
+        ctx.device().get_name() +
+        ") has no fp64 support, so this build compiled no Backend::SYCL kernels for those "
+        "types. Run double work on a CPU Queue (Queue(Device(\"cpu\"))), whose backend is "
+        "NETLIB, or convert the data to float or complex<float>.");
+}
+
+// with_backend with the fp64 gate: the SYCL branch is discarded (never instantiated) when
+// NeedsFp64 and the build has no device fp64, so no <SYCL, double> symbol is referenced.
+template <bool NeedsFp64, typename F>
+inline auto with_backend_gated(Queue& ctx, const char* op, F&& f) {
+    static_assert(BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND ||
+                      BATCHLAS_HAS_SYCL_BACKEND || BATCHLAS_HAS_HOST_BACKEND,
+                  "BatchLAS was built with no backends; nothing can be dispatched.");
+
+    switch (ctx.backend()) {
+#if BATCHLAS_HAS_CUDA_BACKEND
+        case Backend::CUDA:
+            return f(std::integral_constant<Backend, Backend::CUDA>{});
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+        case Backend::ROCM:
+            return f(std::integral_constant<Backend, Backend::ROCM>{});
+#endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        case Backend::SYCL:
+            if constexpr (NeedsFp64 && !BATCHLAS_HAS_DEVICE_FP64) {
+                throw_no_device_fp64(ctx, op);
+            } else {
+                return f(std::integral_constant<Backend, Backend::SYCL>{});
+            }
+#endif
+#if BATCHLAS_HAS_HOST_BACKEND
+        case Backend::NETLIB:
+            return f(std::integral_constant<Backend, Backend::NETLIB>{});
+#endif
+        default:
+            break;
+    }
+    throw batchlas::unsupported(
+        std::string("BatchLAS: backend ") + std::string(to_string(ctx.backend())) +
+        " has no implementation in this build. "
+        "Check Queue::backend_available() before pinning a backend.");
+}
+
+}  // namespace detail
+
 /// @brief Call @p f with the queue's backend as a compile-time constant.
 ///
 /// Converts `ctx.backend()` into `std::integral_constant<Backend, B>` and invokes
@@ -61,34 +137,23 @@ namespace batchlas {
 /// @param f      callable; every branch must return the same type
 /// @return       whatever @p f returns
 /// @throws batchlas::unsupported if `ctx.backend()` has no implementation in this
-///         build (always the case for Backend::MAGMA and Backend::SYCL)
+///         build (always the case for Backend::MAGMA)
+/// @note In a build without device fp64 (`BATCHLAS_HAS_DEVICE_FP64` 0), Backend::SYCL
+///       has no double or complex<double> instantiations: @p f must not name them for
+///       Backend::SYCL. The entry points' deducing overloads check this and throw
+///       batchlas::unsupported instead.
 /// @see Queue::backend_available
 template <typename F>
 inline auto with_backend(Queue& ctx, F&& f) {
-    static_assert(BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND ||
-                      BATCHLAS_HAS_HOST_BACKEND,
-                  "BatchLAS was built with no backends; nothing can be dispatched.");
+    return detail::with_backend_gated<false>(ctx, nullptr, std::forward<F>(f));
+}
 
-    switch (ctx.backend()) {
-#if BATCHLAS_HAS_CUDA_BACKEND
-        case Backend::CUDA:
-            return f(std::integral_constant<Backend, Backend::CUDA>{});
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-        case Backend::ROCM:
-            return f(std::integral_constant<Backend, Backend::ROCM>{});
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-        case Backend::NETLIB:
-            return f(std::integral_constant<Backend, Backend::NETLIB>{});
-#endif
-        default:
-            break;
-    }
-    throw batchlas::unsupported(
-        std::string("BatchLAS: backend ") + std::string(to_string(ctx.backend())) +
-        " has no implementation in this build. "
-        "Check Queue::backend_available() before pinning a backend.");
+/// @brief with_backend() for a call on element type @p T: throws batchlas::unsupported
+/// before dispatch when @p T is double or complex<double> and the queue's backend is
+/// Backend::SYCL in a build without device fp64.
+template <typename T, typename F>
+inline auto with_backend_for(Queue& ctx, const char* op, F&& f) {
+    return detail::with_backend_gated<detail::is_fp64_scalar_v<T>>(ctx, op, std::forward<F>(f));
 }
 
 /// @}
@@ -227,7 +292,8 @@ inline view_t<A> as_view(const A& a) {
         }                                                                       \
     inline auto NAME(Queue& ctx, Args&&... args) {                              \
         ::batchlas::detail::require_pack_accessible(ctx, #NAME, args...);       \
-        return ::batchlas::with_backend(ctx, [&](auto Back) {                   \
+        return ::batchlas::detail::with_backend_gated<                          \
+            ::batchlas::detail::needs_fp64_v<Args...>>(ctx, #NAME, [&](auto Back) { \
             return NAME<Back.value>(ctx, std::forward<Args>(args)...);          \
         });                                                                     \
     }

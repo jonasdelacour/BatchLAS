@@ -1,0 +1,86 @@
+From a3b7006af98766f179c517e85a290d1e9b15ac94 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Tue, 13 Oct 2026 00:32:50 +0200
+Subject: [PATCH] [Metal] Declare the SIMD-group intrinsics convergent
+
+The libkernel's public sub-group builtins are convergent, but the
+__acpp_sscp_metal_{shuffle,broadcast,reduce,scan,collpredicate}_* calls
+they inline to were plain declarations. After inlining, LLVM was free to
+unswitch a loop on a per-lane condition and run a simd_shuffle on only
+part of the SIMD-group, which then reads inactive lanes.
+---
+ src/libkernel/sscp/metal/broadcast.cpp       | 2 +-
+ src/libkernel/sscp/metal/collpredicate.cpp   | 2 +-
+ src/libkernel/sscp/metal/reduction.cpp       | 2 +-
+ src/libkernel/sscp/metal/scan_helpers.hpp    | 2 +-
+ src/libkernel/sscp/metal/shuffle_helpers.hpp | 2 +-
+ 5 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/libkernel/sscp/metal/broadcast.cpp b/src/libkernel/sscp/metal/broadcast.cpp
+index b63d89d8..564f6f15 100644
+--- a/src/libkernel/sscp/metal/broadcast.cpp
++++ b/src/libkernel/sscp/metal/broadcast.cpp
+@@ -34,7 +34,7 @@ using namespace hipsycl::sycl::detail::metal_builtins;
+   X(f16) \
+   X(f32)
+ 
+-#define X(type) HIPSYCL_SSCP_BUILTIN type __acpp_sscp_metal_broadcast_##type(const char* s, type value, i32 local_id);
++#define X(type) HIPSYCL_SSCP_CONVERGENT_BUILTIN type __acpp_sscp_metal_broadcast_##type(const char* s, type value, i32 local_id);
+ BROADCAST_TYPES
+ #undef X
+ 
+diff --git a/src/libkernel/sscp/metal/collpredicate.cpp b/src/libkernel/sscp/metal/collpredicate.cpp
+index f0d9ce76..ec8df5df 100644
+--- a/src/libkernel/sscp/metal/collpredicate.cpp
++++ b/src/libkernel/sscp/metal/collpredicate.cpp
+@@ -19,7 +19,7 @@
+ 
+ using namespace hipsycl::sycl::detail::metal_builtins;
+ 
+-HIPSYCL_SSCP_BUILTIN bool __acpp_sscp_metal_collpredicate(const char* s, bool pred);
++HIPSYCL_SSCP_CONVERGENT_BUILTIN bool __acpp_sscp_metal_collpredicate(const char* s, bool pred);
+ 
+ HIPSYCL_SSCP_CONVERGENT_BUILTIN
+ bool __acpp_sscp_sub_group_any(bool pred) {
+diff --git a/src/libkernel/sscp/metal/reduction.cpp b/src/libkernel/sscp/metal/reduction.cpp
+index c1284767..ef0e88b4 100644
+--- a/src/libkernel/sscp/metal/reduction.cpp
++++ b/src/libkernel/sscp/metal/reduction.cpp
+@@ -40,7 +40,7 @@ using namespace hipsycl::sycl::detail::metal_builtins;
+ #define REDUCTION_TYPES \
+   REDUCTION_INT_TYPES \
+   REDUCTION_FLOAT_TYPES
+-#define X(type) HIPSYCL_SSCP_BUILTIN type __acpp_sscp_metal_reduce_##type(const char* s, type value);
++#define X(type) HIPSYCL_SSCP_CONVERGENT_BUILTIN type __acpp_sscp_metal_reduce_##type(const char* s, type value);
+ REDUCTION_TYPES
+ #undef X
+ 
+diff --git a/src/libkernel/sscp/metal/scan_helpers.hpp b/src/libkernel/sscp/metal/scan_helpers.hpp
+index 72068a47..99b6bb7d 100644
+--- a/src/libkernel/sscp/metal/scan_helpers.hpp
++++ b/src/libkernel/sscp/metal/scan_helpers.hpp
+@@ -43,7 +43,7 @@ namespace detail::metal_builtins {
+   SCAN_INT_TYPES \
+   SCAN_FLOAT_TYPES
+ 
+-#define X(type) HIPSYCL_SSCP_BUILTIN type __acpp_sscp_metal_scan_##type(const char* s, type value);
++#define X(type) HIPSYCL_SSCP_CONVERGENT_BUILTIN type __acpp_sscp_metal_scan_##type(const char* s, type value);
+ SCAN_TYPES
+ #undef X
+ 
+diff --git a/src/libkernel/sscp/metal/shuffle_helpers.hpp b/src/libkernel/sscp/metal/shuffle_helpers.hpp
+index cc3311b6..a297e8dc 100644
+--- a/src/libkernel/sscp/metal/shuffle_helpers.hpp
++++ b/src/libkernel/sscp/metal/shuffle_helpers.hpp
+@@ -32,7 +32,7 @@ namespace detail::metal_builtins {
+   X(f16) \
+   X(f32)
+ 
+-#define X(type) HIPSYCL_SSCP_BUILTIN type __acpp_sscp_metal_shuffle_##type(const char* s, type value, u32 offset);
++#define X(type) HIPSYCL_SSCP_CONVERGENT_BUILTIN type __acpp_sscp_metal_shuffle_##type(const char* s, type value, u32 offset);
+ SHUFFLE_TYPES
+ #undef X
+ 
+-- 
+2.54.0 (Apple Git-157)
+

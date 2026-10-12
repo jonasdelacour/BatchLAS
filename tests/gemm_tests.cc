@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <cstdio>
 #include <cstring>
 
 #include <batchlas/backend_config.h>
@@ -154,6 +155,9 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
                                   ScalarType beta = ScalarType(1),
                                   double old_scale = 75) {
     SKIP_UNLESS_NATIVE(ctx);
+    if (int rm, rn, rk, ru; std::sscanf(kernel_name, "reg:m=%d:n=%d:k=%d:u=%d", &rm, &rn, &rk, &ru) == 4 &&
+                            !RegTileFitsOrIsRefused(ctx, kernel_name, rm, rn, rk, ru))
+        GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead";
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;

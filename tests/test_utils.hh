@@ -22,7 +22,11 @@ namespace test_utils {
 // evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
 inline constexpr bool kSlmCappedAt48KiB = BATCHLAS_SYCL_IMPL_ACPP && !BATCHLAS_ACPP_SLM_OPTIN;
 inline constexpr const char* kSlmCappedReason =
+#if BATCHLAS_HAS_SYCL_BACKEND
+    "acpp on an Apple GPU: 32 KiB threadgroup memory per work-group, less the runtime's scratch";
+#else
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
+#endif
 
 // Convert std::tuple<Ts...> to GoogleTest type list
 template <class Tuple> struct tuple_to_types;
@@ -45,12 +49,12 @@ inline bool should_run_backend(batchlas::Backend backend) {
     std::transform(backend_filter.begin(), backend_filter.end(), backend_filter.begin(), ::toupper);
     
     // Check if filter matches a known backend
-    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" || 
-                       backend_filter == "NETLIB");
+    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" ||
+                       backend_filter == "SYCL" || backend_filter == "NETLIB");
     
     if (!recognized) {
         std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
-                  << " is not recognized. Valid values are: CUDA, ROCM, NETLIB. "
+                  << " is not recognized. Valid values are: CUDA, ROCM, SYCL, NETLIB. "
                   << "Skipping all tests." << std::endl;
         return false;
     }
@@ -58,6 +62,7 @@ inline bool should_run_backend(batchlas::Backend backend) {
     // Match backend to filter
     if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
     if (backend == batchlas::Backend::ROCM && backend_filter == "ROCM") return true;
+    if (backend == batchlas::Backend::SYCL && backend_filter == "SYCL") return true;
     if (backend == batchlas::Backend::NETLIB && backend_filter == "NETLIB") return true;
     
     return false;  // Filter doesn't match, skip
@@ -114,6 +119,14 @@ struct backend_types {
                    Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<float, batchlas::Backend::SYCL>,
+                   Config<std::complex<float>, batchlas::Backend::SYCL>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<double, batchlas::Backend::SYCL>,
+                   Config<std::complex<double>, batchlas::Backend::SYCL>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -147,6 +160,16 @@ struct backend_types_filtered {
                               Config<std::complex<double>, batchlas::Backend::ROCM>>,
                    std::tuple<>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<float, batchlas::Backend::SYCL>>{},
+        std::conditional_t<IncludeComplex, std::tuple<Config<std::complex<float>, batchlas::Backend::SYCL>>,
+                           std::tuple<>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<double, batchlas::Backend::SYCL>>{},
+        std::conditional_t<IncludeComplex, std::tuple<Config<std::complex<double>, batchlas::Backend::SYCL>>,
+                           std::tuple<>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -169,6 +192,12 @@ struct backend_types_complex {
         std::tuple<Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<std::complex<float>, batchlas::Backend::SYCL>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<std::complex<double>, batchlas::Backend::SYCL>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -179,6 +208,8 @@ struct backend_types_complex {
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
 #endif
 
 // Utility traits and helper functions

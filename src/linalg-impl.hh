@@ -974,6 +974,13 @@ namespace batchlas{
         };
 
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+    // No vendor library, so no handles; complete because native TUs (ortho.cc) declare one.
+    template <>
+    struct LinalgHandle<Backend::SYCL> {
+        void setStream(const Queue&) {}
+    };
+#endif
 #if BATCHLAS_HAS_HOST_BACKEND
     template <>
     struct LinalgHandle<Backend::NETLIB>{

@@ -37,7 +37,7 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 | Where the checks live | static functions of `MatrixView<T, MatrixFormat::Dense>` (`include/batchlas/blas/matrix.hh`, implementation `src/extra/matrix_checks.cc`); every utility a check needs is a `Matrix`/`MatrixView` member or static, or an existing library function. `batchlas::verify` keeps only the tolerance policy and the LAPACKE references |
 | Data | the library's own `MatrixView` and `VectorView`; no other matrix, batch, operand or item type. A site holding raw buffers builds a view over them |
 | Memory | host-readable views (unified or host allocations); the caller waits on its queue first. A check promotes its items with `MatrixView::astype<promoted_type>(items)` |
-| Queue | the caller's: every check takes `Queue& ctx` first, runs there and waits once at the end |
+| Queue | the caller's: every check takes `Queue& ctx` first, runs there and waits once at the end. On a device without fp64 (an Apple GPU, see [no-fp64 devices](#verification-no-fp64-device)) the check waits on `ctx` and runs on a per-thread CPU queue instead |
 | Arithmetic | every check promotes to `double` / `std::complex<double>` |
 | Maxima | NaN-propagating everywhere: a NaN anywhere in a check fails it |
 | Items checked | `default_items()` (`{0, batch/2, batch−1}`) by default; an explicit list otherwise, `all_items()` for every item. Check a batch with one call over its items, not one call per item: each call waits on the queue |
@@ -63,6 +63,16 @@ kind, n and the slack.
 
 Every check returns the worst value over the checked items as a `double`; the caller compares it
 with `bound`. Items are processed in groups that keep each promoted operand under 2^25 elements.
+
+## Checks on a device without fp64 {#verification-no-fp64-device}
+
+The checks promote to `double`, and a Metal build has no double kernels for the GPU
+(`BATCHLAS_HAS_DEVICE_FP64=0`). `check_queue()` in `src/extra/matrix_checks.cc` therefore waits on
+the caller's queue and returns a leaked, per-thread CPU `Queue` (the AdaptiveCpp OpenMP device) when
+`ctx.device().supports_fp64()` is false. Every promoted allocation, kernel and Frobenius norm of the
+check runs there. The operands stay where they are: library matrices are USM shared, which the host
+device reads in place. A `malloc_device` operand is not host-readable and must be copied first.
+The checks are not demoted to `float`, which would make them as inexact as the code they judge.
 
 ## Tolerance kinds
 

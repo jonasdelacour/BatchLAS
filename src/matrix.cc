@@ -202,6 +202,12 @@ inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int
     return data.data();
 }
 
+// The queue-less helpers run on the default device, or the CPU for double on an fp64-less GPU.
+template <typename T>
+Queue default_queue_for() {
+    return Queue(Device::default_device_for<T>());
+}
+
 }  // namespace
 
 //----------------------------------------------------------------------
@@ -357,7 +363,7 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
 template <typename T, MatrixFormat MType>
 template <MatrixFormat NewMType>
 Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshold) const {
-    Queue q; // Use default queue
+    Queue q = default_queue_for<T>(); // Use default queue
 
     // Handle identity conversion (same format)
     if constexpr (MType == NewMType) {
@@ -757,7 +763,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     
     // Create a queue to submit work to
-    Queue q;
+    Queue q = default_queue_for<T>();
     
     // Get pointer to the matrix data
     T* data_ptr = result.data_.data();
@@ -1058,7 +1064,7 @@ Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) {
     Matrix<T, MType> result(n, n, NonZeros{csr_random_nnz_per_matrix(n, density)}, batch_size);
-    result.view().fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern).wait();
+    result.view().fill_random_sparse_hermitian(default_queue_for<T>(), density, seed, diagonal_boost, shared_pattern).wait();
     return result;
 }
 
@@ -1873,7 +1879,7 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major(int row_pitch) const {
     // Builds a queue of its own, and waits on it before returning.
-    Queue q;
+    Queue q = default_queue_for<T>();
     return to_column_major(q, row_pitch);
 }
 
@@ -1939,7 +1945,7 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     // Builds a queue of its own, and waits on it before returning.
-    Queue q;
+    Queue q = default_queue_for<T>();
     return to_row_major(q);
 }
 

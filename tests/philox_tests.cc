@@ -14,6 +14,15 @@ using namespace batchlas;
 
 namespace {
 
+// The default device may lack fp64 (Metal): double instances run on the CPU device instead.
+template <class T>
+sycl::queue queue_for() {
+    sycl::queue q;
+    if constexpr (std::is_same_v<typename philox::real_of<T>::type, double>)
+        if (!q.get_device().has(sycl::aspect::fp64)) return sycl::queue{sycl::cpu_selector_v};
+    return q;
+}
+
 struct Kat {
     philox::Words ctr;
     std::uint32_t k0, k1;
@@ -173,7 +182,7 @@ TYPED_TEST(PhiloxScalarTest, DeviceUniformIsBitIdenticalToHost) {
     const std::uint64_t seed = 0xfedcba9876543210ull;
     const std::uint64_t stream = 0x100000003ull;
     const std::uint64_t base = 0xfffff000ull;  // straddles the 2^32 index word boundary
-    sycl::queue q;
+    sycl::queue q = queue_for<T>();
     auto* sym = sycl::malloc_shared<T>(n, q);
     auto* uni = sycl::malloc_shared<T>(n, q);
     auto* nrm = sycl::malloc_shared<T>(n, q);

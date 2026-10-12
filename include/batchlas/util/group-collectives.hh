@@ -84,6 +84,16 @@ struct rebind_op<OpT<V>, R> {
 template <typename T>
 using local_ptr = __attribute__((address_space(3))) T*;
 
+// sycl_impl::on_metal() (src/sycl/sscp_target.hh), which an installed header cannot include.
+// 4 is compiler_backend::metal; acpp 25.10 has no such enumerator.
+__attribute__((always_inline)) inline bool on_metal() {
+    bool r = false;
+    __acpp_if_target_sscp(
+        r = static_cast<int>(sycl::AdaptiveCpp_jit::reflect<
+                             sycl::AdaptiveCpp_jit::reflection_query::compiler_backend>()) == 4;)
+    return r;
+}
+
 // One scratch per T per kernel, shared by every op and call site, as AdaptiveCpp's own is.
 template <typename T>
 __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
@@ -102,6 +112,8 @@ template <typename Group, typename T, typename Op>
 inline T wg_reduce_floating(Group g, T x, Op op) {
     // Host-compiled kernels (omp.library-only) have no wg_scratch.
     __acpp_if_target_host(return sycl::reduce_over_group(g, x, op);)
+    // Metal emits no static local memory, and its own reduce keeps a typed scratch (no TRAP).
+    if (on_metal()) return sycl::reduce_over_group(g, x, op);
     const sycl::sub_group sg{};
     const T s = sycl::reduce_over_group(sg, x, op);
     const std::uint32_t width = sg.get_max_local_range()[0];

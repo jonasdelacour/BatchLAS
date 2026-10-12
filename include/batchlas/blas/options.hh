@@ -294,7 +294,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
 inline Event gemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const GemmOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "gemm", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return gemm<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "gemm",
+                               [&](auto Back) { return gemm<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief gemv with a compile-time backend; same contract as the Queue-deducing
@@ -319,7 +320,8 @@ template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event gemv(Queue& ctx, const MA& A, const VectorView<T>& x, const VectorView<T>& y,
                   const GemvOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "gemv", A, x, y);
-    return with_backend(ctx, [&](auto Back) { return gemv<Back.value>(ctx, A, x, y, opts); });
+    return with_backend_for<T>(ctx, "gemv",
+                               [&](auto Back) { return gemv<Back.value>(ctx, A, x, y, opts); });
 }
 
 /// @brief symm with a compile-time backend; same contract as the Queue-deducing
@@ -344,7 +346,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
 inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "symm", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return symm<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "symm",
+                               [&](auto Back) { return symm<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief hemm with a compile-time backend; same contract as the Queue-deducing
@@ -371,7 +374,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
     requires ComplexScalar<T>
 inline Event hemm(Queue& ctx, const MA& A, const MB& B, const MC& C, const HemmOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "hemm", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return hemm<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "hemm",
+                               [&](auto Back) { return hemm<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief herk with a compile-time backend; same contract as the Queue-deducing
@@ -398,7 +402,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
     requires ComplexScalar<T>
 inline Event herk(Queue& ctx, const MA& A, const MC& C, const HerkOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "herk", A, C);
-    return with_backend(ctx, [&](auto Back) { return herk<Back.value>(ctx, A, C, opts); });
+    return with_backend_for<T>(ctx, "herk",
+                               [&](auto Back) { return herk<Back.value>(ctx, A, C, opts); });
 }
 
 /// @brief her2k with a compile-time backend; same contract as the Queue-deducing
@@ -426,7 +431,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
 inline Event her2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
                    const Her2kOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "her2k", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return her2k<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "her2k",
+                               [&](auto Back) { return her2k<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief syrk with a compile-time backend; same contract as the Queue-deducing
@@ -451,7 +457,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "syrk", A, C);
-    return with_backend(ctx, [&](auto Back) { return syrk<Back.value>(ctx, A, C, opts); });
+    return with_backend_for<T>(ctx, "syrk",
+                               [&](auto Back) { return syrk<Back.value>(ctx, A, C, opts); });
 }
 
 /// @brief syr2k with a compile-time backend; same contract as the Queue-deducing
@@ -477,7 +484,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
 inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
                    const Syr2kOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "syr2k", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return syr2k<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "syr2k",
+                               [&](auto Back) { return syr2k<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief trmm with a compile-time backend; same contract as the Queue-deducing
@@ -504,7 +512,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseM
           typename T = detail::dense_scalar_t<MA>>
 inline Event trmm(Queue& ctx, const MA& A, const MB& B, const MC& C, const TrmmOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "trmm", A, B, C);
-    return with_backend(ctx, [&](auto Back) { return trmm<Back.value>(ctx, A, B, C, opts); });
+    return with_backend_for<T>(ctx, "trmm",
+                               [&](auto Back) { return trmm<Back.value>(ctx, A, B, C, opts); });
 }
 
 /// @brief trsm with a compile-time backend; same contract as the Queue-deducing
@@ -527,7 +536,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& opts) {
     BATCHLAS_CHECK_ARGS(ctx, "trsm", A, B);
-    return with_backend(ctx, [&](auto Back) { return trsm<Back.value>(ctx, A, B, opts); });
+    return with_backend_for<T>(ctx, "trsm",
+                               [&](auto Back) { return trsm<Back.value>(ctx, A, B, opts); });
 }
 
 // ---- dense LAPACK ----------------------------------------------------------
@@ -585,7 +595,8 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::
     BATCHLAS_CHECK_ARGS(ctx, "potrf", A, ws, opts.info);
     detail::require_square("potrf", "A", A);
     detail::require_info_span("potrf", opts.info.size(), static_cast<size_t>(A.batch_size()));
-    return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts, ws); });
+    return with_backend_for<T>(ctx, "potrf",
+                               [&](auto Back) { return potrf<Back.value>(ctx, A, opts, ws); });
 }
 
 /// @brief Batched Cholesky factorisation \f$A_i = L_iL_i^H\f$ (Lower) or \f$U_i^HU_i\f$ (Upper), in place.
@@ -606,7 +617,8 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "potrf", A, opts.info);
     detail::require_square("potrf", "A", A);
     detail::require_info_span("potrf", opts.info.size(), static_cast<size_t>(A.batch_size()));
-    return with_backend(ctx, [&](auto Back) { return potrf<Back.value>(ctx, A, opts); });
+    return with_backend_for<T>(ctx, "potrf",
+                               [&](auto Back) { return potrf<Back.value>(ctx, A, opts); });
 }
 
 /// @}
@@ -665,7 +677,8 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> 
     detail::require_span_at_least("getrf", "pivots", pivots.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
     detail::require_info_span("getrf", info.size(), static_cast<size_t>(A.batch_size()));
-    return with_backend(ctx, [&](auto Back) { return getrf<Back.value>(ctx, A, pivots, info); });
+    return with_backend_for<T>(ctx, "getrf",
+                               [&](auto Back) { return getrf<Back.value>(ctx, A, pivots, info); });
 }
 
 /// @brief getrs with a compile-time backend and a caller workspace; no shape checks.
@@ -707,8 +720,8 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
     detail::require_same_batch("getrs", "A", A, "B", B_);
     detail::require_span_at_least("getrs", "pivots", pivots.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
-    return with_backend(
-        ctx, [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts, ws); });
+    return with_backend_for<T>(
+        ctx, "getrs", [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts, ws); });
 }
 
 /// @brief Batched LU solve \f$\mathrm{op}(A_i)X_i = B_i\f$ from getrf()'s factors, in place.
@@ -733,8 +746,8 @@ inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
     detail::require_same_batch("getrs", "A", A, "B", B_);
     detail::require_span_at_least("getrs", "pivots", pivots.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
-    return with_backend(ctx,
-                        [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts); });
+    return with_backend_for<T>(ctx, "getrs",
+                               [&](auto Back) { return getrs<Back.value>(ctx, A, B_, pivots, opts); });
 }
 
 /// @brief getri with a compile-time backend; workspace leased from the arena.
@@ -778,8 +791,8 @@ inline Event getri(Queue& ctx, const MA& A, const MB& Ainv, Span<int64_t> pivots
     detail::require_span_at_least("getri", "pivots", pivots.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
     detail::require_info_span("getri", info.size(), static_cast<size_t>(A.batch_size()));
-    return with_backend(ctx,
-                        [&](auto Back) { return getri<Back.value>(ctx, A, Ainv, pivots, info); });
+    return with_backend_for<T>(ctx, "getri",
+                               [&](auto Back) { return getri<Back.value>(ctx, A, Ainv, pivots, info); });
 }
 
 /// @brief geqrf with a compile-time backend; workspace leased from the arena.
@@ -809,7 +822,8 @@ inline Event geqrf(Queue& ctx, const MA& A, Span<T> tau) {
     // No squareness check (rectangular A is the point); the tau stride is fixed.
     detail::require_span_at_least("geqrf", "tau", tau.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return geqrf<Back.value>(ctx, A, tau); });
+    return with_backend_for<T>(ctx, "geqrf",
+                               [&](auto Back) { return geqrf<Back.value>(ctx, A, tau); });
 }
 
 /// @brief orgqr with a compile-time backend; workspace leased from the arena.
@@ -837,7 +851,8 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
     BATCHLAS_CHECK_ARGS(ctx, "orgqr", A, tau);
     detail::require_span_at_least("orgqr", "tau", tau.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
+    return with_backend_for<T>(ctx, "orgqr",
+                               [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
 }
 
 /// @brief syev with a compile-time backend and a caller workspace; no shape checks.
@@ -869,7 +884,8 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
     detail::require_square("syev", "A", A);
     detail::require_span_at_least("syev", "W", W.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts, ws); });
+    return with_backend_for<T>(ctx, "syev",
+                               [&](auto Back) { return syev<Back.value>(ctx, A, W, opts, ws); });
 }
 
 /// @brief Batched symmetric/Hermitian eigendecomposition \f$A_i = V_i\Lambda_iV_i^H\f$.
@@ -891,7 +907,8 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
     detail::require_square("syev", "A", A);
     detail::require_span_at_least("syev", "W", W.size(),
                                   static_cast<size_t>(A.rows()) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
+    return with_backend_for<T>(ctx, "syev",
+                               [&](auto Back) { return syev<Back.value>(ctx, A, W, opts); });
 }
 
 // ---- ormqr and gesvd -------------------------------------------------------
@@ -939,7 +956,8 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
     detail::require_same_batch("ormqr", "A", A, "C", C);
     detail::require_span_at_least("ormqr", "tau", tau.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts, ws); });
+    return with_backend_for<T>(ctx, "ormqr",
+                               [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts, ws); });
 }
 
 /// @brief Apply the Q of geqrf() to C: \f$C_i := \mathrm{op}(Q_i)C_i\f$ (Left) or \f$C_i\,\mathrm{op}(Q_i)\f$ (Right).
@@ -961,7 +979,8 @@ inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
     detail::require_same_batch("ormqr", "A", A, "C", C);
     detail::require_span_at_least("ormqr", "tau", tau.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(ctx, [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts); });
+    return with_backend_for<T>(ctx, "ormqr",
+                               [&](auto Back) { return ormqr<Back.value>(ctx, A, C, tau, opts); });
 }
 
 /// @brief Options for gesvd(): \f$A = U\Sigma V^H\f$.
@@ -1019,8 +1038,8 @@ inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> si
     if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
     detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(
-        ctx, [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts, ws); });
+    return with_backend_for<T>(
+        ctx, "gesvd", [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts, ws); });
 }
 
 /// @brief Batched singular value decomposition \f$A_i = U_i\Sigma_iV_i^H\f$.
@@ -1046,8 +1065,8 @@ inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> si
     if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
     detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
-    return with_backend(
-        ctx, [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts); });
+    return with_backend_for<T>(
+        ctx, "gesvd", [&](auto Back) { return gesvd<Back.value>(ctx, A, singular_values, U, Vh, opts); });
 }
 
 /// @}

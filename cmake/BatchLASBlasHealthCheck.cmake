@@ -33,7 +33,11 @@ set(BATCHLAS_OPENBLAS_CORETYPE "" CACHE STRING
 set(BATCHLAS_BLAS_HEALTH_STATUS "UNKNOWN" CACHE INTERNAL "Result of the host BLAS dgemm health check")
 
 # Tried in order; earlier entries keep more performance than later ones.
-set(_batchlas_coretype_candidates SKYLAKEX HASWELL SANDYBRIDGE NEHALEM PRESCOTT)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+    set(_batchlas_coretype_candidates NEOVERSEN1 ARMV8)
+else()
+    set(_batchlas_coretype_candidates SKYLAKEX HASWELL SANDYBRIDGE NEHALEM PRESCOTT)
+endif()
 
 function(_batchlas_write_dgemm_check out_file)
     file(WRITE "${out_file}" [==[

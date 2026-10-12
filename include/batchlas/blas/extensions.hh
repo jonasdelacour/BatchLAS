@@ -2316,7 +2316,8 @@ inline Event ortho(Queue& ctx,
         detail::require_arg_accessible(ctx, A, "ortho: A");
         detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
     }
-    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts, workspace); });
+    return with_backend_for<T>(ctx, "ortho",
+                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts, workspace); });
 }
 
 template <typename T>
@@ -2324,7 +2325,8 @@ inline Event ortho(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
         const OrthoOptions& opts = {}) {
     if (detail::pointer_checks_enabled()) detail::require_arg_accessible(ctx, A, "ortho: A");
-    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts); });
+    return with_backend_for<T>(ctx, "ortho",
+                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts); });
 }
 
 template <typename T>
@@ -2428,8 +2430,8 @@ inline Event ortho(Queue& ctx,
         detail::require_arg_accessible(ctx, M, "ortho: M");
         detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
     }
-    return with_backend(ctx,
-                        [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts, workspace); });
+    return with_backend_for<T>(ctx, "ortho",
+                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts, workspace); });
 }
 
 template <typename T>
@@ -2441,7 +2443,8 @@ inline Event ortho(Queue& ctx,
         detail::require_arg_accessible(ctx, A, "ortho: A");
         detail::require_arg_accessible(ctx, M, "ortho: M");
     }
-    return with_backend(ctx, [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts); });
+    return with_backend_for<T>(ctx, "ortho",
+                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts); });
 }
 
 template <typename T>

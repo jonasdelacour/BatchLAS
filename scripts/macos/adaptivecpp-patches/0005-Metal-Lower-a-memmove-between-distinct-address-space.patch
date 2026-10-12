@@ -1,0 +1,67 @@
+From 25cb3c76f9b9b04a7266de5e0f6791da44bf5773 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 23:04:06 +0200
+Subject: [PATCH 5/7] [Metal] Lower a memmove between distinct address spaces
+ as a memcpy
+
+MemCpyOpt folds a global->private->local copy pair into one memmove. Its
+loop expansion compares the two pointers to pick a direction, and MSL
+rejects a comparison of a device with a threadgroup pointer. Distinct
+non-generic Metal address spaces never overlap, so a forward copy is exact.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../llvm-to-backend/metal/LLVMToMetal.cpp     | 23 +++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp b/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
+index ab3833c6..8c6b3f38 100644
+--- a/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
++++ b/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
+@@ -20,6 +20,7 @@
+ #include "hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp"
+ #include "hipSYCL/common/filesystem.hpp"
+ #include "hipSYCL/common/debug.hpp"
++#include <llvm/Analysis/ValueTracking.h>
+ #include <llvm/IR/Instructions.h>
+ #include <llvm/IR/Constants.h>
+ #include <llvm/IR/GlobalVariable.h>
+@@ -246,6 +247,16 @@ struct ReplaceIntrinsics : llvm::PassInfoMixin<ReplaceIntrinsics> {
+   }
+ };
+ 
++// True when a memmove copies between two different, non-generic address spaces.
++bool memmoveSpansAddressSpaces(llvm::MemMoveInst* MM) {
++  auto origin = [](llvm::Value* P) {
++    return llvm::getUnderlyingObject(P)->getType()->getPointerAddressSpace();
++  };
++  const unsigned DstAS = origin(MM->getRawDest());
++  const unsigned SrcAS = origin(MM->getRawSource());
++  return DstAS != SrcAS && DstAS != 0 && SrcAS != 0;
++}
++
+ struct ExpandIntrinsics : llvm::PassInfoMixin<ExpandIntrinsics> {
+   llvm::PreservedAnalyses run(llvm::Function& F, llvm::FunctionAnalysisManager& FAM) {
+     llvm::SmallVector<llvm::IntrinsicInst*, 16> Work;
+@@ -275,6 +286,18 @@ struct ExpandIntrinsics : llvm::PassInfoMixin<ExpandIntrinsics> {
+         llvm::expandMemCpyAsLoop(MC, TTI, SE);
+         II->eraseFromParent();
+         Changed = true;
++      } else if (auto* MM = llvm::dyn_cast<llvm::MemMoveInst>(II);
++                 MM && memmoveSpansAddressSpaces(MM)) {
++        // Distinct Metal address spaces never overlap, so a forward copy is exact. The
++        // memmove loop would compare a device with a threadgroup pointer, which MSL rejects.
++        llvm::IRBuilder<> B(MM);
++        auto* MC = llvm::cast<llvm::MemCpyInst>(
++            B.CreateMemCpy(MM->getRawDest(), MM->getDestAlign(), MM->getRawSource(),
++                           MM->getSourceAlign(), MM->getLength(), MM->isVolatile()));
++        llvm::expandMemCpyAsLoop(MC, TTI, SE);
++        MC->eraseFromParent();
++        II->eraseFromParent();
++        Changed = true;
+       } else if (auto* MM = llvm::dyn_cast<llvm::MemMoveInst>(II)) {
+         bool lowered = llvm::expandMemMoveAsLoop(MM, TTI);
+         if (lowered) {
+-- 
+2.54.0 (Apple Git-157)
+

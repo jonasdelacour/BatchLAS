@@ -93,6 +93,9 @@ function(batchlas_architecture_table_local_mem_bytes architecture device_type ou
             set(_table_bytes 65536)
         elseif("${architecture}" MATCHES "^intel")
             set(_table_bytes 65536)
+        elseif("${architecture}" MATCHES "^apple_gpu_")
+            # Hypothesis (Metal maxThreadgroupMemoryLength on M5 Max), not a measured budget.
+            set(_table_bytes 32768)
         endif()
     endif()
 
@@ -144,6 +147,9 @@ function(batchlas_safe_subgroups_per_workgroup architecture device_type out_var)
             set(_safe_subgroups 4)
         elseif("${architecture}" MATCHES "^intel")
             set(_safe_subgroups 4)
+        elseif("${architecture}" MATCHES "^apple_gpu_")
+            # Hypothesis: the unrecognised-GPU default, kept until measured on Apple GPUs.
+            set(_safe_subgroups 1)
         endif()
     endif()
 

@@ -52,6 +52,9 @@ option(BATCHLAS_ACPP_SLM_OPTIN "AdaptiveCpp + CUDA: opt launches into >48 KiB lo
 if(BATCHLAS_ACPP_SLM_OPTIN AND NOT BATCHLAS_SYCL_IMPL_ACPP)
     message(FATAL_ERROR "BATCHLAS_ACPP_SLM_OPTIN needs BATCHLAS_SYCL_IMPL=ACPP (DPC++ opts in by itself)")
 endif()
+if(BATCHLAS_ACPP_SLM_OPTIN AND APPLE)
+    message(FATAL_ERROR "BATCHLAS_ACPP_SLM_OPTIN is a CUDA cuLaunchKernel interposer; macOS has no CUDA")
+endif()
 
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
@@ -110,6 +113,12 @@ option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 set(BATCHLAS_ENABLE_CUDA "AUTO" CACHE STRING
     "CUDA backend: AUTO (enable when the SYCL runtime exposes a CUDA device), ON (require it), OFF")
 set_property(CACHE BATCHLAS_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
+# Apple GPU through AdaptiveCpp's Metal backend, dispatched as Backend::SYCL (native kernels,
+# no vendor library). Same AUTO|ON|OFF contract as BATCHLAS_ENABLE_CUDA; resolved in
+# BatchLASSyclAcpp.cmake. Design: docs/design/sycl-implementations.md.
+set(BATCHLAS_ENABLE_METAL "AUTO" CACHE STRING
+    "Metal backend (AdaptiveCpp only): AUTO (enable when acpp-info lists a Metal GPU), ON (require it), OFF")
+set_property(CACHE BATCHLAS_ENABLE_METAL PROPERTY STRINGS AUTO ON OFF)
 option(BATCHLAS_DISABLE_CUDA_FTZ "Disable flush-to-zero (FTZ) for CUDA device code" ON)
 option(BATCHLAS_CUDA_DEVICE_LINE_INFO
     "Pass --generate-line-info to the NVPTX backend in Debug/RelWithDebInfo builds (useful for ncu/nsight, has been observed to fail CUDA JIT program builds)"
@@ -196,6 +205,17 @@ set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
 option(BATCHLAS_MONOLITHIC_LIBRARY
     "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
     OFF)
+# Monolithic mode used to hide every symbol unconditionally. The in-tree tests reach ~1,000
+# unannotated internal symbols, so a monolithic tree that builds tests needs it OFF.
+cmake_dependent_option(BATCHLAS_HIDDEN_VISIBILITY
+    "-fvisibility=hidden on the monolithic library (OFF to link the in-tree tests against it)"
+    ON "BATCHLAS_MONOLITHIC_LIBRARY" OFF)
+# ld64 rejects undefined symbols in a dylib, and the split components reference each other in
+# cycles with no recorded dependency (src/CMakeLists.txt, the --no-as-needed note).
+if(APPLE AND NOT BATCHLAS_MONOLITHIC_LIBRARY)
+    message(FATAL_ERROR "macOS needs -DBATCHLAS_MONOLITHIC_LIBRARY=ON: the split component dylibs "
+        "have cyclic undefined symbols, which ld64 rejects")
+endif()
 
 set_property(CACHE BATCHLAS_CPU_TARGET PROPERTY STRINGS auto native_cpu spir64_x86_64 none)
 set_property(CACHE BATCHLAS_TEST_TARGET_SET PROPERTY STRINGS all smoke)
@@ -215,6 +235,18 @@ if(NOT BATCHLAS_ENABLE_CUDA_MODE MATCHES "^(AUTO|ON|OFF)$")
     message(FATAL_ERROR
         "BATCHLAS_ENABLE_CUDA must be AUTO, ON or OFF (got '${BATCHLAS_ENABLE_CUDA}')")
 endif()
+string(TOUPPER "${BATCHLAS_ENABLE_METAL}" BATCHLAS_ENABLE_METAL_MODE)
+if(BATCHLAS_ENABLE_METAL_MODE MATCHES "^(1|TRUE|YES|Y)$")
+    set(BATCHLAS_ENABLE_METAL_MODE "ON")
+elseif(BATCHLAS_ENABLE_METAL_MODE MATCHES "^(0|FALSE|NO|N)$")
+    set(BATCHLAS_ENABLE_METAL_MODE "OFF")
+endif()
+if(NOT BATCHLAS_ENABLE_METAL_MODE MATCHES "^(AUTO|ON|OFF)$")
+    message(FATAL_ERROR "BATCHLAS_ENABLE_METAL must be AUTO, ON or OFF (got '${BATCHLAS_ENABLE_METAL}')")
+endif()
+if(BATCHLAS_ENABLE_METAL_MODE STREQUAL "ON" AND NOT BATCHLAS_SYCL_IMPL_ACPP)
+    message(FATAL_ERROR "BATCHLAS_ENABLE_METAL=ON needs BATCHLAS_SYCL_IMPL=ACPP (DPC++ has no Metal backend)")
+endif()
 # Resolved by detect_sycl_gpu_architectures() in BatchLASDetectSYCL.cmake; this
 # is the value that survives if sycl-ls is missing and detection bails out early.
 if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON")
@@ -231,7 +263,30 @@ option(BATCHLAS_NATIVE_CPU_DISABLE_VECZ "Disable vecz for native_cpu backend (wo
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
 set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
+# Backend::SYCL: a GPU with no vendor library (AdaptiveCpp Metal). Set by BatchLASSyclAcpp.cmake.
+set(BATCHLAS_HAS_SYCL_BACKEND FALSE)
+set(BATCHLAS_DEVICE_NO_VECTOR_TYPES FALSE)
 set(BATCHLAS_HAS_CPU_TARGET FALSE)
+
+# double/complex<double> instantiation for Backend::SYCL only; CUDA, ROCm and the host keep all
+# four types. AUTO is OFF on Metal (no fp64 in MSL) and ON elsewhere; ON with Metal is an error.
+set(BATCHLAS_DEVICE_FP64 "AUTO" CACHE STRING
+    "Instantiate double and complex<double> for the native-SYCL GPU backend: AUTO, ON, OFF")
+set_property(CACHE BATCHLAS_DEVICE_FP64 PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${BATCHLAS_DEVICE_FP64}" BATCHLAS_DEVICE_FP64_MODE)
+if(BATCHLAS_DEVICE_FP64_MODE MATCHES "^(1|TRUE|YES|Y)$")
+    set(BATCHLAS_DEVICE_FP64_MODE "ON")
+elseif(BATCHLAS_DEVICE_FP64_MODE MATCHES "^(0|FALSE|NO|N)$")
+    set(BATCHLAS_DEVICE_FP64_MODE "OFF")
+endif()
+if(NOT BATCHLAS_DEVICE_FP64_MODE MATCHES "^(AUTO|ON|OFF)$")
+    message(FATAL_ERROR "BATCHLAS_DEVICE_FP64 must be AUTO, ON or OFF (got '${BATCHLAS_DEVICE_FP64}')")
+endif()
+if(BATCHLAS_DEVICE_FP64_MODE STREQUAL "OFF")
+    set(BATCHLAS_HAS_DEVICE_FP64 OFF)
+else()
+    set(BATCHLAS_HAS_DEVICE_FP64 ON)
+endif()
 set(BATCHLAS_ENABLE_SYCL ON)
 
 # ---------------------------------------------------------------------------
@@ -319,5 +374,5 @@ target_compile_definitions(batchlas_build_options INTERFACE
 target_include_directories(batchlas_dep_options INTERFACE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
-    $<BUILD_INTERFACE:/opt/include>
+    $<BUILD_INTERFACE:$<$<NOT:$<PLATFORM_ID:Darwin>>:/opt/include>>
 )

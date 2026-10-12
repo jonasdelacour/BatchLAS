@@ -60,15 +60,33 @@
   #define BATCHLAS_IF_HOST(x)
 #endif
 
-// INVOKE gets the Backend enumerator LAST, matching the type loops above.
+// Backend::SYCL (a GPU with no vendor library, e.g. AdaptiveCpp Metal) gets float and
+// complex<float> only, plus the double pair when its device has fp64. Calls on the missing
+// types throw before dispatch (detail::needs_fp64_v in blas/queue-dispatch.hh).
+#define BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(INVOKE, arg1) \
+    INVOKE(arg1, (float)) \
+    BATCHLAS_IF_DEVICE_FP64(INVOKE(arg1, (double)))
+
+#define BATCHLAS_FOR_EACH_DEVICE_COMPLEX_TYPE_1(INVOKE, arg1) \
+    INVOKE(arg1, (std::complex<float>)) \
+    BATCHLAS_IF_DEVICE_FP64(INVOKE(arg1, (std::complex<double>)))
+
+#define BATCHLAS_FOR_EACH_DEVICE_SCALAR_TYPE_1(INVOKE, arg1) \
+    BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(INVOKE, arg1) \
+    BATCHLAS_FOR_EACH_DEVICE_COMPLEX_TYPE_1(INVOKE, arg1)
+
+// INVOKE gets the Backend enumerator LAST, matching the type loops above. Type-free: an
+// INVOKE that loops over types itself must use the DEVICE loops for Backend::SYCL.
 #define BATCHLAS_FOR_EACH_ENABLED_BACKEND(INVOKE) \
     BATCHLAS_IF_CUDA(INVOKE(Backend::CUDA)) \
     BATCHLAS_IF_ROCM(INVOKE(Backend::ROCM)) \
+    BATCHLAS_IF_SYCL(INVOKE(Backend::SYCL)) \
     BATCHLAS_IF_HOST(INVOKE(Backend::NETLIB))
 
 #define BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(INVOKE, arg1) \
     BATCHLAS_IF_CUDA(INVOKE(arg1, Backend::CUDA)) \
     BATCHLAS_IF_ROCM(INVOKE(arg1, Backend::ROCM)) \
+    BATCHLAS_IF_SYCL(INVOKE(arg1, Backend::SYCL)) \
     BATCHLAS_IF_HOST(INVOKE(arg1, Backend::NETLIB))
 
 // LEAF is `LEAF(back, fp)` with fp parenthesised:
@@ -80,7 +98,13 @@
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(LEAF, back)
 
 #define BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(LEAF) \
-    BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(BATCHLAS_TYPES_ON_BACKEND_REAL_, LEAF)
+    BATCHLAS_IF_CUDA(BATCHLAS_TYPES_ON_BACKEND_REAL_(LEAF, Backend::CUDA)) \
+    BATCHLAS_IF_ROCM(BATCHLAS_TYPES_ON_BACKEND_REAL_(LEAF, Backend::ROCM)) \
+    BATCHLAS_IF_SYCL(BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(LEAF, Backend::SYCL)) \
+    BATCHLAS_IF_HOST(BATCHLAS_TYPES_ON_BACKEND_REAL_(LEAF, Backend::NETLIB))
 
 #define BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(LEAF) \
-    BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(BATCHLAS_TYPES_ON_BACKEND_SCALAR_, LEAF)
+    BATCHLAS_IF_CUDA(BATCHLAS_TYPES_ON_BACKEND_SCALAR_(LEAF, Backend::CUDA)) \
+    BATCHLAS_IF_ROCM(BATCHLAS_TYPES_ON_BACKEND_SCALAR_(LEAF, Backend::ROCM)) \
+    BATCHLAS_IF_SYCL(BATCHLAS_FOR_EACH_DEVICE_SCALAR_TYPE_1(LEAF, Backend::SYCL)) \
+    BATCHLAS_IF_HOST(BATCHLAS_TYPES_ON_BACKEND_SCALAR_(LEAF, Backend::NETLIB))

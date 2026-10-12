@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -44,12 +45,21 @@ std::vector<std::string_view> words(std::string_view s) {
     return out;
 }
 
+// Whole-string, locale-independent (strtod obeys a host app's comma-decimal LC_NUMERIC).
+// Not std::from_chars: Apple libc++ headers mark the floating-point overload unavailable.
+bool parse_double(std::string_view s, double& out) {
+    if (s.empty() || s.front() == '+' || std::isspace(static_cast<unsigned char>(s.front()))) return false;
+    std::istringstream in{std::string(s)};
+    in.imbue(std::locale::classic());
+    in >> std::noskipws >> out;
+    return !in.fail() && in.peek() == std::char_traits<char>::eof();
+}
+
 // A plain positive decimal: digits with at most one '.', no sign, no exponent.
 bool parse_weight(std::string_view s, double& out) {
     if (s.empty() || std::count(s.begin(), s.end(), '.') > 1) return false;
     if (!std::all_of(s.begin(), s.end(), [](char c) { return c == '.' || (c >= '0' && c <= '9'); })) return false;
-    const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
-    return r.ec == std::errc{} && r.ptr == s.data() + s.size() && std::isfinite(out) && out > 0;
+    return parse_double(s, out) && std::isfinite(out) && out > 0;
 }
 
 int leading_int(std::string_view s) {
@@ -321,10 +331,10 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
             const auto w = words(segs[s]);
             if (w.size() != 2)
                 fail("ranked entry '" + std::string(trim(segs[s])) + "' is not '<choice> <ms>' or '<choice> -'");
-            double ms = 0.0;  // from_chars: strtod obeys a host app's comma-decimal LC_NUMERIC
-            const auto r = std::from_chars(w[1].data(), w[1].data() + w[1].size(), ms);
+            double ms = 0.0;
+            const bool parsed = parse_double(w[1], ms);
             if (w[1] == "-") ++untimed;
-            else if (r.ec != std::errc{} || r.ptr != w[1].data() + w[1].size() || !std::isfinite(ms) || ms < 0)
+            else if (!parsed || !std::isfinite(ms) || ms < 0)
                 fail("time '" + std::string(w[1]) + "' is not a non-negative number or '-'");
             for (const auto& e : row.ranked)
                 if (e.spelling == w[0]) fail("'" + e.spelling + "' ranked twice");

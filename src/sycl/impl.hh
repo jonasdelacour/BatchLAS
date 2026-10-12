@@ -49,6 +49,18 @@ inline sycl::backend backend_of(const sycl::queue& q) {
 inline bool is_cuda(sycl::backend b) { return b == kCudaBackend; }
 inline bool is_hip(sycl::backend b) { return b == kHipBackend; }
 
+// Only a Metal build names sycl::backend::metal, so older acpp releases still compile.
+#if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_HAS_SYCL_BACKEND
+inline bool is_metal(sycl::backend b) { return b == sycl::backend::metal; }
+// ACPP_ADAPTIVITY_LEVEL as the acpp runtime resolved it (env or config file).
+inline int acpp_adaptivity_level() {
+    return hipsycl::rt::application::get_settings().get<hipsycl::rt::setting::adaptivity_level>();
+}
+#else
+inline bool is_metal(sycl::backend) { return false; }
+inline int acpp_adaptivity_level() { return -1; }
+#endif
+
 // Compute capability as major*10+minor; 0 when the version string has neither form.
 // DPC++ reports "8.9", acpp "sm_89" / "sm_120".
 inline int cuda_cc(const sycl::device& d) {

@@ -20,6 +20,10 @@ namespace batchlas::select {
 
 inline constexpr bool kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS;
 
+/// Backends with wired native GPU kernels; ROCm and the host keep their vendor routes.
+template <Backend B>
+inline constexpr bool native_gpu_backend = B == Backend::CUDA || B == Backend::SYCL;
+
 template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k
 inline constexpr bool level3_vendor_available =
     B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
@@ -49,17 +53,20 @@ inline constexpr bool sparse_vendor_available =
 /// The library name a diagnostic quotes when the answer is no.
 template <Backend B>
 inline constexpr const char* kLevel3Library =
-    B == Backend::CUDA ? "cuBLAS" : B == Backend::ROCM ? "rocBLAS" : "netlib CBLAS/LAPACKE";
+    B == Backend::CUDA ? "cuBLAS" : B == Backend::ROCM ? "rocBLAS"
+    : B == Backend::SYCL ? "a vendor GPU library" : "netlib CBLAS/LAPACKE";
 template <Backend B>
 inline constexpr const char* kFactorizationLibrary =
     B == Backend::CUDA ? "cuBLAS and cuSOLVER" : B == Backend::ROCM ? "rocSOLVER"
-                                               : "netlib CBLAS/LAPACKE";
+    : B == Backend::SYCL ? "a vendor GPU library" : "netlib CBLAS/LAPACKE";
 template <Backend B>
 inline constexpr const char* kSolverLibrary =
-    B == Backend::CUDA ? "cuSOLVER" : B == Backend::ROCM ? "rocSOLVER" : "netlib CBLAS/LAPACKE";
+    B == Backend::CUDA ? "cuSOLVER" : B == Backend::ROCM ? "rocSOLVER"
+    : B == Backend::SYCL ? "a vendor GPU library" : "netlib CBLAS/LAPACKE";
 template <Backend B>
 inline constexpr const char* kSparseLibrary =
-    B == Backend::CUDA ? "cuSPARSE" : B == Backend::ROCM ? "rocSPARSE" : "netlib CBLAS/LAPACKE";
+    B == Backend::CUDA ? "cuSPARSE" : B == Backend::ROCM ? "rocSPARSE"
+    : B == Backend::SYCL ? "a vendor GPU library" : "netlib CBLAS/LAPACKE";
 
 /// The library group an op's Vendor family calls; an op names exactly one (OpSpec::vendor).
 enum class Lib : std::uint8_t { none, level3, factorization, solver, sparse };
@@ -93,7 +100,7 @@ constexpr const char* library_name(Lib l) {
 // evidence: docs/design/vendor-independence.md#the-vendor-gate-why-the-tile-route-predicate-is-per-backend-and-scalar
 template <Backend B, typename T>
 inline constexpr bool level3_tile_route_available =
-    B == Backend::CUDA && (std::is_same_v<T, float> || bool(BATCHLAS_HAS_CUBLAS));
+    native_gpu_backend<B> && (std::is_same_v<T, float> || (B == Backend::CUDA && bool(BATCHLAS_HAS_CUBLAS)));
 
 /// The single funnel for "nothing can serve this call": records the miss, then throws NoRouteError.
 template <typename T>

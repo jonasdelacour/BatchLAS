@@ -8,6 +8,7 @@
 #include <complex>
 #include <type_traits>
 #include <sycl/sycl.hpp>
+#include <batchlas/backend_config.h>
 #include "../sycl/kernel_attrs.hh"
 
 namespace batchlas::backend::detail {
@@ -110,7 +111,11 @@ inline int triangular_tile_count(int n) {
 // correction loops make the result exact regardless of what the device's sqrt
 // rounds to. Uplo::Upper is the same set with the pair swapped.
 inline void triangular_tile_decode(int tile, int& bi, int& bj) {
+#if BATCHLAS_HAS_DEVICE_FP64
     bi = static_cast<int>((sycl::sqrt(8.0 * tile + 1.0) - 1.0) * 0.5);
+#else  // Metal has no double; a float seed serves as well
+    bi = static_cast<int>((sycl::sqrt(8.0f * static_cast<float>(tile) + 1.0f) - 1.0f) * 0.5f);
+#endif
     while (bi > 0 && bi * (bi + 1) / 2 > tile) {
         --bi;
     }

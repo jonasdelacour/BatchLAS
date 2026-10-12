@@ -113,12 +113,37 @@ function(find_rocm_libs)
     endif()
 endfunction()
 
+set(BATCHLAS_OPENBLAS_ROOT "" CACHE PATH
+    "OpenBLAS prefix whose libopenblas provides LAPACKE and CBLAS (auto-probed under Homebrew on macOS)")
+
 function(find_netlib_libs)
     if(NOT BATCHLAS_ENABLE_NETLIB)
         return()
     endif()
 
     message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
+
+    # Homebrew's keg-only OpenBLAS ships no liblapacke: LAPACKE_* and cblas_* live in
+    # libopenblas itself. The SDK's vecLib framework has a cblas.h/lapack.h of its own and must
+    # never pair with it, so frameworks are off for every find in this function.
+    if(APPLE)
+        set(CMAKE_FIND_FRAMEWORK NEVER)
+        if(NOT BATCHLAS_OPENBLAS_ROOT)
+            foreach(_root IN ITEMS /opt/homebrew/opt/openblas /usr/local/opt/openblas)
+                if(EXISTS "${_root}/include/lapacke.h")
+                    set(BATCHLAS_OPENBLAS_ROOT "${_root}" CACHE PATH "OpenBLAS prefix for LAPACKE and CBLAS" FORCE)
+                    break()
+                endif()
+            endforeach()
+        endif()
+    endif()
+    if(BATCHLAS_OPENBLAS_ROOT)
+        message(STATUS "OpenBLAS prefix: ${BATCHLAS_OPENBLAS_ROOT}")
+        find_library(LAPACKE_LIBRARY NAMES lapacke openblas
+            HINTS "${BATCHLAS_OPENBLAS_ROOT}/lib" NO_DEFAULT_PATH)
+        find_library(CBLAS_LIBRARY NAMES cblas openblas
+            HINTS "${BATCHLAS_OPENBLAS_ROOT}/lib" NO_DEFAULT_PATH)
+    endif()
 
     find_library(LAPACKE_LIBRARY NAMES lapacke
         PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
@@ -140,7 +165,8 @@ function(find_netlib_libs)
     find_library(CBLAS_LIBRARY NAMES cblas blas
         PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
         NO_DEFAULT_PATH)
-    if(NOT CBLAS_LIBRARY)
+    # On macOS the default path finds the SDK's Accelerate libcblas.tbd, never OpenBLAS's partner.
+    if(NOT CBLAS_LIBRARY AND NOT APPLE)
         find_library(CBLAS_LIBRARY NAMES cblas blas)
     endif()
 
@@ -166,11 +192,15 @@ function(find_netlib_libs)
         # <prefix>/include to the tests and benchmarks that call LAPACKE_*.
         get_filename_component(_lapacke_prefix "${LAPACKE_LIBRARY}" DIRECTORY)
         get_filename_component(_cblas_prefix "${CBLAS_LIBRARY}" DIRECTORY)
+        set(_root_include "")
+        if(BATCHLAS_OPENBLAS_ROOT)
+            set(_root_include "${BATCHLAS_OPENBLAS_ROOT}/include")
+        endif()
         find_path(LAPACKE_INCLUDE_DIR lapacke.h
-            HINTS "${_lapacke_prefix}/../include"
+            HINTS ${_root_include} "${_lapacke_prefix}/../include"
             PATH_SUFFIXES lapacke)
         find_path(CBLAS_INCLUDE_DIR cblas.h
-            HINTS "${_cblas_prefix}/../include"
+            HINTS ${_root_include} "${_cblas_prefix}/../include"
             PATH_SUFFIXES cblas openblas)
         set(_netlib_includes)
         foreach(_dir IN ITEMS "${LAPACKE_INCLUDE_DIR}" "${CBLAS_INCLUDE_DIR}")
@@ -240,8 +270,22 @@ endif()
 if(BATCHLAS_HAS_HOST_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_HOST_BACKEND=1)
 endif()
+# The library includes <lapacke.h>/<cblas.h> (src/linalg-impl.hh), which a keg-only prefix does not
+# put on the default path. Only for an OpenBLAS prefix, so Linux trees keep the system headers; a
+# system prefix must stay implicit (as -isystem it breaks libstdc++'s #include_next).
+if(BATCHLAS_HAS_HOST_BACKEND AND BATCHLAS_OPENBLAS_ROOT)
+    set(_batchlas_netlib_lib_includes ${BATCHLAS_NETLIB_INCLUDE_DIRS})
+    list(REMOVE_ITEM _batchlas_netlib_lib_includes /usr/include /usr/local/include
+        ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+    foreach(_dir IN LISTS _batchlas_netlib_lib_includes)
+        target_include_directories(batchlas_dep_options SYSTEM INTERFACE $<BUILD_INTERFACE:${_dir}>)
+    endforeach()
+endif()
 if(BATCHLAS_HAS_CUDA_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_CUDA_BACKEND=1)
+endif()
+if(BATCHLAS_HAS_SYCL_BACKEND)
+    target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_SYCL_BACKEND=1)
 endif()
 if(BATCHLAS_HAS_ROCM_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_ROCM_BACKEND=1)
@@ -249,5 +293,21 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
         target_include_directories(batchlas_dep_options INTERFACE
             $<BUILD_INTERFACE:${BATCHLAS_ROCM_INCLUDE_DIR}>
         )
+    endif()
+endif()
+
+# The macOS 27 SDK's <math.h> includes <float.h> for INFINITY/NAN only (__need_infinity_nan) when
+# __has_feature(modules), which clang reports for every C++20 TU. libc++'s <float.h> guard then
+# blocks the full header, so FLT_MAX is undefined after <cmath> (googletest's headers use it).
+# The shim answers the partial request without touching libc++'s guard. Build tree only.
+if(APPLE)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_FLAGS "-std=c++20")
+    check_cxx_source_compiles("#include <cmath>\n#include <cfloat>\nint main() { return FLT_MAX > 0 ? 0 : 1; }"
+        BATCHLAS_FLOAT_H_AFTER_CMATH_OK)
+    unset(CMAKE_REQUIRED_FLAGS)
+    if(NOT BATCHLAS_FLOAT_H_AFTER_CMATH_OK)
+        message(STATUS "<float.h> after <cmath> loses FLT_MAX (SDK/libc++ mismatch): using cmake/compat/float-h")
+        include_directories(BEFORE SYSTEM "${CMAKE_CURRENT_SOURCE_DIR}/cmake/compat/float-h")
     endif()
 endif()

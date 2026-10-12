@@ -38,18 +38,26 @@ namespace batchlas
         UnifiedVector<Real> eigenvalues(static_cast<size_t>(batch_size) * n);
         auto eigen_span = eigenvalues.to_span();
 
-        const size_t ws_bytes = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                        A_copy.view(),
-                                                                        eigen_span,
-                                                                        JobType::NoEigenVectors,
-                                                                        Uplo::Lower);
-        auto workspace = ctx.workspace(ws_bytes);
-        Event e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx,
-                                             A_copy.view(),
-                                             eigen_span,
-                                             JobType::NoEigenVectors,
-                                             Uplo::Lower,
-                                             workspace.span());
+        Event e;
+        if constexpr (B == Backend::SYCL) {
+            // No vendor solver: the public syev's native kernels on the queue's device.
+            auto workspace = ctx.workspace(
+                syev_buffer_size<B, T>(ctx, A_copy.view(), eigen_span, JobType::NoEigenVectors, Uplo::Lower));
+            e = syev<B, T>(ctx, A_copy.view(), eigen_span, JobType::NoEigenVectors, Uplo::Lower, workspace.span());
+        } else {
+            const size_t ws_bytes = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
+                                                                            A_copy.view(),
+                                                                            eigen_span,
+                                                                            JobType::NoEigenVectors,
+                                                                            Uplo::Lower);
+            auto workspace = ctx.workspace(ws_bytes);
+            e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx,
+                                                 A_copy.view(),
+                                                 eigen_span,
+                                                 JobType::NoEigenVectors,
+                                                 Uplo::Lower,
+                                                 workspace.span());
+        }
         ctx.enqueue(e);
 
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
@@ -82,6 +90,16 @@ namespace batchlas
         #if BATCHLAS_HAS_ROCM_BACKEND
         if (is_gpu && vendor == Vendor::AMD) {
             return norm_spectral_vendor_impl<Backend::ROCM>(ctx, A, norms);
+        }
+        #endif
+
+        #if BATCHLAS_HAS_SYCL_BACKEND
+        if (is_gpu && ctx.backend() == Backend::SYCL) {
+            if constexpr (detail::is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
+                detail::throw_no_device_fp64(ctx, "norm");
+            } else {
+                return norm_spectral_vendor_impl<Backend::SYCL>(ctx, A, norms);
+            }
         }
         #endif
 
@@ -180,12 +198,23 @@ namespace batchlas
         return ctx.get_event();
     }
 
+    // The kernels below are not Backend-templated, so double ones exist; refuse them here
+    // rather than in the device compiler.
+    template <typename T>
+    void require_device_fp64(Queue& ctx) {
+        if constexpr (detail::is_fp64_scalar_v<T>) {
+            if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())
+                detail::throw_no_device_fp64(ctx, "norm");
+        }
+    }
+
     template <typename T, MatrixFormat MF>
     Event norm(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
               const Span<float_t<T>> norms)
     {
+        require_device_fp64<T>(ctx);
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
                 throw batchlas::unsupported("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
@@ -201,6 +230,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
+        require_device_fp64<T>(ctx);
         // Allocate memory for the results
         UnifiedVector<float_t<T>> norms(A.batch_size());
         if (norm_type == NormType::Spectral) {

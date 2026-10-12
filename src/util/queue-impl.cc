@@ -52,15 +52,35 @@ EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
 
 
+namespace {
+// An Apple GPU through acpp Metal: no fp64, and no double kernels can be JIT-compiled for it.
+bool is_metal_gpu(const Device& dev) {
+    if (dev.type != DeviceType::GPU || dev.supports_fp64()) return false;
+    return impl::is_metal(impl::backend_of(QueueImpl::device_arrays.at(static_cast<int>(dev.type)).at(dev.idx)));
+}
+
+// acpp at adaptivity level 0 JITs every kernel of a translation unit at the first launch,
+// so one double kernel in the TU fails every float launch there.
+void require_metal_adaptivity(const Device& dev) {
+    if (!is_metal_gpu(dev) || impl::acpp_adaptivity_level() != 0) return;
+    throw batchlas::unsupported(
+        "BatchLAS: ACPP_ADAPTIVITY_LEVEL=0 cannot run on " + dev.get_name() +
+        ": AdaptiveCpp then JITs every kernel of a translation unit together, including the "
+        "double kernels Metal cannot compile. Unset it or use level 1 or higher.");
+}
+}  // namespace
+
 // configure() closes at the first Queue; every ROOT constructor must call note_queue_constructed().
 // evidence: docs/design/runtime-internals.md#runtime-internals-the-settings-loader
 Queue::Queue() : device_(Device::default_device()), in_order_(true) {
     batchlas::detail::note_queue_constructed();
+    require_metal_adaptivity(device_);
     impl_ = std::make_unique<QueueImpl>(device_, in_order_);
 }
 
 Queue::Queue(Device dev, bool in_order) : device_(dev), in_order_(in_order) {
     batchlas::detail::note_queue_constructed();
+    require_metal_adaptivity(device_);
     impl_ = std::make_unique<QueueImpl>(dev, in_order);
 }
 
@@ -81,9 +101,9 @@ bool Queue::backend_available(batchlas::Backend backend) {
         case Backend::ROCM:   return BATCHLAS_HAS_ROCM_BACKEND;
         case Backend::MKL:    return false;
         case Backend::NETLIB: return BATCHLAS_HAS_HOST_BACKEND;
-        // AUTO is a request, not a backend; MAGMA and SYCL have no dispatch
-        // targets, so claiming they are available would be a lie that only
-        // surfaces at the call.
+        case Backend::SYCL:   return BATCHLAS_HAS_SYCL_BACKEND;
+        // AUTO is a request, not a backend; MAGMA has no dispatch target, so
+        // claiming it is available would be a lie that only surfaces at the call.
         default: return false;
     }
 }
@@ -93,6 +113,13 @@ void Queue::set_backend(batchlas::Backend backend) {
         throw batchlas::unsupported(
             std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
             " is not compiled into this build of BatchLAS.");
+    }
+    // NETLIB still launches its native kernels on the queue's device, double ones included.
+    if (backend == batchlas::Backend::NETLIB && is_metal_gpu(device_)) {
+        throw batchlas::unsupported(
+            "Queue::set_backend: backend NETLIB on " + device_.get_name() +
+            " is not supported: its native kernels include double ones, which Metal cannot run. "
+            "Use a CPU Queue for host LAPACK.");
     }
     backend_ = backend;
     resolved_backend_ = batchlas::Backend::AUTO;  // re-resolve on next query
@@ -114,6 +141,8 @@ batchlas::Backend Queue::backend() const {
             choice = Backend::ROCM;
         } else if (vendor == Vendor::INTEL && backend_available(Backend::MKL)) {
             choice = Backend::MKL;
+        } else if (backend_available(Backend::SYCL)) {
+            choice = Backend::SYCL;  // native kernels only, e.g. an Apple GPU through acpp Metal
         }
     }
     if (choice == Backend::AUTO && backend_available(Backend::NETLIB)) {
@@ -184,9 +213,11 @@ void Queue::require_device_accessible(const void* ptr, const char* what) const {
     msg += "Use memory the device can reach:\n"
            "  - let Matrix<T, MatrixFormat::Dense> own it (it allocates USM shared,\n"
            "    which you can still fill and read directly from the host), or\n"
-           "  - allocate with sycl::malloc_device/malloc_shared/malloc_host, or\n"
-           "    cudaMalloc/cudaMallocManaged on CUDA.\n"
-           "See 'Where the memory has to live: the USM contract' in docs/cpp-api.md.";
+           "  - allocate with sycl::malloc_device/malloc_shared/malloc_host";
+    msg += impl::is_cuda(impl::backend_of(impl_->get_device()))
+               ? ", or\n    cudaMalloc/cudaMallocManaged on CUDA.\n"
+               : ".\n";
+    msg += "See 'Where the memory has to live: the USM contract' in docs/cpp-api.md.";
     throw batchlas::invalid_argument(msg);
 }
 
@@ -346,6 +377,17 @@ bool Device::supports_sub_group_size(size_t size) const {
         if (s == size) return true;
     }
     return false;
+}
+
+bool Device::supports_fp64() const {
+    static std::mutex mu;
+    static std::map<std::pair<int, size_t>, bool> memo;
+    std::lock_guard<std::mutex> lock(mu);
+    auto key = std::make_pair(static_cast<int>(type), idx);
+    if (auto it = memo.find(key); it != memo.end()) return it->second;
+    const bool fp64 = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).has(sycl::aspect::fp64);
+    memo.emplace(key, fp64);
+    return fp64;
 }
 
 int Device::cuda_compute_capability() const {
