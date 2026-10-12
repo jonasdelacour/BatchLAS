@@ -180,7 +180,7 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
 }
 
 // Hash v2's normalization, and the vector sweep_to_table.py --self-test and check_tuned_tables.py
-// --self-test check too (tests/data/kernel_hash_v2): one rule in three implementations.
+// --self-test check too (tests/data/kernel_hash_v2): one rule, in C++ and in sweep_to_table.py.
 TEST(TuneHash, V2IgnoresCommentsAndWhitespaceAndMatchesTheSharedVector) {
     EXPECT_EQ(normalize_source("a /* x */ b // y\n c"), "abc");
     EXPECT_EQ(normalize_source("a/* open"), "a") << "an unterminated block runs to the end";
@@ -196,7 +196,7 @@ TEST(TuneHash, V2IgnoresCommentsAndWhitespaceAndMatchesTheSharedVector) {
     EXPECT_EQ(kernel_hash(repo, {path}), hash);
 }
 
-TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
+TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithThePythonHash) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv", "gemv", "trmm", "symm", "syrk", "syr2k", "syev", "gesvd", "spmm"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
@@ -207,9 +207,9 @@ TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
         const std::string py = BATCHLAS_TUNE_PYTHON;
         if (py.empty()) continue;
         const std::string got = run("cd '" + repo + "' && '" + py +
-                                    "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
-                                    "print(c.kernel_hash('.', c.parse_kernel_list(open('tools/tune/" +
-                                    op + "_spec.cc').read()))[0])\"");
+                                    "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as c; "
+                                    "print(c.kernel_hash(c.parse_kernel_block(open('tools/tune/" +
+                                    op + "_spec.cc').read())['all'], '.'))\"");
         EXPECT_EQ(got, *h) << op;
     }
 }
@@ -437,8 +437,8 @@ TEST(TuneHash, QrSpecsDeclareTheirFamiliesAndCompositions) {
         ASSERT_TRUE(op_hash) << op << ": " << missing;
         if (const std::string py = BATCHLAS_TUNE_PYTHON; !py.empty())
             EXPECT_EQ(run("cd '" + repo + "' && '" + py +
-                          "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
-                          "print(c.kernel_hash('.', c.parse_kernel_list(open('" + spec + "').read()))[0])\""),
+                          "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as c; "
+                          "print(c.kernel_hash(c.parse_kernel_block(open('" + spec + "').read())['all'], '.'))\""),
                       *op_hash) << op;
         EXPECT_EQ(b.deps_common.front(), "src/ops/" + op + "/" + op + ".cc") << op;
         EXPECT_TRUE(b.family.count("blocked")) << op;
