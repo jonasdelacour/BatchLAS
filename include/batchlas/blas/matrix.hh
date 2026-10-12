@@ -1196,10 +1196,12 @@ namespace batchlas {
         /// @name Verification
         /// Accuracy checks of a computed result against its inputs (@ref design_verification). Each
         /// reads every operand through ld() and stride(), promotes to double / complex<double>, runs
-        /// on @p ctx, waits, and returns the worst value over @p items (empty: default_items());
-        /// a NaN anywhere is the result. Compare it with batchlas::verify::bound(). Operands are read
-        /// as stored: apply triangularize(), hermitize() or symmetrize() to a copy first to check
-        /// against a triangle or a mirrored matrix.
+        /// on @p ctx (an in-order sibling of it when @p ctx is out of order), waits, and returns the
+        /// worst value over @p items (empty: default_items(); no items checked returns 0); a NaN
+        /// anywhere is the result. Operands are read as stored: apply triangularize(), hermitize()
+        /// or symmetrize() to a copy first to check against a triangle or a mirrored matrix.
+        /// @pre every operand is host-readable (unified or host memory) and the work that wrote it
+        ///      has completed: the caller waits on its queue first.
         /// @{
 
         /// @brief T's promoted type: double, or complex<double> for complex T.

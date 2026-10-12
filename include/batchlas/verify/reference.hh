@@ -6,6 +6,7 @@
 #pragma once
 
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 
 #include <algorithm>
 #include <complex>
@@ -43,7 +44,7 @@ template <class D> void require_host_dgemm() {
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if constexpr (std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>) {
         static const std::string defect = host_dgemm_defect();
-        if (!defect.empty()) throw std::runtime_error("batchlas::verify: host LAPACKE reference refused\n" + defect);
+        if (!defect.empty()) throw batchlas::unsupported("batchlas::verify: host LAPACKE reference refused\n" + defect);
     }
 #endif
 }
@@ -99,8 +100,8 @@ bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
 // LAPACK's |re|+|im|, or breaks ties the other way, passes every residual. This is the check that does not.
 /// 1-based pivots of the m x n @p a (column-major, ld = m; overwritten by its LU factor): min(m, n)
 /// of them, from ?getrf in E's own precision (float, double, complex<float>, complex<double>).
-/// @pre @p a holds the data in its native precision: copy_item_native, never copy_item, which
-/// promotes float data and sends it to dgetrf. The view overload below does this for you.
+/// @pre @p a holds the data in its native precision (MatrixView::astype<E>(items), never a promoted copy,
+/// which sends float data to dgetrf). The view overload below does this for you.
 // Never promote float data to dgetrf: OpenBLAS 0.3.20's dgetrf on Cooperlake Xeons (its broken dgemm
 // kernel) is wrong from n = 10 while sgetrf is not. evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
 template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vector<std::int32_t>& ipiv) {
