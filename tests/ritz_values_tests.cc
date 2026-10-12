@@ -7,6 +7,7 @@
 #include <batchlas/blas/extensions.hh>
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
+#include <batchlas/util/mempool.hh>
 
 using namespace batchlas;
 
@@ -145,6 +146,32 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     EXPECT_VERIFY(ScalarType, verify::Check::values, n, MV::values_error(w, ref, norm2, w.all_items()));
 }
 
+
+// CSR A: the spmm workspace is carved with allocate<std::byte>, which rounds, so the size query must
+// equal the run path's measured sequence and an exactly sized workspace must be enough.
+TYPED_TEST(RitzValuesTest, SparseWorkspaceMatchesRunPath) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using RealType = typename TestFixture::RealType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    const int n = 37, k = 5, batch = 3;
+    auto A = Matrix<ScalarType, MatrixFormat::CSR>::RandomSparseHermitian(n, 0.3f, batch, 5u);
+    auto V = Matrix<ScalarType, MatrixFormat::Dense>::Random(n, k, false, batch, 6u);
+    Vector<RealType> ritz_vals(k, batch);
+    const size_t bytes = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::CSR>(*(this->ctx), A, V, ritz_vals);
+
+    auto pool = BumpAllocator::measuring();
+    auto av = pool.allocate<ScalarType>(*(this->ctx), size_t(n) * k * batch);
+    (void)pool.allocate<ScalarType*>(*(this->ctx), batch);
+    const MatrixView<ScalarType, MatrixFormat::Dense> AV(av.data(), n, k, n, n * k, batch);
+    (void)pool.allocate<std::byte>(*(this->ctx), spmm_buffer_size<BackendType>(*(this->ctx), A.view(), V.view(), AV, ScalarType(1),
+                                                                                  ScalarType(0), Transpose::NoTrans, Transpose::NoTrans));
+    EXPECT_EQ(bytes, pool.required_bytes());
+
+    UnifiedVector<std::byte> workspace(bytes);
+    auto run = [&] { (void)ritz_values<BackendType, ScalarType, MatrixFormat::CSR>(*(this->ctx), A, V, ritz_vals, workspace); };
+    EXPECT_NO_THROW(run());
+    this->ctx->wait();
+}
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

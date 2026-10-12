@@ -1397,6 +1397,38 @@ TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
     expect_pairs(*this->ctx, dense_A.view(), Q0, VectorView<Real>(w).batch_item(0));
 }
 
+// sort() cannot permute eigenvalues with inc != 1: it throws its own error before enqueuing anything
+// (it used to argsort a temporary freed before the read, then fail in permute), and steqr without
+// sorting still accepts the view.
+TYPED_TEST(SteqrTest, SortRejectsStridedEigenvalues) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 8, batch = 2;
+    Vector<Real> diag(n, Real(1), batch), sub(n - 1, Real(0.5), batch);
+    Vector<Real> evbuf(2 * n, Real(0), batch);
+    const VectorView<Real> evals(evbuf.data(), n, batch, 2, 2 * n);
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool sort : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.sort = sort;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params));
+        auto run = [&] {
+            (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            this->ctx->wait();
+        };
+        if (!sort) {
+            EXPECT_NO_THROW(run());
+            continue;
+        }
+        try {
+            run();
+            ADD_FAILURE() << "sort with inc = 2 did not throw";
+        } catch (const batchlas::invalid_argument& e) {
+            EXPECT_EQ(std::string(e.what()).rfind("sort:", 0), 0u) << "thrown after sort started: " << e.what();
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
