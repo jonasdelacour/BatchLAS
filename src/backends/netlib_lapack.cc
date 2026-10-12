@@ -1157,12 +1157,12 @@ namespace batchlas{
         // inverse was indistinguishable from one that inverted (issue #73).
         auto info = info_out;
         const bool want_info = info.size() >= static_cast<size_t>(batch);
+        // ld- and stride-aware; submit_host_task waits for it before the LAPACKE calls.
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C_view, A_view);
         return detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
             auto piv_in = piv.as_span<int64_t>();
             for (int b = 0; b < batch; ++b) {
-                auto Ab = A_view[b];
                 auto Cb = C_view[b];
-                std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
                 for (int i = 0; i < n; ++i) {
                     piv_i32[b * n + i] = static_cast<int>(piv_in[b * n + i]);
                 }

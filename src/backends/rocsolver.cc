@@ -341,9 +341,9 @@ namespace batchlas {
         // See potrf above (issue #73).
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ipiv = pivots.as_span<int>();
-        if (A.data_ptr() != C.data_ptr()) {
-            ctx->memcpy(C.data_ptr(), A.data_ptr(), sizeof(T) * static_cast<size_t>(A.stride()) * A.batch_size());
-        }
+        // ld- and stride-aware (a no-op when C aliases A, which rocsolver_?getri runs in place).
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C, A);
+        if (!ctx.in_order()) ctx.wait();
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             if (A.batch_size() == 1) {

@@ -1141,6 +1141,9 @@ namespace batchlas {
         Span<int64_t> pivots,
         Span<std::byte> work_space,
         Span<int32_t> info_out) {
+            if (A.data_ptr() == C.data_ptr()) {
+                throw batchlas::invalid_argument("getri_vendor (CUBLAS): cublas<t>getriBatched is out of place; C aliases A");
+            }
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
