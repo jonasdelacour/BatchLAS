@@ -362,7 +362,7 @@ void stedc_merge_step(Queue& ctx,
         // but uses SYCL group collectives for the product reduction.
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            batchlas::impl::parallel_for<StedcRescaleV<B, T>>(h, 
+            batchlas::impl::parallel_for<StedcRescaleV<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
@@ -405,7 +405,7 @@ void stedc_merge_step(Queue& ctx,
 
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            batchlas::impl::parallel_for<StedcMatrixUpdate<B, T>>(h, 
+            batchlas::impl::parallel_for<StedcMatrixUpdate<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();

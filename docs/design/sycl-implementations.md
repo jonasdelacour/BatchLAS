@@ -231,7 +231,8 @@ the next `sycl::queue` destructor, any copy included: 11 test binaries aborted t
 - **Empty `nd_range` (acpp).** Every command-group `nd_range` launch in `src/` goes through
   `impl::parallel_for(handler, nd_range, ...)`, which gives the handler a no-op custom operation
   for an empty range (an empty command group is an error there). `QueueImpl::parallel_for(nd_range)`
-  returns an empty event without submitting. On DPC++ both are the plain launch.
+  submits that same no-op command group, so the event it returns stays ordered after earlier work
+  on an in-order queue. On DPC++ both are the plain launch.
 - **Vendor calls in the trace.** `impl::run_native` submits through an untraced
   `QueueImpl::submit_and_record`:
   the custom operation updates the last event but is not a kernel-trace record, matching DPC++,

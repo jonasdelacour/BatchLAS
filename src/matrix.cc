@@ -387,7 +387,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         q->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), cgh);
                 
-            batchlas::impl::parallel_for(cgh, 
+            batchlas::impl::parallel_for(cgh,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, cols, wg_size),
                     sycl::range<3>(1, 1, wg_size)
@@ -434,7 +434,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_nnz_acc = batch_nnz_counts.data();
             
-            batchlas::impl::parallel_for(cgh, 
+            batchlas::impl::parallel_for(cgh,
             sycl::nd_range<1>(
                 sycl::range<1>(batch_size * wg_size),
                 sycl::range<1>(wg_size)
@@ -482,7 +482,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_offsets_acc = batch_offsets.data();
             auto wgs = compute_optimal_wg_size(q.device(), KernelType::SCAN, rows + 1, batch_size);
-            batchlas::impl::parallel_for(cgh, 
+            batchlas::impl::parallel_for(cgh,
                 sycl::nd_range<1>(batch_size * wgs, 
                                  wgs),
                 [=](sycl::nd_item<1> item) {
@@ -512,7 +512,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             // Use atomic to track position within each row
             auto row_counters_acc = row_counters.to_span();
             auto wgs = compute_optimal_wg_size(q.device(), KernelType::SPARSE, rows, batch_size);
-            batchlas::impl::parallel_for(cgh, 
+            batchlas::impl::parallel_for(cgh,
                 sycl::nd_range<1>(batch_size * wgs, wgs),
                 [=](sycl::nd_item<1> item) {
                     size_t local_id = item.get_local_linear_id();
@@ -1640,7 +1640,7 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
     ctx->submit([=, this](sycl::handler& cgh) {
         auto view = this->kernel_view();
         auto diag = diag_values;
-        batchlas::impl::parallel_for<FillDiagonalVectorKernel<T, MType>>(cgh, 
+        batchlas::impl::parallel_for<FillDiagonalVectorKernel<T, MType>>(cgh,
             sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
                 size_t gid = item.get_global_id(0);
 

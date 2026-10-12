@@ -163,8 +163,8 @@ inline sycl::event submit_barrier(sycl::queue& q, const std::vector<sycl::event>
 
 // Largest work-group kernel K can launch on dev; throws sycl::exception when the runtime cannot
 // answer. acpp has no kernel_id query and the device limit (1024) aborts a register-heavy kernel
-// at launch, so it answers 256: 8 warps fit the register gate at 64 registers per thread,
-// ceil(8/4)*32*64 <= 16384 (docs/developer/agent-guide.md §11).
+// at launch, so it answers 256: 8 warps fit the register gate even at 255 registers per thread,
+// ceil(8/4)*32*255 <= 16384 (docs/developer/agent-guide.md §11).
 template <class K>
 std::size_t kernel_max_wg_size(const sycl::context& ctx, const sycl::device& dev) {
 #if BATCHLAS_SYCL_IMPL_ACPP

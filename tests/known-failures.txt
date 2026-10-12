@@ -72,6 +72,9 @@ steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
 # generator (a305bcf0) drew a kappa=497 matrix for the AN case; 8 of 80 seeds
 # fail. Not a tolerance problem: jacobi and blocked reach 6e-6 on the same input.
 gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
+# Same defect for double (index 3): red on origin/main 30627f1f in the threadripper02
+# full-target baseline gate, 2026-10-12.
+gesvd_tests::GesvdTest/3.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<double,(batchlas::Backend)1>
 
 # --- DELIBERATELY ABSENT ------------------------------------------------------
 # sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal

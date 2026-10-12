@@ -257,7 +257,7 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         const Body body{reinterpret_cast<D*>(a_ptr), n, batch, static_cast<std::ptrdiff_t>(ld),
                         static_cast<std::ptrdiff_t>(stride), piv_ptr, info_ptr,
                         sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<GetrfTinyKernel<T, N, NC, MinBlocks>>(h, 
+        batchlas::impl::parallel_for<GetrfTinyKernel<T, N, NC, MinBlocks>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),

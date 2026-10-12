@@ -110,7 +110,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
         const int stride_b = B.stride();
         const int stride_c = C.stride();
 
-        batchlas::impl::parallel_for<TrmmTriangularTilesKernel<T, TileM>>(h, 
+        batchlas::impl::parallel_for<TrmmTriangularTilesKernel<T, TileM>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {

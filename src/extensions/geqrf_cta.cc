@@ -125,7 +125,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_alloc_elems), h);
-        batchlas::impl::parallel_for<GeqrfPanelResidentKernel<T, SC>>(h, 
+        batchlas::impl::parallel_for<GeqrfPanelResidentKernel<T, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -206,7 +206,7 @@ Event geqrf_panel_global_launch(Queue& ctx,
     const int kmax = std::min(m, n);
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<GeqrfPanelGlobalKernel<T>>(h, 
+        batchlas::impl::parallel_for<GeqrfPanelGlobalKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -263,7 +263,7 @@ Event geqrf_panel_reg_launch(Queue& ctx,
         ctx->submit([&](sycl::handler& h) {
             sycl::local_accessor<R, 1> sred(sycl::range<1>(rslots), h);
             sycl::local_accessor<D, 1> sw(sycl::range<1>(sslots), h);
-            batchlas::impl::parallel_for<GeqrfPanelRegKernel<T, N>>(h, 
+            batchlas::impl::parallel_for<GeqrfPanelRegKernel<T, N>>(h,
                 sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                                  static_cast<std::size_t>(wg)),
                                   sycl::range<1>(static_cast<std::size_t>(wg))),

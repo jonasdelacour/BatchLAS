@@ -247,7 +247,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
-        batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh, 
+        batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();

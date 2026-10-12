@@ -216,7 +216,7 @@ Event gemv_direct_notrans(Queue& ctx,
         const int red_len = n;
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<GemvDirectNKernel<T>>(h, 
+        batchlas::impl::parallel_for<GemvDirectNKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -302,7 +302,7 @@ Event gemv_seg_notrans(Queue& ctx,
         const int64_t nbatch = batch;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvSegNKernel<T, W>>(h, 
+        batchlas::impl::parallel_for<GemvSegNKernel<T, W>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
@@ -404,7 +404,7 @@ Event gemv_direct_trans(Queue& ctx,
         const int red_len = m;
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<GemvDirectTKernel<T>>(h, 
+        batchlas::impl::parallel_for<GemvDirectTKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -494,7 +494,7 @@ Event gemv_cta_trans(Queue& ctx,
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvCtaTKernel<T>>(h, 
+        batchlas::impl::parallel_for<GemvCtaTKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
@@ -604,7 +604,7 @@ Event gemv_seg_trans(Queue& ctx,
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvSegTKernel<T, W>>(h, 
+        batchlas::impl::parallel_for<GemvSegTKernel<T, W>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {

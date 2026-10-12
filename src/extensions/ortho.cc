@@ -210,7 +210,7 @@ namespace batchlas {
                     auto A_stride = A.stride();
                     auto Aspan = Span(A.data_ptr(), A_stride * batch_size);
 
-                    batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h, 
+                    batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
                         [=](sycl::nd_item<1> item){
                             auto tid = item.get_local_linear_id();

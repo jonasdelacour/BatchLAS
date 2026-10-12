@@ -183,7 +183,7 @@ Event launch_wide_transposed(Queue& ctx,
 
         batchlas::impl::parallel_for<GemmWideTransposedKernel<T, TileM, TileN, TileK, TTM, TTN,
                                                 static_cast<int>(P.OpA),
-                                                static_cast<int>(P.OpB)>>(h, 
+                                                static_cast<int>(P.OpB)>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {

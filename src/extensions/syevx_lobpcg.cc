@@ -441,7 +441,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             const float_type def_floor = jacobi_definiteness_floor<float_type>();
             constexpr size_t wg = 256;
             ctx->submit([&](sycl::handler& h) {
-                batchlas::impl::parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(h, 
+                batchlas::impl::parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
                         const int bid = int(item.get_group_linear_id());
@@ -943,7 +943,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     auto diag_ptr = jacobi_diag.data();
                     auto usable_ptr = jacobi_usable.data();
                     auto lambdas_span = lambdas;
-                    batchlas::impl::parallel_for<SyevxJacobiApplyKernel<B, T, MFormat>>(h, 
+                    batchlas::impl::parallel_for<SyevxJacobiApplyKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * residual_wg_size)},
                                           sycl::range{size_t(residual_wg_size)}),
                         [=](sycl::nd_item<1> item) {
@@ -1178,7 +1178,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const int64_t nn = n;
                 const int64_t ncols = static_cast<int64_t>(neigs);
                 ctx->submit([&](sycl::handler& h) {
-                    batchlas::impl::parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(h, 
+                    batchlas::impl::parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}),
                         [=](sycl::nd_item<1> item) {
                             const int64_t tid = int64_t(item.get_local_linear_id());

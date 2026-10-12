@@ -136,7 +136,7 @@ inline void gebrd_cta_impl(Queue& ctx,
 
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
-        impl::parallel_for<GebrdCTAKernel<T, P>>(cgh, 
+        impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();

@@ -39,7 +39,7 @@ void stedc_merge_fused(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
 
-        batchlas::impl::parallel_for<StedcFusedMerge<B, T>>(h, 
+        batchlas::impl::parallel_for<StedcFusedMerge<B, T>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const auto bid = item.get_group_linear_id();

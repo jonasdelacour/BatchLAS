@@ -350,7 +350,7 @@ Event gesv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(stride_a), static_cast<std::ptrdiff_t>(stride_b),
             piv_ptr, info_ptr,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks>>(h, 
+        batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),

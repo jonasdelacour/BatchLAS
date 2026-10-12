@@ -152,7 +152,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
             sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
             sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
-        batchlas::impl::parallel_for<GetrfPanelResidentKernel<T, SC>>(h, 
+        batchlas::impl::parallel_for<GetrfPanelResidentKernel<T, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -248,7 +248,7 @@ Event getrf_panel_global_launch(Queue& ctx,
             sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
             sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
-        batchlas::impl::parallel_for<GetrfPanelGlobalKernel<T>>(h, 
+        batchlas::impl::parallel_for<GetrfPanelGlobalKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),

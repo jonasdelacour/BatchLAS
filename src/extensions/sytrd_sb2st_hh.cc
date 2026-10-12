@@ -182,7 +182,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
         auto Ev = e_out;
         auto TAUv = tau_out;
 
-        batchlas::impl::parallel_for<Sb2stHhChaseKernel<B, T>>(h, 
+        batchlas::impl::parallel_for<Sb2stHhChaseKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -497,7 +497,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
         auto TAUv = tau_in;
 
-        batchlas::impl::parallel_for<Sb2stHhBackWaveKernel<B, T, C, S>>(h, 
+        batchlas::impl::parallel_for<Sb2stHhBackWaveKernel<B, T, C, S>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -608,7 +608,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
         auto TAUv = tau_in;
 
-        batchlas::impl::parallel_for<Sb2stHhBackTiledKernel<B, T, C>>(h, 
+        batchlas::impl::parallel_for<Sb2stHhBackTiledKernel<B, T, C>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kSg),
                               sycl::range<1>(kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -846,7 +846,7 @@ streaming:
 
     ctx->submit([&](sycl::handler& h) {
         auto TAUv = tau_in;
-        batchlas::impl::parallel_for<Sb2stHhBackKernel<B, T>>(h, 
+        batchlas::impl::parallel_for<Sb2stHhBackKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * 32),
                               sycl::range<1>(32)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {

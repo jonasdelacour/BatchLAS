@@ -78,7 +78,7 @@ namespace batchlas {
             auto AV_view = AV.kernel_view();
             auto V_view = V.kernel_view();
             
-            batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h, 
+            batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(global_size, local_size),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group(0); // Which batch*k combination

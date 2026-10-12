@@ -149,7 +149,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // A local so `[=]` copies a pointer; nullptr (status not requested) makes info_store a no-op.
         int32_t* const info_dev = info;
 
-        impl::parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(cgh, 
+        impl::parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
