@@ -782,6 +782,44 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
     }
 }
 
+// Uniformly tiny input (A scaled by 2^-30 float / 2^-60 double, every sigma far below eps): a
+// zero-sigma threshold of eps * max(1, sigma_max) calls every singular value zero. The threshold
+// lives on the tridiagonal-of-B^T B path, so the bidiagonal solver is pinned to it.
+TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+    } else {
+        const int m = 24, n = 16, batch = 2;
+        const Real tiny = std::ldexp(Real(1), std::is_same_v<Real, float> ? -30 : -60);
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 7002);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i) A.view()(i, j, b) *= tiny;
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
+        MV::copy(*this->ctx, A_ref.view(), A.view()).wait();
+
+        UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
+        Matrix<Scalar, MatrixFormat::Dense> U(m, m, batch);
+        Matrix<Scalar, MatrixFormat::Dense> Vh(n, n, batch);
+        ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
+        const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, U, Vh, SvdVectors::All,
+                                                                   SvdVectors::All, "blocked");
+        ASSERT_TRUE(err.empty()) << err;
+
+        expect_singular_values_match_lapacke(A_ref, s);
+        expect_orthonormal_columns(*this->ctx, U);
+        expect_orthonormal_rows(*this->ctx, Vh);
+        const VectorView<Real> sv(s.to_span(), n, batch, 1, n);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, m,
+                      MV::svd_residual(*this->ctx, A_ref.view(), U.view(), sv, Vh.view(), A_ref.view().all_items()));
+    }
+}
+
 TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
