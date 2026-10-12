@@ -776,6 +776,7 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
 // deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
                         {"cfloat", "L", "T", 64, 1, 1024, 2048, "vendor", 1}, {"cfloat", "R", "C", 5, 2, 3, 4, "blocked", 2},
@@ -790,12 +791,13 @@ TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
             // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-            if (row->timed) continue;
+            if (held.skip(row->timed)) continue;
             const std::string what = t.file + ":" + std::to_string(row->line);
             ASSERT_EQ(row->ranked.size(), r.len) << what;
             EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
             EXPECT_EQ(row->ranked.back().spelling, "vendor") << what;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

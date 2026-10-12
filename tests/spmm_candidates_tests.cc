@@ -852,6 +852,7 @@ TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
 // them: the old clause at grid and off-grid sizes (no size term, so any size reads the same).
 // sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     for (const char* dev : {"sm_89", "cpu"})
         for (const char* dtype : {"float", "double", "cfloat", "cdouble"})
             for (const char* ta : {"N", "T"})
@@ -866,13 +867,14 @@ TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
                         const select::TableRow* row = t.nearest(key);
                         ASSERT_NE(row, nullptr) << t.file;
                         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                        if (row->timed) continue;
+                        if (held.skip(row->timed)) continue;
                         const std::string what = t.file + ":" + std::to_string(row->line);
                         const bool window = std::string(ta) == "N" && !(std::string(dtype) == "cfloat" && std::string(tb) == "T");
                         ASSERT_EQ(row->ranked.size(), 2u) << what;
                         EXPECT_EQ(row->ranked[0].spelling, window ? "direct" : "vendor") << what;
                         EXPECT_EQ(row->ranked[1].spelling, window ? "vendor" : "direct") << what;
                     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

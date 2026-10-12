@@ -862,6 +862,7 @@ TYPED_TEST(PosvCandidates, EmptyShapesThrowBeforeChoose) {
 // the old router's window (float/double/cdouble to their tier ceiling, cfloat above 24 only at
 // nrhs > 2) as the first entry, then cta, then blocked.
 TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* uplo; int n, nrhs, batch; const char* first; std::size_t len; };
     const Row rows[] = {
         {"cfloat", "L", 24, 2, 8192, "tiny", 3},  {"cfloat", "L", 28, 2, 8192, "cta", 2},
@@ -879,12 +880,13 @@ TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-        if (row->timed) continue;
+        if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         ASSERT_EQ(row->ranked.size(), r.len) << what;
         EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
         EXPECT_EQ(row->ranked.back().spelling, "blocked") << what;
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

@@ -734,15 +734,18 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
 TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    struct Row { int n, k, batch; };
-    const Row rows[] = {{128, 64, 4},  {1, 4096, 2},   {129, 129, 4}, {129, 8, 128},  {200, 150, 2},
-                        {200, 500, 8}, {256, 8, 128},  {257, 8, 128}, {257, 7, 128},  {300, 64, 26},
-                        {300, 64, 27}, {300, 700, 26}, {300, 700, 27}, {1600, 64, 1}, {1600, 64, 2}};
+    // form spelled by hand (2 min >= max: sq; n > 2k: tall; else wide), never via form_of.
+    struct Row { int n, k, batch; const char* form; };
+    const Row rows[] = {{128, 64, 4, "sq"},      {1, 4096, 2, "wide"},    {129, 129, 4, "sq"},
+                        {129, 8, 128, "tall"},   {200, 150, 2, "sq"},     {200, 500, 8, "wide"},
+                        {256, 8, 128, "tall"},   {257, 8, 128, "tall"},   {257, 7, 128, "tall"},
+                        {300, 64, 26, "tall"},   {300, 64, 27, "tall"},   {300, 700, 26, "wide"},
+                        {300, 700, 27, "wide"},  {1600, 64, 1, "tall"},   {1600, 64, 2, "tall"}};
     for (const Row& r : rows)
         for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             Spec s{r.n, r.k, r.batch, Uplo::Lower, t};
             const char* word = t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C");
-            const select::Key key{{"form", ops::syrk::form_of(r.n, r.k)}, {"trans", word}, {"n", r.n}, {"k", r.k}, {"batch", r.batch}};
+            const select::Key key{{"form", r.form}, {"trans", word}, {"n", r.n}, {"k", r.k}, {"batch", r.batch}};
             const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
             const std::string want = test_utils::shipped_table_pick<C>("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
                                                                        key, [&] {

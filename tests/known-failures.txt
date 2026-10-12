@@ -39,11 +39,11 @@
 #   type_param, so a shifted index is a hard error, never a silent mask.
 
 # --- lanczos ------------------------------------------------------------------
-# Verified 2026-09-09; cause re-attributed 2026-10-12 (audit B1). lanczos hands
-# steqr its off-diagonal betas with a stride of n instead of n - 1, so every item
-# after the first reads the wrong betas. Not a routing defect (the same two cases
-# fail with BATCHLAS_SPMM_ROUTE=vendor), and not known-defects entry 3, which was
-# the earlier blame. Delete both lines when the B1 fix (fix/audit-oneliners) lands.
+# Verified 2026-09-09 (also on the WP0 and WP1 trees).
+# docs/design/known-defects.md entry 3: src/extensions/lanczos.cc:107-111 issues a
+# two-column level-3 multiply and the consuming kernel reads column 0 only
+# (:127). Not a routing defect -- the same two cases fail with
+# BATCHLAS_SPMM_ROUTE=vendor.
 lanczos_tests::LanczosTestBase.LanczosTest
 lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
 
@@ -66,8 +66,10 @@ steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32;type_param=SteqrConfig<doubl
 # fail. Not a tolerance problem: jacobi and blocked reach 6e-6 on the same input.
 gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
 # double/CUDA (index 3) fails the same orthogonality check on threadripper02
-# (sm_120, 2026-10-12: 8.39e-12 against the 128 n eps cta slack), identical on
-# main; on the 4090 box it may pass, which compare_failures reports as a warning.
+# (sm_120, 2026-10-12: 8.39e-12 against the 128 n eps cta slack). Observed as
+# GesvdTest/1 on a GPU-only tree and as GesvdTest/3 on a full-target tree of
+# main 30627f1f (not the dev-tests preset); not yet seen on the 4090 box, where
+# a pass is reported by compare_failures as a NEWLY PASSING warning.
 gesvd_tests::GesvdTest/3.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<double,(batchlas::Backend)1>
 
 # --- DELIBERATELY ABSENT ------------------------------------------------------

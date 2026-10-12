@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include "../src/ops/gesvd/choice.hh"
 #include "../src/extensions/gesvd_native.hh"
@@ -129,13 +130,6 @@ TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
 TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
 TYPED_TEST_SUITE(GesvdGeneralComplexTest, GesvdHermitianComplexTestTypes);
 
-namespace {
-// Defined with the other expect_* helpers below.
-template <typename Scalar>
-void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
-                                          const UnifiedVector<typename base_type<Scalar>::type>& s);
-}  // namespace
-
 
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
@@ -175,7 +169,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
                         ws.to_span());
     evt.wait();
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
 #endif
 }
 
@@ -258,31 +252,6 @@ std::string run_gesvd_with_provider(Queue& ctx,
     }
 
     return {};
-}
-
-template <typename Scalar>
-void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
-                                          const UnifiedVector<typename base_type<Scalar>::type>& s) {
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-    using Real = typename base_type<Scalar>::type;
-    const int k = std::min(A_ref.rows(), A_ref.cols());
-    const int batch = A_ref.batch_size();
-
-    // The reference runs in double on the exact input, so it is not limited by this precision.
-    std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
-    double sigma_max = 0.0;
-    for (int b = 0; b < batch; ++b) {
-        ASSERT_TRUE(batchlas::verify::singular_values(A_ref.view(), b, ref[static_cast<size_t>(b)]))
-            << "LAPACKE reference failed, batch=" << b;
-        if (k > 0) sigma_max = batchlas::verify::nanmax(sigma_max, ref[static_cast<size_t>(b)].front());
-    }
-    const VectorView<Real> w(const_cast<Real*>(s.data()), k, batch);
-    const double err = MatrixView<Scalar, MatrixFormat::Dense>::values_error(w, ref, sigma_max);
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
-#else
-    static_cast<void>(A_ref);
-    static_cast<void>(s);
-#endif
 }
 
 // s (k values per item, packed) against ref[item] over @p items at Check::values, relative to the
@@ -407,7 +376,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
                         ws.to_span());
     evt.wait();
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
 #endif
 }
 
@@ -440,7 +409,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -476,7 +445,7 @@ TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -556,7 +525,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
                                                                        "blocked");
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U);
             }
@@ -602,7 +571,7 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
                                                                        "cta");
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
             }
@@ -737,7 +706,7 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -773,7 +742,7 @@ TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
                                                                    "cta");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
         expect_orthonormal_rows(*this->ctx, Vh, gesvd_cta_slack<typename TestFixture::Real>());
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -810,7 +779,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -984,7 +953,7 @@ TYPED_TEST(GesvdTest, ThinTallRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
     expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -1016,7 +985,7 @@ TYPED_TEST(GesvdTest, ThinWideRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
     expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -1219,7 +1188,7 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
                 *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             expect_orthonormal_columns(*this->ctx, U);
             expect_orthonormal_rows(*this->ctx, Vh);
             expect_reconstruction(*this->ctx, A_ref, s, U, Vh);

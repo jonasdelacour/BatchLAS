@@ -981,6 +981,7 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them:
 // cta | blocked | vendor up to order 32 and blocked | vendor above, on both sides and trans.
 TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* side; const char* trans; int n, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {
         {"float", "L", "N", 32, 8, 512, "cta", 3},       {"float", "L", "N", 48, 8, 512, "blocked", 2},
@@ -997,12 +998,13 @@ TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-        if (row->timed) continue;
+        if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         ASSERT_EQ(row->ranked.size(), r.len) << what;
         EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
         EXPECT_EQ(row->ranked.back().spelling, "vendor") << what;
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

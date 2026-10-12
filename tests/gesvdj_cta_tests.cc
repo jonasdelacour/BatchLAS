@@ -81,26 +81,6 @@ protected:
         return cap;
     }
 
-    // s (k per item, packed) against LAPACKE singular values of A0 at Check::values; skips
-    // without LAPACKE.
-    static void expect_values(const Matrix<Scalar>& A0, const UnifiedVector<Real>& s) {
-        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
-        const int k = std::min(A0.rows(), A0.cols()), batch = A0.batch_size();
-        if constexpr (!batchlas::verify::have_reference) {
-            GTEST_SKIP() << "no host LAPACKE reference in this build";
-        } else {
-            const auto items = A0.view().all_items();
-            std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
-            double smax = 0.0;
-            for (int b : items) {
-                ASSERT_TRUE(batchlas::verify::singular_values(A0.view(), b, ref[static_cast<size_t>(b)])) << "item " << b;
-                if (k > 0) smax = std::max(smax, ref[static_cast<size_t>(b)].front());
-            }
-            const VectorView<Real> sv(const_cast<Real*>(s.data()), k, batch);
-            EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, MV::values_error(sv, ref, smax, items));
-        }
-    }
-
     // ||M^H M - I||_F over the leading `cols` columns of an ld x cols block, worst over the batch.
     static double col_orthogonality(Queue& ctx, int rows, int cols, int batch,
                                     const Scalar* M, int64_t stride, int ld) {
@@ -147,7 +127,7 @@ protected:
                       (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(
                           ctx, A0.view(), U.view(), VectorView<Real>(s, k, batch), Vh.view(), A0.view().all_items())))
             << "reconstruction m=" << m << " n=" << n;
-        expect_values(A0, s);
+        test_utils::expect_singular_values_match_lapacke(A0.view(), s);
 
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, m, col_orthogonality(ctx, m, m, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
@@ -215,7 +195,7 @@ protected:
                       (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(
                           ctx, A0.view(), U.view(), VectorView<Real>(s, k, batch), Vh.view(), A0.view().all_items())))
             << "thin reconstruction m=" << m << " n=" << n;
-        expect_values(A0, s);
+        test_utils::expect_singular_values_match_lapacke(A0.view(), s);
 
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, col_orthogonality(ctx, m, k, batch, U.view().data_ptr(), U.view().stride(),
                                     static_cast<int>(U.view().ld())))
@@ -465,7 +445,7 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
                                   ju ? SvdVectors::All : SvdVectors::None,
                                   jv ? SvdVectors::All : SvdVectors::None);
             ctx.wait_and_throw();
-            TestFixture::expect_values(A0, s);
+            test_utils::expect_singular_values_match_lapacke(A0.view(), s);
         }
     }
 }
@@ -505,7 +485,7 @@ TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
                   (MatrixView<Scalar, MatrixFormat::Dense>::svd_residual(ctx, A0.view(), U.view(), VectorView<Real>(s, n, batch),
                                                                          Vh.view(), A0.view().all_items())));
-    TestFixture::expect_values(A0, s);
+    test_utils::expect_singular_values_match_lapacke(A0.view(), s);
 }
 
 // ---------------------------------------------------------------------------

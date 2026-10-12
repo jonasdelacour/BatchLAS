@@ -1232,6 +1232,7 @@ TYPED_TEST(GemmCandidatesCpu, CpuQueueRunsNativeOnlyWithoutAHostBlas) {
 // squares to 48 and the vendor the rest of float; double is native first; complex is vendor
 // first; a real C folds to T; the old forced-name fallback follows the old kernel.
 TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row {
         const char* dtype; const char* ta; const char* tb; const char* layout; int m, n, k, batch;
         std::vector<std::string> ranked;
@@ -1258,7 +1259,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-        if (row->timed) continue;
+        if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         std::vector<std::string> got;
         for (const auto& e : row->ranked) got.push_back(e.spelling);
@@ -1275,6 +1276,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         for (const auto& row : t.rows)
             ASSERT_TRUE(row.keys[0] != "C" && row.keys[1] != "C") << t.file << ":" << row.line;
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 // The old preferred() edges below the grid (batch < 64, double k < 2, float native only on NN

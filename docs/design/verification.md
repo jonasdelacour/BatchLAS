@@ -211,6 +211,8 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/iluk_tests.cc` MILU diagonal value, generator Hermitian symmetry, host-vs-device factor entries, the 2D-Laplacian smallest eigenvalue | one exactly computable factor entry; a property of the input generator; two factorization implementations compared entry by entry (intermediate output); an iterative LOBPCG run judged at its own convergence tolerance, not a residual |
 | `tests/geqrf_tests.cc` tau against `host_geqr2` and `verify::geqrf_tau`, the native-vs-vendor drop-in and Register-vs-Resident panel comparisons | LAPACK's reflector convention (a residual passes any sign) and two implementations of the op compared result to result, normwise |
 | `tests/getrf_tests.cc` tiny-vs-cta elementwise factor agreement | two kernels compared element by element, the pivots exactly: the identity pad must not change the selection or the arithmetic |
+| `tests/gesvd_tests.cc` `DefaultProviderKeepsSingularValuesAtHighCondition` `sv_rel_tol` | per-singular-value relative error on graded input (kappa 1e5) against the closed-form spectrum: the quantity the normal-equations path destroys; a normwise `values_error` scaled by sigma_max cannot see the small values, and no relative-accuracy kind exists |
+| `tests/device_blas_tests.cc` Auto-vs-Generic and group-vs-item policy comparisons (gemv, ger, syr2k `EXPECT_NEAR` at 1e-4/1e-5) | two execution policies of the same op compared result to result: each policy's arithmetic must agree elementwise, which a backward error against the inputs would loosen |
 
 ## Rollout
 

@@ -136,7 +136,7 @@ O(n^3) reference solves (91% of `steqr_tests` runtime). Original CUDA-only vs al
 
 A launch that finds no device image for its kernel ("No kernel named ...") fails the test.
 `BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1` turns that into a skip, for a deliberately partial
-`-fsycl-targets` build only (`test_utils::is_kernel_not_found_message`).
+`-fsycl-targets` build only (`test_utils::may_skip_missing_kernel`).
 
 ## Writing tests that stay fast
 

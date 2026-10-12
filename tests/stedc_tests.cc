@@ -337,8 +337,9 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
                 JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n);
+    const std::vector<int> all_items = T_mat.view().all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
 }
 
 // Regression: a merge subproblem of size dd == 1 used to make the extremal-root
@@ -395,8 +396,9 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
             (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals, ws, JobType::EigenVectors, params, eigvecs.view());
             this->ctx->wait();
 
-            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense_A.view(), W, n);
-            test_utils::expect_eigenpairs<float_type>(*this->ctx, dense_A.view(), eigvecs.view(), W, n);
+            const std::vector<int> all_items = dense_A.view().all_items();
+            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense_A.view(), W, n, false, all_items);
+            test_utils::expect_eigenpairs<float_type>(*this->ctx, dense_A.view(), eigvecs.view(), W, n, all_items);
             for (int j = 0; j < batch; ++j) {
                 for (int i = 0; i < n; ++i) {
                     const float_type got = eigvals(i, j);
@@ -448,8 +450,9 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
                     JobType::EigenVectors, params_cta, eigvecs_cta.view());
         this->ctx->wait();
 
-        test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n);
-        test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n);
+        const std::vector<int> all_items = T_mat.view().all_items();
+        test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+        test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
     }
 }
 
@@ -484,8 +487,9 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
                 JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n);
+    const std::vector<int> all_items = T_mat.view().all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
 }
 
 
@@ -557,7 +561,7 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
     for (int i = 0; i < n; ++i) spectrum[i] = 1.0 + 2.0 * std::cos(M_PI * double(n - i) / double(n + 1));
     const std::vector<std::vector<double>> ref(batch, spectrum);
     EXPECT_VERIFY(float_type, verify::Check::values, n,
-                  MatrixView<float_type>::values_error(eigvals.view(), ref, 3.0, eigvects.view().all_items()));
+                  MatrixView<float_type>::values_error(eigvals.view(), ref, 3.0, eigvals.view().all_items()));
 }
 
 // THE CASE THAT MATTERS: the same batch, one sweep allowed in the leaf solves.

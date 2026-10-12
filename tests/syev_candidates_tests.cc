@@ -750,6 +750,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // old threshold on its two sides, per type and jobz (the old predicates, syev.hh@424a45bc). sm_120
 // is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* jobz; int n; const char* ranked; };
     const Row rows[] = {
         {"float", "V", 8, "jacobi|blocked|two_stage|vendor"},     {"float", "V", 9, "cta_fused|blocked|two_stage|vendor"},
@@ -772,11 +773,12 @@ TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
                 const select::TableRow* row = t.nearest({{"jobz", r.jobz}, {"n", r.n}, {"batch", batch}});
                 ASSERT_NE(row, nullptr) << t.file;
                 // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                if (row->timed) continue;
+                if (held.skip(row->timed)) continue;
                 std::string got;
                 for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
                 EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line << " n=" << r.n << " batch=" << batch;
             }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

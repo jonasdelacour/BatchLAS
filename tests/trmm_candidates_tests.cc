@@ -1021,6 +1021,7 @@ TYPED_TEST(TrmmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // transcribed commit and choice.hh's keys, and reads `triangular | expand | vendor` on Side::Left
 // and `expand | vendor` on Side::Right. sm_120 is deep-measured since 2026-10-09.
 TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     std::set<std::string> want;
     for (const char* s : {"L", "R"})
         for (int o : tm::grid_order)
@@ -1046,7 +1047,7 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
                 got.insert(k);
                 // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                if (row.timed) continue;
+                if (held.skip(row.timed)) continue;
                 std::string ranked;
                 for (const auto& x : row.ranked) ranked += x.spelling + "|";
                 EXPECT_EQ(ranked, row.keys[0] == "L" ? "triangular|expand|vendor|" : "expand|vendor|") << file << " " << k;
@@ -1062,6 +1063,7 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
             }
         }
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

@@ -820,6 +820,7 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // old preference, every dtype, at on-grid, edge and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getri", dt, select::device_from_key(dev));
@@ -831,13 +832,14 @@ TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
                     const select::TableRow* row = t.nearest({{"n", n}, {"batch", batch}});
                     ASSERT_NE(row, nullptr) << t.file;
                     // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                    if (row->timed) continue;
+                    if (held.skip(row->timed)) continue;
                     const std::string what = t.file + ":" + std::to_string(row->line) + " for n=" +
                                              std::to_string(n) + " batch=" + std::to_string(batch);
                     ASSERT_EQ(row->ranked.size(), 2u) << what;
                     EXPECT_EQ(row->ranked.front().spelling, old_auto_dtype(dt, n)) << what;
                 }
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

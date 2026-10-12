@@ -82,14 +82,14 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 			this->ctx->wait();
 		} catch (const sycl::exception& e) {
 			const std::string msg = e.what();
-			if (test_utils::is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::may_skip_missing_kernel(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}
 			throw;
 		} catch (const std::exception& e) {
 			const std::string msg = e.what();
-			if (test_utils::is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::may_skip_missing_kernel(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}

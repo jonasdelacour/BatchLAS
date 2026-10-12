@@ -245,6 +245,7 @@ TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 // A padded ld (272, 258) is layout=strided. The vendor-vs-native order is not asserted here
 // (gemm_candidates_tests.cc AutoReadsTheSm89TranscribedTable runs it).
 TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* ta; const char* layout; int m, n, k; const char* native; };
     const Row rows[] = {
         {"N", "packed", 128, 128, 128, "reg:m=128:n=128:k=8:u=1"},
@@ -269,7 +270,7 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr);
         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-        if (row->timed) continue;
+        if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         const auto it = std::find_if(row->ranked.begin(), row->ranked.end(),
                                      [](const auto& e) { return e.spelling != "vendor"; });
@@ -277,6 +278,7 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
         EXPECT_EQ(it->spelling, r.native) << what << " ta=" << r.ta << " " << r.layout << " " << r.m << "x" << r.n
                                           << "x" << r.k;
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 // Test GEMM operation using identity matrix (C = A * I = A)

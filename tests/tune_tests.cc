@@ -895,7 +895,8 @@ TEST(TuneRace, PairedRatiosCancelADriftingClock) {
     std::uniform_real_distribution<double> u(-0.003, 0.003);
     const auto r = run_race(params(Tier::coarse), [&](int i) {
         const double drift = 1.0 + 0.3 * i / 12.0;
-        return std::pair(drift * (1 + u(g)), 1.06 * drift * (1 + u(g)));
+        const double r0 = u(g), r1 = u(g);
+        return std::pair(drift * (1 + r0), 1.06 * drift * (1 + r1));
     });
     EXPECT_FALSE(r.s.alive[1]);
     EXPECT_EQ(r.v, RaceVerdict::winner);

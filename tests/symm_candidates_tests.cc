@@ -923,6 +923,7 @@ TYPED_TEST(SymmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // both candidates, and the float first entries restate the old rule at the cell's form
 // representative (double: vendor everywhere). sm_120 is deep-measured since 2026-10-09.
 TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
+    test_utils::TranscribedRowsHeld held;
     auto rep = [](const std::string& form, int m, int n) {
         if (std::string(sy::form_of(m, n)) == form) return std::pair{m, n};
         const int M = std::max(m, n), h = std::max(1, (M - 1) / 2);
@@ -948,7 +949,7 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
             for (const auto& row : t.rows) {
                 got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3]);
                 // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                if (row.timed) continue;
+                if (held.skip(row.timed)) continue;
                 ASSERT_EQ(row.ranked.size(), 2u) << t.file << ":" << row.line;
                 const auto [rm, rn] = rep(row.keys[0], std::stoi(row.keys[1]), std::stoi(row.keys[2]));
                 const std::string first = std::string(dt) == "float" ? old_auto<float>(rm, rn, std::stoi(row.keys[3]))
@@ -971,6 +972,7 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
         ASSERT_NE(row, nullptr);
         EXPECT_EQ(row->ranked.front().spelling, s.first) << t.file << ":" << row->line;
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

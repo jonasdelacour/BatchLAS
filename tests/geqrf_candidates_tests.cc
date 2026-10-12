@@ -791,6 +791,7 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // the old preference (the old predicates read no architecture). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* form; int n, aspect; const char* ranked; };
     const Row rows[] = {
         {"float", "sq", 21, 1, "tiny|vendor|cta|blocked"},      {"float", "sq", 17, 1, "vendor|tiny|cta|blocked"},
@@ -810,11 +811,12 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
             const select::TableRow* row = t.nearest({{"form", r.form}, {"n", r.n}, {"aspect", r.aspect}});
             ASSERT_NE(row, nullptr) << t.file;
             // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-            if (row->timed) continue;
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 // can_run's device clauses on a synthetic select::Device, host-only: every GPU here has

@@ -30,6 +30,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -142,17 +143,7 @@ protected:
             }
         }
 
-        if constexpr (!batchlas::verify::have_reference) {
-            GTEST_SKIP() << "no host LAPACKE reference in this build";
-        } else {
-            std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
-            double smax = 0.0;
-            for (int b : items) {
-                ASSERT_TRUE(batchlas::verify::singular_values(B0.view(), b, ref[static_cast<size_t>(b)])) << "item " << b;
-                smax = std::max(smax, ref[static_cast<size_t>(b)].front());
-            }
-            EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, MV::values_error(sv, ref, smax, items));
-        }
+        test_utils::expect_singular_values_match_lapacke(B0.view(), s, items);
     }
 
     void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0,

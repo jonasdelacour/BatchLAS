@@ -890,6 +890,7 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
 // cells, vendor | direct under N; on-grid and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance; AutoReadsTheShippedTable its use).
 TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* trans; int out, red, batch; const char* ranked; };
     const Row rows[] = {
         {"cdouble", "T", 256, 64, 320, "cta|vendor|direct"},   {"cdouble", "T", 700, 200, 5000, "cta|vendor|direct"},
@@ -908,11 +909,12 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
             // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-            if (row->timed) continue;
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

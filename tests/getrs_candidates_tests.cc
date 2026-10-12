@@ -826,6 +826,7 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // every dtype, the first entry (vendor present) and the first native entry that fits (vendor-free)
 // equal the old router at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold) {
+    test_utils::TranscribedRowsHeld held;
     const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
@@ -839,7 +840,7 @@ TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold)
                         const select::TableRow* row = t.nearest({{"n", n}, {"nrhs", nrhs}, {"batch", batch}});
                         ASSERT_NE(row, nullptr);
                         // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
-                        if (row->timed) continue;
+                        if (held.skip(row->timed)) continue;
                         const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(n) +
                                                  " nrhs=" + std::to_string(nrhs) + " batch=" + std::to_string(batch);
                         const bool fits = nrhs <= w;  // unlimited SLM: the width is the only cta term here
@@ -853,6 +854,7 @@ TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold)
                         EXPECT_EQ(native, old_auto(dt, n, nrhs, batch, false, fits)) << what << " (vendor-free)";
                     }
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

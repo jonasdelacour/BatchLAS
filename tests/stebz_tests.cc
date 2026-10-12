@@ -23,7 +23,8 @@ namespace {
 // Symmetric tridiagonal Toeplitz: d_i = a, e_i = b. Eigenvalues are known in
 // closed form, which gives an exact reference independent of any other solver.
 //   lambda_k = a + 2*b*cos(k*pi/(n+1)),  k = 1..n
-// Evaluated in double, so the reference carries no float rounding of its own.
+// Evaluated in double; a caller that stores it as Real adds one rounding (eps |lambda|), far
+// below Check::values.
 inline std::vector<double> toeplitz_reference(int n, double a, double b) {
     std::vector<double> ref(n);
     for (int k = 1; k <= n; ++k) {
