@@ -63,10 +63,10 @@ struct BATCHLAS_API UnifiedVector
         other.capacity_ = 0;
         other.data_ = nullptr;
     }
-    /// @brief Takes @p other's allocation and leaves @p other empty.
-    /// @trap This vector's previous allocation is not freed (a leak; see @ref matrix-model-open-debts).
+    /// @brief Frees this vector's allocation, takes @p other's and leaves @p other empty.
     UnifiedVector<T> &operator=(UnifiedVector<T> &&other) {
         if (this == &other) return *this;
+        UnifiedVector<T> previous(std::move(*this));  // its destructor frees the old allocation
         this->data_ = other.data_;
         this->size_ = other.size_;
         this->capacity_ = other.capacity_;

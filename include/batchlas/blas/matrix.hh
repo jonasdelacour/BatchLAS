@@ -289,6 +289,18 @@ namespace batchlas {
             return {s.start, len};
         }
 
+        // Host slicing only: KernelMatrixView shares normalize_slice_component() in device code,
+        // which cannot throw. An empty in-range slice is left to the caller's invalid_argument.
+        inline std::pair<int64_t,int64_t> checked_slice_component(Slice s, int64_t dim) {
+            const auto [start, len] = normalize_slice_component(s, dim);
+            if (start < 0 || start > dim || start + std::max<int64_t>(len, 0) > dim) {
+                throw batchlas::out_of_range("Slice [" + std::to_string(start) + ", " +
+                                             std::to_string(start + len) + ") is outside a dimension of " +
+                                             std::to_string(dim));
+            }
+            return {start, len};
+        }
+
         inline void validate_dense_active_dims(int rows_capacity,
                                               int cols_capacity,
                                               int batch_size,
@@ -414,7 +426,7 @@ namespace batchlas {
         auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
         auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
         if (r_len <= 0 || c_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView");
+            assert(r_len > 0 && c_len > 0 && "Invalid slice dimensions in KernelMatrixView");
         }
         detail::apply_dense_slice_pointer_arithmetic(out.data_, ld_, r_start, c_start);
         out.rows_ = static_cast<int>(r_len);
@@ -428,7 +440,7 @@ namespace batchlas {
     VectorView<T> KernelMatrixView<T, MType>::operator()(int32_t row, Slice cols_slice) const {
         auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
         if (c_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView row extraction");
+            assert(c_len > 0 && "Invalid slice dimensions in KernelMatrixView row extraction");
         }
         T* row_data = data_ + row + c_start * ld_;
         return VectorView<T>(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
@@ -440,7 +452,7 @@ namespace batchlas {
     VectorView<T> KernelMatrixView<T, MType>::operator()(Slice rows_slice, int32_t col) const {
         auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
         if (r_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView column extraction");
+            assert(r_len > 0 && "Invalid slice dimensions in KernelMatrixView column extraction");
         }
         T* col_data = data_ + r_start + col * ld_;
         return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
@@ -737,12 +749,12 @@ namespace batchlas {
         Matrix<U, MType> astype() const;
 
         /// @brief View of the sub-block selected by @p rows x @p cols in every item; never copies.
-        /// @throws batchlas::invalid_argument if either slice is empty
+        /// @throws batchlas::invalid_argument if either slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
@@ -1460,12 +1472,12 @@ namespace batchlas {
         }
 
         /// @brief View of the sub-block @p rows x @p cols of every item; keeps ld and stride, never copies.
-        /// @throws batchlas::invalid_argument if either slice is empty
+        /// @throws batchlas::invalid_argument if either slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
@@ -1484,11 +1496,11 @@ namespace batchlas {
         }
 
         /// @brief Part of row @p row of every item as a batched VectorView (inc = ld(), stride = stride()).
-        /// @throws batchlas::invalid_argument if the slice is empty
+        /// @throws batchlas::invalid_argument if the slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         VectorView<T> operator()(int32_t row, Slice cols) const {
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
@@ -1497,11 +1509,11 @@ namespace batchlas {
         }
 
         /// @brief Part of column @p col of every item as a batched VectorView (inc = 1, stride = stride()).
-        /// @throws batchlas::invalid_argument if the slice is empty
+        /// @throws batchlas::invalid_argument if the slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         VectorView<T> operator()(Slice rows, int32_t col) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
             if (r_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }

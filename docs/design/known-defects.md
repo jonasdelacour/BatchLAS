@@ -406,11 +406,11 @@ refuted.
   and, under `Diag::Unit`, the stored diagonal. It accumulates into `C` instead of overwriting.
   See [the trmm generic recursion](../perf/level3.md#trmm-the-generic-recursion-reads-the-whole-square-of-a)
   (`src/extensions/trmm.cc:22-26`).
-- **Matrix and vector containers.** Five defects in `matrix.hh` and `src/matrix.cc` are listed in
+- **Matrix and vector containers.** Four defects in `matrix.hh` and `src/matrix.cc` are listed in
   [Matrix model: open debts](matrix-model.md#matrix-model-open-debts). They are an undefined
   `MatrixView::transpose`, packed-only addressing in `fill_triangular_random` and
-  `fill_tridiag_toeplitz`, padding written by `fill_random`, a no-op slice assert in
-  `KernelMatrixView`, and a `fill_diagonal(ctx, Span, k)` length assert that fires for `k != 0`.
+  `fill_tridiag_toeplitz`, padding written by `fill_random`, and a `fill_diagonal(ctx, Span, k)`
+  length assert that fires for `k != 0`.
 - **Environment parser.** `BATCHLAS_SYEVX_SOFT_LOCK` is inverted: `=off` and an empty export read
   as on. `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` reads an unparseable value as 0, which widens the blocked
   path to every n. `BATCHLAS_TUNE_STEDC_MERGE_VARIANT` is cast to the enum with no range check. See
@@ -426,13 +426,9 @@ refuted.
 - **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:29` addresses
   `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
   also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
-- **`UnifiedVector` move assignment leaks.** `operator=(UnifiedVector&&)` in
-  `include/batchlas/util/sycl-vector.hh` overwrites `data_` without freeing it. Moving into a
-  non-empty `UnifiedVector`, `Matrix` or `Vector` leaks USM shared memory. See
-  [Matrix model: open debts](matrix-model.md#matrix-model-open-debts).
 - **Kernel selection throws outside the error hierarchy.** `src/select/` throws `std::invalid_argument`
-  and `std::runtime_error`. `batchlas::NoRouteError` derives from `std::runtime_error` only, so
-  `catch (const batchlas::exception&)` misses all of them. `gesv` and `posv` throw
+  and `std::runtime_error`, which `catch (const batchlas::exception&)` misses (`batchlas::NoRouteError`
+  is a `batchlas::unsupported`). `gesv` and `posv` throw
   `internal_error` for an empty or heterogeneous batch, where `invalid_argument` or `unsupported`
   would fit. Reclassifying either changes behaviour for callers that catch the current type. See
   [kernel selection throws outside the hierarchy](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).

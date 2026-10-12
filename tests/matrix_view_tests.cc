@@ -255,3 +255,35 @@ TEST(MatrixViewTest, CSRSubmatrixViewThrows) {
     Matrix<float, MatrixFormat::CSR> mat(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, 1);
     EXPECT_THROW(mat.view(1, 1), std::runtime_error);
 }
+
+// A host slice reaching past the dimension used to hand out a view onto foreign memory
+// (only an EMPTY slice was rejected).
+TEST(MatrixView, SliceOutOfRangeThrows) {
+    Matrix<float, MatrixFormat::Dense> M(6, 5, 2);
+    auto v = M.view();
+    EXPECT_THROW((void)v(Slice(0, 6), Slice(2, 9)), batchlas::out_of_range);
+    EXPECT_THROW((void)v(Slice(4, 8), Slice()), batchlas::out_of_range);
+    EXPECT_THROW((void)v(Slice(-9, 3), Slice()), batchlas::out_of_range);
+    EXPECT_THROW((void)v(Slice(7), Slice()), batchlas::out_of_range);
+    EXPECT_THROW((void)v(2, Slice(1, 7)), batchlas::out_of_range);
+    EXPECT_THROW((void)v(Slice(0, 7), 1), batchlas::out_of_range);
+    EXPECT_THROW((void)M(Slice(0, 6), Slice(2, 9)), batchlas::out_of_range);
+    // GUARD: in-range slices, negative bounds included, are still accepted.
+    EXPECT_NO_THROW((void)v(Slice(0, 6), Slice(2, 5)));
+    EXPECT_NO_THROW((void)v(Slice(-2, 6), Slice(-3)));
+    EXPECT_NO_THROW((void)M(Slice(1), Slice(0, -1)));
+    EXPECT_THROW((void)v(Slice(3, 3), Slice()), batchlas::invalid_argument) << "empty stays invalid_argument";
+}
+
+// The device-side twin cannot throw; its assert used to be assert("string"), which never fires.
+TEST(KernelMatrixView, BadSliceAsserts) {
+#ifdef NDEBUG
+    GTEST_SKIP() << "asserts are compiled out (NDEBUG); covered in a -UNDEBUG build";
+#else
+    std::vector<float> buf(30, 0.0f);
+    KernelMatrixView<float, MatrixFormat::Dense> kv(buf.data(), 6, 5, 6);
+    EXPECT_DEATH((void)kv(Slice(3, 3), Slice()), "");
+    EXPECT_DEATH((void)kv(2, Slice(4, 4)), "");
+    EXPECT_DEATH((void)kv(Slice(1, 1), 0), "");
+#endif
+}

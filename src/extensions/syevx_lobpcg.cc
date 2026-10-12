@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "syevx.hh"
 #include "info_span.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>

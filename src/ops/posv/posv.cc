@@ -124,7 +124,12 @@ Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
         ops::posv::spec, ctx, ops::posv::key_of(A, B, uplo), ops::posv::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::posv::can_run<T>(c, d, A, B); }, shape,
         {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
-        [&](const auto& c) { return ops::posv::launch<Back, T>(ctx, c, A, B, uplo, work_space, info); });
+        [&](const auto& c) {
+            // Cta and Blocked chain potrf into the solves, so they need an in-order queue.
+            return select::on_in_order_queue(ctx, [&](Queue& q) {
+                return ops::posv::launch<Back, T>(q, c, A, B, uplo, work_space, info);
+            });
+        });
 }
 
 template <Backend Back, typename T>

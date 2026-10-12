@@ -81,7 +81,8 @@ passed by value, with no ownership or backend handle.
 - Dense `operator()(i, j, b)` computes the address above. Its checks are debug asserts only.
 - CSR `get(i, j, b)` searches row \f$i\f$ linearly and returns zero for an absent entry.
 - `batch_item(b)` returns a single-item view, or 0 x 0 for an out-of-range `b`.
-- Slicing does not diagnose an empty slice (see [open debts](#matrix-model-open-debts)).
+- Slicing asserts (debug builds) that the slice is not empty. The host `MatrixView`/`Matrix` slices
+  throw `batchlas::invalid_argument` for an empty slice and `batchlas::out_of_range` past a dimension.
 
 ## Matrix model: heterogeneous batches
 
@@ -138,7 +139,5 @@ and swallow errors.
 - `fill_triangular_random` and `fill_tridiag_toeplitz` address items as packed \f$n \times n\f$, ignoring `ld`
   and `stride`. `fill_triangular_random` seeds by position, so every item gets the same matrix.
 - `fill_random` writes all of `data()`, padding included, so on a sub-block view it writes neighbours.
-- `KernelMatrixView` slicing uses `assert("...")`, which is always true, so empty slices pass.
-- `UnifiedVector`'s move assignment leaks the destination's previous allocation.
 - `fill_diagonal(ctx, Span, k)` with `k != 0` and one shared diagonal builds a view over only \f$n - |k|\f$
   values, so its debug assert can fire on a valid call.
