@@ -39,6 +39,7 @@ target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="
 # libbatchlas or libsycl would put a CUDA context on every visible GPU (see launcher.cc).
 add_executable(batchlas_tune launcher.cc)
 add_dependencies(batchlas_tune batchlas_tune_impl)
+target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE="${BATCHLAS_OPENBLAS_CORETYPE}")
 
 # Offline replay of the tiers against a raw sweep (docs/design/tiered-tuning.md). Host-only, like the tests:
 # no batchlas_configure_binary_target, no SYCL.
