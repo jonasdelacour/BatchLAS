@@ -178,8 +178,8 @@ namespace batchlas {
         template <MatrixFormat MF = MType>
             requires CsrMatrixFormat<MF>
         inline constexpr T get(int i, int j, int b = 0) const {
-            const int ro_base = b * offset_stride_;
-            const int val_base = b * matrix_stride_;
+            const std::ptrdiff_t ro_base = static_cast<std::ptrdiff_t>(b) * offset_stride_;
+            const std::ptrdiff_t val_base = static_cast<std::ptrdiff_t>(b) * matrix_stride_;
             int rs = row_offsets_[ro_base + i];
             int re = row_offsets_[ro_base + i + 1];
             for (int p = rs; p < re; ++p) {

@@ -836,7 +836,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                             // evidence: docs/perf/sytrd.md#sytrd-her2k-scratch-fit-headroom
                             const std::size_t her2k_scratch_bytes =
                                 backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
-                            if (backend::detail::her2k_takes_gemm_route(ctx, n2, batch, her2k_scratch_bytes)) {
+                            if (backend::detail::her2k_takes_gemm_route<T>(ctx, n2, batch, her2k_scratch_bytes)) {
                                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_her2k");
                                 // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                                 // is already ordered after this one and the Event carries nothing the caller needs.

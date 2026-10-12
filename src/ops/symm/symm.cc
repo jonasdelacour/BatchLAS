@@ -50,7 +50,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
                         C.cols() >= 1 && batch >= 1 && batch <= kMaxGridBatch;
     return std::visit(overloaded{
         [&](Expand) {
-            return native && backend::detail::expansion_fits(
+            return native && backend::detail::expansion_fits<T>(
                                  q, int(k), int(batch),
                                  backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
         },

@@ -33,10 +33,12 @@ std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
     return sizer.required_bytes();
 }
 
-// Two hard ceilings, not tuned: the int-linearised SYCL range (2^31 elements) and a quarter of global
-// memory, which BATCHLAS_EXPAND_MAX_BYTES lowers. Past either the caller takes its no-scratch route.
+// Two hard ceilings, not tuned: the int-linearised SYCL range (2^31 elements of the PADDED scratch,
+// expanded_ld x n x batch) and a quarter of global memory, which BATCHLAS_EXPAND_MAX_BYTES lowers.
+// Past either the caller takes its no-scratch route.
+template <typename T>
 inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    const std::size_t elements = static_cast<std::size_t>(n) *
+    const std::size_t elements = static_cast<std::size_t>(expanded_ld<T>(n)) *
                                  static_cast<std::size_t>(n) *
                                  static_cast<std::size_t>(batch);
     if (elements > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -69,8 +71,9 @@ inline bool her2k_gemm_preferred(int n, int batch) {
 }
 
 // The whole of her2k_vendor's batched-GEMM condition, never half of it.
+template <typename T>
 inline bool her2k_takes_gemm_route(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    return her2k_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes);
+    return her2k_gemm_preferred(n, batch) && expansion_fits<T>(ctx, n, batch, bytes);
 }
 
 }  // namespace batchlas::backend::detail

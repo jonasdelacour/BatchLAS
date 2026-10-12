@@ -81,9 +81,9 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch) return;
 
-                T* t_b = t_data + b * stride_t;
-                const T* v_b = v_data + b * stride_v;
-                const T* tau_b = tau_data + b * tau_stride + tau_offset;
+                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
+                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
+                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
 
                 const sycl::group<1> g = it.get_group();
                 const int lid = static_cast<int>(it.get_local_linear_id());
@@ -158,9 +158,9 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch) return;
 
-                T* t_b = t_data + b * stride_t;
-                const T* v_b = v_data + b * stride_v;
-                const T* tau_b = tau_data + b * tau_stride + tau_offset;
+                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
+                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
+                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
 
                 const sycl::group<1> g = it.get_group();
                 const int lid = static_cast<int>(it.get_local_linear_id());
@@ -290,9 +290,9 @@ sycl::event pack_v_panel_batched(Queue& q,
                 if (r == c) {
                     val = T(1);
                 } else if (r > c) {
-                    val = a_ptr[b * stride_a + (i0 + r) + (i0 + c) * ld_a];
+                    val = a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + (i0 + r) + (i0 + c) * ld_a];
                 }
-                v_out[b * stride_v_out + r + c * ld_v_out] = val;
+                v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
             });
     });
 }

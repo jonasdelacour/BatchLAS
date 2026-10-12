@@ -285,7 +285,7 @@ protected:
         const bool grid = s.batch <= 65535;
         if (std::holds_alternative<tm::Triangular>(c)) return grid && s.side == Side::Left;
         if (std::holds_alternative<tm::Expand>(c))
-            return grid && backend::detail::expansion_fits(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch));
+            return grid && backend::detail::expansion_fits<T>(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch));
         return kVendor;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<tm::Vendor>(c) && !kVendor; }

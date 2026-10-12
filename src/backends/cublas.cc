@@ -197,7 +197,7 @@ namespace batchlas {
         // The loop beats the expansion on a launch-bound call, so the shape must earn the extra kernel.
         // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
         const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
-        if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes) &&
+        if (detail::expansion_fits<T>(ctx, k, A.batch_size(), expansion_bytes) &&
             detail::expansion_preferred(std::max({m, n, k}), A.batch_size())) {
             const int ld = detail::expanded_ld<T>(k);
 
@@ -377,7 +377,7 @@ namespace batchlas {
         }
 
         const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
-        if (herk_gemm_preferred(n, batch) && detail::expansion_fits(ctx, n, batch, product_bytes)) {
+        if (herk_gemm_preferred(n, batch) && detail::expansion_fits<T>(ctx, n, batch, product_bytes)) {
             const int ld = detail::expanded_ld<T>(n);
 
             auto ws = ctx.workspace(product_bytes);
@@ -451,7 +451,7 @@ namespace batchlas {
         const bool no_trans = transA == Transpose::NoTrans;
 
         const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
-        if (her2k_gemm_preferred(n, batch) && detail::expansion_fits(ctx, n, batch, product_bytes)) {
+        if (her2k_gemm_preferred(n, batch) && detail::expansion_fits<T>(ctx, n, batch, product_bytes)) {
             const int ld = detail::expanded_ld<T>(n);
 
             auto ws = ctx.workspace(product_bytes);
