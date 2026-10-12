@@ -21,6 +21,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -774,6 +775,46 @@ TEST_F(Select, TunedDirThatIsNotADirectoryIsIgnoredWithOneWarning) {
     EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), "tiny");
     const std::string err = ::testing::internal::GetCapturedStderr();
     EXPECT_EQ(err, "batchlas: BATCHLAS_TUNED_DIR=/nonexistent/select_tests is not a directory; ignoring it\n");
+}
+
+// The loader parses each table file once, however many dtypes ask for it (gemm's files are
+// ~14 MB), built-in and BATCHLAS_TUNED_DIR alike, and each dtype's table equals a fresh parse.
+TEST_F(Select, TableLoaderParsesEachFileOnce) {
+    TempDir dir("select_tests.parse_once." + std::to_string(::getpid()));
+    std::vector<std::pair<std::string, std::string>> files;
+    for (const auto& t : sel::embedded_tables())
+        if (t.name.rfind("gemm.", 0) == 0) files.emplace_back(std::string(t.name), std::string(t.text));
+    ASSERT_GE(files.size(), 2u);
+    for (const auto& f : files) dir.write(f);
+    ScopedEnvVar tuned("BATCHLAS_TUNED_DIR", dir.path.string().c_str());
+    sel::testing::use_embedded_tables();  // a new generation: nothing cached
+    const std::size_t before = sel::testing::parse_count();
+    const auto dev = sel::device_from_key(files.front().first.substr(5, files.front().first.size() - 9));
+    std::map<std::string, std::vector<sel::Table>> fresh;  // the reference: one direct parse per file
+    for (const char* dtype : {"float", "double", "cfloat", "cdouble"}) {
+        const auto tables = sel::tables_in_borrow_order("gemm", dtype, dev);
+        ASSERT_EQ(tables.size(), files.size()) << dtype;
+        for (const sel::Table* t : tables) {
+            EXPECT_TRUE(t->is_override) << t->file;
+            const auto it = std::find_if(files.begin(), files.end(), [&](const auto& f) { return f.first == t->file; });
+            ASSERT_NE(it, files.end()) << t->file;
+            auto& ref = fresh[t->file];
+            if (ref.empty()) ref = sel::parse_tables(it->second, it->first);
+            const auto want = std::find_if(ref.begin(), ref.end(), [&](const sel::Table& x) { return x.dtype == dtype; });
+            ASSERT_NE(want, ref.end()) << t->file << " " << dtype;
+            ASSERT_EQ(t->rows.size(), want->rows.size()) << t->file << " " << dtype;
+            EXPECT_EQ(t->keys.size(), want->keys.size()) << t->file;
+            for (std::size_t r = 0; r < t->rows.size(); ++r) {
+                ASSERT_EQ(t->rows[r].keys, want->rows[r].keys) << t->file << " " << dtype << " row " << r;
+                ASSERT_EQ(t->rows[r].ranked.size(), want->rows[r].ranked.size()) << t->file << " row " << r;
+                for (std::size_t e = 0; e < t->rows[r].ranked.size(); ++e)
+                    ASSERT_EQ(t->rows[r].ranked[e].spelling, want->rows[r].ranked[e].spelling) << t->file << " row " << r;
+            }
+        }
+    }
+    // Every built-in gemm file and its same-named override, once each (the direct reference parses
+    // above do not go through the loader, so they are not counted).
+    EXPECT_EQ(sel::testing::parse_count() - before, 2 * files.size());
 }
 
 TEST(SelectNativeFacts, OverTheCandidateList) {
