@@ -101,6 +101,7 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
             // family: blocked
             "src/extensions/orgqr_blocked.cc",
             // common

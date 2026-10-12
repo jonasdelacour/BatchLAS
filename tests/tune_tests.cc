@@ -29,6 +29,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -316,7 +317,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "c51a422b"}, {"potrf", "9feb9c9f"}, {"posv", "583885c6"}, {"trsm", "bffc2438"}};
+        {"gemm", "b70d066a"}, {"potrf", "aab0e228"}, {"posv", "806c5176"}, {"trsm", "4c501944"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -328,6 +329,46 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
             EXPECT_TRUE(kernel_hash(repo, files)) << op << " " << fam;
         }
     }
+}
+
+// Shared device headers every family compiles: hashed in common, once, wherever a listed source
+// reaches them through quoted or <batchlas/...> includes.
+TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
+    const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const auto shared = [](const std::string& p) {
+        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" || p == "src/extensions/sg_compat.hh" ||
+               p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+    };
+    const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
+    int specs = 0;
+    for (const auto& entry : fs::directory_iterator(repo / "tools/tune")) {
+        const std::string name = entry.path().filename().string();
+        if (name.size() < 8 || name.substr(name.size() - 8) != "_spec.cc") continue;
+        ++specs;
+        const KernelBlock b = parse_kernel_block(read_file(entry.path()));
+        std::set<std::string> reached{"src/sycl/kernel_attrs.hh"}, seen;
+        std::vector<fs::path> todo;
+        for (const auto& f : b.all) todo.push_back(repo / f);
+        while (!todo.empty()) {
+            const fs::path p = todo.back().lexically_normal();
+            todo.pop_back();
+            if (!fs::is_regular_file(p) || !seen.insert(p.string()).second) continue;
+            const std::string rel = p.lexically_relative(repo).string();
+            if (shared(rel)) reached.insert(rel);
+            const std::string text = read_file(p);
+            for (std::sregex_iterator m(text.begin(), text.end(), inc), end; m != end; ++m)
+                for (const fs::path& base : {p.parent_path(), repo / "include", repo / "src"})
+                    if (fs::is_regular_file(base / (*m)[1].str())) {
+                        todo.push_back(base / (*m)[1].str());
+                        break;
+                    }
+        }
+        for (const auto& h : reached) {
+            EXPECT_EQ(std::count(b.common.begin(), b.common.end(), h), 1) << name << " " << h;
+            EXPECT_EQ(std::count(b.all.begin(), b.all.end(), h), 1) << name << " " << h;
+        }
+    }
+    EXPECT_EQ(specs, 19);
 }
 
 TEST(TuneHash, SpecsDeclareTheirFamilies) {

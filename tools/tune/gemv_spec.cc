@@ -90,6 +90,7 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
             // cta and direct are both in gemv_native.cc: common only.
             "src/sycl/gemv_native.cc",
             "src/sycl/gemv_native.hh",

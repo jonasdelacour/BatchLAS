@@ -155,6 +155,7 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
             "src/sycl/trsm_native.cc",
             "src/sycl/trsm_native.hh",
             // family: sg_left

@@ -93,6 +93,8 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: cta
             "src/extensions/getrs_fused.cc",
             // family: blocked

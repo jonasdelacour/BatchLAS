@@ -125,6 +125,8 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: blocked
             "src/extensions/ormqr_blocked.cc",
             "include/batchlas/internal/ormqr_blocked.hh",

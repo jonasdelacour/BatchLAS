@@ -128,6 +128,7 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
             // family: gram
             "src/backends/syrk_gram_tiles.hh",
             // family: triangular

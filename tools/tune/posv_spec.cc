@@ -87,6 +87,16 @@ public:
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "src/extensions/sg_compat.hh",
+            "src/extensions/sg_partition/backend_amdgcn.hh",
+            "src/extensions/sg_partition/backend_amdgcn_core.hh",
+            "src/extensions/sg_partition/backend_generic.hh",
+            "src/extensions/sg_partition/backend_nvptx.hh",
+            "src/extensions/sg_partition/backend_spirv.hh",
+            "src/extensions/sg_partition/backend_sscp.hh",
+            "src/extensions/sg_partition/sg_partition.hh",
             // family: tiny
             "src/extensions/posv_tiny.cc",
             "src/extensions/solve_native.hh",
