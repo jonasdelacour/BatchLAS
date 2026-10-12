@@ -13,7 +13,7 @@
 
 namespace batchlas::ops::syr2k {
 
-struct Triangular : select::NoFields<"triangular"> {};  ///< syr2k_triangular_tiles<float>, CUDA GPU; not ConjTrans
+struct Triangular : select::NoFields<"triangular"> {};  ///< syr2k_triangular_tiles<float>, CUDA GPU; real ConjTrans runs as Trans
 struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syr2k_vendor (per-item ?syr2k loop)
 
 using Syr2kChoice = std::variant<Triangular, Vendor>;  ///< fieldless: the aligned/predicated leg is derived

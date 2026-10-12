@@ -265,17 +265,12 @@ protected:
     static bool vendor_conj_row(const Spec& s) {
         return B == Backend::CUDA && kCx<T> && s.tb == Transpose::ConjTrans && s.nrhs == 1;
     }
-    // cuSPARSE: complex<double> N/N with one column segfaults on the host (known-defects #13).
-    static bool vendor_zz_column(const Spec& s) {
-        return B == Backend::CUDA && std::is_same_v<T, std::complex<double>> && s.ta == Transpose::NoTrans &&
-               s.tb == Transpose::NoTrans && s.nrhs == 1;
-    }
     // netlib: its host loop throws `unsupported` on any transpose, once per (non-empty) batch.
     static bool vendor_netlib_trans(const Spec& s) {
         return B == Backend::NETLIB && s.batch > 0 && (s.ta != Transpose::NoTrans || s.tb != Transpose::NoTrans);
     }
     static bool vendor_refused(const Spec& s) {
-        return vendor_conj_row(s) || vendor_zz_column(s) || vendor_netlib_trans(s);
+        return vendor_conj_row(s) || vendor_netlib_trans(s);
     }
     static bool expect_runs(const C& c, const Spec& s) {
         return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_refused(s));
@@ -521,8 +516,9 @@ TYPED_TEST(SpmmCandidates, DirectSizesNoWorkspace) {
 
 // The Vendor terms (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
 // OPERATION_CONJUGATE_TRANSPOSE is unsupported when B is a single row"), the vendor arm drops the
-// status and C is never written; complex<double> N/N with one column segfaults; netlib throws on
-// any transpose. Straddled on nrhs 1/2, transA N/T and transB N/T/C; Auto then runs Direct.
+// status and C is never written; netlib throws on any transpose. complex<double> N/N with one
+// column runs on the vendor (it segfaulted before defect 13's fix). Straddled on nrhs 1/2,
+// transA N/T and transB N/T/C; Auto then runs Direct where the vendor is refused.
 TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
     using T = typename TestFixture::T;
     if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor in this build";

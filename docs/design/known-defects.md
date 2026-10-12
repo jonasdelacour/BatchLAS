@@ -26,7 +26,7 @@ closed and kept only for numbering.
 | 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
-| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); complex<double> gemv vendor still refused on CUDA |
+| 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | worked around: `can_run` refuses batch > 65535 |
@@ -248,12 +248,15 @@ wrote both triangles and was reachable only through those pins.
   (trans=N, red=32768, out >= 64, batch 1) ranked vendor first, so nearest-row lookup sent other
   shapes into the crash. gemv's `can_run(Vendor)` (`src/ops/gemv/gemv.cc`) therefore refuses
   complex<double> on the CUDA backend: a strict pin throws `std::invalid_argument`, the `vendor` class
-  word falls back to Auto, and Auto runs `direct`/`cta`. Guard:
-  `GemvVendorRefusalTest/7.ComplexDoubleVendorIsRefusedOnCuda` (segfaults with the term removed).
-  The term is CUDA-wide, not keyed on this cuBLAS version; where Zgemv works it costs speed only.
-  That term predates the alignment fix and was not re-measured with it.
-- **Status:** fixed (gemm and gemv crashes); gemv's vendor refusal still in place. The cuSPARSE
-  spmm term attributed here (`src/ops/spmm/spmm.cc:68`) was not re-measured.
+  word falls back to Auto, and Auto runs `direct`/`cta`. That term predated the alignment fix.
+- **Re-measured without the refusals (WP3, 2026-10-12, threadripper02, sm_120, cuBLAS/cuSPARSE of
+  HPC SDK 26.5):** with gemv's complex<double> CUDA term and spmm's complex<double> N/N one-column
+  term removed, `BATCHLAS_GEMV_ROUTE=vendor` sent all 43 gemv calls of `GemvMatrixViewTest/3.*` and
+  `GemvCoverageTest/3.*` to cuBLAS (46 tests pass), `BATCHLAS_SPMM_ROUTE=vendor` sent every
+  `SpmmCoverageTest/3.*` call (48 pass, one N/N nrhs 1) to cuSPARSE, and `spmm_candidates_tests` ran
+  the N/N nrhs 1 vendor at m 9/4/5 correctly. No process crashed, so both terms are deleted. Guard:
+  `GemvVendorRefusalTest.ComplexDoubleVendorRunsOnCuda` (a strict vendor pin, verified answer).
+- **Status:** fixed; no complex<double> refusal remains in `can_run`.
 
 ## Defect 14: the Hermitian drivers read the unreferenced triangle
 
@@ -307,8 +310,8 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Complex, `transB == ConjTrans`, nrhs 1:** the vendor returns an error status the caller never
   checks, and `C` is left unwritten. The vendor `can_run` now refuses these on CUDA, so Auto runs
   `direct`.
-- **complex<double> N/N with one column:** segfaults inside cuSPARSE, as in defect 13. A `vendor`
-  pin now falls back to Auto.
+- **complex<double> N/N with one column:** segfaulted inside cuSPARSE, as in defect 13. Re-run
+  after defect 13's fix it runs correctly, and the `can_run` term is deleted (see defect 13).
 - **R3 waiver:** cuSPARSE silently mishandles operands that are off their natural alignment.
   Alignment is a property of the pointers, not of the selection key, so `can_run` does not model
   it. `spmm_tests` skips misaligned cases unless the route is pinned to `native`.

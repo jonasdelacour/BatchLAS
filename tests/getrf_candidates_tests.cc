@@ -396,19 +396,72 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
 }
 
-// The squareness gate (route_vocabulary's RouteGetrf.Squareness..., ported): a non-square getrf
-// is the vendor's (an ordinary positional call), refused by every native pin; vendor-free, no route.
-TYPED_TEST(GetrfCandidates, NonSquareIsTheVendorsOnly) {
+// The squareness gate (route_vocabulary's RouteGetrf.Squareness..., ported): every native pin
+// refuses a non-square getrf. On a GPU queue the vendor is cuBLAS getrfBatched, square-only, so
+// there is no route; vendor-free, NoRouteError. NETLIB and ROCm take it: GetrfVendor below.
+TYPED_TEST(GetrfCandidates, NonSquareHasNoRouteOnTheGpuQueue) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     UnifiedVector<T> w(std::size_t(24) * 32 * 2, MVof<T>::make(1.0, 0.5));
     UnifiedVector<T*> wp(2, nullptr);
     const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 2, wp.data());
+    for (const C& c : gf::candidates<T>())
+        if (!std::holds_alternative<gf::Vendor>(c)) EXPECT_FALSE(this->pin_accepted(c, W)) << select::to_string(c);
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
-    if constexpr (TestFixture::kVendor)
+    if constexpr (B == Backend::ROCM && TestFixture::kVendor)
         EXPECT_EQ((getrf_buffer_size<B, T>(*this->ctx, W)), (backend::getrf_vendor_buffer_size<B, T>(*this->ctx, W)));
+    else if constexpr (TestFixture::kVendor)
+        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), std::runtime_error);
     else
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), batchlas::NoRouteError);
+}
+
+// B6: a non-square getrf is the whole m x n factorization with min(m, n) pivots per item (packed),
+// at a padded ld and a stride that is not ld * n, complex data with a nonzero imaginary part. NETLIB
+// writes genuine int64 pivots, converted here for the residual; CUDA has no route (above).
+template <typename Config>
+class GetrfVendor : public test_utils::BatchLASTest<Config> {};
+TYPED_TEST_SUITE(GetrfVendor, Types);
+
+TYPED_TEST(GetrfVendor, NonSquareFactorsWholeMatrix) {
+    using T = typename TypeParam::ScalarType;
+    static constexpr Backend B = TypeParam::BackendVal;
+    if constexpr (B != Backend::NETLIB || !batchlas::select::factorization_vendor_available<B>) {
+        GTEST_SKIP() << "the NETLIB vendor only; CUDA: GetrfCandidates.NonSquareHasNoRouteOnTheGpuQueue";
+    } else {
+        const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
+        for (auto [m, n] : {std::pair{24, 32}, std::pair{32, 24}}) {
+            const int batch = 3, ld = m + 3, stride = ld * n + 5, mn = std::min(m, n);
+            UnifiedVector<T> buf(std::size_t(stride) * batch);
+            for (std::size_t e = 0; e < buf.size(); ++e)
+                buf[e] = MVof<T>::make(RealOf<T>(int((e * 2654435761u) % 1999) - 999) / 500, RealOf<T>(int(e % 7) - 3) / 4);
+            const std::vector<T> a0(buf.data(), buf.data() + buf.size());
+            UnifiedVector<T*> ptrs(batch, nullptr);
+            const MVof<T> A(buf.data(), m, n, ld, stride, batch, ptrs.data());
+            UnifiedVector<int64_t> piv(std::size_t(mn) * batch + 8, int64_t(-7));
+            UnifiedVector<int32_t> info(batch, -7);
+            const std::size_t bytes = getrf_buffer_size<B, T>(*this->ctx, A);
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
+            (void)getrf<B, T>(*this->ctx, A, piv.to_span(), Span<std::byte>(ws.data(), bytes), info.to_span());
+            this->ctx->wait();
+            const std::string what = std::to_string(m) + "x" + std::to_string(n);
+            for (int b = 0; b < batch; ++b) ASSERT_EQ(info[b], 0) << what << " item " << b;
+            for (std::size_t i = std::size_t(mn) * batch; i < piv.size(); ++i)
+                ASSERT_EQ(piv[i], int64_t(-7)) << what << ": pivot written past min(m, n) * batch";
+            UnifiedVector<int32_t> p32(std::size_t(mn) * batch);
+            for (std::size_t i = 0; i < p32.size(); ++i) p32[i] = static_cast<int32_t>(piv[i]);
+            UnifiedVector<T> a0buf(a0.size());
+            for (std::size_t e = 0; e < a0.size(); ++e) a0buf[e] = a0[e];
+            const MVof<T> A0(a0buf.data(), m, n, ld, stride, batch);
+            const VectorView<int32_t> pv(p32.data(), mn, batch, 1, mn);
+            const double r = MVof<T>::getrf_residual(*this->ctx, A0, MVof<T>(buf.data(), m, n, ld, stride, batch), pv);
+            EXPECT_VERIFY(T, verify::Check::factorization, std::max(m, n), r) << what << " residual " << r;
+            for (std::size_t e = 0; e < a0.size(); ++e) {
+                const int rr = int(e % stride), i = rr % ld, j = rr / ld;
+                if (!(i < m && j < n)) ASSERT_TRUE(same_bits(buf[e], a0[e])) << what << ": padding written at " << e;
+            }
+        }
+    }
 }
 
 // §8.3 (R5): exactly getrf_buffer_size bytes inside a larger arena whose tail is a guard. The

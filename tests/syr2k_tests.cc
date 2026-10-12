@@ -5,6 +5,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -374,6 +375,36 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
         }
     }
 }
+// A real ConjTrans is Trans: pinned to the tile kernel it runs (it used to be refused) and gives
+// Trans's answer bit for bit, at padded ld and stride, beta != 0, on the predicated path (n, k
+// not tile multiples). The Trans result is checked against the definition too.
+TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is CUDA GPU only";
+    const int n = 200, k = 53, batch = 5, lda = k + 3, sa = lda * n + 7, ldc = n + 2, sc = ldc * n + 5;
+    auto fill = [](UnifiedVector<float>& v, unsigned seed) {
+        for (std::size_t e = 0; e < v.size(); ++e) v[e] = float(int((e * 2654435761u + seed) % 2001) - 1000) / 1000.f;
+    };
+    UnifiedVector<float> a(std::size_t(sa) * batch), b(std::size_t(sa) * batch), c0(std::size_t(sc) * batch);
+    fill(a, 11), fill(b, 29), fill(c0, 41);
+    UnifiedVector<float> ct(c0.size()), cc(c0.size());
+    for (std::size_t e = 0; e < c0.size(); ++e) ct[e] = cc[e] = c0[e];
+    using MV = MatrixView<float, MatrixFormat::Dense>;
+    const MV A(a.data(), k, n, lda, sa, batch), B(b.data(), k, n, lda, sa, batch);
+    const MV C0(c0.data(), n, n, ldc, sc, batch), Ct(ct.data(), n, n, ldc, sc, batch), Cc(cc.data(), n, n, ldc, sc, batch);
+    const float alpha = 0.9f, beta = -0.35f;
+    {
+        ScopedEnvVar route("BATCHLAS_SYR2K_ROUTE", "triangular");
+        syr2k<Backend::CUDA, float>(ctx, A, B, Ct, alpha, beta, Uplo::Lower, Transpose::Trans);
+        syr2k<Backend::CUDA, float>(ctx, A, B, Cc, alpha, beta, Uplo::Lower, Transpose::ConjTrans);
+        ctx.wait();
+    }
+    std::size_t differ = 0;
+    for (std::size_t e = 0; e < ct.size(); ++e) differ += std::memcmp(&ct[e], &cc[e], sizeof(float)) != 0;
+    EXPECT_EQ(differ, 0u) << "ConjTrans differs from Trans";
+    expect_syr2k_matches<float>(ctx, A, B, C0, Ct, Uplo::Lower, Transpose::Trans, alpha, beta, k);
+}
+
 // BATCHLAS_SYR2K_ROUTE takes only its own words; the removed legacy spellings (and any typo)
 // throw rather than silently meaning Auto.
 TEST(Syr2kCudaCustomTest, RemovedRouteWordsThrow) {

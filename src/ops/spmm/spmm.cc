@@ -62,10 +62,10 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // group collective, and the NETLIB (native_cpu) queue relies on it. One launch covers the batch
 // with one (ld, stride) per dense operand, so neither may be heterogeneous; a CSR view varies per
 // item only through nnz(b), which the bodies bound by row_offsets. m, k or nrhs 0 is a legal call
-// (the driver quick-returns on the host); an empty batch is not. Two cuSPARSE terms, both off
-// the old Auto path: a conjugated single-row B is an error status the vendor arm never checks (C
-// unwritten, a silent wrong answer), and complex<double> N/N with one column segfaults on the host
-// (known-defects #13).
+// (the driver quick-returns on the host); an empty batch returns before selection. One cuSPARSE
+// term, off the old Auto path: a conjugated single-row B is an error status the vendor arm never
+// checks (C unwritten, a silent wrong answer). complex<double> N/N with one column ran clean once
+// defect 13's aligned scalars landed, so it is no longer refused (known-defects #17).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
 // falls to Direct. No vendor reads per-item dense extents: no heterogeneous B or C.
 template <Backend B, class T, MatrixFormat MF>
@@ -84,12 +84,10 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
         },
         [&](Vendor) {
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
-            constexpr bool zz = std::is_same_v<T, std::complex<double>>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
             return d.has_vendor && !Bm.is_heterogeneous() && !C.is_heterogeneous() &&
                    !(B == Backend::NETLIB && !nn) &&
-                   !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1) &&
-                   !(B == Backend::CUDA && zz && nn && C.cols() == 1);
+                   !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1);
         },
     }, c);
 }

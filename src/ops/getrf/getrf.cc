@@ -54,7 +54,8 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
             return native && sycl_getrf::getrf_blocked_available<T>() &&
                    sycl_getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
         },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
+        // cuBLAS getrfBatched is square-only (it would factor rows() x rows()); LAPACKE and rocSOLVER take m x n.
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && (B != Backend::CUDA || A.rows() == A.cols()); },
     }, c);
 }
 
