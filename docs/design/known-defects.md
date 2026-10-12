@@ -56,9 +56,11 @@ closed and kept only for numbering.
   when `X.size() != red_len` or `Y.size() != out_len`, so the call always goes to the vendor.
 - **Test gap:** `tests/ortho_tests.cc:249` and `:293` use only `{Transpose::NoTrans}`. The
   transposed arm has never run in the suite.
-- **Fix needs:** `A_i` with `ld = A.ld()` and stored-orientation extents, `A_next` as the i-th row
-  vector, and a transposed test.
-- **Status:** open, latent.
+- **Fix:** `A_i` has `ld = A.ld()` and stored-orientation extents, `A_next` is row `i`
+  (conjugated around the gemv pair for complex), the normalisation steps by `ld`. SVQB/SVQB2 copy
+  the conjugate transpose back on this arm and the projection against `M` uses `ConjTrans`.
+  `tests/ortho_tests.cc` runs both orientations; Householder still has no row arm.
+- **Status:** fixed (WP8).
 
 ## 2. `cond` calls the vendor `syev` directly
 

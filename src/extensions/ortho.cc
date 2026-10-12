@@ -175,6 +175,17 @@ namespace batchlas {
                     {.alpha = alpha, .side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
         };
 
+        auto conj_vector = [&](const VectorView<T>& v) {
+            if constexpr (internal::is_complex<T>::value) {
+                auto x = v;
+                ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
+                    auto& e = x(int(id[1]), int(id[0]));
+                    e = std::conj(e);
+                });
+            }
+            return ctx.get_event();
+        };
+
         auto cgs_alg = [&](){
             //Implemented as an iterative process:
             //1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
@@ -184,17 +195,15 @@ namespace batchlas {
             auto Ymem = wsl.Ymem;
             auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
             for (int i = 0; i < k; i++){
-                //View of the first i vectors (either columns or rows of A depending on transA)
-                // Trap: the transposed arm's view does not describe the memory (known defect).
-                // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
-                auto A_i = transA == Transpose::NoTrans ? 
-                      MatrixView<T, fmt>(A.data_ptr(), m, i, m, A.stride(), batch_size) 
-                    : MatrixView<T, fmt>(A.data_ptr(), i, m, m, A.stride(), batch_size);
-                //View of the next vector (either column or row of A depending on transA)
+                // The first i vectors and vector i, in stored orientation: columns, or rows of A.
+                auto A_i = is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
+                                      : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size);
                 auto C = VectorView(Ymem.data(), i, batch_size);
-                auto A_next = A(Slice(), i);  //VectorView(A.data_ptr() + m * i, m, batch_size, 1, A.stride());
-                //output vector
+                auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
                 if (i > 0){ //If it's the first vector we just need to normalize it
+                    // Rows: the gemv pair below projects conj(row i) against the rows, so for
+                    // complex the row is conjugated around it.
+                    if (is_A_trans) (void)conj_vector(A_next);
                     for (int j = 0; j < 2; j++){
                         (void)gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
                         (void)gemv<B>(ctx,
@@ -203,12 +212,15 @@ namespace batchlas {
                                 A_next,
                                 {.alpha = T(-1.0), .beta = T(1.0), .transA = transA});
                     }
+                    if (is_A_trans) (void)conj_vector(A_next);
                 }
                 //Normalize A_i
                 ctx -> submit([&](sycl::handler& h){
                     auto Anext_squared = sycl::local_accessor<float_t, 1>(m, h);
                     auto A_stride = A.stride();
-                    auto Aspan = Span(A.data_ptr(), A_stride * batch_size);
+                    auto Aptr = A.data_ptr();
+                    const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
+                    const int64_t vstep = is_A_trans ? A.ld() : 1;
 
                     h.parallel_for<OrthoNormalizeVector<B, T>>(
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
@@ -216,11 +228,11 @@ namespace batchlas {
                             auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
                             auto cta = item.get_group();
-                            auto A_local_vector = Aspan.subspan(bid * A_stride + i*m, m);
+                            T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
                             auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
                             
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                Anext_squared_span[j] = square(A_local_vector[j]);
+                                Anext_squared_span[j] = square(A_local_vector[j * vstep]);
                             }
                             
                             sycl::group_barrier(cta);
@@ -228,7 +240,7 @@ namespace batchlas {
                             auto norm = std::sqrt(squared_norm);
 
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
-                                A_local_vector[j] /= norm;
+                                A_local_vector[j * vstep] /= norm;
                             }
                         }); 
                 });
@@ -245,15 +257,12 @@ namespace batchlas {
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
                     auto ATA_acc = ATA_ptr + bid * ATA_stride;
-                    T g_norm = 0.0;
-                    if constexpr (internal::is_complex<T>::value){
-                        g_norm = batchlas::portable::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid].real()), sycl::maximum<typename T::value_type>());
-                    } else {
-                        g_norm = batchlas::portable::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid]), sycl::maximum<T>());
-                    }
-                    auto eps = std::numeric_limits<T>::epsilon();
-                    auto shift = T(11.0) * T(T(m * k) * T(eps) + T(k + 1) * T(k) * T(eps)) * g_norm;
-                    ATA_acc[tid * k + tid] += shift;
+                    // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
+                    // matrix, so with the square of the norm, in the real type's epsilon.
+                    const float_t fro2 = batchlas::portable::reduce_over_group(cta, real_part(ATA_acc[tid * k + tid]), sycl::plus<float_t>());
+                    const float_t eps = std::numeric_limits<float_t>::epsilon();
+                    const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
+                    ATA_acc[tid * k + tid] += T(shift);
                 });
             });
             //Compute the Cholesky Factorization of StS
@@ -334,6 +343,30 @@ namespace batchlas {
             (void)gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
             //Memcpy
         };
+        // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
+        auto svqb_into_A = [&]() {
+            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+            svqb_alg(A, output_view);
+            auto A_stride = A.stride();
+            auto A_ld = A.ld();
+            auto Adata = A.data();
+            auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
+            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
+                auto batch_idx = item.get_group().get_group_id()[0];
+                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
+                    auto i = linear_ix % m;
+                    auto j = linear_ix / m;
+                    const T v = output_basis[batch_idx * m * k + j*m + i];
+                    if (is_A_trans) {
+                        if constexpr (internal::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
+                        else Adata[batch_idx * A_stride + i * A_ld + j] = v;
+                    } else {
+                        Adata[batch_idx * A_stride + j * A_ld + i] = v;
+                    }
+                }
+            });
+        };
+
         switch (algo) {
             case OrthoAlgorithm::Cholesky:
                 chol_alg();
@@ -353,24 +386,15 @@ namespace batchlas {
             case OrthoAlgorithm::CGS2:
                 cgs_alg();
                 break;
-            case OrthoAlgorithm::SVQB: {
-                auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
-                svqb_alg(A, output_view);
-                auto A_stride = A.stride();
-                auto A_ld = A.ld();
-                auto Adata = A.data();
-                auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
-                ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
-                    auto batch_idx = item.get_group().get_group_id()[0];
-                    for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
-                    auto i = linear_ix % m;
-                    auto j = linear_ix / m;
-                    Adata[batch_idx * A_stride + j * A_ld + i] = output_basis[batch_idx * m * k + j*m + i];
-                    }
-                });
+            case OrthoAlgorithm::SVQB:
+                svqb_into_A();
                 break;
-            }
             case OrthoAlgorithm::SVQB2: {
+                if (is_A_trans) {
+                    svqb_into_A();
+                    svqb_into_A();
+                    break;
+                }
                 auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
                 svqb_alg(A, output_view);
                 svqb_alg(output_view, A);
@@ -433,8 +457,9 @@ namespace batchlas {
         auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo));
         auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size);
         auto isAtrans = transA == trans;
-        auto is_first_transposed = static_cast<Transpose>(((transA == trans) || (transM == trans)));
-        auto is_second_transposed = static_cast<Transpose>(((transA == trans) && (transM == no_trans)));
+        // ConjTrans for complex: a bool cast to Transpose is Trans, which projects onto conj(M).
+        auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
+        auto is_second_transposed = ((transA == trans) && (transM == no_trans)) ? trans : no_trans;
         
         for (size_t i = 0; i < iterations; i++){
             (void)gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});

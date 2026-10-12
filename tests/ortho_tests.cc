@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include "test_utils.hh"
+#include "../src/ops/potrf/choice.hh"
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <vector>
@@ -108,7 +109,7 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    const std::vector<Transpose> transposes = {Transpose::NoTrans};
+    const std::vector<Transpose> transposes = {Transpose::NoTrans, test_utils::is_complex<T>() ? Transpose::ConjTrans : Transpose::Trans};
     std::vector<OrthoAlgorithm> algos = {
         OrthoAlgorithm::Chol2,
         OrthoAlgorithm::ShiftChol3,
@@ -127,6 +128,8 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
 
     for (auto transA : transposes) {
         for (auto algo : algos) {
+            // Householder runs geqrf/orgqr on the stored matrix: the row arm is not implemented.
+            if (transA != Transpose::NoTrans && algo == OrthoAlgorithm::Householder) continue;
             SCOPED_TRACE(test_utils::backend_to_string(BackendType));
             SCOPED_TRACE(GetTestName(transA, algo));
 
@@ -151,7 +154,7 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    const std::vector<Transpose> transposes = {Transpose::NoTrans};
+    const std::vector<Transpose> transposes = {Transpose::NoTrans, test_utils::is_complex<T>() ? Transpose::ConjTrans : Transpose::Trans};
     std::vector<OrthoAlgorithm> algos = {
         OrthoAlgorithm::Chol2,
         OrthoAlgorithm::ShiftChol3,
@@ -198,6 +201,59 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 this->check_orthogonality_to_M(A, M, transA, transM, kOrtho);
             }
         }
+    }
+}
+
+// ShiftChol3 on a graded A (top k x k block Hermitian with condition 10^c, c = 4.5 float / 12
+// double, so cond(A^H A) is past 1/eps) scaled by 2^-10: the shift must use the real epsilon (the
+// complex one is 0) and ||A||^2 (||A|| over-shifts and leaves A's conditioning for the next pass). potrf is pinned to the vendor, which
+// fails on an indefinite Gram matrix; the native tiny kernel survives an unshifted one.
+TYPED_TEST(OrthoMatrixTest, ShiftChol3IllConditioned) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    if constexpr (BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "ShiftChol3 is replaced by Householder on host devices";
+    } else {
+        const int m = 24, k = 8, batch_size = 32;
+        const double log10_cond = std::is_same_v<Real, float> ? 4.5 : 12.0;
+        select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", "vendor");
+        Matrix<T, MatrixFormat::Dense> H(k, k, batch_size);
+        H.view().fill_graded_hermitian(*this->ctx, log10_cond, 7u).wait();
+        auto A = Matrix<T, MatrixFormat::Dense>::Zeros(m, k, batch_size);
+        for (int b = 0; b < batch_size; ++b)
+            for (int j = 0; j < k; ++j)
+                for (int i = 0; i < k; ++i) A.view()(i, j, b) = H.view()(i, j, b) / Real(1024);
+        UnifiedVector<std::byte> workspace(ortho_buffer_size(*(this->ctx), A.view(), Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
+        (void)ortho(*(this->ctx), A.view(), Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::ShiftChol3);
+        this->ctx->wait();
+        this->check_orthonormality(A, Transpose::NoTrans, kOrtho);
+    }
+}
+
+// CGS2 on a view with ld = m + 7: the normalisation must step columns by ld, and the padding rows
+// (poisoned with 1e3) must be left alone.
+TYPED_TEST(OrthoMatrixTest, Cgs2PaddedLd) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+    if constexpr (BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "CGS2 is replaced by Householder on host devices";
+    } else {
+        const int m = 12, k = 5, ld = m + 7, batch_size = 3;
+        auto buf = Matrix<T, MatrixFormat::Dense>::Random(ld, k, false, batch_size, 11u);
+        for (int b = 0; b < batch_size; ++b)
+            for (int j = 0; j < k; ++j)
+                for (int i = m; i < ld; ++i) buf.view()(i, j, b) = T(1e3);
+        const MatrixView<T, MatrixFormat::Dense> A(buf.view().data_ptr(), m, k, ld, ld * k, batch_size);
+        UnifiedVector<std::byte> workspace(ortho_buffer_size(*(this->ctx), A, Transpose::NoTrans, OrthoAlgorithm::CGS2));
+        (void)ortho(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::CGS2);
+        this->ctx->wait();
+        Matrix<T, MatrixFormat::Dense> packed(m, k, batch_size);
+        MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), packed.view(), A).wait();
+        this->check_orthonormality(packed, Transpose::NoTrans, kOrtho);
+        for (int b = 0; b < batch_size; ++b)
+            for (int j = 0; j < k; ++j)
+                for (int i = m; i < ld; ++i) ASSERT_EQ(buf.view()(i, j, b), T(1e3)) << "padding row " << i << " col " << j;
     }
 }
 
