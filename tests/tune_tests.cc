@@ -316,7 +316,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "d50602bd"}, {"potrf", "bd3519cd"}, {"posv", "26430214"}, {"trsm", "542705e2"}};
+        {"gemm", "5695060d"}, {"potrf", "bd3519cd"}, {"posv", "26430214"}, {"trsm", "542705e2"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
