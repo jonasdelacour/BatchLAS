@@ -126,6 +126,8 @@ Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T
 template <Backend B, class T>
 Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu, SvdVectors jobvh,
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
     // The scope opens before sizing, so a driver that refuses the shape still leaves its row, as before.
@@ -146,6 +148,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
 template <Backend B, class T>
 std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
+    if (A.batch_size() == 0) return 0;
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
                                       [&](const auto& k, const auto& d) { return can_run<T>(k, d, A, j); });

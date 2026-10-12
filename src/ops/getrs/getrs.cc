@@ -94,6 +94,8 @@ template <Backend Back, typename T>
 Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             Transpose transA, Span<int64_t> pivots, Span<std::byte> work_space) {
     getrs_validate_params<T>(A, B);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = nrhs, and transA (the field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};
@@ -108,6 +110,7 @@ template <Backend Back, typename T>
 size_t getrs_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& B, Transpose transA) {
     getrs_validate_params<T>(A, B);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::getrs::spec, ctx, ops::getrs::key_of<T>(A, B), ops::getrs::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::getrs::can_run<Back, T>(k, d, A, B); });

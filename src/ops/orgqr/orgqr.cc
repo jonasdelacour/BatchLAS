@@ -94,6 +94,8 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     orgqr_validate_params<T>(A);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as the old builder set it: k = min(m, n) reflectors, (Left, NoTrans).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
@@ -108,6 +110,7 @@ Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
 template <Backend Back, typename T>
 size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     orgqr_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::orgqr::can_run<T>(k, d, A); });

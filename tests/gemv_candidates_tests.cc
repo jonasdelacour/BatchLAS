@@ -504,13 +504,12 @@ TYPED_TEST(GemvCandidates, UnknownPinsThrow) {
 }
 
 // The named can_run-false cases (absorbs RouteGemv.CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32's
-// NoTrans clause and RouteGemv.ZeroExtentIsSupportedButNegativeExtentIsNot's empty batch).
+// NoTrans clause). An empty batch returns before selection (WP3 batch policy): no pin sees it.
 TYPED_TEST(GemvCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     struct Case { C c; Transpose t; int m, n, batch; };
-    const Case cases[] = {{gv::Cta{}, Transpose::NoTrans, 8, 5, 2},   {gv::Cta{}, Transpose::NoTrans, 1, 1, 1},
-                          {gv::Cta{}, Transpose::Trans, 8, 5, 0},     {gv::Direct{}, Transpose::NoTrans, 8, 5, 0}};
+    const Case cases[] = {{gv::Cta{}, Transpose::NoTrans, 8, 5, 2}, {gv::Cta{}, Transpose::NoTrans, 1, 1, 1}};
     for (const auto& k : cases) {
         UnifiedVector<T> a(64, T(1)), x(16, T(1)), y(16, T(0));
         const MVof<T> A(a.data(), k.m, k.n, k.m, k.m * k.n, k.batch);

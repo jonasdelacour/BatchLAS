@@ -471,8 +471,7 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
                          {"C cols != opB cols", 8, 6, 6, 3, 8, 2, 3, 3, 3, 11},
                          {"B batch != A batch", 8, 6, 6, 3, 8, 3, 3, 2, 3, 11},
                          {"C batch != A batch", 8, 6, 6, 3, 8, 3, 3, 3, 2, 11},
-                         {"offset stride m (needs m + 1)", 8, 6, 6, 3, 8, 3, 3, 3, 3, 8},
-                         {"empty batch", 8, 6, 6, 3, 8, 3, 0, 0, 0, 11}};
+                         {"offset stride m (needs m + 1)", 8, 6, 6, 3, 8, 3, 3, 3, 3, 8}};
     for (const auto& k : cases) {
         auto p = make<T>(s);
         const Csr<T> A(p.val.data(), p.ro.data(), p.ci.data(), k.a_rows, k.a_cols, NonZeros{p.cap}, p.vstride,

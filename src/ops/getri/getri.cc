@@ -90,6 +90,8 @@ template <Backend Back, typename T>
 Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
     getri_validate_params<T>(A, C);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
     const select::Key key = ops::getri::key_of<T>(A);
@@ -102,6 +104,7 @@ Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
 template <Backend Back, typename T>
 size_t getri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     getri_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::getri::spec, ctx, ops::getri::key_of<T>(A), ops::getri::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::getri::can_run<Back, T>(k, d, A); });

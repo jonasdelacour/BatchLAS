@@ -1,21 +1,34 @@
-// src/select/select.hh on a synthetic choice variant and synthetic tables: no GPU, no kernel.
+// src/select/select.hh on a synthetic choice variant and synthetic tables (no GPU, no kernel),
+// then the batch policy every public entry point shares, on a real queue.
 // docs/design/flat-kernel-selection.md §5 and §8.5.
 
 #include <gtest/gtest.h>
 
+#include <batchlas/blas/functions.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/util/env.hh>
 
+#include "../src/select/coverage.hh"
 #include "../src/select/select.hh"
+#include "test_utils.hh"
 
+#include <algorithm>
+#include <complex>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unistd.h>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace sel = batchlas::select;
 using batchlas::ScopedEnvVar;
@@ -918,6 +931,267 @@ TEST_F(Select, TraceIsSilentWhenOff) {
         sel::TraceScope ts("synth", c, shape(64, 1024));
     }
     EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
+}
+
+}  // namespace
+
+// One batch policy across every public entry point (WP3): an empty batch is a no-op, and a
+// heterogeneous batch never reaches a family that reads one (n, ld, stride) for the whole batch.
+// These run real calls on a real queue, unlike the synthetic tests above.
+namespace {
+
+using batchlas::Backend;
+using batchlas::MatrixFormat;
+template <class T>
+using Dense = batchlas::MatrixView<T, MatrixFormat::Dense>;
+template <class T>
+using RealOf = typename batchlas::base_type<T>::type;
+
+template <class T, Backend B>
+struct PolicyConfig {
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
+};
+using PolicyTuple = decltype(std::tuple_cat(
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+    std::tuple<PolicyConfig<float, Backend::NETLIB>, PolicyConfig<std::complex<double>, Backend::NETLIB>>{},
+#endif
+#if BATCHLAS_HAS_CUDA_BACKEND
+    std::tuple<PolicyConfig<float, Backend::CUDA>, PolicyConfig<std::complex<double>, Backend::CUDA>>{},
+#endif
+#if BATCHLAS_HAS_ROCM_BACKEND
+    std::tuple<PolicyConfig<float, Backend::ROCM>, PolicyConfig<std::complex<double>, Backend::ROCM>>{},
+#endif
+    std::tuple<>{}));
+using PolicyTypes = test_utils::tuple_to_types<PolicyTuple>::type;
+
+template <class Config>
+class BatchPolicy : public test_utils::BatchLASTest<Config> {};
+TYPED_TEST_SUITE(BatchPolicy, PolicyTypes);
+
+// Every op once, by name, on `batch` items of order n at a padded ld, a stride that is not
+// ld * n and inc 2; with `het`, A, B and C carry active orders {n, n-3, n, n-5, ...}. Every
+// buffer starts as a large finite sentinel, so a write anywhere shows.
+template <class T, Backend B>
+struct OpBattery {
+    static constexpr int n = 8, ld = 11, stride = 11 * 8 + 5;
+    batchlas::Queue& q;
+    int batch;
+    batchlas::Span<std::byte> ws;
+    batchlas::UnifiedVector<T> a, b, c, vx, vy, vals, tau;
+    batchlas::UnifiedVector<RealOf<T>> w;
+    batchlas::UnifiedVector<std::int64_t> piv;
+    batchlas::UnifiedVector<std::int32_t> info;
+    batchlas::UnifiedVector<int> act, ro, ci;
+    batchlas::UnifiedVector<T*> pa, pb, pc;  // the per-item pointer arrays a vendor batched call fills
+
+    static T sentinel() { return Dense<T>::make(RealOf<T>(-999), RealOf<T>(777)); }
+    std::size_t items() const { return std::size_t(std::max(batch, 1)); }
+    std::size_t len() const { return std::size_t(stride) * items() + 64; }
+    OpBattery(batchlas::Queue& queue, int nbatch, batchlas::Span<std::byte> work)
+        : q(queue), batch(nbatch), ws(work), a(len(), sentinel()), b(len(), sentinel()), c(len(), sentinel()),
+          vx(len(), sentinel()), vy(len(), sentinel()), vals(len(), sentinel()), tau(len(), sentinel()),
+          w(len(), RealOf<T>(-999)), piv(len(), -999), info(len(), -999), act(items(), n), ro(len(), 0),
+          ci(len(), 0), pa(items(), nullptr), pb(items(), nullptr), pc(items(), nullptr) {
+        constexpr int drop[4] = {0, 3, 0, 5};
+        for (std::size_t i = 0; i < items(); ++i) act[i] = n - drop[i % 4];
+        for (int i = 0; i <= n; ++i) ro[i] = i;
+        for (int i = 0; i < n; ++i) ci[i] = (i + 3) % n;
+    }
+    Dense<T> view(batchlas::UnifiedVector<T>& buf, bool het) {
+        T** ptrs = &buf == &a ? pa.data() : (&buf == &b ? pb.data() : pc.data());
+        Dense<T> v(buf.data(), n, n, ld, stride, batch, ptrs);
+        return het ? v.with_active_dims(act.to_span(), act.to_span()) : v;
+    }
+    batchlas::VectorView<T> vec(batchlas::UnifiedVector<T>& buf) { return {buf.data(), n, batch, 2, 2 * n + 3}; }
+    batchlas::MatrixView<T, MatrixFormat::CSR> csr() {
+        return {vals.data(), ro.data(), ci.data(), n, n, batchlas::NonZeros{n}, n + 2, 0, batch};
+    }
+    batchlas::Span<RealOf<T>> wspan() { return {w.data(), std::size_t(n) * items()}; }
+    batchlas::Span<T> tspan() { return {tau.data(), std::size_t(n) * items()}; }
+    batchlas::Span<std::int64_t> pspan() { return {piv.data(), std::size_t(n) * items()}; }
+    batchlas::Span<std::int32_t> ispan() { return {info.data(), items()}; }
+
+    using Calls = std::vector<std::pair<std::string, std::function<void()>>>;
+    Calls calls(bool het) {
+        using namespace batchlas;
+        const T one = T(1), half = T(0.5);
+        const auto A = view(a, het), Bv = view(b, het), Cv = view(c, het);
+        const auto L = Uplo::Lower;
+        const auto N = Transpose::NoTrans;
+        Calls out = {
+            {"gemm", [=, this] { gemm<B, T>(q, A, Bv, Cv, one, half, N, N); }},
+            {"gemv", [=, this] { gemv<B, T>(q, A, vec(vx), vec(vy), one, half, N); }},
+            {"trsm", [=, this] { trsm<B, T>(q, A, Bv, one, Side::Left, L, N, Diag::NonUnit); }},
+            {"trmm", [=, this] { trmm<B, T>(q, A, Bv, Cv, one, Side::Left, L, N, Diag::NonUnit); }},
+            {"potrf", [=, this] { potrf<B, T>(q, A, L, ws, ispan()); }},
+            {"getrf", [=, this] { getrf<B, T>(q, A, pspan(), ws, ispan()); }},
+            {"getrs", [=, this] { getrs<B, T>(q, A, Bv, N, pspan(), ws); }},
+            {"getri", [=, this] { getri<B, T>(q, A, Cv, pspan(), ws, ispan()); }},
+            {"geqrf", [=, this] { geqrf<B, T>(q, A, tspan(), ws); }},
+            {"orgqr", [=, this] { orgqr<B, T>(q, A, tspan(), ws); }},
+            {"ormqr", [=, this] { ormqr<B, T>(q, A, Cv, Side::Left, N, tspan(), ws); }},
+            {"syev", [=, this] { syev<B, T>(q, A, wspan(), JobType::EigenVectors, L, ws, ispan()); }},
+            {"gesvd", [=, this] { gesvd<B, T>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All, ws, ispan()); }},
+            {"gesv", [=, this] { gesv<B, T>(q, A, Bv, pspan(), ws, ispan()); }},
+            {"posv", [=, this] { posv<B, T>(q, A, Bv, L, ws, ispan()); }},
+            {"spmm", [=, this] { spmm<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, one, half, N, N, ws); }},
+        };
+        if constexpr (is_std_complex_v<T>) {
+            out.emplace_back("hemm", [=, this] { hemm<B, T>(q, A, Bv, Cv, one, half, Side::Left, L); });
+            out.emplace_back("herk", [=, this] { herk<B, T>(q, A, Cv, RealOf<T>(1), RealOf<T>(0.5), L, N); });
+            out.emplace_back("her2k", [=, this] { her2k<B, T>(q, A, Bv, Cv, one, RealOf<T>(0.5), L, N); });
+        } else {
+            out.emplace_back("symm", [=, this] { symm<B, T>(q, A, Bv, Cv, one, half, Side::Left, L); });
+            out.emplace_back("syrk", [=, this] { syrk<B, T>(q, A, Cv, one, half, L, N); });
+            out.emplace_back("syr2k", [=, this] { syr2k<B, T>(q, A, Bv, Cv, one, half, L, N); });
+        }
+        return out;
+    }
+    std::vector<std::pair<std::string, std::function<std::size_t()>>> sizes() {
+        using namespace batchlas;
+        const auto A = view(a, false), Bv = view(b, false), Cv = view(c, false);
+        const auto N = Transpose::NoTrans;
+        return {
+            {"potrf", [=, this] { return potrf_buffer_size<B, T>(q, A, Uplo::Lower); }},
+            {"getrf", [=, this] { return getrf_buffer_size<B, T>(q, A); }},
+            {"getrs", [=, this] { return getrs_buffer_size<B, T>(q, A, Bv, N); }},
+            {"getri", [=, this] { return getri_buffer_size<B, T>(q, A); }},
+            {"geqrf", [=, this] { return geqrf_buffer_size<B, T>(q, A, tspan()); }},
+            {"orgqr", [=, this] { return orgqr_buffer_size<B, T>(q, A, tspan()); }},
+            {"ormqr", [=, this] { return ormqr_buffer_size<B, T>(q, A, Cv, Side::Left, N, tspan()); }},
+            {"syev", [=, this] { return syev_buffer_size<B, T>(q, A, wspan(), JobType::EigenVectors, Uplo::Lower); }},
+            {"gesvd", [=, this] { return gesvd_buffer_size<B, T>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All); }},
+            {"gesv", [=, this] { return gesv_buffer_size<B, T>(q, A, Bv); }},
+            {"posv", [=, this] { return posv_buffer_size<B, T>(q, A, Bv, Uplo::Lower); }},
+            {"spmm", [=, this] { return spmm_buffer_size<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, T(1), T(0.5), N, N); }},
+        };
+    }
+    template <class U>
+    static int changed(const batchlas::UnifiedVector<U>& v, U s) {
+        return int(std::count_if(v.data(), v.data() + v.size(), [&](const U& x) { return !(x == s); }));
+    }
+    int touched() const {
+        const T s = sentinel();
+        return changed(a, s) + changed(b, s) + changed(c, s) + changed(vx, s) + changed(vy, s) + changed(vals, s) +
+               changed(tau, s) + changed(w, RealOf<T>(-999)) + changed(piv, std::int64_t(-999)) +
+               changed(info, std::int32_t(-999));
+    }
+};
+
+// Batch 0 through every public entry point and every *_buffer_size, with a 0-byte workspace:
+// no throw (vendor-free too: an empty call never reaches selection), 0 bytes, nothing written,
+// and no coverage `miss` row.
+TYPED_TEST(BatchPolicy, EmptyBatchIsANoOpForEveryOp) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    OpBattery<T, B> ops(*this->ctx, 0, {});
+    for (const auto& [name, size] : ops.sizes()) {
+        try {
+            EXPECT_EQ(size(), 0u) << name << "_buffer_size";
+        } catch (const std::exception& e) {
+            ADD_FAILURE() << name << "_buffer_size threw on an empty batch: " << e.what();
+        }
+    }
+    for (const auto& [name, call] : ops.calls(false)) {
+        try {
+            call();
+        } catch (const std::exception& e) {
+            ADD_FAILURE() << name << " threw on an empty batch: " << e.what();
+        }
+    }
+    this->ctx->wait();
+    EXPECT_EQ(ops.touched(), 0);
+
+    // threadsafe: the child re-executes the binary, so the SYCL runtime starts fresh.
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("select_tests.empty." + std::string(sel::dtype_name<T>()) + "." + std::to_string(int(B)));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string out = (dir / "cov").string();
+    auto child = [&] {
+        ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+        batchlas::coverage::g_dynamic_enabled = true;
+        for (const auto& [name, call] : ops.calls(false)) {
+            try {
+                call();
+            } catch (...) {
+            }
+        }
+        this->ctx->wait();
+        std::exit(0);
+    };
+    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    int lines = 0;
+    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
+        std::ifstream in(ent.path());
+        for (std::string line; std::getline(in, line); ++lines)
+            EXPECT_NE(line.rfind("miss,", 0), 0u) << "an empty call recorded a routing miss: " << line;
+    }
+    EXPECT_GT(lines, 0) << "the coverage file was never written, so the miss check saw nothing";
+    std::filesystem::remove_all(dir);
+}
+
+// gemm with k = 0 is C := beta C in every build (no family takes it; vendor-free it had no
+// route): beta 0 writes zeros over a NaN, beta 1 writes nothing, and the padding is never touched.
+TYPED_TEST(BatchPolicy, GemmWithZeroInnerExtentScalesC) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    constexpr int m = 7, n = 5, ldc = 9, sc = 9 * 5 + 4, batch = 3;
+    const T poison = Dense<T>::make(RealOf<T>(-999), RealOf<T>(777));
+    batchlas::UnifiedVector<T> a(64, poison), b(64, poison), c(std::size_t(sc) * batch);
+    const Dense<T> A(a.data(), m, 0, m, m, batch), Bv(b.data(), 0, n, 1, 1, batch);
+    const Dense<T> Cv(c.data(), m, n, ldc, sc, batch);
+    for (const T beta : {T(0), T(1), Dense<T>::make(RealOf<T>(-0.5), RealOf<T>(0.25))}) {
+        for (std::size_t e = 0; e < c.size(); ++e) c[e] = Dense<T>::make(RealOf<T>(e % 13) - 6, RealOf<T>(e % 5));
+        c[std::size_t(sc) + 2 * ldc + 3] = T(std::numeric_limits<RealOf<T>>::quiet_NaN());
+        const std::vector<T> c0(c.data(), c.data() + c.size());
+        const auto call = [&] {
+            batchlas::gemm<B, T>(*this->ctx, A, Bv, Cv, T(2), beta, batchlas::Transpose::NoTrans,
+                                 batchlas::Transpose::NoTrans);
+        };
+        ASSERT_NO_THROW(call()) << "beta " << beta;
+        this->ctx->wait();
+        int wrong = 0;
+        for (std::size_t e = 0; e < c.size(); ++e) {
+            const std::size_t r = e % sc;
+            const bool inside = e / sc < std::size_t(batch) && r % ldc < std::size_t(m) && r / ldc < std::size_t(n);
+            const T want = !inside || beta == T(1) ? c0[e] : (beta == T(0) ? T(0) : c0[e] * beta);
+            const bool same = std::memcmp(&c[e], &want, sizeof(T)) == 0;
+            wrong += !same && !(want != want && c[e] != c[e]);
+        }
+        EXPECT_EQ(wrong, 0) << "beta " << beta;
+    }
+}
+
+// A batch of 4 with active orders {n, n-3, n, n-5}: every family of these ops launches one
+// (n, ld, stride) for the whole batch, so the call must find no route (hemm/herk/her2k, which
+// have no selection: an argument error), never return a padded answer. gemm has a per-item loop.
+// In a vendor build "no route" is select's "no runnable kernel"; vendor-free it is NoRouteError.
+TYPED_TEST(BatchPolicy, HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    batchlas::UnifiedVector<std::byte> work(std::size_t(1) << 24);
+    OpBattery<T, B> ops(*this->ctx, 4, {work.data(), work.size()});
+    ASSERT_TRUE(ops.view(ops.a, true).is_heterogeneous());
+    for (const auto& [name, call] : ops.calls(true)) {
+        if (name == "gemm") continue;
+        // No selection (hemm/herk/her2k) or a pre-selection refusal (gesv/posv): an argument error.
+        const bool refused_upfront =
+            name == "hemm" || name == "herk" || name == "her2k" || name == "gesv" || name == "posv";
+        try {
+            call();
+            this->ctx->wait();
+            ADD_FAILURE() << name << " ran a heterogeneous batch";
+        } catch (const batchlas::NoRouteError&) {
+            EXPECT_FALSE(refused_upfront) << name;
+        } catch (const std::exception& e) {
+            const std::string what = e.what();
+            EXPECT_NE(what.find(refused_upfront ? "heterogeneous batch" : "no runnable kernel"), std::string::npos)
+                << name << ": " << what;
+        }
+    }
 }
 
 }  // namespace

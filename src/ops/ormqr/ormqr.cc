@@ -110,6 +110,8 @@ template <Backend Back, typename T>
 Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Side side, Transpose trans, Span<T> tau, Span<std::byte> workspace, int32_t block_size_hint) {
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as the old builder had it (m, n = A's extents, k = reflectors), plus
     // the backend, which that builder never set.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
@@ -133,6 +135,7 @@ size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
                          const MatrixView<T, MatrixFormat::Dense>& C, Side side, Transpose trans, Span<T> tau,
                          int32_t block_size_hint) {
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr_buffer_size");
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::ormqr::can_run<T>(k, d, trans); });

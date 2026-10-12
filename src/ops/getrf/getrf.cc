@@ -106,6 +106,8 @@ template <Backend B, typename T>
 Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
             Span<std::byte> work_space, Span<int32_t> info) {
     getrf_validate_params<T>(A);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n are A's extents (a non-square call reaches the vendor), k = m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
     const select::Key key = ops::getrf::key_of<T>(A);
@@ -118,6 +120,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
 template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     getrf_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::getrf::spec, ctx, ops::getrf::key_of<T>(A), ops::getrf::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::getrf::can_run<B, T>(k, d, A); });

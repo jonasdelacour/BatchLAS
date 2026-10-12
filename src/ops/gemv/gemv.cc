@@ -85,6 +85,8 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 template <Backend Back, typename T>
 Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
            T alpha, T beta, Transpose transA) {
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};

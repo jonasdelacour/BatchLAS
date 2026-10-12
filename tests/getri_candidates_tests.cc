@@ -487,12 +487,12 @@ TYPED_TEST(GetriCandidates, UnknownPinsThrow) {
 }
 
 // The named can_run-false cases (RouteGetri.CorrectnessGatesIncludeTheOnesInheritedFromTrsm,
-// ported): order 0, batch 0, a non-square A, and a heterogeneous A, each with its message;
+// ported): order 0 and a non-square A, each with its message (batch 0 returns before selection);
 // batch 1 and 2, n = 32 at a saturating batch and a huge order are NOT gates.
 TYPED_TEST(GetriCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    for (const auto& [r, c, batch] : {std::tuple{0, 0, 4}, std::tuple{64, 64, 0}, std::tuple{64, 1024, 4}}) {
+    for (const auto& [r, c, batch] : {std::tuple{0, 0, 4}, std::tuple{64, 1024, 4}}) {
         const Pin pin("getri", C{gi::Blocked{}});
         try {
             (void)getri_buffer_size<B, T>(*this->ctx, meta_view<T>(r, c, batch));

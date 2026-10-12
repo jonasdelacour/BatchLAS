@@ -92,6 +92,8 @@ template <Backend Back, typename T>
 Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
     trsm_validate_params(A, B, side, uplo, transA, diag);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n are B's extents and k the triangular order, as before.
     const coverage::Shape shape{.m = B.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA, .uplo = uplo, .side = side, .diag = diag};

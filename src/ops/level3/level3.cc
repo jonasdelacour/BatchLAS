@@ -11,6 +11,7 @@
 #include <batchlas/blas/functions/her2k.hh>
 
 #include <batchlas/no_route.hh>
+#include "../../backends/level3_shape.hh"
 #include "../../select/vendor.hh"
 
 #include "../../util/template-instantiations.hh"
@@ -28,6 +29,9 @@ Event hemm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
+    backend::shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+    // An empty problem is a no-op in every build and under any pin, as symm's is.
+    if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::hemm, Back, select::kLevel3Library<Back>);
@@ -44,6 +48,8 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
+    backend::shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+    if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::herk, Back, select::kLevel3Library<Back>);
@@ -61,6 +67,8 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
+    backend::shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+    if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::her2k, Back, select::kLevel3Library<Back>);

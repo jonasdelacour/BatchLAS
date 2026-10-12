@@ -134,6 +134,8 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            Span<std::byte> workspace) {
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as the old shape builder wrote it: m, k = A as stored, n = nrhs.
     const coverage::Shape shape{.m = A.rows(), .n = C.cols(), .k = A.cols(), .batch = A.batch_size(),
                                 .transA = transA, .transB = transB};
@@ -152,6 +154,7 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA,
                         Transpose transB) {
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::spmm::spec, ctx, ops::spmm::key_of<T, MFormat>(A, C, transA, transB), ops::spmm::candidates<T>(),
         [&](const auto& k, const auto& d) {

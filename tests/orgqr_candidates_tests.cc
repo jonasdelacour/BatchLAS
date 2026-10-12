@@ -447,15 +447,16 @@ TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
 }
 
 // The named can_run-false cases (RouteOrgqr.CorrectnessGatesIncludeTheOnesInheritedFromOrmqr,
-// ported): n > m, an empty extent, batch 0 and a heterogeneous batch refuse a blocked pin from
-// both orgqr and orgqr_buffer_size; batch 1 and 8192 x 8192 are not correctness gates.
+// ported): n > m, an empty extent and a heterogeneous batch refuse a blocked pin from
+// both orgqr and orgqr_buffer_size (batch 0 returns before selection); batch 1 and 8192 x 8192
+// are not correctness gates.
 TYPED_TEST(OrgqrCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const C blocked{oq::Blocked{}};
     struct Case { const char* what; int m, n, batch; bool het; };
     for (const Case& k : {Case{"n > m", 128, 256, 2, false}, Case{"n = 0", 16, 0, 2, false},
-                          Case{"m = n = 0", 0, 0, 2, false}, Case{"batch 0", 16, 8, 0, false},
+                          Case{"m = n = 0", 0, 0, 2, false},
                           Case{"heterogeneous", 32, 16, 4, true}}) {
         UnifiedVector<T> a(std::size_t(std::max(1, k.m)) * std::max(1, k.n) * std::max(1, k.batch), T(1));
         UnifiedVector<T> tau(std::size_t(std::max(1, std::min(k.m, k.n))) * std::max(1, k.batch), T(0));

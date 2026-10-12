@@ -358,16 +358,12 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
             EXPECT_EQ(pin, this->expect_runs(c, n)) << TestFixture::name(c, n, 2) << ": can_run disagrees with the oracle";
             disagreements += pin != run;
         }
-        // An empty batch: every native driver refuses it as degenerate extents.
+        // An empty batch returns before selection (WP3 batch policy): accepted under every pin as a
+        // no-op, although the native driver itself refuses it as degenerate extents.
         {
             auto a = make_lu<T>(8, 0, 67u);
-            auto b = make_lu<T>(8, 0, 67u);
-            const bool pin = this->pin_accepted(c, a.A());
-            std::string why;
-            const bool run = this->direct(c, b, &why);
-            EXPECT_EQ(pin, run) << TestFixture::name(c, 8, 0) << ": the driver " << (run ? "launches" : why);
-            EXPECT_FALSE(pin) << TestFixture::name(c, 8, 0);
-            disagreements += pin != run;
+            EXPECT_TRUE(this->pin_accepted(c, a.A())) << TestFixture::name(c, 8, 0);
+            EXPECT_NO_THROW(this->run_pinned(c, a)) << TestFixture::name(c, 8, 0);
         }
         // A non-square view: refused by the pin and by the driver alike.
         UnifiedVector<T> w(std::size_t(24) * 32, MVof<T>::make(1.0, 0.5));
@@ -473,14 +469,14 @@ TYPED_TEST(GetrfCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases, each with its message: one past each ceiling, n = 0 and batch = 0.
+// The named can_run-false cases, each with its message: one past each ceiling and n = 0 (batch 0
+// returns before selection, so no pin sees it).
 TYPED_TEST(GetrfCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     struct Case { C c; int n, batch; };
     const std::vector<Case> cases{{gf::Tiny{}, this->tiny_n() + 1, 1}, {gf::Cta{}, this->cta_n() + 1, 1},
-                                  {gf::Tiny{}, 0, 1},  {gf::Cta{}, 0, 1},  {gf::Blocked{}, 0, 1},
-                                  {gf::Tiny{}, 8, 0},  {gf::Cta{}, 8, 0},  {gf::Blocked{}, 8, 0}};
+                                  {gf::Tiny{}, 0, 1},  {gf::Cta{}, 0, 1},  {gf::Blocked{}, 0, 1}};
     for (const auto& [c, n, batch] : cases) {
         auto p = make_lu<T>(n, batch, 7u);
         const Pin pin("getrf", c);

@@ -122,6 +122,8 @@ template <Backend Back, typename T>
 Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> eigenvalues,
            JobType jobtype, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     ops::syev::validate<T>(A, "syev");
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     const select::Key key = ops::syev::key_of<T>(A, jobtype);
     return select::run<Back, T>(
@@ -141,6 +143,7 @@ template <Backend Back, typename T>
 size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo) {
     ops::syev::validate<T>(A, "syev_buffer_size");
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::syev::spec, ctx, ops::syev::key_of<T>(A, jobtype), ops::syev::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::syev::can_run<Back, T>(k, d, A); });

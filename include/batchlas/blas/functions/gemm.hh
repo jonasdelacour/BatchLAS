@@ -57,8 +57,8 @@ using gemm_vendor = gemm<T>;
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A`, `B` and `C` have the same batch size and conforming shapes per item.
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Back`
-///         when no native kernel can run the call (a non-Default `precision`,
-///         or a degenerate homogeneous m, n or k of zero).
+///         when no native kernel can run the call (a non-Default `precision`).
+///         An empty batch, m or n is a no-op, and k = 0 computes `C = beta * C`.
 /// @see GemmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
 template <Backend Back, typename T>

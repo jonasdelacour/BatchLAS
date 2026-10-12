@@ -414,10 +414,10 @@ TYPED_TEST(SyevCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 }
 
 // §8.2 R3: can_run (the pin accepted by the sizing call) equals the driver accepting the shape,
-// including the degenerate n = 0 and batch = 0 (small and large n) that the drivers check.
+// including the degenerate n = 0 that the drivers check (batch 0 returns before selection).
 TYPED_TEST(SyevCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
-    const std::pair<int, int> shapes[] = {{1, 2}, {31, 2}, {32, 2}, {33, 2}, {64, 2}, {0, 2}, {8, 0}, {40, 0}};
+    const std::pair<int, int> shapes[] = {{1, 2}, {31, 2}, {32, 2}, {33, 2}, {64, 2}, {0, 2}};
     for (const C& c : sy::candidates<T>())
         for (const auto& [n, batch] : shapes)
             for (JobType j : {JobType::NoEigenVectors, JobType::EigenVectors})
