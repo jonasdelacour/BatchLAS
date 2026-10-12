@@ -56,10 +56,13 @@ files (common, its own, `kernel-deps`), hash v2:
 - sha256 over the lines `"<sha256(normalized file)>  <path>\n"` in list order, first 8 hex.
 - normalized: `/* ... */` blocks removed (an unterminated one runs to the end), then `//` to the
   end of the line, then every whitespace byte. Naive: string literals are not special.
-- One rule in three implementations: `kernel_hash` in `tools/tune/tune_core.cc`,
-  `scripts/sweep_to_table.py` and `.github/ci/check_tuned_tables.py`. The shared vector
-  `tests/data/kernel_hash_v2/` is checked by `tune_tests`, `sweep_to_table.py --self-test` and
-  `check_tuned_tables.py --self-test`.
+- One rule in two implementations: `kernel_hash` in `tools/tune/tune_core.cc` and
+  `scripts/sweep_to_table.py` (`.github/ci/check_tuned_tables.py` imports the latter). The shared
+  vector `tests/data/kernel_hash_v2/` is checked by `tune_tests`, `sweep_to_table.py --self-test`
+  and `check_tuned_tables.py --self-test`.
+- Table staleness is one function, `sweep_to_table.stale_kernel_warnings`: the header's
+  `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
+  deep, coarse, preview or custom row (all converted/transcribed) carries no hash and is never stale.
 
 A comment or whitespace edit therefore leaves every record current. Any other edit to a hashed
 file stales the records of every family that hashes it.
@@ -129,7 +132,7 @@ scripts/sweep_to_table.py --rehash-sample RUN_ID --op gemm --device sm_120   # "
   proves that the table equals the function of the ledger, whatever the sources say today.
 - **Stale kernels** (header hashes against `tools/tune/<op>_spec.cc`'s kernel-sources block) are
   a warning. A kernel edit does not fail CI; it makes the table stale until the op is retuned.
-  `check_tuned_tables.py` reports the same per op; there is no configure-time check.
+  `check_tuned_tables.py` prints the same warnings; there is no configure-time check.
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.
 

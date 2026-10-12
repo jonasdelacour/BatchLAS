@@ -613,13 +613,22 @@ def check_table(path, failures, notes, repo=REPO):
         bad = [c for c, _ in ranked if c not in der.vocab.get(key[0], [])]
         if bad or len({c for c, _ in ranked}) != len(ranked):
             failures.append(f"{rel}: row {key} has unknown or repeated spellings {bad}")
-    notes += stale_kernel_warnings(rel, ident[0], header, judge, repo)
+    notes += stale_kernel_warnings(path, repo)
     print(f"check {rel}: {len(parsed)} rows re-derived from {src}")
     return ledger
 
 
-def stale_kernel_warnings(rel, op, header, judge, repo=REPO):
-    """Header hashes against tools/tune/<op>_spec.cc now: a kernel edit since the table was made."""
+def stale_kernel_warnings(table_path, repo=REPO):
+    """Header hashes against tools/tune/<op>_spec.cc now: a kernel edit since the table was made.
+    A table with no measured row (tiers= counts only converted/transcribed) carries no hash and is
+    never stale."""
+    rel = os.path.relpath(table_path, repo)
+    with open(table_path) as f:
+        header = parse_table(f.read().split("\n# keys:", 1)[0])[0]
+    counts = dict(t.split(":", 1) for t in header.get("tiers", "").split(",") if ":" in t)
+    if not any(int(counts.get(t, 0)) > 0 for t in LEDGER_TIERS if t not in UNHASHED):
+        return []
+    op, judge = os.path.basename(table_path).split(".")[0], header_hashes(header)
     try:
         block = parse_kernel_block(read_spec_source(op, repo))
         now = family_hashes(block, list(judge), repo)
@@ -937,6 +946,20 @@ def self_test():
         failures, notes = check(os.path.join(repo, "tuned"), os.path.join(repo, "ledger"), repo)
         expect(not failures and len(notes) == 1 and "stale" in notes[0],
                f"a kernel edit is a stale warning, not a failure -> {failures} {notes}")
+        # staleness by tier: an all-transcribed table is never stale; a measured one names its stale family
+        os.makedirs(os.path.join(repo, "fix"))
+        hk2 = kernel_hash(["src/k.cc"], repo)
+        for name, fams, tier_counts, want in (
+                ("posv.sm_t.txt", "tiny:deadbeef", "deep:0,coarse:0,preview:0,custom:0,converted:4,transcribed:3", []),
+                ("posv.sm_d.txt", f"tiny:{hk2},cta:deadbeef", "deep:5,coarse:0,preview:0,custom:0,converted:0,transcribed:3",
+                 ["cta:deadbeef"])):
+            fp = os.path.join(repo, "fix", name)
+            with open(fp, "w") as f:
+                f.write(f"# op=posv device=x batchlas=b kernels=deadbeef family_kernels={fams} date=d\n"
+                        f"# source=ledger:x tiers={tier_counts}\n# keys: dtype:exact n:log\n")
+            got = stale_kernel_warnings(fp, repo)
+            expect(len(got) == len(want) and all(w in g and "tiny:" not in g for w, g in zip(want, got)),
+                   f"stale_kernel_warnings({name}) -> {got}")
         os.remove(tab)
         failures, _ = check(os.path.join(repo, "tuned"), os.path.join(repo, "ledger"), repo)
         expect(any("no table" in x for x in failures), f"a ledger without a table fails -> {failures}")
