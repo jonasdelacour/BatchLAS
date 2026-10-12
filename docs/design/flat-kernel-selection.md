@@ -504,6 +504,7 @@ unless a line says otherwise.
 - Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
   `choose()`. The vendor spells a real ConjTrans as Trans.
 - `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
+  Vendor-free past 65535 its sub-gemm or sub-trmm may throw `NoRouteError` itself.
 
 ### spmm {#phase-5-spmm}
 

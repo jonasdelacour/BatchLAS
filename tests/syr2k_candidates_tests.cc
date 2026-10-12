@@ -269,7 +269,7 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<s2::Vendor>(c)) return kVendor;
         const long t = (s.n + 127) / 128;
-        return kFloat && B == Backend::CUDA && s.trans != Transpose::ConjTrans && s.n >= 1 && s.k >= 1 &&
+        return kFloat && B == Backend::CUDA && s.n >= 1 && s.k >= 1 &&
                s.batch >= 1 && s.batch <= 65535 && t * (t + 1) / 2 <= 65535;
     }
     // `vendor` is a class word: with no vendor it falls back to Auto (with a warning), §5.3.
@@ -327,8 +327,8 @@ TYPED_TEST(Syr2kCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // Every (uplo, trans) on every candidate, at rows != cols operands with padded ld and stride,
-// alpha != 1, beta != 0. Real ConjTrans is refused by the tile kernel (the old reach) and runs
-// on the vendor, or has no route vendor-free.
+// alpha != 1, beta != 0. A real ConjTrans is Trans: triangular takes it, and Auto (no trans
+// key) picks Trans's route.
 TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -345,8 +345,9 @@ TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
             if (t != Transpose::ConjTrans) continue;
             const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
             auto p = make_prob<T>(s);
-            if constexpr (TestFixture::kVendor) {
-                EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor") << label(s);
+            auto pt = make_prob<T>(Spec{uplo, Transpose::Trans, 141, 37, 3, 0, false, 7u});
+            if (TestFixture::kVendor || TestFixture::expect_runs(C{s2::Triangular{}}, s)) {
+                EXPECT_EQ(traced_choice([&] { this->run(p); }), traced_choice([&] { this->run(pt); })) << label(s);
                 expect_syr2k(*this->ctx, p, "auto " + label(s));
             } else {
                 EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
@@ -500,7 +501,7 @@ TYPED_TEST(Syr2kCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false pins, each with its message: real ConjTrans, a heterogeneous operand,
+// The named can_run-false pins, each with its message: a heterogeneous operand,
 // and a double triangular (not a compiled candidate: the kernel is float only).
 TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
@@ -516,16 +517,6 @@ TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
             EXPECT_NE(std::string(e.what()).find("is not a compiled syr2k double candidate"), std::string::npos) << e.what();
         }
         return;
-    }
-    {
-        auto p = make_prob<T>(Spec{Uplo::Lower, Transpose::ConjTrans, 16, 4, 2});
-        const Pin pin("syr2k", tri);
-        try {
-            this->run(p);
-            ADD_FAILURE() << "ConjTrans triangular was accepted";
-        } catch (const std::invalid_argument& e) {
-            EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
-        }
     }
     const int n = 16, k = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, k, batch), Bm(n, k, batch), Cm(n, n, batch);

@@ -305,11 +305,13 @@ triangle gets a wrong answer today.
 - **Not reproduced (WP3 review, threadripper02, sm_120, CUDA 13.2):** `ormqr_blocked` called
   directly at batch 65536 ran and applied Q correctly for every side and trans (complex: N, C) at
   m/k/q = 2/1/1, 17/17/3 and 40/33/5, all four types. The public gemm sub-calls refuse batch > 65535
-  for every 3-D native launch (`ops::gemm::kMaxGridBatch`, `gemm.cc:101`). The probe ran in a vendor
-  build; the test below also runs vendor-free. The 2x4090 box was not re-checked. `can_run(Blocked)`
-  therefore has no batch term: a guard that no launch backs would make batch > 65535 unservable
-  vendor-free. Test:
-  `OrmqrCandidates.BlockedRunsPastTheOldGridLimit` (L T, batch 65536, pinned `blocked`).
+  for every 3-D native launch (`ops::gemm::kMaxGridBatch`, `gemm.cc:101`), so in a vendor build
+  they take the vendor. Vendor-free at L T batch 65536, double runs correctly (gemm `small`), while
+  float (sub-trmm), complex<float> and complex<double> (sub-gemm) throw `NoRouteError` from the
+  sub-op. Vendor-free there is no other ormqr family, so the outcome equals a `can_run` refusal; only
+  the coverage miss row names the sub-op. The 2x4090 box was not re-checked. `can_run(Blocked)`
+  therefore has no batch term: a term would make double vendor-free unservable past 65535. Test:
+  `OrmqrCandidates.BlockedPastTheGridLimitRunsOrHasNoRoute` (L T, batch 65536, pinned `blocked`).
 - **Fix needs:** a reproducer. If one is found: fold the batch into dimension 0 or loop over batch
   chunks; the driver itself still does not check.
 - **Status:** open, not reproduced.
