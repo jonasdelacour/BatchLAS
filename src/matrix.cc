@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/kernel-heuristics.hh>
+#include <batchlas/util/group-collectives.hh>
 #include <sycl/sycl.hpp>
 #include <cmath>
 #include <complex>
@@ -1281,7 +1282,7 @@ Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10
                     v[r] = seeded_uniform<T>(seed ^ kReflectorSalt, (b * N + k) * N + r);
                     partial += abs2_of(v[r]);
                 }
-                const R vv = sycl::reduce_over_group(g, partial, sycl::plus<R>());
+                const R vv = portable::reduce_over_group(g, partial, sycl::plus<R>());
                 if (vv == R(0)) continue;
                 const R inv = R(1) / sycl::sqrt(vv);
                 for (std::size_t r = lid; r < N; r += wg) v[r] *= inv;
