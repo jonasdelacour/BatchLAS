@@ -19,30 +19,32 @@ namespace batchlas::select {
 /// @{
 
 inline constexpr bool kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS;
+inline constexpr bool kHasCudaVendor =  // all three; configure rejects a partial set
+    BATCHLAS_HAS_CUBLAS && BATCHLAS_HAS_CUSOLVER && BATCHLAS_HAS_CUSPARSE;
 
 template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
 inline constexpr bool level3_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
     B == Backend::NETLIB ? kHasNetlib : false;
 
 /// geqrf/orgqr/getrf/getrs/getri/ormqr. On NVIDIA the group spans cuBLAS (getrf, getri)
-/// and cuSOLVER (geqrf, orgqr, ormqr, getrs), so it needs both.
+/// and cuSOLVER (geqrf, orgqr, ormqr, getrs).
 template <Backend B>
 inline constexpr bool factorization_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS) && bool(BATCHLAS_HAS_CUSOLVER) :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCSOLVER) :
     B == Backend::NETLIB ? kHasNetlib : false;
 
 template <Backend B>  // potrf syev gesvd: cuSOLVER on NVIDIA
 inline constexpr bool solver_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUSOLVER)  :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCSOLVER) :
     B == Backend::NETLIB ? kHasNetlib : false;
 
 template <Backend B>  // spmm
 inline constexpr bool sparse_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUSPARSE)  :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCSPARSE) :
     B == Backend::NETLIB ? kHasNetlib : false;
 

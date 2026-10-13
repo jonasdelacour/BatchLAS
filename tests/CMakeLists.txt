@@ -517,9 +517,8 @@ endif()
 # failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
 # suites, and the suite list cannot tell you that.
 add_custom_target(batchlas_coverage
-    COMMAND ${CMAKE_COMMAND} -E env
-            BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
-            ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # One sh -c word: the `|| true` must not rest on CMake leaving `||` unquoted under VERBATIM.
+    COMMAND sh -c "BATCHLAS_COVERAGE_OUT='${CMAKE_BINARY_DIR}/coverage.csv' '${CMAKE_CTEST_COMMAND}' --test-dir '${CMAKE_BINARY_DIR}' -LE slow || true"
     # Each test BINARY writes its own shard. Merging is not optional: a single
     # shared file meant every process truncated the last, so this target used to
     # report the rows of whichever binary finished last.
