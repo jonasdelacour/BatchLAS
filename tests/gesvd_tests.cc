@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include "../src/ops/gesvd/choice.hh"
 #include "../src/extensions/gesvd_native.hh"
@@ -129,13 +130,6 @@ TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
 TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
 TYPED_TEST_SUITE(GesvdGeneralComplexTest, GesvdHermitianComplexTestTypes);
 
-namespace {
-// Defined with the other expect_* helpers below.
-template <typename Scalar>
-void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
-                                          const UnifiedVector<typename base_type<Scalar>::type>& s);
-}  // namespace
-
 
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
@@ -175,7 +169,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
                         ws.to_span());
     evt.wait();
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
 #endif
 }
 
@@ -187,19 +181,6 @@ namespace {
 inline bool gesvd_bidiag_is_normal_equations() {
     const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
     return v != nullptr && std::string(v) == "normal";
-}
-
-// The reconstruction ||A - U S V^H||_F / ||A||_F has no library kind (verification.md, "Kept outside
-// the library"), so it keeps this file's measured per-type bound. The float constant used to be 3e-1,
-// which permitted a 30% error against a measured ~1.3e-6; BATCHLAS_GESVD_BIDIAG=normal squares the
-// condition number and keeps the old bound.
-template <typename Real>
-inline Real gesvd_recon_tol() {
-    if constexpr (std::is_same_v<Real, float>) {
-        return gesvd_bidiag_is_normal_equations() ? Real(3e-1f) : Real(1e-4f);
-    } else {
-        return Real(1e-8);
-    }
 }
 
 // The cta provider always takes the normal-equations bidiagonal path, which squares the condition
@@ -273,31 +254,6 @@ std::string run_gesvd_with_provider(Queue& ctx,
     return {};
 }
 
-template <typename Scalar>
-void expect_singular_values_match_lapacke(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
-                                          const UnifiedVector<typename base_type<Scalar>::type>& s) {
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
-    using Real = typename base_type<Scalar>::type;
-    const int k = std::min(A_ref.rows(), A_ref.cols());
-    const int batch = A_ref.batch_size();
-
-    // The reference runs in double on the exact input, so it is not limited by this precision.
-    std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
-    double sigma_max = 0.0;
-    for (int b = 0; b < batch; ++b) {
-        ASSERT_TRUE(batchlas::verify::singular_values(A_ref.view(), b, ref[static_cast<size_t>(b)]))
-            << "LAPACKE reference failed, batch=" << b;
-        if (k > 0) sigma_max = batchlas::verify::nanmax(sigma_max, ref[static_cast<size_t>(b)].front());
-    }
-    const VectorView<Real> w(const_cast<Real*>(s.data()), k, batch);
-    const double err = MatrixView<Scalar, MatrixFormat::Dense>::values_error(w, ref, sigma_max);
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
-#else
-    static_cast<void>(A_ref);
-    static_cast<void>(s);
-#endif
-}
-
 // s (k values per item, packed) against ref[item] over @p items at Check::values, relative to the
 // largest reference value; no items, nothing to check.
 template <typename Real>
@@ -366,43 +322,18 @@ void expect_orthonormal_rows(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dens
     expect_orthonormal_columns(ctx, Mh, slack);
 }
 
+// ||A - U S V^H||_F / ||A||_F (MatrixView::svd_residual) at Check::factorization, every item.
 template <typename Scalar>
-void expect_reconstruction(const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
+void expect_reconstruction(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dense>& A_ref,
                            const UnifiedVector<typename base_type<Scalar>::type>& s,
                            const Matrix<Scalar, MatrixFormat::Dense>& U,
-                           const Matrix<Scalar, MatrixFormat::Dense>& Vh,
-                           typename base_type<Scalar>::type tol = gesvd_recon_tol<typename base_type<Scalar>::type>()) {
+                           const Matrix<Scalar, MatrixFormat::Dense>& Vh) {
     using Real = typename base_type<Scalar>::type;
-    const int m = A_ref.rows();
-    const int n = A_ref.cols();
-    const int k = std::min(m, n);
-    const int batch = A_ref.batch_size();
-
-    for (int b = 0; b < batch; ++b) {
-        SCOPED_TRACE("batch=" + std::to_string(b));
-        auto Ab = A_ref.view().batch_item(b);
-        auto Ub = U.view().batch_item(b);
-        auto Vhb = Vh.view().batch_item(b);
-        const Real* sb = s.data() + static_cast<size_t>(b) * static_cast<size_t>(k);
-
-        Real err2 = Real(0);
-        Real ref2 = Real(0);
-        for (int i = 0; i < m; ++i) {
-            for (int j = 0; j < n; ++j) {
-                Scalar recon = Scalar(0);
-                for (int kk = 0; kk < k; ++kk) {
-                    recon += Ub(i, kk, 0) * Scalar(sb[kk]) * Vhb(kk, j, 0);
-                }
-                const Scalar ref = Ab(i, j, 0);
-                const Scalar diff = recon - ref;
-                err2 += static_cast<Real>(std::pow(std::abs(MatrixView<Scalar, MatrixFormat::Dense>::up(diff)), 2));
-                ref2 += static_cast<Real>(std::pow(std::abs(MatrixView<Scalar, MatrixFormat::Dense>::up(ref)), 2));
-            }
-        }
-
-        const Real rel_err = std::sqrt(err2 / std::max(ref2, Real(1e-20)));
-        EXPECT_LE(rel_err, tol);
-    }
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    const int m = A_ref.rows(), n = A_ref.cols(), k = std::min(m, n);
+    const VectorView<Real> sv(const_cast<Real*>(s.data()), k, A_ref.batch_size());
+    const double err = MV::svd_residual(ctx, A_ref.view(), U.view(), sv, Vh.view(), A_ref.view().all_items());
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, std::max(m, n), err);
 }
 
 TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
@@ -445,7 +376,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
                         ws.to_span());
     evt.wait();
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
 #endif
 }
 
@@ -478,10 +409,10 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -514,10 +445,10 @@ TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -594,7 +525,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
                                                                        "blocked");
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U);
             }
@@ -602,7 +533,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
                 expect_orthonormal_rows(*this->ctx, Vh);
             }
             if (job.jobu == SvdVectors::All && job.jobvh == SvdVectors::All) {
-                expect_reconstruction(A_ref, s, U, Vh);
+                expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
             }
         }
     }
@@ -640,7 +571,7 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
                                                                        "cta");
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
             }
@@ -648,7 +579,7 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
                 expect_orthonormal_rows(*this->ctx, Vh, gesvd_cta_slack<typename TestFixture::Real>());
             }
             if (job.jobu == SvdVectors::All && job.jobvh == SvdVectors::All) {
-                expect_reconstruction(A_ref, s, U, Vh);
+                expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
             }
         }
     }
@@ -696,7 +627,7 @@ TYPED_TEST(GesvdTest, BlockedProviderHandlesRepeatedAndTinySingularValues) {
         expect_sorted_singular_values(s, n, batch, expected);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -742,7 +673,7 @@ TYPED_TEST(GesvdTest, CtaProviderHandlesRepeatedAndTinySingularValues) {
         expect_sorted_singular_values(s, n, batch, expected);
         expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
         expect_orthonormal_rows(*this->ctx, Vh, gesvd_cta_slack<typename TestFixture::Real>());
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -775,10 +706,10 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -811,7 +742,7 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
                                                                    SvdVectors::All, "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         const VectorView<Real> sv(s.to_span(), n, batch, 1, n);
@@ -849,10 +780,10 @@ TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
                                                                    "cta");
         ASSERT_TRUE(err.empty()) << err;
 
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
         expect_orthonormal_rows(*this->ctx, Vh, gesvd_cta_slack<typename TestFixture::Real>());
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -886,12 +817,10 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        const Real recon_tol = std::is_same_v<Real, float> ? gesvd_recon_tol<Real>() : Real(2e-8);
-
-        expect_singular_values_match_lapacke(A_ref, s);
+        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
-        expect_reconstruction(A_ref, s, U, Vh, recon_tol);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -1062,10 +991,10 @@ TYPED_TEST(GesvdTest, ThinTallRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
-    expect_reconstruction(A_ref, s, U, Vh);
+    expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
 }
 
 TYPED_TEST(GesvdTest, ThinWideRectangular) {
@@ -1094,10 +1023,10 @@ TYPED_TEST(GesvdTest, ThinWideRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    expect_singular_values_match_lapacke(A_ref, s);
+    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
-    expect_reconstruction(A_ref, s, U, Vh);
+    expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
 }
 
 // The point of the whole item: a thin request must not pay the full U cost,
@@ -1174,7 +1103,7 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
             using MV = MatrixView<Scalar, MatrixFormat::Dense>;
             typename MV::promoted_type acc = 0;
             for (int i = 0; i < m; ++i) acc += MV::conj(MV::up(Ut(i, c, 0))) * MV::up(Uf(i, c, 0));
-            EXPECT_NEAR(std::abs(acc), 1.0, 1e-2)
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, k, std::fabs(1.0 - std::abs(acc)))
                 << "U column " << c << " differs at b=" << b;
         }
     }
@@ -1219,7 +1148,7 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
             *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
         ASSERT_TRUE(err.empty()) << err;
         expect_orthonormal_columns(*this->ctx, U);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -1254,7 +1183,7 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
         ASSERT_TRUE(err.empty()) << err;
 
         expect_orthonormal_columns(*this->ctx, U);
-        expect_reconstruction(A_ref, s, U, Vh);
+        expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
     }
 }
 
@@ -1297,10 +1226,10 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
                 *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
             ASSERT_TRUE(err.empty()) << err;
 
-            expect_singular_values_match_lapacke(A_ref, s);
+            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
             expect_orthonormal_columns(*this->ctx, U);
             expect_orthonormal_rows(*this->ctx, Vh);
-            expect_reconstruction(A_ref, s, U, Vh);
+            expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
         }
     }
 }
@@ -1341,7 +1270,7 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
 
         expect_singular_values_agree(s_blk, s_unb, k, batch);
         expect_orthonormal_columns(*this->ctx, U_blk);
-        expect_reconstruction(A_ref, s_blk, U_blk, Vh_blk);
+        expect_reconstruction(*this->ctx, A_ref, s_blk, U_blk, Vh_blk);
     }
 }
 
@@ -1402,7 +1331,7 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
             }
             expect_orthonormal_columns(*this->ctx, U);
             expect_orthonormal_rows(*this->ctx, Vh);
-            expect_reconstruction(A_ref, s, U, Vh);
+            expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
         }
     }
 }
@@ -1532,6 +1461,39 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
         for (int i = 0; i < n; ++i) exact[static_cast<size_t>(b)].push_back(double(n - i));
     }
     expect_singular_values_near(s, exact, n, batch, converged);
+}
+
+// cuSOLVER returns V; the V^H transpose is a SYCL kernel that must run after the vendor call
+// even on an out-of-order Queue. Called directly: the public gesvd hands its drivers an
+// in-order Queue (select::on_in_order_queue), so only the vendor entry point sees one.
+// SMOKE TEST, NOT A GUARD: DPC++/CUDA orders get_native's stream before the next kernel, so
+// removing both the wait and the barrier stayed green 20/20. It cannot go red on this toolchain;
+// the cusolver.cc wait is a documented invariant for runtimes that do not order it (acpp).
+TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVhSmoke) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA || !BATCHLAS_HAS_CUSOLVER) {
+        GTEST_SKIP() << "the V -> V^H transpose is cuSOLVER's binding only";
+    } else {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        const int n = 32, batch = 2048;
+        const auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 4711u);
+        Matrix<Scalar, MatrixFormat::Dense> A = A0.clone(), U(n, n, batch), Vh(n, n, batch);
+        Vh.fill(Scalar(-9.75e3));
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+        this->ctx->wait();
+        Queue ooo(*this->ctx, false);
+        UnifiedVector<std::byte> ws(std::max<size_t>(
+            1, backend::gesvd_vendor_buffer_size<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(),
+                                                            SvdVectors::All, SvdVectors::All)));
+        (void)backend::gesvd_vendor<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+                                               SvdVectors::All, ws.to_span());
+        ooo.wait();
+        EXPECT_VERIFY(Scalar, verify::Check::factorization, n,
+                      MV::svd_residual(*this->ctx, A0.view(), U.view(), VectorView<Real>(s, n, batch, 1, n), Vh.view(),
+                                       A0.view().all_items()));
+    }
 }
 
 // An empty span is "not requested": neither the workspace query nor the answer

@@ -6,6 +6,7 @@
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "syevx.hh"
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>

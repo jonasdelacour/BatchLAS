@@ -748,6 +748,41 @@ INSTANTIATE_TEST_SUITE_P(
         return std::string(info.param ? "Largest" : "Smallest");
     });
 
+// The vendor projected-syev workspace is an opt-in; sizing it unconditionally throws vendor-free.
+TEST(SyevxLobpcgBufferSize, NoVendorQueryUnlessOptedIn) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 3, neig = 4;
+    Queue ctx(Device::default_device(), true);
+    auto A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*symmetric=*/true, batch);
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.algorithm = OrthoAlgorithm::SVQB2;
+    params.iterations = 200;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
+    UnifiedVector<float> W(neig * batch, 0.0f);
+    const auto V = MatrixView<float, MatrixFormat::Dense>();
+
+    size_t plain = 0;
+    {
+        const ScopedEnvVar off("BATCHLAS_SYEVX_PROJECTED_VENDOR", nullptr);
+        ASSERT_NO_THROW(plain = syevx_buffer_size(ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, V, params));
+        UnifiedVector<std::byte> ws(plain);
+        (void)syevx(ctx, A.view(), W.to_span(), neig, ws, JobType::NoEigenVectors, V, params);
+        ctx.wait();
+    }
+    SYEVX_REQUIRE_LAPACKE();
+    const auto ref = LapackeSpectrum(A.view());
+    ExpectValues(W.data(), neig, Extremal(ref, neig, params.find_largest), ref.norm2, n);
+
+    if constexpr (select::solver_vendor_available<Backend::CUDA>) {
+        if (ctx.device().get_vendor() != Vendor::NVIDIA) return;
+        const ScopedEnvVar on("BATCHLAS_SYEVX_PROJECTED_VENDOR", "1");
+        const size_t opted = syevx_buffer_size(ctx, A.view(), W.to_span(), neig, JobType::NoEigenVectors, V, params);
+        EXPECT_LT(plain, opted) << "the vendor projected-syev workspace is sized without the opt-in";
+    }
+}
+
 // evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
 // The LOBPCG instrumentation histories used to be filled by a
 // host loop over batch x neigs after a forced pipeline drain every iteration.

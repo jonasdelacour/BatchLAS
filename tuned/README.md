@@ -83,4 +83,5 @@ user had damaged (`--remeasure-keys`). Details are in
 - `python3 scripts/sweep_to_table.py --check` and `python3 .github/ci/check_tuned_tables.py` warn
   when a hash no longer matches `tools/tune/<op>_spec.cc`'s sources. They never fail on it; the op
   needs a retune.
-- converted and transcribed rows carry no hash and are never stale.
+- converted and transcribed rows carry no hash and are never stale; a table with only such rows
+  is never reported stale (one implementation, `sweep_to_table.stale_kernel_warnings`).

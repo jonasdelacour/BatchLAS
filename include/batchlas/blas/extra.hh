@@ -74,6 +74,7 @@ namespace batchlas
     ///       kernel selection, and throws batchlas::NoRouteError in a vendor-free
     ///       build; see @ref md_docs_2design_2known-defects (defect 2).
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     BATCHLAS_API Event cond(Queue &ctx,
                            const MatrixView<T, MF> &A,
                            const NormType norm_type,
@@ -82,11 +83,12 @@ namespace batchlas
 
     /// @brief Workspace bytes needed by the span overload of cond().
     ///
-    /// Instantiated only for T in {float, double} with MatrixFormat::Dense; any other
-    /// combination is a link error, not a compile error.
+    /// Instantiated only for T in {float, double} with MatrixFormat::Dense: a complex T is a
+    /// compile error (`requires RealScalar<T>`), another format a link error.
     /// @return size in bytes for the `workspace` argument of cond()
     /// @ingroup api_extra_lowlevel
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     BATCHLAS_API size_t cond_buffer_size(Queue &ctx,
                                          const MatrixView<T, MF> &A,
                                          const NormType norm_type);
@@ -96,6 +98,7 @@ namespace batchlas
     /// Leases its workspace from the queue's arena and waits before returning.
     /// @return one condition number per batch item
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     BATCHLAS_API UnifiedVector<T> cond(Queue &ctx,
                                        const MatrixView<T, MF> &A,
                                        const NormType norm_type);

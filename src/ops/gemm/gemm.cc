@@ -167,6 +167,10 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     // An empty batch launches nothing under any pin, as the old native range did.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
+    // No family takes a zero extent (vendor-free there was no route): an empty C is a no-op and
+    // k = 0 is C := beta C, written as zeros at beta 0 so a NaN in C does not survive.
+    if (d.m == 0 || d.n == 0 || (d.k == 0 && beta == T(1))) return ctx.create_event_after_external_work();
+    if (d.k == 0) return beta == T(0) ? C.fill_zeros(ctx) : scale(ctx, beta, C);
     const coverage::Shape shape{.m = d.m, .n = d.n, .k = d.k, .batch = A.batch_size(), .transA = transA,
                                 .transB = transB};
     const select::Key key = ops::gemm::key_of<T>(A, B, C, transA, transB);

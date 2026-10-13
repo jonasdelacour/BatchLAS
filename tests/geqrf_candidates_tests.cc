@@ -94,7 +94,12 @@ Qr<T> make_qr(const Spec& s) {
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.at(it, i, j)] = it < reps ? MVof<T>::make(u(gen), u(gen)) : p.mem[p.at(it % reps, i, j)];
+                if (it < reps) {
+                    const auto re = u(gen), im = u(gen);
+                    p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+                } else {
+                    p.mem[p.at(it, i, j)] = p.mem[p.at(it % reps, i, j)];
+                }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
 }
@@ -495,8 +500,8 @@ TYPED_TEST(GeqrfCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous batch: one launch has one (m, n), so every native pin throws. Auto takes the
-// vendor; vendor-free there is no route.
+// A heterogeneous batch: one launch has one (m, n), so every native pin throws, and the vendor
+// runs each item at the top-level (m, n). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -517,7 +522,7 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     auto size = [&] { (void)geqrf_buffer_size<B, T>(*this->ctx, H, p.tau.to_span()); };
-    if constexpr (TestFixture::kVendor) EXPECT_NO_THROW(size());
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(size());
     else EXPECT_THROW(size(), batchlas::NoRouteError);
 }
 
@@ -583,44 +588,30 @@ TYPED_TEST(GeqrfCandidates, ScopedPinBeatsTheEnvironment) {
     expect_factored(*this->ctx, r, "outer cta");
 }
 
-// The shipped (transcribed) table on this device reproduces the old router at the window
-// edges the deleted RouteGeqrf tests pinned: per-type order floors, the tall-panel clause, the
-// tiny window and its gaps, the CTA/Blocked crossover (vendor-present = Auto; vendor-free = the
-// class word `native`). Hand-read from the deleted predicates at the measured 97,280 B budget.
+// Auto and the class word `native` against the shipped table of this device (table_pick) at the
+// window edges the deleted RouteGeqrf tests pinned: per-type order floors, the tall-panel clause,
+// the tiny window and its gaps, the CTA/Blocked crossover. A regenerated table moves the
+// expectation, not the test.
 TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
-    if (this->budget() != 97280) GTEST_SKIP() << "the expectations are read at a 97,280 B budget";
-    const auto tables = select::tables_in_borrow_order("geqrf", select::dtype_name<T>(),
-                                                       select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device's first geqrf table is not the transcription";
-    struct Row { int m, n; const char* vendor; const char* native; };
+    struct Row { int m, n; };
     std::vector<Row> rows;
     if constexpr (std::is_same_v<T, float>)
-        rows = {{3, 3, "vendor", "tiny"},     {4, 4, "tiny", "tiny"},     {17, 17, "vendor", "tiny"},
-                {21, 21, "tiny", "tiny"},     {33, 33, "vendor", "cta"},  {63, 63, "vendor", "cta"},
-                {64, 64, "cta", "cta"},       {96, 96, "cta", "cta"},     {97, 97, "blocked", "blocked"},
-                {160, 40, "cta", "cta"},      {159, 40, "vendor", "cta"}, {124, 31, "vendor", "cta"},
-                {400, 100, "blocked", "blocked"}, {130, 70, "cta", "cta"},
-                {400, 90, "blocked", "blocked"}};  // 400x90 is past Cta's area: the fit, not the crossover
+        rows = {{3, 3}, {4, 4}, {17, 17}, {21, 21}, {33, 33}, {63, 63}, {64, 64}, {96, 96}, {97, 97},
+                {160, 40}, {159, 40}, {124, 31}, {400, 100}, {130, 70}, {400, 90}};
     else if constexpr (std::is_same_v<T, std::complex<float>>)
-        rows = {{4, 4, "vendor", "tiny"},  {5, 5, "tiny", "tiny"},    {9, 9, "vendor", "tiny"},
-                {17, 17, "vendor", "cta"}, {20, 20, "vendor", "cta"}, {22, 22, "vendor", "tiny"},
-                {24, 24, "tiny", "tiny"},  {47, 47, "vendor", "cta"}, {48, 48, "cta", "cta"},
-                {77, 77, "blocked", "blocked"}, {128, 32, "cta", "cta"}, {127, 32, "vendor", "cta"}};
+        rows = {{4, 4}, {5, 5}, {9, 9}, {17, 17}, {20, 20}, {22, 22}, {24, 24}, {47, 47}, {48, 48},
+                {77, 77}, {128, 32}, {127, 32}};
     else if constexpr (std::is_same_v<T, double>)
-        rows = {{8, 8, "vendor", "cta"},   {48, 48, "vendor", "cta"},     {49, 49, "vendor", "blocked"},
-                {75, 75, "vendor", "blocked"}, {76, 76, "blocked", "blocked"}, {320, 40, "blocked", "blocked"},
-                {319, 40, "vendor", "blocked"}};
+        rows = {{8, 8}, {48, 48}, {49, 49}, {75, 75}, {76, 76}, {320, 40}, {319, 40}};
     else
-        rows = {{8, 8, "vendor", "cta"},       {54, 54, "vendor", "cta"},       {96, 96, "vendor", "blocked"},
-                {255, 255, "vendor", "blocked"}, {256, 256, "blocked", "blocked"}, {256, 32, "blocked", "blocked"},
-                {255, 32, "vendor", "blocked"}};
+        rows = {{8, 8}, {54, 54}, {96, 96}, {255, 255}, {256, 256}, {256, 32}, {255, 32}};
     for (const Row& r : rows) {
         const Spec s{r.m, r.n, 2, 0, 5u + unsigned(r.n)};
+        const std::string want = this->table_pick(s), want_native = this->table_pick(s, true);
+        ASSERT_NE(want_native, test_utils::kNoTableEntryRuns) << label(s);
         auto p = make_qr<T>(s);
-        const std::string want = TestFixture::kVendor ? r.vendor : r.native;
         EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << "Auto " << label(s);
         expect_factored(*this->ctx, p, "auto " + label(s));
         auto q = make_qr<T>(s);
@@ -628,7 +619,7 @@ TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
                       const Pin pin("geqrf", std::string_view("native"));
                       this->run(q);
                   }),
-                  r.native)
+                  want_native)
             << "native (the vendor-free walk) " << label(s);
     }
 }
@@ -800,6 +791,7 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // the old preference (the old predicates read no architecture). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* form; int n, aspect; const char* ranked; };
     const Row rows[] = {
         {"float", "sq", 21, 1, "tiny|vendor|cta|blocked"},      {"float", "sq", 17, 1, "vendor|tiny|cta|blocked"},
@@ -816,14 +808,15 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, device) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest({{"form", r.form}, {"n", r.n}, {"aspect", r.aspect}});
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
-            EXPECT_FALSE(row->timed) << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 // can_run's device clauses on a synthetic select::Device, host-only: every GPU here has

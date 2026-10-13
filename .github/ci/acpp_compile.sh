@@ -4,11 +4,12 @@
 #   .github/ci/acpp_compile.sh <acpp-prefix> <build-dir> [extra cmake args...]
 #
 # --acpp-targets=generic compiles device code to target-independent IR, so the library, the
-# tests, the benchmarks and tools/tune all compile without a GPU or a CUDA toolkit. A
-# DPC++-only spelling (sycl::ext::oneapi::*, queue::get_backend(), backend::ext_oneapi_cuda,
+# tests and the benchmarks compile without a GPU or a CUDA toolkit. A DPC++-only spelling
+# (sycl::ext::oneapi::*, queue::get_backend(), backend::ext_oneapi_cuda,
 # ext_oneapi_submit_barrier, kernel_bundle queries...) outside the impl seams is a compile
-# error here and nowhere else in CI. CUDA is off, so code under BATCHLAS_HAS_CUDA_BACKEND
-# (the vendor TUs) is not compiled; docs/ci.md lists the gap.
+# error here and nowhere else in CI. CUDA is off, so code under BATCHLAS_HAS_CUDA_BACKEND (the
+# vendor TUs) is not compiled, and neither is tools/tune (BATCHLAS_BUILD_TUNE_TOOL needs a CUDA
+# or ROCm backend) nor its verify-based op specs; docs/ci.md lists the gap.
 #
 # JOBS sets the parallelism (default: nproc). Nothing is run, only compiled and linked.
 set -eu

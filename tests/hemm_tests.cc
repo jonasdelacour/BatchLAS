@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -137,6 +138,33 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
     }
 }
 
+// expand_mirrored puts the batch in grid z (65535): with the expansion pinned, a batch of 65536
+// must fall back to the per-item loop, not throw.
+TYPED_TEST(HemmTest, ExpandBatchAboveGridFallsBack) {
+    using T = typename TestFixture::ScalarType;
+    if constexpr (TestFixture::BackendType != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
+        GTEST_SKIP() << "the expansion is cuBLAS's (hemm has no route vendor-free)";
+    } else {
+        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const int n = 8, m = 6, batch = 65536;
+        const T alpha = T(0.5, -1.25), beta = T(0.75, 0.5);
+        auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);
+        A.view().hermitize(*(this->ctx), Uplo::Lower).wait();
+        auto B = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 43);
+        auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 47);
+        this->ctx->wait();
+        auto C = C0.clone();
+        this->ctx->wait();
+        ASSERT_NO_THROW((hemm(*(this->ctx), A.view(), B.view(), C.view(),
+                              {.alpha = alpha, .beta = beta, .side = Side::Left, .uplo = Uplo::Lower})
+                             .wait()));
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
+                      MV::gemm_backward_error(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans,
+                                              C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items()));
+    }
+}
+
 // The option struct must mean exactly what the positional call means. A bare
 // `{}` in particular has to reach the option-struct overload -- the positional
 // spelling takes eight arguments, so a five-argument call that resolved to it
@@ -213,7 +241,7 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
             double worst = 0;
             for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, std::abs(double(XhAX(i, i, b).imag())));
             const double scale = MV::gemm_max_denominator(*(this->ctx), X.view(), Transpose::ConjTrans, AX.view(), Transpose::NoTrans,
-                                                          XhAX.view(), 1.0, 0.0, b);
+                                                          XhAX.view(), 1.0, 0.0, std::span<const int>(&b, 1));
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * n, worst / scale)
                 << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                 << ", batch=" << b;

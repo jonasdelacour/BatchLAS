@@ -19,12 +19,11 @@
 #   '#' starts a comment; blank lines ignored.
 #
 # WHY GTEST-CASE GRANULARITY AND NOT CTEST-TEST GRANULARITY
-#   The four entries below live in exactly two ctest tests. Keying this file on
-#   the ctest test name would therefore mask all 10 TYPED_TESTs x 4
-#   instantiations in steqr_tests and both cases in lanczos_tests -- roughly 40
-#   cases, in the two suites this project has historically broken most often --
-#   in order to excuse 4. That is not a coarser gate, it is an absent one.
-#   Do not "simplify" this file back to binary level.
+#   Keying this file on the ctest test name would mask every other case of each
+#   binary listed below -- dozens of typed instantiations in steqr_tests,
+#   gesvd_tests and cond_tests -- in order to excuse a handful. That is not a
+#   coarser gate, it is an absent one. Do not "simplify" this file back to
+#   binary level.
 #
 # THE TYPED-TEST INDEX TRAP
 #   `SteqrTest/0` and `SteqrTest/1` are positional indices into
@@ -36,23 +35,20 @@
 #   hard error rather than honouring the index.
 #
 #   PRESET: these entries were verified under `dev-tests`. They are not claimed
-#   to hold under any other configure preset.
-#
-#   The two steqr entries below carry no type_param yet: the exact demangled
-#   spelling has to be read off a real gtest XML rather than guessed, and no
-#   suite run was permitted in the session that wrote this file.
-#   compare_failures.py prints the observed spelling for any matched typed entry
-#   that lacks one -- paste it in on the first real CI run and the index trap
-#   above is closed for good.
+#   to hold under any other configure preset. Every typed entry carries its
+#   type_param, so a shifted index is a hard error, never a silent mask.
 
 # --- lanczos ------------------------------------------------------------------
-# Verified 2026-09-09 (also on the WP0 and WP1 trees).
-# docs/design/known-defects.md entry 3: src/extensions/lanczos.cc:107-111 issues a
-# two-column level-3 multiply and the consuming kernel reads column 0 only
-# (:127). Not a routing defect -- the same two cases fail with
-# BATCHLAS_SPMM_ROUTE=vendor.
+# Re-verified 2026-10-12 on threadripper02 after the B1 fix (steqr now reads each
+# item's off-diagonals at stride n; LanczosStride.MixedBatchItemsMatchUniformBatches passes).
+# Cause still open (docs/design/known-defects.md, "lanczos returns a spectrum"); NOT entry 3 (that one is 2x
+# work with a right answer): every item's whole spectrum comes out ~3x too wide
+# (Toeplitz n=64, a=2, b=-5: [-28, 32] for [-8, 12]), at batch 1 too.
+# Unconfirmed lead: the SVQB2 re-orthogonalization in lanczos_iteration mixes
+# v_{it-1} and v_it after their alphas/betas were recorded.
 lanczos_tests::LanczosTestBase.LanczosTest
 lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+lanczos_tests::LanczosStride.ClosedFormSpectrum
 
 # --- steqr --------------------------------------------------------------------
 # Verified 2026-09-09 (also on the WP0 and WP1 trees).
@@ -61,8 +57,8 @@ lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
 # the NETLIB (Backend 6) ones -- index 0 float, index 1 double. Located
 # 2026-10-09: steqr_wg (taken when the device has no sub-group size 32) fails
 # the mixed-scale case-3 input on every device, DPC++ CUDA included.
-steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32
-steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
+steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32;type_param=SteqrConfig<float,(batchlas::Backend)6>
+steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32;type_param=SteqrConfig<double,(batchlas::Backend)6>
 
 # --- gesvd --------------------------------------------------------------------
 # Verified 2026-10-09 on the acpp-dual-build branch (threadripper02, GPU-only
@@ -72,6 +68,12 @@ steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
 # generator (a305bcf0) drew a kappa=497 matrix for the AN case; 8 of 80 seeds
 # fail. Not a tolerance problem: jacobi and blocked reach 6e-6 on the same input.
 gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
+# double/CUDA (index 3) fails the same orthogonality check on threadripper02
+# (sm_120, 2026-10-12: 8.39e-12 against the 128 n eps cta slack). Observed as
+# GesvdTest/1 on a GPU-only tree and as GesvdTest/3 on a full-target tree of
+# main 30627f1f (not the dev-tests preset); not yet seen on the 4090 box, where
+# a pass is reported by compare_failures as a NEWLY PASSING warning.
+gesvd_tests::GesvdTest/3.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<double,(batchlas::Backend)1>
 
 # --- DELIBERATELY ABSENT ------------------------------------------------------
 # sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal

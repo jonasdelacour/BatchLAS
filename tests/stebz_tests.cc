@@ -7,9 +7,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 using namespace batchlas;
 
@@ -21,20 +23,16 @@ namespace {
 // Symmetric tridiagonal Toeplitz: d_i = a, e_i = b. Eigenvalues are known in
 // closed form, which gives an exact reference independent of any other solver.
 //   lambda_k = a + 2*b*cos(k*pi/(n+1)),  k = 1..n
-template <typename Real>
-std::vector<Real> toeplitz_reference(int n, Real a, Real b) {
-    std::vector<Real> ref(n);
+// Evaluated in double; a caller that stores it as Real adds one rounding (eps |lambda|), far
+// below Check::values.
+inline std::vector<double> toeplitz_reference(int n, double a, double b) {
+    std::vector<double> ref(n);
     for (int k = 1; k <= n; ++k) {
-        ref[k - 1] = a + Real(2) * b * static_cast<Real>(std::cos(M_PI * k / (n + 1)));
+        ref[k - 1] = a + 2.0 * b * std::cos(M_PI * k / (n + 1));
     }
     std::sort(ref.begin(), ref.end());
     return ref;
 }
-
-template <typename Real>
-struct StebzFixtureTraits {
-    static constexpr Real tight() { return std::is_same_v<Real, float> ? Real(2e-4) : Real(1e-11); }
-};
 
 // Builds a batch of tridiagonal matrices; batch item b is scaled by (1 + b/10) so
 // that the batch is not trivially uniform.
@@ -91,16 +89,15 @@ TYPED_TEST(StebzTest, AllRangeMatchesClosedForm) {
                                    m.to_span(), ws, params);
     this->ctx->wait();
 
+    UnifiedVector<Real> w_ref(n * batch);
     for (int bi = 0; bi < batch; ++bi) {
-        const Real scale = Real(1) + Real(bi) / Real(10);
-        const auto ref = toeplitz_reference<Real>(n, a * scale, b * scale);
+        const double scale = 1.0 + bi / 10.0;
+        const auto ref = toeplitz_reference(n, a * scale, b * scale);
+        for (int i = 0; i < n; ++i) w_ref[bi * n + i] = static_cast<Real>(ref[i]);
+    }
+    test_utils::expect_eigenvalues_agree<Real>(w, w_ref, n, batch);
+    for (int bi = 0; bi < batch; ++bi) {
         EXPECT_EQ(m[bi], n) << "wrong count for batch " << bi;
-        for (int i = 0; i < n; ++i) {
-            const Real got = w[bi * n + i];
-            EXPECT_NEAR(std::abs(got - ref[i]) / std::max<Real>(std::abs(ref[i]), Real(1)),
-                        Real(0), StebzFixtureTraits<Real>::tight())
-                << "batch " << bi << " index " << i << ": got " << got << " want " << ref[i];
-        }
         // Ascending by construction.
         for (int i = 1; i < n; ++i) {
             EXPECT_LE(w[bi * n + i - 1], w[bi * n + i]) << "not ascending at " << i;
@@ -138,19 +135,15 @@ TYPED_TEST(StebzTest, IndexRangeMatchesFullSpectrum) {
                                        m.to_span(), ws, params);
         this->ctx->wait();
 
+        SCOPED_TRACE("range [" + std::to_string(c.il) + "," + std::to_string(c.iu) + "]");
+        UnifiedVector<Real> w_ref(k * batch);
         for (int bi = 0; bi < batch; ++bi) {
-            const Real scale = Real(1) + Real(bi) / Real(10);
-            const auto ref = toeplitz_reference<Real>(n, a * scale, b * scale);
+            const double scale = 1.0 + bi / 10.0;
+            const auto ref = toeplitz_reference(n, a * scale, b * scale);
             EXPECT_EQ(m[bi], k);
-            for (int i = 0; i < k; ++i) {
-                const Real got = w[bi * k + i];
-                const Real want = ref[c.il + i];
-                EXPECT_NEAR(std::abs(got - want) / std::max<Real>(std::abs(want), Real(1)),
-                            Real(0), StebzFixtureTraits<Real>::tight())
-                    << "range [" << c.il << "," << c.iu << "] batch " << bi
-                    << " index " << i << ": got " << got << " want " << want;
-            }
+            for (int i = 0; i < k; ++i) w_ref[bi * k + i] = static_cast<Real>(ref[c.il + i]);
         }
+        test_utils::expect_eigenvalues_agree<Real>(w, w_ref, k, batch);
     }
 }
 
@@ -199,12 +192,12 @@ TYPED_TEST(StebzTest, ValueRangeSelectsInterval) {
     const Real a = Real(0), b = Real(1);
 
     TriDiagBatch<Real> tb(n, batch, a, b);
-    const auto ref = toeplitz_reference<Real>(n, a, b);
+    const auto ref = toeplitz_reference(n, a, b);
 
     // An interval strictly between two reference eigenvalues, so the expected
     // count is unambiguous.
-    const Real vl = (ref[9] + ref[10]) / Real(2);
-    const Real vu = (ref[29] + ref[30]) / Real(2);
+    const Real vl = static_cast<Real>((ref[9] + ref[10]) / 2);
+    const Real vu = static_cast<Real>((ref[29] + ref[30]) / 2);
     const int expected_count = 20; // indices 10..29
 
     UnifiedVector<Real> w(n * batch);
@@ -223,12 +216,9 @@ TYPED_TEST(StebzTest, ValueRangeSelectsInterval) {
     this->ctx->wait();
 
     ASSERT_EQ(m[0], expected_count);
-    for (int i = 0; i < expected_count; ++i) {
-        const Real want = ref[10 + i];
-        EXPECT_NEAR(std::abs(w[i] - want) / std::max<Real>(std::abs(want), Real(1)),
-                    Real(0), StebzFixtureTraits<Real>::tight())
-            << "index " << i;
-    }
+    UnifiedVector<Real> w_ref(expected_count);
+    for (int i = 0; i < expected_count; ++i) w_ref[i] = static_cast<Real>(ref[10 + i]);
+    test_utils::expect_eigenvalues_agree<Real>(w, w_ref, expected_count, 1);
 }
 
 // Clustered and degenerate spectra are where bisection's guard against a zero
@@ -260,17 +250,12 @@ TYPED_TEST(StebzTest, HandlesRepeatedAndZeroOffDiagonals) {
     this->ctx->wait();
 
     // Each half is a 16x16 Toeplitz(2, -1); the spectrum is that, doubled.
-    auto half = toeplitz_reference<Real>(n / 2, Real(2), Real(-1));
-    std::vector<Real> ref;
-    for (Real v : half) { ref.push_back(v); ref.push_back(v); }
-    std::sort(ref.begin(), ref.end());
+    const auto half = toeplitz_reference(n / 2, 2.0, -1.0);
+    UnifiedVector<Real> w_ref(n);
+    for (int i = 0; i < n; ++i) w_ref[i] = static_cast<Real>(half[i / 2]);
 
     ASSERT_EQ(m[0], n);
-    for (int i = 0; i < n; ++i) {
-        EXPECT_NEAR(std::abs(w[i] - ref[i]) / std::max<Real>(std::abs(ref[i]), Real(1)),
-                    Real(0), StebzFixtureTraits<Real>::tight())
-            << "index " << i << ": got " << w[i] << " want " << ref[i];
-    }
+    test_utils::expect_eigenvalues_agree<Real>(w, w_ref, n, 1);
 }
 
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND

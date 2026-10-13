@@ -10,12 +10,10 @@ add_library(batchlas_backends_obj OBJECT)
 # The vendor-independent public entry points: src/select/ and src/ops/<op>/. Compiled
 # unconditionally; the vendor calls inside are `if constexpr`-gated on the BATCHLAS_HAS_* macros.
 add_library(batchlas_dispatch_obj OBJECT)
-# WP0 S6: these carry the VENDOR wrapper TUs, so they exist only when at least
-# one vendor library for that family does. "There is a CUDA device" is no longer
-# sufficient -- with every CUDA math library off, BACKEND_CUDA_SOURCES is empty
-# and an OBJECT library with no sources is a hard CMake error, which is the
-# first thing a vendor-free configure used to hit.
-if(BATCHLAS_HAS_CUDA_BACKEND AND (BATCHLAS_HAS_CUBLAS OR BATCHLAS_HAS_CUSOLVER OR BATCHLAS_HAS_CUSPARSE))
+# These carry the VENDOR wrapper TUs, so they exist only when that family's TUs
+# are compiled: an OBJECT library with no sources is a hard CMake error. The CUDA
+# set is all-or-nothing (BATCHLAS_HAS_CUDA_VENDOR_TUS, BatchLASDependencies.cmake).
+if(BATCHLAS_HAS_CUDA_VENDOR_TUS)
     add_library(batchlas_backends_cuda_obj OBJECT)
 endif()
 if(BATCHLAS_HAS_ROCM_BACKEND AND (BATCHLAS_HAS_ROCBLAS OR BATCHLAS_HAS_ROCSOLVER OR BATCHLAS_HAS_ROCSPARSE))

@@ -269,7 +269,7 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<s2::Vendor>(c)) return kVendor;
         const long t = (s.n + 127) / 128;
-        return kFloat && B == Backend::CUDA && s.trans != Transpose::ConjTrans && s.n >= 1 && s.k >= 1 &&
+        return kFloat && B == Backend::CUDA && s.n >= 1 && s.k >= 1 &&
                s.batch >= 1 && s.batch <= 65535 && t * (t + 1) / 2 <= 65535;
     }
     // `vendor` is a class word: with no vendor it falls back to Auto (with a warning), §5.3.
@@ -327,8 +327,8 @@ TYPED_TEST(Syr2kCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // Every (uplo, trans) on every candidate, at rows != cols operands with padded ld and stride,
-// alpha != 1, beta != 0. Real ConjTrans is refused by the tile kernel (the old reach) and runs
-// on the vendor, or has no route vendor-free.
+// alpha != 1, beta != 0. A real ConjTrans is Trans: triangular takes it, and Auto (no trans
+// key) picks Trans's route.
 TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -345,8 +345,9 @@ TYPED_TEST(Syr2kCandidates, EveryCombinationOnEveryCandidate) {
             if (t != Transpose::ConjTrans) continue;
             const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
             auto p = make_prob<T>(s);
-            if constexpr (TestFixture::kVendor) {
-                EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor") << label(s);
+            auto pt = make_prob<T>(Spec{uplo, Transpose::Trans, 141, 37, 3, 0, false, 7u});
+            if (TestFixture::kVendor || TestFixture::expect_runs(C{s2::Triangular{}}, s)) {
+                EXPECT_EQ(traced_choice([&] { this->run(p); }), traced_choice([&] { this->run(pt); })) << label(s);
                 expect_syr2k(*this->ctx, p, "auto " + label(s));
             } else {
                 EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
@@ -500,7 +501,7 @@ TYPED_TEST(Syr2kCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false pins, each with its message: real ConjTrans, a heterogeneous operand,
+// The named can_run-false pins, each with its message: a heterogeneous operand,
 // and a double triangular (not a compiled candidate: the kernel is float only).
 TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
@@ -516,16 +517,6 @@ TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
             EXPECT_NE(std::string(e.what()).find("is not a compiled syr2k double candidate"), std::string::npos) << e.what();
         }
         return;
-    }
-    {
-        auto p = make_prob<T>(Spec{Uplo::Lower, Transpose::ConjTrans, 16, 4, 2});
-        const Pin pin("syr2k", tri);
-        try {
-            this->run(p);
-            ADD_FAILURE() << "ConjTrans triangular was accepted";
-        } catch (const std::invalid_argument& e) {
-            EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
-        }
     }
     const int n = 16, k = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, k, batch), Bm(n, k, batch), Cm(n, n, batch);
@@ -909,13 +900,13 @@ TYPED_TEST(Syr2kCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // batch 1, double `vendor` everywhere; spot rows through nearest(). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
+    test_utils::TranscribedRowsHeld held;
     for (const char* dt : {"float", "double"})
         for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syr2k", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::string keys = "# keys: dtype:exact";
             for (auto k : s2::key_names) keys += " " + std::string(k);
             const std::string file = "syr2k." + std::string(dev) + ".txt";
@@ -933,6 +924,8 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                         ASSERT_EQ(row.keys.size(), 3u) << t.file << ":" << row.line;
                         EXPECT_EQ(row.keys[0] + " " + row.keys[1] + " " + row.keys[2], want_key)
                             << t.file << ":" << row.line;
+                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        if (held.skip(row.timed)) continue;
                         std::vector<std::string> ranked;
                         for (const auto& e : row.ranked) ranked.push_back(e.spelling);
                         const std::vector<std::string> want =
@@ -940,7 +933,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                             : b >= 2 ? std::vector<std::string>{"triangular", "vendor"}
                                      : std::vector<std::string>{"vendor", "triangular"};
                         EXPECT_EQ(ranked, want) << t.file << ":" << row.line;
-                        EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                         const select::TableRow* hit = t.nearest({{"n", n}, {"k", k}, {"batch", b}});
                         ASSERT_EQ(hit, &row) << t.file << ": grid cell n=" << n << " k=" << k << " batch=" << b;
                     }
@@ -950,6 +942,7 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             off = t.nearest({{"n", 3000}, {"k", 2}, {"batch", 1}});
             EXPECT_EQ(off->ranked.front().spelling, "vendor") << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

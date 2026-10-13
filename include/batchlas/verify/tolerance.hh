@@ -3,6 +3,7 @@
 #pragma once
 
 #include <batchlas/blas/enums.hh>
+#include <batchlas/error.hh>
 
 #include <cctype>
 #include <cmath>
@@ -77,13 +78,14 @@ struct Slack {
 namespace detail {
 
 inline void check_slack(const Slack& s) {
-    if (!(s.factor > 0) || !std::isfinite(s.factor)) throw std::invalid_argument("batchlas::verify::Slack: factor must be finite and > 0");
-    if (!s.reason || !*s.reason) throw std::invalid_argument("batchlas::verify::Slack: a reason is mandatory");
+    if (!(s.factor > 0) || !std::isfinite(s.factor)) throw batchlas::invalid_argument("batchlas::verify::Slack: factor must be finite and > 0");
+    if (!s.reason || !*s.reason) throw batchlas::invalid_argument("batchlas::verify::Slack: a reason is mandatory");
 }
 
 // "kind dtype n value bound factor reason"; bound is the kind's, never the slacked one, and value is raw.
-// One open handle while BATCHLAS_VERIFY_RECORD names the same path: reopened when it changes, closed
-// when it is unset (getenv per check is a scan of environ; the open/close per check was the cost).
+// BATCHLAS_VERIFY_RECORD is a raw getenv on every check, deliberately not the settings snapshot: this
+// header is outside the library's Settings snapshot (uninstalled batchlas::verify) and tests setenv it mid-process. The handle stays open while the path is
+// unchanged; a new path reopens, unset closes, and a path fopen refuses is retried (nothing recorded).
 inline void record(const char* kind, const char* dtype, int n, double value, double b, double factor, const char* reason) {
     static std::mutex mu;
     static std::string open_path;
@@ -117,7 +119,7 @@ template <class T> double bound(Check kind, int n) {
     return detail::coefficient(kind) * f * eps<T>();
 }
 
-/// slack.factor * bound<T>(kind, n). @throws std::invalid_argument for an empty reason or a factor <= 0.
+/// slack.factor * bound<T>(kind, n). @throws batchlas::invalid_argument for an empty reason or a factor <= 0.
 template <class T> double bound(Check kind, int n, Slack slack) {
     detail::check_slack(slack);
     return slack.factor * bound<T>(kind, n);

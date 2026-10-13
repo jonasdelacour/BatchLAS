@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 #include "test_utils.hh"
@@ -110,6 +111,24 @@ protected:
 };
 
 TYPED_TEST_SUITE(SteqrTest, SteqrTestTypes);
+
+// A missing kernel image is a failure unless the run opts in: the skip below every steqr launch
+// would otherwise keep a dropped instantiation green.
+TEST(MissingKernelPolicy, SkipsOnlyWhenAllowed) {
+    const char* msg = "No kernel named _ZTS10steqr_cta was found";
+    {
+        const ScopedEnvVar unset("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", nullptr);
+        EXPECT_FALSE(test_utils::may_skip_missing_kernel(msg));
+    }
+    {
+        const ScopedEnvVar zero("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "0");
+        EXPECT_FALSE(test_utils::may_skip_missing_kernel(msg));
+    }
+    const ScopedEnvVar allow("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "1");
+    EXPECT_TRUE(test_utils::may_skip_missing_kernel(msg));
+    EXPECT_TRUE(test_utils::may_skip_missing_kernel("PI_ERROR_INVALID_KERNEL_NAME"));
+    EXPECT_FALSE(test_utils::may_skip_missing_kernel("CUDA_ERROR_ILLEGAL_ADDRESS"));
+}
 
 TYPED_TEST(SteqrTest, SingleMatrix) {
     using T = typename TestFixture::ScalarType;
@@ -495,10 +514,6 @@ inline void stress_debug_log(const char* msg) {
     }
 }
 
-inline bool is_kernel_not_found_message(const std::string& msg) {
-    return msg.find("No kernel named") != std::string::npos;
-}
-
 template <typename Real>
 Real stress_large_scale() {
     if constexpr (std::is_same_v<Real, float>) {
@@ -675,12 +690,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
                            /*check_cta_against_ref=*/true);
 
     } catch (const sycl::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
@@ -1024,7 +1039,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
             (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
             this->ctx->wait();
         } catch (const std::exception& e) {
-            if (is_kernel_not_found_message(e.what())) {
+            if (test_utils::may_skip_missing_kernel(e.what())) {
                 GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
             }
             throw;
@@ -1050,6 +1065,50 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
         EXPECT_LE(max_err, max_tol) << "n=" << n << ": worst relative eigenvalue error over the batch";
     }
 }
+
+// steqr_legacy (NETLIB stedc's only solver) must orient each block like dsteqr: item 0 is graded
+// large-at-top, item 1 is its reversal; every eigenvalue is checked relative to its own magnitude.
+// The inverted rule measured 2.6e-12 / 1.9e-11 here, the dsteqr rule 2.4e-15 / 4.4e-15 (bound 1.7e-13).
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
+    constexpr int n = 48, batch = 2;
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    Vector<double> diag(n, 0.0, batch);
+    Vector<double> sub(n - 1, 0.0, batch);
+    Vector<double> evals = Vector<double>::zeros(n, batch);
+    std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+    std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const int k = b == 0 ? i : n - 1 - i;
+            diag(i, b) = (i % 3 == 0 ? -1.0 : 1.0) * std::pow(10.0, -6.0 * k / (n - 1));
+            hd[b][i] = diag(i, b);
+        }
+        for (int i = 0; i < n - 1; ++i) {
+            sub(i, b) = 0.3 * std::sqrt(std::fabs(diag(i, b) * diag(i + 1, b)));
+            he[b][i] = sub(i, b);
+        }
+    }
+    StedcParams<double> params;
+    auto ws = UnifiedVector<std::byte>(stedc_buffer_size<Backend::NETLIB, double>(ctx, n, batch, JobType::EigenVectors, params));
+    auto Z = Matrix<double>::Zeros(n, n, batch);
+    (void)stedc<Backend::NETLIB, double>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, Z.view());
+    ctx.wait();
+
+    for (int b = 0; b < batch; ++b) {
+        const auto ref = sturm_eigenvalues(hd[b], he[b]);
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            const int items[] = {b};
+            const std::vector<std::vector<double>> one(batch, std::vector<double>{double(ref[i])});
+            worst = std::max(worst, MatrixView<double, MatrixFormat::Dense>::values_error(
+                                        VectorView<double>(evals.data().data() + i, 1, batch, 1, n), one, std::fabs(double(ref[i])), items));
+        }
+        SCOPED_TRACE(b == 0 ? "large at top" : "large at bottom");
+        EXPECT_VERIFY(double, verify::Check::values, n, worst);
+    }
+}
+#endif
 
 namespace {
 
@@ -1114,7 +1173,7 @@ bool run_steqr_vectors(Queue& ctx, const std::vector<std::vector<long double>>& 
                              info.to_span());
         ctx.wait();
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             skip_reason = e.what();
             return false;
         }

@@ -237,8 +237,11 @@ capability 5892"). That fails any `spir64_x86_64` link.
   non-empty value not starting with `0` as skip, including `false`, `off` and `no`; it is not
   `env_truthy`. The gate is compiled out when `BATCHLAS_ALLOW_UNSAFE_ENV` is ON. That option is set in
   `cmake/backend_config.h.in`, and `settings.cc` defaults it to the safe reading.
-- **Reload.** A reload reads the environment on top of what `configure()` last set, not on top of the
-  defaults. Starting from the defaults would discard `configure()` on any unrelated `ScopedEnvVar`.
+- **Reload.** A reload reads the environment on top of what `configure()` last set (the defaults when
+  it was never called), not on top of the defaults. Each loader assigns a field only when its variable
+  is exported (`set_if_present`), so an unset variable keeps the base value; the unsafe gate likewise
+  refuses only a move the environment made. Starting from the defaults would discard `configure()` on
+  any unrelated `ScopedEnvVar` (`ConfigureSurvivesUnrelatedReload` guards this).
   Ignoring the environment after `configure()` would make every `ScopedEnvVar` a no-op, so an A/B test
   would compare an arm with itself (`tests/settings_tests.cc`, case (c), guards this). An explicitly
   set variable still wins over `configure()`. To pin a knob against the environment, set it in the
@@ -397,11 +400,10 @@ BatchLAS therefore needs no data files at run time.
 - An unchanged table set leaves the generated file untouched, so its timestamp holds and the TU is not
   recompiled.
 
-**Staleness.** `scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py`
-recompute the kernel-source hash that each table header records (`kernels=<hash>`, kernel hash v2 over
-the sources listed in `tools/tune/<op>_spec.cc`) and warn on a mismatch. It is a warning only: a stale
-table stays in use, since a slightly stale ranking beats none. The tuner computes the same hash. There
-is no configure-time check.
+**Staleness.** One function, `sweep_to_table.stale_kernel_warnings`, used by
+`scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`
+([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). It is a warning only: a stale table stays
+in use. A table with only converted/transcribed rows is never stale. There is no configure-time check.
 
 **Run time.** Tables are parsed lazily per `(op, dtype)`, on the first selection that needs them, and
 cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in

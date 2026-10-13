@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 using namespace batchlas;
 
@@ -206,6 +207,7 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
 
     Matrix<float, MatrixFormat::Dense> rhs(n, nrhs, batch);
     Matrix<float, MatrixFormat::Dense> out(n, nrhs, batch);
+    Matrix<float, MatrixFormat::Dense> A_dense(n, n, batch);
 
     for (int b = 0; b < batch; ++b) {
         for (int c = 0; c < nrhs; ++c) {
@@ -213,6 +215,8 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
                 rhs(i, c, b) = 1.0f + static_cast<float>(b + c + i);
             }
         }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) A_dense(i, j, b) = i == j ? values[b * nnz + i] : 0.0f;
     }
 
     for (int k : {0, 1, 2}) {
@@ -223,16 +227,11 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
         (void)iluk_apply(*ctx, M, rhs.view(), out.view());
         ctx->wait_and_throw();
 
-        for (int b = 0; b < batch; ++b) {
-            for (int c = 0; c < nrhs; ++c) {
-                for (int i = 0; i < n; ++i) {
-                    const float denom = (b == 0 ? 2.0f : 4.0f) + i;
-                    const float expected = rhs(i, c, b) / denom;
-                    EXPECT_NEAR(out(i, c, b), expected, 1e-5f)
-                        << "Mismatch at k=" << k << " b=" << b << " c=" << c << " i=" << i;
-                }
-            }
-        }
+        // A diagonal A factors exactly at every fill level, so applying M is solving A X = rhs.
+        EXPECT_VERIFY(float, verify::Check::solve, n,
+                      (MatrixView<float, MatrixFormat::Dense>::solve_residual(*ctx, A_dense.view(), out.view(), rhs.view(),
+                                                                              A_dense.view().all_items())))
+            << "k=" << k;
     }
 }
 
@@ -893,10 +892,7 @@ TEST_F(ILUKTests, SyevxBuildsPreconditionerFromItsOwnWorkspace) {
 
     // Identical factor and identical iteration sequence, so this is bit-level
     // reproducible up to the nondeterminism syevx already has.
-    for (size_t i = 0; i < W_external.size(); ++i) {
-        EXPECT_NEAR(W_internal[i], W_external[i], 1e-4f * std::max(1.0f, std::abs(W_external[i])))
-            << "eigenvalue " << i << " differs between the in-solver and caller-built factor";
-    }
+    test_utils::expect_eigenvalues_agree<float>(W_internal, W_external, int(neigs), batch);
 
     // Sanity check against the analytic 2D Laplacian spectrum: the smallest
     // eigenvalue of the 5-point stencil on an m x m grid is 8 sin^2(pi/(2(m+1))).
