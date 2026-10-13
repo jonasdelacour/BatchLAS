@@ -20,7 +20,7 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
 
     ctx -> submit([&](sycl::handler& h) {
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
@@ -55,7 +55,7 @@ Event argsort_active(Queue& ctx,
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
 
-        h.parallel_for<ActiveArgsortKernel<T, K>>(sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<ActiveArgsortKernel<T, K>>(h, sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
             const auto bid = item.get_group_linear_id();
             const auto tid = item.get_local_linear_id();
             const auto bdim = item.get_local_range()[0];
@@ -150,7 +150,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        h.parallel_for<PermutedCopyKernel<T, K>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<PermutedCopyKernel<T, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             auto gid = item.get_global_linear_id();
             for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
                 int batch_id = index / (cols * n);
@@ -201,7 +201,7 @@ Event permuted_copy_active(Queue& ctx,
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        h.parallel_for<ActivePermutedCopyKernel<T, K>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<ActivePermutedCopyKernel<T, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             auto gid = item.get_global_linear_id();
             for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
                 int batch_id = index / (cols * n);
@@ -254,7 +254,7 @@ Event permuted_copy_active_2d(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
-        h.parallel_for<ActivePermutedCopy2DKernel<T, RowK, ColK>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<ActivePermutedCopy2DKernel<T, RowK, ColK>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             auto gid = item.get_global_linear_id();
             for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
                 int batch_id = index / (cols * rows);
@@ -301,7 +301,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
         auto temp_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto temp_vec = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         auto data_view = data.kernel_view();
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto cta = item.get_group();
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range()[0];
@@ -369,7 +369,7 @@ Event permute_active(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        h.parallel_for<ActivePermuteVectorKernel<T, K>>(sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<ActivePermuteVectorKernel<T, K>>(h, sycl::nd_range<1>(batch_size * 128, 128), [=](sycl::nd_item<1> item) {
             const auto bid = item.get_group_linear_id();
             const auto bdim = item.get_local_range()[0];
             const auto tid = item.get_local_linear_id();
@@ -398,7 +398,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         
-        h.parallel_for(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];

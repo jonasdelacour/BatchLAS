@@ -340,6 +340,28 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 }
 #endif
 
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+// Batch 0: no launch, no throw, nothing written (acpp 25.10 launches an empty nd_range).
+TYPED_TEST(SytrdCtaTest, EmptyBatchIsANoOp) {
+	using Real = typename TestFixture::ScalarType;
+	constexpr Backend B = TestFixture::BackendType;
+	const int n = 16;
+	UnifiedVector<Real> sentinel(4 * n * n, Real(7));
+	MatrixView<Real, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 2, (n + 2) * n, 0);
+	VectorView<Real> d(sentinel.data() + 3 * n * n, n, 0), e(sentinel.data() + 3 * n * n + n, n - 1, 0),
+		tau(sentinel.data() + 3 * n * n + 2 * n, n - 1, 0);
+	UnifiedVector<std::byte> ws(1, std::byte{0});
+	for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+		const auto run = [&] {
+			(void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, uplo, ws.to_span(), 1);
+			this->ctx->wait();
+		};
+		EXPECT_NO_THROW(run());
+	}
+	for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+}
+#endif
+
 int main(int argc, char** argv) {
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();

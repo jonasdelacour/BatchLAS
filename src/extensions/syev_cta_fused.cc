@@ -149,7 +149,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // A local so `[=]` copies a pointer; nullptr (status not requested) makes info_store a no-op.
         int32_t* const info_dev = info;
 
-        cgh.parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(
+        impl::parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
@@ -469,26 +469,11 @@ Event syev_cta_fused(Queue& ctx,
         throw batchlas::invalid_argument("syev_cta_fused: eigenvalues span too small for n*batch.");
     }
 
-    // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
-            }
-        }
-        if (!has32) {
-            throw batchlas::unsupported("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
-        }
+    if (!ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
     }
-    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
-    if (batch64 == 0) return ctx.get_event();
 
-    // Match syev_cta's robustness bump so the two solve the tridiagonal problem
-    // with identical settings unless the caller tuned them.
+    // syev_cta's robustness bump, unless the caller tuned the params.
     {
         const SteqrParams<T> defaults{};
         if (steqr_params.max_sweeps == defaults.max_sweeps &&

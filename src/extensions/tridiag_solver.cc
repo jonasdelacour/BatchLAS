@@ -164,7 +164,7 @@ Event tridiagonal_solver(Queue& ctx,
         sycl::local_accessor<T, 1> U_smem(smem_possible ? 2 * (n + 1) : 0, h);
         sycl::local_accessor<T, 1> V_smem(smem_possible ? 2 * n : 0, h);
 
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];

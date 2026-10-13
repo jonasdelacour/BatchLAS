@@ -648,7 +648,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
         auto vsign = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto log_numerators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
         auto log_denominators = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
-        h.parallel_for(sycl::nd_range<1>(d.batch_size()*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(d.batch_size()*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();

@@ -175,7 +175,7 @@ Event steqr_wg_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:francis_sweep");
         ctx->submit([&](sycl::handler& cgh) {
             auto rotations_view = givens_rotations.kernel_view();
-            cgh.parallel_for<FrancisKernel<T>>(sycl::nd_range(sycl::range(ncus * 128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<FrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus * 128), sycl::range(64)), [=](sycl::nd_item<1> item) {
                 auto i = item.get_global_id(0);
                 auto n_problems = scan_view[batch_size - 1];
 
@@ -279,7 +279,7 @@ Event steqr_wg_impl(Queue& ctx,
         ctx->submit([&](sycl::handler& cgh) {
             auto Qview = Q.kernel_view();
             auto rotations_view = givens_rotations.kernel_view();
-            cgh.parallel_for<RotationKernel<T>>(sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<RotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group(0);
                 auto k = item.get_local_linear_id();
                 auto n_problems = scan_view[batch_size - 1];
@@ -417,7 +417,7 @@ Event steqr_wg(Queue& ctx,
     }
 
     ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::nd_range(sycl::range(batch_size * n), sycl::range(n)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(cgh, sycl::nd_range(sycl::range(batch_size * n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto intra = item.get_local_id(0);
             eigenvalues(intra, bid) = d(intra, bid);

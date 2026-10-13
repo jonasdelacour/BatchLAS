@@ -45,17 +45,19 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 // memory) and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
 // sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
 // TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
-// runs each item at the top-level order, so none takes a heterogeneous batch.
+// runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
+// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200).
 template <Backend B, class T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
     const bool homogeneous = !A.is_heterogeneous();
     const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
+    const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
-        [&](Cta) { return small; },
-        [&](CtaFused) { return small; },
+        [&](Cta) { return cta_steqr; },
+        [&](CtaFused) { return cta_steqr; },
         [&](Jacobi) { return small; },
         [&](Blocked) { return large; },
         [&](TwoStage) { return large; },
@@ -111,10 +113,13 @@ void validate(const MV<T>& A, const char* who) {
                                          " x " + std::to_string(A.cols()));
 }
 
-// Capability only, for the Python binding's introspection: the same can_run, no backend.
+// Capability only (the Python binding, the LOBPCG accuracy pin): the same can_run, where the only
+// backend term is the ROCm exclusion.
 template <class T>
 bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
-    return can_run<Backend::AUTO, T>(c, select::describe(q.device(), Backend::AUTO, false), A);
+    const select::Device& d = select::describe(q.device(), Backend::AUTO, false);
+    if (q.backend() == Backend::ROCM) return can_run<Backend::ROCM, T>(c, d, A);
+    return can_run<Backend::AUTO, T>(c, d, A);
 }
 
 }  // namespace ops::syev

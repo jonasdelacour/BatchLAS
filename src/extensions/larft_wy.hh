@@ -74,7 +74,7 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
     };
 
     return q->submit([&](sycl::handler& h) {
-        h.parallel_for<LarftKernelName<Tag, T, WG, false>>(
+        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, false>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) {
@@ -151,7 +151,7 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
     static_assert(WG > 0, "WG must be positive");
 
     return q->submit([&](sycl::handler& h) {
-        h.parallel_for<LarftKernelName<Tag, T, WG, true>>(
+        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, true>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) {

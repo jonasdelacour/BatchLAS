@@ -36,7 +36,7 @@ struct WorkgroupAdapter {
 
     template <typename T>
     inline T broadcast(T value) const {
-        return sycl::group_broadcast(wg, value, 0);
+        return batchlas::portable::group_broadcast(wg, value, 0);
     }
 };
 

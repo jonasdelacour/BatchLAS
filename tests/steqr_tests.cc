@@ -1405,6 +1405,26 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
     }
 }
 
+// Batch 0 through the CTA tier: no launch, no throw, nothing written. acpp 25.10 launches an
+// empty nd_range as a 0-block grid and parks CU:1 for the next call that may throw.
+TYPED_TEST(SteqrTest, EmptyBatchIsANoOp) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "tests the steqr_cta launch";
+    const int n = 13;
+    UnifiedVector<Real> sentinel(4 * n * n, Real(7));
+    VectorView<Real> d(sentinel.data(), n, 0), e(sentinel.data() + n, n - 1, 0), w(sentinel.data() + 2 * n, n, 0);
+    MatrixView<Real, MatrixFormat::Dense> Q(sentinel.data() + 3 * n, n, n, n + 3, (n + 3) * n, 0);
+    SteqrParams<Real> params = {};
+    UnifiedVector<std::byte> ws(std::max<size_t>(1, steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params)));
+    const auto run = [&] {
+        (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, Q);
+        this->ctx->wait();
+    };
+    EXPECT_NO_THROW(run());
+    for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+}
+
 // tridiagonal_solver on a graded tridiagonal (condition 1e6) scaled to 0.1 eps: an absolute deflation
 // threshold deflates every off-diagonal at once. Batch 1024 identical items, each bit-identical to
 // item 0; Q has a padded ld.

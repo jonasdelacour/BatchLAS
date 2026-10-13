@@ -214,7 +214,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         // makes info_store below a no-op.
         int32_t* const info_dev = info;
 
-        cgh.parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(
+        impl::parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto wg = it.get_group();
@@ -548,22 +548,9 @@ Event syev_jacobi_cta(Queue& ctx,
     }
 
     // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
-            }
-        }
-        if (!has32) {
-            throw batchlas::unsupported("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
-        }
+    if (!ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
     }
-    // An empty nd_range is a no-op in SYCL, but acpp 25.10 launches it as a 0-block grid (CU:1).
-    if (batch64 == 0) return ctx.get_event();
 
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
     auto* w_ptr = eigenvalues.data();

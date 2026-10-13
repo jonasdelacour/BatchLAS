@@ -29,7 +29,7 @@ Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-low
 | eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
 | n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
 | n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
-| backend scope | `can_run` | any GPU backend with a sub-group of 32. ROCm has no table and borrows the sm tables with a warning (untested) |
+| backend scope | `can_run` | any GPU backend with a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm has no table and borrows the sm tables with a warning (untested) |
 | values-only blocked solve | `syev_blocked.stebz_evals` | `stebz` bisection off the tridiagonal, no `stedc` |
 | complex panel width | `sytrd_block_size_default<T>`, `src/extensions/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
 | complex trailing update | `rank2k_trailing_update_supported`, `src/extensions/sytrd_blocked.cc` | float and complex<float> use the rank-2k path on the CUDA backend. double, complex<double> and other backends keep the GEMM pair |

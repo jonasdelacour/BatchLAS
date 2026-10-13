@@ -24,7 +24,7 @@ namespace batchlas {
             sycl::local_accessor<T, 2> tile(sycl::range<2>(TILE, TILE + 1), cgh);
             size_t grid_x = (cols + TILE - 1) / TILE;
             size_t grid_y = (rows + TILE - 1) / TILE;
-            cgh.parallel_for<TransposeKernel<T, MF>>(
+            batchlas::impl::parallel_for<TransposeKernel<T, MF>>(cgh,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                     sycl::range<3>(1, TILE, TILE)),

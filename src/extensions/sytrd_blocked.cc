@@ -260,7 +260,7 @@ Event update_vw_lower_small_device(Queue& q,
         const auto a_view = a22.kernel_view();
 
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
-        h.parallel_for<UpdateVWLowerSmallKernel<T>>(
+        batchlas::impl::parallel_for<UpdateVWLowerSmallKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * local_size),
                               sycl::range<1>(local_size)),
             [=](sycl::nd_item<1> item) {
@@ -305,7 +305,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(n)), h);
         auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
 
-        h.parallel_for<SytrdLowerLocalSmallKernelLegacy<T>>(
+        batchlas::impl::parallel_for<SytrdLowerLocalSmallKernelLegacy<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
@@ -488,7 +488,7 @@ Event sytrd_lower_local_small_device(Queue& q,
         auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
 
-        h.parallel_for<SytrdLowerLocalSmallKernel<T>>(
+        batchlas::impl::parallel_for<SytrdLowerLocalSmallKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
@@ -704,14 +704,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const bool is_legacy = !use_device_sytrd();
 
     if (n <= 32) {
-        bool has_sg32 = false;
-        try {
-            const auto sizes = ctx->get_device().get_info<sycl::info::device::sub_group_sizes>();
-            has_sg32 = std::find(sizes.begin(), sizes.end(), 32) != sizes.end();
-        } catch (...) {
-            has_sg32 = false;
-        }
-        if (has_sg32) {
+        if (ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, T>(ctx, a_in, d_out, e_out, tau_out, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
         }
     }

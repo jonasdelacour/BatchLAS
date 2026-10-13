@@ -110,7 +110,7 @@ namespace batchlas
                                                                 norm_type == NormType::Inf ? rows : 0, cgh);
             // Use a parallel_for to compute the norms
             // All kernels assume that matrices are stored in column-major order
-            cgh.parallel_for<NormKernel<T, MF>>(sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<NormKernel<T, MF>>(cgh, sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
                 auto batch_idx = item.get_group_linear_id();
                 auto local_idx = item.get_local_linear_id();
                 auto local_size = item.get_local_range()[0];

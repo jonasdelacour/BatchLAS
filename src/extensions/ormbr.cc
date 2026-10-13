@@ -202,7 +202,7 @@ sycl::event ormbr_larft_forward_columnwise_batched_wg(Queue& q,
     };
 
     return q->submit([&](sycl::handler& h) {
-        h.parallel_for<KernelName>(
+        batchlas::impl::parallel_for<KernelName>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) {

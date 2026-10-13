@@ -90,7 +90,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
         const int batch = A.batch_size();
         const bool lower = uplo == Uplo::Lower;
 
-        h.parallel_for<SyrkTriangularTilesKernel<T, TransOperand, AlignedFastPath>>(
+        batchlas::impl::parallel_for<SyrkTriangularTilesKernel<T, TransOperand, AlignedFastPath>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {

@@ -155,7 +155,7 @@ Event gebrd_blocked_real(Queue& ctx,
             auto Y = y_mat.kernel_view();
             auto work_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(2 * nb)), h);
 
-            h.parallel_for(sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(panel_wg)),
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(panel_wg)),
                                              sycl::range<1>(static_cast<size_t>(panel_wg))),
                            [=](sycl::nd_item<1> item) {
                 const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
@@ -190,7 +190,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     if (lid == 0) {
                         alpha = A(gi, gi, b);
                     }
-                    alpha = sycl::group_broadcast(g, alpha);
+                    alpha = batchlas::portable::group_broadcast(g, alpha);
                     T tau_q = T(0);
                     T beta_q = alpha;
                     T scale_q = T(0);
@@ -200,9 +200,9 @@ Event gebrd_blocked_real(Queue& ctx,
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
                     }
-                    tau_q = sycl::group_broadcast(g, tau_q);
-                    beta_q = sycl::group_broadcast(g, beta_q);
-                    scale_q = sycl::group_broadcast(g, scale_q);
+                    tau_q = batchlas::portable::group_broadcast(g, tau_q);
+                    beta_q = batchlas::portable::group_broadcast(g, beta_q);
+                    scale_q = batchlas::portable::group_broadcast(g, scale_q);
 
                     if (lid == 0) {
                         D(gi, b) = static_cast<Real>(beta_q);
@@ -277,7 +277,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     if (lid == 0) {
                         alpha_r = A(gi, gi + 1, b);
                     }
-                    alpha_r = sycl::group_broadcast(g, alpha_r);
+                    alpha_r = batchlas::portable::group_broadcast(g, alpha_r);
                     T tau_p = T(0);
                     T beta_p = alpha_r;
                     T scale_p = T(0);
@@ -287,9 +287,9 @@ Event gebrd_blocked_real(Queue& ctx,
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;
                     }
-                    tau_p = sycl::group_broadcast(g, tau_p);
-                    beta_p = sycl::group_broadcast(g, beta_p);
-                    scale_p = sycl::group_broadcast(g, scale_p);
+                    tau_p = batchlas::portable::group_broadcast(g, tau_p);
+                    beta_p = batchlas::portable::group_broadcast(g, beta_p);
+                    scale_p = batchlas::portable::group_broadcast(g, scale_p);
 
                     if (lid == 0) {
                         E(gi, b) = static_cast<Real>(beta_p);

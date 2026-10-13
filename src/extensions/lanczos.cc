@@ -89,7 +89,7 @@ namespace batchlas {
         auto init = [&](){
             ctx -> submit([&](sycl::handler& h) {
                 auto reduce_mem = sycl::local_accessor<T>(n, h);
-                h.parallel_for<InitKernel<B, T, MF>>(sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
+                batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
                     auto tid = item.get_local_linear_id();
                     auto bdim = item.get_local_range()[0];
@@ -134,7 +134,7 @@ namespace batchlas {
                     auto v_current_ptr = Vmem.data() + it*n;
                     auto v_next_ptr = padded_output.data_ptr();
                     auto dot_mem = sycl::local_accessor<T>(n, h);
-                    h.parallel_for<LanczosKernel<B, T, MF>>(sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
+                    batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
                         auto tid = item.get_local_linear_id();
                         auto wg = item.get_local_range()[0];

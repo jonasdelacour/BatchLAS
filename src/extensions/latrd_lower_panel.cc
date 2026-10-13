@@ -299,7 +299,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
         auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 
-        h.parallel_for<LatrdLowerPanelKernelLegacy<T, WG, FuseTrailingUpdate>>(
+        batchlas::impl::parallel_for<LatrdLowerPanelKernelLegacy<T, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
@@ -596,7 +596,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
         auto gam_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
         auto del_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
 
-        h.parallel_for<LatrdLowerPanelKernelGrid<T, WG, FuseTrailingUpdate>>(
+        batchlas::impl::parallel_for<LatrdLowerPanelKernelGrid<T, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(G) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -905,7 +905,7 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
         auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
 
-        h.parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(
+        batchlas::impl::parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());

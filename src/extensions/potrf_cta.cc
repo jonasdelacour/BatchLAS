@@ -228,7 +228,7 @@ Event potrf_cta_launch(Queue& ctx,
         sycl::local_accessor<int, 1> off(
             sycl::range<1>(static_cast<std::size_t>(G) * static_cast<std::size_t>(Rt0 + 1)), h);
 
-        h.parallel_for<PotrfCtaKernel<T, NB, TS, SC>>(
+        batchlas::impl::parallel_for<PotrfCtaKernel<T, NB, TS, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {

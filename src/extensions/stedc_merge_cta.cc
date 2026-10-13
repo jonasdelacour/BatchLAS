@@ -31,27 +31,6 @@ class StedcFusedCtaMerge;
 template <Backend B, typename T>
 class StedcFusedWgMerge;
 
-inline int32_t device_max_sub_group_size(const Queue& ctx) {
-    const auto dev = ctx->get_device();
-    const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-    int32_t max_sg = 1;
-    for (const auto size : sg_sizes) {
-        max_sg = std::max(max_sg, static_cast<int32_t>(size));
-    }
-    return max_sg;
-}
-
-inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
-    const auto dev = ctx->get_device();
-    const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-    for (const auto size : sg_sizes) {
-        if (static_cast<int32_t>(size) == target_size) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // `kernel_max_wg` is the largest work-group THIS kernel can launch on this device,
 // generally below the device maximum (register file per sub-partition: the merge
 // kernel caps at 768 on sm_89, and 1024 throws). 0 means unknown: device limit only.
@@ -852,7 +831,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedCtaMerge<B, T, P>>(
+        batchlas::impl::parallel_for<StedcFusedCtaMerge<B, T, P>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -944,8 +923,7 @@ void stedc_merge_fused_wg(Queue& ctx,
     const auto batch_size = eigenvalues.batch_size();
     const auto dev = ctx->get_device();
 
-    const int32_t max_sg = std::max<int32_t>(1, device_max_sub_group_size(ctx));
-    const int32_t base_wg_size = max_sg;
+    const int32_t base_wg_size = 32;  // the CTA kernels' lane count; wider requests come here
     const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedWgMerge<B, T>>(ctx, dev);
     const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
                                            kernel_max_wg);
@@ -959,7 +937,7 @@ void stedc_merge_fused_wg(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedWgMerge<B, T>>(
+        batchlas::impl::parallel_for<StedcFusedWgMerge<B, T>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -1031,7 +1009,7 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const StedcParams<T>& params,
                            int32_t* info,
                            int64_t info_nodes_per_item) {
-    const bool has32 = device_has_sub_group_size(ctx, 32);
+    const bool has32 = ctx.device().supports_sub_group_size(32);
 
     if (!has32) {
         stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
@@ -1039,8 +1017,7 @@ void stedc_merge_fused_cta(Queue& ctx,
     }
 
     const int32_t requested = std::max<int32_t>(4, params.secular_threads_per_root);
-    const int32_t max_sg = device_max_sub_group_size(ctx);
-    const bool use_wg_path = requested > max_sg;
+    const bool use_wg_path = requested > 32;
 
     if (use_wg_path) {
         stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);

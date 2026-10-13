@@ -177,7 +177,7 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
     const T zero = T(0);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<PotrfBlockedFixupKernel<T>>(
+        batchlas::impl::parallel_for<PotrfBlockedFixupKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
