@@ -689,10 +689,10 @@ namespace batchlas {
      * @param Q          n x n eigenvector output per item
      * @param n          order of each tridiagonal matrix
      * @param batch_size number of batch items
-     * @return event of the kernel
-     * @pre `Q` is packed (`ld() == n`): the rotation update addresses it with stride `n`.
-     * @note Each eigenvalue gets at most six QR steps and no convergence status is
-     *       reported; steqr() and stedc() are the maintained tridiagonal solvers.
+     * @return event of the kernel; the call waits for it before returning
+     * @throws batchlas::convergence_error if an eigenvalue of any item does not deflate
+     *         within 30 QR steps
+     * @note steqr() and stedc() are the maintained tridiagonal solvers.
      */
     template <Backend B, typename T>
     BATCHLAS_API Event tridiagonal_solver(Queue& ctx,

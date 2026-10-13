@@ -57,9 +57,12 @@ closed and kept only for numbering.
   when `X.size() != red_len` or `Y.size() != out_len`, so the call always goes to the vendor.
 - **Test gap:** `tests/ortho_tests.cc:249` and `:293` use only `{Transpose::NoTrans}`. The
   transposed arm has never run in the suite.
-- **Fix needs:** `A_i` with `ld = A.ld()` and stored-orientation extents, `A_next` as the i-th row
-  vector, and a transposed test.
-- **Status:** open, latent.
+- **Fix:** `A_i` has `ld = A.ld()` and stored-orientation extents, `A_next` is row `i`
+  (conjugated around the gemv pair for complex), the normalisation steps by `ld`. SVQB/SVQB2 copy
+  the conjugate transpose back on this arm and the projection against `M` uses `ConjTrans`.
+  Householder (also what every algorithm becomes on a host device) QRs a transposed m x k copy and
+  transposes the factor back. `tests/ortho_tests.cc` runs both orientations for every algorithm.
+- **Status:** fixed (WP8).
 
 ## 2. `cond` calls the vendor `syev` directly
 
@@ -446,11 +449,6 @@ refuted.
 - **`compute_optimal_wg_size` assumes a 32-bit `long`.** `include/batchlas/util/kernel-heuristics.hh:103,108`
   uses `__builtin_clzl` with a 31 shift. On LP64 this shifts by a negative count, which is undefined
   behaviour. Fix with `63 - __builtin_clzl` or `std::bit_floor`. Callers: `src/matrix.cc:387,487`.
-- **The generic (MKL-instantiated) `trmm` recursion reads the whole square of `A`.** Its base case
-  at n <= 256 is a `gemm` with `beta = 1` on the diagonal block. It reads the unreferenced triangle
-  and, under `Diag::Unit`, the stored diagonal. It accumulates into `C` instead of overwriting.
-  See [the trmm generic recursion](../perf/level3.md#trmm-the-generic-recursion-reads-the-whole-square-of-a)
-  (`src/extensions/trmm.cc:22-26`).
 - **Matrix and vector containers.** Four defects in `matrix.hh` and `src/matrix.cc` are listed in
   [Matrix model: open debts](matrix-model.md#matrix-model-open-debts). They are an undefined
   `MatrixView::transpose`, packed-only addressing in `fill_triangular_random` and

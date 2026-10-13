@@ -250,7 +250,7 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     if (batch_size > 1) {
         data_ptrs_.resize(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            data_ptrs_[i] = data_.data() + i * stride_;
+            data_ptrs_[i] = data_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
         }
     }
 }
@@ -298,7 +298,7 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
     if (batch_size > 1) {
         data_ptrs_.resize(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            data_ptrs_[i] = data_.data() + i * stride_;
+            data_ptrs_[i] = data_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
         }
     }
 }
@@ -1958,8 +1958,8 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                   int stride, int batch_size, T** data_ptrs) :
-                data_(data, (stride > 0 ? stride :
-                            ld > 0 ? ld * cols : rows * cols) * batch_size),
+                data_(data, static_cast<size_t>(stride > 0 ? stride :
+                            ld > 0 ? ld * cols : rows * cols) * static_cast<size_t>(batch_size)),
                 rows_(rows), cols_(cols), batch_size_(batch_size),
                 ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
     // TRAP: MatrixView(p, n, n, batch) (Matrix's argument order) gives ld = batch; `ld_ < rows`

@@ -68,11 +68,11 @@ using symm_vendor = Event(Queue&,
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
-///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
+///         unless the call is `Backend::CUDA` or `Backend::ROCM` on a GPU, with homogeneous operands,
 ///         batch <= 65535 and an expansion scratch that fits (the `expand` choice;
 ///         @ref md_docs_2perf_2level3).
-/// @note `Backend::ROCM` and `Backend::MKL` are served by src/extensions/symm.cc
-///       (symmetrize a copy of `A`, then gemm), outside the tuned selection.
+/// @note `Backend::ROCM` has no vendor symm: its `vendor` choice symmetrizes a copy of `A`
+///       and calls gemm, and blocks the host until it finishes.
 /// @see hemm, SymmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
 template <Backend Ba, RealScalar T>

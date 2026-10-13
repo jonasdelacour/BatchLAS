@@ -74,7 +74,7 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
 
 // Typed over every backend the build has, unlike the CUDA-only poison tests
 // below (which force a route and skip without a GPU). SYR2K owns one triangle of
-// C; the generic gemm fallback in src/extensions/syr2k.cc aimed both of its gemms
+// C; the generic gemm fallback in the deleted src/extensions/syr2k.cc aimed both of its gemms
 // at C, which writes both triangles, with `uplo` an unnamed parameter. That
 // fallback is instantiated for Backend::MKL only, so this test cannot fail in a
 // build without MKL.

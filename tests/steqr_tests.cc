@@ -1405,6 +1405,154 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
     }
 }
 
+// tridiagonal_solver on a graded tridiagonal (condition 1e6) scaled to 0.1 eps: an absolute deflation
+// threshold deflates every off-diagonal at once. Batch 1024 identical items, each bit-identical to
+// item 0; Q has a padded ld.
+TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 32, batch = 1024, ld = n + 3;
+    const long double scale = 0.1L * std::numeric_limits<Real>::epsilon();
+    const long double g = std::pow(1e-6L, 1.0L / (n - 1));
+
+    Vector<Real> diag(n, Real(0), batch);
+    Vector<Real> sub(n, Real(0), batch);
+    Vector<Real> w(n, Real(0), batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            diag(i, b) = static_cast<Real>(((i % 3) == 0 ? -1.0L : 1.0L) * scale * std::pow(g, i));
+            sub(i, b) = i < n - 1 ? static_cast<Real>(0.5L * scale * std::pow(g, i + 0.5L)) : Real(0);
+        }
+    }
+    Matrix<Real> Qbuf(ld, n, batch);
+    const MatrixView<Real, MatrixFormat::Dense> Q(Qbuf.view().data_ptr(), n, n, ld, ld * n, batch);
+    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, Real>(*this->ctx, n, batch, JobType::EigenVectors));
+    (void)tridiagonal_solver<B, Real>(*this->ctx, diag.data(), sub.data(), w.data(), ws.to_span(),
+                                      JobType::EigenVectors, Q, n, batch);
+    this->ctx->wait();
+
+    for (int b = 1; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            ASSERT_EQ(w(i, b), w(i, 0)) << "item " << b << " value " << i;
+            for (int r = 0; r < n; ++r) ASSERT_EQ(Q(r, i, b), Q(r, i, 0)) << "item " << b << " Q(" << r << "," << i << ")";
+        }
+    }
+
+    auto dense_A = Matrix<Real>::Zeros(n, n, 1);
+    Vector<Real> d0(n, Real(0), 1), e0(n - 1, Real(0), 1), w_sorted(n, Real(0), 1);
+    std::vector<Real> got(n);
+    for (int i = 0; i < n; ++i) {
+        d0(i, 0) = diag(i, 0);
+        if (i < n - 1) e0(i, 0) = sub(i, 0);
+        got[i] = w(i, 0);
+    }
+    std::sort(got.begin(), got.end());
+    for (int i = 0; i < n; ++i) w_sorted(i, 0) = got[i];
+    dense_A.view().fill_tridiag(*this->ctx, e0, d0, e0).wait();
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    expect_values(VectorView<Real>(w_sorted), ref, norm2, n);
+    // expect_values is norm-relative, blind to the small end: each eigenvalue against the Sturm
+    // oracle, relative (verification.md, "Kept outside").
+    std::vector<long double> hd(n), he(n - 1);
+    for (int i = 0; i < n; ++i) hd[i] = diag(i, 0);
+    for (int i = 0; i < n - 1; ++i) he[i] = sub(i, 0);
+    const auto sturm = sturm_eigenvalues(hd, he);
+    const double rel_tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
+    for (int i = 0; i < n; ++i)
+        EXPECT_LE(double(std::fabs(got[i] - sturm[i]) / std::fabs(sturm[i])), rel_tol) << "eigenvalue " << i;
+    const MatrixView<Real, MatrixFormat::Dense> Q0(Qbuf.view().data_ptr(), n, n, ld, ld * n, 1);
+    expect_pairs(*this->ctx, dense_A.view(), Q0, VectorView<Real>(w).batch_item(0));
+}
+
+// sort() cannot permute eigenvalues with inc != 1: it throws its own error before enqueuing anything
+// (it used to argsort a temporary freed before the read, then fail in permute), and steqr without
+// sorting still accepts the view.
+TYPED_TEST(SteqrTest, SortRejectsStridedEigenvalues) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 8, batch = 2;
+    Vector<Real> diag(n, Real(1), batch), sub(n - 1, Real(0.5), batch);
+    Vector<Real> evbuf(2 * n, Real(0), batch);
+    const VectorView<Real> evals(evbuf.data(), n, batch, 2, 2 * n);
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool sort : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.sort = sort;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params));
+        auto run = [&] {
+            (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            this->ctx->wait();
+        };
+        if (!sort) {
+            EXPECT_NO_THROW(run());
+            continue;
+        }
+        try {
+            run();
+            ADD_FAILURE() << "sort with inc = 2 did not throw";
+        } catch (const batchlas::invalid_argument& e) {
+            EXPECT_EQ(std::string(e.what()).rfind("sort:", 0), 0u) << "thrown after sort started: " << e.what();
+        }
+    }
+}
+
+// n = 48 takes steqr_wg. block_rotations with 2 * block_size > max_sweeps stores 2 * block_size
+// sweeps of rotations, and transpose_working_vectors changes the working layout: the size query must
+// follow both. The workspace is exactly steqr_buffer_size bytes, poisoned with 0x7f.
+TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    Vector<Real> evals = Vector<Real>::zeros(n, batch);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool transposed : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.block_rotations = true;
+        params.block_size = 16;
+        params.max_sweeps = 10;
+        params.sort = true;
+        params.transpose_working_vectors = transposed;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params),
+                                    std::byte(0x7f));
+        (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        this->ctx->wait();
+        double norm2 = 0;
+        const auto ref = lapacke_spectra(dense_A.view(), norm2);
+        expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.view().all_items());
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<Real>(evals), dense_A.view().all_items());
+    }
+}
+
+// NoEigenVectors, sort on, eigenvalues in a view of stride 4n and no eigenvector view: the sort
+// scratch must not follow the caller's padding, which the size query never sees.
+TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4, stride = 4 * n;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    UnifiedVector<Real> evals_buf(std::size_t(stride) * batch, Real(0));
+    const VectorView<Real> evals(evals_buf.data(), n, batch, 1, stride);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    SteqrParams<Real> params = {};
+    params.max_sweeps = 10;
+    params.sort = true;
+    UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::NoEigenVectors, params),
+                                std::byte(0x7f));
+    (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::NoEigenVectors, params,
+                         MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0));
+    this->ctx->wait();
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    expect_values(evals, ref, norm2, n, std::nullopt, dense_A.view().all_items());
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

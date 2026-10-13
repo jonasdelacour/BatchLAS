@@ -27,7 +27,8 @@ namespace batchlas
     /// @param A         batch of matrices; not modified
     /// @param norm_type which norm
     /// @param norms     device-accessible output, at least `A.batch_size()` elements
-    /// @return          event of the last enqueued kernel; `norms` is valid after it
+    /// @return          event of the last enqueued kernel; `norms` is valid after it (Spectral
+    ///                  waits before returning, so `norms` is valid on return)
     /// @pre  NormType::Spectral requires square symmetric/Hermitian `A` (the lower
     ///       triangle is read).
     /// @throws batchlas::invalid_argument for Spectral on a non-square `A`

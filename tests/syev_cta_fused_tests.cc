@@ -321,4 +321,30 @@ TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
 	EXPECT_EQ(ws_bytes, 0u);
 }
 
+
+// A NaN entry in item 0: the rank sort must still be a bijection (NaN last, ties on index), so no
+// slot of W keeps the 12345 it was poisoned with and A's columns are a permutation; items 1.. are
+// unaffected.
+TYPED_TEST(SyevCtaFusedTest, NaNInputLeavesNoStaleSlot) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+	const int n = 16, batch = 4;
+	auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77);
+	A0.view()(3, 3, 0) = Scalar(std::numeric_limits<Real>::quiet_NaN());
+	for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+		for (const JobType jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+			SCOPED_TRACE(::testing::Message() << "descending " << (order == SortOrder::Descending) << ", vectors " << (jobz == JobType::EigenVectors));
+			auto A = A0;
+			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
+			SteqrParams<Scalar> params{};
+			params.sort_order = order;
+			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
+			for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
+			const std::vector<int> clean{1, 2, 3};
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W, n, /*sorted_copy=*/true, clean);
+		}
+	}
+}
+
 #endif // CUDA || ROCM

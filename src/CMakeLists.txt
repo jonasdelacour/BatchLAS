@@ -21,7 +21,6 @@ if(BATCHLAS_HAS_ROCM_BACKEND AND (BATCHLAS_HAS_ROCBLAS OR BATCHLAS_HAS_ROCSOLVER
 endif()
 add_library(batchlas_extensions_eigen_obj OBJECT)
 add_library(batchlas_extensions_factorization_obj OBJECT)
-add_library(batchlas_extensions_symmetric_obj OBJECT)
 add_library(batchlas_extensions_tridiag_obj OBJECT)
 add_library(batchlas_extensions_sytrd_obj OBJECT)
 add_library(batchlas_extensions_latrd_obj OBJECT)
@@ -39,7 +38,6 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_dispatch_obj
     batchlas_extensions_eigen_obj
     batchlas_extensions_factorization_obj
-    batchlas_extensions_symmetric_obj
     batchlas_extensions_tridiag_obj
     batchlas_extensions_sytrd_obj
     batchlas_extensions_latrd_obj
@@ -304,10 +302,10 @@ add_library(batchlas_extensions_factorization SHARED
 )
 batchlas_configure_component(batchlas_extensions_factorization)
 
-add_library(batchlas_extensions_symmetric SHARED
-    $<TARGET_OBJECTS:batchlas_extensions_symmetric_obj>
-)
-batchlas_configure_component(batchlas_extensions_symmetric)
+# INTERFACE, as batchlas_blas: its four TUs redefined public syrk/syr2k/trmm/symm templates
+# (three instantiated nothing, symm only ROCm, bypassing flat selection), so they are gone and
+# BatchLAS::batchlas_extensions_symmetric stays resolvable for anyone linking it by name.
+add_library(batchlas_extensions_symmetric INTERFACE)
 
 add_library(batchlas_extensions_tridiag SHARED
     $<TARGET_OBJECTS:batchlas_extensions_tridiag_obj>

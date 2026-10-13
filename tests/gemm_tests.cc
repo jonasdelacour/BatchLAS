@@ -20,6 +20,7 @@
 #include <complex>
 #include <cstdint>
 #include <utility>
+#include <optional>
 #include "test_utils.hh"
 
 using namespace batchlas;
@@ -1668,6 +1669,56 @@ TYPED_TEST(GemmTest, WideTransposedRefusesNoTransRequest) {
     ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
     RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90,
                                                       Transpose::NoTrans, Transpose::NoTrans, ScalarType(-1));
+}
+
+// Item 128 of a batch with stride 2^24 starts at element 2^31: an int bid * stride wraps. 8 x 8
+// operands keep the work tiny; A and B alias one buffer, C another (~8.6 GB each, float). Small
+// integers make the products exact; beta = 1 with a packed C0 copy.
+TYPED_TEST(GemmTest, BatchOffsetAbove2Pow31) {
+    using T = typename TestFixture::ScalarType;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "one scalar type carries the offset arithmetic";
+    } else {
+        SKIP_UNLESS_NATIVE(*this->ctx);
+        constexpr int n = 8, batch = 129, stride = 1 << 24;
+        const std::size_t elements = static_cast<std::size_t>(batch - 1) * stride + n * n;
+        if (this->ctx->device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) < 2 * elements * sizeof(T) + (std::size_t(4) << 30)) {
+            GTEST_SKIP() << "needs two " << elements * sizeof(T) / (1u << 20) << " MiB buffers and headroom";
+        }
+        std::optional<UnifiedVector<T>> ab, c;
+        try {
+            ab.emplace(elements);
+            c.emplace(elements);
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "allocation failed: " << e.what();
+        }
+        MV A(ab->data(), n, n, n, stride, batch);
+        MV C(c->data(), n, n, n, stride, batch);
+        auto C0 = Matrix<T>::Zeros(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    A(i, j, b) = T((i + 2 * j + b) % 5 - 2);
+                    C(i, j, b) = T((3 * i + j + b) % 7 - 3);
+                    C0(i, j, b) = C(i, j, b);
+                }
+        const std::vector<int> items{0, 127, 128};
+        for (const char* route : {"direct", "tiled", "reg:m=128:n=128:k=8:u=1"}) {
+            SCOPED_TRACE(route);
+            for (int b : items)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) C(i, j, b) = C0(i, j, b);
+            {
+                const GemmPin pin(route);
+                (void)gemm(*this->ctx, A, A, C, {.alpha = T(2), .beta = T(1)});
+            }
+            this->ctx->wait();
+            EXPECT_EQ(MV::gemm_backward_error(*this->ctx, A, Transpose::NoTrans, A, Transpose::NoTrans, C0.view(), C, T(2),
+                                              T(1), items),
+                      0.0);
+        }
+    }
 }
 
 int main(int argc, char **argv) {
