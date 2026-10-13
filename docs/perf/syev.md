@@ -15,7 +15,8 @@ The families live in `src/ops/syev/choice.hh`: `cta`, `cta_fused` and `jacobi` (
 sub-group solvers), `blocked`, `two_stage` and `vendor`. `select::choose` takes the first runnable
 entry of the nearest row of `tuned/syev.<dtype>.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on
 `jobz`, `n` and `batch`. `can_run` is correctness only: the native families need a non-NETLIB GPU
-backend and a square A with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group.
+backend and a square A with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group. Every
+family, `vendor` included, needs a homogeneous batch (`syev.cc:52-62`).
 Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
 
 > **Note:** every syev table (all dtypes, sm_89 and sm_120) is `source=transcribed:424a45bc`: it replays the

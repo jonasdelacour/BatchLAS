@@ -47,11 +47,6 @@ inline std::vector<std::pair<std::string, std::string>> dtype_keyed(std::vector<
     return files;
 }
 
-// A table whose every row is untimed: the old router's transcribed order (sm_89, cpu).
-inline bool transcribed_only(const batchlas::select::Table& t) {
-    return !t.rows.empty() && std::none_of(t.rows.begin(), t.rows.end(), [](const auto& r) { return r.timed; });
-}
-
 // `native_only`: what the class word "native" resolves to (the vendor family is skipped).
 template <class Choice, class Probe>
 std::string shipped_table_pick(std::string_view op, std::string_view dtype, const batchlas::select::Device& d,

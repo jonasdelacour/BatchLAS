@@ -148,24 +148,20 @@ namespace batchlas {
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals) {
-        auto batch_size = A.batch_size();
-        auto n = A.rows();
-        auto k = V.cols();
-        
-        size_t size = 0;
-        
-        // Space for A*V
-        size += BumpAllocator::allocation_size<T>(ctx, n * k * batch_size);
-        size += BumpAllocator::allocation_size<T*>(ctx, batch_size);
-        
-        // Additional space for spmm if A is sparse
-        if constexpr (MFormat != MatrixFormat::Dense) {
-            // Create temporary views for spmm_buffer_size calculation
-            auto AV_temp = MatrixView<T, MatrixFormat::Dense>(nullptr, n, k, n, n * k, batch_size, nullptr);
-            size += spmm_buffer_size<B>(ctx, A, V, AV_temp, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
-        }
-        
-        return size;
+        const auto batch_size = A.batch_size();
+        const auto n = A.rows();
+        const auto k = V.cols();
+        // The run path's allocation sequence, measured: the spmm bytes go through allocate<std::byte>,
+        // which rounds, so a hand sum of raw sizes is short.
+        return workspace_bytes([&](BumpAllocator& pool) {
+            auto av = pool.allocate<T>(ctx, n * k * batch_size);
+            (void)pool.allocate<T*>(ctx, batch_size);
+            if constexpr (MFormat != MatrixFormat::Dense) {
+                auto AV = MatrixView<T, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr);
+                (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
+            }
+            return 0;
+        });
     }
 
     // Explicit template instantiations for common types

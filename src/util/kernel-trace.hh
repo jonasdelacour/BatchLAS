@@ -26,9 +26,9 @@ struct Record {
     std::uint32_t tid = 0;
 };
 
-inline std::atomic<bool> g_initialized{false};
 // ONE INSTANCE PER PROCESS: BATCHLAS_INTERNAL_API keeps these vague-linkage inlines folding with
 // the copies in test TUs. evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
+inline BATCHLAS_INTERNAL_API std::atomic<bool> g_initialized{false};
 inline BATCHLAS_INTERNAL_API std::atomic<bool> g_enabled{false};
 inline BATCHLAS_INTERNAL_API std::mutex g_mu;
 inline BATCHLAS_INTERNAL_API std::vector<Record> g_records;

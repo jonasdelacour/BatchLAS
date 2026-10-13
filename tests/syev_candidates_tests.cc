@@ -116,7 +116,8 @@ Eig<T> make_eig(const Spec& s) {
         std::vector<cd> v(n);
         double vv = 0;
         for (int i = 0; i < n; ++i) {
-            v[i] = kCx<T> ? cd(u(gen), u(gen)) : cd(u(gen), 0.0);
+            const double re = u(gen);
+            v[i] = cd(re, kCx<T> ? u(gen) : 0.0);
             vv += std::norm(v[i]);
         }
         auto q = [&](int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * v[i] * std::conj(v[j]) / vv; };
@@ -414,10 +415,10 @@ TYPED_TEST(SyevCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 }
 
 // §8.2 R3: can_run (the pin accepted by the sizing call) equals the driver accepting the shape,
-// including the degenerate n = 0 and batch = 0 (small and large n) that the drivers check.
+// including the degenerate n = 0 that the drivers check (batch 0 returns before selection).
 TYPED_TEST(SyevCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
-    const std::pair<int, int> shapes[] = {{1, 2}, {31, 2}, {32, 2}, {33, 2}, {64, 2}, {0, 2}, {8, 0}, {40, 0}};
+    const std::pair<int, int> shapes[] = {{1, 2}, {31, 2}, {32, 2}, {33, 2}, {64, 2}, {0, 2}};
     for (const C& c : sy::candidates<T>())
         for (const auto& [n, batch] : shapes)
             for (JobType j : {JobType::NoEigenVectors, JobType::EigenVectors})
@@ -611,26 +612,22 @@ TYPED_TEST(SyevCandidates, TraceLineShowsTheKey) {
     EXPECT_NE(line.find("jobz=N n=7 batch=5 ->"), std::string::npos) << line;
 }
 
-// Auto against the shipped transcribed tables, on the device's own (or borrowed) table: the
-// old small-kernel pick per type at n 8|9, the cdouble CTA-vs-vendor edge 24|25, CTA's 32|33.
+// Auto against the shipped table of this device (shipped_table_pick.hh) at the old router's
+// edges: the small-kernel pick per type at n 8|9, the cdouble CTA-vs-vendor edge 24|25, CTA's 32|33.
 TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const auto tables = select::tables_in_borrow_order("syev", select::dtype_name<T>(),
-                                                       select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device reads no transcribed syev table";
-    const std::string dt(select::dtype_name<T>());
-    const std::string v = TestFixture::kVendor ? "vendor" : "cta";
-    const std::map<std::string, std::vector<std::pair<int, std::string>>> want{
-        {"float", {{8, "jacobi"}, {9, "cta_fused"}, {32, "cta_fused"}, {33, "blocked"}}},
-        {"double", {{8, "jacobi"}, {9, "jacobi"}, {32, "jacobi"}, {33, "blocked"}}},
-        {"cfloat", {{8, "cta_fused"}, {9, "cta"}, {32, "cta"}, {33, "blocked"}}},
-        {"cdouble", {{8, "cta"}, {24, "cta"}, {25, v}, {33, "blocked"}}}};
-    for (const auto& [n, expect] : want.at(dt)) {
+    for (int n : {8, 9, 24, 25, 32, 33}) {
         Spec s{n, 3, JobType::EigenVectors};
+        const select::Key key{{"jobz", "V"}, {"n", s.n}, {"batch", s.batch}};
+        const std::string want = test_utils::shipped_table_pick<C>(
+            "syev", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx), key, [&] {
+                auto q = make_eig<T>(s);
+                this->run(q);
+            });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
         auto p = make_eig<T>(s);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), expect) << label(s);
+        EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
         expect_solved(*this->ctx, p, "auto " + label(s));
     }
 }
@@ -753,6 +750,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // old threshold on its two sides, per type and jobz (the old predicates, syev.hh@424a45bc). sm_120
 // is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* jobz; int n; const char* ranked; };
     const Row rows[] = {
         {"float", "V", 8, "jacobi|blocked|two_stage|vendor"},     {"float", "V", 9, "cta_fused|blocked|two_stage|vendor"},
@@ -772,14 +770,15 @@ TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
                 ASSERT_FALSE(tables.empty()) << r.dtype;
                 const select::Table& t = *tables.front();
                 ASSERT_EQ(t.device, dev) << r.dtype;
-                EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
                 const select::TableRow* row = t.nearest({{"jobz", r.jobz}, {"n", r.n}, {"batch", batch}});
                 ASSERT_NE(row, nullptr) << t.file;
+                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                if (held.skip(row->timed)) continue;
                 std::string got;
                 for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
                 EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line << " n=" << r.n << " batch=" << batch;
-                EXPECT_FALSE(row->timed) << t.file;
             }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

@@ -234,9 +234,9 @@ Event steqr_impl(Queue& ctx,
                 }
                 continue;
             }
-            // QR / QL switch: QR sweeps from top, QL sweeps from bottom.
-            // We implement QL by viewing (d_, e_) in reversed order via virtual indices.
-            bool QR = std::abs(d_(0)) <= std::abs(d_(n - 1));
+            // QL is QR on (d_, e_) viewed in reverse. The sweep converges the end the shift is taken
+            // from (virtual index n - 1), so orient that end at the SMALLER |d|, as dsteqr does.
+            bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             for (size_t k = 0; k < max_sweeps; ++k) {
                 auto anorm = std::abs(d_(n - 1));

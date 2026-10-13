@@ -127,11 +127,15 @@ Sys<T> make_sys(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
-                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * d(gen), R(0.3) * d(gen));
-                else p.f(it, i, j) = MVof<T>::make(sg * d(gen) / R(s.n), d(gen) / R(s.n));
+                const auto x = d(gen), y = d(gen);
+                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
+                else p.f(it, i, j) = MVof<T>::make(sg * x / R(s.n), y / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
-            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < s.n; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.x(it, i, j) = MVof<T>::make(re, im);
+            }
     }
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -531,7 +535,8 @@ TYPED_TEST(GetrsCandidates, UnknownPinsThrow) {
 
 // The named can_run-false shapes (absorbs RouteGetrs.CorrectnessGatesAreNotSpeedGates and
 // FusedGetrsHandsBackAtBothCeilings' table half): empty order or rhs, one past the width,
-// a non-square A, B's rows or batch disagreeing with A, an empty batch on both sides.
+// a non-square A, B's rows or batch disagreeing with A. An empty batch returns before selection
+// (WP3 batch policy), so no pin sees it.
 TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -542,8 +547,7 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
                           {gs::Cta{}, 8, 8, 8, w + 1, 1, 1, "nrhs past the width"},
                           {gs::Cta{}, 8, 10, 8, 2, 1, 1, "A not square"},  {gs::Blocked{}, 8, 10, 8, 2, 1, 1, "A not square"},
                           {gs::Cta{}, 8, 8, 9, 2, 1, 1, "B rows != n"},    {gs::Blocked{}, 8, 8, 9, 2, 1, 1, "B rows != n"},
-                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"},
-                          {gs::Cta{}, 8, 8, 8, 2, 0, 0, "batch 0"},        {gs::Blocked{}, 8, 8, 8, 2, 0, 0, "batch 0"}};
+                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}};
     for (const auto& k : cases) {
         UnifiedVector<T> a(std::size_t(std::max(1, k.an * k.ac)) * 2, T(1)), b(std::size_t(std::max(1, k.bn * k.bc)) * 2, T(1));
         const MVof<T> A(a.data(), k.an, k.ac, std::max(1, k.an), std::max(1, k.an * k.ac), k.ab);
@@ -600,8 +604,12 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
                 << k.what << " " << select::to_string(c);
         }
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
+        // No family, the vendor included, takes it (WP3 batch policy).
         if constexpr (!TestFixture::kVendor)
             EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), batchlas::NoRouteError)
+                << k.what;
+        else
+            EXPECT_NO_RUNNABLE_KERNEL((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans))
                 << k.what;
     }
 }
@@ -822,6 +830,7 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // every dtype, the first entry (vendor present) and the first native entry that fits (vendor-free)
 // equal the old router at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold) {
+    test_utils::TranscribedRowsHeld held;
     const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
@@ -834,9 +843,10 @@ TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold)
                     for (int batch : {1, 100, 127, 128, 129, 40000}) {
                         const select::TableRow* row = t.nearest({{"n", n}, {"nrhs", nrhs}, {"batch", batch}});
                         ASSERT_NE(row, nullptr);
+                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        if (held.skip(row->timed)) continue;
                         const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(n) +
                                                  " nrhs=" + std::to_string(nrhs) + " batch=" + std::to_string(batch);
-                        EXPECT_FALSE(row->timed) << what;
                         const bool fits = nrhs <= w;  // unlimited SLM: the width is the only cta term here
                         std::string first, native;
                         for (const auto& e : row->ranked) {
@@ -848,6 +858,7 @@ TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold)
                         EXPECT_EQ(native, old_auto(dt, n, nrhs, batch, false, fits)) << what << " (vendor-free)";
                     }
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

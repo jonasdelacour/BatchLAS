@@ -181,6 +181,17 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "src/extensions/sg_compat.hh",
+            "src/extensions/sg_partition/backend_amdgcn.hh",
+            "src/extensions/sg_partition/backend_amdgcn_core.hh",
+            "src/extensions/sg_partition/backend_generic.hh",
+            "src/extensions/sg_partition/backend_nvptx.hh",
+            "src/extensions/sg_partition/backend_spirv.hh",
+            "src/extensions/sg_partition/backend_sscp.hh",
+            "src/extensions/sg_partition/sg_partition.hh",
             // family: jacobi
             "src/extensions/gesvdj_cta.cc",
             // family: cta
@@ -203,7 +214,7 @@ public:
         // family: cta "src/extensions/syev_cta.cc" "src/extensions/sytrd_cta.cc" "src/extensions/sytrd_cta_device.hh" "src/extensions/steqr.cc" "src/extensions/steqr_cta.cc" "src/extensions/steqr_cta_device.hh" "src/extensions/steqr_wg.cc"
         // family: blocked "src/extensions/syev_blocked.cc" "src/extensions/sytrd_blocked.cc" "src/extensions/latrd_lower_panel.cc" "src/extensions/sytrd_cta.cc" "src/extensions/steqr.cc" "src/extensions/steqr_wg.cc"
         // family: blocked "src/extensions/stedc.cc" "src/extensions/stedc_merge_cta.cc" "src/extensions/stedc_merge_kernels.cc" "src/extensions/stedc_secular.cc" "src/extensions/ormqr_blocked.cc" "src/extensions/uplo_mirror.cc"
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/extensions/trmm.cc" "src/extensions/syr2k.cc"
+        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
         // family: blocked "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
         // kernel-deps-end
     }

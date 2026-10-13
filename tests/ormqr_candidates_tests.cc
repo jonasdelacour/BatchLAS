@@ -126,8 +126,11 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                const T v = i > j ? MVof<T>::make(u(gen) / std::sqrt(double(s.m)), u(gen) / std::sqrt(double(s.m)))
-                                  : MVof<T>::make(300, -200);
+                T v = MVof<T>::make(300, -200);
+                if (i > j) {
+                    const auto re = u(gen), im = u(gen);
+                    v = MVof<T>::make(re / std::sqrt(double(s.m)), im / std::sqrt(double(s.m)));
+                }
                 p.mem[p.ai(it, i, j)] = v;
                 if (i > j) norm2 += std::norm(MVof<T>::up(v));
             }
@@ -140,7 +143,12 @@ Apply<T> make_apply(const Spec& s) {
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
-                p.mem[p.ci(it, i, j)] = it != r ? p.mem[p.ci(r, i, j)] : MVof<T>::make(u(gen), u(gen));
+                if (it != r) {
+                    p.mem[p.ci(it, i, j)] = p.mem[p.ci(r, i, j)];
+                } else {
+                    const auto re = u(gen), im = u(gen);
+                    p.mem[p.ci(it, i, j)] = MVof<T>::make(re, im);
+                }
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
     return p;
@@ -350,6 +358,29 @@ std::vector<Spec> straddles() {
                 out.push_back(s);
             }
     return out;
+}
+
+// Known-defects #16, L T as the defect states it: the blocked pin is accepted at batch 65536.
+// With the level-3 vendor it applies Q to the last item as to the first. Vendor-free, a sub-gemm
+// or sub-trmm whose natives stop at 65535 may have no route: then the call throws NoRouteError,
+// and otherwise its answer is right. Never a raw launch error or a wrong answer.
+TYPED_TEST(OrmqrCandidates, BlockedPastTheGridLimitRunsOrHasNoRoute) {
+    using T = typename TestFixture::T;
+    const C blocked{om::Blocked{}};
+    const Transpose t = kCx<T> ? Transpose::ConjTrans : Transpose::Trans;
+    auto p = make_apply<T>(Spec{Side::Left, t, 2, 1, 1, 65536});
+    ASSERT_TRUE(this->pin_accepted(blocked, p));
+    if constexpr (!select::level3_vendor_available<TestFixture::B>) {
+        try {
+            this->run_pinned(blocked, p);
+        } catch (const batchlas::NoRouteError& e) {
+            SUCCEED() << e.what();
+            return;
+        }
+    } else {
+        this->run_pinned(blocked, p);
+    }
+    expect_applied(*this->ctx, p, name(blocked, p.s));
 }
 
 // §8.1: each candidate on every straddle; accepted shapes are correct, refused ones throw from
@@ -585,20 +616,25 @@ TYPED_TEST(OrmqrCandidates, RetiredProviderVariableIsNotRead) {
     }
 }
 
-// Auto against the shipped transcribed tables on a device that reads them: blocked first
-// everywhere. Their complex-Trans rows name the vendor (the old router's choice), but that call
-// is refused before choose() (ComplexTransIsRefusedUnderEveryPin).
+// Auto against the shipped table of this device (shipped_table_pick.hh). Complex-Trans calls are
+// refused before choose() (ComplexTransIsRefusedUnderEveryPin), so they are not probed.
 TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const auto tables = select::tables_in_borrow_order("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device does not read a transcribed ormqr table";
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
                           Spec{Side::Left, Transpose::Trans, 33, 20, 1, 5}, Spec{Side::Right, Transpose::Trans, 2, 1, 700, 3000}}) {
-        auto p = make_apply<T>(s);
         if (!TestFixture::defined(s.trans)) continue;
-        EXPECT_EQ(this->auto_choice(p), "blocked") << label(s);
+        auto p = make_apply<T>(s);
+        const select::Key key{{"side", s.side == Side::Left ? "L" : "R"},
+                              {"trans", s.trans == Transpose::NoTrans ? "N" : (s.trans == Transpose::Trans ? "T" : "C")},
+                              {"m", s.m}, {"k", s.k}, {"q", s.q}, {"batch", s.batch}};
+        const std::string want = test_utils::shipped_table_pick<C>("ormqr", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                                   key, [&] {
+                                                                       auto q = make_apply<T>(s);
+                                                                       this->run(q);
+                                                                   });
+        ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+        EXPECT_EQ(this->auto_choice(p), want) << label(s);
         expect_applied(*this->ctx, p, "auto " + label(s));
     }
 }
@@ -763,6 +799,7 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
 // deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
                         {"cfloat", "L", "T", 64, 1, 1024, 2048, "vendor", 1}, {"cfloat", "R", "C", 5, 2, 3, 4, "blocked", 2},
@@ -773,16 +810,17 @@ TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             const std::string what = t.file + ":" + std::to_string(row->line);
             ASSERT_EQ(row->ranked.size(), r.len) << what;
             EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
             EXPECT_EQ(row->ranked.back().spelling, "vendor") << what;
-            EXPECT_FALSE(row->timed) << what;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

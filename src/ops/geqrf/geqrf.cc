@@ -75,6 +75,8 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> work_space) {
     geqrf_validate_params<T>(A);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n and k = min(m, n), as the old shape builder set them.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size()};
@@ -88,6 +90,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
 template <Backend Back, typename T>
 size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     geqrf_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::geqrf::spec, ctx, ops::geqrf::key_of<T>(A), ops::geqrf::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::geqrf::can_run<T>(k, d, A); });
@@ -97,6 +100,7 @@ size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
 template <Backend Back, typename T>
 std::size_t geqrf_buffer_size_bound(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     geqrf_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const select::Device& d = select::device_of<Back>(ctx, ops::geqrf::spec.vendor);
     std::size_t need = 0;
     for (const auto& c : ops::geqrf::candidates<T>()) {

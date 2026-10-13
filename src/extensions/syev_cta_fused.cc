@@ -224,16 +224,17 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     offdiag = real_part_f(e_c);
                 }
 
-                // ---- Ordering: each lane writes its eigenvalue to its rank slot; index
-                // order breaks ties, so repeated eigenvalues still give a bijection. ----
+                // ---- Ordering: each lane writes its eigenvalue to its rank slot. ----
                 const auto slot_of = [&](Real wj) {
                     if (!do_sort) return lane;
                     int32_t rank = 0;
                     for (int32_t k = 0; k < nn; ++k) {
                         const Real wk = select_from_group(part, wj, static_cast<uint32_t>(k));
-                        const bool before = ascending
-                            ? (wk < wj || (wk == wj && k < lane))
-                            : (wk > wj || (wk == wj && k < lane));
+                        // Strict total order (NaN last, ties on index): a bijection even for NaN.
+                        const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
+                        const bool before = (nan_j != nan_k) ? nan_j
+                                          : (nan_j || wk == wj) ? (k < lane)
+                                          : (ascending ? wk < wj : wk > wj);
                         if (before) ++rank;
                     }
                     return rank;

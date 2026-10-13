@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 #include "test_utils.hh"
@@ -110,6 +111,24 @@ protected:
 };
 
 TYPED_TEST_SUITE(SteqrTest, SteqrTestTypes);
+
+// A missing kernel image is a failure unless the run opts in: the skip below every steqr launch
+// would otherwise keep a dropped instantiation green.
+TEST(MissingKernelPolicy, SkipsOnlyWhenAllowed) {
+    const char* msg = "No kernel named _ZTS10steqr_cta was found";
+    {
+        const ScopedEnvVar unset("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", nullptr);
+        EXPECT_FALSE(test_utils::may_skip_missing_kernel(msg));
+    }
+    {
+        const ScopedEnvVar zero("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "0");
+        EXPECT_FALSE(test_utils::may_skip_missing_kernel(msg));
+    }
+    const ScopedEnvVar allow("BATCHLAS_TEST_ALLOW_MISSING_KERNEL", "1");
+    EXPECT_TRUE(test_utils::may_skip_missing_kernel(msg));
+    EXPECT_TRUE(test_utils::may_skip_missing_kernel("PI_ERROR_INVALID_KERNEL_NAME"));
+    EXPECT_FALSE(test_utils::may_skip_missing_kernel("CUDA_ERROR_ILLEGAL_ADDRESS"));
+}
 
 TYPED_TEST(SteqrTest, SingleMatrix) {
     using T = typename TestFixture::ScalarType;
@@ -495,10 +514,6 @@ inline void stress_debug_log(const char* msg) {
     }
 }
 
-inline bool is_kernel_not_found_message(const std::string& msg) {
-    return msg.find("No kernel named") != std::string::npos;
-}
-
 template <typename Real>
 Real stress_large_scale() {
     if constexpr (std::is_same_v<Real, float>) {
@@ -675,12 +690,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
                            /*check_cta_against_ref=*/true);
 
     } catch (const sycl::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
         }
         throw;
@@ -1024,7 +1039,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
             (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
             this->ctx->wait();
         } catch (const std::exception& e) {
-            if (is_kernel_not_found_message(e.what())) {
+            if (test_utils::may_skip_missing_kernel(e.what())) {
                 GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
             }
             throw;
@@ -1050,6 +1065,50 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
         EXPECT_LE(max_err, max_tol) << "n=" << n << ": worst relative eigenvalue error over the batch";
     }
 }
+
+// steqr_legacy (NETLIB stedc's only solver) must orient each block like dsteqr: item 0 is graded
+// large-at-top, item 1 is its reversal; every eigenvalue is checked relative to its own magnitude.
+// The inverted rule measured 2.6e-12 / 1.9e-11 here, the dsteqr rule 2.4e-15 / 4.4e-15 (bound 1.7e-13).
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
+    constexpr int n = 48, batch = 2;
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    Vector<double> diag(n, 0.0, batch);
+    Vector<double> sub(n - 1, 0.0, batch);
+    Vector<double> evals = Vector<double>::zeros(n, batch);
+    std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+    std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const int k = b == 0 ? i : n - 1 - i;
+            diag(i, b) = (i % 3 == 0 ? -1.0 : 1.0) * std::pow(10.0, -6.0 * k / (n - 1));
+            hd[b][i] = diag(i, b);
+        }
+        for (int i = 0; i < n - 1; ++i) {
+            sub(i, b) = 0.3 * std::sqrt(std::fabs(diag(i, b) * diag(i + 1, b)));
+            he[b][i] = sub(i, b);
+        }
+    }
+    StedcParams<double> params;
+    auto ws = UnifiedVector<std::byte>(stedc_buffer_size<Backend::NETLIB, double>(ctx, n, batch, JobType::EigenVectors, params));
+    auto Z = Matrix<double>::Zeros(n, n, batch);
+    (void)stedc<Backend::NETLIB, double>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, Z.view());
+    ctx.wait();
+
+    for (int b = 0; b < batch; ++b) {
+        const auto ref = sturm_eigenvalues(hd[b], he[b]);
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            const int items[] = {b};
+            const std::vector<std::vector<double>> one(batch, std::vector<double>{double(ref[i])});
+            worst = std::max(worst, MatrixView<double, MatrixFormat::Dense>::values_error(
+                                        VectorView<double>(evals.data().data() + i, 1, batch, 1, n), one, std::fabs(double(ref[i])), items));
+        }
+        SCOPED_TRACE(b == 0 ? "large at top" : "large at bottom");
+        EXPECT_VERIFY(double, verify::Check::values, n, worst);
+    }
+}
+#endif
 
 namespace {
 
@@ -1114,7 +1173,7 @@ bool run_steqr_vectors(Queue& ctx, const std::vector<std::vector<long double>>& 
                              info.to_span());
         ctx.wait();
     } catch (const std::exception& e) {
-        if (is_kernel_not_found_message(e.what())) {
+        if (test_utils::may_skip_missing_kernel(e.what())) {
             skip_reason = e.what();
             return false;
         }
@@ -1364,6 +1423,154 @@ TYPED_TEST(SteqrTest, EmptyBatchIsANoOp) {
     };
     EXPECT_NO_THROW(run());
     for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+}
+
+// tridiagonal_solver on a graded tridiagonal (condition 1e6) scaled to 0.1 eps: an absolute deflation
+// threshold deflates every off-diagonal at once. Batch 1024 identical items, each bit-identical to
+// item 0; Q has a padded ld.
+TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 32, batch = 1024, ld = n + 3;
+    const long double scale = 0.1L * std::numeric_limits<Real>::epsilon();
+    const long double g = std::pow(1e-6L, 1.0L / (n - 1));
+
+    Vector<Real> diag(n, Real(0), batch);
+    Vector<Real> sub(n, Real(0), batch);
+    Vector<Real> w(n, Real(0), batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            diag(i, b) = static_cast<Real>(((i % 3) == 0 ? -1.0L : 1.0L) * scale * std::pow(g, i));
+            sub(i, b) = i < n - 1 ? static_cast<Real>(0.5L * scale * std::pow(g, i + 0.5L)) : Real(0);
+        }
+    }
+    Matrix<Real> Qbuf(ld, n, batch);
+    const MatrixView<Real, MatrixFormat::Dense> Q(Qbuf.view().data_ptr(), n, n, ld, ld * n, batch);
+    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, Real>(*this->ctx, n, batch, JobType::EigenVectors));
+    (void)tridiagonal_solver<B, Real>(*this->ctx, diag.data(), sub.data(), w.data(), ws.to_span(),
+                                      JobType::EigenVectors, Q, n, batch);
+    this->ctx->wait();
+
+    for (int b = 1; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            ASSERT_EQ(w(i, b), w(i, 0)) << "item " << b << " value " << i;
+            for (int r = 0; r < n; ++r) ASSERT_EQ(Q(r, i, b), Q(r, i, 0)) << "item " << b << " Q(" << r << "," << i << ")";
+        }
+    }
+
+    auto dense_A = Matrix<Real>::Zeros(n, n, 1);
+    Vector<Real> d0(n, Real(0), 1), e0(n - 1, Real(0), 1), w_sorted(n, Real(0), 1);
+    std::vector<Real> got(n);
+    for (int i = 0; i < n; ++i) {
+        d0(i, 0) = diag(i, 0);
+        if (i < n - 1) e0(i, 0) = sub(i, 0);
+        got[i] = w(i, 0);
+    }
+    std::sort(got.begin(), got.end());
+    for (int i = 0; i < n; ++i) w_sorted(i, 0) = got[i];
+    dense_A.view().fill_tridiag(*this->ctx, e0, d0, e0).wait();
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    expect_values(VectorView<Real>(w_sorted), ref, norm2, n);
+    // expect_values is norm-relative, blind to the small end: each eigenvalue against the Sturm
+    // oracle, relative (verification.md, "Kept outside").
+    std::vector<long double> hd(n), he(n - 1);
+    for (int i = 0; i < n; ++i) hd[i] = diag(i, 0);
+    for (int i = 0; i < n - 1; ++i) he[i] = sub(i, 0);
+    const auto sturm = sturm_eigenvalues(hd, he);
+    const double rel_tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
+    for (int i = 0; i < n; ++i)
+        EXPECT_LE(double(std::fabs(got[i] - sturm[i]) / std::fabs(sturm[i])), rel_tol) << "eigenvalue " << i;
+    const MatrixView<Real, MatrixFormat::Dense> Q0(Qbuf.view().data_ptr(), n, n, ld, ld * n, 1);
+    expect_pairs(*this->ctx, dense_A.view(), Q0, VectorView<Real>(w).batch_item(0));
+}
+
+// sort() cannot permute eigenvalues with inc != 1: it throws its own error before enqueuing anything
+// (it used to argsort a temporary freed before the read, then fail in permute), and steqr without
+// sorting still accepts the view.
+TYPED_TEST(SteqrTest, SortRejectsStridedEigenvalues) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 8, batch = 2;
+    Vector<Real> diag(n, Real(1), batch), sub(n - 1, Real(0.5), batch);
+    Vector<Real> evbuf(2 * n, Real(0), batch);
+    const VectorView<Real> evals(evbuf.data(), n, batch, 2, 2 * n);
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool sort : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.sort = sort;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params));
+        auto run = [&] {
+            (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            this->ctx->wait();
+        };
+        if (!sort) {
+            EXPECT_NO_THROW(run());
+            continue;
+        }
+        try {
+            run();
+            ADD_FAILURE() << "sort with inc = 2 did not throw";
+        } catch (const batchlas::invalid_argument& e) {
+            EXPECT_EQ(std::string(e.what()).rfind("sort:", 0), 0u) << "thrown after sort started: " << e.what();
+        }
+    }
+}
+
+// n = 48 takes steqr_wg. block_rotations with 2 * block_size > max_sweeps stores 2 * block_size
+// sweeps of rotations, and transpose_working_vectors changes the working layout: the size query must
+// follow both. The workspace is exactly steqr_buffer_size bytes, poisoned with 0x7f.
+TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    Vector<Real> evals = Vector<Real>::zeros(n, batch);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+    for (const bool transposed : {false, true}) {
+        SteqrParams<Real> params = {};
+        params.block_rotations = true;
+        params.block_size = 16;
+        params.max_sweeps = 10;
+        params.sort = true;
+        params.transpose_working_vectors = transposed;
+        UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params),
+                                    std::byte(0x7f));
+        (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        this->ctx->wait();
+        double norm2 = 0;
+        const auto ref = lapacke_spectra(dense_A.view(), norm2);
+        expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.view().all_items());
+        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<Real>(evals), dense_A.view().all_items());
+    }
+}
+
+// NoEigenVectors, sort on, eigenvalues in a view of stride 4n and no eigenvector view: the sort
+// scratch must not follow the caller's padding, which the size query never sees.
+TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 48, batch = 4, stride = 4 * n;
+    Vector<Real> diag = Vector<Real>::random(n, batch);
+    Vector<Real> sub = Vector<Real>::random(n - 1, batch);
+    UnifiedVector<Real> evals_buf(std::size_t(stride) * batch, Real(0));
+    const VectorView<Real> evals(evals_buf.data(), n, batch, 1, stride);
+    auto dense_A = Matrix<Real>::Zeros(n, n, batch);
+    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    SteqrParams<Real> params = {};
+    params.max_sweeps = 10;
+    params.sort = true;
+    UnifiedVector<std::byte> ws(steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::NoEigenVectors, params),
+                                std::byte(0x7f));
+    (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::NoEigenVectors, params,
+                         MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0));
+    this->ctx->wait();
+    double norm2 = 0;
+    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    expect_values(evals, ref, norm2, n, std::nullopt, dense_A.view().all_items());
 }
 
 int main(int argc, char **argv) {

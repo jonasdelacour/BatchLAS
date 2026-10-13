@@ -457,14 +457,13 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
 template <typename T>
 Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
-    auto pool = BumpAllocator(workspace);
-    // Ensure contiguous unit-inc views for argsort
-    VectorView<T> eigs_unit = eigs;
+    // permute() needs unit increments; refuse before anything is enqueued.
     if (eigs.inc() != 1) {
-        auto tmp = Vector<T>(eigs.size(), eigs.batch_size(), Stride{eigs.size()}, Inc{1});
-        (void)VectorView<T>::copy(ctx, tmp, eigs);
-        eigs_unit = VectorView<T>(tmp);
+        throw batchlas::invalid_argument("sort: eigenvalues must have unit increment (inc=1), got inc=" +
+                                         std::to_string(eigs.inc()));
     }
+    auto pool = BumpAllocator(workspace);
+    const VectorView<T>& eigs_unit = eigs;
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.

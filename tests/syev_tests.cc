@@ -43,9 +43,8 @@ TYPED_TEST(SyevTest, DiagTest) {
     constexpr Backend B = TestFixture::BackendType;
     const int n = 4;
     auto diag = UnifiedVector<T>(n);
-    // Initialize random number generator
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    // Fixed seed: a random_device seed made every run, and every compiler, a different matrix.
+    std::mt19937 gen(4747u);
     std::uniform_real_distribution<typename base_type<T>::type> dis(-10.0, 10.0);
 
     // Populate diagonal with random values
@@ -71,13 +70,14 @@ TYPED_TEST(SyevTest, DiagTest) {
     });
     (void)syev(*this->ctx, A_view, W.to_span(), {.jobz = JobType::NoEigenVectors}, workspace.to_span());
     (*this->ctx).wait();
+    std::vector<std::vector<double>> ref(1);
+    double scale = 0.0;
     for (int i = 0; i < n; ++i) {
-        if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-            EXPECT_NEAR(std::real(diag[i]), W[i], 1e-5);
-        } else if constexpr (std::is_floating_point_v<T>) {
-            EXPECT_NEAR(diag[i], W[i], 1e-5);
-        }
+        ref[0].push_back(static_cast<double>(std::real(diag[i])));
+        scale = std::max(scale, std::fabs(ref[0].back()));
     }
+    EXPECT_VERIFY(T, verify::Check::values, n,
+                  MatrixView<T>::values_error(VectorView<typename base_type<T>::type>(W, n), ref, scale, std::vector<int>{0}));
 }
 
 // ---------------------------------------------------------------------------

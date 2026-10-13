@@ -27,7 +27,7 @@ every item at the top-level extents.
 | `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`syrk.cc:58-59`) | float, double |
 | `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`syrk.cc:62-63`) | float |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; `transA != ConjTrans`; tile ceiling (`syr2k.cc:53-55`) | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
 | `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`trmm.cc:56-61`) | all four |
 | `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`trmm.cc:63-68`) | all four |
@@ -65,7 +65,9 @@ are listed at [the level-3 pin words](dispatch.md#the-level-3-pin-words).
 
 - `BATCHLAS_TRMM_ROUTE=vendor` is always the `cublas?trmm` loop, even where a tile kernel ranks first.
   The old meaning (expand plus gemm) is now `expand`.
-- `herk` reaches the Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`).
+- `herk` reaches the Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`),
+  and then only where syrk's Gram `can_run` would admit it: `batch` in [1, 65535], `max_wg >= gram_threads(n)`
+  and the tile in SLM (`src/backends/cublas.cc:374-377`).
 - `symm` does not read `BATCHLAS_EXPAND_ROUTE`; hemm, herk and her2k do.
 
 ### Level-3: hemm, herk and her2k still choose by fixed rules
@@ -75,11 +77,11 @@ These three have no `choice.hh` and no table. Their entry points (`src/ops/level
 cuBLAS backend then picks between one batched GEMM into scratch and the per-item vendor loop:
 
 ```cpp
-// hemm_vendor (src/backends/cublas.cc:192-193); expansion_preferred is triangular_expand.hh:31-42
+// hemm_vendor (src/backends/cublas.cc:200-201); expansion_preferred is triangular_expand.hh:32-43
 expansion_fits(ctx, k, batch, bytes) && expansion_preferred(max(m, n, k), batch)  // batch >= 4 || max_dim >= 256
-// herk_vendor (cublas.cc:366); herk_gemm_preferred is cublas.cc:257-263
+// herk_vendor (cublas.cc:383); herk_gemm_preferred is cublas.cc:270-276
 herk_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)             // batch >= 4 && n <= 768
-// her2k_vendor (cublas.cc:436); her2k_gemm_preferred is src/expansion_budget.hh:65-69
+// her2k_vendor (cublas.cc:457); her2k_gemm_preferred is src/expansion_budget.hh:70-74
 her2k_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)            // batch >= 2 || n >= 128
 ```
 
@@ -267,7 +269,7 @@ The reasons behind the tile kernels' shapes. The headers keep the invariants and
 
 `src/backends/trmm_triangular_tiles.hh`.
 
-- **The triangle was never exploited before.** `src/extensions/trmm.cc` recursed to a 256-wide block and then
+- **The triangle was never exploited before.** The generic `src/extensions/trmm.cc` (deleted) recursed to a 256-wide block and then
   called the GEMM it was meant to replace. On CUDA the `expand` family (now second on every Left row) ran a full GEMM.
 - **A loop bound, not a mask.** For `C = alpha*op(A)*B` with op(A) upper triangular, output row i touches only
   p >= i, so an output tile rooted at row m0 starts its reduction at p = m0. Only the k-tile straddling the
@@ -397,9 +399,10 @@ n2=256 batch 1024 (**7.7x slower**), because double syr2k has only the per-batch
 
 ### Level-3: generic syrk and syr2k fallbacks fold one triangle
 
-The generic fallbacks in `src/extensions/syrk.cc` and `syr2k.cc` (used where no native `?syrk`/`?syr2k` is wired,
-MKL) once wrote **both** triangles and overwrote the half the caller owns. The product now goes to scratch, and
-`fold_symmetric_product_into_triangle` (`src/extensions/symmetric_product_fold.hh`) folds only the named triangle:
+The generic fallbacks in `src/extensions/syrk.cc` and `syr2k.cc` once wrote **both** triangles and overwrote the
+half the caller owns. Both files are deleted: no backend instantiated them, and they redefined the public templates.
+`fold_symmetric_product_into_triangle` (`src/extensions/symmetric_product_fold.hh`, still used by `potrf_blocked`)
+folds only the named triangle:
 `C(i,j) := product(i,j) + beta*C(i,j)`. With beta == 0, C is not read, so a poisoned C cannot produce NaN.
 
 ### her2k alpha alignment fault
@@ -438,10 +441,11 @@ netlib's host tasks throw `std::runtime_error`.
   costs several times the GEMM it feeds, and it would be freed while kernels are still enqueued.
 - **Mirrored expansion.** It stages one tile pair per work-group through local memory: 1.5 n^2 of traffic, against
   3 n^2 for a copy plus an in-place symmetrize.
-- **Two hard ceilings.** SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31
+- **Three hard ceilings.** The batch sits in grid z of `expand_mirrored` and `accumulate_hermitian`, so
+  `expansion_fits` refuses batch > 65535 (`ops::symm::kMaxGridBatch`). SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31
   elements (a thrown `sycl::exception` at n = 2048 batch 512). The scratch also shares the device with A, B and C,
   so the budget is a quarter of global memory. `BATCHLAS_EXPAND_MAX_BYTES` lowers the memory ceiling. A shape past
-  either ceiling fails `can_run`, and the row's next entry runs.
+  any ceiling fails `can_run` (hemm, herk, her2k: takes the per-item loop), and the row's next entry runs.
 - **Why `expansion_budget.hh` is outside `src/backends/`.** `src/extensions/sytrd_blocked.cc` must know whether her2k
   takes its GEMM route, and it is also built for ROCm and the host. There is one definition, because a reimplemented
   ceiling drifts silently.
@@ -451,11 +455,9 @@ netlib's host tasks throw `std::runtime_error`.
 
 ### trmm: the generic recursion reads the whole square of A
 
-`src/extensions/trmm.cc` (the MKL instantiation) ends its recursion at n <= 256 in a plain `gemm` on the diagonal block
-with `beta = 1`. Read as written, the base case uses A's unreferenced triangle and its stored diagonal under
-`Diag::Unit`, and accumulates into C rather than overwriting it. It matches BLAS only when the caller zeroed the
-opposite triangle and C. This was found by reading and is **not confirmed by a test**. A poison test in the style of
-[the trmm poison test](#the-trmm-poison-test) against the MKL backend would settle it.
+`src/extensions/trmm.cc` ended its recursion at n <= 256 in a plain `gemm` with `beta = 1` on the diagonal block,
+reading A's unreferenced triangle. It was never instantiated by any backend and is deleted; every trmm goes through
+`src/ops/trmm/trmm.cc`.
 
 ## Open debts {#level3-open-debts}
 

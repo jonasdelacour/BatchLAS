@@ -4,7 +4,8 @@
 
 Every `BATCHLAS_*` variable the library reads is captured once into `batchlas::Settings`
 (`include/batchlas/settings.hh`, `src/util/settings.cc`). The user guide is
-[Configuration](../cpp-api.md#configuration). Test and benchmark-only variables are not listed.
+[Configuration](../cpp-api.md#configuration). Test and benchmark-only variables are not listed,
+except [`BATCHLAS_VERIFY_RECORD`](#environment-verify-record-is-read-raw), which is read raw.
 
 ## Snapshot and reload
 
@@ -204,6 +205,17 @@ Fixing these changes behaviour, so each fix belongs in its own commit:
 Three diagnostics knobs open a path for writing: the kernel trace (`kernel_trace_path`), the
 selection coverage (`$BATCHLAS_COVERAGE_OUT.<pid>`) and the band-reduction dump
 (`$BATCHLAS_DUMP_BANDR1_DIR`). Two write from an `atexit` handler. `configure()` lets an embedding application clear them first.
+
+## BATCHLAS_VERIFY_RECORD is read raw {#environment-verify-record-is-read-raw}
+
+`BATCHLAS_VERIFY_RECORD=<path>` makes every `verify::pass` append one calibration row to `<path>`
+(@ref design_verification). It is the one `BATCHLAS_*` variable read under `include/` outside `Settings`, deliberately:
+`verify/tolerance.hh` belongs to the uninstalled `batchlas::verify` target (tests, benchmarks, the
+tuner), not the library, and tests set it with a bare `setenv` mid-process.
+
+- Read with `std::getenv` on every `pass`; no snapshot, no `configure()` override, no reload.
+- The file stays open while the path is unchanged. A new path reopens it; unset or empty closes it.
+- A path that cannot be opened records nothing and is retried on the next `pass`.
 
 ## The unsafe group and its gate {#environment-the-unsafe-group-and-its-gate}
 

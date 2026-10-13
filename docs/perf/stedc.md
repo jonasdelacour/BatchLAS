@@ -32,6 +32,12 @@ bit-identical to the old code and is kept as the A/B reference.
 > width 32 to width 4. At n = 64 the naive product overflowed or underflowed and poisoned the
 > eigenvalues. The product is accumulated as a (mantissa, exponent) pair with `frexp` renormalization.
 
+> **Warning:** Widening the group is the opposite hazard. Each lane's mantissa is in [0.5, 1), so one
+> group-wide product over W lanes can reach 0.5^W, which is zero in float at W = 256. The Fused merge
+> passes its work-group width (`merge_threads`). At n = 512, W = 256, float, eigen_residual was 0.56
+> (`StedcTest.StedcFusedWideWorkgroupRescale`). The reduction now runs in rounds of 32 lanes and
+> renormalizes between rounds. At W <= 32 that is one round, the same reduction as before.
+
 > **Warning:** `dd` is rarely a multiple of `parts_per_wg`. A plain `eid < dd` bound lets some
 > partitions leave early, while the sub-group shuffles need every lane. Both loops run a uniform trip
 > count and mask the work.

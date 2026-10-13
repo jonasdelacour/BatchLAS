@@ -209,9 +209,9 @@ sycl::event ormbr_larft_forward_columnwise_batched_wg(Queue& q,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch) return;
 
-                T* t_b = t_data + b * stride_t;
-                const T* v_b = v_data + b * stride_v;
-                const T* tau_b = tau_data + b * tau_stride + tau_offset;
+                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
+                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
+                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
 
                 const sycl::group<1> g = it.get_group();
                 const int lid = static_cast<int>(it.get_local_linear_id());
@@ -346,9 +346,9 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 } else if (r > c) {
                                                     const int row = i0 + c;
                                                     const int col = i0 + 1 + r;
-                                                    val = conj_if_needed(a_ptr[b * stride_a + row + col * ld_a]);
+                                                    val = conj_if_needed(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
                                                 }
-                                                v_out[b * stride_v_out + r + c * ld_v_out] = val;
+                                                v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
                                             });
     });
 }

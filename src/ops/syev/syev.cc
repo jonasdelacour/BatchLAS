@@ -44,13 +44,14 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 // drivers are GPU kernels on a GPU backend (a NETLIB instantiation would call netlib on device
 // memory) and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
 // sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
-// TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Cta and CtaFused also exclude
-// ROCm, where steqr_cta gives wrong eigenvalues (gfx1200). No term reads heterogeneity: neither
-// the old router nor any driver checks it.
+// TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
+// runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
+// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200).
 template <Backend B, class T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool native = B != Backend::NETLIB && d.is_gpu && A.rows() == A.cols() && n >= 1;
+    const bool homogeneous = !A.is_heterogeneous();
+    const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
     const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
@@ -60,7 +61,7 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
         [&](Jacobi) { return small; },
         [&](Blocked) { return large; },
         [&](TwoStage) { return large; },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
 
@@ -127,6 +128,8 @@ template <Backend Back, typename T>
 Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> eigenvalues,
            JobType jobtype, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     ops::syev::validate<T>(A, "syev");
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     const select::Key key = ops::syev::key_of<T>(A, jobtype);
     return select::run<Back, T>(
@@ -146,6 +149,7 @@ template <Backend Back, typename T>
 size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo) {
     ops::syev::validate<T>(A, "syev_buffer_size");
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::syev::spec, ctx, ops::syev::key_of<T>(A, jobtype), ops::syev::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::syev::can_run<Back, T>(k, d, A); });
