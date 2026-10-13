@@ -28,7 +28,8 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
 }
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause
-// is the argument check at the top of that driver's *_dispatch.
+// is the argument check at the top of that driver's *_dispatch. The vendor factors each item at
+// the storage order, so no family takes a heterogeneous batch (known-defects #12).
 template <class T>
 bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              Uplo uplo) {
@@ -52,7 +53,7 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
             return native && uplo == Uplo::Lower && sycl_potrf::potrf_blocked_available<T>() &&
                    sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
     }, c);
 }
 
@@ -107,6 +108,8 @@ template <Backend B, typename T>
 Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
             Span<int32_t> info) {
     potrf_validate_params<T>(A, uplo);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // uplo is part of the coverage key; never inferred.
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     return select::run<B, T>(
@@ -118,6 +121,7 @@ Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });

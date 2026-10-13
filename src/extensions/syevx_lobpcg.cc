@@ -45,6 +45,13 @@ namespace batchlas {
 
 namespace {
 
+// BATCHLAS_SYEVX_PROJECTED_VENDOR: the tiny projected solves (XtAX, StAS) go to the vendor syev.
+// The run path and the buffer size must both read it, or vendor-free sizing throws.
+bool projected_vendor_opted_in() {
+    const char* v = batchlas::settings().selection.syevx_projected_vendor.get();
+    return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
+}
+
 // Block power-iteration steps applied to the random start; meaningful only when
 // searching for the largest eigenpairs. Kept small deliberately: an over-compressed
 // block is rank-deficient in floating point, at which point the Cholesky-based ortho
@@ -367,15 +374,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
               spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        // Diagnostic escape hatch for the tiny projected solves (XtAX, StAS).
-        const bool prefer_vendor_projected_syev =
-            (B != Backend::NETLIB) &&
-            ([]() {
-                if (const char* v = batchlas::settings().selection.syevx_projected_vendor.get()) {
-                    return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
-                }
-                return false;
-            })();
+        const bool prefer_vendor_projected_syev = (B != Backend::NETLIB) && projected_vendor_opted_in();
 
         // syev picks its provider from the matrix shape, so workspace demand is NOT
         // monotone in the problem size: the 2*block_vectors restart problem can demand
@@ -1298,8 +1297,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
-                // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
-                if constexpr (B != Backend::NETLIB) {
+                if constexpr (B != Backend::NETLIB) if (projected_vendor_opted_in()) {
                     const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);

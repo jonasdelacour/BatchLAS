@@ -86,7 +86,9 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n matrices; overwritten with L and U
+/// @param A           batch of n x n matrices; overwritten with L and U. An m x n batch is
+///                    factored whole by the NETLIB and ROCm vendors (min(m, n) pivots per item,
+///                    packed); CUDA has no route for it
 /// @param pivots      pivot output, at least `n * batch` `int64_t` elements
 /// @param work_space  device-accessible scratch of at least getrf_buffer_size() bytes
 /// @param info        per-item LAPACK status, one int32 per batch item: 0 on

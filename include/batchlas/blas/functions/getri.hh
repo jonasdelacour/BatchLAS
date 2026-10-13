@@ -62,8 +62,9 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     }
 }
 
-/// @brief Validates A and C for the positional getri(): non-negative extents only.
-/// @throws batchlas::invalid_argument on negative extents of A or C
+/// @brief Validates A and C for the positional getri(): non-negative extents, C not aliasing A.
+/// @throws batchlas::invalid_argument on negative extents of A or C, or if a non-empty C
+///         starts at A's storage (getri is out of place on every backend)
 /// @ingroup api_factorizations_lowlevel
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
@@ -73,6 +74,9 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
         throw batchlas::invalid_argument(
             "GETRI: Matrix dimensions cannot be negative (C: rows=" +
             std::to_string(C.rows()) + ", cols=" + std::to_string(C.cols()) + ")");
+    }
+    if (A.rows() > 0 && A.batch_size() > 0 && C.data_ptr() == A.data_ptr()) {
+        throw batchlas::invalid_argument("GETRI: C aliases A; getri is out of place");
     }
 }
 
@@ -97,7 +101,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @return event of the last enqueued kernel
 /// @pre A and C square of the same order and batch, and
 ///      `pivots.size() >= n * batch` (checked by the option overloads only)
-/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::invalid_argument on negative extents, or if C aliases A
 /// @throws batchlas::NoRouteError if no native kernel can run the shape and the
 ///         vendor library was not built in
 /// @note The workspace size does not depend on whether @p info is requested.

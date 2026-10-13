@@ -26,12 +26,12 @@ The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a ho
 | `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:48`) |
 | `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:50`) |
 | `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:53-54`) |
-| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor`; the only family for non-square or heterogeneous A |
+| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
 | `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
 | `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
-| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`; also takes a non-conforming pair |
+| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |
 | `getri` | `blocked` | `getri_blocked.cc`, writes P into C, two public `trsm`, zero workspace | `getri_blocked_available<T>()` (`getri.cc:49-50`) |
-| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B>` (`getri.cc:52`) |
+| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B> && !A.is_heterogeneous()` (`getri.cc:52`) |
 | `gesv` | `tiny` | `gesv_tiny.cc`, fused factor and solve | `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4`, `max_wg >= 64` (`gesv.cc:45-47`) |
 | `gesv` | `blocked` | public `getrf`, then public `getrs`; each child selects for itself | homogeneous A and B (`gesv.cc:49`) |
 

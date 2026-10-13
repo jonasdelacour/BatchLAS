@@ -1,5 +1,5 @@
 // The public hemm/herk/her2k entry points, defined outside every vendor TU so the API
-// links in a build with no vendor library. They go straight to backend::<op>_vendor<B, T>
+// links in a build with no vendor library. After the shape checks they go to backend::<op>_vendor<B, T>
 // (whose expand/fold-into-gemm arms are still hand-written in cublas.cc), or throw
 // NoRouteError when no vendor library is compiled in. symm, syrk, syr2k and trmm use
 // flat kernel selection: src/ops/<op>/<op>.cc.
@@ -10,7 +10,9 @@
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/her2k.hh>
 
+#include <batchlas/error.hh>
 #include <batchlas/no_route.hh>
+#include "../../backends/level3_shape.hh"
 #include "../../select/vendor.hh"
 
 #include "../../util/template-instantiations.hh"
@@ -37,6 +39,13 @@ Event hemm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
+    // Both arms (expansion into one gemm, the per-item vendor loop) run each item at the top-level
+    // extents, so a heterogeneous batch would get a padded answer.
+    backend::shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+    if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous())
+        throw batchlas::invalid_argument("HEMM: a heterogeneous batch (per-item active dims), which no arm serves");
+    // An empty problem is a no-op in every build and under any pin, as symm's is.
+    if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     if constexpr (Back == Backend::ROCM) {
         throw_no_rocm_wrapper<T>(Op::hemm);
     } else if constexpr (!select::level3_vendor_available<Back>) {
@@ -55,6 +64,10 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
+    backend::shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+    if (A.is_heterogeneous() || C.is_heterogeneous())
+        throw batchlas::invalid_argument("HERK: a heterogeneous batch (per-item active dims), which no arm serves");
+    if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     if constexpr (Back == Backend::ROCM) {
         throw_no_rocm_wrapper<T>(Op::herk);
     } else if constexpr (!select::level3_vendor_available<Back>) {
@@ -74,6 +87,10 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
+    backend::shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+    if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous())
+        throw batchlas::invalid_argument("HER2K: a heterogeneous batch (per-item active dims), which no arm serves");
+    if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     if constexpr (Back == Backend::ROCM) {
         throw_no_rocm_wrapper<T>(Op::her2k);
     } else if constexpr (!select::level3_vendor_available<Back>) {

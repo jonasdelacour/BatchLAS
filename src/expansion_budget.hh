@@ -2,6 +2,7 @@
 
 #include "math-helpers.hh"
 #include "queue.hh"
+#include "ops/symm/choice.hh"
 
 #include <batchlas/settings.hh>
 #include <batchlas/util/mempool.hh>
@@ -33,9 +34,13 @@ std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
     return sizer.required_bytes();
 }
 
-// Two hard ceilings, not tuned: the int-linearised SYCL range (2^31 elements) and a quarter of global
-// memory, which BATCHLAS_EXPAND_MAX_BYTES lowers. Past either the caller takes its no-scratch route.
+// Three hard ceilings, not tuned: the batch in grid z (expand_mirrored, accumulate_hermitian), the
+// int-linearised SYCL range (2^31 elements) and a quarter of global memory, which
+// BATCHLAS_EXPAND_MAX_BYTES lowers. Past any of them the caller takes its no-scratch route.
 inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes) {
+    if (batch > ::batchlas::ops::symm::kMaxGridBatch) {
+        return false;
+    }
     const std::size_t elements = static_cast<std::size_t>(n) *
                                  static_cast<std::size_t>(n) *
                                  static_cast<std::size_t>(batch);

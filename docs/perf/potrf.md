@@ -35,7 +35,7 @@ Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel
 * `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (`:43`).
 * `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)` (`:44-48`).
 * `blocked`: `Uplo::Lower`, `potrf_blocked_available<T>()`, `cta_max_n >= 1` (`:50-53`).
-* `vendor`: `d.has_vendor` (`:55`).
+* `vendor`: `d.has_vendor && !A.is_heterogeneous()` (`:56`).
 
 There is no `uplo` term on `cta` or `tiny`: Upper is the same recurrence on `S(i,c) = conj(A(c,i))`, a load and store
 transform. `blocked` has no lower order bound, because a correctness gate must not refuse a shape the driver serves.

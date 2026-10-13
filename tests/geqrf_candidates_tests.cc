@@ -495,8 +495,8 @@ TYPED_TEST(GeqrfCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous batch: one launch has one (m, n), so every native pin throws. Auto takes the
-// vendor; vendor-free there is no route.
+// A heterogeneous batch: one launch has one (m, n), so every native pin throws, and the vendor
+// runs each item at the top-level (m, n). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -517,7 +517,7 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     }
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     auto size = [&] { (void)geqrf_buffer_size<B, T>(*this->ctx, H, p.tau.to_span()); };
-    if constexpr (TestFixture::kVendor) EXPECT_NO_THROW(size());
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(size());
     else EXPECT_THROW(size(), batchlas::NoRouteError);
 }
 

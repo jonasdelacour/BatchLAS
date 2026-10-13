@@ -400,11 +400,10 @@ BatchLAS therefore needs no data files at run time.
 - An unchanged table set leaves the generated file untouched, so its timestamp holds and the TU is not
   recompiled.
 
-**Staleness.** `scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py`
-recompute the kernel-source hash that each table header records (`kernels=<hash>`, kernel hash v2 over
-the sources listed in `tools/tune/<op>_spec.cc`) and warn on a mismatch. It is a warning only: a stale
-table stays in use, since a slightly stale ranking beats none. The tuner computes the same hash. There
-is no configure-time check.
+**Staleness.** One function, `sweep_to_table.stale_kernel_warnings`, used by
+`scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`
+([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). It is a warning only: a stale table stays
+in use. A table with only converted/transcribed rows is never stale. There is no configure-time check.
 
 **Run time.** Tables are parsed lazily per `(op, dtype)`, on the first selection that needs them, and
 cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in
