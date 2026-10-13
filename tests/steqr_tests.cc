@@ -1051,6 +1051,50 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
     }
 }
 
+// steqr_legacy (NETLIB stedc's only solver) must orient each block like dsteqr: item 0 is graded
+// large-at-top, item 1 is its reversal; every eigenvalue is checked relative to its own magnitude.
+// The inverted rule measured 2.6e-12 / 1.9e-11 here, the dsteqr rule 2.4e-15 / 4.4e-15 (bound 1.7e-13).
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
+    constexpr int n = 48, batch = 2;
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    Vector<double> diag(n, 0.0, batch);
+    Vector<double> sub(n - 1, 0.0, batch);
+    Vector<double> evals = Vector<double>::zeros(n, batch);
+    std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+    std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            const int k = b == 0 ? i : n - 1 - i;
+            diag(i, b) = (i % 3 == 0 ? -1.0 : 1.0) * std::pow(10.0, -6.0 * k / (n - 1));
+            hd[b][i] = diag(i, b);
+        }
+        for (int i = 0; i < n - 1; ++i) {
+            sub(i, b) = 0.3 * std::sqrt(std::fabs(diag(i, b) * diag(i + 1, b)));
+            he[b][i] = sub(i, b);
+        }
+    }
+    StedcParams<double> params;
+    auto ws = UnifiedVector<std::byte>(stedc_buffer_size<Backend::NETLIB, double>(ctx, n, batch, JobType::EigenVectors, params));
+    auto Z = Matrix<double>::Zeros(n, n, batch);
+    (void)stedc<Backend::NETLIB, double>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, Z.view());
+    ctx.wait();
+
+    for (int b = 0; b < batch; ++b) {
+        const auto ref = sturm_eigenvalues(hd[b], he[b]);
+        double worst = 0;
+        for (int i = 0; i < n; ++i) {
+            const int items[] = {b};
+            const std::vector<std::vector<double>> one(batch, std::vector<double>{double(ref[i])});
+            worst = std::max(worst, MatrixView<double, MatrixFormat::Dense>::values_error(
+                                        VectorView<double>(evals.data().data() + i, 1, batch, 1, n), one, std::fabs(double(ref[i])), items));
+        }
+        SCOPED_TRACE(b == 0 ? "large at top" : "large at bottom");
+        EXPECT_VERIFY(double, verify::Check::values, n, worst);
+    }
+}
+#endif
+
 namespace {
 
 // True when item b of a sorted steqr result is right, through batchlas::verify: eigenvalues

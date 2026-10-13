@@ -30,6 +30,20 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>
     struct DiagonalizeKernel {};
 
+    namespace {
+    // Shared by lanczos and lanczos_buffer_size, which must size exactly what the run uses.
+    template <typename T>
+    SteqrParams<T> lanczos_steqr_params() {
+        return SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true, true, SortOrder::Descending};
+    }
+
+    // Item b's off-diagonals start at betas[b * n] (one n-slot per item, n - 1 used).
+    template <typename R>
+    VectorView<R> lanczos_offdiagonals(R* betas, int n, int batch_size) {
+        return VectorView<R>(betas, n - 1, batch_size, Inc{1}, Stride{n});
+    }
+    } // namespace
+
     template <Backend B, typename T, MatrixFormat MF>
     Event lanczos(Queue& ctx,
                 const MatrixView<T, MF>& A,
@@ -166,11 +180,11 @@ namespace batchlas {
 
         //Allocate workspace and compute eigenvalues/eigenvectors of the tridiagonal matrix
         auto Q_eigenvectors = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? n * n * batch_size : 0);
-        const auto steqr_params = SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true, true, SortOrder::Descending};
+        const auto steqr_params = lanczos_steqr_params<T>();
         auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
-                                                    ctx, 
+                                                    ctx,
                                                     VectorView<real_t>(alphas.data(), n, batch_size),
-                                                    VectorView<real_t>(betas.data(), n-1, batch_size),
+                                                    lanczos_offdiagonals<real_t>(betas.data(), n, batch_size),
                                                     VectorView<real_t>(W.data(), n, batch_size),
                                                     jobz,
                                                     steqr_params));
@@ -180,7 +194,7 @@ namespace batchlas {
         
         (void)steqr<B> (ctx,
             VectorView<real_t>(alphas.data(), n, batch_size),
-            VectorView<real_t>(betas.data(), n-1, batch_size),
+            lanczos_offdiagonals<real_t>(betas.data(), n, batch_size),
             VectorView<real_t>(W.data(), n, batch_size),
             steqr_ws,
             jobz,
@@ -234,10 +248,10 @@ namespace batchlas {
         basic_size += BumpAllocator::allocation_size<std::byte>(ctx,
                         steqr_buffer_size<T>(ctx, 
                             VectorView<typename base_type<T>::type>(nullptr, n, batch_size),
-                            VectorView<typename base_type<T>::type>(nullptr, n-1, batch_size),
+                            lanczos_offdiagonals<typename base_type<T>::type>(nullptr, n, batch_size),
                             VectorView<typename base_type<T>::type>(W.data(), n, batch_size),
                             jobz,
-                            SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true}));
+                            lanczos_steqr_params<T>()));
 
         // Eigenvector memory (only if needed)
         size_t eigenvectors_size = (jobz == JobType::EigenVectors) ? 

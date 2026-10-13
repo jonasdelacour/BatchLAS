@@ -200,7 +200,7 @@ namespace batchlas {
         } else {
             Queue sub_queue(ctx.device(), false);
             for (int i = 0; i < A.batch_size(); ++i) {
-                (void)orgqr<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
+                (void)orgqr_vendor<B, T>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
             }
             sub_queue.wait();
         }
