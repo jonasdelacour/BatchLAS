@@ -1196,10 +1196,12 @@ namespace batchlas {
         /// @name Verification
         /// Accuracy checks of a computed result against its inputs (@ref design_verification). Each
         /// reads every operand through ld() and stride(), promotes to double / complex<double>, runs
-        /// on @p ctx, waits, and returns the worst value over @p items (empty: default_items());
-        /// a NaN anywhere is the result. Compare it with batchlas::verify::bound(). Operands are read
-        /// as stored: apply triangularize(), hermitize() or symmetrize() to a copy first to check
-        /// against a triangle or a mirrored matrix.
+        /// on @p ctx (an in-order sibling of it when @p ctx is out of order), waits, and returns the
+        /// worst value over @p items (empty: default_items(); no items checked returns 0); a NaN
+        /// anywhere is the result. Operands are read as stored: apply triangularize(), hermitize()
+        /// or symmetrize() to a copy first to check against a triangle or a mirrored matrix.
+        /// @pre every operand is host-readable (unified or host memory) and the work that wrote it
+        ///      has completed: the caller waits on its queue first.
         /// @{
 
         /// @brief T's promoted type: double, or complex<double> for complex T.
@@ -1245,7 +1247,7 @@ namespace batchlas {
         /// @brief Every item index, 0 .. batch_size() - 1.
         std::vector<int> all_items() const;
 
-        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated: what a check reads by default.
+        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated ({} for batch 0): what a check reads by default.
         std::vector<int> default_items() const;
 
         /// @brief astype() of @p items only, packed in that order (item g at g * rows() * cols()).
@@ -1309,10 +1311,11 @@ namespace batchlas {
         static double solve_residual(Queue& ctx, const MatrixView& A0, const MatrixView& X, const MatrixView& B0,
                                      std::span<const int> items = {});
 
-        /// @brief solve_residual() with A = P L U formed per item from getrf factors @p F and pivots @p piv.
+        /// @brief solve_residual() with A = P L U formed per item from getrf factors @p F and pivots @p piv;
+        ///        @p full_limit as for solve_residual().
         static double lu_solve_residual(Queue& ctx, const MatrixView& F, const VectorView<std::int32_t>& piv,
                                         Transpose ta, const MatrixView& X, const MatrixView& B0,
-                                        std::span<const int> items = {});
+                                        std::span<const int> items = {}, double full_limit = double(1 << 28));
 
         /// @brief Componentwise max |C - (alpha op(A) op(B) + beta C0)| / (|alpha| |op(A)| |op(B)| + |beta| |C0|),
         ///        over @p c_triangle of C when given; C0 is not read when beta == 0.
@@ -1321,10 +1324,11 @@ namespace batchlas {
                                           promoted_type beta, std::span<const int> items = {},
                                           std::optional<Uplo> c_triangle = std::nullopt);
 
-        /// @brief The largest denominator of gemm_backward_error() over item @p item.
+        /// @brief The largest denominator of gemm_backward_error() over @p items (empty: A's default_items(),
+        ///        while gemm_backward_error() defaults to C's: pass both the same span when A's batch differs).
         static double gemm_max_denominator(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B,
                                            Transpose tb, const MatrixView& C0, promoted_type alpha, promoted_type beta,
-                                           int item = 0);
+                                           std::span<const int> items = {});
 
         /// @brief gemm_backward_error() of y = alpha op(A) x + beta y0.
         static double gemv_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const VectorView<T>& x,
@@ -2210,6 +2214,15 @@ namespace batchlas {
         std::vector<int> all_items() const {
             std::vector<int> items(static_cast<std::size_t>(batch_size_ > 0 ? batch_size_ : 0));
             for (std::size_t i = 0; i < items.size(); ++i) items[i] = static_cast<int>(i);
+            return items;
+        }
+
+        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated ({} for batch 0):
+        ///        what a check reads by default, as MatrixView::default_items().
+        std::vector<int> default_items() const {
+            if (batch_size_ < 1) return {};
+            std::vector<int> items{0, batch_size_ / 2, batch_size_ - 1};
+            items.erase(std::unique(items.begin(), items.end()), items.end());
             return items;
         }
 
