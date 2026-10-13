@@ -13,6 +13,19 @@ namespace batchlas
     template <Backend B, typename T>
     struct CondSpectralKernel;
 
+    // Sized and run on the same arm, so the buffer and the call branch identically.
+    template <Backend B, typename T>
+    size_t cond_syev_buffer_size(Queue &ctx, const MatrixView<T, MatrixFormat::Dense> &A,
+                                 const Span<typename base_type<T>::type> eig) {
+        if constexpr (!select::solver_vendor_available<B>) {
+            return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
+        } else {
+            return blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, A, eig,
+                                                                                  JobType::NoEigenVectors,
+                                                                                  Uplo::Lower);
+        }
+    }
+
     template <Backend B, typename T>
     Event cond_spectral_impl(Queue &ctx,
                              const MatrixView<T, MatrixFormat::Dense> &A,
@@ -45,18 +58,16 @@ namespace batchlas
                         auto eig = pool.allocate<Real>(ctx, static_cast<size_t>(batch_size) * n);
                         auto eig_span = Span<Real>(eig.data(), eig.size());
 
-                        const size_t ws_bytes = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                                       A_copy,
-                                                                                       eig_span,
-                                                                                       JobType::NoEigenVectors,
-                                                                                       Uplo::Lower);
-                        auto syev_ws = pool.allocate<std::byte>(ctx, ws_bytes);
-                        Event e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx,
-                                                             A_copy,
-                                                             eig_span,
-                                                             JobType::NoEigenVectors,
-                                                             Uplo::Lower,
-                                                             syev_ws);
+                        auto syev_ws = pool.allocate<std::byte>(ctx, cond_syev_buffer_size<B, T>(ctx, A_copy, eig_span));
+                        Event e;
+                        if constexpr (!select::solver_vendor_available<B>) {
+                            // No vendor solver (the vendor-free SYCL backend): the public syev's native kernels.
+                            e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+                        } else {
+                            e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, A_copy, eig_span,
+                                                                                   JobType::NoEigenVectors,
+                                                                                   Uplo::Lower, syev_ws);
+                        }
                         ctx.enqueue(e);
 
                         ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
@@ -128,11 +139,7 @@ namespace batchlas
             } else {
                 using Real = typename base_type<T>::type;
                 const size_t eig_size = static_cast<size_t>(A.rows()) * A.batch_size();
-                const size_t syev_ws = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                              A,
-                                                                              Span<Real>(nullptr, eig_size),
-                                                                              JobType::NoEigenVectors,
-                                                                              Uplo::Lower);
+                const size_t syev_ws = cond_syev_buffer_size<B, T>(ctx, A, Span<Real>(nullptr, eig_size));
                 return  BumpAllocator::allocation_size<T>(ctx, A.data().size()) +
                         BumpAllocator::allocation_size<T*>(ctx, A.batch_size()) +
                         BumpAllocator::allocation_size<Real>(ctx, eig_size) +

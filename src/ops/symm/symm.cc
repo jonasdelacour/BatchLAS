@@ -47,7 +47,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
     const std::int64_t k = A.rows(), batch = A.batch_size();
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && batch >= 1 && batch <= kMaxGridBatch;
+                        C.cols() >= 1 && batch >= 1 && batch <= d.max_groups_yz;
     return std::visit(overloaded{
         [&](Expand) {
             return native && backend::detail::expansion_fits(

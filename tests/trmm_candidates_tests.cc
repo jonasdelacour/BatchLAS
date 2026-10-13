@@ -272,7 +272,8 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
-        if constexpr (B != Backend::CUDA) GTEST_SKIP() << "the native families are wired for CUDA only";
+        if constexpr (B != Backend::CUDA && B != Backend::SYCL)
+            GTEST_SKIP() << "the native families are wired for CUDA and SYCL only";
     }
 
     std::size_t expand_bytes(int order, int batch) {
@@ -281,8 +282,9 @@ protected:
 
     // The limit oracle: the tile kernel's own predicate (Left, homogeneous), the grid-z ceiling,
     // the expansion's fit (BATCHLAS_EXPAND_MAX_BYTES included), the vendor's presence.
+    std::int64_t grid_yz() const { return test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family); }
     bool expect_runs(const C& c, const Spec& s) {
-        const bool grid = s.batch <= 65535;
+        const bool grid = s.batch <= grid_yz();
         if (std::holds_alternative<tm::Triangular>(c)) return grid && s.side == Side::Left;
         if (std::holds_alternative<tm::Expand>(c))
             return grid && backend::detail::expansion_fits(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch));
@@ -531,11 +533,15 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// Both native launches put the batch in grid z: a pin launches at 65535 and is refused at 65536,
-// where the direct launch throws; Auto then takes the vendor (vendor-free: no route).
+// Both native launches put the batch in grid z: a pin launches at 65535 and is refused at 65536
+// on CUDA, where the direct launch throws; Auto then takes the vendor (vendor-free: no route).
+// Metal has no such cap: one past it launches too.
 TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
-    const int ceiling = int(tm::kMaxGridBatch);
+    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
+    ASSERT_EQ(dev.max_groups_yz, this->grid_yz()) << dev.key;
+    const int ceiling = int(test_utils::kCudaGridYZ);
+    const bool capped = this->grid_yz() <= ceiling;
     for (const C& c : {C{tm::Triangular{}}, C{tm::Expand{}}}) {
         Spec at{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling};
         auto p = make_prob<T>(at);
@@ -544,11 +550,16 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         Spec past = at;
         past.batch = ceiling + 1;
         auto r = make_prob<T>(past);
-        EXPECT_FALSE(this->pin_accepted(c, r)) << name(c, past);
+        EXPECT_EQ(this->pin_accepted(c, r), !capped) << name(c, past);
+        if (!capped) {
+            expect_trmm(*this->ctx, r, name(c, past));
+            continue;
+        }
         auto d = make_prob<T>(past);
         std::string why;
         EXPECT_FALSE(this->direct(c, d, &why)) << name(c, past) << ": the launch ran past the grid ceiling";
     }
+    if (!capped) return;  // Auto past it is then whatever the table ranks first
     Spec past{Side::Right, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling + 1};
     auto p = make_prob<T>(past);
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
@@ -565,7 +576,7 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
 // (two), so the last q that fits is 65535*128 and 32767*128. There the pin launches and writes C's
 // last column; one column past it the direct launch throws, the pin is refused and writes nothing,
 // and Auto, under a table ranking triangular first, takes expand. B and C live on the device
-// (~2.2 GB at order 65).
+// (~2.2 GB at order 65). Metal has no such cap: one column past it launches and is checked too.
 TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
     static constexpr Backend B = TestFixture::B;
     if constexpr (!std::is_same_v<typename TestFixture::T, float>) {
@@ -576,7 +587,7 @@ TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
         this->rank_trmm("triangular 1 | expand 2 | vendor 3", "expand 1 | vendor 2");
         auto& q = batchlas::sycl_queue(*this->ctx);
         for (const auto [n, row_tiles] : {std::pair{16, 1}, std::pair{65, 2}}) {
-            const int last = int(65535 / row_tiles) * 128;
+            const int last = int(test_utils::kCudaGridYZ / row_tiles) * 128;
             const std::size_t need = 2 * std::size_t(n) * std::size_t(last + 1) * sizeof(float);
             if (q.get_device().template get_info<sycl::info::device::global_mem_size>() < need + (std::size_t(4) << 30))
                 GTEST_SKIP() << "needs " << (need >> 30) << " GiB of device memory";
@@ -617,7 +628,7 @@ TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
                     EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
                     accepted = false;
                 }
-                if (cols == last) {
+                if (std::int64_t(row_tiles) * ((cols + 127) / 128) <= this->grid_yz()) {
                     EXPECT_TRUE(accepted) << what;
                     for (const auto& [i, j] : std::initializer_list<std::pair<int, int>>{
                              {n - 1, cols - 1}, {0, cols - 1}, {n - 1, 0}, {n / 2, cols - 129}})
@@ -961,7 +972,7 @@ TYPED_TEST(TrmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s, algo] : {std::tuple{klo, lo, "triangular"}, std::tuple{khi, hi, "expand"}}) {
         const auto& f = rows[key];
-        EXPECT_EQ(f[3], "CUDA") << key << ": the backend column";
+        EXPECT_EQ(f[3], TestFixture::B == Backend::CUDA ? "CUDA" : "SYCL") << key << ": the backend column";
         EXPECT_EQ(f[2], std::string(batchlas::to_string(batchlas::scalar_kind_of<T>))) << key << ": the scalar column";
         EXPECT_EQ(f[9], "native") << key;
         EXPECT_EQ(f[10], algo) << key;

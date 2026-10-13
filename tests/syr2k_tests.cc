@@ -128,7 +128,8 @@ int main(int argc, char** argv) {
     return RUN_ALL_TESTS();
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// The native GPU kernels: CUDA, or SYCL (AdaptiveCpp Metal, vendor-free).
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 namespace {
 
 struct Syr2kShape {

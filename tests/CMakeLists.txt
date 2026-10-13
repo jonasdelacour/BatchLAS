@@ -486,6 +486,17 @@ foreach(_i RANGE ${_rp_last})
     batchlas_add_route_pinned_test(${_rp_name} "${_rp_env}")
 endforeach()
 
+# An AdaptiveCpp Metal tree: ACPP_ADAPTIVITY_LEVEL=0 must make a GPU Queue throw (it would JIT
+# a TU's double kernels with its float ones). The unset arm runs inside backend_dispatch_tests.
+if(BATCHLAS_GPU_FAMILY_RESOLVED STREQUAL "METAL" AND TARGET backend_dispatch_tests)
+    batchlas_gpu_test_command(_cmd backend_dispatch_tests)
+    add_test(NAME backend_dispatch_tests_adaptivity0
+             COMMAND ${_cmd} --gtest_filter=MetalAdaptivityGuard.*)
+    batchlas_test_needs_gpu(backend_dispatch_tests_adaptivity0)
+    set_tests_properties(backend_dispatch_tests_adaptivity0 PROPERTIES
+        LABELS "util" ENVIRONMENT "ACPP_ADAPTIVITY_LEVEL=0")
+endif()
+
 if(BATCHLAS_SMOKE_TEST_TARGETS)
     add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
 endif()

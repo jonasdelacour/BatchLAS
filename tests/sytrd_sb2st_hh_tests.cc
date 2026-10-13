@@ -99,6 +99,16 @@ using Sb2stHhTypes = ::testing::Types<
 using Sb2stHhTypes = ::testing::Types<
     Sb2stHhConfig<float, Backend::ROCM>,
     Sb2stHhConfig<double, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND && BATCHLAS_HAS_DEVICE_FP64
+using Sb2stHhTypes = ::testing::Types<
+    Sb2stHhConfig<float, Backend::SYCL>,
+    Sb2stHhConfig<double, Backend::SYCL>,
+    Sb2stHhConfig<std::complex<float>, Backend::SYCL>,
+    Sb2stHhConfig<std::complex<double>, Backend::SYCL>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND  // Metal: no fp64 on the GPU
+using Sb2stHhTypes = ::testing::Types<
+    Sb2stHhConfig<float, Backend::SYCL>,
+    Sb2stHhConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using Sb2stHhTypes = ::testing::Types<Sb2stHhConfig<float, Backend::NETLIB>>;
 #endif

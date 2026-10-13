@@ -8,6 +8,7 @@
 #include "../queue.hh"
 #include "../math-helpers.hh"
 #include "../ops/syev/vendor.hh"
+#include "../sycl/sscp_target.hh"
 
 namespace batchlas
 {   
@@ -142,40 +143,57 @@ namespace batchlas
                     }
                     result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
-                    // Initialize local memory with zeros for column sums
-                    if (local_idx < cols) {
-                        local_mem[local_idx] = 0;
-                    }
-                    sycl::group_barrier(cta);
+                    // Metal has no floating atomics on threadgroup memory: one item owns each sum.
+                    if (sycl_impl::on_metal()) {
+                        for (int k = local_idx; k < cols; k += local_size) {
+                            float_t<T> s = 0;
+                            for (int i = 0; i < rows; ++i) s += internal::abs(data_span[k * ld + i]);
+                            local_mem[k] = s;
+                        }
+                    } else {
+                        // Initialize local memory with zeros for column sums
+                        if (local_idx < cols) {
+                            local_mem[local_idx] = 0;
+                        }
+                        sycl::group_barrier(cta);
 
-                    // Sum absolute values for each column across all rows
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                        sycl::memory_scope::work_group>
-                            atomic_local_mem(local_mem[col]);
-                        atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        // Sum absolute values for each column across all rows
+                        for (int j = local_idx; j < rows * cols; j += local_size) {
+                            auto col = j / rows;
+                            auto row = j % rows;
+                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
+                                            sycl::memory_scope::work_group>
+                                atomic_local_mem(local_mem[col]);
+                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        }
                     }
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
                     result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
-                    // Initialize local memory with zeros for row sums
-                    if (local_idx < rows) {
-                        local_mem[local_idx] = 0;
-                    }
-                    sycl::group_barrier(cta);
+                    if (sycl_impl::on_metal()) {
+                        for (int k = local_idx; k < rows; k += local_size) {
+                            float_t<T> s = 0;
+                            for (int i = 0; i < cols; ++i) s += internal::abs(data_span[i * ld + k]);
+                            local_mem[k] = s;
+                        }
+                    } else {
+                        // Initialize local memory with zeros for row sums
+                        if (local_idx < rows) {
+                            local_mem[local_idx] = 0;
+                        }
+                        sycl::group_barrier(cta);
 
-                    // Sum absolute values for each row across all columns
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                        sycl::memory_scope::work_group>
-                            atomic_local_mem(local_mem[row]);
-                        atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        // Sum absolute values for each row across all columns
+                        for (int j = local_idx; j < rows * cols; j += local_size) {
+                            auto col = j / rows;
+                            auto row = j % rows;
+                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
+                                            sycl::memory_scope::work_group>
+                                atomic_local_mem(local_mem[row]);
+                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        }
                     }
                     sycl::group_barrier(cta);
 

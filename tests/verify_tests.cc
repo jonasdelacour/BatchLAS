@@ -362,11 +362,15 @@ TEST(Reference, GetrfPivotsInWorkingPrecision) {
     getrf_pivots_of_permutation<cdouble>();
 }
 
-// Found by search: the second pivot is a rounding tie that sgetrf breaks to row 2 and dgetrf (on the
-// same, exactly promoted, data) to row 3. Pivots from a promoted copy would read {2, 3, 3}.
+namespace {
+// l = 1/3 rounds up in float and down in double, so u = 1 - 3l is -2^-23 in float but at most 2^-54
+// in double, FMA or not. Row 3's 2^-40 lies between: no tie for any LAPACK to break differently.
+const float kPivotSplit[9] = {3.0f, 1.0f, 0.0f, 3.0f, 1.0f, 0x1p-40f, 0.0f, 0.0f, 1.0f};
+}  // namespace
+
 TEST(Reference, GetrfPivotsOfFloatDataAreSgetrfs) {
-    const float col[9] = {0.0f, -1.0f, 0x1.555556p-1f, -1.0f, -4.5f, 2.0f, -1.0f, -0.25f, 2.5f};
-    const std::vector<std::int32_t> single{2, 2, 3}, promoted{2, 3, 3};
+    const float* col = kPivotSplit;
+    const std::vector<std::int32_t> single{1, 2, 3}, promoted{1, 3, 3};
     std::vector<std::int32_t> ipiv;
     std::vector<float> f(col, col + 9);
     ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 3, f, ipiv));
@@ -380,7 +384,7 @@ TEST(Reference, GetrfPivotsOfFloatDataAreSgetrfs) {
 }
 
 TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
-    const float col[9] = {0.0f, -1.0f, 0x1.555556p-1f, -1.0f, -4.5f, 2.0f, -1.0f, -0.25f, 2.5f};
+    const float* col = kPivotSplit;
     constexpr int ld = 5, stride = 17;
     std::vector<float> buf(2 * stride, 1e30f);
     std::vector<cfloat> cbuf(2 * stride, {1e30f, -1e30f});
@@ -389,7 +393,7 @@ TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
             buf[stride + j * ld + i] = col[j * 3 + i];
             cbuf[stride + j * ld + i] = col[j * 3 + i];
         }
-    const std::vector<std::int32_t> single{2, 2, 3};
+    const std::vector<std::int32_t> single{1, 2, 3};
     std::vector<std::int32_t> ipiv;
     ASSERT_TRUE(batchlas::verify::getrf_pivots(MV<float>(buf.data(), 3, 3, ld, stride, 2), 1, ipiv));
     EXPECT_EQ(ipiv, single);

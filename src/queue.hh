@@ -232,12 +232,16 @@ struct QueueImpl : public sycl::queue{
         assert(!arena_.has_outstanding_loans() &&
                "QueueImpl destroyed (or its Queue move-assigned) while a workspace lease is live");
 
-        // Drain first: freeing USM under in-flight kernels is a use-after-free.
-        if (!arena_.blocks_.empty()) {
+        // Drain first: freeing USM under in-flight kernels is a use-after-free. acpp always drains:
+        // its ~queue does not wait (coarse events leave the Metal command buffer open), so a derived
+        // queue's work (select::on_in_order_queue) outlived the caller's wait. DPC++ is unchanged.
+        if (BATCHLAS_SYCL_IMPL_ACPP || !arena_.blocks_.empty()) {
             try {
                 wait();
             } catch (...) {
             }
+        }
+        if (!arena_.blocks_.empty()) {
             arena_.free_all(get_context());
         }
     }
@@ -303,8 +307,24 @@ struct QueueImpl : public sycl::queue{
 
     static_assert(device_arrays.size() == (int)DeviceType::NUM_DEV_TYPES && "DeviceType enum does not match device_arrays size");
 
-    static sycl::property_list make_queue_properties(bool in_order) {
+    // Metal: batch operations into shared command buffers (acpp commits one per operation
+    // otherwise). Its events then complete with the whole queue, which over-synchronises but is
+    // never early, and carry no timestamps, hence not under profiling.
+    static bool coarse_events(const sycl::device& dev) {
+        return impl::is_metal(impl::backend_of(dev)) && !batchlas::settings().diagnostics.metal_flush_each_op;
+    }
+
+    static sycl::property_list make_queue_properties(const sycl::device& dev, bool in_order) {
         const bool profiling_enabled = batchlas_queue_profiling_enabled();
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (!profiling_enabled && coarse_events(dev)) {
+            using Coarse = sycl::property::queue::AdaptiveCpp_coarse_grained_events;
+            if (in_order) return sycl::property_list{sycl::property::queue::in_order{}, Coarse{}};
+            return sycl::property_list{Coarse{}};
+        }
+#else
+        (void)dev;
+#endif
         if (in_order && profiling_enabled) {
             return sycl::property_list{sycl::property::queue::in_order{},
                                        sycl::property::queue::enable_profiling{}};
@@ -351,7 +371,7 @@ struct QueueImpl : public sycl::queue{
         : sycl::queue(shared_context(dev),
                       device_arrays.at((int)dev.type).at(dev.idx),
                       impl::on_async_errors,
-                      make_queue_properties(in_order)),
+                      make_queue_properties(device_arrays.at((int)dev.type).at(dev.idx), in_order)),
           device_(dev),
           trace_tid_(allocate_trace_tid()) {}
 
@@ -359,7 +379,7 @@ struct QueueImpl : public sycl::queue{
         : sycl::queue(ctx,
                       dev,
                       impl::on_async_errors,
-                      make_queue_properties(in_order)),
+                      make_queue_properties(dev, in_order)),
           device_(logical_dev),
           trace_tid_(allocate_trace_tid()) {}
 
@@ -367,7 +387,7 @@ struct QueueImpl : public sycl::queue{
         : sycl::queue(shared_context(Device{0, DeviceType::CPU}),
                       device_arrays.at((int)DeviceType::CPU).at(0),
                       impl::on_async_errors,
-                      make_queue_properties(false)),
+                      make_queue_properties(device_arrays.at((int)DeviceType::CPU).at(0), false)),
           device_(Device{0, DeviceType::CPU}),
           trace_tid_(allocate_trace_tid()) {}
 
@@ -405,6 +425,7 @@ struct QueueImpl : public sycl::queue{
 
     template <int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::range<Dimensions>& num_work_items, KernelFunc&& kernel_func) {
+        impl::check_global_range(*this, num_work_items);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for(num_work_items, std::forward<KernelFunc>(kernel_func));
         });
@@ -412,6 +433,7 @@ struct QueueImpl : public sycl::queue{
 
     template <typename KernelFunc>
     sycl::event parallel_for(std::size_t num_work_items, KernelFunc&& kernel_func) {
+        impl::check_global_range(*this, sycl::range<1>(num_work_items));
         auto kfunc = std::forward<KernelFunc>(kernel_func);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {
@@ -430,6 +452,7 @@ struct QueueImpl : public sycl::queue{
 
     template <typename KernelName, int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::range<Dimensions>& num_work_items, KernelFunc&& kernel_func) {
+        impl::check_global_range(*this, num_work_items);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for<KernelName>(num_work_items, std::forward<KernelFunc>(kernel_func));
         });
@@ -437,6 +460,7 @@ struct QueueImpl : public sycl::queue{
 
     template <typename KernelName, typename KernelFunc>
     sycl::event parallel_for(std::size_t num_work_items, KernelFunc&& kernel_func) {
+        impl::check_global_range(*this, sycl::range<1>(num_work_items));
         auto kfunc = std::forward<KernelFunc>(kernel_func);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for<KernelName>(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {

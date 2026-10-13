@@ -54,11 +54,11 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && A.batch_size() >= 1 && A.batch_size() <= kMaxGridBatch;
+                        C.cols() >= 1 && A.batch_size() >= 1 && A.batch_size() <= d.max_groups_yz;
     return std::visit(overloaded{
         [&](Triangular) {
             return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
-                   backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= kMaxGridTiles;
+                   backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= d.max_groups_yz;
         },
         [&](Expand) {
             if (!native) return false;

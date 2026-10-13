@@ -12,7 +12,15 @@ template <typename T>
 class TransposeTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ctx = std::make_shared<Queue>(Device::default_device());
+        // A GPU without fp64 (Metal) has no double kernels: double runs on the host, as NETLIB.
+        if constexpr (test_utils::native_gpu_lacks_fp64 && !std::is_same_v<T, float>) {
+#if !BATCHLAS_HAS_CPU_TARGET
+            GTEST_SKIP() << "the GPU has no fp64 and the build no CPU target";
+#endif
+            ctx = std::make_shared<Queue>(Device("cpu"), Backend::NETLIB, true);
+        } else {
+            ctx = std::make_shared<Queue>(Device::default_device());
+        }
     }
     std::shared_ptr<Queue> ctx;
 };

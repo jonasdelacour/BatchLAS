@@ -699,7 +699,10 @@ TYPED_TEST(GetrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     for (const auto& [key, algo] : {std::pair{std::string("16 16 16"), "cta"}, std::pair{std::string("48 48 48"), "blocked"}}) {
         ASSERT_TRUE(rows.count(key)) << "no row " << key;
         const auto& f = rows[key];

@@ -113,6 +113,12 @@ double MaxAbs(const std::vector<R>& lam) {
     return m;
 }
 
+// Backend::SYCL on a GPU with no fp64 (Metal) has no complex<double>: run the
+// complex<double> cases on the host backend there, unchanged elsewhere.
+std::shared_ptr<Queue> complex_double_queue(const std::shared_ptr<Queue>& gpu) {
+    if constexpr (test_utils::native_gpu_lacks_fp64) return std::make_shared<Queue>(Device("cpu"));
+    else return gpu;
+}
 
 }  // namespace
 // Test fixture for SYEVX operations
@@ -323,6 +329,7 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
 }
 
 TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
+    const auto q = complex_double_queue(ctx);
     constexpr int n = 200;
     constexpr int batch = 2;
     const int neig = 3;
@@ -343,11 +350,11 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
     params.find_largest = true;
     params.iterations = 50;
 
-    size_t buf_size = syevx_buffer_size(*ctx, A_view, W, neig, JobType::EigenVectors, V.view(), params);
+    size_t buf_size = syevx_buffer_size(*q, A_view, W, neig, JobType::EigenVectors, V.view(), params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    (void)syevx(*ctx, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
-    ctx->wait();
+    (void)syevx(*q, A_view, W, neig, workspace, JobType::EigenVectors, V.view(), params);
+    q->wait();
 
     std::vector<std::complex<double>> expected(n);
     for (int k = 1; k <= n; ++k) {
@@ -364,6 +371,7 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 }
 
 TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
+    const auto q = complex_double_queue(ctx);
     constexpr int n = 200;
     constexpr int batch = 2;
     const int neig = 3;
@@ -391,8 +399,8 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
         }
     }
 
-    auto shift_inv = inv(*ctx, dense.view());
-    ctx->wait();
+    auto shift_inv = inv(*q, dense.view());
+    q->wait();
     //Adjust expectation to the shift inverted
     for (auto& val : expected) {
         val = 1.0 / (val - shift);
@@ -410,10 +418,10 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     // shift-inverted operator), not the CSR view: the two can select different
     // algorithms and therefore different workspace requirements.
     UnifiedVector<std::byte> workspace(syevx_buffer_size(
-        *ctx, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params));
+        *q, shift_inv.view(), W, neig, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params));
 
-    (void)syevx(*ctx, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params);
-        ctx->wait();
+    (void)syevx(*q, shift_inv.view(), W, neig, workspace, JobType::NoEigenVectors, MatrixView<std::complex<double>, MatrixFormat::Dense>(), params);
+        q->wait();
 
     std::vector<double> lam(n);
     for (int k = 0; k < n; ++k) lam[k] = expected[k].real();
@@ -421,15 +429,15 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     ExpectValues(W.data(), neig, want, MaxAbs(lam), n);
     /* std::cout << "LOBPCG Computed eigenvalues (shifted): " << W.subspan(0, neig) << std::endl;
 
-    auto syev_buffer = syev_buffer_size(*ctx, shift_inv.view(), W, JobType::NoEigenVectors, Uplo::Lower);
+    auto syev_buffer = syev_buffer_size(*q, shift_inv.view(), W, JobType::NoEigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> syev_workspace(syev_buffer);
     UnifiedVector<double> ref_vals(n * batch, 0.0);
-    syev(*ctx,
+    syev(*q,
                                   shift_inv.view(),
                                   ref_vals,
                                   {.jobz = JobType::NoEigenVectors},
                                   syev_workspace);
-    ctx->wait();
+    q->wait();
 
     std::cout << "Reference Computed eigenvalues (shifted): " << ref_vals.subspan(0, n) << std::endl;
     std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */

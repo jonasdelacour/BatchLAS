@@ -296,15 +296,17 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernels are GPU kernels";
+        grid_yz = test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family);
     }
+    static inline std::int64_t grid_yz = test_utils::kCudaGridYZ;  // the tile kernels' grid ceiling
 
     // ---- the limit oracle: the kernels' own constants, not syrk.cc's can_run ----
     // Real C is T to both kernels, so trans never refuses one.
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<sk::Vendor>(c)) return kVendor;
-        if (s.batch > 65535) return false;
+        if (s.batch > grid_yz) return false;
         if (std::holds_alternative<sk::Gram>(c)) return s.n <= backend::detail::kGramMaxTile;
-        return kFloat && backend::detail::triangular_tile_count(s.n) <= 65535;
+        return kFloat && backend::detail::triangular_tile_count(s.n) <= grid_yz;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run instead of throwing (§5.3).
@@ -485,12 +487,15 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
 }
 
 // The grid term (AGENTS §8.9, a launch at the ceiling): the tile kernels put the batch in a grid
-// dimension capped at 65535, and one past it the direct launch throws ("Number of work-groups
-// exceed limit"). A pin at the ceiling launches; one past it is refused, and Auto takes the
-// vendor (vendor-free: no route).
+// dimension capped at 65535 on CUDA, and one past it the direct launch throws ("Number of
+// work-groups exceed limit"). A pin at the ceiling launches; one past it is refused, and Auto
+// takes the vendor (vendor-free: no route). Metal has no such cap: one past it launches too.
 TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
-    const int ceiling = int(sk::kMaxGridBatch);
+    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
+    ASSERT_EQ(dev.max_groups_yz, TestFixture::grid_yz) << dev.key;
+    const int ceiling = int(test_utils::kCudaGridYZ);
+    const bool capped = TestFixture::grid_yz <= ceiling;
     for (const C& c : sk::candidates<T>()) {
         if (std::holds_alternative<sk::Vendor>(c)) continue;
         Spec at{1, 1, ceiling};
@@ -503,13 +508,19 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
         Spec past = at;
         past.batch = ceiling + 1;
         auto q = make_prob<T>(past);
-        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
+        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
+        auto e = make_prob<T>(past);
+        if (!capped) {
+            EXPECT_TRUE(correct(*this->ctx, q)) << name(c, past);
+            EXPECT_TRUE(this->direct(c, e)) << name(c, past) << ": the direct launch past CUDA's ceiling";
+            continue;
+        }
         EXPECT_TRUE(untouched(q)) << name(c, past);
         std::string why;
-        auto e = make_prob<T>(past);
         EXPECT_FALSE(this->direct(c, e, &why)) << name(c, past) << ": the direct launch past the ceiling ran";
         EXPECT_NE(why.find("exceed limit"), std::string::npos) << why;
     }
+    if (!capped) return;  // Auto past it is then whatever the table ranks first
     Spec past{1, 1, ceiling + 1};
     past.period = 1;
     auto p = make_prob<T>(past);
@@ -523,16 +534,17 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
 }
 
 // The tile-count term (AGENTS §8.9): triangular puts its T(T+1)/2 tiles (T = ceil(n/128)) in a
-// grid dimension capped at 65535. At the last order whose tile count fits, the pin launches and
-// writes C's last tile; one past it the direct launch throws, the pin is refused and writes
-// nothing, and Auto takes the vendor (vendor-free: no route). k = 8, batch 1, C on the device.
+// grid dimension capped at 65535 on CUDA. At the last order whose tile count fits, the pin
+// launches and writes C's last tile; one past it the direct launch throws, the pin is refused and
+// writes nothing, and Auto takes the vendor (vendor-free: no route). k = 8, batch 1, C on the
+// device. Metal has no such cap: there one past it launches and is checked the same way.
 TYPED_TEST(SyrkCandidates, TriangularTileGridCeiling) {
     static constexpr Backend B = TestFixture::B;
     if constexpr (!TestFixture::kFloat) {
         GTEST_SKIP() << "triangular is a float kernel";
     } else {
         int last = 1;
-        while (backend::detail::triangular_tile_count(last + 1) <= 65535) ++last;
+        while (backend::detail::triangular_tile_count(last + 1) <= test_utils::kCudaGridYZ) ++last;
         auto& q = batchlas::sycl_queue(*this->ctx);
         const std::size_t need = std::size_t(last + 1) * std::size_t(last + 1) * sizeof(float);
         if (q.get_device().template get_info<sycl::info::device::global_mem_size>() < need + (std::size_t(4) << 30))
@@ -570,7 +582,7 @@ TYPED_TEST(SyrkCandidates, TriangularTileGridCeiling) {
                 EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
                 accepted = false;
             }
-            if (n == last) {
+            if (backend::detail::triangular_tile_count(n) <= TestFixture::grid_yz) {
                 EXPECT_TRUE(accepted) << "n=" << n;
                 for (const auto& [i, j] : std::initializer_list<std::pair<int, int>>{
                          {n - 1, n - 1}, {n - 1, 0}, {0, 0}, {n - 1, n - 129}, {n - 200, n - 300}})
@@ -892,7 +904,10 @@ TYPED_TEST(SyrkCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         }
     }
     std::filesystem::remove_all(dir);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     const std::string scalar = TestFixture::kFloat ? "float" : "double";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     std::vector<std::tuple<std::string, Spec, std::string>> want{{"48 48 20", lo, "gram"}};

@@ -367,8 +367,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         }
 
         // Diagnostic escape hatch for the tiny projected solves (XtAX, StAS).
+        // The opt-in names the vendor solver; without one (vendor-free SYCL) it is ignored, not a throw.
         const bool prefer_vendor_projected_syev =
-            (B != Backend::NETLIB) &&
+            (B != Backend::NETLIB) && select::solver_vendor_available<B> &&
             ([]() {
                 if (const char* v = batchlas::settings().selection.syevx_projected_vendor.get()) {
                     return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
@@ -1297,8 +1298,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
-                // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
-                if constexpr (B != Backend::NETLIB) {
+                // Covers the runtime's vendor opt-in, which exists only with a vendor solver.
+                if constexpr (B != Backend::NETLIB && select::solver_vendor_available<B>) {
                     const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);

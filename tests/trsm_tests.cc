@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/sycl_interop.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -17,6 +18,15 @@
 #include "../src/sycl/trsm_native.hh"
 
 using namespace batchlas;
+
+namespace {
+// The native-kernel cases below pin the build's native GPU backend (CUDA, or SYCL on
+// AdaptiveCpp Metal). Cases written in double run in float where that backend has no
+// double kernels, so the native kernel still launches instead of the case skipping.
+constexpr Backend kGpu = test_utils::native_gpu_backend;
+using Wide = test_utils::native_gpu_scalar_t<double>;
+using WideC = test_utils::native_gpu_scalar_t<std::complex<double>>;
+}  // namespace
 
 template <typename T, Backend B>
 struct TestConfig {
@@ -254,7 +264,7 @@ struct TrsmNativeCase {
 
 template <typename T>
 void RunTrsmNative(const TrsmNativeCase<T>& tc) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
     Matrix<T, MatrixFormat::Dense> A(n, n, bs);
@@ -315,14 +325,14 @@ TEST(TrsmNativeCta, CanonicalCrossProductDouble) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<double>({8, 24, 3, sd, up, tr, dg, 1.0});
+                    RunTrsmNative<Wide>({8, 24, 3, sd, up, tr, dg, 1.0});
 }
 
 // alpha scales B once, before the subtraction, not after the divide.
 TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
     for (Side sd : {Side::Left, Side::Right}) {
-        RunTrsmNative<double>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
-        RunTrsmNative<double>({16, 40, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
+        RunTrsmNative<Wide>({16, 40, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, -2.5});
+        RunTrsmNative<Wide>({16, 40, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 0.75});
     }
 }
 
@@ -331,14 +341,14 @@ TEST(TrsmNativeCta, AlphaIsAppliedOnce) {
 TEST(TrsmNativeCta, PartialBucketIsZeroPadded) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {5, 9, 13, 17, 30})
-            RunTrsmNative<double>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
+            RunTrsmNative<Wide>({n, 33, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
 // With q not a multiple of the work-group size, the tail lanes must not store.
 TEST(TrsmNativeCta, RaggedRhsCount) {
     for (Side sd : {Side::Left, Side::Right})
         for (int q : {1, 7, 31, 33, 129, 257})
-            RunTrsmNative<double>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
+            RunTrsmNative<Wide>({8, q, 2, sd, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, 1.0});
 }
 
 // n=32 is the largest order that keeps x[] in registers; n > 32 is V2's job.
@@ -346,7 +356,7 @@ TEST(TrsmNativeCta, RaggedRhsCount) {
 TEST(TrsmNativeCta, LargestResidentOrder) {
     for (Side sd : {Side::Left, Side::Right}) {
         RunTrsmNative<float>({32, 64, 2, sd, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 1.0f});
-        RunTrsmNative<double>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
+        RunTrsmNative<Wide>({32, 64, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit, 1.0});
     }
 }
 
@@ -355,10 +365,10 @@ TEST(TrsmNativeCta, LargestResidentOrder) {
 // over-capacity order once truncated to the leading 32x32 solve in silence.
 // evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
 TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = 33, q = 8, bs = 1;
-    Matrix<double, MatrixFormat::Dense> A(n, n, bs);
-    Matrix<double, MatrixFormat::Dense> B(q, n, bs);
+    Matrix<Wide, MatrixFormat::Dense> A(n, n, bs);
+    Matrix<Wide, MatrixFormat::Dense> B(q, n, bs);
     auto Av = A.view();
     auto Bv = B.view();
     for (int c = 0; c < n; ++c)
@@ -369,8 +379,8 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
             Bv.at(r, c, 0) = 1.0;
 
     EXPECT_THROW(
-        ((void)batchlas::sycl_trsm::trsm_native_v1_dispatch<double>(
-            *ctx, A.view(), B.view(), 1.0, Side::Right, Uplo::Lower,
+        ((void)batchlas::sycl_trsm::trsm_native_v1_dispatch<Wide>(
+            *ctx, A.view(), B.view(), Wide(1), Side::Right, Uplo::Lower,
             Transpose::NoTrans, Diag::NonUnit)),
         std::runtime_error)
         << "n=33 exceeds the CTA capacity; silently solving 32 of 33 rows is the "
@@ -384,7 +394,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
 namespace {
 template <typename T>
 void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = tc.n, q = tc.q, bs = tc.batch;
     const int brows = (tc.side == Side::Left) ? n : q;
     const int bcols = (tc.side == Side::Left) ? q : n;
@@ -415,11 +425,11 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
         [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
            ComputePrecision p) -> Event {
-#if BATCHLAS_HAS_CUDA_BACKEND
-            return gemm<Backend::CUDA, T>(c, ga, gb, gc, al, be, ta, tb, p);
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
+            return gemm<kGpu, T>(c, ga, gb, gc, al, be, ta, tb, p);
 #else
             (void)c, (void)ga, (void)gb, (void)gc, (void)al, (void)be, (void)ta, (void)tb, (void)p;
-            throw std::logic_error("RunTrsmBlocked: no CUDA backend in this build");
+            throw std::logic_error("RunTrsmBlocked: no CUDA or SYCL backend in this build");
 #endif
         });
     ctx->wait();
@@ -472,7 +482,7 @@ TEST(TrsmNativeCta, LadderRungsAreCappedByRhsCount) {
 }
 
 TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
-    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto probe = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int q = 976, bs = 128;
     ASSERT_GT(trsm_expected_wg(*probe, q, bs), 32)
         << "this device's ladder still picks a single sub-group at q=" << q
@@ -483,14 +493,14 @@ TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
     // divide evenly into the CTA capacity do not reproduce the race.
     RunTrsmBlocked<float>({48, q, bs, Side::Right, Uplo::Lower,
                            Transpose::Trans, Diag::NonUnit, 1.0f});
-    RunTrsmBlocked<double>({48, q, bs, Side::Right, Uplo::Lower,
+    RunTrsmBlocked<Wide>({48, q, bs, Side::Right, Uplo::Lower,
                             Transpose::Trans, Diag::NonUnit, 1.0});
 }
 
 TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {33, 40, 64, 96, 100})
-            RunTrsmBlocked<double>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            RunTrsmBlocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, 1.0});
 }
 
@@ -498,9 +508,9 @@ TEST(TrsmNativeBlocked, CrossoverAndBlockStructure) {
 // beta = 1 is correct at block 0 and wrong at every later one.
 TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOncePerBlock) {
     for (Side sd : {Side::Left, Side::Right})
-        for (double a : {-2.5, 0.75, 3.0})
+        for (Wide a : {Wide(-2.5), Wide(0.75), Wide(3.0)})
             for (int n : {33, 64, 96})
-                RunTrsmBlocked<double>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                RunTrsmBlocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
                                         Diag::NonUnit, a});
 }
 
@@ -509,7 +519,7 @@ TEST(TrsmNativeBlocked, CanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<double>({70, 16, 2, sd, up, tr, dg, -1.5});
+                    RunTrsmBlocked<Wide>({70, 16, 2, sd, up, tr, dg, -1.5});
 }
 
 TEST(TrsmNativeBlocked, FloatAndRaggedRhs) {
@@ -541,17 +551,17 @@ TEST(TrsmNativeCta, ComplexCanonicalCrossProductDouble) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmNative<std::complex<double>>(
-                        {8, 24, 3, sd, up, tr, dg, std::complex<double>(1.0, 0.0)});
+                    RunTrsmNative<WideC>(
+                        {8, 24, 3, sd, up, tr, dg, WideC(1.0, 0.0)});
 }
 
 // A real alpha cannot catch an error that drops the imaginary cross-terms.
 TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
     for (Side sd : {Side::Left, Side::Right})
         for (Transpose tr : {Transpose::NoTrans, Transpose::ConjTrans}) {
-            RunTrsmNative<std::complex<double>>(
+            RunTrsmNative<WideC>(
                 {16, 40, 2, sd, Uplo::Lower, tr, Diag::NonUnit,
-                 std::complex<double>(-1.25, 0.75)});
+                 WideC(-1.25, 0.75)});
             RunTrsmNative<std::complex<float>>(
                 {16, 40, 2, sd, Uplo::Upper, tr, Diag::NonUnit,
                  std::complex<float>(0.5f, -2.0f)});
@@ -561,9 +571,9 @@ TEST(TrsmNativeCta, ComplexAlphaHasImaginaryPart) {
 TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
     for (Side sd : {Side::Left, Side::Right}) {
         for (int n : {5, 13, 17, 31, 32})
-            RunTrsmNative<std::complex<double>>(
+            RunTrsmNative<WideC>(
                 {n, 33, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
-                 std::complex<double>(1.0, 0.0)});
+                 WideC(1.0, 0.0)});
         for (int q : {1, 7, 33, 129})
             RunTrsmNative<std::complex<float>>(
                 {8, q, 2, sd, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit,
@@ -576,16 +586,16 @@ TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
 TEST(TrsmNativeBlocked, ComplexDoubleSingleRhsTrailingGemm) {
     for (Side sd : {Side::Left, Side::Right})
         for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans})
-            RunTrsmBlocked<std::complex<double>>(
-                {64, 1, 3, sd, Uplo::Lower, t, Diag::NonUnit, std::complex<double>(1.0, 0.5)});
+            RunTrsmBlocked<WideC>(
+                {64, 1, 3, sd, Uplo::Lower, t, Diag::NonUnit, WideC(1.0, 0.5)});
 }
 
 TEST(TrsmNativeBlocked, ComplexCrossoverAndAlpha) {
     for (Side sd : {Side::Left, Side::Right}) {
         for (int n : {33, 64, 70, 96})
-            RunTrsmBlocked<std::complex<double>>(
+            RunTrsmBlocked<WideC>(
                 {n, 20, 2, sd, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit,
-                 std::complex<double>(-1.5, 0.5)});
+                 WideC(-1.5, 0.5)});
         RunTrsmBlocked<std::complex<float>>(
             {48, 24, 2, sd, Uplo::Upper, Transpose::Trans, Diag::NonUnit,
              std::complex<float>(2.0f, -0.75f)});
@@ -597,8 +607,8 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<std::complex<double>>(
-                        {40, 16, 2, sd, up, tr, dg, std::complex<double>(1.0, -0.5)});
+                    RunTrsmBlocked<WideC>(
+                        {40, 16, 2, sd, up, tr, dg, WideC(1.0, -0.5)});
 }
 
 // ===========================================================================
@@ -610,7 +620,7 @@ TEST(TrsmNativeBlocked, ComplexCanonicalCrossProduct) {
 TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
     for (Side sd : {Side::Left, Side::Right})
         for (int n : {129, 256, 300, 384})
-            RunTrsmBlocked<double>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            RunTrsmBlocked<Wide>({n, 24, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, 1.0});
 }
 
@@ -618,9 +628,9 @@ TEST(TrsmNativeBlocked, TwoLevelPanelStructure) {
 // outer gemm's beta, then an inner gemm's beta, then the solve's alpha.
 TEST(TrsmNativeBlocked, AlphaIsAppliedExactlyOnceAcrossPanels) {
     for (Side sd : {Side::Left, Side::Right})
-        for (double a : {-2.5, 0.75})
+        for (Wide a : {Wide(-2.5), Wide(0.75)})
             for (int n : {129, 256, 300})
-                RunTrsmBlocked<double>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
+                RunTrsmBlocked<Wide>({n, 20, 2, sd, Uplo::Upper, Transpose::NoTrans,
                                         Diag::NonUnit, a});
 }
 
@@ -629,7 +639,7 @@ TEST(TrsmNativeBlocked, TwoLevelCanonicalCrossProduct) {
         for (Uplo up : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
                 for (Diag dg : {Diag::NonUnit, Diag::Unit})
-                    RunTrsmBlocked<double>({160, 16, 2, sd, up, tr, dg, -1.5});
+                    RunTrsmBlocked<Wide>({160, 16, 2, sd, up, tr, dg, -1.5});
 }
 
 TEST(TrsmNativeBlocked, TwoLevelFloatAndComplex) {
@@ -659,7 +669,7 @@ TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
     for (const char* v : {"64", "32", "256"}) {
         batchlas::ScopedEnvVar g("BATCHLAS_TRSM_OUTER_NB", v);
         for (Side sd : {Side::Left, Side::Right})
-            RunTrsmBlocked<double>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
+            RunTrsmBlocked<Wide>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, -1.25});
     }
 }
@@ -732,7 +742,7 @@ struct SgCase {
 
 template <typename T>
 std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = tc.n, q = tc.q, bs = tc.batch;
     const int lda = n + tc.pad_a, ldb = n + tc.pad_b;
     const int sa = lda * n + 7, sb = ldb * q + 11;
@@ -796,7 +806,7 @@ TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedComplex) {
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
             for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
                 RunSgLeft<std::complex<float>>({13, 9, 5, up, tr, dg, {0.5f, -1.25f}});
-                RunSgLeft<std::complex<double>>({29, 17, 3, up, tr, dg, {-1.5, 0.75}});
+                RunSgLeft<WideC>({29, 17, 3, up, tr, dg, {-1.5, 0.75}});
             }
 }
 
@@ -805,7 +815,7 @@ TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedReal) {
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
             for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
                 RunSgLeft<float>({6, 7, 9, up, tr, dg, -2.0f});
-                RunSgLeft<double>({32, 33, 3, up, tr, dg, 0.75});
+                RunSgLeft<Wide>({32, 33, 3, up, tr, dg, 0.75});
             }
 }
 
@@ -819,10 +829,10 @@ TEST(TrsmNativeSgLeft, BucketAndChunkEdges) {
     for (int n : ns)
         for (int q : qs) {
             RunSgLeft<float>({n, q, 7, Uplo::Lower, Transpose::Trans, Diag::Unit, 0.5f});
-            RunSgLeft<double>({n, q, 11, Uplo::Upper, Transpose::Trans, Diag::NonUnit, -1.25});
+            RunSgLeft<Wide>({n, q, 11, Uplo::Upper, Transpose::Trans, Diag::NonUnit, -1.25});
             RunSgLeft<std::complex<float>>(
                 {n, q, 13, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, {1.0f, 0.5f}});
-            RunSgLeft<std::complex<double>>(
+            RunSgLeft<WideC>(
                 {n, q, 11, Uplo::Upper, Transpose::ConjTrans, Diag::Unit, {-0.5, 1.5}});
         }
 }
@@ -830,7 +840,7 @@ TEST(TrsmNativeSgLeft, BucketAndChunkEdges) {
 // The capacity guard: n = 32 launches (above), n = 33 must throw, not truncate.
 // ARMED BREAK: bucket n <= 64 into N = 32. OBSERVED: red only on this test.
 TEST(TrsmNativeSgLeft, OrderAboveSubGroupWidthThrows) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     Matrix<float, MatrixFormat::Dense> A(33, 33, 2);
     Matrix<float, MatrixFormat::Dense> B(33, 4, 2);
     EXPECT_THROW((void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
@@ -857,8 +867,8 @@ TEST(TrsmNativeSgLeft, SaturatingBatchIsBitIdentical) {
     };
     run(std::complex<float>{}, 32, 17);
     run(float{}, 8, 9);
-    run(double{}, 4, 3);
-    run(std::complex<double>{}, 16, 20);
+    run(Wide{}, 4, 3);
+    run(WideC{}, 16, 20);
 }
 
 // A subnormal diagonal has a reciprocal of inf while the division stays finite.
@@ -866,9 +876,18 @@ TEST(TrsmNativeSgLeft, SaturatingBatchIsBitIdentical) {
 // both paths are exact, so this does not tell a per-matrix fallback from a
 // sub-group-wide one.
 TEST(TrsmNativeSgLeft, NonFiniteReciprocalFallsBackToDivision) {
-    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = 8, q = 3, bs = 4;
     const float tiny = 1e-39f;
+    {   // Only a subnormal has a non-finite reciprocal; a device that flushes it (Metal) cannot
+        // reach the fallback with a finite answer. Probed, since acpp reports denorm everywhere.
+        UnifiedVector<float> probe(2, -1.0f);
+        probe[0] = tiny;
+        float* pp = probe.data();
+        batchlas::sycl_queue(*ctx).single_task([=] { pp[1] = pp[0] * 1.5f; }).wait();
+        ASSERT_NE(probe[1], -1.0f) << "the probe kernel did not run";
+        if (probe[1] == 0.0f) GTEST_SKIP() << "the device flushes float subnormals to zero";
+    }
     Matrix<float, MatrixFormat::Dense> A(n, n, bs);
     Matrix<float, MatrixFormat::Dense> B(n, q, bs);
     auto Av = A.view();
@@ -898,7 +917,7 @@ TEST(TrsmNativeSgLeft, NonFiniteReciprocalFallsBackToDivision) {
 // is a multi-sub-group group on the Right side that no other case reaches.
 // evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
 TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
-    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    auto probe = std::make_shared<Queue>(Device("gpu"), kGpu);
     ASSERT_EQ(trsm_expected_wg(*probe, 40, 4096), 64);
     ASSERT_EQ(trsm_expected_wg(*probe, 8, 4096), 32);
     for (int q : {8, 40}) {
@@ -907,7 +926,7 @@ TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
         RunTrsmNative<std::complex<float>>({29, q, 4096, Side::Right, Uplo::Upper,
                                             Transpose::ConjTrans, Diag::NonUnit, {1.0f, -0.5f}});
     }
-    RunTrsmNative<double>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
+    RunTrsmNative<Wide>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
                            Diag::NonUnit, -1.0});
 }
 

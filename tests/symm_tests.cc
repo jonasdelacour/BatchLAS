@@ -83,7 +83,8 @@ int main(int argc, char** argv) {
     return RUN_ALL_TESTS();
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// The native GPU kernels: CUDA, or SYCL (AdaptiveCpp Metal, vendor-free).
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
@@ -183,7 +184,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
     if (ordered.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
     }
-    Queue ctx(ordered.device(), Backend::CUDA, /*in_order=*/false);
+    Queue ctx(ordered.device(), test_utils::native_gpu_backend, /*in_order=*/false);
 
     const int n = 192;
     const int batch = 8;

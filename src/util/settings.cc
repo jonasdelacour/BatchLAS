@@ -203,6 +203,7 @@ void load_diagnostics(DiagnosticsSettings& d) {
 
     d.kernel_trace = env_truthy(std::getenv("BATCHLAS_KERNEL_TRACE")) ||
                      env_truthy(std::getenv("BATCHLAS_TRACE_KERNELS"));
+    d.metal_flush_each_op = env_truthy(std::getenv("BATCHLAS_METAL_FLUSH_EACH_OP"));
 
     // First NON-EMPTY wins: a set-but-empty variable falls through, never an empty filename.
     d.kernel_trace_path = "batchlas_kernels.trace.json";

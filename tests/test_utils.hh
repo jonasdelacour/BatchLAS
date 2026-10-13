@@ -1,5 +1,6 @@
 #pragma once
 #include <batchlas/backend_config.h>
+#include <cstdint>
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
@@ -211,6 +212,39 @@ constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
 #elif BATCHLAS_HAS_SYCL_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
 #endif
+
+// The backend a native-kernel test pins (tests that call the CUDA-or-SYCL native kernels
+// directly): CUDA, else SYCL (AdaptiveCpp Metal). A build with neither keeps CUDA, whose
+// Queue constructor throws, which is how these tests behaved before SYCL existed.
+#if BATCHLAS_HAS_CUDA_BACKEND
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::SYCL;
+#else
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+#endif
+
+// True when the native GPU backend has no double kernels (Metal: no device fp64).
+inline constexpr bool native_gpu_lacks_fp64 =
+    native_gpu_backend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
+
+// T for a native-kernel case written in double: double (or complex<double>) where the native
+// GPU backend has it, else the float type of the same kind, so the kernel still launches.
+template <typename T>
+using native_gpu_scalar_t = std::conditional_t<
+    native_gpu_lacks_fp64,
+    std::conditional_t<std::is_same_v<T, double>, float,
+                       std::conditional_t<std::is_same_v<T, std::complex<double>>, std::complex<float>, T>>,
+    T>;
+
+// The work-group ceiling of SYCL dims 0/1 of a 2-D/3-D launch (CUDA grid z/y). Grid-ceiling
+// tests launch at kCudaGridYZ and one past it; on an Apple GPU (acpp Metal) the cap is the
+// 32-bit work-item global range instead, so one past CUDA's ceiling must be served. The test's
+// own fact, checked against select::Device::max_groups_yz; pass select::Device::family.
+inline constexpr std::int64_t kCudaGridYZ = 65535;
+inline std::int64_t expected_grid_yz(std::string_view device_family) {
+    return device_family == "apple" ? std::int64_t{0xffffffff} : kCudaGridYZ;
+}
 
 // Utility traits and helper functions
 template <typename T>

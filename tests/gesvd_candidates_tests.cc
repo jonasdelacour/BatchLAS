@@ -882,7 +882,10 @@ TYPED_TEST(GesvdCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, uplo, algo] : {std::tuple{std::string("20 12 12"), Uplo::Lower, "jacobi"},
                                           std::tuple{std::string("24 24 24"), Uplo::Upper, "cta"}}) {

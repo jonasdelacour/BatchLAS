@@ -73,7 +73,8 @@ WHAT THIS DOES NOT CATCH
 Usage:
     python3 .github/ci/compare_failures.py --junit FILE [--gtest-dir DIR]
                                            [--known FILE | --sycl-impl DPCPP|ACPP
-                                            | --build-dir DIR] [--require NAME]...
+                                            [--gpu-family METAL] | --build-dir DIR]
+                                           [--require NAME]...
                                            [--expected-tests N]
 Exit code 0 = gated clean (warnings are still possible), 1 = gate failed.
 """
@@ -91,16 +92,32 @@ DEFAULT_KNOWN = os.path.join(REPO, "tests", "known-failures.txt")
 DEFAULT_KNOWN_ACPP = os.path.join(REPO, "tests", "known-failures-acpp.txt")
 
 
-def sycl_impl_of(build_dir):
-    """BATCHLAS_SYCL_IMPL_RESOLVED from a configured tree's cache, or None."""
+# An AdaptiveCpp Metal tree (BATCHLAS_GPU_FAMILY_RESOLVED=METAL) has a third, also
+# self-contained ledger: no device fp64 and a different GPU, so few entries are shared.
+DEFAULT_KNOWN_ACPP_METAL = os.path.join(REPO, "tests", "known-failures-acpp-metal.txt")
+
+
+def cache_value_of(build_dir, name):
+    """The value of cache entry NAME in a configured tree's CMakeCache.txt, or None."""
     try:
         with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if line.startswith("BATCHLAS_SYCL_IMPL_RESOLVED:"):
+                if line.startswith(name + ":"):
                     return line.split("=", 1)[1].strip() or None
     except OSError:
         pass
     return None
+
+
+def sycl_impl_of(build_dir):
+    """BATCHLAS_SYCL_IMPL_RESOLVED from a configured tree's cache, or None."""
+    return cache_value_of(build_dir, "BATCHLAS_SYCL_IMPL_RESOLVED")
+
+
+def default_ledger(impl, gpu_family):
+    if impl == "ACPP" and gpu_family == "METAL":
+        return DEFAULT_KNOWN_ACPP_METAL
+    return DEFAULT_KNOWN_ACPP if impl == "ACPP" else DEFAULT_KNOWN
 
 # The only two <skipped message> values ctest 3.28 emits for a real skip. A
 # third value means something else went wrong -- "Unable to find executable"
@@ -326,11 +343,16 @@ def main(argv):
     parser.add_argument("--gtest-dir", metavar="DIR",
                         help="directory written by GTEST_OUTPUT=xml:DIR/ (one file per binary)")
     parser.add_argument("--known", metavar="FILE",
-                        help="the ledger (default: tests/known-failures.txt, or "
-                             "tests/known-failures-acpp.txt for an AdaptiveCpp build)")
+                        help="the ledger (default: tests/known-failures.txt, "
+                             "tests/known-failures-acpp.txt for an AdaptiveCpp build, or "
+                             "tests/known-failures-acpp-metal.txt for an AdaptiveCpp Metal build)")
     parser.add_argument("--sycl-impl", choices=("DPCPP", "ACPP"),
                         help="the SYCL implementation the run was built with; picks the default "
                              "ledger (default: read from --build-dir, else DPCPP)")
+    parser.add_argument("--gpu-family", metavar="FAMILY",
+                        help="BATCHLAS_GPU_FAMILY_RESOLVED of the tested tree; METAL with ACPP picks "
+                             "tests/known-failures-acpp-metal.txt (default: read from --build-dir, "
+                             "else the BATCHLAS_GPU_FAMILY_RESOLVED environment variable)")
     parser.add_argument("--build-dir", metavar="DIR",
                         help="the tested build tree; its CMakeCache.txt names the SYCL implementation")
     parser.add_argument("--require", metavar="NAME", action="append", default=[],
@@ -346,10 +368,19 @@ def main(argv):
             print("compare_failures: %s/CMakeCache.txt names no BATCHLAS_SYCL_IMPL_RESOLVED; "
                   "reconfigure it or pass --sycl-impl" % args.build_dir)
             return 1
+    family = args.gpu_family
+    if family is None and args.build_dir:
+        family = cache_value_of(args.build_dir, "BATCHLAS_GPU_FAMILY_RESOLVED")
+    if family is None:
+        family = os.environ.get("BATCHLAS_GPU_FAMILY_RESOLVED") or None
+    family = family.upper() if family else None
+    if family == "METAL" and impl is None:
+        impl = "ACPP"  # Metal is reachable only through AdaptiveCpp.
     if args.known is None:
-        args.known = DEFAULT_KNOWN_ACPP if impl == "ACPP" else DEFAULT_KNOWN
-    print("compare_failures: ledger %s (SYCL implementation %s)"
-          % (os.path.relpath(args.known, REPO), impl or "DPCPP, by default"))
+        args.known = default_ledger(impl, family)
+    print("compare_failures: ledger %s (SYCL implementation %s%s)"
+          % (os.path.relpath(args.known, REPO), impl or "DPCPP, by default",
+             ", GPU family " + family if family else ""))
 
     if not args.junit and not args.gtest_dir:
         print("compare_failures: nothing to read -- pass --junit and/or --gtest-dir")

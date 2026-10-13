@@ -56,6 +56,14 @@ if [ "${ACPP_REAPPLY:-0}" = 1 ] || ! git -C "$ACPP_SRC" rev-parse --verify -q "$
 else
   git -C "$ACPP_SRC" checkout "$ACPP_BRANCH"
 fi
+# An existing branch is reused as is, so a patch added here later would silently not be built.
+n_patches=$(ls "$patch_dir"/*.patch | wc -l | tr -d ' ')
+n_commits=$(git -C "$ACPP_SRC" rev-list --count "$ACPP_BASE..HEAD")
+if [ "$n_patches" != "$n_commits" ]; then
+  echo "error: $ACPP_BRANCH has $n_commits commits over $ACPP_BASE but $patch_dir has $n_patches patches;" \
+    "re-run with ACPP_REAPPLY=1 (or update $patch_dir from the branch)" >&2
+  exit 1
+fi
 git -C "$ACPP_SRC" log --oneline "$ACPP_BASE~1..HEAD"
 
 cmake -S "$ACPP_SRC" -B "$build_dir" \

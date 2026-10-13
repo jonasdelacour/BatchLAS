@@ -692,7 +692,10 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), TestFixture::kVendor ? 2u : 1u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     std::vector<std::tuple<std::string, const char*, const char*>> want{{"40 24 24", "native", "blocked"}};
     if (TestFixture::kVendor) want.emplace_back("48 16 16", "vendor", "vendor");

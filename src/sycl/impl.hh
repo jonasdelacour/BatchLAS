@@ -248,22 +248,39 @@ inline void throw_launch_errors([[maybe_unused]] sycl::queue& q) {
 #endif
 }
 
+[[noreturn]] inline void throw_group_count(int d, std::size_t count, std::size_t limit, const char* what) {
+    throw sycl::exception(sycl::make_error_code(sycl::errc::nd_range),
+                          std::string("Number of ") + what + " exceed limit for dimension " + std::to_string(d) +
+                              " : " + std::to_string(count) + " > " + std::to_string(limit));
+}
+
+// Metal indexes the grid with 32-bit thread positions: a dimension of 2^32 or more work-items
+// runs with wrong ids and no error (measured on the M5 Max: 2^32 - 1024 is exact, 2^32 is not).
+// The work-group count itself is not capped at 65535 there, in any dimension.
+inline constexpr std::size_t kMetalMaxGlobalRange = 0xffffffffu;
+
+template <int D>
+inline void check_global_range([[maybe_unused]] const sycl::queue& q, [[maybe_unused]] const sycl::range<D>& g) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+    if (!is_metal(backend_of(q))) return;
+    for (int d = 0; d < D; ++d)
+        if (g[d] > kMetalMaxGlobalRange) throw_group_count(d, g[d], kMetalMaxGlobalRange, "work-items");
+#endif
+}
+
 // Before an nd_range launch: the CUDA grid limit (x 2^31-1, y and z 65535; SYCL dimension d is
 // CUDA axis D-1-d). DPC++ checks it itself and throws errc::nd_range with this message; acpp
-// launches and gets CU:1.
+// launches and gets CU:1. On Metal, the 32-bit global range above.
 template <int D>
 inline void check_group_count([[maybe_unused]] const sycl::queue& q, [[maybe_unused]] const sycl::nd_range<D>& r) {
 #if BATCHLAS_SYCL_IMPL_ACPP
+    if (is_metal(backend_of(q))) return check_global_range(q, r.get_global_range());
     if (!is_cuda(backend_of(q))) return;
     for (int d = 0; d < D; ++d) {
         const std::size_t local = r.get_local_range()[d];
         const std::size_t groups = local == 0 ? 0 : r.get_global_range()[d] / local;
         const std::size_t limit = d == D - 1 ? std::size_t{2147483647} : std::size_t{65535};
-        if (groups > limit) {
-            throw sycl::exception(sycl::make_error_code(sycl::errc::nd_range),
-                                  "Number of work-groups exceed limit for dimension " + std::to_string(d) + " : " +
-                                      std::to_string(groups) + " > " + std::to_string(limit));
-        }
+        if (groups > limit) throw_group_count(d, groups, limit, "work-groups");
     }
 #endif
 }

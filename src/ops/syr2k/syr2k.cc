@@ -52,7 +52,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
         [&](Triangular) {
             return select::native_gpu_backend<B> && std::is_same_v<T, float> && d.is_gpu && d.max_wg >= 256 &&
                    transA != Transpose::ConjTrans && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
-                   batch <= kMaxGridBatch && side * (side + 1) / 2 <= kMaxGridTiles;
+                   batch <= d.max_groups_yz && side * (side + 1) / 2 <= d.max_groups_yz;
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);

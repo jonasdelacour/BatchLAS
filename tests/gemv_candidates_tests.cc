@@ -830,7 +830,10 @@ TYPED_TEST(GemvCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string klo = "16 4 16", khi = "48 3 48";
     ASSERT_TRUE(rows.count(klo)) << "no 16x4 row";
     ASSERT_TRUE(rows.count(khi)) << "no 48x3 row";
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s, algo] : {std::tuple{klo, lo, "direct"}, std::tuple{khi, hi, "cta"}}) {
         const auto& f = rows[key];

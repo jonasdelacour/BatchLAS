@@ -694,7 +694,10 @@ TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     for (const auto& [m, algo, uplo] : {std::tuple{"12", "jacobi", Uplo::Lower}, std::tuple{"40", "blocked", Uplo::Upper}}) {
         ASSERT_TRUE(rows.count(m)) << m;
         const auto& f = rows[m];

@@ -107,6 +107,15 @@ using SyevCtaTestTypes = ::testing::Types<
     SyevCtaConfig<double, Backend::ROCM>,
     SyevCtaConfig<std::complex<float>, Backend::ROCM>,
     SyevCtaConfig<std::complex<double>, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+// AdaptiveCpp Metal: the native kernels in float and complex<float>; double needs device fp64.
+using SyevCtaTestTypes = ::testing::Types<
+    SyevCtaConfig<float, Backend::SYCL>,
+#if BATCHLAS_HAS_DEVICE_FP64
+    SyevCtaConfig<double, Backend::SYCL>,
+    SyevCtaConfig<std::complex<double>, Backend::SYCL>,
+#endif
+    SyevCtaConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using SyevCtaTestTypes = ::testing::Types<SyevCtaConfig<float, Backend::NETLIB>>;
 #endif
@@ -116,7 +125,7 @@ class SyevCtaTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevCtaTest, SyevCtaTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;

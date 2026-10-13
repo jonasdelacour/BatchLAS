@@ -1,12 +1,16 @@
 #include "../linalg-impl.hh"
 #include <batchlas/util/group-collectives.hh>
 #include "../math-helpers.hh"
+#include "../sycl/local_mem.hh"
+#include "../sycl/sscp_target.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
+#include <array>
 #include <complex>
+#include <tuple>
 #include <batchlas/blas/linalg.hh>
 
 #include "../util/template-instantiations.hh"
@@ -143,6 +147,12 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     sycl::group_barrier(cta);
 }
 
+// Whether the four work arrays fit the local memory a 32-lane work-group may request (on Metal
+// the runtime's per-lane scratch comes off the top).
+inline bool tridiag_smem_fits(Queue& ctx, size_t bytes) {
+    return impl::local_mem_bytes(ctx->get_device(), 32) >= bytes;
+}
+
 template <Backend B, typename T>
 Event tridiagonal_solver(Queue& ctx,
                          Span<T> alphas,
@@ -157,7 +167,7 @@ Event tridiagonal_solver(Queue& ctx,
     auto pool = BumpAllocator(workspace);
 
     auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
-    bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= smem_required;
+    bool smem_possible = tridiag_smem_fits(ctx, smem_required);
 
     auto V_reflectors = pool.allocate<T>(ctx, !smem_possible ? 2 * n * batch_size : 0);
     auto D_global = pool.allocate<T>(ctx, !smem_possible ? (n+1) * batch_size : 0);
@@ -180,68 +190,85 @@ Event tridiagonal_solver(Queue& ctx,
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
 
-            auto D = Span(smem_possible ? &D_smem[0] : D_global.data() + bid*(n+1), n+1);
-            auto L = Span(smem_possible ? &L_smem[0] : L_global.data() + bid*n, n);
-            auto U = Span(smem_possible ? &U_smem[0] : U_global.data() + bid*2*(n+1), 2 * (n + 1));
-            auto Vlocal = Span(smem_possible ? &V_smem[0] : V_reflectors.data() + bid*2*n, 2 * n);
+            auto solve = [&](Span<T> D, Span<T> L, Span<T> U, Span<T> Vlocal) __attribute__((always_inline)) {
+                auto batch_alphas = Span(alphas.data() + bid * n, n);
+                auto batch_betas = Span(betas.data() + bid * n, n);
+                T* batch_Q = Vdata + bid * Vstride;
+                real_t* batch_W = W.data() + bid * n;
 
-            auto batch_alphas = Span(alphas.data() + bid * n, n);
-            auto batch_betas = Span(betas.data() + bid * n, n);
-            T* batch_Q = Vdata + bid * Vstride;
-            real_t* batch_W = W.data() + bid * n;
-
-            if (jobz == JobType::EigenVectors) {
-                for (int i = tid; i < n*n; i += bdim) {
-                    batch_Q[i] = T(0);
+                if (jobz == JobType::EigenVectors) {
+                    for (int i = tid; i < n*n; i += bdim) {
+                        batch_Q[i] = T(0);
+                    }
+                    sycl::group_barrier(cta);
+                    for (int i = tid; i < n; i += bdim) {
+                        batch_Q[i * (Vld + 1)] = T(1);
+                    }
                 }
+
+                for( int i = tid; i < n; i += bdim) {
+                    D[i] = batch_alphas[i];
+                    L[i] = batch_betas[i];
+                }
+
                 sycl::group_barrier(cta);
+
+                for (int k = n-1; k >= 0; k--) {
+                    T d = D[k];
+                    T shift = d;
+                    int i = 0;
+                    real_t GR = (k > 0 ? std::abs(L[k-1]) : 0) + std::abs(L[k]);
+                    int not_done = 1;
+                    while (not_done > 0) {
+                        i++;
+                        T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
+                        if (jobz == JobType::EigenVectors) {
+                            apply_all_reflections(cta, Vlocal, k, n, batch_Q);
+                        }
+                        GR = (k > 0 ? std::abs(L[k-1]) : 0) + (k+1 < n ? std::abs(L[k]) : 0);
+                        if (k > 0) {
+                            std::array<T,4> args = {D[k-1], L[k-1], L[k-1], D[k]};
+                            auto [l0, l1] = eigvalsh2x2(args);
+                            shift = std::abs(l0-d) < std::abs(l1-d) ? l0 : l1;
+                        } else {
+                            shift = D[k];
+                        }
+                        if (GR <= std::numeric_limits<real_t>::epsilon() * real_t(10.0)) {
+                            not_done--;
+                        }
+                        if (i > 5) {
+                            break;
+                        }
+                    }
+                }
+
                 for (int i = tid; i < n; i += bdim) {
-                    batch_Q[i * (Vld + 1)] = T(1);
-                }
-            }
-
-            for( int i = tid; i < n; i += bdim) {
-                D[i] = batch_alphas[i];
-                L[i] = batch_betas[i];
-            }
-
-            sycl::group_barrier(cta);
-
-            for (int k = n-1; k >= 0; k--) {
-                T d = D[k];
-                T shift = d;
-                int i = 0;
-                real_t GR = (k > 0 ? std::abs(L[k-1]) : 0) + std::abs(L[k]);
-                int not_done = 1;
-                while (not_done > 0) {
-                    i++;
-                    T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
-                    if (jobz == JobType::EigenVectors) {
-                        apply_all_reflections(cta, Vlocal, k, n, batch_Q);
-                    }
-                    GR = (k > 0 ? std::abs(L[k-1]) : 0) + (k+1 < n ? std::abs(L[k]) : 0);
-                    if (k > 0) {
-                        std::array<T,4> args = {D[k-1], L[k-1], L[k-1], D[k]};
-                        auto [l0, l1] = eigvalsh2x2(args);
-                        shift = std::abs(l0-d) < std::abs(l1-d) ? l0 : l1;
+                    if constexpr (internal::is_complex<T>::value) {
+                        batch_W[i] = D[i].real();
                     } else {
-                        shift = D[k];
-                    }
-                    if (GR <= std::numeric_limits<real_t>::epsilon() * real_t(10.0)) {
-                        not_done--;
-                    }
-                    if (i > 5) {
-                        break;
+                        batch_W[i] = D[i];
                     }
                 }
-            }
+            };
 
-            for (int i = tid; i < n; i += bdim) {
-                if constexpr (internal::is_complex<T>::value) {
-                    batch_W[i] = D[i].real();
-                } else {
-                    batch_W[i] = D[i];
-                }
+            // TRAP (Metal): no generic address space, so a pointer chosen between local and global
+            // memory at run time is rejected ("Conflicting address space information in PHI node").
+            // There the solve is emitted once per storage; elsewhere once, on selected pointers.
+            auto smem = [&]() {
+                return std::array<Span<T>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
+                                               Span(&U_smem[0], 2 * (n + 1)), Span(&V_smem[0], 2 * n)};
+            };
+            auto gmem = [&]() {
+                return std::array<Span<T>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
+                                               Span(L_global.data() + bid * n, n),
+                                               Span(U_global.data() + bid * 2 * (n + 1), 2 * (n + 1)),
+                                               Span(V_reflectors.data() + bid * 2 * n, 2 * n)};
+            };
+            if (sycl_impl::on_metal()) {
+                if (smem_possible) std::apply(solve, smem());
+                else std::apply(solve, gmem());
+            } else {
+                std::apply(solve, smem_possible ? smem() : gmem());
             }
         });
     });
@@ -252,7 +279,7 @@ Event tridiagonal_solver(Queue& ctx,
 template <Backend B, typename T>
 size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType /*jobz*/){
     auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
-    bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= smem_required;
+    bool smem_possible = tridiag_smem_fits(ctx, smem_required);
     size_t size = 0;
     size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? 2*n*batch_size : 0);
     size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? (n+1)*batch_size : 0);

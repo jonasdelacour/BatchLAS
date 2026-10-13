@@ -1,0 +1,49 @@
+# Known test failures of an AdaptiveCpp Metal build (BATCHLAS_SYCL_IMPL=ACPP with
+# BATCHLAS_GPU_FAMILY_RESOLVED=METAL: preset acpp-metal-tests). A debt ledger, not an
+# allowlist: read the header of tests/known-failures.txt, which governs this file too.
+#
+# SELF-CONTAINED. .github/ci/compare_failures.py reads THIS file instead of
+# tests/known-failures-acpp.txt when the tree is an acpp Metal build (--build-dir <tree>
+# whose cache has BATCHLAS_GPU_FAMILY_RESOLVED=METAL, --gpu-family METAL, or the
+# BATCHLAS_GPU_FAMILY_RESOLVED=METAL environment variable). A defect shared with the
+# other trees is listed here as well; an entry here that passes fails the gate
+# (NEWLY PASSING).
+#
+# Same FORMAT as tests/known-failures.txt:
+#   <ctest-test>[::<Suite>.<Case>][;type_param=<exact gtest XML type_param>]
+# type_param is the macOS libc++abi spelling (`std::__1::complex<float>`, a space after
+# the comma): copy it from the gtest XML, never from the Linux ledgers.
+#
+# PRESET: verified 2026-10-13 on an Apple M5 Max (applegpu_g17s), macOS 27, tree
+# build-acpp-metal-tests, full serial ctest (104 tests: 88 passed, 15 failed, 1 skipped).
+# Backend::SYCL here is float and complex<float> only (Backend 5); the double
+# configurations run as NETLIB on the host (Backend 6). The gtest identities below were
+# checked against real GTEST_OUTPUT XML from a rerun of the failing binaries.
+#
+# DELIBERATELY ABSENT: device_calls_tests is a SKIP (exit 77, no NVPTX in this build),
+# not a failure.
+
+# --- BatchLAS: vendor-free routing (inherent to a build with no vendor GPU library) ---
+# hemm, herk and her2k choose only by the hand-written vendor rule in cublas.cc and have
+# no native family, so a vendor-free build throws NoRouteError (agent guide section 9,
+# docs/design/flat-kernel-selection.md section 11 lists the migration).
+hemm_tests::HemmTest/2.IgnoresUnreferencedTriangleAndImaginaryDiagonal;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
+hemm_tests::HemmTest/2.OptionStructMatchesPositional;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
+hemm_tests::HemmTest/2.QuadraticFormIsReal;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
+herk_tests::HerkTest/2.IgnoresUnreferencedTriangleOfC;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
+herk_tests::HerkTest/2.TrianglesAgreeAcrossUplo;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
+herk_tests::HerkTest/2.OptionStructMatchesPositional;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
+herk_tests::HerkTest/2.MatchesGemmReference;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
+her2k_tests::Her2kTest/2.IgnoresUnreferencedTriangleOfC;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
+her2k_tests::Her2kTest/2.TrianglesAgreeAcrossUplo;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
+her2k_tests::Her2kTest/2.OptionStructMatchesPositional;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
+
+# posv pinned Blocked, Uplo::Upper, n=33: its potrf<complex<float>> child has no
+# vendor-free route (cta is over Apple's 32 KiB local memory; lpanel and blocked refuse
+# Upper, docs/perf/potrf.md), so it throws NoRouteError. Lower and n=4,16 pass.
+posv_tests::PosvTest/5.PublicPosvSolvesOnBothTriangles;type_param=(anonymous namespace)::PosvConfig<std::__1::complex<float>, (batchlas::Backend)5>
+
+# --- BatchLAS: shared with DPC++ (tests/known-failures.txt) and acpp generic ---
+# docs/design/known-defects.md entry 3: lanczos reads column 0 of a two-column multiply.
+lanczos_tests::LanczosTestBase.LanczosTest
+lanczos_tests::LanczosTestBase.ToeplitzEigenpairs

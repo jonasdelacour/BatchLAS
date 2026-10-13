@@ -57,6 +57,10 @@ namespace detail {
 // UnifiedVector); void for anything else. Scalars are deliberately not containers: a
 // float op may take a double knob (fill_graded_hermitian's condition number).
 template <class A> struct container_elem { using type = void; };
+// A one-parameter class template over the scalar (StedcParams<T>, GemmOptions<T>) names the
+// op's type as well: stedc_buffer_size(ctx, n, batch, job, StedcParams<double>) has no container.
+template <template <class> class P, class T> struct container_elem<P<T>> { using type = T; };
+template <class T> struct container_elem<std::complex<T>> { using type = void; };
 template <class T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
 template <class T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
 template <class T> struct container_elem<Vector<T>> { using type = T; };

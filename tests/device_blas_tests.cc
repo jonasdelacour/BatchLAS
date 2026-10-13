@@ -63,6 +63,13 @@ void expect_matrix_near(const MatrixView<T, MatrixFormat::Dense>& actual,
     }
 }
 
+// The device a double case runs on: the default one, or the host where the GPU has no fp64
+// (Metal), so the same device code still runs in double.
+Device fp64_device() {
+    if constexpr (test_utils::native_gpu_lacks_fp64) return Device("cpu");
+    else return Device::default_device();
+}
+
 size_t device_test_work_group_size(const Queue& ctx) {
     const auto max_wg = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
     return std::max<size_t>(1, std::min<size_t>(32, max_wg));
@@ -975,7 +982,7 @@ TEST(DeviceBlasTest, HemvUpperMatchesReferenceUsingStoredTriangle) {
 }
 
 TEST(DeviceBlasTest, HemvLowerNdItemMatchesReferenceUsingStoredTriangle) {
-    Queue ctx(Device::default_device());
+    Queue ctx(fp64_device());
 
     using Complex = std::complex<double>;
     Matrix<Complex, MatrixFormat::Dense> a(3, 3);
@@ -1903,7 +1910,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
-    Queue ctx(Device::default_device());
+    Queue ctx(fp64_device());
 
     using Complex = std::complex<double>;
     Matrix<Complex, MatrixFormat::Dense> a(64, 32);
@@ -2819,7 +2826,7 @@ void check_portable_group_reductions_on(Queue& ctx, const char* where) {
 TEST(DeviceBlasTest, PortableGroupReductionsAreExact) {
     Queue gpu(Device::default_device());
     check_portable_group_reductions_on<float>(gpu, "default device");
-    check_portable_group_reductions_on<double>(gpu, "default device");
+    if (!test_utils::native_gpu_lacks_fp64) check_portable_group_reductions_on<double>(gpu, "default device");
 #if BATCHLAS_HAS_CPU_TARGET
     std::unique_ptr<Queue> cpu;
     try {

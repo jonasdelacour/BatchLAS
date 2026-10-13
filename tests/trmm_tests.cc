@@ -84,7 +84,8 @@ int main(int argc, char **argv) {
     return RUN_ALL_TESTS();
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// The native GPU kernels: CUDA, or SYCL (AdaptiveCpp Metal, vendor-free).
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 // BATCHLAS_TRMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
 // throw rather than silently meaning Auto.
 TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {

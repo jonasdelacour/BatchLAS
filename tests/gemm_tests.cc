@@ -76,8 +76,9 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
         ADD_FAILURE() << word << " is not a reg_configs row";
         return false;
     }
-    const auto budget = static_cast<std::int64_t>(
-        resident::device_slm_budget(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    // At the tile's own width: Metal's runtime scratch grows with it (select::Device::slm_budget_for).
+    const std::int64_t budget =
+        select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
     if (cfg->slm_bytes() <= budget || !NativePinsRun(ctx)) return true;
     EXPECT_TRUE(test_utils::kSlmCappedAt48KiB)
         << word << " needs " << cfg->slm_bytes() << " B of local memory; this device budgets " << budget;

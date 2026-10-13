@@ -823,7 +823,10 @@ TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "NETLIB");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "NETLIB";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const Spec& s : {lo, hi}) {
         const std::string key = std::to_string(s.m) + " " + std::to_string(s.nrhs) + " " + std::to_string(s.k);
