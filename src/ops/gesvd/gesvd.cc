@@ -57,12 +57,14 @@ select::Key key_of(const MV<T>& A, const Job& j) {
 // Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
 // Hermitian form; Cta and Blocked run complex input only through the Hermitian shortcut
 // (gesvd_native_impl throws `unsupported` for complex general); Cta cannot write a genuinely thin
-// U; Blocked's Hermitian arm is Lower-only, as the old router had it (Upper is unverified).
+// U; Blocked's Hermitian arm is Lower-only, as the old router had it (Upper is unverified). Every
+// family, the vendor included, runs each item at the top-level (m, n): no heterogeneous batch.
 template <class T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
-    const bool native = d.is_gpu && m >= 1 && n >= 1 && A.batch_size() >= 1;
+    const bool homogeneous = !A.is_heterogeneous();
+    const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
     return std::visit(overloaded{
         [&](Jacobi) {
@@ -74,7 +76,7 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) { return native && (j.herm ? square && *j.herm == Uplo::Lower : kReal); },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
 
@@ -126,6 +128,8 @@ Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T
 template <Backend B, class T>
 Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu, SvdVectors jobvh,
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
     // The scope opens before sizing, so a driver that refuses the shape still leaves its row, as before.
@@ -146,6 +150,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
 template <Backend B, class T>
 std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
+    if (A.batch_size() == 0) return 0;
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
                                       [&](const auto& k, const auto& d) { return can_run<T>(k, d, A, j); });

@@ -97,7 +97,7 @@ std::size_t workspace(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixF
     }, c);
 }
 
-// An empty problem (n, nrhs or batch 0) or a heterogeneous batch has no kernel; the old router
+// n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel; the old router
 // refused both the same way. Thrown before choose() so a pin cannot take them either.
 template <class T>
 void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
@@ -117,6 +117,8 @@ template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
     posv_validate_params<T>(A, B, uplo);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::posv::throw_if_unservable<T>(A, B, "posv");
     // The coverage row's key: m = k = order, n = nrhs, and uplo (the only field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
@@ -131,6 +133,7 @@ template <Backend Back, typename T>
 size_t posv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
     posv_validate_params<T>(A, B, uplo);
+    if (A.batch_size() == 0) return 0;
     ops::posv::throw_if_unservable<T>(A, B, "posv_buffer_size");
     const auto c = select::pick<Back, T>(
         ops::posv::spec, ctx, ops::posv::key_of(A, B, uplo), ops::posv::candidates<T>(),

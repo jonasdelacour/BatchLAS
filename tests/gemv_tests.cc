@@ -11,6 +11,7 @@
 #include "test_utils.hh"
 #include "../src/sycl/gemv_native.hh"
 #include "../src/select/select.hh"
+#include "../src/select/vendor.hh"
 #include "../src/ops/gemv/choice.hh"
 #include <complex>
 #include <utility>
@@ -1024,19 +1025,19 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     EXPECT_GT(width(8, kBig), 1);
 }
 
-// complex<double> cuBLAS gemv segfaults inside cuBLASLt (batched and single), so the vendor
-// family refuses it on CUDA: a pin throws instead of killing the process, and Auto at a shape the
-// sm_120 table ranks vendor first (trans=N red=32768, applied to batch 2 by nearest row) runs a
-// native family. evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
+// complex<double> cuBLAS gemv segfaulted inside cuBLASLt until defect 13's aligned scalars, and
+// can_run refused the vendor on CUDA. Re-run without the refusal (WP3, threadripper02): a strict
+// vendor pin runs this shape (trans=N red=32768, batch 2) and the answer verifies.
+// evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
 template <typename Config>
 class GemvVendorRefusalTest : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GemvVendorRefusalTest, MyTypes);
 
-TYPED_TEST(GemvVendorRefusalTest, ComplexDoubleVendorIsRefusedOnCuda) {
+TYPED_TEST(GemvVendorRefusalTest, ComplexDoubleVendorRunsOnCuda) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B != Backend::CUDA || !std::is_same_v<T, std::complex<double>>) {
-        GTEST_SKIP() << "the refusal is complex<double> on CUDA only";
+        GTEST_SKIP() << "the former refusal was complex<double> on CUDA only";
     } else {
         const int m = 64, n = 32768, batch = 2;
         UnifiedVector<T> a(size_t(m) * n * batch), xs(size_t(n) * batch), ys(size_t(m) * batch, T(0));
@@ -1049,14 +1050,12 @@ TYPED_TEST(GemvVendorRefusalTest, ComplexDoubleVendorIsRefusedOnCuda) {
             }
         MatrixView<T, MatrixFormat::Dense> A(a.data(), m, n, m, m * n, batch);
         VectorView<T> x(xs.data(), n, batch), y(ys.data(), m, batch);
+        if (!select::level3_vendor_available<B>) GTEST_SKIP() << "no vendor BLAS in this build";
         {
             const select::ScopedPin<ops::gemv::GemvChoice> pin("gemv", "vendor", select::StrictPin{});
-            EXPECT_THROW(((void)gemv(*this->ctx, A, x, y, {.alpha = T(1), .beta = T(0)})), std::invalid_argument);
+            (void)gemv(*this->ctx, A, x, y, {.alpha = T(1), .beta = T(0)});
+            this->ctx->wait();
         }
-        // The env class word falls back to Auto with a warning; either way no cuBLAS call is made.
-        const ScopedEnvVar word("BATCHLAS_GEMV_ROUTE", "vendor");
-        (void)gemv(*this->ctx, A, x, y, {.alpha = T(1), .beta = T(0)});
-        this->ctx->wait();
         using MV = MatrixView<T, MatrixFormat::Dense>;
         EXPECT_VERIFY(T, verify::Check::blas, n,
                       MV::gemv_backward_error(*this->ctx, A, Transpose::NoTrans, x, y, y, MV::up(T(1)), MV::up(T(0)),

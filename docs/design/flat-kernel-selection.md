@@ -311,13 +311,14 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
-  work-groups. The phase-5 kernels were not audited for it, and ormqr's blocked driver hits it (known-defects #16).
+  work-groups. The phase-5 kernels were not audited for it. ormqr's blocked driver was reported to hit it
+  (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_route_available`** is conservative (float, or any type with cuBLAS). Widening
   it moves the vendor-free routes of ortho and ormqr, so that is a separate change.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
 
 Known defects that affect routing are in [known defects](known-defects.md) (for example #12, heterogeneous batches
-on the vendor, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
+on the vendor, closed by refusing them in every family's `can_run`, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
 `gemm_vendor_impl` works around with the typed `cublasZgemmStridedBatched`).
 
 ## 12. Per-op families
@@ -503,7 +504,8 @@ unless a line says otherwise.
   and `q` is the extent of C that Q does not act on. 540 rows.
 - Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
   `choose()`. The vendor spells a real ConjTrans as Trans.
-- `blocked` hits the 65535 grid-z ceiling (known-defects #16).
+- `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
+  Vendor-free past 65535 its sub-gemm or sub-trmm may throw `NoRouteError` itself.
 
 ### spmm {#phase-5-spmm}
 
@@ -577,8 +579,8 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
   because the kernel would answer wrongly. It also needs `max_wg >= gram_threads(n)`. `triangular`
   is float only, and needs `max_wg >= 256` and `T(T+1)/2 <= 65535` tiles. ConjTrans is passed as
   Trans, and the `trans` key keeps real ConjTrans on the vendor.
-- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms, and `transA != ConjTrans`.
-  Real ConjTrans stays on the vendor.
+- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms. The launch folds a
+  real ConjTrans to Trans, and the key has no `trans`, so it follows the Trans rows.
 - **symm.** `expand` is the mirrored expansion into a queue workspace, then the public gemm. It needs
   `max_wg >= 256` and `expansion_fits(q, k, batch, bytes)`. `BATCHLAS_EXPAND_MAX_BYTES` lowers the
   limit. symm does not read `BATCHLAS_EXPAND_ROUTE`.
