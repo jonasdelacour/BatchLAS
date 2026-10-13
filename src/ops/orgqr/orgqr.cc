@@ -35,7 +35,7 @@ select::Key key_of(const MV<T>& A) {
 // Correctness only (R3): false means the driver would throw. Blocked's clauses are
 // orgqr_blocked_dispatch's own checks (one identity and one apply serve the whole batch, and
 // Q's columns live in C^m, so n <= m); its tau-length check is an argument error, left to the
-// driver. The vendor accepts every shape, a heterogeneous batch included, as before.
+// driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
 template <class T>
 bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
@@ -43,7 +43,7 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
     }, c);
 }
 
@@ -94,6 +94,8 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     orgqr_validate_params<T>(A);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as the old builder set it: k = min(m, n) reflectors, (Left, NoTrans).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
@@ -108,6 +110,7 @@ Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
 template <Backend Back, typename T>
 size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     orgqr_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::orgqr::can_run<T>(k, d, A); });

@@ -24,7 +24,7 @@ namespace batchlas {
                Span<std::byte> workspace) {
         static LinalgHandle<Back> handle;
         BumpAllocator pool(workspace);
-        auto buffer_size = spmm_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);
+        auto buffer_size = backend::spmm_vendor_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);
         auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
         A.init();  // cached descriptors live on the caller's views; the lambda copies share them
         B.init();

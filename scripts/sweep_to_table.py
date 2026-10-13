@@ -9,6 +9,7 @@ tier bracketing); docs/design/flat-kernel-selection.md section 5.4 (table format
     scripts/sweep_to_table.py --op potrf --device sm_120 --out DIR
     scripts/sweep_to_table.py --check              # CI: re-derive every table byte for byte
     scripts/sweep_to_table.py --self-test
+    scripts/sweep_to_table.py --emit-sample OUT --op potrf --device sm_120 [--cells N]
 
 The one input is benchmarks/results/tuning/ledger/<op>.<device>.jsonl (--ledger DIR names another
 root). Every line carries "dtype" except `rehash`. Keys and candidates come from each dtype's newest
@@ -613,19 +614,30 @@ def check_table(path, failures, notes, repo=REPO):
         bad = [c for c, _ in ranked if c not in der.vocab.get(key[0], [])]
         if bad or len({c for c, _ in ranked}) != len(ranked):
             failures.append(f"{rel}: row {key} has unknown or repeated spellings {bad}")
-    notes += stale_kernel_warnings(rel, ident[0], header, judge, repo)
+    notes += stale_kernel_warnings(path, repo)
     print(f"check {rel}: {len(parsed)} rows re-derived from {src}")
     return ledger
 
 
-def stale_kernel_warnings(rel, op, header, judge, repo=REPO):
-    """Header hashes against tools/tune/<op>_spec.cc now: a kernel edit since the table was made."""
+def stale_kernel_warnings(table_path, repo=REPO):
+    """Header hashes against tools/tune/<op>_spec.cc now: a kernel edit since the table was made.
+    A table with no measured row (tiers= counts only converted/transcribed) carries no hash and is
+    never stale; a missing or unparsable tiers= is checked. A missing spec is a note, not a warning."""
+    rel = os.path.relpath(table_path, repo)
+    with open(table_path) as f:
+        header = parse_table(f.read().split("\n# keys:", 1)[0])[0]
+    tokens = [t.split(":", 1) for t in header.get("tiers", "").split(",")]
+    if all(len(t) == 2 and t[1].isdigit() for t in tokens):
+        counts = dict(tokens)
+        if not any(int(counts.get(t, "0")) > 0 for t in LEDGER_TIERS if t not in UNHASHED):
+            return []
+    op, judge = os.path.basename(table_path).split(".")[0], header_hashes(header)
     try:
         block = parse_kernel_block(read_spec_source(op, repo))
         now = family_hashes(block, list(judge), repo)
         op_now = kernel_hash(block["all"], repo)
     except SystemExit as e:
-        return [f"{rel}: kernel sources unreadable ({e}); staleness not checked"]
+        return [f"note: {rel}: kernel sources unreadable ({e}); staleness not checked"]
     fams = [f for f, h in judge.items() if now.get(f) != h]
     out = []
     if fams or header.get("kernels") != op_now:
@@ -757,6 +769,40 @@ def rehash_sample(ledger_path, op, run_id, families=None, at=None, repo=REPO, wr
                   f"{', '.join(x['family'] for x in lines)}"], lines
 
 
+def emit_sample(ledger_path, op, cells=SAMPLE_MIN_CELLS):
+    """--remeasure-keys lines '<op> <dtype> <key>' for a --rehash-sample run: per dtype, every
+    combination of exact keys the measured records hold, each with the cells at the min, median and
+    max of every log key; then cells spread evenly over the rest up to `cells`. Only keys of measured
+    records that are not all-error (the ones --rehash-sample compares with), so every cell sampled
+    is on the tuner's grid and has an old record."""
+    led = read_ledger(ledger_path)
+    heads = defaultdict(list)
+    for r in led.runs:
+        heads[r["dtype"]].append(r)
+    chosen, rest = [], []
+    for d in [t for t in DTYPES if t in heads]:
+        logs = [n for n, is_log, _ in parse_keys(newest(heads[d])["keys"]) if is_log]
+        keys = sorted({c["key"] for c in led.cells if c["dtype"] == d and c["tier"] not in UNHASHED
+                       and not all_error(c)},
+                      key=lambda k: tuple(int(v) if n in logs else 0 for n, v in k) + tuple(k))
+        groups = defaultdict(list)
+        for k in keys:
+            groups[tuple((n, v) for n, v in k if n not in logs)].append(k)
+        for g in groups.values():
+            pick = []
+            for name in logs:
+                vals = sorted({int(dict(k)[name]) for k in g})
+                for v in dict.fromkeys((vals[0], vals[len(vals) // 2], vals[-1])):
+                    at = [k for k in g if int(dict(k)[name]) == v]
+                    pick.append(at[len(at) // 2])
+            pick = list(dict.fromkeys(pick))
+            chosen += [(d, k) for k in pick]
+            rest += [(d, k) for k in g if k not in pick]
+    need = min(max(0, cells - len(chosen)), len(rest))
+    chosen += [rest[i * len(rest) // need] for i in range(need)]
+    return [f"{op} {d} {','.join(f'{n}={v}' for n, v in k)}" for d, k in chosen]
+
+
 def hash_vector_problem(repo=REPO):
     """The shared hash v2 vector (also checked by tune_tests and check_tuned_tables.py)."""
     with open(os.path.join(repo, HASH_VECTOR, "expected.txt")) as f:
@@ -787,8 +833,8 @@ def self_test():
                 "batchlas": batchlas or "bl" + rid[-1], "argv": "", "date": date, "tier": tier, "keys": keys,
                 "candidates": "|".join(cands)}
 
-    def cell(rid, tier, n, ranked=("tiny", "cta"), date="2026-10-01", hashes=None, dtype="float", uplo="L"):
-        r = {"kind": "cell", "dtype": dtype, "run_id": rid, "tier": tier, "key": f"uplo={uplo},n={n},nrhs=1,batch=128",
+    def cell(rid, tier, n, ranked=("tiny", "cta"), date="2026-10-01", hashes=None, dtype="float", uplo="L", batch=128):
+        r = {"kind": "cell", "dtype": dtype, "run_id": rid, "tier": tier, "key": f"uplo={uplo},n={n},nrhs=1,batch={batch}",
              "round": 0, "date": date, "ranked": "|".join(ranked), "cands": "|".join(cands)}
         for i, c in enumerate(cands):
             r.update({f"h{i}": (hashes or fh)[c], f"s{i}": "ok" if c in ranked else "skipped", f"r{i}": "",
@@ -937,6 +983,31 @@ def self_test():
         failures, notes = check(os.path.join(repo, "tuned"), os.path.join(repo, "ledger"), repo)
         expect(not failures and len(notes) == 1 and "stale" in notes[0],
                f"a kernel edit is a stale warning, not a failure -> {failures} {notes}")
+        # staleness by tier: an all-transcribed table is never stale; a measured one names its stale family
+        os.makedirs(os.path.join(repo, "fix"))
+        hk2 = kernel_hash(["src/k.cc"], repo)
+        one = "deep:{},coarse:{},preview:{},custom:{},converted:0,transcribed:5".format
+        for name, fams, tier_counts, want in (
+                ("posv.sm_t.txt", "tiny:deadbeef", "deep:0,coarse:0,preview:0,custom:0,converted:4,transcribed:3", []),
+                ("posv.sm_d.txt", f"tiny:{hk2},cta:deadbeef", one(5, 0, 0, 0), ["cta:deadbeef"]),
+                ("posv.sm_c.txt", f"tiny:{hk2},cta:deadbeef", one(0, 2, 0, 0), ["cta:deadbeef"]),
+                ("posv.sm_p.txt", f"tiny:{hk2},cta:deadbeef", one(0, 0, 2, 0), ["cta:deadbeef"]),
+                ("posv.sm_u.txt", f"tiny:{hk2},cta:deadbeef", one(0, 0, 0, 2), ["cta:deadbeef"]),
+                ("posv.sm_m.txt", f"tiny:{hk2},cta:deadbeef", None, ["cta:deadbeef"]),
+                ("posv.sm_x.txt", f"tiny:{hk2},cta:deadbeef", "deep:x,transcribed:5", ["cta:deadbeef"])):
+            fp = os.path.join(repo, "fix", name)
+            with open(fp, "w") as f:
+                f.write(f"# op=posv device=x batchlas=b kernels=deadbeef family_kernels={fams} date=d\n"
+                        f"# source=ledger:x{'' if tier_counts is None else ' tiers=' + tier_counts}\n"
+                        "# keys: dtype:exact n:log\n")
+            got = stale_kernel_warnings(fp, repo)
+            expect(len(got) == len(want) and all(w in g and "tiny:" not in g for w, g in zip(want, got)),
+                   f"stale_kernel_warnings({name}) -> {got}")
+        fp = os.path.join(repo, "fix", "gemv.sm_d.txt")
+        with open(fp, "w") as f:
+            f.write("# op=gemv device=x kernels=deadbeef family_kernels=a:b date=d\n# source=ledger:x tiers=deep:1\n")
+        got = stale_kernel_warnings(fp, repo)
+        expect(len(got) == 1 and got[0].startswith("note:"), f"an op without a spec is a note -> {got}")
         os.remove(tab)
         failures, _ = check(os.path.join(repo, "tuned"), os.path.join(repo, "ledger"), repo)
         expect(any("no table" in x for x in failures), f"a ledger without a table fails -> {failures}")
@@ -978,6 +1049,35 @@ def self_test():
         rows5 = ledger_rows(keyspec, read_ledger(s5, "float").cells, family_hashes(parse_kernel_block(
             read_spec_source("posv", repo)), cands, repo))
         expect(ok and rows5[("L", 5, 1, 128)][0] == "deep", f"after the rehash the deep records stand -> {ok}")
+        # the stratified sample: posv keys under op potrf, 4 dtypes x 2 uplo x n=1..40 x batch 32|128|1024,
+        # stale by one hash
+        with open(os.path.join(repo, "tools", "tune", "potrf_spec.cc"), "w") as f:
+            f.write('// kernel-sources-begin\n"src/k.cc",\n// kernel-sources-end\n')
+        old = {f"h{i}": "v1old" for i in range(3)}
+        pl = [run_line(r1, "2026-10-01", dtype=t) for t in DTYPES]
+        pl += [dict(cell(r1, "deep", n, dtype=t, uplo=u, batch=b), **old)
+               for t in DTYPES for u in "LU" for n in range(1, 41) for b in (32, 128, 1024)]
+        pp = build(pl, os.path.join(repo, "ledger"), "potrf.sm_s.jsonl")
+        sample = emit_sample(pp, "potrf")
+        got = [ln.split() for ln in sample]
+        kv = [(t, dict(x.split("=") for x in k.split(","))) for o, t, k in got]
+        seen = defaultdict(set)  # the stratified picks alone (no fill) must reach every end
+        for t, k in [(t, dict(x.split("=") for x in k.split(","))) for _, t, k in
+                     (ln.split() for ln in emit_sample(pp, "potrf", 0))]:
+            seen[t, k["uplo"]] |= {("n", k["n"]), ("batch", k["batch"])}
+        ends = {("n", "1"), ("n", "40"), ("batch", "32"), ("batch", "1024")}
+        expect(len(set(sample)) == len(sample) >= SAMPLE_MIN_CELLS and all(o == "potrf" for o, _, _ in got)
+               and set(seen) == {(t, u) for t in DTYPES for u in "LU"} and all(ends <= v for v in seen.values()),
+               f"emit_sample covers 4 dtypes x 2 uplo, both ends of n and batch, >= 64 distinct cells -> {len(sample)} "
+               f"{sorted((g, sorted(ends - v)) for g, v in seen.items())}")
+        expect(len(emit_sample(pp, "potrf", 200)) == 200, "emit_sample --cells 200")
+        pl.append(run_line("S", "2026-10-05", tier="custom"))
+        for t, k in kv:
+            pl.append({**cell("S", "custom", int(k["n"]), date="2026-10-05", dtype=t, uplo=k["uplo"], batch=int(k["batch"])),
+                       **{f"h{i}": hk for i in range(3)}})
+        ok, msg, _ = rehash_sample(build(pl, os.path.join(repo, "ledger"), "potrf.sm_s.jsonl"), "potrf", "S",
+                                   repo=repo, write=False)
+        expect(ok, f"--rehash-sample accepts the emitted sample -> {msg}")
         # row kinds
         expect(row_kind_problems({"source": "ledger:x"}, [(("L",), [("a", None), ("b", 1.0)])]) != [], "mixed row")
         expect(row_kind_problems({"source": "x"}, [(("L",), [("a", None)])]) != [], "untimed row needs ledger:")
@@ -996,7 +1096,22 @@ def main():
                     help="with --op and --device: rehash the stale families if this sample run agrees with the old records")
     ap.add_argument("--family", nargs="+", help="--rehash-sample: only these families")
     ap.add_argument("--at", help="--rehash-sample: the commit to record (default HEAD)")
+    ap.add_argument("--emit-sample", metavar="OUT",
+                    help="with --op and --device: write a stratified --remeasure-keys file for a --rehash-sample run")
+    ap.add_argument("--cells", type=int, default=SAMPLE_MIN_CELLS,
+                    help="--emit-sample: this many cells (default %(default)s); a ledger with fewer exits 1")
     args = ap.parse_args()
+    if args.emit_sample:
+        if not args.op or not args.device:
+            raise SystemExit("--emit-sample needs --op and --device")
+        lines = emit_sample(os.path.join(args.ledger, f"{args.op}.{args.device}.jsonl"), args.op, args.cells)
+        with open(args.emit_sample, "w") as fh:
+            fh.write("".join(ln + "\n" for ln in lines))
+        print(f"wrote {args.emit_sample}: {len(lines)} cells")
+        if len(lines) < SAMPLE_MIN_CELLS:
+            print(f"error: fewer than {SAMPLE_MIN_CELLS} measured cells; --rehash-sample would refuse this sample")
+            return 1
+        return 0
     if args.rehash_sample:
         if not args.op or not args.device:
             raise SystemExit("--rehash-sample needs --op and --device")

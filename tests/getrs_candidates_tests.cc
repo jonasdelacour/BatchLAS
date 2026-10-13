@@ -531,7 +531,8 @@ TYPED_TEST(GetrsCandidates, UnknownPinsThrow) {
 
 // The named can_run-false shapes (absorbs RouteGetrs.CorrectnessGatesAreNotSpeedGates and
 // FusedGetrsHandsBackAtBothCeilings' table half): empty order or rhs, one past the width,
-// a non-square A, B's rows or batch disagreeing with A, an empty batch on both sides.
+// a non-square A, B's rows or batch disagreeing with A. An empty batch returns before selection
+// (WP3 batch policy), so no pin sees it.
 TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -542,8 +543,7 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
                           {gs::Cta{}, 8, 8, 8, w + 1, 1, 1, "nrhs past the width"},
                           {gs::Cta{}, 8, 10, 8, 2, 1, 1, "A not square"},  {gs::Blocked{}, 8, 10, 8, 2, 1, 1, "A not square"},
                           {gs::Cta{}, 8, 8, 9, 2, 1, 1, "B rows != n"},    {gs::Blocked{}, 8, 8, 9, 2, 1, 1, "B rows != n"},
-                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"},
-                          {gs::Cta{}, 8, 8, 8, 2, 0, 0, "batch 0"},        {gs::Blocked{}, 8, 8, 8, 2, 0, 0, "batch 0"}};
+                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}};
     for (const auto& k : cases) {
         UnifiedVector<T> a(std::size_t(std::max(1, k.an * k.ac)) * 2, T(1)), b(std::size_t(std::max(1, k.bn * k.bc)) * 2, T(1));
         const MVof<T> A(a.data(), k.an, k.ac, std::max(1, k.an), std::max(1, k.an * k.ac), k.ab);
@@ -600,8 +600,12 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
                 << k.what << " " << select::to_string(c);
         }
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
+        // No family, the vendor included, takes it (WP3 batch policy).
         if constexpr (!TestFixture::kVendor)
             EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), batchlas::NoRouteError)
+                << k.what;
+        else
+            EXPECT_NO_RUNNABLE_KERNEL((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans))
                 << k.what;
     }
 }

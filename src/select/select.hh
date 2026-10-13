@@ -63,7 +63,7 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
     return describe(q.device(), B, has_library<B>(vendor));
 }
 
-/// The dtype token of a table file name: float, double, cfloat or cdouble.
+/// The dtype key of a table row (the first, exact key of every tuned file): float, double, cfloat or cdouble.
 template <class T>
 constexpr std::string_view dtype_name() {
     if constexpr (std::is_same_v<T, float>) return "float";
@@ -271,7 +271,7 @@ struct Table {
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
-/// Parses one single-dtype table (the header or file name gives op, dtype and device).
+/// Parses one single-dtype table: op and device from the header or file name, dtype from the header.
 /// @throws std::runtime_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
 
@@ -288,7 +288,7 @@ struct EmbeddedTable {
 BATCHLAS_API std::span<const EmbeddedTable> embedded_tables();  ///< generated from tuned/*.txt
 
 /// §5.5: own key; same family at-or-below by nearest arch, then above; then sm, gfx, intel,
-/// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR, parsed once per (op, dtype, dir).
+/// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR; each file is parsed once per dir (not per dtype).
 /// A CPU device gets only its own table.
 BATCHLAS_API std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::string_view dtype,
                                                               const Device& d);
@@ -584,6 +584,7 @@ namespace testing {
 BATCHLAS_API void set_builtin_tables(std::vector<std::pair<std::string, std::string>> files);
 BATCHLAS_API void use_embedded_tables();
 BATCHLAS_API void reset_warnings();
+BATCHLAS_API std::size_t parse_count();  ///< table files parsed since load (the loader's cost)
 }  // namespace testing
 
 }  // namespace batchlas::select

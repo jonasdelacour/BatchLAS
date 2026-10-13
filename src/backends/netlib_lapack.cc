@@ -1087,9 +1087,10 @@ namespace batchlas{
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto piv = pivots;
-        const int n = A_view.rows();
+        // An m x n item (B6): LAPACKE factors the whole matrix, min(m, n) pivots per item, packed.
+        const int m = A_view.rows(), n = A_view.cols(), mn = std::min(m, n);
         const int batch = A_view.batch_size();
-        auto piv_i32 = pool.allocate<int>(ctx, n * batch);
+        auto piv_i32 = pool.allocate<int>(ctx, mn * batch);
         // See potrf above: the LAPACKE return was discarded, so a singular item
         // was indistinguishable from a factorised one (issue #73).
         auto info = info_out;
@@ -1100,11 +1101,11 @@ namespace batchlas{
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
                     Layout::ColMajor,
-                    n,
+                    m,
                     n,
                     A_view[i].data_ptr(),
                     A_view.ld(),
-                    piv_i32.data() + i * n);
+                    piv_i32.data() + i * mn);
                 if (want_info) info[i] = static_cast<int32_t>(st);
             }
         });
@@ -1114,7 +1115,7 @@ namespace batchlas{
             auto piv_out = piv.as_span<int64_t>();
             auto piv_in = piv_i32;
             h.depends_on(static_cast<sycl::event>(*ctx.get_event()));
-            h.parallel_for(sycl::range<1>(static_cast<size_t>(n * batch)), [=](sycl::id<1> idx) {
+            h.parallel_for(sycl::range<1>(static_cast<size_t>(mn * batch)), [=](sycl::id<1> idx) {
                 piv_out[static_cast<int>(idx[0])] = static_cast<int64_t>(piv_in[static_cast<int>(idx[0])]);
             });
         });
@@ -1132,7 +1133,7 @@ namespace batchlas{
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
-        return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
+        return BumpAllocator::allocation_size<int>(ctx, std::min(A.rows(), A.cols()) * A.batch_size());
     }
 
     } // namespace backend

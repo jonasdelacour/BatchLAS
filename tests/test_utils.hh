@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <algorithm>
 #include <iostream>
 
@@ -213,6 +214,20 @@ template <typename T>
                                          << " (" << slack.reason << "))";
 }
 
+// A vendor build's "no route": select::pick's std::runtime_error("<op>: no runnable kernel on ...").
+// Any other exception fails, so a vendor that ran and then threw cannot pass for a refusal.
+template <typename F>
+::testing::AssertionResult throws_no_runnable_kernel(F&& f) {
+    try {
+        std::forward<F>(f)();
+    } catch (const std::exception& e) {
+        if (std::string_view(e.what()).find("no runnable kernel") != std::string_view::npos)
+            return ::testing::AssertionSuccess();
+        return ::testing::AssertionFailure() << "threw, but not 'no runnable kernel': " << e.what();
+    }
+    return ::testing::AssertionFailure() << "did not throw";
+}
+
 // Unified base test fixture for all BatchLAS tests
 template <typename Config>
 class BatchLASTest : public ::testing::Test {
@@ -273,3 +288,4 @@ protected:
 // EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
 #define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))
 #define EXPECT_VERIFY_SLACK(T, kind, n, value, ...) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value), __VA_ARGS__))
+#define EXPECT_NO_RUNNABLE_KERNEL(...) EXPECT_TRUE(::test_utils::throws_no_runnable_kernel([&] { __VA_ARGS__; }))
