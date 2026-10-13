@@ -1,5 +1,6 @@
 # batchlas_tune (docs/design/flat-kernel-selection.md §6). Built with the benchmarks
-# (BATCHLAS_BUILD_BENCHMARKS): it is a measuring tool like factor_bench, not part of the library.
+# (BATCHLAS_BUILD_BENCHMARKS) and only with a CUDA or ROCm backend (BATCHLAS_BUILD_TUNE_TOOL in
+# the top-level CMakeLists.txt), so a CPU-only or acpp generic configure does not compile it.
 # One spec per op in <op>_spec.cc.
 add_executable(batchlas_tune_impl
     batchlas_tune.cc

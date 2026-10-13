@@ -26,7 +26,7 @@ A survey of the tree on 2026-10-09 (branch `tuning-deep-sm120`) found:
 | LAPACKE references (`?syevd`, `?gesvd`, `?sterf`, `?getrf`) | ~10 | |
 | tolerances | 3 schemes, 20+ constants | fixed per type vs `c·n·eps` with c from 4 to 200 |
 
-`tools/tune/residuals.hh` says it is a port of `benchmarks/factor_bench.cc`. "Is LAPACKE
+`tools/tune/residuals.hh` (since deleted) was a port of `benchmarks/factor_bench.cc`. "Is LAPACKE
 available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 `BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE`, `BATCHLAS_GETRF_TESTS_HAVE_LAPACKE`).
 
@@ -37,10 +37,11 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 | Where the checks live | static functions of `MatrixView<T, MatrixFormat::Dense>` (`include/batchlas/blas/matrix.hh`, implementation `src/extra/matrix_checks.cc`); every utility a check needs is a `Matrix`/`MatrixView` member or static, or an existing library function. `batchlas::verify` keeps only the tolerance policy and the LAPACKE references |
 | Data | the library's own `MatrixView` and `VectorView`; no other matrix, batch, operand or item type. A site holding raw buffers builds a view over them |
 | Memory | host-readable views (unified or host allocations); the caller waits on its queue first. A check promotes its items with `MatrixView::astype<promoted_type>(items)` |
-| Queue | the caller's: every check takes `Queue& ctx` first, runs there and waits once at the end |
+| Queue | the caller's: every check that launches kernels takes `Queue& ctx` first and waits before it returns (at least once per item group); on an out-of-order Queue it runs on an in-order sibling that first waits on ctx's pending work (`select::on_in_order_queue`), which costs one Queue construction per call, so pass item spans rather than loop per item. `product` takes `const Queue&` and returns its Event without waiting; `values_error`, `pivot_ratio` and `pivots_valid` are host loops and take no Queue |
 | Arithmetic | every check promotes to `double` / `std::complex<double>` |
 | Maxima | NaN-propagating everywhere: a NaN anywhere in a check fails it |
 | Items checked | `default_items()` (`{0, batch/2, batch−1}`) by default; an explicit list otherwise, `all_items()` for every item. Check a batch with one call over its items, not one call per item: each call waits on the queue |
+| Empty item set | a batch-0 operand with defaulted items checks nothing: every check returns 0 (passes), `form_q` returns a batch-0 `Matrix`, `pivots_valid` returns true. One policy for `MatrixView` and `VectorView` operands (`VectorView::default_items()` is `{}` for batch 0) |
 | Operand structure | operands are read as stored. A check against a triangle or a mirrored matrix applies `triangularize`, `hermitize` or `symmetrize` to a copy first; `trsm_residual` (`Uplo`, `Diag`), `potrf_residual` (`Uplo`) and `eigen_residual` (lower triangle) take the structure their factor or input has |
 | Tolerance | `c · f(n) · eps(T)` per check kind, one named entry per kind (below); no fixed per-type bounds |
 | Inputs | `MatrixView` fills: `fill_random`, `fill_random_spd`, `fill_random_pivoted` (dominant, rows a random n-cycle per item), `fill_graded_hermitian` (condition 10^c) |
@@ -50,10 +51,10 @@ available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
 
 | Where | Contents |
 | --- | --- |
-| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`; one item, or a list of items packed in order), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `svd_residual` (`‖A − U·diag(s)·Vh‖_F / ‖A‖_F` over the leading min(m, n) singular triplets, judged as `factorization` at n = max(m, n)), `solve_residual` (an empty B for getri; 8 seeded probe columns above 2^28 multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator`, `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
-| `MatrixView` / `VectorView` members | `all_items()`, `default_items()`, `astype<U>(items)` (the listed items, promoted and packed) |
+| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`; one item, or a list of items packed in order), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `svd_residual` (`‖A − U·diag(s)·Vh‖_F / ‖A‖_F` over the leading min(m, n) singular triplets, judged as `factorization` at n = max(m, n)), `solve_residual` (an empty B for getri; 8 seeded probe columns above 2^28 multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator` (over an item list, like the others), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
+| `MatrixView` / `VectorView` members | `all_items()`, `default_items()` (both views); `MatrixView::astype<U>(items)` (the listed items, promoted and packed) |
 | `verify/tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()`, `eps<T>()`, `nanmax` |
-| `verify/reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`), singular values (`?gesdd`), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` tau, `?sterf`; each on a packed vector or on `(view, item)`. Each returns `false` without LAPACKE, empty input included, and the caller skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
+| `verify/reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`) and singular values (`?gesdd`) of `double` or `std::complex<double>` data only (any other type does not compile), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` tau, `?sterf`; each on a packed vector or on `(view, item)`. Each returns `false` without LAPACKE, empty input included, and the caller skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws `batchlas::unsupported` when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
 
 CMake target `batchlas::verify`: a small host library (`src/verify/reference.cc`, the dgemm probe)
 carrying LAPACKE and the `BATCHLAS_VERIFY_HAVE_LAPACKE` switch; not installed.
@@ -101,7 +102,7 @@ that a k = 1 cell hits (cdouble rows reached 0.88 of `4·k·eps` at k = 1).
 **Slack.** A site whose quantity legitimately sits off its kind's bound passes
 `Slack{factor, reason}`: `bound<T>(kind, n, slack) = factor · bound<T>(kind, n)`. The factor may be
 above or below 1 (a site may also tighten); it must be finite and positive, and the reason is
-mandatory (`std::invalid_argument` otherwise). With `BATCHLAS_VERIFY_RECORD=<path>` every `pass`
+mandatory (`batchlas::invalid_argument` otherwise). With `BATCHLAS_VERIFY_RECORD=<path>` every `pass`
 appends `kind dtype n value bound factor reason`: `value` is the raw value (never divided by the
 factor), `bound` the kind's unslacked bound, `factor` 1 and `reason` `-` for the plain overloads,
 and whitespace in a reason is written as `_`. The calibration excludes every row with factor ≠ 1
@@ -221,7 +222,7 @@ gemm specs, `benchmarks/factor_bench.cc`; `tools/tune/residuals.hh` and factor_b
 deleted; the three LAPACKE macros became `BATCHLAS_VERIFY_HAVE_LAPACKE`) landed first. The tests were
 then migrated per area (LU; QR and Cholesky; eigen, SVD and tridiagonal; BLAS) on task branches merged
 into it, and the library was extended mid-way where a migration needed it (`view`, `form_q`,
-`qr_reconstruction`, the `Shape` and `Transpose` solve overload, `rank2k_backward_error`, `geqrf_tau`,
+`qr_reconstruction`, the `Transpose` solve overload, `rank2k_backward_error`, `geqrf_tau`,
 `Slack`; later `lu_solve_residual`, `pivot_ratio`, working-precision `getrf_pivots` and the split
 orthogonality kinds). A final pass moved the remaining local checks onto it
 (syevx, ortho, trmm, the syev CTA and Jacobi eigenvalue references, gesvd's singular-value bounds,
@@ -250,6 +251,7 @@ normal-equations path (docs/perf/gesvd.md, defect A), up to 2.3e4 n eps; no slac
   rounding; a migrated test keeps its case list, and the repo's deliberate-break rule (agent
   guide §8) is re-run for it.
 - **One switch.** No `HAVE_LAPACKE` macro other than `BATCHLAS_VERIFY_HAVE_LAPACKE` remains, and
-  a vendor-free, LAPACKE-free configure still builds with the references reporting NaN.
-- **No new copies.** After each step, grep finds no definition of the migrated helpers outside
-  `include/batchlas/verify/`.
+  a vendor-free, LAPACKE-free configure still builds with the references returning `false`.
+- **No new copies.** After each step, grep finds one definition of each migrated helper: a
+  `MatrixView`/`VectorView` member or static, or `include/batchlas/verify/` (`nanmax`, the
+  tolerances, the references).

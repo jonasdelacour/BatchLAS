@@ -845,17 +845,21 @@ TYPED_TEST(PosvCandidates, CoverageRowCarriesNativeFlags) {
     EXPECT_EQ(rows[hi][10], "blocked");  // nrhs 9 is past tiny's and cta's ceilings
 }
 
-// An empty problem has no kernel: an explicit throw before choose(), never a silent no-op.
+// n or nrhs 0 has no kernel: an explicit throw before choose(), never a silent no-op. An empty
+// batch is the one empty shape that is a no-op (WP3 batch policy): 0 bytes under any pin.
 TYPED_TEST(PosvCandidates, EmptyShapesThrowBeforeChoose) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    for (auto [n, nrhs, batch] : {std::tuple{0, 1, 1}, std::tuple{4, 0, 1}, std::tuple{4, 1, 0}}) {
+    for (auto [n, nrhs, batch] : {std::tuple{0, 1, 1}, std::tuple{4, 0, 1}}) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
         const Pin pin("posv", C{ps::Blocked{}});
         EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)),
                      batchlas::internal_error)
             << n << " " << nrhs << " " << batch;
     }
+    Matrix<T, MatrixFormat::Dense> A(4, 4, 0), Bm(4, 1, 0);
+    const Pin pin("posv", C{ps::Blocked{}});
+    EXPECT_EQ((posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)), 0u);
 }
 
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them:

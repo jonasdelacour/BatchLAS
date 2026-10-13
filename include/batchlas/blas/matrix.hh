@@ -289,6 +289,18 @@ namespace batchlas {
             return {s.start, len};
         }
 
+        // Host slicing only: KernelMatrixView shares normalize_slice_component() in device code,
+        // which cannot throw. An empty in-range slice is left to the caller's invalid_argument.
+        inline std::pair<int64_t,int64_t> checked_slice_component(Slice s, int64_t dim) {
+            const auto [start, len] = normalize_slice_component(s, dim);
+            if (start < 0 || start > dim || start + std::max<int64_t>(len, 0) > dim) {
+                throw batchlas::out_of_range("Slice [" + std::to_string(start) + ", " +
+                                             std::to_string(start + len) + ") is outside a dimension of " +
+                                             std::to_string(dim));
+            }
+            return {start, len};
+        }
+
         inline void validate_dense_active_dims(int rows_capacity,
                                               int cols_capacity,
                                               int batch_size,
@@ -414,7 +426,7 @@ namespace batchlas {
         auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
         auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
         if (r_len <= 0 || c_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView");
+            assert(r_len > 0 && c_len > 0 && "Invalid slice dimensions in KernelMatrixView");
         }
         detail::apply_dense_slice_pointer_arithmetic(out.data_, ld_, r_start, c_start);
         out.rows_ = static_cast<int>(r_len);
@@ -428,7 +440,7 @@ namespace batchlas {
     VectorView<T> KernelMatrixView<T, MType>::operator()(int32_t row, Slice cols_slice) const {
         auto [c_start, c_len] = detail::normalize_slice_component(cols_slice, cols_);
         if (c_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView row extraction");
+            assert(c_len > 0 && "Invalid slice dimensions in KernelMatrixView row extraction");
         }
         T* row_data = data_ + row + c_start * ld_;
         return VectorView<T>(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
@@ -440,7 +452,7 @@ namespace batchlas {
     VectorView<T> KernelMatrixView<T, MType>::operator()(Slice rows_slice, int32_t col) const {
         auto [r_start, r_len] = detail::normalize_slice_component(rows_slice, rows_);
         if (r_len <= 0) {
-            assert("Invalid slice dimensions in KernelMatrixView column extraction");
+            assert(r_len > 0 && "Invalid slice dimensions in KernelMatrixView column extraction");
         }
         T* col_data = data_ + r_start + col * ld_;
         return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
@@ -737,12 +749,12 @@ namespace batchlas {
         Matrix<U, MType> astype() const;
 
         /// @brief View of the sub-block selected by @p rows x @p cols in every item; never copies.
-        /// @throws batchlas::invalid_argument if either slice is empty
+        /// @throws batchlas::invalid_argument if either slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
@@ -1196,10 +1208,12 @@ namespace batchlas {
         /// @name Verification
         /// Accuracy checks of a computed result against its inputs (@ref design_verification). Each
         /// reads every operand through ld() and stride(), promotes to double / complex<double>, runs
-        /// on @p ctx, waits, and returns the worst value over @p items (empty: default_items());
-        /// a NaN anywhere is the result. Compare it with batchlas::verify::bound(). Operands are read
-        /// as stored: apply triangularize(), hermitize() or symmetrize() to a copy first to check
-        /// against a triangle or a mirrored matrix.
+        /// on @p ctx (an in-order sibling of it when @p ctx is out of order), waits, and returns the
+        /// worst value over @p items (empty: default_items(); no items checked returns 0); a NaN
+        /// anywhere is the result. Operands are read as stored: apply triangularize(), hermitize()
+        /// or symmetrize() to a copy first to check against a triangle or a mirrored matrix.
+        /// @pre every operand is host-readable (unified or host memory) and the work that wrote it
+        ///      has completed: the caller waits on its queue first.
         /// @{
 
         /// @brief T's promoted type: double, or complex<double> for complex T.
@@ -1245,7 +1259,7 @@ namespace batchlas {
         /// @brief Every item index, 0 .. batch_size() - 1.
         std::vector<int> all_items() const;
 
-        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated: what a check reads by default.
+        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated ({} for batch 0): what a check reads by default.
         std::vector<int> default_items() const;
 
         /// @brief astype() of @p items only, packed in that order (item g at g * rows() * cols()).
@@ -1309,10 +1323,11 @@ namespace batchlas {
         static double solve_residual(Queue& ctx, const MatrixView& A0, const MatrixView& X, const MatrixView& B0,
                                      std::span<const int> items = {});
 
-        /// @brief solve_residual() with A = P L U formed per item from getrf factors @p F and pivots @p piv.
+        /// @brief solve_residual() with A = P L U formed per item from getrf factors @p F and pivots @p piv;
+        ///        @p full_limit as for solve_residual().
         static double lu_solve_residual(Queue& ctx, const MatrixView& F, const VectorView<std::int32_t>& piv,
                                         Transpose ta, const MatrixView& X, const MatrixView& B0,
-                                        std::span<const int> items = {});
+                                        std::span<const int> items = {}, double full_limit = double(1 << 28));
 
         /// @brief Componentwise max |C - (alpha op(A) op(B) + beta C0)| / (|alpha| |op(A)| |op(B)| + |beta| |C0|),
         ///        over @p c_triangle of C when given; C0 is not read when beta == 0.
@@ -1321,10 +1336,11 @@ namespace batchlas {
                                           promoted_type beta, std::span<const int> items = {},
                                           std::optional<Uplo> c_triangle = std::nullopt);
 
-        /// @brief The largest denominator of gemm_backward_error() over item @p item.
+        /// @brief The largest denominator of gemm_backward_error() over @p items (empty: A's default_items(),
+        ///        while gemm_backward_error() defaults to C's: pass both the same span when A's batch differs).
         static double gemm_max_denominator(Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B,
                                            Transpose tb, const MatrixView& C0, promoted_type alpha, promoted_type beta,
-                                           int item = 0);
+                                           std::span<const int> items = {});
 
         /// @brief gemm_backward_error() of y = alpha op(A) x + beta y0.
         static double gemv_backward_error(Queue& ctx, const MatrixView& A, Transpose ta, const VectorView<T>& x,
@@ -1460,12 +1476,12 @@ namespace batchlas {
         }
 
         /// @brief View of the sub-block @p rows x @p cols of every item; keeps ld and stride, never copies.
-        /// @throws batchlas::invalid_argument if either slice is empty
+        /// @throws batchlas::invalid_argument if either slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         MatrixView<T, MType> operator()(Slice rows, Slice cols) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
@@ -1484,11 +1500,11 @@ namespace batchlas {
         }
 
         /// @brief Part of row @p row of every item as a batched VectorView (inc = ld(), stride = stride()).
-        /// @throws batchlas::invalid_argument if the slice is empty
+        /// @throws batchlas::invalid_argument if the slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         VectorView<T> operator()(int32_t row, Slice cols) const {
-            auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
+            auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (c_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
@@ -1497,11 +1513,11 @@ namespace batchlas {
         }
 
         /// @brief Part of column @p col of every item as a batched VectorView (inc = 1, stride = stride()).
-        /// @throws batchlas::invalid_argument if the slice is empty
+        /// @throws batchlas::invalid_argument if the slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         VectorView<T> operator()(Slice rows, int32_t col) const {
-            auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
+            auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
             if (r_len <= 0) {
                 throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
@@ -1632,16 +1648,16 @@ namespace batchlas {
 
         /// @brief Writes diagonal @p k (k > 0 above the main diagonal, k < 0 below).
         ///
-        /// @p diag_values holds either n - |k| values used for every item, or
-        /// (n - |k|) * batch_size() values, one run per item. Other entries are untouched.
-        /// @pre rows() == cols() == n
+        /// The diagonal has d = max(0, min(rows() - max(-k, 0), cols() - max(k, 0))) entries.
+        /// @p diag_values holds either d values used for every item, or d * batch_size()
+        /// values, one run per item. Other entries are untouched; d = 0 writes nothing.
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k = 0) const;
 
         /// @brief Writes diagonal @p k from a VectorView: per item when its batch size equals
         ///        batch_size(), otherwise its item 0 for every item.
-        /// @pre rows() == cols(), `diag_values.size() >= n - |k|`
+        /// @pre `diag_values.size() >= d`, d as in the Span overload
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k = 0) const;
@@ -2222,6 +2238,15 @@ namespace batchlas {
         std::vector<int> all_items() const {
             std::vector<int> items(static_cast<std::size_t>(batch_size_ > 0 ? batch_size_ : 0));
             for (std::size_t i = 0; i < items.size(); ++i) items[i] = static_cast<int>(i);
+            return items;
+        }
+
+        /// @brief {0, batch_size() / 2, batch_size() - 1}, sorted and de-duplicated ({} for batch 0):
+        ///        what a check reads by default, as MatrixView::default_items().
+        std::vector<int> default_items() const {
+            if (batch_size_ < 1) return {};
+            std::vector<int> items{0, batch_size_ / 2, batch_size_ - 1};
+            items.erase(std::unique(items.begin(), items.end()), items.end());
             return items;
         }
 

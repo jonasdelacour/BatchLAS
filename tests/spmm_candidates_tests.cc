@@ -274,17 +274,12 @@ protected:
     static bool vendor_conj_row(const Spec& s) {
         return B == Backend::CUDA && kCx<T> && s.tb == Transpose::ConjTrans && s.nrhs == 1;
     }
-    // cuSPARSE: complex<double> N/N with one column segfaults on the host (known-defects #13).
-    static bool vendor_zz_column(const Spec& s) {
-        return B == Backend::CUDA && std::is_same_v<T, std::complex<double>> && s.ta == Transpose::NoTrans &&
-               s.tb == Transpose::NoTrans && s.nrhs == 1;
-    }
     // netlib: its host loop throws `unsupported` on any transpose, once per (non-empty) batch.
     static bool vendor_netlib_trans(const Spec& s) {
         return B == Backend::NETLIB && s.batch > 0 && (s.ta != Transpose::NoTrans || s.tb != Transpose::NoTrans);
     }
     static bool vendor_refused(const Spec& s) {
-        return vendor_conj_row(s) || vendor_zz_column(s) || vendor_netlib_trans(s);
+        return vendor_conj_row(s) || vendor_netlib_trans(s);
     }
     static bool expect_runs(const C& c, const Spec& s) {
         return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_refused(s));
@@ -480,8 +475,7 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
                          {"C cols != opB cols", 8, 6, 6, 3, 8, 2, 3, 3, 3, 11},
                          {"B batch != A batch", 8, 6, 6, 3, 8, 3, 3, 2, 3, 11},
                          {"C batch != A batch", 8, 6, 6, 3, 8, 3, 3, 3, 2, 11},
-                         {"offset stride m (needs m + 1)", 8, 6, 6, 3, 8, 3, 3, 3, 3, 8},
-                         {"empty batch", 8, 6, 6, 3, 8, 3, 0, 0, 0, 11}};
+                         {"offset stride m (needs m + 1)", 8, 6, 6, 3, 8, 3, 3, 3, 3, 8}};
     for (const auto& k : cases) {
         auto p = make<T>(s);
         const Csr<T> A(p.val.data(), p.ro.data(), p.ci.data(), k.a_rows, k.a_cols, NonZeros{p.cap}, p.vstride,
@@ -531,8 +525,9 @@ TYPED_TEST(SpmmCandidates, DirectSizesNoWorkspace) {
 
 // The Vendor terms (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
 // OPERATION_CONJUGATE_TRANSPOSE is unsupported when B is a single row"), the vendor arm drops the
-// status and C is never written; complex<double> N/N with one column segfaults; netlib throws on
-// any transpose. Straddled on nrhs 1/2, transA N/T and transB N/T/C; Auto then runs Direct.
+// status and C is never written; netlib throws on any transpose. complex<double> N/N with one
+// column runs on the vendor (it segfaulted before defect 13's fix). Straddled on nrhs 1/2,
+// transA N/T and transB N/T/C; Auto then runs Direct where the vendor is refused.
 TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
     using T = typename TestFixture::T;
     if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor in this build";
@@ -555,7 +550,8 @@ TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
 }
 
 // RouteSpmm.HeterogeneousBatchRefused, ported: a heterogeneous B or C has no native route (one
-// launch has one ld/stride per dense operand); Auto takes the vendor, or there is no route.
+// launch has one ld/stride per dense operand), nor a vendor route (no vendor reads per-item
+// dense extents). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -585,12 +581,8 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
                          ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) {
-        bool threw = false;
-        EXPECT_EQ(traced_choice(call, nullptr, &threw), "vendor");
-    } else {
-        EXPECT_THROW(call(), batchlas::NoRouteError);
-    }
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
 // R6: a spelling that names nothing compiled throws instead of meaning Auto (RouteSpmm's

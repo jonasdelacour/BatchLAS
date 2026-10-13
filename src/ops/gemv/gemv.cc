@@ -47,8 +47,8 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 // Correctness only (R3). There is no gemv validator, deliberately: a throw would turn a live
 // silent misuse (ortho's transposed arm) into a crash, so the native terms carry the agreement checks:
 // one launch reads A.batch_size() items of all three views with one (m, n), so x and y must
-// match A in batch and length or a native kernel indexes past them. The vendor takes any call but
-// complex<double> on CUDA (cuBLASLt segfault). m == 0 or n == 0 is legal; the drivers quick-return.
+// match A in batch and length or a native kernel indexes past them. The vendor takes any homogeneous
+// call (defect 13 fixed). m == 0 or n == 0 is legal; the drivers quick-return.
 // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
 // evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
 template <Backend B, class T>
@@ -61,7 +61,7 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
     return std::visit(overloaded{
         [&](Cta) { return native && sycl_gemv::gemv_cta_available<T>(); },
         [&](Direct) { return native && sycl_gemv::gemv_direct_available<T>(); },
-        [&](Vendor) { return !(B == Backend::CUDA && std::is_same_v<T, std::complex<double>>); },
+        [&](Vendor) { return !A.is_heterogeneous(); },
     }, c);
 }
 
@@ -85,6 +85,8 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 template <Backend Back, typename T>
 Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
            T alpha, T beta, Transpose transA) {
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};

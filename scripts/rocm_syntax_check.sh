@@ -106,5 +106,6 @@ check() {
 check src/backends/rocblas.cc   "$ROCM/include/rocblas/rocblas.h"
 check src/backends/rocsolver.cc "$ROCM/include/rocsolver/rocsolver.h"
 check src/backends/rocsparse.cc "$ROCM/include/rocsparse/rocsparse.h"
+check src/ops/level3/level3.cc  "$ROCM/include/rocblas/rocblas.h"
 
 exit $rc

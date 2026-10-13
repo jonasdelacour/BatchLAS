@@ -478,16 +478,24 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// An empty shape (m, n or batch = 0) is refused by every native family's can_run, as the old
-// router's size gate had it: the drivers' validate throws on it. Auto takes the base outcome,
-// the vendor where it exists and a NoRouteError vendor-free, never a native family.
+// An empty shape (m or n = 0) is refused by every native family's can_run, as the old router's
+// size gate had it: the drivers' validate throws on it. Auto takes the base outcome, the vendor
+// where it exists and a NoRouteError vendor-free, never a native family. An empty batch returns
+// before selection (WP3 batch policy): a no-op under Auto and every pin.
 TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
     const Spec shapes[] = {{0, 8, 2, 'N', SvdVectors::None, SvdVectors::None},
-                           {8, 0, 2, 'N', SvdVectors::None, SvdVectors::None},
-                           {8, 8, 0, 'N', SvdVectors::None, SvdVectors::None},
-                           {8, 8, 0, 'L', SvdVectors::None, SvdVectors::None}};
+                           {8, 0, 2, 'N', SvdVectors::None, SvdVectors::None}};
+    for (const Spec& s : {Spec{8, 8, 0, 'N', SvdVectors::None, SvdVectors::None},
+                          Spec{8, 8, 0, 'L', SvdVectors::None, SvdVectors::None}}) {
+        for (const C& c : gs::candidates<T>()) {
+            auto p = make_svd<T>(s);
+            EXPECT_TRUE(this->pin_accepted(c, p)) << name(c, s);
+        }
+        auto p = make_svd<T>(s);
+        EXPECT_NO_THROW(this->run(p)) << label(s);
+    }
     for (const Spec& s : shapes) {
         for (const C& c : gs::candidates<T>()) {
             if (std::holds_alternative<gs::Vendor>(c)) continue;

@@ -26,14 +26,15 @@ Not wrapped, so `catch (const batchlas::exception&)` does not see them:
 ## error model: kernel selection throws outside the hierarchy
 
 Flat kernel selection (`src/select/`, see `docs/design/flat-kernel-selection.md`) throws plain `std::`
-types. None of these match `batchlas::exception`:
+types, except `NoRouteError`, which is a `batchlas::unsupported` (and so a `std::runtime_error`).
+The other rows do not match `batchlas::exception`:
 
 | Site | Thrown | When |
 | --- | --- | --- |
 | `select::detail::resolve_pin` (`src/select/select.hh`) | `std::invalid_argument` | `BATCHLAS_<OP>_ROUTE` (or `ScopedPin`) does not parse, is not a compiled candidate, or cannot run the shape. `native` and `vendor` warn and fall back to Auto. |
 | `select::detail::walk` | `std::runtime_error` | No candidate in any table row or the last-resort list can run the call. |
 | `select::detail::validate`, `parse_table` | `std::runtime_error` | A tuned table (built in or from `BATCHLAS_TUNED_DIR`) names an unknown spelling. |
-| `select::throw_no_vendor_route` (`src/select/vendor.hh`) | `batchlas::NoRouteError` (`include/batchlas/no_route.hh`) | No vendor library and no native kernel for the request, typically `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`. |
+| `select::throw_no_vendor_route` (`src/select/vendor.hh`) | `batchlas::NoRouteError` (`include/batchlas/no_route.hh`), a `batchlas::unsupported` | No vendor library and no native kernel for the request, typically `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`. |
 
 Ops that parse pin words outside `src/select` throw `std::invalid_argument` for an unknown word and
 `batchlas::unsupported` for a known pin this build cannot serve. By meaning, the `select` throws

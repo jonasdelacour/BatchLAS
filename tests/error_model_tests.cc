@@ -59,8 +59,12 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/error.hh>
+#include <batchlas/no_route.hh>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/functions.hh>
+#include <batchlas/blas/options.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -301,6 +305,27 @@ TEST(ErrorModelHierarchy, EveryRuntimeLeafIsCaughtAsBatchlasError) {
     // everything.
     EXPECT_FALSE(as_error([] { throw batchlas::invalid_argument("a"); }));
     EXPECT_FALSE(as_error([] { throw batchlas::out_of_range("o"); }));
+}
+
+// NoRouteError is the vendor-free build's "nothing can serve this": a caller that falls back
+// on batchlas::unsupported must see it, and so must the older std::runtime_error handlers.
+TEST(NoRoute, IsUnsupported) {
+    const auto direct = [] {
+        throw NoRouteError(Op::hemm, Backend::CUDA, ScalarKind::C32, "built without cuBLAS");
+    };
+    ExpectThreeWayCatch<batchlas::unsupported>(direct, "no route for hemm");
+    EXPECT_THROW(direct(), std::runtime_error);
+    EXPECT_THROW(direct(), batchlas::error);
+
+#if BATCHLAS_HAS_CUDA_BACKEND && !BATCHLAS_HAS_CUBLAS
+    Queue q;
+    if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the vendor-free call needs the CUDA queue";
+    using C = std::complex<float>;
+    Matrix<C, MatrixFormat::Dense> A(4, 4, 2), B(4, 4, 2), Cm(4, 4, 2);
+    const auto call = [&] { (void)hemm(q, A.view(), B.view(), Cm.view(), HemmOptions<C>{}); };
+    ExpectThreeWayCatch<batchlas::unsupported>(call, "no route for hemm");
+    EXPECT_THROW(call(), std::runtime_error);
+#endif
 }
 
 // ---------------------------------------------------------------------------

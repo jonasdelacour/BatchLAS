@@ -41,8 +41,9 @@ Event gemm_heterogeneous_loop(Queue& ctx,
             continue;
         }
         if (k == 0) {
-            // k == 0 is not a GEMM: the defined result is C := beta*C.
-            last_event = scale(ctx, beta, C.batch_item(batch_index));
+            // k == 0 is not a GEMM: the defined result is C := beta*C, and beta == 0 never reads C.
+            last_event = beta == T(0) ? C.batch_item(batch_index).fill(ctx, T(0))
+                                      : scale(ctx, beta, C.batch_item(batch_index));
             launched = true;
             continue;
         }

@@ -36,7 +36,8 @@ select::Key key_of(const MV<T>& A) {
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause is the
 // argument check at the top of that driver's *_dispatch. One launch covers the batch with a single
-// (n, ld, stride), so no native family takes a heterogeneous batch; the vendor serves everything.
+// (n, ld, stride), so no family takes a heterogeneous batch: every vendor runs each item at the
+// top-level order (known-defects #12).
 template <Backend B, class T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
@@ -53,7 +54,8 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
             return native && sycl_getrf::getrf_blocked_available<T>() &&
                    sycl_getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
         },
-        [&](Vendor) { return d.has_vendor; },
+        // cuBLAS getrfBatched is square-only (it would factor rows() x rows()); LAPACKE and rocSOLVER take m x n.
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && (B != Backend::CUDA || A.rows() == A.cols()); },
     }, c);
 }
 
@@ -106,6 +108,8 @@ template <Backend B, typename T>
 Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
             Span<std::byte> work_space, Span<int32_t> info) {
     getrf_validate_params<T>(A);
+    // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n are A's extents (a non-square call reaches the vendor), k = m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
     const select::Key key = ops::getrf::key_of<T>(A);
@@ -118,6 +122,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
 template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     getrf_validate_params<T>(A);
+    if (A.batch_size() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::getrf::spec, ctx, ops::getrf::key_of<T>(A), ops::getrf::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::getrf::can_run<B, T>(k, d, A); });

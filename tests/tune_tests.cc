@@ -29,6 +29,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -180,7 +181,7 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
 }
 
 // Hash v2's normalization, and the vector sweep_to_table.py --self-test and check_tuned_tables.py
-// --self-test check too (tests/data/kernel_hash_v2): one rule in three implementations.
+// --self-test check too (tests/data/kernel_hash_v2): one rule, in C++ and in sweep_to_table.py.
 TEST(TuneHash, V2IgnoresCommentsAndWhitespaceAndMatchesTheSharedVector) {
     EXPECT_EQ(normalize_source("a /* x */ b // y\n c"), "abc");
     EXPECT_EQ(normalize_source("a/* open"), "a") << "an unterminated block runs to the end";
@@ -196,7 +197,7 @@ TEST(TuneHash, V2IgnoresCommentsAndWhitespaceAndMatchesTheSharedVector) {
     EXPECT_EQ(kernel_hash(repo, {path}), hash);
 }
 
-TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
+TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithThePythonHash) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv", "gemv", "trmm", "symm", "syrk", "syr2k", "syev", "gesvd", "spmm"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
@@ -207,9 +208,9 @@ TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
         const std::string py = BATCHLAS_TUNE_PYTHON;
         if (py.empty()) continue;
         const std::string got = run("cd '" + repo + "' && '" + py +
-                                    "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
-                                    "print(c.kernel_hash('.', c.parse_kernel_list(open('tools/tune/" +
-                                    op + "_spec.cc').read()))[0])\"");
+                                    "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as c; "
+                                    "print(c.kernel_hash(c.parse_kernel_block(open('tools/tune/" +
+                                    op + "_spec.cc').read())['all'], '.'))\"");
         EXPECT_EQ(got, *h) << op;
     }
 }
@@ -316,7 +317,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "d50602bd"}, {"potrf", "bd3519cd"}, {"posv", "26430214"}, {"trsm", "542705e2"}};
+        {"gemm", "b70d066a"}, {"potrf", "d9228692"}, {"posv", "806c5176"}, {"trsm", "4c501944"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -328,6 +329,46 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
             EXPECT_TRUE(kernel_hash(repo, files)) << op << " " << fam;
         }
     }
+}
+
+// Shared device headers every family compiles: hashed in common, once, wherever a listed source
+// reaches them through quoted or <batchlas/...> includes.
+TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
+    const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
+    const auto shared = [](const std::string& p) {
+        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" || p == "src/extensions/sg_compat.hh" ||
+               p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+    };
+    const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
+    int specs = 0;
+    for (const auto& entry : fs::directory_iterator(repo / "tools/tune")) {
+        const std::string name = entry.path().filename().string();
+        if (name.size() < 8 || name.substr(name.size() - 8) != "_spec.cc") continue;
+        ++specs;
+        const KernelBlock b = parse_kernel_block(read_file(entry.path()));
+        std::set<std::string> reached{"src/sycl/kernel_attrs.hh"}, seen;
+        std::vector<fs::path> todo;
+        for (const auto& f : b.all) todo.push_back(repo / f);
+        while (!todo.empty()) {
+            const fs::path p = todo.back().lexically_normal();
+            todo.pop_back();
+            if (!fs::is_regular_file(p) || !seen.insert(p.string()).second) continue;
+            const std::string rel = p.lexically_relative(repo).string();
+            if (shared(rel)) reached.insert(rel);
+            const std::string text = read_file(p);
+            for (std::sregex_iterator m(text.begin(), text.end(), inc), end; m != end; ++m)
+                for (const fs::path& base : {p.parent_path(), repo / "include", repo / "src"})
+                    if (fs::is_regular_file(base / (*m)[1].str())) {
+                        todo.push_back(base / (*m)[1].str());
+                        break;
+                    }
+        }
+        for (const auto& h : reached) {
+            EXPECT_EQ(std::count(b.common.begin(), b.common.end(), h), 1) << name << " " << h;
+            EXPECT_EQ(std::count(b.all.begin(), b.all.end(), h), 1) << name << " " << h;
+        }
+    }
+    EXPECT_EQ(specs, 19);
 }
 
 TEST(TuneHash, SpecsDeclareTheirFamilies) {
@@ -437,8 +478,8 @@ TEST(TuneHash, QrSpecsDeclareTheirFamiliesAndCompositions) {
         ASSERT_TRUE(op_hash) << op << ": " << missing;
         if (const std::string py = BATCHLAS_TUNE_PYTHON; !py.empty())
             EXPECT_EQ(run("cd '" + repo + "' && '" + py +
-                          "' -c \"import sys; sys.path.insert(0, '.github/ci'); import check_tuned_tables as c; "
-                          "print(c.kernel_hash('.', c.parse_kernel_list(open('" + spec + "').read()))[0])\""),
+                          "' -c \"import sys; sys.path.insert(0, 'scripts'); import sweep_to_table as c; "
+                          "print(c.kernel_hash(c.parse_kernel_block(open('" + spec + "').read())['all'], '.'))\""),
                       *op_hash) << op;
         EXPECT_EQ(b.deps_common.front(), "src/ops/" + op + "/" + op + ".cc") << op;
         EXPECT_TRUE(b.family.count("blocked")) << op;

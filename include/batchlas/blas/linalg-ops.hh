@@ -32,7 +32,8 @@
  *
  * Every function here **enqueues and returns without waiting**, including the
  * value-returning ones: a returned matrix is readable only after `ctx.wait()`.
- * The exceptions are norm(), cond() and svd(), which wait. Inputs are never
+ * The exceptions are norm(), cond(), svd(), solve(), solve_spd() and eigvalsh(),
+ * which wait because they free local scratch on return. Inputs are never
  * modified, except by the `_into` forms (which write their last matrix argument)
  * and scale(). A value-returning call allocates its result, so prefer the `_into`
  * forms in an inner loop. User guide: @ref md_docs_2cpp-api (the `linalg` section);
@@ -299,6 +300,7 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
     auto work = detail::like(A);
     (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
     (void)syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
+    ctx.wait();  // ~Matrix frees `work` without waiting, as in svd()
     return W;
 }
 
@@ -373,11 +375,13 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
         // Released before the pivot lease (reverse order): the arena reuses it at once.
         auto lease = ctx.workspace(gesv_buffer_size(ctx, LU.view(), X.view()));
         (void)gesv(ctx, LU.view(), X.view(), pivots, lease.span(), Span<int32_t>{});
+        ctx.wait();  // ~Matrix frees `LU` without waiting, as in svd()
         return X;
     }
 
     (void)getrf(ctx, LU.view(), pivots);
     (void)getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    ctx.wait();
     return X;
 }
 
@@ -407,6 +411,7 @@ inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
 
     auto lease = ctx.workspace(posv_buffer_size(ctx, F.view(), X.view(), uplo));
     (void)posv(ctx, F.view(), X.view(), uplo, lease.span(), Span<int32_t>{});
+    ctx.wait();  // ~Matrix frees `F` without waiting, as in svd()
     return X;
 }
 

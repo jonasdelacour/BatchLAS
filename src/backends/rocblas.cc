@@ -102,12 +102,12 @@ namespace batchlas {
             if (batch_size <= 1) {
                 call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv, rocblas_dgemv, rocblas_cgemv, rocblas_zgemv,
                     handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
-                    A.data_ptr(), A.ld(), X.data_ptr(), 1, &beta_h, Y.data_ptr(), 1);
+                    A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta_h, Y.data_ptr(), Y.inc());
             } else {
                 call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv_strided_batched, rocblas_dgemv_strided_batched,
                     rocblas_cgemv_strided_batched, rocblas_zgemv_strided_batched,
                     handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
-                    A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), 1, X.stride(), &beta_h, Y.data_ptr(), 1, Y.stride(), batch_size);
+                    A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta_h, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
             }
         });
         return ctx.create_event_after_external_work();

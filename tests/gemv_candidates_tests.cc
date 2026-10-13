@@ -246,17 +246,6 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "GPU fixture (GemvCandidatesCpu covers host)";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
-        if (!vendor_launch_ok())
-            std::cerr << "note: gemv's can_run refuses the complex<double> vendor on CUDA (known-defects #13); "
-                         "cases that would launch it are skipped\n";
-    }
-
-    // False where gemv's can_run refuses the vendor: complex<double> on CUDA (known-defects #13).
-    static bool vendor_launch_ok() {
-        return !(kVendor && B == Backend::CUDA && std::is_same_v<T, std::complex<double>>);
-    }
-    static bool launches_crashing_vendor(const C& c) {
-        return std::holds_alternative<gv::Vendor>(c) && kVendor && !vendor_launch_ok();
     }
 
     // ---- the limit oracle: the drivers' own rules, not gemv.cc's can_run ----
@@ -356,7 +345,6 @@ TYPED_TEST(GemvCandidates, PinnedCandidatesStraddleTheirLimits) {
                     s.seed = 1000u + 31u * out + red;
                     auto p = make_problem<T>(s);
                     const std::string what = name(c, s);
-                    if (TestFixture::launches_crashing_vendor(c)) continue;
                     if (TestFixture::vendor_word_falls_back(c)) {
                         auto q = make_problem<T>(s);
                         const std::string want = this->auto_choice(q);
@@ -384,7 +372,7 @@ TYPED_TEST(GemvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     for (const C& c : gv::candidates<T>())
         for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans})
             for (auto [m, n] : {std::pair{13, 7}, std::pair{40, 3}, std::pair{9, 300}}) {
-                if (!TestFixture::expect_runs(c, t) || TestFixture::launches_crashing_vendor(c)) continue;
+                if (!TestFixture::expect_runs(c, t)) continue;
                 Spec s{t, m, n, 5};
                 s.seed = 4242u + m;
                 auto pinned = make_problem<T>(s);
@@ -412,7 +400,7 @@ TYPED_TEST(GemvCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                           {gv::Direct{}, Transpose::NoTrans, 12, 50}, {gv::Direct{}, Transpose::NoTrans, 70, 9},
                           {gv::Direct{}, Transpose::Trans, 33, 17},   {gv::Vendor{}, Transpose::ConjTrans, 24, 6}};
     for (const auto& k : cases) {
-        if (!TestFixture::expect_runs(k.c, k.t) || TestFixture::launches_crashing_vendor(k.c)) continue;
+        if (!TestFixture::expect_runs(k.c, k.t)) continue;
         Spec s{k.t, k.m, k.n, kBatch};
         s.period = 7;
         s.seed = 777u + k.m;
@@ -430,7 +418,7 @@ TYPED_TEST(GemvCandidates, CanRunEqualsLaunch) {
     for (const C& c : gv::candidates<T>())
         for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
             for (auto [m, n] : {std::pair{1, 1}, std::pair{8, 5}, std::pair{33, 64}, std::pair{0, 3}}) {
-                if (TestFixture::vendor_word_falls_back(c) || TestFixture::launches_crashing_vendor(c)) continue;
+                if (TestFixture::vendor_word_falls_back(c)) continue;
                 Spec s{t, m, n, 2};
                 s.seed = 61u + m;
                 auto a = make_problem<T>(s);
@@ -483,7 +471,7 @@ TYPED_TEST(GemvCandidates, MismatchedViewsHaveNoNativeRoute) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
     // Auto: the vendor (known-defects #1's ortho call goes the same way). It indexes by A's
     // extents and batch, which stay inside this buffer.
-    if (TestFixture::kVendor && TestFixture::vendor_launch_ok())
+    if (TestFixture::kVendor)
         for (const auto& k : cases) {
             const VectorView<T> X(p.mem.data() + p.x_off, k.xlen, k.xb, Inc{p.incx}, Stride{p.sx});
             const VectorView<T> Y(p.mem.data() + p.y_off, k.ylen, k.yb, Inc{p.incy}, Stride{p.sy});
@@ -509,13 +497,12 @@ TYPED_TEST(GemvCandidates, UnknownPinsThrow) {
 }
 
 // The named can_run-false cases (absorbs RouteGemv.CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32's
-// NoTrans clause and RouteGemv.ZeroExtentIsSupportedButNegativeExtentIsNot's empty batch).
+// NoTrans clause). An empty batch returns before selection (WP3 batch policy): no pin sees it.
 TYPED_TEST(GemvCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     struct Case { C c; Transpose t; int m, n, batch; };
-    const Case cases[] = {{gv::Cta{}, Transpose::NoTrans, 8, 5, 2},   {gv::Cta{}, Transpose::NoTrans, 1, 1, 1},
-                          {gv::Cta{}, Transpose::Trans, 8, 5, 0},     {gv::Direct{}, Transpose::NoTrans, 8, 5, 0}};
+    const Case cases[] = {{gv::Cta{}, Transpose::NoTrans, 8, 5, 2}, {gv::Cta{}, Transpose::NoTrans, 1, 1, 1}};
     for (const auto& k : cases) {
         UnifiedVector<T> a(64, T(1)), x(16, T(1)), y(16, T(0));
         const MVof<T> A(a.data(), k.m, k.n, k.m, k.m * k.n, k.batch);
@@ -560,7 +547,8 @@ TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
 }
 
 // RouteGemv.HeterogeneousBatchIsRefusedByBothNativeTiers, ported: a heterogeneous A has no
-// native family; Auto is the vendor, and vendor-free there is no route.
+// native family, and the vendor runs each item at the top-level (m, n). Auto finds no runnable
+// kernel; vendor-free, NoRouteError.
 TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -584,16 +572,13 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)gemv<B, T>(*this->ctx, het, X, Y, T(1), T(0), Transpose::NoTrans);
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) {
-        if (TestFixture::vendor_launch_ok()) EXPECT_EQ(traced_choice(call), "vendor");
-    } else {
-        EXPECT_THROW(call(), batchlas::NoRouteError);
-    }
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Auto and
 // bare `native` (the row's best runnable non-vendor) come from the shipped table; `vendor` is the
-// vendor where it can run (not complex<double> on CUDA, known defect 13), else Auto with a warning.
+// vendor where it exists, else Auto with a warning.
 TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
@@ -725,7 +710,6 @@ TYPED_TEST(GemvCandidates, AutoReadsEveryKeyField) {
         {Transpose::Trans, 64, 8, 8, TestFixture::kVendor ? "vendor" : "cta", "red (T: A.rows)"},
         {Transpose::Trans, 8, 8, 64, "direct", "batch"}};
     for (const auto& k : probes) {
-        if (k.expect == "vendor" && !TestFixture::vendor_launch_ok()) continue;  // known-defects #13
         Spec s{k.t, k.m, k.n, k.batch};
         s.seed = 43u;
         auto p = make_problem<T>(s);
@@ -753,7 +737,6 @@ TYPED_TEST(GemvCandidates, TraceKeyOutRedFollowTrans) {
 // one native tier with no GPU gate), for both trans; a vendor build takes the vendor.
 TYPED_TEST(GemvCandidates, VendorFreeLastResortIsDirect) {
     using T = typename TestFixture::T;
-    if (!TestFixture::vendor_launch_ok()) GTEST_SKIP() << "known-defects #13: the vendor arm crashes here";
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
     const TableGuard restore;
     install_gemv_table<T, TestFixture::B>(*this->ctx, "trans=T out=8 red=8 batch=8 | vendor 1\n");
@@ -775,9 +758,7 @@ TYPED_TEST(GemvCandidates, OrthoCallerShapes) {
     for (const C& c : gv::candidates<T>())
         for (int i : {1, 7})
             for (Transpose t : {Transpose::ConjTrans, Transpose::NoTrans}) {
-                if (!TestFixture::expect_runs(c, t) || TestFixture::vendor_word_falls_back(c) ||
-                    TestFixture::launches_crashing_vendor(c))
-                    continue;
+                if (!TestFixture::expect_runs(c, t) || TestFixture::vendor_word_falls_back(c)) continue;
                 Spec s{t, 40, i, 2};
                 s.seed = 500u + i;
                 auto p = make_problem<T>(s);
