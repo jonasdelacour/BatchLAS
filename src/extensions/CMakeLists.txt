@@ -136,13 +136,6 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     lascl.cc
 )
 
-set(EXTENSIONS_SYMMETRIC_SOURCES
-    symm.cc
-    syrk.cc
-    syr2k.cc
-    trmm.cc
-)
-
 # The unit of SYCL *device* linking is the shared library, not the object file:
 # one changed object redoes ptxas and the native_cpu AOT pass for every object in
 # the library. These three groups used to be one 15-object library whose device
@@ -190,7 +183,6 @@ set(EXTENSIONS_STEDC_SOURCES
 
 target_sources(batchlas_extensions_eigen_obj PRIVATE ${EXTENSIONS_EIGEN_SOURCES})
 target_sources(batchlas_extensions_factorization_obj PRIVATE ${EXTENSIONS_FACTORIZATION_SOURCES})
-target_sources(batchlas_extensions_symmetric_obj PRIVATE ${EXTENSIONS_SYMMETRIC_SOURCES})
 target_sources(batchlas_extensions_tridiag_obj PRIVATE ${EXTENSIONS_TRIDIAG_SOURCES})
 target_sources(batchlas_extensions_sytrd_obj PRIVATE ${EXTENSIONS_SYTRD_SOURCES})
 target_sources(batchlas_extensions_latrd_obj PRIVATE ${EXTENSIONS_LATRD_SOURCES})

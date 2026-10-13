@@ -132,7 +132,7 @@ Event trsm_native_v1(Queue& ctx,
         D alpha_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
-        h.parallel_for<TrsmCtaKernel<T, N, SideV>>(
+        batchlas::impl::parallel_for<TrsmCtaKernel<T, N, SideV>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {

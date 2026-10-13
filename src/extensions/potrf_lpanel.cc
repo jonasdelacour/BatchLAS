@@ -205,7 +205,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                            sizeof(sycl::vec<float, 4>)), h);
         sycl::local_accessor<int, 1> fail(sycl::range<1>(static_cast<std::size_t>(G)), h);
 
-        h.parallel_for<PotrfLpanelKernel<T, NB>>(
+        batchlas::impl::parallel_for<PotrfLpanelKernel<T, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {

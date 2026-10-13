@@ -62,6 +62,8 @@ namespace batchlas
             norms[b] = max_val;
         });
 
+        // A_copy, eigenvalues and the workspace lease die with this frame: finish before they do.
+        ctx.wait();
         return ctx.get_event();
     }
 
@@ -108,7 +110,7 @@ namespace batchlas
                                                                 norm_type == NormType::Inf ? rows : 0, cgh);
             // Use a parallel_for to compute the norms
             // All kernels assume that matrices are stored in column-major order
-            cgh.parallel_for<NormKernel<T, MF>>(sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<NormKernel<T, MF>>(cgh, sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
                 auto batch_idx = item.get_group_linear_id();
                 auto local_idx = item.get_local_linear_id();
                 auto local_size = item.get_local_range()[0];
@@ -125,8 +127,8 @@ namespace batchlas
                     result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
                     // Initialize local memory with zeros for column sums
-                    if (local_idx < cols) {
-                        local_mem[local_idx] = 0;
+                    for (int j = local_idx; j < cols; j += local_size) {
+                        local_mem[j] = 0;
                     }
                     sycl::group_barrier(cta);
 
@@ -145,8 +147,8 @@ namespace batchlas
                     result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
                     // Initialize local memory with zeros for row sums
-                    if (local_idx < rows) {
-                        local_mem[local_idx] = 0;
+                    for (int j = local_idx; j < rows; j += local_size) {
+                        local_mem[j] = 0;
                     }
                     sycl::group_barrier(cta);
 

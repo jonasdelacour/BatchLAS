@@ -8,9 +8,9 @@
 // unqualified, and a backend::detail in that TU makes its `detail::` resolve wrong.
 namespace batchlas::backend::shape {
 
-// The level-3 shape checks shared by every backend. E is the exception type,
-// and it must stay per-backend: netlib throws std::runtime_error from its host
-// task, cuBLAS/rocBLAS std::invalid_argument (pinned by options_api_tests).
+// The level-3 shape checks shared by every backend. E is the exception type.
+// The public entries (level3.cc, symm/syrk/syr2k/trmm) already throw std::invalid_argument
+// up front; netlib's host-task copy (std::runtime_error) is a second check.
 // evidence: docs/perf/level3.md#level-3-one-set-of-shape-validators
 
 // What symm/hemm/trmm derive: C is m x n and A is square of order k.

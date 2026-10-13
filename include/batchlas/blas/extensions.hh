@@ -438,21 +438,6 @@ namespace batchlas {
                                                        SyevxSelect select = SyevxSelect::Extremal);
 
     /**
-     * @brief Resolves SyevxParams::preconditioner_type to a concrete family. Never returns
-     *        `Auto`; deterministic so solve and sizing agree on the pool allocation.
-     *
-     * @param requested SyevxParams::preconditioner_type
-     * @param iluk_configured Whether an ILU(k) factor was supplied or requested
-     * @param find_largest An environment default of `Jacobi` degrades to `None` when this
-     *        is true; an explicit request is returned as is (syevx() rejects it earlier).
-     * @return the preconditioner family syevx() will build or use
-     * @ingroup api_eigen_lowlevel
-     */
-    SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
-                                                    bool iluk_configured,
-                                                    bool find_largest);
-
-    /**
      * @brief Partial eigensolve by full decomposition followed by selection. Runs `syev`
      *        on a private copy of A. Dense input only, but every scalar type and every
      *        `SyevxSelect` range: the universal fallback.
@@ -704,10 +689,10 @@ namespace batchlas {
      * @param Q          n x n eigenvector output per item
      * @param n          order of each tridiagonal matrix
      * @param batch_size number of batch items
-     * @return event of the kernel
-     * @pre `Q` is packed (`ld() == n`): the rotation update addresses it with stride `n`.
-     * @note Each eigenvalue gets at most six QR steps and no convergence status is
-     *       reported; steqr() and stedc() are the maintained tridiagonal solvers.
+     * @return event of the kernel; the call waits for it before returning
+     * @throws batchlas::convergence_error if an eigenvalue of any item does not deflate
+     *         within 30 QR steps
+     * @note steqr() and stedc() are the maintained tridiagonal solvers.
      */
     template <Backend B, typename T>
     BATCHLAS_API Event tridiagonal_solver(Queue& ctx,

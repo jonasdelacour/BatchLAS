@@ -77,7 +77,7 @@ selected in `src/ops/<op>/<op>.cc`). "Transcribed" means the rows reproduce the 
 | `gesvd` | `jacobi`, `cta`, `blocked`. Transcribed: real 33..64 is `blocked\|vendor\|jacobi` ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)). | Host rows refused. |
 | `symm` | Hand-rolled `if` chain. `expand` (mirrored expansion + public `gemm`; needs `expansion_fits`). No tile kernel. | Census 8. At the snapshot, `double` had no expansion route; the flat-selection spec lists `expand` for both types. Reconcile before relying on either. |
 | `syrk` | Hand-rolled. `gram` (`n <= 128`, float and double), `triangular` (float). | Census 12. Non-float tiles are reachable only from `cublas.cc`. |
-| `syr2k` | `triangular` (float only). Real ConjTrans stays on the vendor. | Census 10. No non-float tile route; `syr2k_triangular_tiles` has one call site, in the float-only dispatcher. |
+| `syr2k` | `triangular` (float only). A real ConjTrans runs as Trans. | Census 10. No non-float tile route; `syr2k_triangular_tiles` has one call site, in the float-only dispatcher. |
 | `trmm` | `triangular` (`Side::Left`), `expand`. | Census 16. The `double`/complex tile branch is reachable only from `cublas.cc`. |
 | `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError`. | Census 12, 16, 12. No native arm in the facade (`src/ops/level3/level3.cc:23-70`). |
 

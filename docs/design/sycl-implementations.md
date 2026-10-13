@@ -127,9 +127,9 @@ kernel level. On DPC++ each helper expands to the exact calls it replaced.
 | `backend_of(queue)` | `q.get_backend()` | `q.get_device().get_backend()` |
 | `cuda_cc(device)` | parse `"8.9"` | parse `"sm_89"` |
 | `native_stream(queue)`, `query_stream<N>(q)` | `get_native` | the in-order executor's stream, possibly `nullptr` |
-| `run_native<N>(q, f)` | `f(get_native(q))` inline | `f` inside `AdaptiveCpp_enqueue_custom_operation`, submitted through `submit_untraced` |
+| `run_native<N>(q, f)` | `f(get_native(q))` inline | `f` inside `AdaptiveCpp_enqueue_custom_operation`, submitted untraced (`submit_and_record(..., traced = false)`) |
 | `submit_barrier(q[, wait_list])` | `ext_oneapi_submit_barrier` | last event (in-order) or a wait-list barrier |
-| `kernel_max_wg_size<K>`, `kernel_max_wg_size_all_devices<K>` | kernel-bundle query | device `max_work_group_size` |
+| `kernel_max_wg_size<K>` | kernel-bundle query | `min(max_work_group_size, 256)`: the device limit aborts a register-heavy kernel |
 | `on_async_errors`, `throw_async_errors`, `throw_launch_errors`, `wait_and_throw` | rethrowing handler; the waits throw | the error sink ([asynchronous errors](#sycl-impl-asynchronous-errors)) |
 | `check_group_count(q, nd_range)` | empty | CUDA grid-limit check before the launch |
 
@@ -228,7 +228,7 @@ the next `sycl::queue` destructor, any copy included: 11 test binaries aborted t
   `impl::throw_async_errors(q)` collects and rethrows the first, dropping the rest as DPC++'s
   rethrowing handler does. No handler throws, so no destructor terminates. DPC++ keeps the
   rethrowing handler.
-- **Where acpp errors surface.** `QueueImpl::submit_and_record` and `submit_untraced` call
+- **Where acpp errors surface.** `QueueImpl::submit_and_record` calls
   `impl::throw_launch_errors` after the submit (acpp launches inside `submit`), so a failed launch
   throws from the launching call as on DPC++. `Queue::wait()`, `Queue::wait_and_throw()` and
   `impl::wait_and_throw(event, q)` throw what a wait registered. Destructors only park.
@@ -237,9 +237,13 @@ the next `sycl::queue` destructor, any copy included: 11 test binaries aborted t
   ..."). It runs in `QueueImpl::parallel_for(nd_range)` and in the five tile launchers that submit
   through a command group (`syrk_gram_tiles`, `syrk_triangular_tiles`, `syr2k_triangular_tiles`,
   `trmm_triangular_tiles`, `expand_mirrored`). On DPC++ it is empty.
-- **Empty batches.** `syev_cta`, `syev_cta_fused` and `syev_jacobi_cta` return after argument
-  checks when batch = 0 (both builds; the result is identical on DPC++).
-- **Vendor calls in the trace.** `impl::run_native` submits through `QueueImpl::submit_untraced`:
+- **Empty `nd_range` (acpp).** Every command-group `nd_range` launch in `src/` goes through
+  `impl::parallel_for(handler, nd_range, ...)`, which gives the handler a no-op custom operation
+  for an empty range (an empty command group is an error there). `QueueImpl::parallel_for(nd_range)`
+  submits that same no-op command group, so the event it returns stays ordered after earlier work
+  on an in-order queue. On DPC++ both are the plain launch.
+- **Vendor calls in the trace.** `impl::run_native` submits through an untraced
+  `QueueImpl::submit_and_record`:
   the custom operation updates the last event but is not a kernel-trace record, matching DPC++,
   where vendor work never appears in `BATCHLAS_KERNEL_TRACE`.
 - **Tests.** `util_device_queue_tests` `QueueAsyncErrors.*`: an over-limit grid, 1 MiB of local

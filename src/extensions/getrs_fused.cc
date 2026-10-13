@@ -229,7 +229,7 @@ Event fused_launch_notrans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        h.parallel_for<GetrsFusedNKernel<T, NR>>(
+        batchlas::impl::parallel_for<GetrsFusedNKernel<T, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -424,7 +424,7 @@ Event fused_launch_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        h.parallel_for<GetrsFusedTKernel<T, NR>>(
+        batchlas::impl::parallel_for<GetrsFusedTKernel<T, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -626,7 +626,7 @@ Event potrs_fused_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        h.parallel_for<PotrsFusedKernel<T, NR, Lower>>(
+        batchlas::impl::parallel_for<PotrsFusedKernel<T, NR, Lower>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),

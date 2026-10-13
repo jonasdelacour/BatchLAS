@@ -25,6 +25,8 @@
 
 #include <batchlas/backend_config.h>
 
+#include "../../sycl/kernel_attrs.hh"
+
 #include "backend_generic.hh"
 
 // acpp SSCP picks the target at JIT time (SscpBackend); FORCE_GENERIC is the break (divergence
@@ -90,7 +92,7 @@ inline T map_words(const T& v, F&& f) {
         return sycl::bit_cast<T>(f(sycl::bit_cast<uint32_t>(v)));
     } else {
         Words<T> in = to_words(v);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t i = 0; i < kWords<T>; ++i) in.w[i] = f(in.w[i]);
         return from_words<T>(in);
     }
@@ -268,7 +270,7 @@ inline T reduce_over_group(SubGroupPartition<P, M> part, T v, Op op) {
     if constexpr (B::template has_native_reduce<T, Op>) {
         return B::reduce(part.sg, part.base, v, op);
     } else {
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t m = 1; m < static_cast<uint32_t>(P); m <<= 1)
             v = op(v, permute_group_by_xor(part, v, m));
         return v;
@@ -281,7 +283,7 @@ inline T inclusive_scan_over_group(SubGroupPartition<P, M> part, T v, Op op) {
     const uint32_t lid = part.get_local_linear_id();
     return sgp::region<B>([&](auto ops) {
         T x = v;
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t d = 1; d < static_cast<uint32_t>(P); d <<= 1) {
             const T other = sgp::map_words(x, [&](uint32_t w) {
                 return decltype(ops)::shfl_up(part.sg, part.base, w, d);

@@ -202,7 +202,7 @@ Event steqr_impl(Queue& ctx,
         ctx->submit([&](sycl::handler& cgh) {
         auto rotations_view = givens_rotations.kernel_view();
         //auto bsize = n_problems < ncus ? 1 : internal::ceil_div(size_t(n_problems), ncus);
-        cgh.parallel_for<FrancisKernel<T>>(sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<FrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
             auto i = item.get_global_id(0);
             auto n_problems = scan_view[batch_size - 1];
 
@@ -234,9 +234,9 @@ Event steqr_impl(Queue& ctx,
                 }
                 continue;
             }
-            // QR / QL switch: QR sweeps from top, QL sweeps from bottom.
-            // We implement QL by viewing (d_, e_) in reversed order via virtual indices.
-            bool QR = std::abs(d_(0)) <= std::abs(d_(n - 1));
+            // QL is QR on (d_, e_) viewed in reverse. The sweep converges the end the shift is taken
+            // from (virtual index n - 1), so orient that end at the SMALLER |d|, as dsteqr does.
+            bool QR = std::abs(d_(n - 1)) < std::abs(d_(0));
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             for (size_t k = 0; k < max_sweeps; ++k) {
                 auto anorm = std::abs(d_(n - 1));
@@ -317,7 +317,7 @@ Event steqr_impl(Queue& ctx,
     ctx -> submit([&](sycl::handler& cgh) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        cgh.parallel_for<RotationKernel<T>>(sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<RotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
             auto n_problems = scan_view[batch_size - 1];
@@ -509,7 +509,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     }
 
     ctx -> submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(cgh, sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto intra = item.get_local_id(0);
             eigenvalues(intra, bid) = d(intra, bid);

@@ -105,7 +105,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
             sycl::range<1>(2u * static_cast<std::size_t>(n)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        h.parallel_for<GetrsPermGatherKernel<T>>(
+        batchlas::impl::parallel_for<GetrsPermGatherKernel<T>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),

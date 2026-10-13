@@ -59,7 +59,7 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& cgh) {
                 auto max_wg_size = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
                 auto bsize = data.size() > max_wg_size ? max_wg_size : data.size();
-                cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(bsize), sycl::range<1>(bsize)), [=](sycl::nd_item<1> item) {
+                batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(bsize), sycl::range<1>(bsize)), [=](sycl::nd_item<1> item) {
                     auto cta = item.get_group();
                     sycl::joint_inclusive_scan(cta, data.data(), data.data() + data.size(), data.data(), op);
                 });
@@ -467,6 +467,31 @@ namespace batchlas {
             }
 
             return std::array{rt1, rt2};
+        }
+
+        // LAPACK ?LAS2: {ssmin, ssmax}, the singular values of the upper triangular [[f, g], [0, h]],
+        // without squaring any entry.
+        template <typename T>
+        inline constexpr std::array<T, 2> las2(const T& f, const T& g, const T& h) {
+            const T one = T(1), two = T(2), zero = T(0);
+            const T fa = std::abs(f), ga = std::abs(g), ha = std::abs(h);
+            const T fhmn = fa < ha ? fa : ha;
+            const T fhmx = fa < ha ? ha : fa;
+            if (fhmn == zero) {
+                if (fhmx == zero) return {zero, ga};
+                const T mx = fhmx > ga ? fhmx : ga, mn = fhmx > ga ? ga : fhmx;
+                return {zero, mx * std::sqrt(one + (mn / mx) * (mn / mx))};
+            }
+            if (ga < fhmx) {
+                const T as = one + fhmn / fhmx, at = (fhmx - fhmn) / fhmx, au = (ga / fhmx) * (ga / fhmx);
+                const T c = two / (std::sqrt(as * as + au) + std::sqrt(at * at + au));
+                return {fhmn * c, fhmx / c};
+            }
+            const T au = fhmx / ga;
+            if (au == zero) return {(fhmn * fhmx) / ga, ga};
+            const T as = one + fhmn / fhmx, at = (fhmx - fhmn) / fhmx;
+            const T c = one / (std::sqrt(one + (as * au) * (as * au)) + std::sqrt(one + (at * au) * (at * au)));
+            return {two * ((fhmn * c) * au), ga / (c + c)};
         }
 
         template <typename T>

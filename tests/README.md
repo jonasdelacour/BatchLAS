@@ -1,6 +1,6 @@
 # Running the BatchLAS tests {#testing}
 
-> **Status:** current · counts measured under the `dev-tests` preset on the primary machine
+> **Status:** current · test counts are whatever `ctest -N` lists for your tree
 
 Run the narrowest scope that covers your change. The full suite takes 15-20 minutes and a few
 binaries hold nearly all of it.
@@ -10,10 +10,11 @@ binaries hold nearly all of it.
 | one test case | `./build/tests/stedc_tests --gtest_filter='StedcTest/0.BatchedMatrices'` |
 | one binary | `ctest -R '^stedc_tests$'` |
 | one component | `ctest -L tridiag` |
-| everything quick | `ctest -LE slow` (about 95 s; `ctest -N -LE slow` counts it) |
-| everything | `ctest` (`ctest -N` counts it) |
+| everything quick | `ctest -LE slow` (count: `ctest -N -LE slow`) |
+| everything | `ctest` (count: `ctest -N`) |
 
-Counts move as binaries are added (see [the CI page](../docs/ci.md#running-all-of-it-locally)).
+Counts move as binaries are added, so none is written here: read them off `ctest -N` (see
+[the CI page](../docs/ci.md#running-all-of-it-locally)).
 `ctest -R` is a substring regex: `-R syev` matches `syev_tests`, `syevx_tests`, `syev_cta_tests`.
 Anchor with `^...$` for one binary.
 
@@ -132,6 +133,10 @@ O(n^3) reference solves (91% of `steqr_tests` runtime). Original CUDA-only vs al
 > filtered coverage is gone, and startup is not cut. An unrecognised value skips every case:
 > `BATCHLAS_TEST_BACKEND=cuda0` warns, `BATCHLAS_TEST_FLOAT_TYPE=single` skips silently. A run
 > where everything skipped is not a pass.
+
+A launch that finds no device image for its kernel ("No kernel named ...") fails the test.
+`BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1` turns that into a skip, for a deliberately partial
+`-fsycl-targets` build only (`test_utils::may_skip_missing_kernel`).
 
 ## Writing tests that stay fast
 

@@ -247,7 +247,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
-        cgh.parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(
+        batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
@@ -884,16 +884,8 @@ Event gesvdj_cta(Queue& ctx,
             "(see gesvdj_cta_max_dim)");
     }
 
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto s : sg_sizes) {
-            if (static_cast<int32_t>(s) == 32) { has32 = true; break; }
-        }
-        if (!has32) {
-            throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
-        }
+    if (!ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
     }
 
     const bool transposed = (m < n);

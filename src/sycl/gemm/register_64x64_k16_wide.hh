@@ -197,7 +197,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
-        h.parallel_for<GemmRegister64x64K16WideKernel<T, AlignedFastPath>>(
+        batchlas::impl::parallel_for<GemmRegister64x64K16WideKernel<T, AlignedFastPath>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {

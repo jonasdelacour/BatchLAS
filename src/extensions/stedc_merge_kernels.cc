@@ -39,7 +39,7 @@ void stedc_merge_fused(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
 
-        h.parallel_for<StedcFusedMerge<B, T>>(
+        batchlas::impl::parallel_for<StedcFusedMerge<B, T>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const auto bid = item.get_group_linear_id();
@@ -87,33 +87,9 @@ void stedc_merge_fused(Queue& ctx,
                 }
                 sycl::group_barrier(cta);
 
-                if (do_rescale) {
-                    // Löwner rescale: native T is sufficient once deflation uses the
-                    // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
-                    for (int eid = 0; eid < dd; ++eid) {
-                        const T Di = eigenvalues(eid, bid);
-                        T partial = T(1);
-                        for (int j = tid; j < dd; j += static_cast<int>(bdim)) {
-                            const T q_elem = Q_bid(eid, j);
-                            T ratio;
-                            if (j == eid) {
-                                ratio = q_elem;
-                            } else {
-                                const T denom = Di - eigenvalues(j, bid);
-                                ratio = q_elem / denom;
-                            }
-                            partial *= ratio;
-                        }
-
-                        T valf = batchlas::portable::reduce_over_group(cta, partial, sycl::multiplies<T>());
-                        if (tid == 0) {
-                            T mag = std::sqrt(std::fabs(valf));
-                            T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-                            v(eid, bid) = sgn * mag;
-                        }
-                    }
-                    sycl::group_barrier(cta);
-                }
+                const WorkgroupAdapter adapter{cta, static_cast<int32_t>(tid), static_cast<int32_t>(bdim)};
+                maybe_rescale_vectors(do_rescale, adapter, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
+                sycl::group_barrier(cta);
 
                 // Baseline matrix update kernel math.
                 for (int eig = 0; eig < dd; ++eig) {

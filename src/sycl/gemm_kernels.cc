@@ -127,7 +127,7 @@ Event launch_direct(Queue& ctx,
         const Transpose op_a = transA;
         const Transpose op_b = transB;
 
-        h.parallel_for<GemmDirectKernel<T>>(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for<GemmDirectKernel<T>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
             const int row = static_cast<int>(item.get_global_id(1));
             const int col = static_cast<int>(item.get_global_id(2));
@@ -136,15 +136,17 @@ Event launch_direct(Queue& ctx,
             }
 
             T sum = T(0);
-            const int batch_a = bid * stride_a;
-            const int batch_b = bid * stride_b;
-            const int batch_c = bid * stride_c;
+            // Rebased per item in 64 bits (bid * stride passes 2^31); offsets within an item stay int.
+            const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+            const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+            T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+            constexpr int batch_a = 0, batch_b = 0, batch_c = 0;
             for (int kk = 0; kk < k; ++kk) {
-                const T a_val = operand_value(a_ptr, lda, batch_a, row, kk, op_a);
-                const T b_val = operand_value(b_ptr, ldb, batch_b, kk, col, op_b);
+                const T a_val = operand_value(a_item, lda, batch_a, row, kk, op_a);
+                const T b_val = operand_value(b_item, ldb, batch_b, kk, col, op_b);
                 sum += a_val * b_val;
             }
-            LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta, sum);
+            LinearEpilogue<T>::store(c_item + batch_c + col * ldc + row, alpha, beta, sum);
         });
     });
 

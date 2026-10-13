@@ -351,7 +351,7 @@ Per-op choices:
 | posv | `tiny`/`cta`/`blocked`, no vendor family; its children select for themselves |
 | gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
 | syrk | `gram` (n <= 128; float and double), `triangular` (float), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
-| syr2k | `triangular` (float; real ConjTrans stays on the vendor), `vendor` |
+| syr2k | `triangular` (float; a real ConjTrans runs as Trans), `vendor` |
 | symm | `expand` (mirrored expansion + public gemm, float and double, needs `expansion_fits`), `vendor`; key `form` = sq\|tall\|wide |
 | trmm | `triangular` (Side::Left), `expand` (expansion + public gemm, either side), `vendor` (the `cublas?trmm` loop only; the old `vendor` pin meant expand+gemm, that is now `expand`) |
 

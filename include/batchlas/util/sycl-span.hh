@@ -52,10 +52,10 @@ struct BATCHLAS_API Span
     inline constexpr Span(Span<T> &&other) = default;
     /// @brief Views @p other with its first @p offset elements dropped.
     /// @pre offset <= other.size()
-    inline constexpr Span(const Span<T>& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
+    inline constexpr Span(const Span<T>& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) { assert(offset <= other.size_); }
     /// @brief Views @p other with its first @p offset elements dropped.
     /// @pre offset <= other.size()
-    inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) {}
+    inline constexpr Span(Span<T>&& other, size_t offset) : data_(other.data_ + offset), size_(other.size_ - offset) { assert(offset <= other.size_); }
     /// @brief A one-element span over @p value.
     ///
     /// Explicit on purpose: implicitly, a scalar lvalue became a length-1 buffer
@@ -87,7 +87,7 @@ struct BATCHLAS_API Span
     }
 
     /// @brief Elements [@p offset, size()).
-    inline constexpr Span<T> subspan(size_t offset) const { assert(size_ - offset >= 0); return Span<T>(data_ + offset, size_ - offset); }
+    inline constexpr Span<T> subspan(size_t offset) const { assert(offset <= size_); return Span<T>(data_ + offset, size_ - offset); }
     /// @brief Elements [@p offset, @p offset + @p count). @pre offset + count <= size()
     inline constexpr Span<T> subspan(size_t offset, size_t count) const { assert(offset + count <= size_);  return Span<T>(data_ + offset, count); }
     /// @brief Rebinds this span to @p other's pointer and size; no elements are copied.

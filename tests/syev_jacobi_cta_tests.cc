@@ -24,53 +24,6 @@
 using namespace batchlas;
 
 namespace {
-template <typename Scalar>
-using RealOf = typename base_type<Scalar>::type;
-
-
-template <typename Scalar>
-static Matrix<Scalar, MatrixFormat::Dense> make_near_degenerate_hermitian(int n, int batch, unsigned seed,
-																		 RealOf<Scalar> eps) {
-	using Real = RealOf<Scalar>;
-
-	// NOTE: Avoid Matrix::Zeros/Matrix::Diagonal here: those factory helpers launch
-	// device kernels (often asynchronously) and can race with the host-side writes
-	// below on USM memory.
-	Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
-
-	std::minstd_rand rng(seed);
-	std::uniform_real_distribution<Real> dist(Real(-1), Real(1));
-
-	for (int b = 0; b < batch; ++b) {
-		for (int j = 0; j < n; ++j) {
-			for (int i = 0; i <= j; ++i) {
-				Scalar z;
-				if constexpr (std::is_same_v<Scalar, Real>) {
-					z = Scalar(dist(rng));
-				} else {
-					z = Scalar(dist(rng), dist(rng));
-				}
-
-				if (i == j) {
-					const Real base = Real(i / 4);
-					const Real tiny = Real(i % 4) * Real(1e-4);
-					if constexpr (std::is_same_v<Scalar, Real>) {
-						A(i, j, b) = Scalar(base + tiny) + Scalar(eps) * z;
-					} else {
-						A(i, j, b) = Scalar(base + tiny) + Scalar(eps) * Scalar(Real(std::real(z)), Real(0));
-					}
-				} else {
-					const Scalar v = Scalar(eps) * z;
-					A(i, j, b) = v;
-					if constexpr (std::is_same_v<Scalar, Real>) A(j, i, b) = v;
-					else A(j, i, b) = std::conj(v);
-				}
-			}
-		}
-	}
-
-	return A;
-}
 
 // ---------------------------------------------------------------------------
 // Independent CPU reference: cyclic-by-rows two-sided Jacobi in double.
@@ -372,8 +325,8 @@ TYPED_TEST(SyevJacobiCtaTest, NearDegenerateResidualAndOrtho) {
 	for (int n : {24, 32}) {
 		SCOPED_TRACE(::testing::Message() << "n=" << n);
 
-		Matrix<Scalar, MatrixFormat::Dense> A0 = make_near_degenerate_hermitian<Scalar>(
-			n, batch, /*seed=*/static_cast<unsigned>(1337 + n), Real(1e-3));
+		Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
+		A0.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/static_cast<unsigned>(1337 + n)).wait();
 		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
@@ -400,6 +353,31 @@ TYPED_TEST(SyevJacobiCtaTest, RepeatedRunsDoNotHang) {
 	for (int t = 0; t < iters; ++t) {
 		Matrix<Scalar, MatrixFormat::Dense> A = A0;
 		syev_jacobi_cta<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+	}
+}
+
+// A NaN entry in item 0: the rank sort must still be a bijection (NaN last, ties on index), so no
+// slot of W keeps the 12345 it was poisoned with and A's columns are a permutation; items 1.. are
+// unaffected.
+TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+	const int n = 16, batch = 4;
+	auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77);
+	A0.view()(3, 3, 0) = Scalar(std::numeric_limits<Real>::quiet_NaN());
+	for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+		for (const JobType jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+			SCOPED_TRACE(::testing::Message() << "descending " << (order == SortOrder::Descending) << ", vectors " << (jobz == JobType::EigenVectors));
+			auto A = A0;
+			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
+			JacobiParams<Scalar> params{};
+			params.sort_order = order;
+			syev_jacobi_cta<B, Scalar>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
+			for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
+			const std::vector<int> clean{1, 2, 3};
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W, n, /*sorted_copy=*/true, clean);
+		}
 	}
 }
 

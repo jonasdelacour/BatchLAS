@@ -264,7 +264,7 @@ python3 .github/ci/compare_failures.py \
     --junit ctest.xml \
     --gtest-dir build/presets/dev-tests/gtest-xml \
     --require consumer_package_tests \
-    --expected-tests "$N"
+    --expected-tests-from build/presets/dev-tests
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
@@ -277,8 +277,13 @@ python3 .github/ci/compare_failures.py \
   ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
   (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
   `BATCHLAS_BUILD_DIR` is set.
-- Use `--require` and `--expected-tests` on a full run only. After `ctest -LE slow`,
-  `consumer_package_tests` does not run and the count is 65, so the per-PR job passes neither.
+- `--expected-tests-from <tree>` compares the junit count with what `ctest --test-dir <tree> -N`
+  registers. After `ctest -LE slow`, pass `--label-exclude slow` so the count is filtered the same way.
+  It catches a run that stopped early, not a configure that registered fewer tests: the count shrinks
+  with the tree.
+- `--min-tests N` is the checked-in floor for that case: CI passes 95 after `-LE slow` and 100 on the
+  full run (threadripper02's full-target tree registers 99 and 104). Raise it when tests are added.
+- Use `--require consumer_package_tests` on a full run only: `ctest -LE slow` does not run it.
 
 ### Both directions fail the gate
 
@@ -420,8 +425,9 @@ with a `<skipped>` child, which includes never-built binaries. The root summary 
 - **Cause:** `BatchLASTest::SetUp` in `test_utils.hh` calls `GTEST_SKIP()` when `should_run_backend` or
   `should_run_float_type` rejects an instantiation. A skip does not fail, so a binary with every case
   skipped exits 0. An unrecognised `BATCHLAS_TEST_BACKEND` skips everything, so one typo in a CI
-  variable gives an all-green run.
+  variable turns every test green.
 - **Defences:** CI sets neither `BATCHLAS_TEST_BACKEND` nor `BATCHLAS_TEST_FLOAT_TYPE`, and their
   absence from `env:` is a gate. `compare_failures.py` names such binaries under `SKIPPED`, read that
-  section rather than the exit code. `--expected-tests` with a fixed count catches missing executables. The
+  section rather than the exit code. A never-built executable is still registered, so it is not a
+  count problem: its `notrun` testcase is classified `FAILED`. The
   assertions in [The environment trap](#the-environment-trap) catch a CPU-only build.

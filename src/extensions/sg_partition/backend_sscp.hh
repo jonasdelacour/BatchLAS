@@ -15,6 +15,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "../../sycl/kernel_attrs.hh"
 #include "../../sycl/sscp_target.hh"
 
 // Asm labels bind these to the LLVM intrinsics, so LLVM attaches the intrinsic's own attributes
@@ -150,11 +151,11 @@ struct SscpBackend {
             else return Nv::Full::butterfly(b, v, op);
         }
         constexpr uint32_t kW = static_cast<uint32_t>((sizeof(T) + 3) / 4);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t m = 1; m < P; m <<= 1) {
             uint32_t w[kW] = {};
             std::memcpy(w, &v, sizeof(T));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (uint32_t i = 0; i < kW; ++i) w[i] = Gen::shfl_xor(sg, b, w[i], m);
             T other;
             std::memcpy(&other, w, sizeof(T));

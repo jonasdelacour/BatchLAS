@@ -327,22 +327,14 @@ struct QueueImpl : public sycl::queue{
         return scope ? scope : default_label;
     }
 
+    // traced = false is impl::run_native's submission: ordered and recorded, absent from the trace.
     template <typename SubmitOp>
-    sycl::event submit_and_record(const char* default_label, SubmitOp&& submit_op) {
+    sycl::event submit_and_record(const char* default_label, SubmitOp&& submit_op, bool traced = true) {
         sycl::event event = std::forward<SubmitOp>(submit_op)();
         // Recorded first: on acpp the error thrown may be an older one parked by another queue.
         last_event_ = event;
         impl::throw_launch_errors(*this);
-        batchlas_kernel_trace::record_event(*this, event, trace_label_or_default(default_label), trace_tid_);
-        return event;
-    }
-
-    // impl::run_native's submission: ordered and recorded like submit(), absent from the trace.
-    template <typename SubmitFunc>
-    sycl::event submit_untraced(SubmitFunc&& f) {
-        sycl::event event = sycl::queue::submit(std::forward<SubmitFunc>(f));
-        last_event_ = event;
-        impl::throw_launch_errors(*this);
+        if (traced) batchlas_kernel_trace::record_event(*this, event, trace_label_or_default(default_label), trace_tid_);
         return event;
     }
     
@@ -391,6 +383,15 @@ struct QueueImpl : public sycl::queue{
         return record_untraced(sycl::queue::ext_oneapi_memcpy2d(std::forward<Args>(args)...));
     }
 #endif
+#if BATCHLAS_SYCL_IMPL_ACPP
+    // Empty nd_range: no launch (acpp runs it as a 0-block grid). The no-op command group keeps the
+    // returned event ordered after earlier work, as the launch's would be; see impl::parallel_for.
+    sycl::event empty_launch() {
+        return submit_and_record("sycl_parallel_for", [&] {
+            return sycl::queue::submit([](sycl::handler& h) { impl::skip_empty_launch(h, 0); });
+        }, false);
+    }
+#endif
     sycl::event record_untraced(sycl::event event) {
         last_event_ = event;
         return event;
@@ -422,6 +423,9 @@ struct QueueImpl : public sycl::queue{
 
     template <int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::nd_range<Dimensions>& exec_range, KernelFunc&& kernel_func) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (exec_range.get_global_range().size() == 0) return empty_launch();
+#endif
         impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for(exec_range, std::forward<KernelFunc>(kernel_func));
@@ -447,6 +451,9 @@ struct QueueImpl : public sycl::queue{
 
     template <typename KernelName, int Dimensions, typename KernelFunc>
     sycl::event parallel_for(const sycl::nd_range<Dimensions>& exec_range, KernelFunc&& kernel_func) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (exec_range.get_global_range().size() == 0) return empty_launch();
+#endif
         impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
             return sycl::queue::parallel_for<KernelName>(exec_range, std::forward<KernelFunc>(kernel_func));

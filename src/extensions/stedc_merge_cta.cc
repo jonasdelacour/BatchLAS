@@ -31,27 +31,6 @@ class StedcFusedCtaMerge;
 template <Backend B, typename T>
 class StedcFusedWgMerge;
 
-inline int32_t device_max_sub_group_size(const Queue& ctx) {
-    const auto dev = ctx->get_device();
-    const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-    int32_t max_sg = 1;
-    for (const auto size : sg_sizes) {
-        max_sg = std::max(max_sg, static_cast<int32_t>(size));
-    }
-    return max_sg;
-}
-
-inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
-    const auto dev = ctx->get_device();
-    const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-    for (const auto size : sg_sizes) {
-        if (static_cast<int32_t>(size) == target_size) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // `kernel_max_wg` is the largest work-group THIS kernel can launch on this device,
 // generally below the device maximum (register file per sub-partition: the merge
 // kernel caps at 768 on sm_89, and 1024 throws). 0 means unknown: device limit only.
@@ -162,38 +141,6 @@ struct PartitionAdapter {
     inline void sync() const {}
 };
 
-struct WorkgroupAdapter {
-    sycl::group<1> wg;
-    int32_t tid;
-    int32_t bdim;
-
-    inline int32_t lane_id() const {
-        return tid;
-    }
-
-    inline int32_t width() const {
-        return bdim;
-    }
-
-    template <typename T>
-    inline T reduce_product(T value) const {
-        return batchlas::portable::reduce_over_group(wg, value, sycl::multiplies<T>());
-    }
-
-    inline void sync() const {
-        sycl::group_barrier(wg);
-    }
-
-    template <typename T>
-    inline T reduce_sum(T value) const {
-        return batchlas::portable::reduce_over_group(wg, value, sycl::plus<T>());
-    }
-
-    template <typename T>
-    inline T broadcast(T value) const {
-        return sycl::group_broadcast(wg, value, 0);
-    }
-};
 
 template <typename T>
 inline void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
@@ -812,88 +759,6 @@ inline T nrm2_column(const Adapter& adapter,
     return scl * sycl::sqrt(sumsq);
 }
 
-// Löwner rescale. `first`/`stride` select which eigen-indices this reduction group
-// owns: (0, 1) walks every index (WG reference variant), (part_id, parts_per_wg)
-// gives one index per partition with no work-group barrier. Iteration `eid` reads
-// row `eid` of Q (never written here) and writes only v(eid).
-//
-// The product is a (mantissa, exponent) pair, REQUIRED: narrow partitions lengthen
-// each serial product and the naive one leaves float range at n=64. frexp scaling is
-// by exact powers of two, so in-range results are bit-identical to the naive product.
-// evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
-template <typename T, typename Adapter, typename QBatch, typename VView>
-inline void maybe_rescale_vectors(bool do_rescale,
-                                  const Adapter& adapter,
-                                  int32_t first,
-                                  int32_t stride,
-                                  int32_t dd,
-                                  QBatch& Q_bid,
-                                  const VectorView<T>& d_prob,
-                                  const VView& v,
-                                  int32_t bid) {
-    if (!do_rescale) {
-        return;
-    }
-
-    const int32_t lane = adapter.lane_id();
-    const int32_t width = adapter.width();
-
-    // Trip count is deliberately identical for every reduction group: `dd` is
-    // rarely a multiple of `stride` (deflation makes it arbitrary), so a plain
-    // `eid < dd` bound would let some partitions run one iteration longer than
-    // others. The reductions below are sub-group shuffles, which require every
-    // lane of the warp to participate -- a partition that has already exited the
-    // loop makes the shuffle read garbage. Iterate a uniform number of times and
-    // mask the work instead.
-    const int32_t iters = (dd + stride - 1) / stride;
-
-    // Löwner rescale: native T is sufficient once deflation uses the
-    // absolute 8*eps*max(|D|,|z|) tolerance. See stedc.cc.
-
-    for (int32_t it = 0; it < iters; ++it) {
-        const int32_t eid = first + it * stride;
-        const bool active = (eid < dd);
-        const T Di = active ? d_prob(eid) : T(0);
-        T mant = T(1);
-        int32_t expo = 0;
-        for (int32_t j = lane; active && j < dd; j += width) {
-            const T q_elem = Q_bid(eid, j);
-            T ratio;
-            if (j == eid) {
-                ratio = q_elem;
-            } else {
-                const T denom = Di - d_prob(j);
-                ratio = q_elem / denom;
-            }
-            mant *= ratio;
-            // Renormalize every factor so |mant| stays in [0.5, 1); exact,
-            // since frexp only rescales by a power of two.
-            if (mant != T(0) && sycl::isfinite(mant)) {
-                int e = 0;
-                mant = sycl::frexp(mant, &e);
-                expo += e;
-            }
-        }
-
-        // Each lane contributes |mant| < 1, so the butterfly product bottoms out
-        // at 0.5^width (>= 2e-10 for width 32) -- no underflow in the reduction.
-        const T mant_all = adapter.reduce_product(mant);
-        const int32_t expo_all = adapter.template reduce_sum<int32_t>(expo);
-
-        if (active && lane == 0) {
-            // mag = sqrt(|mant_all| * 2^expo_all), split so neither the square
-            // root's argument nor its result can leave range.
-            const int32_t half = expo_all >> 1;              // floor(expo_all / 2)
-            const int32_t rem = expo_all - 2 * half;         // 0 or 1
-            T mag = sycl::sqrt(sycl::fabs(mant_all) * (rem ? T(2) : T(1)));
-            mag = sycl::ldexp(mag, half);
-            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
-            v(eid, bid) = sgn * mag;
-        }
-        adapter.sync();
-    }
-}
-
 // Reciprocate-and-normalize. Same `first`/`stride` convention as
 // maybe_rescale_vectors: columns are independent (column `eig` reads v and only
 // touches Q(:, eig)), so one column per partition removes the per-column
@@ -966,7 +831,7 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedCtaMerge<B, T, P>>(
+        batchlas::impl::parallel_for<StedcFusedCtaMerge<B, T, P>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -1058,8 +923,7 @@ void stedc_merge_fused_wg(Queue& ctx,
     const auto batch_size = eigenvalues.batch_size();
     const auto dev = ctx->get_device();
 
-    const int32_t max_sg = std::max<int32_t>(1, device_max_sub_group_size(ctx));
-    const int32_t base_wg_size = max_sg;
+    const int32_t base_wg_size = 32;  // the CTA kernels' lane count; wider requests come here
     const int32_t kernel_max_wg = kernel_max_work_group_size<StedcFusedWgMerge<B, T>>(ctx, dev);
     const int32_t wg_size = choose_wg_size(dev, base_wg_size, params.secular_cta_wg_size_multiplier,
                                            kernel_max_wg);
@@ -1073,7 +937,7 @@ void stedc_merge_fused_wg(Queue& ctx,
         auto d_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
         auto z_local = sycl::local_accessor<T, 1>(sycl::range<1>(nloc), h);
 
-        h.parallel_for<StedcFusedWgMerge<B, T>>(
+        batchlas::impl::parallel_for<StedcFusedWgMerge<B, T>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const int32_t bid = static_cast<int32_t>(item.get_group_linear_id());
@@ -1145,7 +1009,7 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const StedcParams<T>& params,
                            int32_t* info,
                            int64_t info_nodes_per_item) {
-    const bool has32 = device_has_sub_group_size(ctx, 32);
+    const bool has32 = ctx.device().supports_sub_group_size(32);
 
     if (!has32) {
         stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
@@ -1153,8 +1017,7 @@ void stedc_merge_fused_cta(Queue& ctx,
     }
 
     const int32_t requested = std::max<int32_t>(4, params.secular_threads_per_root);
-    const int32_t max_sg = device_max_sub_group_size(ctx);
-    const bool use_wg_path = requested > max_sg;
+    const bool use_wg_path = requested > 32;
 
     if (use_wg_path) {
         stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);

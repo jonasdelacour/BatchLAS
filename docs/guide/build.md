@@ -94,7 +94,7 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables and `batchlas_tune` |
 | `BATCHLAS_BUILD_PYTHON` | build the Python package |
 | `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without a `[cuda:gpu]` in `sycl-ls`) or `OFF`. Boolean spellings are accepted (`1`/`TRUE`/`YES` mean `ON`, `0`/`FALSE`/`NO` mean `OFF`); an existing cache entry keeps its value |
-| `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS); `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
+| `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS); the three CUDA libraries are all-or-nothing (a partial `BATCHLAS_ENABLE_CU*` set fails configure); `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
 | `BATCHLAS_ENABLE_<LIB>` | per library, `<LIB>` one of `CUBLAS`, `CUSOLVER`, `CUSPARSE`, `ROCBLAS`, `ROCSOLVER`, `ROCSPARSE`, `LAPACKE`, `CBLAS`: allow it when present (default: `BATCHLAS_ENABLE_VENDOR_BLAS`) |
 | `BATCHLAS_MONOLITHIC_LIBRARY` | one `libbatchlas.so` instead of the per-component libraries (default `OFF`; the `release` preset turns it on) |
 | `BATCHLAS_ALLOW_UNSAFE_ENV` | honour the `BATCHLAS_*` overrides that disable a safety check (`batchlas::Settings::unsafe`; default `OFF`, see "Presets") |

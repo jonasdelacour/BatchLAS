@@ -373,19 +373,12 @@ void finalize_values_only(Queue& ctx,
     });
 }
 
+// Relative to sigma_max, never max(1, sigma_max): an absolute floor calls every value of a
+// uniformly tiny matrix zero (the form gesvdj_cta rejected). sigma_max == 0 gives 0, and the
+// callers' `<=` / `>` still classify exact zeros.
 template <typename T>
-inline T gesvd_zero_sigma_tol_device(T sigma_max) {
-    const T eps = std::numeric_limits<T>::epsilon();
-    // Keep the zero-singular fallback conservative. A looser threshold turns
-    // mildly small but valid singular values into "zero" columns, which hurts
-    // orthogonality and forces unnecessary left-tridiagonal solves.
-    return eps * sycl::fmax(T(1), sigma_max);
-}
-
-template <typename T>
-inline T gesvd_zero_sigma_tol_host(T sigma_max) {
-    const T eps = std::numeric_limits<T>::epsilon();
-    return eps * std::max<T>(T(1), sigma_max);
+inline T gesvd_zero_sigma_tol(T sigma_max) {
+    return std::numeric_limits<T>::epsilon() * sigma_max;
 }
 
 template <typename T>
@@ -575,7 +568,7 @@ void build_bidiag_vectors(Queue& ctx,
                 const int32_t b = linear / u_cols;
                 const int32_t tgt = linear - b * u_cols;
                 const T sigma_max = sycl::sqrt(sycl::fmax(Evals(k - 1, b), T(0)));
-                const T tol_zero = gesvd_zero_sigma_tol_device(sigma_max);
+                const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
 
                 if (tgt >= k) {
                     for (int32_t i = 0; i < m; ++i) {
@@ -612,7 +605,7 @@ bool has_tiny_singular_values(Queue& ctx,
     for (int32_t b = 0; b < batch; ++b) {
         const T* sb = singular_values.data() + static_cast<size_t>(b) * static_cast<size_t>(k);
         const T sigma_max = sb[0];
-        const T tol_zero = gesvd_zero_sigma_tol_host(sigma_max);
+        const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
         for (int32_t i = 0; i < k; ++i) {
             if (sb[i] <= tol_zero) {
                 return true;
@@ -644,7 +637,7 @@ void patch_zero_left_vectors(Queue& ctx,
             const int32_t tgt = linear - b * m;
             const int32_t src = (m - 1) - tgt;
             const T* sb = s_in + static_cast<size_t>(b) * static_cast<size_t>(sigma_count);
-            const T tol_zero = gesvd_zero_sigma_tol_device(sb[0]);
+            const T tol_zero = gesvd_zero_sigma_tol(sb[0]);
             if (tgt < sigma_count && sb[tgt] > tol_zero) {
                 return;
             }

@@ -113,7 +113,7 @@ Event stebz(Queue& ctx,
         auto bounds = sycl::local_accessor<T, 1>(sycl::range<1>(3), h);   // lo, hi, pivmin
         auto found = sycl::local_accessor<int32_t, 1>(sycl::range<1>(2), h); // count, first index
 
-        h.parallel_for<StebzKernel<B, T>>(
+        batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
             [=](sycl::nd_item<1> item) {
                 const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());

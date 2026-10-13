@@ -32,7 +32,7 @@
 #     ctest level, to a run with full coverage. That is why the GPU job exports
 #     GTEST_OUTPUT and hands the per-case XML to compare_failures.py, and why it
 #     sets neither BATCHLAS_TEST_BACKEND nor BATCHLAS_TEST_FLOAT_TYPE: one typo
-#     in either turns 70/70 green into 70/70 vacuous.
+#     in either turns an all-green run into an all-vacuous one.
 #   * No performance gate. Nothing here measures a kernel. A change that is
 #     correct and 10x slower passes.
 #
@@ -172,6 +172,11 @@ jobs:
         # Two of the 291 pointers in the tree were already dangling when this
         # was written.
         run: python3 .github/ci/check_evidence_anchors.py
+      - name: The failure gate still counts the registered tests
+        # --expected-tests-from against a two-test fixture, armed both ways: a
+        # junit missing a registered test fails, the same junit under -LE slow
+        # passes; --min-tests fails under its floor. Needs only ctest, no build.
+        run: python3 .github/ci/compare_failures.py --self-test
       - name: The Markdown location rule still discriminates
         # Same self-test-first reason. Pins a root plan file, any root
         # Markdown (README.md and AGENTS.md included), a nested docs/ and a
@@ -305,9 +310,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: The kernel hash and header parser still work
+      - name: The shared kernel hash vector still matches
         run: python3 .github/ci/check_tuned_tables.py --self-test
-      - name: Stale tables are reported (flat-kernel-selection.md §6.5; never fails)
+      - name: Stale tables are reported (tuning-data.md#tuning-data-kernel-hash; never fails)
         run: python3 .github/ci/check_tuned_tables.py
 
   tuned-tables-ledgers:
@@ -569,7 +574,7 @@ jobs:
         # GTEST_OUTPUT's trailing slash is required - it selects directory mode,
         # in which every gtest binary drops its own XML named after the
         # executable. That per-case XML is the point: the four baseline failures
-        # live in only 2 of 70 ctest tests, so keying the known-failures list at
+        # live in only 2 of the registered ctest tests, so keying the known-failures list at
         # binary level would blind the gate to ~40 other cases in those two
         # suites. It is also the only layer that can see an entirely-skipped,
         # entirely-vacuous run; ctest cannot.
@@ -598,18 +603,21 @@ jobs:
         # `-LE slow` never ran it. Requiring it would fail every pull request.
         # The nightly job runs the full suite and requires it there.
         #
-        # --expected-tests 65 is the guard against a shrunken run. ctest's JUnit
-        # records a test whose executable was never built as a *skip*, and even
-        # miscounts it into the file's `skipped=` attribute, so thirty missing
-        # binaries look like thirty benign skips. The arithmetic behind 65: 70
-        # registered ctest tests minus the 5 slow-labelled ones (stedc_tests,
-        # steqr_tests, sytrd_sb2st_tests, gesvd_tests, consumer_package_tests).
+        # --expected-tests-from catches a truncated run: the junit must hold what
+        # `ctest -N -LE slow` registers in the same tree. Being tree-derived, it
+        # cannot see a configure that registered fewer tests; --min-tests is the
+        # checked-in floor for that (99 -LE slow on threadripper02's full-target
+        # tree, minus slack for the config-dependent script tests). Raise it when
+        # tests are added; it fails only on a decrease. A never-built binary is
+        # neither: it is registered, and compare_failures classifies its notrun
+        # testcase as FAILED.
         # --known defaults to tests/known-failures.txt, which is the ledger.
         run: |
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests 65
+            --expected-tests-from build/presets/dev-tests --label-exclude slow \
+            --min-tests 95
 
       - name: Install to a temp prefix and check the generated export
         # This is the half of check_exported_package.py the exported-package job
@@ -689,9 +697,8 @@ jobs:
           cmake --build --preset dev-tests
 
       - name: Full ctest, slow suites included
-        # No -LE slow. This is the only run that exercises stedc_tests,
-        # steqr_tests, sytrd_sb2st_tests, gesvd_tests and consumer_package_tests
-        # - 70 tests rather than 65.
+        # No -LE slow. This is the only run that exercises the slow-labelled
+        # tests (stedc_tests, steqr_tests, consumer_package_tests, ...).
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/gtest-xml"
@@ -710,12 +717,12 @@ jobs:
         # laptop, wrong for CI: --require makes anything other than a real pass
         # a failure.
         #
-        # 70 rather than 65 here: this run includes the five slow-labelled tests.
+        # No --label-exclude here: this run includes the slow-labelled tests.
         run: |
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests 70 \
+            --expected-tests-from build/presets/dev-tests --min-tests 100 \
             --require consumer_package_tests
 
       - name: Vendor-free configure, build and ctest

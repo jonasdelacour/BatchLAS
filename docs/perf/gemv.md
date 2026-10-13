@@ -24,7 +24,7 @@ on 2026-10-11 (`tuned/README.md`).
 |---|---|---|---|
 | `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | native term, `gemv_cta_available<T>()`, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
 | `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no `is_gpu` term |
-| `vendor` | `backend::gemv_vendor` | — | `d.has_vendor` |
+| `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()`; no `complex<double>` term since WP3 ([Auto moved](#gemv-complex-double-vendor-route-change)) |
 
 `can_run` is correctness only, never a speed cutoff. The native term (`gemv.cc:55-57`) refuses a
 heterogeneous `A`, negative extents and `batch < 1`, and requires x and y to match A in batch and
@@ -40,6 +40,24 @@ both directions. A `reqd_sub_group_size(32)` launch on a device without 32 abort
 
 Layout is column-major: `A(i,j)` sits at `i + j*ld`, one work-item per output element. `NoTrans` is
 coalesced. `Trans` and `ConjTrans` need the sub-group reduction.
+
+### complex<double>: Auto may now pick cuBLAS {#gemv-complex-double-vendor-route-change}
+
+Until WP3, `can_run(Vendor)` refused `complex<double>` on CUDA (known-defects #13, since fixed),
+so no table row could send it to cuBLAS. With the term gone, every row that ranks `vendor` first
+now runs cuBLAS. **None of those rows is timed:** the deep sm_120 ledger never timed the
+`complex<double>` vendor (it crashed then), so every such row is `transcribed`.
+
+| table | `cdouble` rows | `vendor` first |
+|---|---|---|
+| `tuned/gemv.sm_120.txt` | 1568 | 188 (all transcribed; e.g. `trans=N out=64 red=32768 batch=8192`) |
+| `tuned/gemv.sm_89.txt` | 1408 | 1360 (all transcribed) |
+
+Route diff of `gemv_tests` and `spmm_tests` under Auto (coverage `reached` rows, threadripper02,
+sm_120, main 30627f1f vs this change): one decision moved, `complex<double>` `m=64 n=32768 batch=2`
+NoTrans from `direct` to `vendor`; the test passes. spmm did not move: no `complex<double>` N/N
+one-column row ranks `vendor` first in either table. The 2x4090 box (sm_89, where most rows move)
+was not re-checked, and nothing was timed. A cdouble retune decides these rows.
 
 ### The five kernel bodies
 

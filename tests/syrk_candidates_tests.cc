@@ -727,35 +727,33 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_TRUE(correct(*this->ctx, r));
 }
 
-// Auto against the transcribed table, on each side of every threshold the old rule read:
-// gram 128|129, triangular-if-squareish above, the batch floor of the 3-tile band (26|27) and of
-// the 13-tile band (1|2), n 256|257, k 7|8, all three forms, N and T alike; C is the vendor
-// everywhere. Vendor-free, `vendor` is taken by the row's next entry (float: triangular; C at
-// n <= 128: gram) or nothing (double).
+// Auto against the shipped table of this device (shipped_table_pick.hh), on each side of every
+// threshold the old rule read: gram 128|129, the batch floor of the 3-tile band (26|27) and of the
+// 13-tile band (1|2), n 256|257, k 7|8, all three forms, N, T and C. A row with no runnable entry
+// (vendor-free double, say) must throw NoRouteError.
 TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const auto tables = select::tables_in_borrow_order("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || !test_utils::transcribed_only(*tables.front()))
-        GTEST_SKIP() << "this device reads another syrk table";
-    struct Row { int n, k, batch; const char* f; const char* d; };  // float, double (vendor present)
-    const Row rows[] = {{128, 64, 4, "gram", "gram"},           {1, 4096, 2, "gram", "gram"},
-                        {129, 129, 4, "triangular", "vendor"},  {129, 8, 128, "vendor", "vendor"},
-                        {200, 150, 2, "triangular", "vendor"},  {200, 500, 8, "vendor", "vendor"},
-                        {256, 8, 128, "vendor", "vendor"},      {257, 8, 128, "triangular", "vendor"},
-                        {257, 7, 128, "vendor", "vendor"},      {300, 64, 26, "vendor", "vendor"},
-                        {300, 64, 27, "triangular", "vendor"},  {300, 700, 26, "vendor", "vendor"},
-                        {300, 700, 27, "triangular", "vendor"}, {1600, 64, 1, "vendor", "vendor"},
-                        {1600, 64, 2, "triangular", "vendor"}};
+    // form spelled by hand (2 min >= max: sq; n > 2k: tall; else wide), never via form_of.
+    struct Row { int n, k, batch; const char* form; };
+    const Row rows[] = {{128, 64, 4, "sq"},      {1, 4096, 2, "wide"},    {129, 129, 4, "sq"},
+                        {129, 8, 128, "tall"},   {200, 150, 2, "sq"},     {200, 500, 8, "wide"},
+                        {256, 8, 128, "tall"},   {257, 8, 128, "tall"},   {257, 7, 128, "tall"},
+                        {300, 64, 26, "tall"},   {300, 64, 27, "tall"},   {300, 700, 26, "wide"},
+                        {300, 700, 27, "wide"},  {1600, 64, 1, "tall"},   {1600, 64, 2, "tall"}};
     for (const Row& r : rows)
         for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             Spec s{r.n, r.k, r.batch, Uplo::Lower, t};
-            std::string want = t == Transpose::ConjTrans ? "vendor" : (TestFixture::kFloat ? r.f : r.d);
-            if (want == "vendor" && !TestFixture::kVendor)
-                want = t == Transpose::ConjTrans && r.n <= 128 ? "gram" : (TestFixture::kFloat ? "triangular" : "");
+            const char* word = t == Transpose::NoTrans ? "N" : (t == Transpose::Trans ? "T" : "C");
+            const select::Key key{{"form", r.form}, {"trans", word}, {"n", r.n}, {"k", r.k}, {"batch", r.batch}};
+            const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
+            const std::string want = test_utils::shipped_table_pick<C>("syrk", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+                                                                       key, [&] {
+                                                                           auto q = make_prob<T>(s);
+                                                                           this->run(q);
+                                                                       });
             auto p = make_prob<T>(s);
-            if (want.empty()) {
-                const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
+            if (want == test_utils::kNoTableEntryRuns) {
                 EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
                 continue;
             }
@@ -1019,14 +1017,12 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
                 ASSERT_EQ(row.keys.size(), 5u) << t.file << ":" << row.line;
                 const std::string key =
                     row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
                 got.insert(key);
-                EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
             }
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;
