@@ -1,4 +1,4 @@
-# Vendor independence
+# Vendor independence {#design_vendor_independence}
 
 > **Status:** current. The [History](#history-the-routetable-layer) section describes deleted code.
 

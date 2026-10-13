@@ -202,7 +202,7 @@ def build_warnings(info: dict, nvidia_box: bool) -> List[str]:
     return w
 
 
-# Runtime knobs of an acpp build (docs/design/sycl-implementations.md, section 7). benchviz sets these
+# Runtime knobs of an acpp build (docs/design/sycl-implementations.md#sycl-impl-performance-ab). benchviz sets these
 # defaults for every acpp process unless the environment already sets them; the environment wins.
 ACPP_ENV_DEFAULTS = {"ACPP_ADAPTIVITY_LEVEL": "1", "ACPP_RT_SCHEDULER": "direct"}
 

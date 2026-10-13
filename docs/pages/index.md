@@ -25,7 +25,7 @@ ctx.wait();                                   // nothing is readable before this
 ```
 
 Every entry point enqueues and returns an Event. Matrices are column-major in device-accessible
-(USM) memory. Use one Queue per thread. The full contract is in @ref md_docs_2cpp-api.
+(USM) memory. Use one Queue per thread. The full contract is in @ref guide_cpp_api.
 
 ## Operations
 

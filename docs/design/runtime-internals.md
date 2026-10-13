@@ -394,21 +394,19 @@ BatchLAS therefore needs no data files at run time.
 - Each table is embedded as `R"batchlas_tbl(...)batchlas_tbl"`. A table that contains the delimiter is
   a configure error.
 - Each table is one `char` array whose length comes from `sizeof`. A `string_view` built from a bare
-  literal runs a constexpr `strlen`, and about 0.5 MB of tables exceeds clang's constexpr step limit.
+  literal runs a constexpr `strlen`, and the tables (about 33 MB over 39 files, 2026-10-12) exceed
+  clang's constexpr step limit.
   C++23 `#embed` is not available in DPC++.
 - Zero tables is valid. The array keeps a sentinel entry, and the span is empty.
 - An unchanged table set leaves the generated file untouched, so its timestamp holds and the TU is not
   recompiled.
 
-**Staleness.** One function, `sweep_to_table.stale_kernel_warnings`, used by
-`scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`
-([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). It is a warning only: a stale table stays
-in use. A table with only converted/transcribed rows is never stale. There is no configure-time check.
+**Staleness:** @ref design_tuning_data. A stale table stays in use.
 
 **Run time.** Tables are parsed lazily per `(op, dtype)`, on the first selection that needs them, and
 cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in
-`BATCHLAS_TUNED_DIR` with the same name replaces the embedded one, and the trace tag then reads
-`override`. A non-table file there is skipped with a one-time warning. The cache, its mutex and the
+`BATCHLAS_TUNED_DIR` with the same name replaces the embedded one dtype by dtype (a dtype the file
+lacks keeps the embedded rows), and the trace tag then reads `override`. A non-table file there is skipped with a one-time warning. The cache, its mutex and the
 parsed tables are deliberately leaked. `choose()` can run from static destructors, and the coverage
 writer runs from `atexit`, so neither may find the tables already destroyed. Tests swap the embedded
 set with `select::testing::set_builtin_tables` and restore it with `use_embedded_tables`. Each call

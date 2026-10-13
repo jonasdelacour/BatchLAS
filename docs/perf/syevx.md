@@ -18,7 +18,7 @@ LOBPCG iteration counts in the hardening sections are CPU (NETLIB) builds with
 
 ## syevx: routing thresholds as they stand
 
-The dense `Auto` rule, from `syevx_select_algorithm` (`src/extensions/syevx.cc:299-317`):
+The dense `Auto` rule, from `syevx_select_algorithm` (`src/extensions/syevx.cc:302-320`):
 
 | condition | route |
 |---|---|
@@ -125,7 +125,7 @@ is a mesh/stencil family.
 
 ### syevx: automatic Chebyshev filter degree
 
-`syevx_filtered` uses `kDefaultFilterDegree = 10` (`src/extensions/syevx_filtered.cc:55`) unless the degree
+`syevx_filtered` uses `kDefaultFilterDegree = 10` (`src/extensions/syevx_filtered.cc:56`) unless the degree
 is pinned (`BATCHLAS_SYEVX_FILTER_DEGREE` or `params.filter_degree`). The per-matrix derived degree behind
 `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1` **must not ship**.
 

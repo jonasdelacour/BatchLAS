@@ -1,6 +1,6 @@
 # TRSM {#perf_trsm}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · step-9 to step-16 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-05 (sm_120)
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · step-9 to step-16 grids 2026-08-19/20 · tables 2026-10-04 (sm_89), 2026-10-11 (sm_120, deep)
 
 Native batched `trsm` on the GPU: the `cta` (V1), `blocked` (V2) and `sg_left` kernels, the routing
 tables that choose among them, and the measurements behind those tables. The page gives the
@@ -25,23 +25,24 @@ tie-break order. `can_run` (`trsm.cc:45-61`) is correctness only. Every native f
 
 Selection takes the first runnable entry of the nearest row of `tuned/trsm.<device>.txt`
 (@ref selection_tables). The key is `side:exact trans:exact order:log:2 q:log batch:log`
-(`choice.hh:26-27`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
+(`src/ops/trsm/choice.hh:26-27`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
 folds to `T`. uplo and diag are not keys. The last resort is `blocked`, then `vendor`. The CPU has no
 native family. trsm takes no workspace. `A.batch_size() != B.batch_size()` throws `invalid_argument`
 in `trsm_validate_params`.
 
 ### What the tables say
 
-Grid: batch from 128 up (`choice.hh:31-34`). Provenance is in `tuned/README.md`.
+Grid: batch from 128 up (`src/ops/trsm/choice.hh:31-34`). Provenance is in `tuned/README.md`.
 
 | table | source | first entry |
 |---|---|---|
-| `trsm.<all four>.sm_89.txt` | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32; `blocked \| vendor` on all 2400 rows above. `sg_left` in no row |
-| `trsm.{cfloat,cdouble}.sm_120.txt` | the sm_89 transcription, relabelled | the same |
-| `trsm.float.sm_120.txt` | measured (`benchmarks/results/tuning/trsm.float.sm_120.jsonl`) | order <= 32: Left `sg_left` 876 / `cta` 310 rows, Right `cta` 921 / `vendor` 92; above 32: Left `blocked` 601 / `vendor` 538, Right `blocked` 645 / `vendor` 469 |
-| `trsm.double.sm_120.txt` | measured (`trsm.double.sm_120.jsonl`) | order <= 32: Left `sg_left` 587 / `cta` 523 / `vendor` 15 / `blocked` 1, Right `cta` 898 / `vendor` 95; above 32: Left `blocked` 874 / `vendor` 144, Right `blocked` 905 / `vendor` 56 |
+| `trsm.sm_89.txt`, every dtype | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` on all 1920 rows at order <= 32; `blocked \| vendor` on all 2400 rows above. `sg_left` in no row |
+| `trsm.sm_120.txt`, float rows | deep | order <= 32: Left `sg_left` 1156 / `cta` 473 / `blocked` 1, Right `cta` 946 / `vendor` 95; above 32: Left `blocked` 957 / `vendor` 744, Right `blocked` 955 / `vendor` 545 |
+| `trsm.sm_120.txt`, double rows | deep | order <= 32: Left `cta` 777 / `sg_left` 733 / `vendor` 17, Right `cta` 1016 / `vendor` 122 / `blocked` 1; above 32: Left `blocked` 1163 / `vendor` 149, Right `blocked` 1003 / `vendor` 48 |
+| `trsm.sm_120.txt`, cfloat rows | deep, plus 508 transcribed | order <= 32: Left `sg_left` 1220 / `cta` 1078 / `vendor` 266 / `blocked` 121, Right `cta` 887 / `vendor` 591; above 32: Left `blocked` 1156 / `vendor` 26, Right `blocked` 1162 / `vendor` 64 |
+| `trsm.sm_120.txt`, cdouble rows | deep, plus 732 transcribed | order <= 32: Left `cta` 743 / `sg_left` 596 / `vendor` 323 / `blocked` 1, Right `cta` 882 / `vendor` 465; above 32: Left `blocked` 1107 / `vendor` 92, Right `blocked` 1100 / `vendor` 95 |
 
-On sm_89, `sg_left` runs only when pinned. The vendor runs only where no native family can: a
+On sm_89, `sg_left` runs only when pinned, and the vendor only where no native family can: a
 heterogeneous batch, or a CPU queue. The sm_120 result is on the
 [Blackwell page](blackwell.md#trsm-on-sm_120-result).
 
@@ -385,7 +386,7 @@ The lesson, twice over: confirm which kernel runs before explaining why it is sl
 
 V1 staged the canonical triangle into SLM with a loop strided by `lane`. Lane `s` then read
 `sLc[tri_idx(s,s)]`, a value written by a different lane, with no barrier in between. `sDiv[0]` had the same
-problem. The fix is one `sycl::group_barrier` (`src/sycl/trsm_native.cc:184`), commit `c7d6d91`, 2026-08-21.
+problem. The fix is one `sycl::group_barrier` (`src/sycl/trsm_native.cc:185`), commit `c7d6d91`, 2026-08-21.
 
 | | max relative diff vs vendor | items wrong | native residual |
 |---|---|---|---|
@@ -404,7 +405,7 @@ blocked potrf panel solve at n=1024, batch=256 gives wg=256, and the race fires 
 deleted. The reproducer goes through V2: order **48** (final V1 block of order 16), q=976, batch=128.
 Orders whose final block lands in the N=16 bucket (48, 77, 80, 109) fail 90-128 of 128 items, while 32,
 33, 64, 65, 96 and 155 pass. The guard is `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
-(`tests/trsm_tests.cc:561`). It was verified red with the barrier deleted.
+(`tests/trsm_tests.cc:474`). It was verified red with the barrier deleted.
 
 ### The bucket ladder that truncated {#the-bucket-ladder-that-truncated}
 
@@ -475,7 +476,7 @@ but V2 calls the direct entry on its diagonal blocks.
     pins it. The vendor's `can_run` has had it too since WP3 ([known-defects 12](../design/known-defects.md#defect-12-vendor-families-accepted-a-heterogeneous-batch)).
 13. ~~**`OpShape::compute_units` is dead.**~~ Closed: `OpShape` was deleted with the route layer. A speed rule
     belongs in the tables, never in `can_run`.
-14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`matrix.hh:1008`). Reported and
+14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`include/batchlas/blas/matrix.hh:1466-1476`). Reported and
     left alone. V2 passes the parent's `ld` and `stride` at every sub-view, because the constructor defaults
     `stride` to `ld*cols` when 0 is passed.
 15. **No extension is vendor-free through WP3.** `ortho_tests` is blocked by `potrf`, `geqrf`, `orgqr` and `syev`.
@@ -486,7 +487,7 @@ but V2 calls the direct entry on its diagonal blocks.
     non-`potrf` part is about 20x. `posv` and `gesv` have no vendor family of their own. Their `blocked`
     family composes sub-ops that select for themselves. The arm named `blocked` pins only the outer route, so
     both legs stay on Auto. The pins for the other arms are `{POTRF=vendor, TRSM=vendor}` and
-    `{POTRF=tiny, TRSM=cta}` (`benchmarks/factor_bench.cc:458-486`).
+    `{POTRF=tiny, TRSM=cta}` (`benchmarks/factor_bench.cc:213-221`).
 
     Data: `benchmarks/results/p2_posv_float.csv` (float, n=17, batch=16384, 7 reps, all `bad = 0`, residuals
     3.4e-08 to 5.0e-08). `rel_sd` is at most 0.0035, and the rows the argument rests on are all at or below
@@ -517,7 +518,7 @@ but V2 calls the direct entry on its diagonal blocks.
     interleaved in one process. Flat in q, and about 20x the vendor at q=1, confirms the hypothesis. Tracking the
     vendor refutes it and moves the cost into the composition itself.
 18. ~~**`trsm_op_shape` never set `s.backend`.**~~ Resolved by flat selection: the coverage row carries the backend
-    (`TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags`, `tests/trsm_candidates_tests.cc:917`).
+    (`TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags`, `tests/trsm_candidates_tests.cc:879`).
 
 ---
 

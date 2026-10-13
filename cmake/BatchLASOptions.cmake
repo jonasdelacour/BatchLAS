@@ -7,7 +7,7 @@ endif()
 
 # The resolved implementation is BATCHLAS_SYCL_IMPL_RESOLVED plus the 0/1 pair
 # BATCHLAS_SYCL_IMPL_DPCPP / _ACPP; the cache entry keeps what the user asked for.
-# Design: docs/design/sycl-implementations.md section 5.1.
+# Design: docs/design/sycl-implementations.md#sycl-impl-build
 set(BATCHLAS_SYCL_IMPL "AUTO" CACHE STRING
     "SYCL implementation: AUTO (ACPP when CMAKE_CXX_COMPILER is the acpp driver), DPCPP or ACPP")
 set_property(CACHE BATCHLAS_SYCL_IMPL PROPERTY STRINGS AUTO DPCPP ACPP)
@@ -56,7 +56,7 @@ endif()
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
 # this. PROJECT_IS_TOP_LEVEL would be the idiomatic spelling but needs CMake
-# 3.21 and this project declares 3.14.
+# 3.21 and this project declares 3.17.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(BATCHLAS_IS_TOP_LEVEL ON)
 else()

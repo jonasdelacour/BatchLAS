@@ -1,4 +1,4 @@
-# Known defects, located and not fixed
+# Known defects, located and not fixed {#design_known_defects}
 
 > **Status:** current · checked 2026-10-11
 
@@ -14,12 +14,12 @@ closed and kept only for numbering.
 
 | # | where | status |
 |---|---|---|
-| 1 | `src/extensions/ortho.cc:189-191` | open, latent (routed to the vendor) |
+| 1 | `src/extensions/ortho.cc:190-192` | open, latent (routed to the vendor) |
 | 2 | `src/extra/cond.cc:48,54,131` | open, throws in a vendor-free build |
-| 3 | `src/extensions/lanczos.cc:112-117` | open, 2x work, right answer |
-| 4 | `src/backends/rocsparse.cc:30-31,62-63` | open, inferred, unobservable here |
-| 5 | `src/backends/netlib_lapack.cc:484,496,513,525` | open, NaN from unwritten workspace |
-| 6 | `src/backends/netlib_lapack.cc:1250` | open, wrong answer at padded `ld` |
+| 3 | `src/extensions/lanczos.cc:111-116` | open, 2x work, right answer |
+| 4 | `src/backends/rocsparse.cc:37-38,70-71` | open, inferred, unobservable here |
+| 5 | `src/backends/netlib_lapack.cc:399,411,428,440` | open, NaN from unwritten workspace |
+| 6 | `src/backends/netlib_lapack.cc:1165` | open, wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh` (deleted) | closed: not a defect |
 | 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
@@ -31,7 +31,7 @@ closed and kept only for numbering.
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
-| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
+| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -41,7 +41,7 @@ closed and kept only for numbering.
 
 - **Symptom:** under `transA = Trans` or `ConjTrans`, the CGS arm builds a view whose extents and
   leading dimension do not describe the memory, and passes a vector of the wrong length.
-- **Cause:** `src/extensions/ortho.cc:189-191` (was `:218-224` when filed):
+- **Cause:** `src/extensions/ortho.cc:190-192` (was `:218-224` when filed):
 
   ```cpp
   auto A_i = transA == Transpose::NoTrans
@@ -55,7 +55,7 @@ closed and kept only for numbering.
   is column `i`, but on this arm the vectors are rows of `A`.
 - **Why it is not live:** gemv's `can_run` (`src/ops/gemv/gemv.cc`) refuses every native family
   when `X.size() != red_len` or `Y.size() != out_len`, so the call always goes to the vendor.
-- **Test gap:** `tests/ortho_tests.cc:249` and `:293` use only `{Transpose::NoTrans}`. The
+- **Test gap:** `tests/ortho_tests.cc:111` and `:154` use only `{Transpose::NoTrans}`. The
   transposed arm has never run in the suite.
 - **Fix:** `A_i` has `ld = A.ld()` and stored-orientation extents, `A_next` is row `i`
   (conjugated around the gemv pair for complex), the normalisation steps by `ld`. SVQB/SVQB2 copy
@@ -64,7 +64,7 @@ closed and kept only for numbering.
   transposes the factor back. `tests/ortho_tests.cc` runs both orientations for every algorithm.
 - **Status:** fixed (WP8).
 
-## 2. `cond` calls the vendor `syev` directly
+## Defect 2: `cond` calls the vendor `syev` directly
 
 - **Symptom:** throws in a vendor-free build.
 - **Cause:** `src/extra/cond.cc:48`, `:54` and `:131` call
@@ -84,23 +84,23 @@ closed and kept only for numbering.
   batch 1 too) is open: see [lanczos returns a spectrum about three times too wide](#lanczos-returns-a-spectrum-about-three-times-too-wide).
 - **Status:** open.
 
-## 4. rocSPARSE conjugates a real transpose
+## Defect 4: rocSPARSE conjugates a real transpose
 
 - **Symptom (inferred):** on real scalars, `ConjTrans` is passed as the conjugating enum, which
   should give wrong results as it did in cuSPARSE.
-- **Cause:** `src/backends/rocsparse.cc:30-31` and `:62-63` pass `enum_convert` results straight
-  through. That conversion (`src/linalg-impl.hh:327-329`) maps `ConjTrans` to
+- **Cause:** `src/backends/rocsparse.cc:37-38` and `:70-71` pass `enum_convert` results straight
+  through. That conversion (`src/linalg-impl.hh:275-281`) maps `ConjTrans` to
   `rocsparse_operation_conjugate_transpose` for every scalar type.
-- **Reference fix:** `cusparse_op<T>` in `src/backends/cusparse.cc:29-39`.
+- **Reference fix:** `cusparse_op<T>` in `src/backends/cusparse.cc:29-40`.
 - **Status:** inferred, not observed. There is no AMD device here.
   `scripts/rocm_syntax_check.sh` compiles the ROCm TUs but cannot run a kernel.
 - **Fix needs:** a `rocsparse_op<T>` applied to both operands, then `tests/spmm_tests.cc` on AMD
   hardware.
 
-## 5. netlib `trsm` reads `B` when `alpha == 0`
+## Defect 5: netlib `trsm` reads `B` when `alpha == 0`
 
 - **Symptom:** `NaN` from an unwritten workspace.
-- **Cause:** `src/backends/netlib_lapack.cc:484`, `:496`, `:513` and `:525`, in all four arms of
+- **Cause:** `src/backends/netlib_lapack.cc:399`, `:411`, `:428` and `:440`, in all four arms of
   the host solve:
 
   ```cpp
@@ -111,20 +111,20 @@ closed and kept only for numbering.
   `NaN`.
 - **Fix needs:** substitute `T(0)` for the `alpha` term, as the native bodies do, and add an
   `alpha == 0` case to `tests/trsm_tests.cc` with `B` poisoned by `NaN`. A merely wrong `B` cannot
-  reveal the bug. The same defect in `spmm` (`netlib_lapack.cc:228,252`) is fixed; see
+  reveal the bug. The same defect in `spmm` (`netlib_lapack.cc:166`) is fixed; see
   [../perf/spmm.md](../perf/spmm.md).
 - **Status:** open.
 
-## 6. netlib `getri` ignores the leading dimension
+## Defect 6: netlib `getri` ignores the leading dimension
 
 - **Symptom:** a wrong answer when `Ab` or `Cb` has a padded `ld`. If `C` is the tighter view,
   it also writes past its last column.
-- **Cause:** `src/backends/netlib_lapack.cc:1250` copies `n * n` contiguous elements and reads
+- **Cause:** `src/backends/netlib_lapack.cc:1165` copies `n * n` contiguous elements and reads
   neither `ld`.
-- **Fix needs:** the per-column `std::copy_n` already used at `:841`.
+- **Fix needs:** the per-column `std::copy_n` already used at `:756`.
 - **Status:** open. Recorded in [../perf/lu.md](../perf/lu.md).
 
-## 7. CLOSED: `trsm`'s heterogeneous-batch rejection can fire
+## Defect 7 (closed): `trsm`'s heterogeneous-batch rejection can fire
 
 The field is written: `trsm_op_shape` sets `s.heterogeneous_batch` from both `A` and `B`. The
 gate is therefore reachable. The old `trsm_route.hh` is deleted; the term now sits in the native
@@ -135,7 +135,7 @@ The gate is armed. Its test is `TrsmCandidates.HeterogeneousBatchHasNoNativeRout
 or `B`. Dropping the term turns that test red for all four CUDA dtypes. The vendor arm still lacks
 the term (defect 12).
 
-## 8, 9. CLOSED: forced-route defects in the level-3 dispatchers
+## Defects 8 and 9 (closed): forced-route defects in the level-3 dispatchers
 
 Both were removed with the old level-3 dispatchers. `BATCHLAS_SYRK_ROUTE=native` and
 `BATCHLAS_SYR2K_ROUTE=native` now run the tile kernel, which writes only the named triangle
@@ -163,13 +163,13 @@ wrote both triangles and was reachable only through those pins.
   | deleted | default, x40 | red | green, 40 of 40 |
   | restored | amplified, x20 | green | green |
 
-  The red leg fails at `tests/sytrd_blocked_tests.cc:545`.
+  The red leg fails at `tests/sytrd_blocked_tests.cc:390`.
 - **Not established:** the residual rate at the default geometry. The default window is about 16
   times narrower than the amplified one, so 40 runs cannot see it. The barrier removes the hazard by
   the memory model. Confirming that needs many more default runs or
   `compute-sanitizer --tool racecheck`.
 - **Warning:** forcing a larger work-group does not reproduce the defect. The window depends on the
-  group count. Forcing `G` down raises `chunk`. `tests/sytrd_blocked_tests.cc:597-612` is an
+  group count. Forcing `G` down raises `chunk`. `tests/sytrd_blocked_tests.cc:440-455` is an
   unreliable guard, not a blind one.
 - **Status:** fixed, armed on the amplified geometry.
 
@@ -247,7 +247,7 @@ wrote both triangles and was reachable only through those pins.
   The branch can be removed; it is kept until that change lands with its own route diff.
 - **gemv refused (2026-10-09):** under a pinned vendor every non-trivial `GemvMatrixViewTest/7.*` and
   `GemvCoverageTest/7.*` case exits 139, batch 1 included (`cublasZgemv_v2 -> cublasLtZZZMatmul`).
-  The deep sm_120 ledger (`benchmarks/results/tuning/ledger/gemv.cdouble.sm_120`) agrees: the vendor
+  The deep sm_120 ledger (the cdouble cells of `benchmarks/results/tuning/ledger/gemv.sm_120.jsonl`) agrees: the vendor
   arm crashed in all 1458 batch > 1 cells and 191 of 196 batch-1 cells. The five surviving rows
   (trans=N, red=32768, out >= 64, batch 1) ranked vendor first, so nearest-row lookup sent other
   shapes into the crash. gemv's `can_run(Vendor)` (`src/ops/gemv/gemv.cc`) therefore refuses
@@ -333,7 +333,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   Alignment is a property of the pointers, not of the selection key, so `can_run` does not model
   it. `spmm_tests` skips misaligned cases unless the route is pinned to `native`.
 
-## 18. `gesvd_cta` left vectors lose orthogonality as eps times kappa squared
+## Defect 18: `gesvd_cta` left vectors lose orthogonality as eps times kappa squared
 
 - **Symptom:** float, real general 16x16, `BATCHLAS_GESVD_ROUTE=cta`, 160 matrices drawn by
   `Matrix::Random`: \f$\max|U^T U - I|\f$ is 0.003 to 0.77 times \f$\varepsilon\kappa^2\f$. It is
@@ -344,14 +344,18 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `build_bidiag_vectors` forms \f$u_i = B v_i / \sigma_i\f$ (`:596`), which scales the error of
   \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
   [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
-- **Reached by:** a `cta` pin only. Every real general row of `tuned/gesvd.*.txt` ranks `jacobi`
-  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits.
+- **Reached by:** on sm_89 a `cta` pin only: no real general row of `tuned/gesvd.sm_89.txt` ranks `cta`
+  first, and `jacobi`'s `can_run` admits every real shape that `cta` admits. On sm_120 Auto reaches it:
+  the deep table ranks `cta` first in 14 double `vec=all` non-square rows (for example `m=8 n=32`,
+  `m=32 n=8`); float `vec=none` rows also reach `cta`, but compute no vectors, so they cannot
+  show the defect. Double's error is \f$\varepsilon_d\kappa^2\f$; no double
+  failure has been reproduced.
 - **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations`, float/CUDA, listed in
   `tests/known-failures.txt`. Since the Philox generator, its `AN` matrix has \f$\kappa = 497\f$;
   8 of 80 seeds fail. The double instantiation still covers the four job combinations.
 - **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
   for real general input.
-- **Status:** open, pinned `cta` only.
+- **Status:** open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
@@ -436,13 +440,13 @@ re-orthogonalize only against earlier vectors, or recompute alpha and beta after
 Located to a line but not confirmed by a test. Each moves to a numbered entry when confirmed or
 refuted.
 
-- **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung.** `src/extensions/gesvdj_cta.cc:354`
+- **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung.** `src/extensions/gesvdj_cta.cc:361`
   reads `Nrm_local[base_n + lane]` only for `lane < CC`. Correctness holds, but the overflow headroom
   for 33 to 64 columns is narrower than the design claims. See
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling). To settle it, use
   graded input with the largest column norm in columns 32..63, near overflow.
 - **Recursive `stedc` may merge from unset eigenvectors under `NoEigenVectors`.**
-  `src/extensions/stedc.cc:535` forwards `jobz` to the leaf, but merges always consume the leaf
+  `src/extensions/stedc.cc:536` forwards `jobz` to the leaf, but merges always consume the leaf
   vectors. The level-synchronous driver ignores `jobz` (`:640`). To settle it, call
   `stedc(..., NoEigenVectors, ...)` with `StedcAlgorithm::Recursive` on a poisoned eigenvector
   buffer. See [stedc: eigenvalues-only still builds eigenvectors](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
@@ -466,7 +470,7 @@ refuted.
 - **`francis_sweep` is declared and never defined.** `include/batchlas/blas/extensions.hh`
   declares it `BATCHLAS_API`. A call compiles and fails at link time. Delete the declaration or
   implement it.
-- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:29` addresses
+- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:30` addresses
   `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
   also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
 - **Kernel selection throws outside the error hierarchy.** `src/select/` throws `std::invalid_argument`
@@ -478,7 +482,7 @@ refuted.
 - **`internal/sytrd_blocked.hh` declares a second, undefined `sytrd_blocked`.** It takes
   `Span<std::byte> ws` by value with no default `block_size`
   (`include/batchlas/internal/sytrd_blocked.hh:46-53`). The definition at
-  `src/extensions/sytrd_blocked.cc:915` is the `const Span<std::byte>&` overload. A translation unit
+  `src/extensions/sytrd_blocked.cc:916` is the `const Span<std::byte>&` overload. A translation unit
   that sees only the internal header fails at link time. The fix is to make the internal
   declaration match, or drop it.
 
@@ -492,7 +496,7 @@ refuted.
 
 [../perf/lu.md](../perf/lu.md) reported a vendor gate defect: `getrs` sits in a `BATCHLAS_HAS_CUBLAS`
 TU but calls cuSOLVER. Re-checked, the claim does not hold. `getrs_vendor` calls only
-`cublas?getrsBatched` (`src/backends/cublas.cc:1491`), and the gate matches the definition. The
+`cublas?getrsBatched` (`src/backends/cublas.cc:1090`), and the gate matches the definition. The
 stated mismatch did not reproduce.
 
 ## Guards that cannot fail
@@ -502,7 +506,7 @@ shown to be blind by applying a deliberate break, rebuilding, and running.
 
 | guard | why it was blind | fix |
 |---|---|---|
-| `trsm` barrier regression | drove V1 at n=16, which never has more than one sub-group | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:538`). Orders 48, 77, 80 and 109 fail 90-128 of 128 items. |
+| `trsm` barrier regression | drove V1 at n=16, which never has more than one sub-group | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:476-486`). Orders 48, 77, 80 and 109 fail 90-128 of 128 items. |
 | all 232 `gemv` cases | every case used the natural batch stride | four `stride_pad` cases, one per kernel body |
 | `spmm` transposed `nnz` bound | a NaN at an out-of-range column is discarded by the kernel's own guard | poison with an in-range column and a large finite value |
 | `gemv` tail sub-group | out-of-range writes went unseen | a guard band, poisoned before the call and checked after |

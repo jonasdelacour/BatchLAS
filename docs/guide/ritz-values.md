@@ -57,7 +57,7 @@ float theta_j_b = theta(j, b);   // column j of batch item b
 ```
 
 It is declared for `MatrixView`, plus one owning-`Matrix` twin so that the partially-explicit
-`ritz_values<B, T>(ctx, A, V)` compiles (`extensions.hh:1646-1664`).
+`ritz_values<B, T>(ctx, A, V)` compiles (`include/batchlas/blas/extensions.hh:2018-2023`).
 
 ### Workspace form
 
@@ -105,8 +105,8 @@ Shape mismatches fail an `assert`, so a release build does not diagnose them.
 
 - Scalar types: `float`, `double`, `std::complex<float>`, `std::complex<double>`.
 - Formats of `A`: `Dense`, `CSR`.
-- Backends: `NETLIB`, `CUDA`, `ROCM`, `MKL`, each only when compiled in
-  (`src/extensions/ritz_values.cc:202-216`). There is no `Backend::SYCL` instantiation.
+- Backends: `NETLIB`, `CUDA`, `ROCM`, each only when compiled in
+  (`src/extensions/ritz_values.cc:182-192`). There is no `Backend::SYCL` or `Backend::MKL` instantiation.
 
 ## Tests
 

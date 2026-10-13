@@ -1,4 +1,4 @@
-# SPMM: batched CSR kernel and routing
+# SPMM: batched CSR kernel and routing {#perf_spmm}
 
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda
 
@@ -12,7 +12,7 @@ RTX 4090 (device 1, 128 SMs, 72 MB L2, 1008 GB/s DRAM roof), CUDA backend, in-or
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
 | `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch >= 1 |
-| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library and no heterogeneous dense B or C, minus two known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md)). The `complex<double>` N/N one-column refusal is gone (defect 13 fixed; `spmm.cc:85-90`) |
+| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library and no heterogeneous dense B or C, minus two known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)). The `complex<double>` N/N one-column refusal is gone (defect 13 fixed; `spmm.cc:85-90`) |
 
 Selection is the first runnable entry of the nearest row of `tuned/spmm.<device>.txt`, keyed
 `transA:exact transB:exact m:log nrhs:log batch:log`. `ConjTrans` folds to `T` (`src/ops/spmm/spmm.cc:33-39`). The
@@ -26,8 +26,9 @@ is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gathe
 
 ### Ranking in the tables
 
-Every row of `tuned/spmm.<device>.txt` on sm_89, sm_120 and `cpu` is transcribed from the predicate that
-preceded flat selection (untimed; provenance in `tuned/README.md`):
+Every row of `tuned/spmm.sm_89.txt` and `tuned/spmm.cpu.txt` is transcribed from the predicate that
+preceded flat selection (untimed; provenance in `tuned/README.md`); `tuned/spmm.sm_120.txt` is deep-measured, with
+24 transcribed rows left:
 
 | rows | float, double, complex\<double\> | complex\<float\> |
 |---|---|---|
@@ -36,7 +37,7 @@ preceded flat selection (untimed; provenance in `tuned/README.md`):
 | `transA=T`, either `transB` | `vendor`, then `direct` | `vendor`, then `direct` |
 
 The ranking is identical at all 125 `(m, nrhs, batch)` cells of each block (`m` 1..65536, `nrhs` 1..64,
-`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheOldPreference` (`tests/spmm_candidates_tests.cc:874`) pins it.
+`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheOldPreference` (`tests/spmm_candidates_tests.cc:845`) pins it.
 
 The tables have no batch, extent, `is_gpu` or `nnz` term. Each absence is a measured decision: the ranking is
 constant along that axis.
@@ -348,7 +349,7 @@ vendor returning a status code instead of throwing is not covered by the skip. `
    b=32 and 1.71-1.73 at b=512.
 7. **The `cfloat` gather margin is about 3 %, not 2x.** Across the batch ladder it is 0.910-1.078.
 8. **Reversing the route-era order array did not send admitted shapes back to cuSPARSE.** Exactly one unit test went
-   red. Under flat selection the candidate order is only the tie-break (`choice.hh:19-20`). The ranking is in each
+   red. Under flat selection the candidate order is only the tie-break (`src/ops/spmm/choice.hh:19-20`). The ranking is in each
    table row.
 9. **Vendor-free suite counts are the wrong metric for this op.** The metric that moved is the per-op `NoRouteError`
    count: `spmm` went from 2 to 0. Six recovered cases are the type conditional: `transA = NoTrans` with
@@ -359,8 +360,8 @@ vendor returning a status code instead of throwing is not covered by the skip. `
 ## Open debts
 
 * **The transposed scatter has no winning row, and zero in-tree C++ callers.** Nothing exercises it in practice.
-* **The tables are transcribed, not timed.** The grid above is sm_89 only. The sm_120 and CPU rows carry the same
-  clause without measurement. The next retune would replace them with timed rows.
+* **The sm_89 and CPU tables are transcribed, not timed.** The grid above is sm_89 only. The CPU rows carry the
+  same clause without measurement; the sm_120 table is deep-measured.
 * **The `cfloat` gather margin is about 3 %.** A kernel change costing 5 % on `complex<float>` turns admitted cells
   into losses, and no test notices.
 * **The `nrhs >= 16` narrowing** passes `verdict.txt` at worst 0.968 and would move 183 cells instead of 176. It is

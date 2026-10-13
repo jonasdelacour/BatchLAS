@@ -6,7 +6,7 @@ Every entry point enqueues on a batchlas::Queue and returns a batchlas::Event;
 nothing is readable until the queue (or the event) is waited on. The backend is
 taken from the Queue, options are designated-initialiser structs, and scratch
 comes from the Queue's workspace arena. The conventions shared by all entry
-points are in @ref md_docs_2cpp-api.
+points are in @ref guide_cpp_api.
 
 @{
 
@@ -156,7 +156,7 @@ guards, and every candidate is pinned in a test on shapes that straddle its limi
 
 @section selection_table_format Tables, lookup and borrowing
 
-One plain-text file per (op, dtype, device), `tuned/<op>.<device>.txt`, embedded at build
+One plain-text file per (op, device), `tuned/<op>.<device>.txt`, one row set per dtype, embedded at build
 time and parsed once; a directory named by `BATCHLAS_TUNED_DIR` replaces a built-in table of the
 same name. The header names the keys (`# keys: uplo:exact n:log:3 batch:log`); each row is one
 measured shape followed by every candidate timed there, fastest first. Inventory and provenance:
@@ -190,7 +190,7 @@ a tag naming the table used (`[sm_120]`, a borrowed table, `override`, `fallthro
 per process: `linked` rows (what this build contains), `reached` rows (what calls actually ran,
 with the choice spelling) and `miss` rows (calls nothing could serve). A `linked` row is never
 evidence that a kernel runs. Instrument details and defects: the "Dispatch: the coverage
-instrument" section of @ref md_docs_2perf_2dispatch.
+instrument" section of @ref perf_dispatch.
 
 @section selection_vendor_seam The vendor seam
 
@@ -199,7 +199,7 @@ build for backend B", and it sets `select::Device::has_vendor`, which is all a `
 `can_run` reads. The op's `vendor` arm is an `if constexpr` on it, so with the library absent the
 vendor call is not compiled at all and `select::no_vendor()` records a coverage `miss` and throws
 `NoRouteError` instead. That is what keeps `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` an ordinary build;
-see @ref md_docs_2design_2vendor-independence.
+see @ref design_vendor_independence.
 
 @section selection_add_op Adding an op
 
@@ -207,7 +207,7 @@ Write `src/ops/<op>/choice.hh` (families, `candidates<T>()`, `OpSpec`, key names
 `src/ops/<op>/<op>.cc` (key, `can_run`, `launch`, workspace, the public entry point and its
 `*_buffer_size`, the instantiations); add tables for every dtype on every shipped device; give the
 tuner a spec in `tools/tune/<op>_spec.cc`; pin every candidate in a test. The step-by-step version
-is in @ref md_docs_2extending. An op directory without a `choice.hh` still selects by hand; the
+is in @ref dev_extending. An op directory without a `choice.hh` still selects by hand; the
 generated @ref selection_tables page lists exactly the ops that have one.
 */
 

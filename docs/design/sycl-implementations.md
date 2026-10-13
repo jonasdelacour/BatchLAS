@@ -9,7 +9,7 @@ or AdaptiveCpp (`acpp`). Two trees on one box then A/B the same tests and benchm
 correctness and speed. Other SYCL implementations are out of scope. They should not be
 precluded either.
 
-## 1. Probe result (2026-10-08)
+## Probe result (2026-10-08) {#sycl-impl-probe-result}
 
 A scratch copy of `1f0b6d84` was compiled with `acpp --acpp-targets=generic -O2 -std=c++20`, using
 the DPC++ tree's `-I`/`-D` flags. The patches were regex shims applied to the copy, not real fixes.
@@ -23,9 +23,9 @@ the DPC++ tree's `-I`/`-D` flags. The patches were regex shims applied to the co
 | `cuda:sm_120` (SMCP) flow | Unusable: clang 20's CUDA wrapper rejects the CUDA 13.2 headers, even on an empty file. **Generic (SSCP) is the only flow on this install.** |
 | Compile wall, -P32, no ccache | acpp 50 s vs DPC++ 62 s. The acpp `.so` link takes 1.1 s because there is no device link; kernels are JIT-compiled at first launch instead. |
 | `examples/consumer` gemm | Max error 0 under Auto and under every gemm pin (`tiled`, `direct`, `small`, `reg:m=128:n=128:k=8:u=1`, `vendor`). SSCP JIT and the cuBLAS stream interop both work. |
-| Test binaries | 39 of 77 fully green (29 before `-fcx-limited-range`). The failure causes are listed in §4. |
+| Test binaries | 39 of 77 fully green (29 before `-fcx-limited-range`). The failure causes are listed in [runtime differences](#sycl-impl-runtime-differences). |
 
-## 2. What is DPC++-specific today
+## What was DPC++-specific at the probe {#sycl-impl-dpcpp-specific}
 
 Most of the DPC++ dependence already sits behind a handful of choke points. `sycl::ext::*` is almost
 unused (one benchmark uses `chunked_partition`). There is no `host_task`, no `interop_handle`, no
@@ -47,16 +47,16 @@ specialization constants and no `sycl::stream`.
 | `info::device::version` parsed as `"8.9"` | `Device::cuda_compute_capability` (`queue-impl.cc`); feeds the table key `sm_<cc>` in `select::describe` | 1 site |
 | PTX inspection: fatbin magic, `cuobjdump`, banned `__spirv_` callees | `scripts/check_device_calls.py`, `register_probe.sh`, `.github/skills/ptx-codegen-comparison` | 3 tools |
 | `/opt/dpcpp-cuda`, `libsycl.so.9`, `-fsycl` | `examples/consumer/`, `consumer_test.sh`, CI, `scripts/rocm_syntax_check.sh` | about 6 files |
-| Compiler provenance | `benchmarks/benchviz/store.py` (warns on `IntelLLVM`, greps `nvptx`), `compare.py` drops `compiler_id`; done in P5 (§7) | 2 files |
+| Compiler provenance | `benchmarks/benchviz/store.py` (warns on `IntelLLVM`, greps `nvptx`), `compare.py` drops `compiler_id`; done in P5 ([the performance protocol](#sycl-impl-performance-ab)) | 2 files |
 
-## 3. Compile-level differences (fix once, both compilers)
+## Compile-level differences (fixed once, both compilers) {#sycl-impl-compile-differences}
 
 All of these are DPC++ extensions or acpp gaps where a spelling legal in both exists.
 
 | # | Construct | acpp error | Portable form |
 | --- | --- | --- | --- |
 | C1 | `q.get_backend()` | no member | `q.get_device().get_backend()` |
-| C2 | `backend::ext_oneapi_cuda`, `get_native(queue)` | no member | `interop::` helper, see §5.2 |
+| C2 | `backend::ext_oneapi_cuda`, `get_native(queue)` | no member | `interop::` helper, see [the interop seam](#sycl-impl-runtime-interop-seam) |
 | C3 | `get_kernel_id` / `kernel_bundle` | no member | helper: DPC++ keeps the query; acpp returns the device `max_work_group_size` |
 | C4 | `joint_reduce(g, acc.begin(), acc.end(), …)` | no `__acpp_leader_reduce` overload for accessor iterators | pass raw pointers `&acc[0]` (6 TUs) |
 | C5 | `group_broadcast` of a struct (`larfg_result`, `Cx<double>`) | SSCP broadcasts scalars only | one `bl::group_broadcast` that splits a trivially copyable struct into words; 22 call sites, most behind `include/batchlas/util/group-invoke.hh` |
@@ -70,97 +70,106 @@ All of these are DPC++ extensions or acpp gaps where a spelling legal in both ex
 Exit criterion: all of `src/`, `tests/`, `benchmarks/` and `tools/` compile under both compilers.
 The DPC++ PTX-call gate (`device_calls_tests`) stays green, and the DPC++ route diff is empty.
 
-## 4. Runtime differences (behaviour, not spelling)
+## Runtime differences (behaviour, not spelling) {#sycl-impl-runtime-differences}
 
 | # | Symptom on acpp (probe) | Cause | Plan |
 | --- | --- | --- | --- |
-| R1 | 17 binaries: `ptxas fatal: Unresolved extern function '__mulsc3'/'__muldc3'` | `std::complex` `*` lowers to Annex G libcalls; SSCP ships no device definition | Ship device definitions of `__mulsc3`/`__muldc3`/`__divsc3`/`__divdc3` for the acpp build, so both builds keep identical Annex G semantics. `-fcx-limited-range` cleared all 17, but changes NaN/Inf results and would make the A/B unequal. Keep it only as a measured variant. Done: `src/sycl/annexg_complex.hh`, force-included; an acpp install ships it as `include/batchlas/acpp/annexg_complex.hh` and appends `-include` for it to `BatchLAS_SYCL_COMPILE_OPTIONS`. |
-| R2 | gemm, trmm/symm/syrk candidates, herk: launch fails, CUDA error 1 | acpp reports `local_mem_size` = 48 KiB and never calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` | Every `can_run` that admits more than 48 KiB must read the device SLM budget (`select::describe`'s `slm_budget`), not a constant. Then the acpp build routes around large-SLM families instead of crashing. Separately, ask upstream for the opt-in (patch the CUDA backend's launch). Done: §5.4. Measured (P5): Auto routes are unchanged; budget-derived block sizes cost 1.22-2.66 in the affected pinned cells (potrf `blocked`, getrf/geqrf `cta`), 0.99-1.20 in the opt-in tree, which also runs the refused families (0.91-1.20; gemm `reg 128x64x32 u4` 0.77-1.75) at 4-7% extra on short launches ([perf](../perf/sycl-implementations.md#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant)). Upstream request still open. |
-| R3 | One bad launch kills the whole gtest binary | acpp's default async handler calls `std::terminate` | Install an async handler on `QueueImpl` that rethrows on `wait_and_throw` (both builds). Done, and on acpp reworked so that no destructor throws: §5.5. |
-| R4 | `cuda_compute_capability()` is 0, so the table key `sm_120` becomes `gpu` (borrowed correctly by luck) | acpp's `info::device::version` is `"sm_120"`, not `"12.0"` | Parse both forms, or ask CUDA directly (`cuDeviceGetAttribute` on the native device ordinal). Done: `impl::cuda_cc`; both trees key the tables `[sm_120]` (P5 route parity). |
-| R5 | Hangs: `SgPartitionDivergence/0.MaskedSG32`, bdsdc, syev_cta, syev_blocked, syev_two_stage, gesvd, sytrd_blocked | Generic SSCP is single-pass, so `__SYCL_DEVICE_ONLY__ && __NVPTX__` is never true and `sg_partition` drops to the unmasked `GenericBackend`, which deadlocks under divergence | §5.3: an SSCP backend for `sg_partition`. Done (P2): `SscpBackend`; no CTA test hangs. Speed (P5, n = 5..32, batch 16384): `steqr_cta` 1.07-1.41 float and 1.00-1.21 double against DPC++, `syev_cta_fused` float 0.54-0.81 ([perf](../perf/sycl-implementations.md#sycl-impl-ab-sub-group-cta-kernels)). |
-| R6 | Out-of-order queues segfault (ormqr/orgqr candidates, symm) | probe shim took the stream from the in-order executor | §5.2: vendor calls go through `AdaptiveCpp_enqueue_custom_operation`. Done (P2). Cost (P5): 3-17 us more per short vendor call; 1.00 at 1 ms and above. |
-| R7 | `Queue::native_handle()` returns null | guarded by `SYCL_EXT_ONEAPI_BACKEND_CUDA` | §5.2. Done (P2). |
-| R8 | `select_tests` hangs in a death test | `fork()` after the acpp runtime started its threads | Use `GTEST_FLAG(death_test_style)="threadsafe"`, or skip death tests on acpp. Done: `threadsafe` in `select_tests` and the candidate tests. |
-| R9 | Wrong answers: cdouble potrf/getrf CTA, orgqr orthogonality 5.8e-6 vs 3.8e-6, norm, cond, lanczos, syr2k_candidates, geqrf | not attributed: some fail on DPC++ on this box too, and there was no same-box DPC++ baseline | Attributed (P3): acpp group-algorithm bugs (§5.6), the 48 KiB budget (§5.4), and two BatchLAS bugs on both builds (§5.6). Residue in `tests/known-failures-acpp.txt`. |
-| R10 | Silent: `BATCHLAS_LAUNCH_BOUNDS` empty; the `register_128x128` PTX prefetch path is compiled out; `reqd_sub_group_size` ignored | single-pass SSCP has no NVPTX device pass | §5.3 for the prefetch. No min-blocks-per-SM equivalent exists: the JIT emits `maxntid` from the launch size but no `minnctapersm`. Accept it, measure the loss (§7), and record it as an implementation difference, not a bug. Measured (P5): a DPC++ tree with the bounds removed runs the bounded kernels at 0.99-1.03 on sm_120, so the bounds are not what acpp loses; the acpp tiny-kernel losses (to 1.56) are code generation ([perf](../perf/sycl-implementations.md#sycl-impl-ab-launch-bounds-r10)). The prefetch path is reached through §5.3. |
-| R11 | Floating point: only contraction differed. Both use `sqrt.approx.f32`/`rsqrt.approx.f32` (bit-identical on 4M floats) and `div.rn`, no FTZ; the acpp driver adds `-ffp-contract=fast` at -O2+, DPC++ (clang) uses `on` | different driver defaults | Done: `-ffp-contract=on` in `BatchLASSyclAcpp.cmake`. Upstream: acpp's `nvvm-reflect-prec-sqrt` flag (`LLVMToPtx.cpp:86,163`) is ignored by LLVM 20's NVVMReflect, so precise sqrt is unreachable; harmless here because it matches DPC++'s default. |
+| A1 | 17 binaries: `ptxas fatal: Unresolved extern function '__mulsc3'/'__muldc3'` | `std::complex` `*` lowers to Annex G libcalls; SSCP ships no device definition | Ship device definitions of `__mulsc3`/`__muldc3`/`__divsc3`/`__divdc3` for the acpp build, so both builds keep identical Annex G semantics. `-fcx-limited-range` cleared all 17, but changes NaN/Inf results and would make the A/B unequal. Keep it only as a measured variant. Done: `src/sycl/annexg_complex.hh`, force-included; an acpp install ships it as `include/batchlas/acpp/annexg_complex.hh` and appends `-include` for it to `BatchLAS_SYCL_COMPILE_OPTIONS`. |
+| A2 | gemm, trmm/symm/syrk candidates, herk: launch fails, CUDA error 1 | acpp reports `local_mem_size` = 48 KiB and never calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` | Every `can_run` that admits more than 48 KiB must read the device SLM budget (`select::describe`'s `slm_budget`), not a constant. Then the acpp build routes around large-SLM families instead of crashing. Separately, ask upstream for the opt-in (patch the CUDA backend's launch). Done: [the local-memory budget](#sycl-impl-slm-budget). Measured (P5): Auto routes are unchanged; budget-derived block sizes cost 1.22-2.66 in the affected pinned cells (potrf `blocked`, getrf/geqrf `cta`), 0.99-1.20 in the opt-in tree, which also runs the refused families (0.91-1.20; gemm `reg 128x64x32 u4` 0.77-1.75) at 4-7% extra on short launches ([perf](../perf/sycl-implementations.md#sycl-impl-ab-the-48-kib-budget-and-the-opt-in-variant)). Upstream request still open. |
+| A3 | One bad launch kills the whole gtest binary | acpp's default async handler calls `std::terminate` | Install an async handler on `QueueImpl` that rethrows on `wait_and_throw` (both builds). Done, and on acpp reworked so that no destructor throws: [asynchronous errors](#sycl-impl-asynchronous-errors). |
+| A4 | `cuda_compute_capability()` is 0, so the table key `sm_120` becomes `gpu` (borrowed correctly by luck) | acpp's `info::device::version` is `"sm_120"`, not `"12.0"` | Parse both forms, or ask CUDA directly (`cuDeviceGetAttribute` on the native device ordinal). Done: `impl::cuda_cc`; both trees key the tables `[sm_120]` (P5 route parity). |
+| A5 | Hangs: `SgPartitionDivergence/0.MaskedSG32`, bdsdc, syev_cta, syev_blocked, syev_two_stage, gesvd, sytrd_blocked | Generic SSCP is single-pass, so `__SYCL_DEVICE_ONLY__ && __NVPTX__` is never true and `sg_partition` drops to the unmasked `GenericBackend`, which deadlocks under divergence | [JIT-time target dispatch](#sycl-impl-device-target-dispatch): an SSCP backend for `sg_partition`. Done (P2): `SscpBackend`; no CTA test hangs. Speed (P5, n = 5..32, batch 16384): `steqr_cta` 1.07-1.41 float and 1.00-1.21 double against DPC++, `syev_cta_fused` float 0.54-0.81 ([perf](../perf/sycl-implementations.md#sycl-impl-ab-sub-group-cta-kernels)). |
+| A6 | Out-of-order queues segfault (ormqr/orgqr candidates, symm) | probe shim took the stream from the in-order executor | [the interop seam](#sycl-impl-runtime-interop-seam): vendor calls go through `AdaptiveCpp_enqueue_custom_operation`. Done (P2). Cost (P5): 3-17 us more per short vendor call; 1.00 at 1 ms and above. |
+| A7 | `Queue::native_handle()` returns null | guarded by `SYCL_EXT_ONEAPI_BACKEND_CUDA` | [the interop seam](#sycl-impl-runtime-interop-seam). Done (P2). |
+| A8 | `select_tests` hangs in a death test | `fork()` after the acpp runtime started its threads | Use `GTEST_FLAG(death_test_style)="threadsafe"`, or skip death tests on acpp. Done: `threadsafe` in `select_tests` and the candidate tests. |
+| A9 | Wrong answers: cdouble potrf/getrf CTA, orgqr orthogonality 5.8e-6 vs 3.8e-6, norm, cond, lanczos, syr2k_candidates, geqrf | not attributed: some fail on DPC++ on this box too, and there was no same-box DPC++ baseline | Attributed (P3): acpp group-algorithm bugs ([the group-algorithm wrappers](#sycl-impl-group-algorithms)), the 48 KiB budget ([the local-memory budget](#sycl-impl-slm-budget)), and two BatchLAS bugs on both builds ([the group-algorithm wrappers](#sycl-impl-group-algorithms)). Residue in `tests/known-failures-acpp.txt`. |
+| A10 | Silent: `BATCHLAS_LAUNCH_BOUNDS` empty; the `register_128x128` PTX prefetch path is compiled out; `reqd_sub_group_size` ignored | single-pass SSCP has no NVPTX device pass | [JIT-time target dispatch](#sycl-impl-device-target-dispatch) for the prefetch. No min-blocks-per-SM equivalent exists: the JIT emits `maxntid` from the launch size but no `minnctapersm`. Accept it, measure the loss ([the performance protocol](#sycl-impl-performance-ab)), and record it as an implementation difference, not a bug. Measured (P5): a DPC++ tree with the bounds removed runs the bounded kernels at 0.99-1.03 on sm_120, so the bounds are not what acpp loses; the acpp tiny-kernel losses (to 1.56) are code generation ([perf](../perf/sycl-implementations.md#sycl-impl-ab-launch-bounds-r10)). The prefetch path is reached through [JIT-time target dispatch](#sycl-impl-device-target-dispatch). |
+| A11 | Floating point: only contraction differed. Both use `sqrt.approx.f32`/`rsqrt.approx.f32` (bit-identical on 4M floats) and `div.rn`, no FTZ; the acpp driver adds `-ffp-contract=fast` at -O2+, DPC++ (clang) uses `on` | different driver defaults | Done: `-ffp-contract=on` in `BatchLASSyclAcpp.cmake`. Upstream: acpp's `nvvm-reflect-prec-sqrt` flag (`LLVMToPtx.cpp:86,163`) is ignored by LLVM 20's NVVMReflect, so precise sqrt is unreachable; harmless here because it matches DPC++'s default. |
 
-## 5. Design
+## Design as built {#sycl-impl-design}
 
-### 5.1 Build: one cache variable, two branches
+### Build: one cache variable, two detect modules {#sycl-impl-build}
 
-- `BATCHLAS_SYCL_IMPL = AUTO | DPCPP | ACPP`. AUTO picks ACPP when the compiler is the `acpp`
-  driver (or `find_package(AdaptiveCpp)` succeeds with `CMAKE_CXX_COMPILER` unset), and DPCPP
-  otherwise. The bootstrap stops forcing a DPC++ `clang++` when ACPP is selected.
-- Split `BatchLASDetectSYCL.cmake` into `BatchLASSyclDpcpp.cmake` (today's file, unchanged in
-  behaviour) and `BatchLASSyclAcpp.cmake`, which:
-  - sets `ACPP_TARGETS=generic` by default, with no `-fsycl*` and no `--cuda-path`;
-  - gets NVIDIA presence and architecture from `nvidia-smi` or `acpp-info`, not `sycl-ls`;
-  - sets `BATCHLAS_HAS_CPU_TARGET` from the OpenMP backend;
-  - makes acpp the compiler for every SYCL target. Use `acpp` as `CMAKE_CXX_COMPILER` plus
-    `--acpp-targets=generic` on the same INTERFACE option libraries, rather than
-    `add_sycl_to_target`. The probe shows this works, and it keeps the object-library and
-    `$<TARGET_OBJECTS>` model intact.
-- The three target helpers are the only call sites that change.
+- `BATCHLAS_SYCL_IMPL = AUTO | DPCPP | ACPP` (`cmake/BatchLASOptions.cmake`). AUTO picks ACPP
+  when `CMAKE_CXX_COMPILER --acpp-version` names AdaptiveCpp, DPCPP otherwise; a mismatch between
+  the value and the compiler is a configure error. The resolved value is cached as
+  `BATCHLAS_SYCL_IMPL_RESOLVED`, which `compare_failures.py --build-dir` reads to pick the ledger.
+- `CMakeLists.txt` includes `cmake/BatchLASSyclAcpp.cmake` for ACPP and
+  `cmake/BatchLASDetectSYCL.cmake` for DPCPP. The acpp module includes the DPC++ one for its
+  functions only (`BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY`) and sets every variable the rest of the
+  build reads:
+  - `--acpp-targets=${BATCHLAS_ACPP_TARGETS}` (default `generic`) on the same INTERFACE option
+    libraries the DPC++ flags use, so the object-library and `$<TARGET_OBJECTS>` model is unchanged;
+    no `-fsycl*`, no `--cuda-path`;
+  - devices from `acpp-info`, falling back to `nvidia-smi` plus the runtime backends present in the
+    install (`librt-backend-cuda.so`, `librt-backend-omp.so`); `sycl-ls` belongs to DPC++;
+  - `-include src/sycl/annexg_complex.hh` (A1) and `-ffp-contract=on` (A11) in every TU.
 - The device-link options (`BATCHLAS_SYCL_LINK_JOBS`, FTZ, line info, keep-intermediates, the
-  native_cpu flags) become DPC++-only.
-- `-mllvm -pragma-unroll-threshold` is accepted by acpp for stage 1. Whether the SSCP JIT honours
-  unrolling must be checked on the JIT-ed PTX.
-- Generated `backend_config.h` gets `BATCHLAS_SYCL_IMPL_DPCPP` / `_ACPP` (`#cmakedefine01`). Source
-  code tests those, never `__ACPP__` or `SYCL_IMPLEMENTATION_ONEAPI` directly.
-- Package config: record `BatchLAS_SYCL_IMPL` and the targets.
-  `BATCHLAS_REQUIRE_MATCHING_COMPILER` stays: an acpp library cannot be consumed by a DPC++
-  project and vice versa. `examples/consumer` and `consumer_test.sh` take their flags from the
-  package (`BatchLAS_SYCL_COMPILE_OPTIONS`) instead of hard-coding `-fsycl` and `libsycl.so.9`.
-- Presets: `acpp` and `acpp-tests`, mirroring `dev-tests` with
-  `CMAKE_CXX_COMPILER=/opt/adaptivecpp/bin/acpp`.
-- ccache: the launcher works unchanged. Measure the hit rate on a second acpp tree before claiming it.
+  `native_cpu` flags) exist only in the DPC++ module.
+- The generated `backend_config.h` carries `BATCHLAS_SYCL_IMPL_DPCPP` / `_ACPP`
+  (`#cmakedefine01`). Source tests those macros. acpp's runtime names (`AdaptiveCpp_*`) appear only
+  in `src/sycl/impl.hh` and `src/sycl/sscp_target.hh`; `__acpp_if_target_sscp` also wraps the
+  intrinsic and `asm` sites (`backend_sscp.hh`, `register_128x128.hh`).
+- Package: `BatchLASConfig.cmake` records `BatchLAS_SYCL_IMPL`, and a consumer must use the same
+  implementation. `examples/consumer` takes its flags from `BatchLAS_SYCL_COMPILE_OPTIONS` /
+  `BatchLAS_SYCL_LINK_OPTIONS`.
+- Presets `acpp` and `acpp-tests` (`CMakePresets.json`) inherit `dev` / `dev-tests` with
+  `CMAKE_CXX_COMPILER=/opt/adaptivecpp-25.10.0-cuda13.2/bin/acpp` and `BATCHLAS_SYCL_IMPL=ACPP`.
 
-### 5.2 Runtime: one interop seam {#sycl-impl-runtime-interop-seam}
+### Runtime: one interop seam {#sycl-impl-runtime-interop-seam}
 
-One new internal header, `src/sycl/impl.hh`, holds every implementation difference above the
-kernel level. Nothing outside it names an implementation. It provides:
+`src/sycl/impl.hh` (namespace `batchlas::impl`) holds every implementation difference above the
+kernel level. On DPC++ each helper expands to the exact calls it replaced.
 
 | Helper | DPC++ | acpp |
 | --- | --- | --- |
-| `impl::backend_of(const sycl::queue&)` | `q.get_backend()` | `q.get_device().get_backend()` |
-| `impl::is_cuda(backend)` | `ext_oneapi_cuda` | `cuda` |
-| `impl::run_native(Queue&, F(cudaStream_t))` | today's pattern: `get_native<ext_oneapi_cuda>(q)`, host call, `create_event_after_external_work` | `q.submit([&](handler& h){ h.AdaptiveCpp_enqueue_custom_operation([&](interop_handle& ih){ f(ih.get_native_queue<backend::cuda>()); }); })` |
-| `impl::kernel_max_wg_size<K>(dev)` | kernel bundle query | `min(max_work_group_size, 256)`: the device limit aborts a register-heavy kernel |
-| `impl::cuda_cc(dev)` | parse `"8.9"` | parse `"sm_89"`, or the driver attribute |
-| `impl::submit_barrier(q)` | `ext_oneapi_submit_barrier` | in-order: last event; out-of-order: `ACPP_EXT_QUEUE_WAIT_LIST` |
+| `kCudaBackend`, `backend_v<N>`, `is_cuda`, `is_hip` | `backend::ext_oneapi_cuda` / `_hip` | `backend::cuda` / `hip` |
+| `backend_of(queue)` | `q.get_backend()` | `q.get_device().get_backend()` |
+| `cuda_cc(device)` | parse `"8.9"` | parse `"sm_89"` |
+| `native_stream(queue)`, `query_stream<N>(q)` | `get_native` | the in-order executor's stream, possibly `nullptr` |
+| `run_native<N>(q, f)` | `f(get_native(q))` inline | `f` inside `AdaptiveCpp_enqueue_custom_operation`, submitted untraced (`submit_and_record(..., traced = false)`) |
+| `submit_barrier(q[, wait_list])` | `ext_oneapi_submit_barrier` | last event (in-order) or a wait-list barrier |
+| `kernel_max_wg_size<K>` | kernel-bundle query | `min(max_work_group_size, 256)`: the device limit aborts a register-heavy kernel |
+| `on_async_errors`, `throw_async_errors`, `throw_launch_errors`, `wait_and_throw` | rethrowing handler; the waits throw | the error sink ([asynchronous errors](#sycl-impl-asynchronous-errors)) |
+| `check_group_count(q, nd_range)` | empty | CUDA grid-limit check before the launch |
 
-- `LinalgHandle::setStream` moves inside `run_native`: every vendor call becomes
-  `impl::run_native(ctx, [&](auto s){ handle.setStream(s); cublasXxx(...); })`. That covers about
-  46 call sites, mechanical but touching every vendor entry point. The DPC++ instantiation must
-  stay byte-for-byte the same pattern (route diff plus timing spot check).
-- The NETLIB host path needs only a CPU `sycl::device`, and acpp's OpenMP backend provides one.
-  `submit_host_task` is already synchronous and needs no change beyond `impl::submit_barrier`.
+Kernel-level differences have their own headers: `src/sycl/sscp_target.hh` (the target as a
+value, below), `src/sycl/kernel_attrs.hh` (attributes and loop pragmas), `src/sycl/local_mem.hh`
+(the local-memory budget) and `include/batchlas/util/group-collectives.hh` (the group
+algorithms). A few sites outside them still test `BATCHLAS_SYCL_IMPL_ACPP` directly:
+`Queue::wait` and `Device::supports_sub_group_size` (`src/util/queue-impl.cc`), the
+`sg_partition` backend choice, the `register_128x128` prefetch, `sycl-util-impl.cc`, and
+`tests/test_utils.hh` (`kSlmCappedAt48KiB`).
 
-### 5.3 Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
+- Every vendor call runs as `impl::run_native<impl::Native::Cuda>(*ctx, [=](auto s){
+  handle.setStream(s); ... })`; on DPC++ that is the pattern the call sites had.
+- The NETLIB host path needs only a CPU `sycl::device`; acpp's OpenMP backend provides one.
 
-- SSCP compiles device code once, target-agnostically. The NVPTX choice moves from the
-  preprocessor to the JIT:
-  `AdaptiveCpp_jit::compile_if(reflect<compiler_backend>() == compiler_backend::ptx, …)`
-  (`hipSYCL/glue/llvm-sscp/jit-reflection/queries.hpp`).
-- `sg_partition` gains a fifth backend, `SscpBackend`. Its `NvptxBackend` member functions are
-  reached through `compile_if`, and the `GenericBackend` is kept only for the host pass.
-- **Open, settle first (spike S1):** whether `__nvvm_shfl_sync_*`, `__nvvm_vote_ballot_sync` and
-  `__nvvm_activemask` survive the stage-1 frontend when the target is not nvptx. If they do not:
-  - declare them as `extern "C"` and resolve them in a small NVVM bitcode library linked at JIT
-    time (AdaptiveCpp's own `libkernel/sscp/builtins/ptx` does this); or
-  - fall back to a fully converged formulation that uses only SYCL collectives on the whole sub-group.
+### Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
 
-  The second option is correct but must be judged by the real-kernel A/B rule (steqr/syev_cta,
-  n = 5..16, batch 16384), never by microbenchmark.
-- The same mechanism carries the `register_128x128` L2-prefetch `asm` and, if possible, launch
-  bounds. If neither is expressible, it remains an implementation difference recorded in §7.
-- `BATCHLAS_LAUNCH_BOUNDS`, `reqd_sub_group_size` and the device-only macros go into one
-  `src/sycl/kernel_attrs.hh`, so that the 26 files using `reqd_sub_group_size` spell a macro.
-  The acpp build defines it empty and asserts sub-group size 32 at queue creation.
+- `src/sycl/sscp_target.hh`: `sycl_impl::on_ptx()` and `target_arch()`. On DPC++ they are
+  `constexpr` from `__SYCL_DEVICE_ONLY__`, `__NVPTX__` and `__SYCL_CUDA_ARCH__`. On acpp generic
+  (SSCP), which compiles one IR for every target and defines neither macro, they are
+  JIT-reflection queries (`AdaptiveCpp_jit::reflect<compiler_backend>()`, `<target_arch>()`) inside
+  `__acpp_if_target_sscp`, and the JIT deletes the dead branch before lowering.
+- **Trap:** a target intrinsic or inline `asm` must also sit inside `__acpp_if_target_sscp(...)`;
+  `on_ptx()` alone does not keep it out of the x86 host object, where instruction selection
+  rejects it.
+- `sg_partition` has a fifth backend, `SscpBackend` (`src/extensions/sg_partition/backend_sscp.hh`).
+  Its PTX leg is `NvptxBackend` unchanged; the `__nvvm_*` names it calls are defined over the LLVM
+  intrinsics through asm labels (`llvm.nvvm.shfl.sync.*`, `vote.ballot.sync`, `activemask`,
+  `redux.sync.*`), so they keep the intrinsics' `convergent` attribute. Every other JIT target takes
+  `GenericBackend`. Spike S1 settled the open question: the intrinsics are reachable this way, so no
+  bitcode library and no converged-only formulation was needed.
+- `src/sycl/kernel_attrs.hh`: `BATCHLAS_REQD_SG_SIZE`, `BATCHLAS_LAUNCH_BOUNDS` and
+  `BATCHLAS_UNROLL_FULL`. On acpp the first two are empty (no SSCP equivalent) and the unroll is
+  `clang loop unroll(full)`, because the SSCP JIT unrolls a bare `#pragma unroll` only partially.
+  On acpp `Device::supports_sub_group_size(n)` is true only when `n` is the device's single
+  sub-group size, so every `can_run` that requires `has_sg32` refuses any other device.
+- The `register_128x128` L2-prefetch load is reached through `on_ptx()` plus
+  `__acpp_if_target_sscp`. Launch bounds stay an implementation difference (A10).
 
-### 5.4 Local memory: the launch budget {#sycl-impl-slm-budget}
+### Local memory: the launch budget {#sycl-impl-slm-budget}
 
 | | DPC++ (CUDA) | acpp 25.10 (CUDA) | acpp + `BATCHLAS_ACPP_SLM_OPTIN` |
 | --- | --- | --- | --- |
@@ -197,13 +206,13 @@ kernel level. Nothing outside it names an implementation. It provides:
   calls `cuFuncSetAttribute(MAX_DYNAMIC_SHARED_SIZE_BYTES)` once per function above 48 KiB, and
   reports `CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN`. It is a recorded A/B variant,
   not the default.
-- **Upstream (v25.10.0).** `src/runtime/cuda/cuda_queue.cpp:187-201` launches without the
-  attribute. `src/runtime/cuda/cuda_hardware_manager.cpp:418-419` reports `sharedMemPerBlock`, not
+- **Upstream (AdaptiveCpp v25.10.0 source tree).** `src/runtime/cuda/cuda_queue.cpp` lines 187-201 launches without the
+  attribute. `src/runtime/cuda/cuda_hardware_manager.cpp` lines 418-419 reports `sharedMemPerBlock`, not
   `sharedMemPerBlockOptin`. The host device reports `SIZE_MAX`
-  (`src/runtime/omp/omp_hardware_manager.cpp:280-281`), so `describe` clamps the budget to
+  (`src/runtime/omp/omp_hardware_manager.cpp` lines 280-281), so `describe` clamps the budget to
   `int64_t`.
 
-### 5.5 Asynchronous errors and launch failures {#sycl-impl-asynchronous-errors}
+### Asynchronous errors and launch failures {#sycl-impl-asynchronous-errors}
 
 | | DPC++ | acpp 25.10 |
 | --- | --- | --- |
@@ -242,17 +251,17 @@ the next `sycl::queue` destructor, any copy included: 11 test binaries aborted t
   the launch or the next wait, and the queue then runs a kernel. Three deliberate breaks each turn
   exactly one case red: no post-submit check, no drain in `Queue::wait`, a rethrowing handler
   (that one aborts).
-- **Upstream (v25.10.0).**
-  - `include/hipSYCL/sycl/queue.hpp:288-290`: `~queue` calls `throw_asynchronous()`.
-  - `include/hipSYCL/glue/error.hpp:145`: the list it drains is the global `rt::application::errors()`.
+- **Upstream (AdaptiveCpp v25.10.0 source tree).**
+  - `include/hipSYCL/sycl/queue.hpp` lines 288-290: `~queue` calls `throw_asynchronous()`.
+  - `include/hipSYCL/glue/error.hpp` line 145: the list it drains is the global `rt::application::errors()`.
   - `queue.hpp:371-374`: `wait()` registers a stream error instead of throwing it.
-  - `include/hipSYCL/sycl/handler.hpp:379`: the `nd_range` `parallel_for` has no empty-range
+  - `include/hipSYCL/sycl/handler.hpp` line 379: the `nd_range` `parallel_for` has no empty-range
     guard. The `range` overloads at `:300, :320, :341, :362` have one.
-  - `include/hipSYCL/sycl/event.hpp:36-40`: the constructor drops its `handler` argument, so
+  - `include/hipSYCL/sycl/event.hpp` lines 36-40: the constructor drops its `handler` argument, so
     `event::wait_and_throw()` (`:90-93`) calls an empty `std::function` (`std::bad_function_call`)
     when an error is pending.
 
-### 5.6 Group algorithms: the portable wrappers {#sycl-impl-group-algorithms}
+### Group algorithms: the portable wrappers {#sycl-impl-group-algorithms}
 
 `include/batchlas/util/group-collectives.hh` (`batchlas::portable::`). Under DPC++ every name is a
 using-declaration of the `sycl::` function, so the converted call sites compile to md5-identical
@@ -279,24 +288,24 @@ Two BatchLAS bugs found on the way, fixed for both builds:
 - **cuSOLVER `potrf` workspace.** `Lwork` is a count of elements; it was allocated as bytes, a
   workspace `sizeof(T)` times too small (`CUSOLVER error: 7`, cfloat n = 164, cdouble n = 78).
 
-## 6. Correctness A/B
+## Correctness A/B {#sycl-impl-correctness-ab}
 
 - Each implementation has its own self-contained failure ledger: `tests/known-failures.txt`
   (DPC++) and `tests/known-failures-acpp.txt`; defects shared by both are listed in both.
   `.github/ci/compare_failures.py` picks the ledger with `--sycl-impl` or `--build-dir <tree>`
   (the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). Compare failing **names**, as for DPC++.
 - **Gate for "acpp supported":** the acpp tree's failing set is a subset of the DPC++ failing set
-  on the same box, plus entries in the acpp ledger, each with a cause from §4.
+  on the same box, plus entries in the acpp ledger, each with a cause from [runtime differences](#sycl-impl-runtime-differences).
 - **Cross-implementation accuracy:** the accuracy harnesses (`steqr_accuracy`,
   `eigensolver_accuracy`, `orthogonality_accuracy`) run in both trees on identical seeds and graded
-  inputs, with FP flags matched (R11). A new `scripts/impl_diff.py` reports per-cell residual ratios.
+  inputs, with FP flags matched (A11). A new `scripts/impl_diff.py` reports per-cell residual ratios.
   This complements the unit tests, which cannot see a 1.5x residual change.
 - Route parity: `scripts/route_diff.sh` across the two trees. A route that differs is either an SLM
-  budget difference (R2, expected) or a bug.
+  budget difference (A2, expected) or a bug.
 - `device_calls_tests` is DPC++-only (it skips on acpp: no fatbin). The acpp counterpart is
   `acpp_jit_tests`, below.
 
-### 6.1 The JIT-ed PTX check {#sycl-impl-jit-ptx-check}
+### The JIT-ed PTX check {#sycl-impl-jit-ptx-check}
 
 `scripts/check_acpp_jit.py`, ctest `acpp_jit_tests` (label `util`; registered only in an acpp tree
 with the CUDA backend, one GPU slot, skips with 77 when no PTX appears).
@@ -310,7 +319,7 @@ with the CUDA backend, one GPU slot, skips with 77 when no PTX appears).
   (complex), `trsm_tests` `TrsmNativeSgLeft.*`, `syev_cta_fused_tests` (complex) and
   `getrf_tests` `RegPanel*`. 148 s on one RTX PRO 6000; 520 PTX files, 206 kernels.
 - **calls.** Any `call` or `.extern .func` fails. SSCP inlines every callee: none in 42,015 files
-  of the P3 full-suite appdb. A kernel that ptxas rejects is still cached, so the R1 case is
+  of the P3 full-suite appdb. A kernel that ptxas rejects is still cached, so the A1 case is
   visible: a `std::complex<float>` multiply built without `annexg_complex.hh` fails to load
   (`ptxas fatal: Unresolved extern function`) and the check reports `-> __mulsc3`.
 - **required.** Nine families (gemm 128x128 and register tiled, getrf and gesv tiny, potrf CTA
@@ -343,7 +352,7 @@ family red.
 Every JIT run prints `'+ptx88' is not a recognized feature for this target`: acpp 25.10 asks LLVM
 20 for PTX ISA 8.8 (CUDA 13.2), LLVM 20 ignores it and emits `.version 8.7`. Harmless here.
 
-## 7. Performance A/B protocol
+## Performance A/B protocol {#sycl-impl-performance-ab}
 
 On top of the measurement rules in `docs/developer/agent-guide.md` §10:
 
@@ -363,7 +372,7 @@ On top of the measurement rules in `docs/developer/agent-guide.md` §10:
     `ACPP_APPDB_DIR` unless the environment does. Each row records `sycl_impl` and `acpp_jit`.
   - `compare` carries each side's toolchain, labels the arms `DPC++` / `AdaptiveCpp`, and warns on
     any other difference. `store.py` warns on an acpp build whose effective fp contract is not
-    `on` (R11).
+    `on` (A11).
   - `benchviz ab` runs two builds interleaved, alternating which goes first per cell.
   - Coarse-grained events are a queue property, not an environment knob; BatchLAS never sets it,
     and `builds[]` records that.
@@ -375,34 +384,34 @@ On top of the measurement rules in `docs/developer/agent-guide.md` §10:
   ([perf](../perf/sycl-implementations.md#sycl-impl-ab-per-implementation-tables)).
 - **First comparison set:** gemm (float and double, NN/TN, strided `ld`, beta=1), potrf, getrf,
   geqrf, syev_cta, steqr_cta and stedc at batch >= 128, n from the CTA range up to 1024. This
-  covers the register-tile kernels, the sub-group CTA kernels (R5 and R10) and the SLM-heavy
-  kernels (R2). Done, with syev Auto, a no-launch-bounds DPC++ arm, the opt-in arm, a batch x2
+  covers the register-tile kernels, the sub-group CTA kernels (A5 and A10) and the SLM-heavy
+  kernels (A2). Done, with syev Auto, a no-launch-bounds DPC++ arm, the opt-in arm, a batch x2
   saturation check and an adaptivity-level-2 arm: @ref perf_sycl_implementations.
   benchviz pins only `native`/`vendor`, so that campaign used its own driver.
 
-## 8. Phases
+## Phases {#sycl-impl-phases}
 
 | Phase | Content | Exit criterion | Status |
 | --- | --- | --- | --- |
-| S1 spike (first) | Can `__nvvm_*` be reached from SSCP stage 1, via `compile_if` or a bitcode library? Do `__mulsc3` definitions resolve at JIT? Does SSCP honour `#pragma unroll` at the 262144 threshold? | Three yes/no answers with a tiny kernel each; decides §5.3 | Answered in P2: yes (JIT reflection inside `__acpp_if_target_sscp`, `src/sycl/sscp_target.hh`); yes (`annexg_complex.hh`); no for a bare `#pragma unroll`, yes for `clang loop unroll(full)` (`BATCHLAS_UNROLL_FULL`) |
-| P1 build | §5.1: `BATCHLAS_SYCL_IMPL`, split detect module, three helpers, presets, package config, consumer | `cmake --preset acpp-tests` configures; DPC++ configure output is identical before and after (diff the flags) | Done (`754c9147`) |
-| P2 compile | §3 C1-C11, `impl.hh`, `kernel_attrs.hh`, oneDPL RNG replaced | everything compiles under both; DPC++ route diff empty; `device_calls_tests` green | Done (`a305bcf0`, `9f551ab0`) |
-| P3 runtime | §4 R1-R4, R6-R8 | acpp: no aborts or segfaults; failing names attributed | Done (`ddf07744`): 8 of 103 tests fail, all in the ledgers or box-environment |
-| P4 sub-groups | §5.3 `SscpBackend`, prefetch path | `sg_partition_tests` green on acpp; no hangs in CTA eig tests; steqr/syev_cta A/B within the noise of the DPC++ build, or the loss recorded | Done with P2/P3; loss recorded: `steqr_cta` 1.07-1.41 float, 1.00-1.21 double; `syev_cta_fused` float 0.54-0.81 ([perf](../perf/sycl-implementations.md#sycl-impl-ab-sub-group-cta-kernels)) |
-| P5 A/B | §6 + §7: ledgers, `impl_diff.py`, benchviz provenance, first comparison set | a `docs/perf/sycl-implementations.md` page with saturated grids for both | Done: @ref perf_sycl_implementations (performance, accuracy, route parity); three cells (geqrf, potrf `blocked`, syev; float n >= 512) still gain over 10% per item at twice the batch |
-| P6 CI | GPU-less acpp configure and compile job (`--acpp-targets=generic` needs no GPU at build time); full gate stays local | acpp build is red in CI when a DPC++-only construct leaks in | Done: `acpp-compile` ([CI](../ci.md#the-acpp-compile-job)), CUDA off, not yet run on GitHub; `acpp_jit_tests` (§6.1) |
+| S1 spike (first) | Can `__nvvm_*` be reached from SSCP stage 1, via `compile_if` or a bitcode library? Do `__mulsc3` definitions resolve at JIT? Does SSCP honour `#pragma unroll` at the 262144 threshold? | Three yes/no answers with a tiny kernel each; decides [JIT-time target dispatch](#sycl-impl-device-target-dispatch) | Answered in P2: yes (JIT reflection inside `__acpp_if_target_sscp`, `src/sycl/sscp_target.hh`); yes (`annexg_complex.hh`); no for a bare `#pragma unroll`, yes for `clang loop unroll(full)` (`BATCHLAS_UNROLL_FULL`) |
+| P1 build | [the build](#sycl-impl-build): `BATCHLAS_SYCL_IMPL`, split detect module, three helpers, presets, package config, consumer | `cmake --preset acpp-tests` configures; DPC++ configure output is identical before and after (diff the flags) | Done (`754c9147`) |
+| P2 compile | [compile-level differences](#sycl-impl-compile-differences) C1-C11, `impl.hh`, `kernel_attrs.hh`, oneDPL RNG replaced | everything compiles under both; DPC++ route diff empty; `device_calls_tests` green | Done (`a305bcf0`, `9f551ab0`) |
+| P3 runtime | [runtime differences](#sycl-impl-runtime-differences) A1-A4, A6-A8 | acpp: no aborts or segfaults; failing names attributed | Done (`ddf07744`): 8 of 103 tests fail, all in the ledgers or box-environment |
+| P4 sub-groups | [JIT-time target dispatch](#sycl-impl-device-target-dispatch) `SscpBackend`, prefetch path | `sg_partition_tests` green on acpp; no hangs in CTA eig tests; steqr/syev_cta A/B within the noise of the DPC++ build, or the loss recorded | Done with P2/P3; loss recorded: `steqr_cta` 1.07-1.41 float, 1.00-1.21 double; `syev_cta_fused` float 0.54-0.81 ([perf](../perf/sycl-implementations.md#sycl-impl-ab-sub-group-cta-kernels)) |
+| P5 A/B | [correctness A/B](#sycl-impl-correctness-ab) and [the performance protocol](#sycl-impl-performance-ab): ledgers, `impl_diff.py`, benchviz provenance, first comparison set | a `docs/perf/sycl-implementations.md` page with saturated grids for both | Done: @ref perf_sycl_implementations (performance, accuracy, route parity); three cells (geqrf, potrf `blocked`, syev; float n >= 512) still gain over 10% per item at twice the batch |
+| P6 CI | GPU-less acpp configure and compile job (`--acpp-targets=generic` needs no GPU at build time); full gate stays local | acpp build is red in CI when a DPC++-only construct leaks in | Done: `acpp-compile` ([CI](../ci.md#the-acpp-compile-job)), CUDA off, not yet run on GitHub; `acpp_jit_tests` ([the JIT-ed PTX check](#sycl-impl-jit-ptx-check)) |
 
 Each phase is its own PR. P1 and P2 must leave the DPC++ build bit-identical in behaviour: the
 route diff is empty and the kernel PTX hashes are unchanged for every TU that P2 did not touch.
 
-## 9. Decisions
+## Decisions {#sycl-impl-decisions}
 
 The recommended option was taken in each case.
 
-1. **Complex multiply semantics (R1): Annex G definitions.** acpp gets device `__mulsc3`-family
+1. **Complex multiply semantics (A1): Annex G definitions.** acpp gets device `__mulsc3`-family
    definitions (`annexg_complex.hh`), so both builds keep Annex G semantics; `-fcx-limited-range`
-   was not adopted. `acpp_jit_tests` reports any unresolved libcall (§6.1).
-2. **SLM above 48 KiB on acpp (R2): route around it, opt-in as a variant.** Every `can_run` reads
+   was not adopted. `acpp_jit_tests` reports any unresolved libcall ([the JIT-ed PTX check](#sycl-impl-jit-ptx-check)).
+2. **SLM above 48 KiB on acpp (A2): route around it, opt-in as a variant.** Every `can_run` reads
    the device budget; `-DBATCHLAS_ACPP_SLM_OPTIN=ON` is a recorded A/B variant, not the default.
    The upstream opt-in is still to be requested. P5: Auto routes unchanged, one Auto cell slower
    (potrf float n = 1024: 1.23, 1.06 with the opt-in); affected pinned cells 1.22-2.66, 0.99-1.20
@@ -411,4 +420,4 @@ The recommended option was taken in each case.
    same library call in both trees: 1.00 at 1 ms and above, 3-17 us more per short call. The
    vendor-free acpp tree is not measured yet.
 4. **Per-implementation tuning tables: not added.** The P5 data shows no inversion worth a table
-   (§7, Tables). Revisit if acpp's code generation changes (a newer LLVM) or on another device.
+   ([the performance protocol](#sycl-impl-performance-ab), Tables). Revisit if acpp's code generation changes (a newer LLVM) or on another device.

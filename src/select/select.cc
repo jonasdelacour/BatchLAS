@@ -507,7 +507,7 @@ std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::strin
         }
         return std::make_tuple(2 + family_rank(t->family), 0, -t->arch_number);
     };
-    // §3/§7.6: the CPU never borrows a GPU table; without its own it reaches the last resort.
+    // §5.5: the CPU never borrows a GPU table; without its own it reaches the last resort.
     if (d.family == "cpu")
         std::erase_if(all, [&](const Table* t) { return t->device != d.key; });
     std::stable_sort(all.begin(), all.end(), [&](const Table* a, const Table* b) { return rank(a) < rank(b); });

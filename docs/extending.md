@@ -1,4 +1,4 @@
-# Adding entry points to BatchLAS
+# Adding entry points to BatchLAS {#dev_extending}
 
 > **Status:** current (flat kernel selection). The route-era recipe is history on the
 > [vendor-independence page](design/vendor-independence.md#adding-an-op-in-the-route-era).

@@ -6,7 +6,7 @@
 # AdaptiveCpp has no binary release, so the acpp-compile job builds it from the tag against
 # the distro LLVM. Only the generic (SSCP) compiler and the OpenMP host runtime are built:
 # --acpp-targets=generic compiles device code to target-independent IR, so a BatchLAS compile
-# needs no CUDA toolkit and no GPU. Design: docs/design/sycl-implementations.md section 8 (P6).
+# needs no CUDA toolkit and no GPU. Design: docs/design/sycl-implementations.md#sycl-impl-phases (P6).
 #
 # Environment (all optional):
 #   ACPP_REPO   clone URL (default https://github.com/AdaptiveCpp/AdaptiveCpp.git; a local

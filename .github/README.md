@@ -40,7 +40,7 @@ Which kernel runs for each op, and where the vendor still wins, is on the
 
 ## Install
 
-Requirements: CMake 3.14+, a SYCL 2020 compiler **with a backend for your GPU** (for NVIDIA, a
+Requirements: CMake 3.17+, a SYCL 2020 compiler **with a backend for your GPU** (for NVIDIA, a
 DPC++ built with `--cuda` or oneAPI plus the Codeplay NVIDIA plugin; stock `icpx` silently builds
 CPU-only), and optionally LAPACKE/CBLAS and the CUDA toolkit.
 

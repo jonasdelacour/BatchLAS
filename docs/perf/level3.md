@@ -1,10 +1,11 @@
-# Level-3: symm, hemm, syrk, herk, syr2k, her2k, trmm
+# Level-3: symm, hemm, syrk, herk, syr2k, her2k, trmm {#perf_level3}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2, `RelWithDebInfo` · measured 2026-09-05; tables transcribed 2026-10-06
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2, `RelWithDebInfo` · measured 2026-09-05; sm_89 tables transcribed 2026-10-06, sm_120 tables deep
 
 Routing and measurements for the seven level-3 ops. `symm`, `syrk`, `syr2k` and `trmm` choose from
-tuned tables. `hemm`, `herk` and `her2k` choose by fixed rules in the cuBLAS backend. The table rows
-for the four are transcribed from the deleted hand-written gates (at `ff340fc6`) and are untimed.
+tuned tables. `hemm`, `herk` and `her2k` choose by fixed rules in the cuBLAS backend. The sm_89 table rows
+for the four are transcribed from the deleted hand-written gates (at `ff340fc6`) and are untimed; the sm_120
+tables are deep-measured (`tuned/README.md`).
 
 ## Level-3: how the table-selected four choose
 
@@ -22,15 +23,15 @@ every item at the top-level extents.
 
 | op | spelling | driver | further `can_run` terms | dtypes |
 |---|---|---|---|---|
-| `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`symm.cc:52-56`) | float, double |
+| `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:52-56`) | float, double |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | float, double |
-| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`syrk.cc:58-59`) | float, double |
-| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`syrk.cc:62-63`) | float |
+| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:58-59`) | float, double |
+| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:62-63`) | float |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
-| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`trmm.cc:56-61`) | all four |
-| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`trmm.cc:63-68`) | all four |
+| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:56-61`) | all four |
+| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:63-68`) | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
@@ -39,9 +40,9 @@ vendor. The last resort when nothing runs is `expand, vendor` (symm), `triangula
 
 ### Level-3: what the shipped tables rank first
 
-The twenty tables (`tuned/{symm,syrk,syr2k}.{float,double}.*`, `tuned/trmm.{float,double,cfloat,cdouble}.*`,
-for `sm_89` and `sm_120`, identical because the old rules read no architecture) are
-`source=transcribed:ff340fc6`. Per grid cell they put the old Auto choice first. From the `sm_89` rows:
+The sm_89 tables (`tuned/{symm,syrk,syr2k,trmm}.sm_89.txt`: float and double for the three real-only ops, all
+four dtypes for trmm) are `transcribed` at `ff340fc6`. Per grid cell they put the old Auto choice first. The sm_120
+tables are deep-measured, with `transcribed` rows kept where the lattice measured nothing near. From the `sm_89` rows:
 
 | op, dtype | ranked first |
 |---|---|
@@ -103,7 +104,7 @@ the effective window, not the predicates.
 
 ## Boundaries and their evidence
 
-The windows below were measured against the old gates. The transcribed tables reproduce them cell by cell.
+The windows below were measured against the old gates. The transcribed sm_89 tables reproduce them cell by cell.
 
 ### syrk triangular tiles
 
@@ -329,7 +330,7 @@ up. Check which family ran with `BATCHLAS_SELECT_TRACE=1`.
 shapes, because a skinny Gram matrix failed both routers and dropped to one `cublasSsyrk` per batch member
 (m=256 k=32 batch 2048: GEMM 0.350 ms, syrk 33.73 ms). That motivated `syrk_gram_tiles`. Once it existed the
 substitution was taken: at k = 32 float 1.450 -> **0.895** ms (1.62x), and ShiftChol3 1.998 -> **1.298** ms
-(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/extensions/ortho.cc:143`):
+(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/extensions/ortho.cc:144`):
 float k=128 is 0.96x, double k=128 is 1.34x. `svqb_alg` keeps its GEMM, since a one-triangle result would
 multiply uninitialised workspace. The precision table is at
 [the Gram matrix through syrk, per precision](ortho.md#ortho-the-gram-matrix-through-syrk-per-precision).
@@ -373,18 +374,18 @@ and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 The 128-wide Gram tile first split each thread's 8 rows into two 4-wide bands 64 apart, as the square kernels
 do. That is incompatible with taking the triangle at thread-tile granularity: thread (0,1) owns element (64,4),
 in the lower triangle while its tile is not, so nothing wrote it. It was silent and appeared only at n > 64.
-`SyrkTest.NarrowShapesMatchGemmReference` (`tests/syrk_tests.cc:91`) sweeps n in {24,32,48,64,96,128} x trans x
+`SyrkTest.NarrowShapesMatchGemmReference` (`tests/syrk_tests.cc:79`) sweeps n in {24,32,48,64,96,128} x trans x
 uplo at k = 200 and mirrors both sides before comparing.
 
 ### The herk test that could not fail
 
 `HerkTest` could not catch conjugating the wrong operand, which returns `conj(C)`: still Hermitian and consistent.
-`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:314`) compares against a GEMM and fails when the conjugation flips.
+`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:265`) compares against a GEMM and fails when the conjugation flips.
 
 ### The trmm poison test
 
 Other trmm tests used `RandomTriangular`, already zeroed opposite the triangle, which passes an implementation that
-ignores `uplo` and `diag`. `TrmmTest.IgnoresUnreferencedTriangleAndUnitDiagonal` (`tests/trmm_tests.cc:132`)
+ignores `uplo` and `diag`. `TrmmTest.IgnoresUnreferencedTriangleAndUnitDiagonal` (`tests/trmm_tests.cc:116`)
 poisons the forbidden storage and compares against a GEMM on the clean A, over both sides, uplo, diag, three
 transposes and ragged shapes. On CUDA it re-runs with `BATCHLAS_EXPAND_MAX_BYTES=0` to reach the `cublas?trmm` loop.
 
@@ -466,7 +467,7 @@ reading A's unreferenced triangle. It was never instantiated by any backend and 
 - **ROCm has no native level-3 path** and no hemm, herk or her2k; its `syrk`, `syr2k` and `trmm` take the rocBLAS loop.
 - **`her2k_gemm_preferred` was swept only over square rank-k shapes.** The narrow panel case (k = nb in {16,24,32},
   n2 up to 480) awaits an A/B at n2 in {224,480}, `complex<float>`. `complex<double>` is unmeasured.
-- **The tables are transcribed, not timed.** Suspects: `sq` rows that rank `triangular` from n = 129 (only n >= 384
+- **The sm_89 tables are transcribed, not timed.** Suspects: `sq` rows that rank `triangular` from n = 129 (only n >= 384
   was measured to win); double `symm` rows that rank `vendor` first; `complex<float>` Left `trmm` rows that rank
   `triangular` first (it loses below m = 512). Retune by sweeping the families on the saturated grid (`tools/tune`).
 - **Unverified boundaries:** `257 <= n <= 383` for `syrk` `triangular`; batch 3 and `769 <= n <= 895` for herk; batch 1
