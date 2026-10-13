@@ -316,7 +316,7 @@ class Ledgers:
                      "families": self.families(op, device, views)}
             if t:
                 entry["table"] = {k: v for k, v in t.info("").items() if k not in ("rows", "tiers")} | {"ok": t.ok}
-                entry["table_warnings"] = stt.stale_kernel_warnings(f"tuned/{op}.{device}.txt", op, t.header, t.judge)
+                entry["table_warnings"] = stt.stale_kernel_warnings(str(self.tuned / f"{op}.{device}.txt"), str(REPO))
             files[f"{op}.{device}"] = entry
             dts = [d for d in DTYPES if (f and d in f.heads) or (t and t.rows.get(d))]
             for d in dts:
