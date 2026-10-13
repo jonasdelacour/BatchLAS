@@ -10,6 +10,7 @@
 #include "coverage.hh"
 #include "vendor.hh"
 #include <batchlas/blas/enums.hh>
+#include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
@@ -558,6 +559,7 @@ Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<
 template <Backend B, class T, class Choice, std::size_t N, class CanRun>
 Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
+    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
     return pick<B, T>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
 }
 
@@ -567,6 +569,7 @@ Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<C
 template <Backend B, class T, class Choice, std::size_t N, class CanRun, class Launch>
 decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
                    CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
+    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
     const Device& d = device_of<B>(q, op.vendor);
     const Choice c = pick<B, T>(op, d, key, candidates, can_run);
     shape.scalar = scalar_kind_of<T>;

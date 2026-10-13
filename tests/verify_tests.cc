@@ -363,14 +363,15 @@ TEST(Reference, GetrfPivotsInWorkingPrecision) {
 }
 
 namespace {
-// l = 1/3 rounds up in float and down in double, so u = 1 - 3l is -2^-23 in float but at most 2^-54
-// in double, FMA or not. Row 3's 2^-40 lies between: no tie for any LAPACK to break differently.
-const float kPivotSplit[9] = {3.0f, 1.0f, 0.0f, 3.0f, 1.0f, 0x1p-40f, 0.0f, 0.0f, 1.0f};
+// l = fl(1/3) and a12 = 2, so l*a12 is exact and every update order (FMA or not) gives the same u.
+// a22 = fl32(2/3) = 2*l in float, so u = a22 - 2l is exactly 0 there; in double it is about 2^-26.
+// Row 3's 2^-40 lies between: float pivots row 3, double row 2, with no rounding left to differ.
+const float kPivotSplit[9] = {3.0f, 1.0f, 0.0f, 2.0f, 0x1.555556p-1f, 0x1p-40f, 0.0f, 1.0f, 1.0f};
 }  // namespace
 
 TEST(Reference, GetrfPivotsOfFloatDataAreSgetrfs) {
     const float* col = kPivotSplit;
-    const std::vector<std::int32_t> single{1, 2, 3}, promoted{1, 3, 3};
+    const std::vector<std::int32_t> single{1, 3, 3}, promoted{1, 2, 3};
     std::vector<std::int32_t> ipiv;
     std::vector<float> f(col, col + 9);
     ASSERT_TRUE(batchlas::verify::getrf_pivots(3, 3, f, ipiv));
@@ -393,7 +394,7 @@ TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
             buf[stride + j * ld + i] = col[j * 3 + i];
             cbuf[stride + j * ld + i] = col[j * 3 + i];
         }
-    const std::vector<std::int32_t> single{1, 2, 3};
+    const std::vector<std::int32_t> single{1, 3, 3};
     std::vector<std::int32_t> ipiv;
     ASSERT_TRUE(batchlas::verify::getrf_pivots(MV<float>(buf.data(), 3, 3, ld, stride, 2), 1, ipiv));
     EXPECT_EQ(ipiv, single);

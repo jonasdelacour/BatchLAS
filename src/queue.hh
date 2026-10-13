@@ -232,10 +232,10 @@ struct QueueImpl : public sycl::queue{
         assert(!arena_.has_outstanding_loans() &&
                "QueueImpl destroyed (or its Queue move-assigned) while a workspace lease is live");
 
-        // Drain first: freeing USM under in-flight kernels is a use-after-free. acpp always drains:
-        // its ~queue does not wait (coarse events leave the Metal command buffer open), so a derived
-        // queue's work (select::on_in_order_queue) outlived the caller's wait. DPC++ is unchanged.
-        if (BATCHLAS_SYCL_IMPL_ACPP || !arena_.blocks_.empty()) {
+        // Drain first: freeing USM under in-flight kernels is a use-after-free. Metal always drains:
+        // coarse events leave its command buffer open, so a derived queue's work
+        // (select::on_in_order_queue) outlived the caller's wait. Other builds are unchanged.
+        if (metal_ || !arena_.blocks_.empty()) {
             try {
                 wait();
             } catch (...) {
@@ -276,6 +276,12 @@ struct QueueImpl : public sycl::queue{
     mutable LastEvent last_event_;
 
     WorkspaceArena arena_;
+
+#if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_HAS_SYCL_BACKEND
+    bool metal_ = impl::is_metal(impl::backend_of(get_device()));
+#else
+    static constexpr bool metal_ = false;
+#endif
 
     // See Queue::attach_to_current_thread. The two guarded members each carry
     // their own recorded owner, so a transfer has to move both.

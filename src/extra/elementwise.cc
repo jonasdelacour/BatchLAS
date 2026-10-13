@@ -1,4 +1,5 @@
 #include <batchlas/blas/linalg-ops.hh>
+#include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -46,6 +47,7 @@ Event elementwise_into(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B,
                        const MatrixView<T, MatrixFormat::Dense>& C) {
+    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::elementwise");
     check_same_shape(A, B, "linalg::elementwise_into");
     check_same_shape(A, C, "linalg::elementwise_into");
 
@@ -85,6 +87,7 @@ Event axpby_into(Queue& ctx,
                  T beta,
                  const MatrixView<T, MatrixFormat::Dense>& B,
                  const MatrixView<T, MatrixFormat::Dense>& C) {
+    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::axpby");
     check_same_shape(A, B, "linalg::axpby_into");
     check_same_shape(A, C, "linalg::axpby_into");
 
@@ -120,6 +123,7 @@ Event triangular_mask_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& C,
                            Uplo uplo,
                            int64_t k) {
+    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::triangular_mask");
     check_same_shape(A, C, "linalg::triangular_mask_into");
 
     const size_t rows = static_cast<size_t>(A.rows());

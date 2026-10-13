@@ -73,6 +73,8 @@ the caller's queue and returns a leaked, per-thread CPU `Queue` (the AdaptiveCpp
 check runs there. The operands stay where they are: library matrices are USM shared, which the host
 device reads in place. A `malloc_device` operand is not host-readable and must be copied first.
 The checks are not demoted to `float`, which would make them as inexact as the code they judge.
+The fp64 policy this answers is in
+[AdaptiveCpp Metal](sycl-implementations.md#sycl-impl-metal-fp64-policy).
 
 ## Tolerance kinds
 

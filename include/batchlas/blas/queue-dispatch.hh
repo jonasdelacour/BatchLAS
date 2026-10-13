@@ -79,13 +79,31 @@ inline constexpr bool needs_fp64_v =
     (is_fp64_scalar_v<typename container_elem<std::remove_cvref_t<A>>::type> || ...);
 
 [[noreturn]] inline void throw_no_device_fp64(const Queue& ctx, const char* op) {
+    const std::string what = std::string("BatchLAS: ") + (op ? op : "this call") +
+                             " was called with double or complex<double> data on a queue whose device (" +
+                             ctx.device().get_name() + ")";
+    // A CPU queue pinned to Backend::SYCL has fp64; what it lacks is the build's SYCL double kernels.
+    if (ctx.device().supports_fp64()) {
+        throw batchlas::unsupported(
+            what + " runs Backend::SYCL, and this build compiled no Backend::SYCL kernels for those "
+            "types. Use Backend::NETLIB (the default backend of a CPU Queue), or convert the data "
+            "to float or complex<float>.");
+    }
     throw batchlas::unsupported(
-        std::string("BatchLAS: ") + (op ? op : "this call") +
-        " was called with double or complex<double> data on a queue whose device (" +
-        ctx.device().get_name() +
-        ") has no fp64 support, so this build compiled no Backend::SYCL kernels for those "
+        what + " has no fp64 support, so this build compiled no Backend::SYCL kernels for those "
         "types. Run double work on a CPU Queue (Queue(Device(\"cpu\"))), whose backend is "
         "NETLIB, or convert the data to float or complex<float>.");
+}
+
+/// Throws throw_no_device_fp64 for a double or complex<double> @p T on a GPU without fp64. For
+/// kernels that are not Backend-templated (or NETLIB ones that launch on the queue's device),
+/// whose double instantiations exist and would otherwise fail in the device JIT.
+template <class T>
+inline void require_device_fp64(const Queue& ctx, const char* op) {
+    if constexpr (is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
+        if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())
+            throw_no_device_fp64(ctx, op);
+    }
 }
 
 // with_backend with the fp64 gate: the SYCL branch is discarded (never instantiated) when

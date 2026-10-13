@@ -187,6 +187,15 @@ if(BATCHLAS_ENABLE_METAL_MODE STREQUAL "ON" AND NOT BATCHLAS_DETECTED_APPLE_GPU)
         "(acpp-info lists none, or ${_acpp_root} was built without WITH_METAL_BACKEND). "
         "Configure with -DBATCHLAS_ENABLE_METAL=AUTO or =OFF.")
 endif()
+# OFF with a visible Metal GPU would compile the Metal guards out while default queues still land on
+# it, so the NETLIB fallback's native double and vector kernels would reach the Metal JIT unguarded.
+if(BATCHLAS_DETECTED_APPLE_GPU AND BATCHLAS_ENABLE_METAL_MODE STREQUAL "OFF"
+   AND ("$ENV{ACPP_VISIBILITY_MASK}" STREQUAL "" OR "$ENV{ACPP_VISIBILITY_MASK}" MATCHES "metal"))
+    message(FATAL_ERROR
+        "BATCHLAS_ENABLE_METAL=OFF but the AdaptiveCpp runtime exposes a Metal GPU, which default "
+        "queues would still use without the Metal backend's guards. For a host-only build hide it "
+        "with ACPP_VISIBILITY_MASK=omp (configure, build and every run); otherwise use AUTO or ON.")
+endif()
 if(BATCHLAS_DETECTED_APPLE_GPU AND NOT BATCHLAS_ENABLE_METAL_MODE STREQUAL "OFF")
     set(BATCHLAS_HAS_SYCL_BACKEND TRUE)
     # Device headers swap their vector registers for plain structs under this, for the SSCP

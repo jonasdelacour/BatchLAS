@@ -7,7 +7,7 @@ cause with its location, any workaround, and the status. Performance debt is lis
 [../perf/](../perf/README.md), not here.
 
 Entries keep their numbers so that other pages can cite them (for example, "known-defects #13").
-Entries 1, 3 and 11 to 17 are cited from code and carry a `Defect N:` heading. Entries 7 to 9 are
+Entries 1, 3, 11 to 17 and 19 are cited from code or a test ledger and carry a `Defect N:` heading. Entries 7 to 9 are
 closed and kept only for numbering.
 
 ## At a glance
@@ -32,6 +32,7 @@ closed and kept only for numbering.
 | 16 | `ormqr_blocked` sub-kernels | open, throws at batch > 65535 |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open, pinned `cta` only |
+| 19 | `src/ops/potrf/potrf.cc` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | LOBPCG null P column | fixed 2026-10-09, kept for the misleading symptom |
@@ -322,6 +323,21 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Fix needs:** the direct bidiagonal solver in CTA mode, as Blocked uses, or no `cta` family
   for real general input.
 - **Status:** open, pinned `cta` only.
+
+## Defect 19: Upper potrf beyond the CTA ceiling has no vendor-free route
+
+- **Symptom:** `potrf` with `Uplo::Upper` throws `NoRouteError` in a vendor-free build once n is
+  above both the `tiny` range and the `cta` local-memory ceiling. On an Apple GPU (Metal, selector
+  budget 20,480 B) the first case is complex<float> at n = 33:
+  `posv_tests` `PosvTest/5.PublicPosvSolvesOnBothTriangles` (posv pinned `blocked`, whose potrf child
+  selects for itself), listed in `tests/known-failures-acpp-metal.txt`. Lower, and n = 4 and 16,
+  pass.
+- **Cause:** in `can_run` (`src/ops/potrf/potrf.cc`) `lpanel` and `blocked` require
+  `Uplo::Lower`, so only `tiny` and `cta` serve Upper, and `cta` is capped by
+  `potrf_cta_max_n_for_slm(budget)`. With the vendor family absent nothing else is runnable. On CUDA
+  the 97,280 B budget puts the ceiling higher, and a vendor build still has the `vendor` family.
+- **Fix needs:** an Upper arm for `lpanel` or `blocked` (or a transpose into the Lower path).
+- **Status:** open.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 

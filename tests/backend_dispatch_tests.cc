@@ -2,6 +2,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/functions.hh>
+#include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -268,16 +269,16 @@ TEST(BackendDispatch, DefaultArgumentsSurviveForwarding) {
 #if BATCHLAS_HAS_SYCL_BACKEND && !BATCHLAS_HAS_DEVICE_FP64
 namespace {
 
+// nullptr only where the runtime lists no GPU (ACPP_VISIBILITY_MASK=omp), and the test skips. Any
+// GPU in this build is the fp64-less one, so a Queue that fails to reach it on Backend::SYCL must
+// fail the test, not turn the refusal checks into skips.
 std::unique_ptr<Queue> fp64less_gpu_queue() {
-    try {
-        auto q = std::make_unique<Queue>(Device("gpu"));
-        if (q->device().type == DeviceType::GPU && !q->device().supports_fp64() &&
-            q->backend() == Backend::SYCL) {
-            return q;
-        }
-    } catch (const std::exception&) {
-    }
-    return nullptr;
+    if (Device::get_devices(DeviceType::GPU).empty()) return nullptr;
+    auto q = std::make_unique<Queue>(Device("gpu"));
+    EXPECT_EQ(q->device().type, DeviceType::GPU);
+    EXPECT_FALSE(q->device().supports_fp64());
+    EXPECT_EQ(q->backend(), Backend::SYCL);
+    return q;
 }
 
 // Host-filled SPD matrix (diagonally dominant), with a poison value in the
@@ -320,7 +321,8 @@ void expect_fp64_refusal(const char* op, F&& call) {
 
 TEST(NoDeviceFp64, GemmDoubleThrowsAndFloatRuns) {
     auto q = fp64less_gpu_queue();
-    if (!q) GTEST_SKIP() << "no GPU without fp64 resolving to Backend::SYCL";
+    if (!q) GTEST_SKIP() << "the runtime lists no GPU";
+    ASSERT_FALSE(HasFailure());
     const int n = 8, batch = 2;
     auto A = spd_matrix<double>(n, batch), B = spd_matrix<double>(n, batch);
     auto C = spd_matrix<double>(n, batch), C0 = spd_matrix<double>(n, batch);
@@ -346,7 +348,8 @@ TEST(NoDeviceFp64, GemmDoubleThrowsAndFloatRuns) {
 
 TEST(NoDeviceFp64, PotrfDoubleThrowsOnEverySpelling) {
     auto q = fp64less_gpu_queue();
-    if (!q) GTEST_SKIP() << "no GPU without fp64 resolving to Backend::SYCL";
+    if (!q) GTEST_SKIP() << "the runtime lists no GPU";
+    ASSERT_FALSE(HasFailure());
     const int n = 8, batch = 2;
     auto A = spd_matrix<double>(n, batch), A0 = spd_matrix<double>(n, batch);
     UnifiedVector<std::byte> ws(1 << 16);
@@ -368,7 +371,8 @@ TEST(NoDeviceFp64, PotrfDoubleThrowsOnEverySpelling) {
 
 TEST(NoDeviceFp64, SyevDoubleThrowsOnEverySpelling) {
     auto q = fp64less_gpu_queue();
-    if (!q) GTEST_SKIP() << "no GPU without fp64 resolving to Backend::SYCL";
+    if (!q) GTEST_SKIP() << "the runtime lists no GPU";
+    ASSERT_FALSE(HasFailure());
     const int n = 8, batch = 2;
     auto A = spd_matrix<double>(n, batch), A0 = spd_matrix<double>(n, batch);
     UnifiedVector<double> W(n * batch, -7.0);
@@ -389,6 +393,46 @@ TEST(NoDeviceFp64, SyevDoubleThrowsOnEverySpelling) {
     Matrix<std::complex<double>, MatrixFormat::Dense> Z(n, n, batch);
     expect_fp64_refusal("syev", [&] { (void)syev(*q, Z, W.to_span(), {.jobz = JobType::NoEigenVectors}); });
 }
+
+// Kernels that are not Backend-templated (view members, linalg::, lascl) and the explicit
+// <Backend::NETLIB> spelling, which skips Queue::set_backend's refusal, launch on the queue's
+// device: they must refuse as well rather than fail in the Metal JIT.
+TEST(NoDeviceFp64, ViewMembersLinalgAndNetlibSpellingThrow) {
+    auto q = fp64less_gpu_queue();
+    if (!q) GTEST_SKIP() << "the runtime lists no GPU";
+    ASSERT_FALSE(HasFailure());
+    const int n = 8, batch = 2;
+    auto A = spd_matrix<double>(n, batch), A0 = spd_matrix<double>(n, batch);
+    UnifiedVector<std::byte> ws(1 << 16);
+
+    expect_fp64_refusal("MatrixView::fill", [&] { (void)A.view().fill(*q, 2.0); });
+    expect_fp64_refusal("MatrixView::symmetrize", [&] { (void)A.view().symmetrize(*q, Uplo::Lower); });
+    expect_fp64_refusal("linalg::elementwise", [&] { (void)linalg::add(*q, A.view(), A.view()); });
+    expect_fp64_refusal("linalg::triangular_mask", [&] { (void)linalg::triu(*q, A.view()); });
+    expect_fp64_refusal("lascl", [&] { (void)lascl<MatrixFormat::Dense, double>(*q, A.view(), 1.0, 2.0); });
+    expect_fp64_refusal("potrf", [&] {
+        (void)potrf<Backend::NETLIB, double>(*q, A.view(), Uplo::Lower, ws.to_span());
+    });
+    q->wait();
+    EXPECT_TRUE(unchanged(A, A0)) << "a refused call must not have launched";
+}
+
+// A CPU queue pinned to Backend::SYCL has fp64; the refusal must name the build's missing SYCL
+// double kernels and NETLIB, not claim the device lacks fp64 or send the caller to a CPU Queue.
+TEST(NoDeviceFp64, CpuQueuePinnedToSyclNamesTheBackend) {
+    Queue cpu(Device("cpu"));
+    cpu.set_backend(Backend::SYCL);
+    const int n = 8, batch = 2;
+    auto A = spd_matrix<double>(n, batch), B = spd_matrix<double>(n, batch), C = spd_matrix<double>(n, batch);
+    try {
+        (void)gemm(cpu, A, B, C, {.alpha = 1.0});
+        ADD_FAILURE() << "double gemm on a CPU queue pinned to Backend::SYCL did not throw";
+    } catch (const batchlas::unsupported& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("Backend::NETLIB"), std::string::npos) << what;
+        EXPECT_EQ(what.find("no fp64 support"), std::string::npos) << what;
+    }
+}
 #endif
 
 // At ACPP_ADAPTIVITY_LEVEL=0 AdaptiveCpp JITs every kernel of a translation unit together,
@@ -396,13 +440,9 @@ TEST(NoDeviceFp64, SyevDoubleThrowsOnEverySpelling) {
 // rather than fail every float launch later. ctest runs this suite a second time with the
 // variable set (backend_dispatch_tests_adaptivity0); unset, the same Queue must construct.
 TEST(MetalAdaptivityGuard, LevelZeroRefusesAGpuQueue) {
-    Device gpu = Device::default_device();
-    try {
-        gpu = Device("gpu");
-    } catch (const std::exception&) {
-        GTEST_SKIP() << "no GPU device";
-    }
-    if (gpu.type != DeviceType::GPU || gpu.supports_fp64()) GTEST_SKIP() << "not a GPU without fp64";
+    if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "the runtime lists no GPU";
+    const Device gpu("gpu");
+    if (gpu.supports_fp64()) GTEST_SKIP() << "not a GPU without fp64";
     const char* level = std::getenv("ACPP_ADAPTIVITY_LEVEL");
     if (level == nullptr || std::string(level) != "0") {
         EXPECT_NO_THROW(Queue{gpu});

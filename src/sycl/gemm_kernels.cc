@@ -326,11 +326,15 @@ Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float
     static_for<static_cast<int>(og::reg_configs.size())>([&](auto I) {
         constexpr og::RegCfg c = og::reg_configs[I];
         if (out || c.m != tm || c.n != tn || c.k != tk || c.u != u) return;
-        // Every tile: Metal budgets ~28 KiB at this work-group, so no size is safe to skip.
-        const auto budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), c.threads()));
-        if (c.slm_bytes() > static_cast<std::int64_t>(budget))
-            refuse("reg needs " + std::to_string(c.slm_bytes()) + " B of local memory; the device budgets " +
-                   std::to_string(budget));
+        // Only tiles above 48 KiB less the reserve can miss a budget, so the others skip the query;
+        // a Metal build checks every tile (~28 KiB at this work-group).
+        if constexpr (BATCHLAS_HAS_SYCL_BACKEND ||
+                      c.slm_bytes() > std::int64_t(resident::device_slm_budget(48 * 1024))) {
+            const auto budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), c.threads()));
+            if (c.slm_bytes() > static_cast<std::int64_t>(budget))
+                refuse("reg needs " + std::to_string(c.slm_bytes()) + " B of local memory; the device budgets " +
+                       std::to_string(budget));
+        }
         if constexpr (c.forms.nn)
             if (!ta && !tb) out = launch_reg_cfg<I, kNN>(ctx, A, B, C, alpha, beta);
         if constexpr (c.forms.nt)

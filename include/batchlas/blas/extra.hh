@@ -74,6 +74,7 @@ namespace batchlas
     /// @note The Spectral path calls the vendor `syev` directly, bypassing syev's
     ///       kernel selection, and throws batchlas::NoRouteError in a vendor-free
     ///       build; see @ref md_docs_2design_2known-defects (defect 2).
+    ///       Backend::SYCL calls the native `syev` instead.
     template <Backend B, typename T, MatrixFormat MF>
     BATCHLAS_API Event cond(Queue &ctx,
                            const MatrixView<T, MF> &A,

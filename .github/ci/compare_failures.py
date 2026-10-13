@@ -97,13 +97,17 @@ DEFAULT_KNOWN_ACPP = os.path.join(REPO, "tests", "known-failures-acpp.txt")
 DEFAULT_KNOWN_ACPP_METAL = os.path.join(REPO, "tests", "known-failures-acpp-metal.txt")
 
 
-def cache_value_of(build_dir, name):
-    """The value of cache entry NAME in a configured tree's CMakeCache.txt, or None."""
+def cache_value_of(build_dir, name, keep_empty=False):
+    """The value of cache entry NAME in a configured tree's CMakeCache.txt, or None.
+
+    An entry that is present but empty is None too, unless KEEP_EMPTY returns it as "".
+    """
     try:
         with open(os.path.join(build_dir, "CMakeCache.txt"), encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if line.startswith(name + ":"):
-                    return line.split("=", 1)[1].strip() or None
+                    value = line.split("=", 1)[1].strip()
+                    return value if (value or keep_empty) else None
     except OSError:
         pass
     return None
@@ -370,7 +374,8 @@ def main(argv):
             return 1
     family = args.gpu_family
     if family is None and args.build_dir:
-        family = cache_value_of(args.build_dir, "BATCHLAS_GPU_FAMILY_RESOLVED")
+        # An empty entry (every non-Metal acpp tree) is an answer: only an absent one reads the env.
+        family = cache_value_of(args.build_dir, "BATCHLAS_GPU_FAMILY_RESOLVED", keep_empty=True)
     if family is None:
         family = os.environ.get("BATCHLAS_GPU_FAMILY_RESOLVED") or None
     family = family.upper() if family else None

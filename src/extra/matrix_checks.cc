@@ -230,6 +230,7 @@ std::pair<int, int> op_dims(int rows, int cols, Transpose t) {
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::product(const Queue& ctx, const MatrixView& A, Transpose ta, const MatrixView& B, Transpose tb,
                                    const MatrixView& C) {
+    detail::require_device_fp64<T>(ctx, "MatrixView::product");
     const auto [m, kk] = op_dims(A.rows(), A.cols(), ta);
     const auto [kb, n] = op_dims(B.rows(), B.cols(), tb);
     if (kk != kb || C.rows() != m || C.cols() != n) bad("product", "dimension mismatch");

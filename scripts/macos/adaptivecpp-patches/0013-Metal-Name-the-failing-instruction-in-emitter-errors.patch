@@ -1,0 +1,73 @@
+From d6392b962d62ac6d4d6a4f6d8fb96938dc825490 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Tue, 13 Oct 2026 08:48:33 +0200
+Subject: [PATCH] [Metal] Name the failing instruction in emitter errors
+ without IR comments
+
+instToString is empty unless __ACPP_PRINT_METAL_CODE or __ACPP_METAL_IR_COMMENTS
+is set, which left the unknown-instruction, wide-integer and indirect-call
+errors without the instruction they reject. Print it through irText, which
+ignores the comment switch.
+---
+ src/compiler/llvm-to-backend/metal/Emitter.cpp | 11 ++++++++---
+ src/compiler/llvm-to-backend/metal/Emitter.hpp |  1 +
+ 2 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+index 6adff6c4..b0509122 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+@@ -153,6 +153,11 @@ std::string MetalEmitter::instToString(const Instruction& I) {
+   if (!irComments) {
+     return {};
+   }
++  return irText(I);
++}
++
++// The instruction's IR, always: error messages must name what failed.
++std::string MetalEmitter::irText(const Instruction& I) {
+   std::string str;
+   raw_string_ostream rso(str);
+   if (slots && I.getFunction() == slotFunction) {
+@@ -945,7 +950,7 @@ bool MetalEmitter::emitInstruction(const Instruction& I, int level) {
+     *errorMsg += " (name: " + I.getName().str() + ")";
+   }
+   *errorMsg += "\n";
+-  *errorMsg += "  " + instToString(I) + "\n";
++  *errorMsg += "  " + irText(I) + "\n";
+   return false;
+ }
+ 
+@@ -1068,7 +1073,7 @@ void MetalEmitter::emitBinaryOperator(const BinaryOperator* BO, const std::strin
+ 
+   if (isWideInteger(BO->getType()) && !isSupportedWideIntegerOp(BO->getOpcode())) {
+     errorMsg = "Error: Unsupported operation on an integer wider than 64 bits: " +
+-               instToString(*BO);
++               irText(*BO);
+     return;
+   }
+ 
+@@ -1376,7 +1381,7 @@ void MetalEmitter::emitGEPInstruction(const GetElementPtrInst* GEP, const std::s
+ bool MetalEmitter::emitCallInstruction(const CallInst* CI, const std::string& name, int level) {
+   Function *callee = CI->getCalledFunction();
+   if (!callee) {
+-    errorMsg = "Error: Indirect call not supported: " + instToString(*CI);
++    errorMsg = "Error: Indirect call not supported: " + irText(*CI);
+     return false;
+   }
+ 
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.hpp b/src/compiler/llvm-to-backend/metal/Emitter.hpp
+index 9033173e..762dd86a 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.hpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.hpp
+@@ -80,6 +80,7 @@ private:
+   std::string emitExpr(const llvm::Value* V);
+   std::string valueName(const llvm::Value* V);
+   std::string instToString(const llvm::Instruction& I);
++  std::string irText(const llvm::Instruction& I);
+   std::string basicBlockName(const llvm::BasicBlock* BB);
+   std::string getSignedType(llvm::Type* T);
+   std::string mapType(const llvm::Type* T);
+-- 
+2.54.0 (Apple Git-157)
+

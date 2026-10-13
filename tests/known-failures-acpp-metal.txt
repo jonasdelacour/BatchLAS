@@ -15,7 +15,7 @@
 # the comma): copy it from the gtest XML, never from the Linux ledgers.
 #
 # PRESET: verified 2026-10-13 on an Apple M5 Max (applegpu_g17s), macOS 27, tree
-# build-acpp-metal-tests, full serial ctest (104 tests: 88 passed, 15 failed, 1 skipped).
+# build-acpp-metal-tests, full serial ctest (104 tests: 98 passed, 5 failed, 1 skipped).
 # Backend::SYCL here is float and complex<float> only (Backend 5); the double
 # configurations run as NETLIB on the host (Backend 6). The gtest identities below were
 # checked against real GTEST_OUTPUT XML from a rerun of the failing binaries.
@@ -39,8 +39,11 @@ her2k_tests::Her2kTest/2.TrianglesAgreeAcrossUplo;type_param=Her2kConfig<std::__
 her2k_tests::Her2kTest/2.OptionStructMatchesPositional;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
 
 # posv pinned Blocked, Uplo::Upper, n=33: its potrf<complex<float>> child has no
-# vendor-free route (cta is over Apple's 32 KiB local memory; lpanel and blocked refuse
-# Upper, docs/perf/potrf.md), so it throws NoRouteError. Lower and n=4,16 pass.
+# vendor-free route, so it throws NoRouteError. Not a hardware limit: cta needs ~9 KiB
+# at n=33, but its can_run caps n at the 4-blocks-per-CU occupancy slice of the
+# 20 KiB budget (~5 KiB, cfloat n<=23); lpanel and blocked refuse Upper
+# (docs/perf/potrf.md). A can_run that falls back to 1 block would serve it, on every
+# backend. Lower and n=4,16 pass.
 posv_tests::PosvTest/5.PublicPosvSolvesOnBothTriangles;type_param=(anonymous namespace)::PosvConfig<std::__1::complex<float>, (batchlas::Backend)5>
 
 # --- BatchLAS: shared with DPC++ (tests/known-failures.txt) and acpp generic ---

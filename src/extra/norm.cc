@@ -216,23 +216,13 @@ namespace batchlas
         return ctx.get_event();
     }
 
-    // The kernels below are not Backend-templated, so double ones exist; refuse them here
-    // rather than in the device compiler.
-    template <typename T>
-    void require_device_fp64(Queue& ctx) {
-        if constexpr (detail::is_fp64_scalar_v<T>) {
-            if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())
-                detail::throw_no_device_fp64(ctx, "norm");
-        }
-    }
-
     template <typename T, MatrixFormat MF>
     Event norm(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
               const Span<float_t<T>> norms)
     {
-        require_device_fp64<T>(ctx);
+        detail::require_device_fp64<T>(ctx, "norm");
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
                 throw batchlas::unsupported("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
@@ -248,7 +238,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
-        require_device_fp64<T>(ctx);
+        detail::require_device_fp64<T>(ctx, "norm");
         // Allocate memory for the results
         UnifiedVector<float_t<T>> norms(A.batch_size());
         if (norm_type == NormType::Spectral) {

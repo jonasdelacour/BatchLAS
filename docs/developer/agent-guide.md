@@ -11,6 +11,12 @@ Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised config
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
 Ubuntu 22.04; see "Tested platforms" in `docs/guide/build.md`.
 
+**Apple GPU (macOS):** a separate AdaptiveCpp Metal build (presets `acpp-metal` /
+`acpp-metal-tests`, toolchain from `scripts/macos/build_adaptivecpp_metal.sh`, M5 Max, macOS 27).
+GPU = `Backend::SYCL`, float and complex<float> only; double runs on a CPU `Queue` via Homebrew
+OpenBLAS; vendor-free. Recipe: "macOS: Apple GPU through AdaptiveCpp Metal" in
+`docs/guide/build.md`; design: `docs/design/sycl-implementations.md#sycl-impl-metal`; traps below.
+
 > **Warning:** NVIDIA targets need a CUDA-capable DPC++. The stock
 > `intel-oneapi-compiler-dpcpp-cpp` package has **no CUDA adapter**: on an NVIDIA machine it
 > configures cleanly and builds a CPU-only library. Use Intel oneAPI plus the Codeplay **oneAPI for
@@ -188,6 +194,52 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
   last `urEnqueueKernelLaunch`. `compute-sanitizer` cannot attach (SYCL calls `cuInit` first); for GPU
   out-of-bounds, rebuild with `-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g -UNDEBUG"` to re-enable the
   device asserts in `VectorView::at` / `KernelMatrixView`.
+
+**Metal (macOS, AdaptiveCpp; M5 Max).** Design and limits: `docs/design/sycl-implementations.md#sycl-impl-metal`.
+
+- **`ACPP_ADAPTIVITY_LEVEL=0` breaks every float kernel**: level 0 JITs a TU's kernels together,
+  double ones included, and Metal cannot compile double. A GPU `Queue` throws `unsupported` at
+  level 0 (`backend_dispatch_tests_adaptivity0`). Leave it unset (1) or higher.
+- **A double call on the Apple GPU throws `unsupported`** by design (no fp64). Use
+  `Queue(Device("cpu"))`. `set_backend(NETLIB)` on the GPU throws too.
+- **Monolithic only on macOS**: split component dylibs have cyclic undefined symbols and ld64
+  rejects them; configure fails without `-DBATCHLAS_MONOLITHIC_LIBRARY=ON`. Test trees also need
+  `BATCHLAS_HIDDEN_VISIBILITY=OFF` (the presets set both).
+- **Homebrew OpenBLAS has no `liblapacke`**: LAPACKE and CBLAS are inside `libopenblas.dylib`.
+  `BATCHLAS_OPENBLAS_ROOT` (probed at `/opt/homebrew/opt/openblas`) finds it; frameworks are off for
+  that search so vecLib's `cblas.h` never pairs with it.
+- **Keg-only paths**: `llvm@21`, `lld@21`, `libomp` and `openblas` are not on default search paths.
+  Use the `/opt/homebrew/opt/<pkg>` paths, never `Cellar/<version>`.
+- **`brew upgrade` can break acpp**: `~/opt/adaptivecpp/etc/AdaptiveCpp/acpp-core.json` holds the
+  LLVM and libomp paths; a `Cellar/` path there dangles after an upgrade (the build script warns).
+  Rebuild with the script, or `brew pin llvm@21 libomp`.
+- **Clear `~/.acpp/apps` after reinstalling AdaptiveCpp**: the JIT cache outlives the toolchain, so a
+  patched translator otherwise runs only on kernels it has not cached. `ACPP_APPDB_DIR=<dir>` gives a
+  run its own cache.
+- **The patches are local** (`scripts/macos/adaptivecpp-patches/`, branch `batchlas-metal`). The
+  script reuses an existing branch and stops on a patch-count mismatch: `ACPP_REAPPLY=1` re-applies.
+- **`make install` resets the acpp shebang** to `#!/usr/bin/env python3`. When `/usr/bin` precedes
+  Homebrew on `PATH` that is the Command Line Tools shim, which exports `CPATH=/usr/local/include`
+  and `LIBRARY_PATH=/usr/local/lib` into every compile: a `/usr/local` GoogleTest then shadows the
+  fetched one and tests fail to link. The script pins `acpp`/`syclcc`/`syclcc-clang` to Homebrew's
+  `python3`; re-run it (or its `sed`) after any reinstall. `env -u CPATH -u LIBRARY_PATH` is the
+  belt-and-braces for configure, build and ctest.
+- **`DYLD_LIBRARY_PATH`, not `LD_LIBRARY_PATH`**, selects dylibs (e.g. a test runtime prefix:
+  `DYLD_LIBRARY_PATH=<acpp-prefix>/lib`). SIP strips `DYLD_*` from `/usr/bin` interpreters and shell
+  scripts run through them.
+- **`ACPP_VISIBILITY_MASK=omp;metal`** (set by the presets): double and `batchlas::verify` need the
+  OpenMP device, and configure fails without it.
+- **Debug**: `ACPP_DEBUG_LEVEL=3` logs every Metal dispatch ("Dispatching kernel");
+  `__ACPP_PRINT_METAL_CODE=1` prints the generated MSL (with IR comments);
+  `__ACPP_PRINT_IR_BEFORE_EMIT=1` prints the LLVM IR the emitter receives (look for `<4 x`,
+  `double`, `llvm.nvvm`). A GPU fault under coarse events covers many ops:
+  `BATCHLAS_METAL_FLUSH_EACH_OP=1` commits one command buffer per op to attribute it.
+- **Float subnormals flush to zero** on the Apple GPU, though the device reports denorm support.
+  A test that needs one must probe the device and skip.
+- **Routing on Apple is borrowed**: no `tuned/*.apple_m5_max.txt`, so every op borrows the nearest
+  table (sm_120 here) and warns once. Every window and constant is an sm_89/sm_120 hypothesis there.
+- **Run ctest serially** on the Mac (`ctest --preset acpp-metal-tests` sets `-j1`); its failure
+  ledger is `tests/known-failures-acpp-metal.txt`.
 
 ## 7. Build Performance
 
@@ -596,7 +648,7 @@ is the open 2.7x.
 On a **new machine**, before trusting any result: `sycl-ls` shows your GPU; configure prints the right
 SYCL target; `nvidia-smi` (or equivalent) reports the architecture you think it does; record that
 architecture's FP32/FP64/DRAM ceilings as sanity anchors. **Every routing window and tuning constant
-in the tree was measured on sm_89.** On a different GPU, especially one with 1:2 FP64 where double
+in the tree was measured on sm_89** (some tables on sm_120). On a different GPU, an Apple GPU included, especially one with 1:2 FP64 where double
 GEMM verdicts invert, treat the tuned tables and hemm/herk/her2k's hand-written windows as
 hypotheses. Re-measure at saturation before quoting any ratio, and record the machine alongside new
 data in `benchmarks/results/`.

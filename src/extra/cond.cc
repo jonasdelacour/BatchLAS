@@ -17,7 +17,7 @@ namespace batchlas
     template <Backend B, typename T>
     size_t cond_syev_buffer_size(Queue &ctx, const MatrixView<T, MatrixFormat::Dense> &A,
                                  const Span<typename base_type<T>::type> eig) {
-        if constexpr (!select::solver_vendor_available<B>) {
+        if constexpr (B == Backend::SYCL) {
             return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
         } else {
             return blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, A, eig,
@@ -60,7 +60,7 @@ namespace batchlas
 
                         auto syev_ws = pool.allocate<std::byte>(ctx, cond_syev_buffer_size<B, T>(ctx, A_copy, eig_span));
                         Event e;
-                        if constexpr (!select::solver_vendor_available<B>) {
+                        if constexpr (B == Backend::SYCL) {
                             // No vendor solver (the vendor-free SYCL backend): the public syev's native kernels.
                             e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
                         } else {
