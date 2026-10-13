@@ -74,6 +74,32 @@ void expect_eigenvalues_match_lapacke(const batchlas::MatrixView<Scalar, batchla
 #endif
 }
 
+/// s (min(m, n) values per item, packed) against LAPACKE singular values of A0 in double:
+/// max |s - s_ref| / max s_ref at Check::values over @p items (default: every item). Skips without
+/// LAPACKE.
+template <typename Scalar>
+void expect_singular_values_match_lapacke(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A0,
+                                          const batchlas::UnifiedVector<typename batchlas::base_type<Scalar>::type>& s,
+                                          std::span<const int> items = {}) {
+#if !BATCHLAS_VERIFY_HAVE_LAPACKE
+    (void)A0, (void)s, (void)items;
+    GTEST_SKIP() << "no host LAPACKE reference in this build";
+#else
+    using Real = typename batchlas::base_type<Scalar>::type;
+    const int k = std::min(A0.rows(), A0.cols()), batch = A0.batch_size();
+    const std::vector<int> picked = items.empty() ? A0.all_items() : std::vector<int>(items.begin(), items.end());
+    std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch));
+    double smax = 0;
+    for (int b : picked) {
+        ASSERT_TRUE(batchlas::verify::singular_values(A0, b, ref[static_cast<std::size_t>(b)])) << "LAPACKE reference failed, item " << b;
+        if (k > 0) smax = batchlas::verify::nanmax(smax, ref[static_cast<std::size_t>(b)].front());
+    }
+    const batchlas::VectorView<Real> sv(const_cast<Real*>(s.data()), k, batch);
+    const double err = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::values_error(sv, ref, smax, picked);
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
+#endif
+}
+
 /// W against @p W_ref, another result of the code under test (no LAPACKE): max |w - w_ref| / max |w_ref|
 /// at Check::values over every item. @p reversed compares W with W_ref read back to front per item.
 template <typename Scalar>

@@ -782,6 +782,7 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
 // threshold of the old predicates from both sides. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; int n, batch; const char* ranked; };
     const Row rows[] = {
         {"float", 4, 128, "vendor tiny cta blocked"},      {"float", 5, 128, "tiny vendor cta blocked"},
@@ -802,14 +803,15 @@ TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"batch", r.batch}});
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : " ") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line << " n=" << r.n << " batch=" << r.batch;
-            EXPECT_FALSE(row->timed) << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

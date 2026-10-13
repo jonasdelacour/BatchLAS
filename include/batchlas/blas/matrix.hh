@@ -1796,6 +1796,18 @@ namespace batchlas {
         Event fill_graded_hermitian(double log10_cond, unsigned int seed = 42) const {
             return fill_graded_hermitian(Queue(), log10_cond, seed);
         }
+
+        /// @brief Clustered-spectrum Hermitian matrix: diagonal floor(i / 4) + (i % 4) 1e-4 plus
+        ///        @p noise times a seeded Hermitian perturbation.
+        ///
+        /// Off-diagonal a_ij = @p noise * z_ij (i > j, z uniform [-1, 1), both parts for complex T) and
+        /// a_ji = conj(a_ij) bitwise; the diagonal adds @p noise * Re(z_ii). Groups of four nearly equal
+        /// eigenvalues exercise deflation and tie-breaking. Deterministic in @p seed (Philox, the same on
+        /// every compiler), independent of ld() and stride(); writes only the rows() x cols() entries.
+        /// @throws batchlas::invalid_argument if rows() != cols()
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        Event fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned int seed = 42) const;
         /// @}
 
 

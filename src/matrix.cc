@@ -1192,6 +1192,33 @@ Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed)
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
+Event MatrixView<T, MType>::fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned int seed) const {
+    if (rows_ != cols_) throw batchlas::invalid_argument("fill_near_degenerate_hermitian: the matrix must be square");
+    const std::size_t n = static_cast<std::size_t>(rows_);
+    const std::size_t total = static_cast<std::size_t>(batch_size_) * n * n;
+    if (total == 0) return ctx.get_event();
+    T* data = data_ptr();
+    const std::size_t ld = static_cast<std::size_t>(ld_);
+    const std::size_t stride = static_cast<std::size_t>(stride_);
+    const float_t<T> eps = static_cast<float_t<T>>(noise);
+    auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+        const std::size_t flat = item.get_global_id(0);
+        if (flat >= total) return;
+        const std::size_t b = flat / (n * n);
+        const std::size_t j = (flat / n) % n;
+        const std::size_t i = flat % n;
+        T value = i >= j ? eps * seeded_uniform<T>(seed, (b * n + j) * n + i)
+                         : conj_of(eps * seeded_uniform<T>(seed, (b * n + i) * n + j));
+        if (i == j) value = T(float_t<T>(i / 4) + float_t<T>(i % 4) * float_t<T>(1e-4) + std::real(value));
+        data[b * stride + j * ld + i] = value;
+    });
+    return ctx.get_event();
+}
+
+template <typename T, MatrixFormat MType>
+template <MatrixFormat M>
+    requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int seed) const {
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_pivoted: the matrix must be square");
     const int n = rows_;
@@ -2655,9 +2682,13 @@ template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triang
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;

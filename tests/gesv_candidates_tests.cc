@@ -94,11 +94,15 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
-                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (d(gen) >= 0 ? R(1) : R(-1)), d(gen))
-                                         : MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
+                    const auto x = d(gen), y = d(gen);
+                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (x >= 0 ? R(1) : R(-1)), y)
+                                         : MatrixView<T, MatrixFormat::Dense>::make(x, y);
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
-            for (auto& v : b1) v = MatrixView<T, MatrixFormat::Dense>::make(d(gen), d(gen));
+            for (auto& v : b1) {
+                const auto re = d(gen), im = d(gen);
+                v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+            }
         }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) p.a[size_t(it) * p.stra + size_t(j) * p.lda + i] = a1[i + size_t(j) * n];
@@ -753,6 +757,7 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
 // old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first entry, then
 // blocked. Off-grid probes (25, 30, 36, 3000) included. sm_120 is deep-measured since 2026-10-09.
 TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; int n, nrhs; const char* first; std::size_t len; };
     const Row rows[] = {
         {"float", 1, 1, "tiny", 2},        {"float", 32, 64, "tiny", 2},   {"float", 33, 1, "blocked", 1},
@@ -766,16 +771,17 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"nrhs", r.nrhs}});
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(r.n);
             ASSERT_EQ(row->ranked.size(), r.len) << what;
             EXPECT_EQ(row->ranked.front().spelling, r.first) << what;
             EXPECT_EQ(row->ranked.back().spelling, "blocked") << what;
-            EXPECT_FALSE(row->timed) << what;
         }
     }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND

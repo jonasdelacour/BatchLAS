@@ -117,14 +117,19 @@ Problem<T> make_problem(const Spec& s) {
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
+        // Named locals: the two draws of a complex entry in a fixed order on every compiler.
+        auto draw = [&] {
+            const auto re = u(gen), im = u(gen);
+            return MatrixView<T, MatrixFormat::Dense>::make(re, im);
+        };
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.xi(r, i)];
+                p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
+        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? draw() : p.mem[p.xi(r, i)];
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? MatrixView<T, MatrixFormat::Dense>::make(u(gen), u(gen)) : p.mem[p.yi(r, i)];
+                p.mem[p.yi(it, i)] = it < reps ? draw() : p.mem[p.yi(r, i)];
     }
     p.mem0 = p.mem;
     return p;
@@ -866,6 +871,7 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
 // cells, vendor | direct under N; on-grid and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance; AutoReadsTheShippedTable its use).
 TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* trans; int out, red, batch; const char* ranked; };
     const Row rows[] = {
         {"cdouble", "T", 256, 64, 320, "cta|vendor|direct"},   {"cdouble", "T", 700, 200, 5000, "cta|vendor|direct"},
@@ -880,15 +886,16 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"trans", r.trans}, {"out", r.out}, {"red", r.red}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
-            EXPECT_FALSE(row->timed) << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

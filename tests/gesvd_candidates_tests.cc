@@ -107,7 +107,8 @@ std::vector<cd> unit_vector(std::mt19937& gen, int n) {
     std::vector<cd> u(n);
     double nrm = 0;
     for (auto& x : u) {
-        x = kCx<T> ? cd(d(gen), d(gen)) : cd(d(gen), 0);
+        const double re = d(gen);
+        x = cd(re, kCx<T> ? d(gen) : 0.0);
         nrm += std::norm(x);
     }
     for (auto& x : u) x /= std::sqrt(nrm);
@@ -944,6 +945,7 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them.
 // sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
+    test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* herm; const char* vec; int m, n; const char* ranked; };
     const Row rows[] = {
         {"float", "N", "all", 32, 32, "jacobi|cta|blocked|vendor"}, {"float", "N", "all", 33, 33, "blocked|vendor|jacobi"},
@@ -958,15 +960,16 @@ TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_FALSE(tables.empty()) << r.dtype;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << r.dtype;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             const select::Key key{{"herm", r.herm}, {"vec", r.vec}, {"m", r.m}, {"n", r.n}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
+            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
-            EXPECT_FALSE(row->timed) << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

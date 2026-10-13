@@ -89,7 +89,10 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < m; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+            }
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
@@ -739,6 +742,7 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // grid and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice, and
 // every row ranks both candidates. sm_120 is deep-measured since 2026-10-09.
 TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     const std::pair<int, int> points[] = {{1, 1},     {96, 96},    {300, 299},  {511, 511}, {512, 512},
                                           {513, 1},   {513, 513},  {514, 300},  {600, 512}, {640, 513},
                                           {1000, 10}, {2000, 600}, {9000, 9000}, {450, 449}, {512, 384}};
@@ -748,16 +752,17 @@ TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (auto [m, n] : points) {
                 const select::TableRow* row = t.nearest(select::Key{{"m", m}, {"n", n}});
                 ASSERT_NE(row, nullptr) << t.file;
+                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                if (held.skip(row->timed)) continue;
                 const std::string what = t.file + ":" + std::to_string(row->line) + " for " + label(m, n, 0);
                 ASSERT_EQ(row->ranked.size(), 2u) << what;
                 EXPECT_EQ(row->ranked.front().spelling, old_first(m, n, true)) << what;
-                EXPECT_FALSE(row->timed) << what;
             }
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

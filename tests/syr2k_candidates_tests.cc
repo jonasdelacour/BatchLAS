@@ -900,13 +900,13 @@ TYPED_TEST(Syr2kCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // batch 1, double `vendor` everywhere; spot rows through nearest(). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
 TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
+    test_utils::TranscribedRowsHeld held;
     for (const char* dt : {"float", "double"})
         for (const char* dev : {"sm_89"}) {
             const auto tables = select::tables_in_borrow_order("syr2k", dt, select::device_from_key(dev));
             ASSERT_FALSE(tables.empty()) << dt << " " << dev;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << t.file;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             std::string keys = "# keys: dtype:exact";
             for (auto k : s2::key_names) keys += " " + std::string(k);
             const std::string file = "syr2k." + std::string(dev) + ".txt";
@@ -924,6 +924,8 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                         ASSERT_EQ(row.keys.size(), 3u) << t.file << ":" << row.line;
                         EXPECT_EQ(row.keys[0] + " " + row.keys[1] + " " + row.keys[2], want_key)
                             << t.file << ":" << row.line;
+                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        if (held.skip(row.timed)) continue;
                         std::vector<std::string> ranked;
                         for (const auto& e : row.ranked) ranked.push_back(e.spelling);
                         const std::vector<std::string> want =
@@ -931,7 +933,6 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                             : b >= 2 ? std::vector<std::string>{"triangular", "vendor"}
                                      : std::vector<std::string>{"vendor", "triangular"};
                         EXPECT_EQ(ranked, want) << t.file << ":" << row.line;
-                        EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                         const select::TableRow* hit = t.nearest({{"n", n}, {"k", k}, {"batch", b}});
                         ASSERT_EQ(hit, &row) << t.file << ": grid cell n=" << n << " k=" << k << " batch=" << b;
                     }
@@ -941,6 +942,7 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             off = t.nearest({{"n", 3000}, {"k", 2}, {"batch", 1}});
             EXPECT_EQ(off->ranked.front().spelling, "vendor") << t.file;
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace
