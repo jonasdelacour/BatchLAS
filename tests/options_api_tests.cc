@@ -568,6 +568,68 @@ TEST(OptionsApi, ShortInfoSpanIsRejected) {
     q.wait();
 }
 
+// The ordinary spelling with non-const lvalue arguments resolves to the queue-dispatch
+// overload, which forwards to the `f<Backend>` option overload: the shape checks must live
+// there too, or a short W/tau/S is written out of bounds. Each short span is a prefix of a
+// full-length buffer, so a missing check cannot corrupt memory. Only potrf's option check is
+// load-bearing: syev, ormqr, gesvd and getrs also reject these spans in their primaries.
+TEST(OptionsShapeChecks, OrdinarySpellingRejectsShortOutputs) {
+    Queue q;
+    constexpr int n = 8;
+    constexpr int batch = 4;
+    const size_t nb = static_cast<size_t>(n) * batch;
+    auto A = spd(n, batch);
+    Matrix<float, MatrixFormat::Dense> C(n, n, batch), U(n, n, batch), Vh(n, n, batch);
+    UnifiedVector<float> full(nb, 0.0f);
+    UnifiedVector<int32_t> info(batch, 0);
+    UnifiedVector<int64_t> pivots(nb, 1);
+    UnifiedVector<std::byte> scratch(size_t{1} << 22);
+    Span<float> short_out(full.data(), nb - 1);
+    Span<int32_t> short_info(info.data(), batch - 1);
+    Span<std::byte> ws = scratch.to_span();
+    Matrix<float, MatrixFormat::Dense> wide(n, n, batch);
+    MatrixView<float, MatrixFormat::Dense> oblong(wide.view().data_ptr(), n, n - 3, n, n * n, batch);
+
+    EXPECT_THROW((void)syev(q, A, short_out, SyevOptions{}), batchlas::invalid_argument);
+    EXPECT_THROW((void)ormqr(q, A, C, short_out, OrmqrOptions{}), batchlas::invalid_argument);
+    EXPECT_THROW((void)gesvd(q, A, short_out, U, Vh, GesvdOptions{}), batchlas::invalid_argument);
+    EXPECT_THROW((void)getrs(q, oblong, C, pivots.to_span(), GetrsOptions{}, ws),
+                 batchlas::invalid_argument);
+    PotrfOptions short_opts{.uplo = Uplo::Lower, .info = short_info};
+    EXPECT_THROW((void)potrf(q, A, short_opts, ws), batchlas::invalid_argument);
+
+    // The same calls spelled `f<Backend>`, which is where the dispatch overload lands.
+    const auto explicit_backend = [&](auto call) { return with_backend(q, call); };
+    EXPECT_THROW((void)explicit_backend([&](auto B) { return syev<B.value>(q, A, short_out, SyevOptions{}); }),
+                 batchlas::invalid_argument);
+    EXPECT_THROW((void)explicit_backend([&](auto B) { return syev<B.value>(q, A, short_out, SyevOptions{}, ws); }),
+                 batchlas::invalid_argument);
+    EXPECT_THROW((void)explicit_backend([&](auto B) { return ormqr<B.value>(q, A, C, short_out, OrmqrOptions{}); }),
+                 batchlas::invalid_argument);
+    EXPECT_THROW(
+        (void)explicit_backend([&](auto B) { return ormqr<B.value>(q, A, C, short_out, OrmqrOptions{}, ws); }),
+        batchlas::invalid_argument);
+    EXPECT_THROW(
+        (void)explicit_backend([&](auto B) { return gesvd<B.value>(q, A, short_out, U, Vh, GesvdOptions{}); }),
+        batchlas::invalid_argument);
+    EXPECT_THROW(
+        (void)explicit_backend([&](auto B) { return gesvd<B.value>(q, A, short_out, U, Vh, GesvdOptions{}, ws); }),
+        batchlas::invalid_argument);
+    EXPECT_THROW((void)explicit_backend(
+                     [&](auto B) { return getrs<B.value>(q, oblong, C, pivots.to_span(), GetrsOptions{}, ws); }),
+                 batchlas::invalid_argument);
+    EXPECT_THROW((void)explicit_backend([&](auto B) { return potrf<B.value>(q, A, short_opts, ws); }),
+                 batchlas::invalid_argument);
+
+    // GUARD: full-length arguments pass, so each throw above is the shape check.
+    Span<float> out = full.to_span();
+    EXPECT_NO_THROW((void)syev(q, A, out, SyevOptions{}));
+    q.wait();
+    PotrfOptions opts{.uplo = Uplo::Lower, .info = info.to_span()};
+    EXPECT_NO_THROW((void)potrf(q, A, opts, ws));
+    q.wait();
+}
+
 // Host memory handed to a device queue used to reach the device as a wild address and
 // abort from inside the SYCL runtime, where no catch block could help.
 // contract: docs/cpp-api.md#where-the-memory-has-to-live-the-usm-contract

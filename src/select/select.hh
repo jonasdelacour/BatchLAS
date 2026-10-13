@@ -567,14 +567,18 @@ decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<
 }
 
 /// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
-/// pending work (the multi-launch drivers need one).
+/// pending work (the multi-launch drivers need one). q is then ordered after that queue's work,
+/// so q.wait() and q.get_event() cover it.
 template <class F>
-decltype(auto) on_in_order_queue(Queue& q, F&& f) {
+auto on_in_order_queue(Queue& q, F&& f) {
     if (q.in_order()) return f(q);
     Queue in_order(q, true);
     Event dep = q.get_event();
     in_order.enqueue(dep);
-    return f(in_order);
+    auto result = f(in_order);
+    Event done = in_order.get_event();
+    q.enqueue(done);
+    return result;
 }
 
 /// @}

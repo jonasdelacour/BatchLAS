@@ -1573,6 +1573,23 @@ TYPED_TEST(MatrixFillTest, LocalMemoryFillsAreRaceFreeAtASaturatingBatch) {
     }
 }
 
+// compute_nd_range_sizes caps the grid above INT_MAX / 2 work items, so a kernel that handles one
+// element per work-item silently skipped everything past the cap. 2^30 + 32768 floats (4 GiB).
+TEST(MatrixKernels, GridCapCoversAllElements) {
+    Queue q;
+    constexpr int rows = 1 << 15, cols = (1 << 15) + 1;
+    const size_t total = static_cast<size_t>(rows) * cols;
+    if (q.device().type != DeviceType::GPU ||
+        q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) < (size_t{10} << 30))
+        GTEST_SKIP() << "needs a GPU with at least 10 GB";
+    Matrix<float, MatrixFormat::Dense> M(rows, cols, 1);
+    M.view().fill(q, 1.0f).wait();
+    scale(q, 2.0f, M.view()).wait();
+    const float* d = M.view().data_ptr();
+    for (size_t idx : {size_t{0}, size_t{1} << 29, (size_t{1} << 30) - 1, size_t{1} << 30, total - rows, total - 1})
+        EXPECT_EQ(d[idx], 2.0f) << "element " << idx << " of " << total;
+}
+
 // fill_diagonal on a wide padded view: diagonal k holds min(rows - row_off, cols - col_off) entries
 // (none once |k| reaches the edge); nothing else in the storage, padding included, may change.
 namespace {

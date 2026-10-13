@@ -21,6 +21,15 @@
 
 namespace batchlas {
 
+// rocBLAS is linked but src/backends/rocblas.cc wraps none of these three.
+// No build switch restores these on ROCm: rocblas.cc has no wrapper at all.
+template <class T>
+[[noreturn]] void throw_no_rocm_wrapper(Op op) {
+    coverage::record_miss(op, scalar_kind_of<T>, Backend::ROCM, "rocBLAS");
+    throw NoRouteError(op, Backend::ROCM, scalar_kind_of<T>,
+                       "rocblas.cc has no hemm/herk/her2k wrapper; no build option adds one");
+}
+
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -37,7 +46,9 @@ Event hemm(Queue& ctx,
         throw batchlas::invalid_argument("HEMM: a heterogeneous batch (per-item active dims), which no arm serves");
     // An empty problem is a no-op in every build and under any pin, as symm's is.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw_no_rocm_wrapper<T>(Op::hemm);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::hemm, Back, select::kLevel3Library<Back>);
     } else {
@@ -57,7 +68,9 @@ Event herk(Queue& ctx,
     if (A.is_heterogeneous() || C.is_heterogeneous())
         throw batchlas::invalid_argument("HERK: a heterogeneous batch (per-item active dims), which no arm serves");
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw_no_rocm_wrapper<T>(Op::herk);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::herk, Back, select::kLevel3Library<Back>);
     } else {
@@ -78,7 +91,9 @@ Event her2k(Queue& ctx,
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous())
         throw batchlas::invalid_argument("HER2K: a heterogeneous batch (per-item active dims), which no arm serves");
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
-    if constexpr (!select::level3_vendor_available<Back>) {
+    if constexpr (Back == Backend::ROCM) {
+        throw_no_rocm_wrapper<T>(Op::her2k);
+    } else if constexpr (!select::level3_vendor_available<Back>) {
         select::throw_no_vendor_route<T>(
             Op::her2k, Back, select::kLevel3Library<Back>);
     } else {
@@ -101,11 +116,15 @@ Event her2k(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above
-// compile to a throw when the library is absent, so the public entry point is a
-// symbol in every build that has the device. rocblas.cc has no hemm/herk/her2k
-// wrapper, so ROCm instantiates none of them.
+// compile to a throw when the library is absent (always on ROCm), so the public
+// entry point is a symbol in every build that has the device; the dispatch macro
+// emits a <ROCM> call in every ROCm build.
 #if BATCHLAS_HAS_CUDA_BACKEND
 LEVEL3_INSTANTIATE(Backend::CUDA)
+#endif
+
+#if BATCHLAS_HAS_ROCM_BACKEND
+LEVEL3_INSTANTIATE(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND

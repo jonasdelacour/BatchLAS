@@ -4,6 +4,9 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
+#include <batchlas/verify/reference.hh>
+
+#include "test_utils.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -934,4 +937,62 @@ TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
     Queue q;
     auto A = spd(4, 1);
     EXPECT_THROW(linalg::svd(q, A.view(), SvdVectors::None), std::invalid_argument);
+}
+
+// posv and syev run an out-of-order caller's call on a temporary in-order queue; the caller's
+// Queue::wait() must still cover that work (the linalg wrappers free their scratch after it).
+TEST(LinalgWrappers, OutOfOrderWaitCoversInOrderDrivers) {
+    Queue base;
+    Queue q(base, false);
+    const int n = 64, nrhs = 4, batch = 4096;
+    auto F = spd(n, batch);
+    auto E = spd(n, batch);
+    auto X = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + (b % 5)); });
+    UnifiedVector<float> W(static_cast<size_t>(n) * batch);
+    auto lease = q.workspace(posv_buffer_size(q, F.view(), X.view(), Uplo::Lower));
+    const auto complete = sycl::info::event_command_status::complete;
+
+    Event solved = posv(q, F.view(), X.view(), Uplo::Lower, lease.span(), Span<int32_t>{});
+    q.wait();
+    EXPECT_EQ(sycl_event(solved).get_info<sycl::info::event::command_execution_status>(), complete) << "posv";
+
+    Event values = syev(q, E.view(), W.to_span(), {.jobz = JobType::NoEigenVectors});
+    q.wait();
+    EXPECT_EQ(sycl_event(values).get_info<sycl::info::event::command_execution_status>(), complete) << "syev";
+}
+
+// The value-returning wrappers own their scratch (the copied A, the factor); returning while
+// the kernels that read it are still enqueued frees it under them. Many calls with no wait in
+// between, on an out-of-order queue, give the freed memory every chance to be reused.
+TEST(LinalgWrappers, ScratchOutlivesKernels) {
+    Queue base;
+    Queue q(base, false);
+    const int n = 48, nrhs = 3, batch = 256, reps = 20;
+    auto A = spd(n, batch);
+    auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - 2 * j + (b % 7)); });
+
+    std::vector<Matrix<float, MatrixFormat::Dense>> X, Y;
+    std::vector<UnifiedVector<float>> W;
+    for (int r = 0; r < reps; ++r) {
+        X.push_back(linalg::solve(q, A.view(), B.view()));
+        Y.push_back(linalg::solve_spd(q, A.view(), B.view()));
+        W.push_back(linalg::eigvalsh(q, A.view()));
+    }
+    q.wait();
+
+    std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
+    double scale = 0.0;
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_TRUE(batchlas::verify::eigenvalues(A.view(), b, ref[static_cast<size_t>(b)]));
+        scale = std::max(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
+    }
+    for (int r = 0; r < reps; ++r) {
+        // Checked on the in-order `base`: the verify helpers chain kernels and must not race.
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), X[r].view(), B.view()))
+            << "solve, rep " << r;
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), Y[r].view(), B.view()))
+            << "solve_spd, rep " << r;
+        const VectorView<float> w(W[r].data(), n, batch);
+        EXPECT_VERIFY(float, batchlas::verify::Check::values, n, Dense::values_error(w, ref, scale)) << "eigvalsh, rep " << r;
+    }
 }

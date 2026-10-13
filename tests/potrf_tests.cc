@@ -1389,3 +1389,27 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
 #include "potrf_lpanel_cases.inc"
 
 }  // namespace
+
+// The blocked driver latched BATCHLAS_POTRF_NB/_W in function-local statics on its first call,
+// so a ScopedEnvVar after any potrf was silently ignored.
+TEST(PotrfBlocked, NbFollowsScopedEnv) {
+    Queue q;
+    if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the blocked driver is GPU-only";
+    constexpr int n = 512;
+    Matrix<float, MatrixFormat::Dense> A(n, n, 4);
+    ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);
+    ScopedEnvVar clear_w("BATCHLAS_POTRF_W", nullptr);
+    ScopedEnvVar pin("BATCHLAS_POTRF_ROUTE", "blocked");
+    const unsigned before = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+    const size_t bytes_before = potrf_buffer_size(q, A.view(), Uplo::Lower);
+    {
+        ScopedEnvVar nb("BATCHLAS_POTRF_NB", "16");
+        ScopedEnvVar w("BATCHLAS_POTRF_W", "8");
+        const unsigned p = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+        EXPECT_EQ(p & 0xffffu, 16u) << "nb";
+        EXPECT_EQ(p >> 16, 8u) << "W";
+        EXPECT_NE(potrf_buffer_size(q, A.view(), Uplo::Lower), bytes_before) << "the product scratch is W x W";
+    }
+    EXPECT_EQ(sycl_potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
+    EXPECT_EQ(potrf_buffer_size(q, A.view(), Uplo::Lower), bytes_before);
+}
