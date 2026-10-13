@@ -137,16 +137,9 @@ namespace batchlas {
                                                              C.data_ptr(), C.ld());
             });
         } else {
-            Queue sub_queue(ctx.device(), false);
+            // On ctx: a fresh Queue is not ordered after ctx's pending work (the geqrf).
             for (int i = 0; i < A.batch_size(); ++i) {
-                // (void) on an Event: deliberate, but NOT because of queue ordering --
-                // Queue(device, false) above is explicitly OUT-OF-ORDER, so these
-                // per-item submissions are not ordered against each other and must
-                // not be assumed to be. What makes dropping the Events safe is the
-                // explicit sub_queue.wait() after the loop: it joins all of them
-                // before this function returns, and the caller's ordering then comes
-                // from create_event_after_external_work().
-                (void)ormqr_vendor<B, T>(sub_queue,
+                (void)ormqr_vendor<B, T>(ctx,
                                    A.batch_item(i),
                                    C.batch_item(i),
                                    side,
@@ -154,7 +147,6 @@ namespace batchlas {
                                    tau.subspan(i * k, k),
                                    {});
             }
-            sub_queue.wait();
         }
         return ctx.create_event_after_external_work();
     }
@@ -198,11 +190,10 @@ namespace batchlas {
                                                              tau.data());
             });
         } else {
-            Queue sub_queue(ctx.device(), false);
+            // On ctx, the vendor per item: a fresh Queue is not ordered after ctx's pending geqrf.
             for (int i = 0; i < A.batch_size(); ++i) {
-                (void)orgqr_vendor<B, T>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
+                (void)orgqr_vendor<B, T>(ctx, A.batch_item(i), tau.subspan(i * k, k), {});
             }
-            sub_queue.wait();
         }
         return ctx.create_event_after_external_work();
     }
@@ -341,9 +332,9 @@ namespace batchlas {
         // See potrf above (issue #73).
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
         auto ipiv = pivots.as_span<int>();
-        if (A.data_ptr() != C.data_ptr()) {
-            ctx->memcpy(C.data_ptr(), A.data_ptr(), sizeof(T) * static_cast<size_t>(A.stride()) * A.batch_size());
-        }
+        // ld- and stride-aware (a no-op when C aliases A, which rocsolver_?getri runs in place).
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C, A);
+        if (!ctx.in_order()) ctx.wait();
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             if (A.batch_size() == 1) {

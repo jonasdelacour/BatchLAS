@@ -813,6 +813,44 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
+// The vendor family on every backend and device, NETLIB on a CPU queue included: A and C at
+// padded lds and strides that are not ld * n, so a copy of A into C that assumes ld == n or
+// stride == n * n reads the gaps.
+template <typename Config>
+class GetriVendor : public GetriCandidates<Config> {
+protected:
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
+        if (!this->ctx) GTEST_SKIP() << "no queue";
+        if (!GetriCandidates<Config>::kVendor) GTEST_SKIP() << "no vendor solver in this build";
+    }
+};
+TYPED_TEST_SUITE(GetriVendor, Types);
+
+TYPED_TEST(GetriVendor, PaddedLdAndStride) {
+    for (int n : {5, 33})
+        for (int batch : {1, 3}) {
+            const Spec s{n, batch, 0, 17u + unsigned(n)};
+            auto p = this->make(s);
+            this->run_pinned(C{gi::Vendor{}}, p);
+            this->expect_inverted(p, name(C{gi::Vendor{}}, s));
+        }
+}
+
+// getri is out of place on every backend (the header's contract): the public entry refuses C
+// aliasing A before any route runs, although LAPACKE/rocSOLVER alone could run it in place.
+TYPED_TEST(GetriVendor, AliasedAAndC) {
+    using T = typename TestFixture::T;
+    auto p = this->make(Spec{8, 2, 0, 3u});
+    const Pin pin("getri", C{gi::Vendor{}});
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getri_buffer_size<TestFixture::B, T>(*this->ctx, p.A())));
+    EXPECT_THROW((void)(getri<TestFixture::B, T>)(*this->ctx, p.A(), p.A(), p.piv.to_span(), ws.to_span(),
+                                                  p.info.to_span()),
+                 batchlas::invalid_argument);
+    this->ctx->wait();
+}
+
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
 // old preference, every dtype, at on-grid, edge and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).

@@ -512,6 +512,72 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
     }
 }
 
+// beta = 0 means C is not an input: a k == 0 member over a NaN-poisoned C must come out all
+// zeros, not 0 * NaN. Item 0 is a real product over the same poison.
+TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using Real = typename base_type<ScalarType>::type;
+    constexpr int batch_size = 2, max_m = 40, max_n = 24, max_k = 16;
+    Matrix<ScalarType> A(max_m, max_k, batch_size), B(max_k, max_n, batch_size), C(max_m, max_n, batch_size),
+        Z(max_m, max_n, batch_size);
+    A.fill(ScalarType(0));
+    B.fill(ScalarType(0));
+    C.fill(ScalarType(std::numeric_limits<Real>::quiet_NaN()));
+    Z.fill(ScalarType(0));
+    UnifiedVector<int> a_rows(batch_size), a_cols(batch_size), b_rows(batch_size), b_cols(batch_size),
+        c_rows(batch_size), c_cols(batch_size);
+    a_rows[0] = 33; a_cols[0] = 16; b_rows[0] = 16; b_cols[0] = 21; c_rows[0] = 33; c_cols[0] = 21;
+    a_rows[1] = 40; a_cols[1] = 0;  b_rows[1] = 0;  b_cols[1] = 24; c_rows[1] = 40; c_cols[1] = 24;
+    A.set_active_dims(a_rows.to_span(), a_cols.to_span());
+    B.set_active_dims(b_rows.to_span(), b_cols.to_span());
+    C.set_active_dims(c_rows.to_span(), c_cols.to_span());
+    auto entry = [](int re, int im) {
+        if constexpr (test_utils::is_complex<ScalarType>::value) return ScalarType(Real(re), Real(im));
+        else return static_cast<ScalarType>(re);
+    };
+    for (int col = 0; col < a_cols[0]; ++col)
+        for (int row = 0; row < a_rows[0]; ++row) A(row, col, 0) = entry(1 + row - col, (row % 3) - 1);
+    for (int col = 0; col < b_cols[0]; ++col)
+        for (int row = 0; row < b_rows[0]; ++row) B(row, col, 0) = entry(2 + row + col, 1 - (col % 3));
+
+    (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(3), ScalarType(0), Transpose::NoTrans,
+               Transpose::NoTrans, ComputePrecision::Default);
+    this->ctx->wait();
+
+    for (int col = 0; col < c_cols[1]; ++col)
+        for (int row = 0; row < c_rows[1]; ++row)
+            ASSERT_EQ(C(row, col, 1), ScalarType(0)) << "k == 0, beta == 0 item at (" << row << "," << col << ")";
+    ExpectGemmExact<ScalarType>(*(this->ctx), ActiveItem(A, 0, a_rows[0], a_cols[0]), Transpose::NoTrans,
+                                ActiveItem(B, 0, b_rows[0], b_cols[0]), Transpose::NoTrans,
+                                ActiveItem(Z, 0, c_rows[0], c_cols[0]), ActiveItem(C, 0, c_rows[0], c_cols[0]),
+                                ScalarType(3), ScalarType(0));
+}
+
+// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item, so on NETLIB it
+// reaches the vendor loop's own k == 0 branch. C is a padded sub-block of a NaN-filled buffer.
+TYPED_TEST(GemmTest, HomogeneousKZeroBetaZeroWritesZeros) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using Real = typename base_type<ScalarType>::type;
+    using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
+    constexpr Backend Ba = TestFixture::BackendType;
+    // No native gemm family takes k == 0, so vendor-free this shape has no route (NoRouteError).
+    constexpr bool kVendor = Ba == Backend::NETLIB ? bool(BATCHLAS_HAS_CBLAS)
+                           : Ba == Backend::ROCM ? bool(BATCHLAS_HAS_ROCBLAS) : bool(BATCHLAS_HAS_CUBLAS);
+    if (!kVendor) GTEST_SKIP() << "k == 0 is vendor-only";
+    constexpr int batch = 3, m = 17, n = 11, ldc = m + 5, stride = ldc * n + 9;
+    UnifiedVector<ScalarType> a(1), b(1), c(static_cast<size_t>(stride) * batch);
+    for (auto& x : c) x = ScalarType(std::numeric_limits<Real>::quiet_NaN());
+    const MV A(a.data(), m, 0, m, 0, batch), B(b.data(), 0, n, 1, 0, batch), C(c.data(), m, n, ldc, stride, batch);
+    (void)gemm(*(this->ctx), A, B, C, ScalarType(2), ScalarType(0), Transpose::NoTrans, Transpose::NoTrans,
+               ComputePrecision::Default);
+    this->ctx->wait();
+    for (int i = 0; i < batch; ++i)
+        for (int col = 0; col < n; ++col)
+            for (int row = 0; row < m; ++row)
+                ASSERT_EQ(c[static_cast<size_t>(i) * stride + col * ldc + row], ScalarType(0))
+                    << "item " << i << " at (" << row << "," << col << ")";
+}
+
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;

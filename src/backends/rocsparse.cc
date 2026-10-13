@@ -33,7 +33,7 @@ namespace batchlas {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
             alignas(16) auto beta_h = beta;
-            rocsparse_spmm(handle,
+            check_status(rocsparse_spmm(handle,
                            enum_convert<BackendLibrary::ROCSPARSE>(transA),
                            enum_convert<BackendLibrary::ROCSPARSE>(transB),
                            &alpha_h,
@@ -45,7 +45,7 @@ namespace batchlas {
                            rocsparse_spmm_alg_default,
                            rocsparse_spmm_stage_compute,
                            &buffer_size,
-                           buffer.data());
+                           buffer.data()));
         });
         return ctx.create_event_after_external_work();
     }
@@ -66,7 +66,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
         size_t size = 0;
-        rocsparse_spmm(handle,
+        check_status(rocsparse_spmm(handle,
                        enum_convert<BackendLibrary::ROCSPARSE>(transA),
                        enum_convert<BackendLibrary::ROCSPARSE>(transB),
                                  &alpha,
@@ -78,7 +78,7 @@ namespace batchlas {
                        rocsparse_spmm_alg_default,
                        rocsparse_spmm_stage_buffer_size,
                        &size,
-                       nullptr);
+                       nullptr));
         return size;
     }
 
