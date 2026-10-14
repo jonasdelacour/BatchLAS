@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <algorithm>
 #include <iostream>
 
@@ -28,6 +29,33 @@ inline constexpr const char* kSlmCappedReason =
 #else
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
 #endif
+
+// True when @p msg reports a kernel with no device image (runtimes word it differently) AND
+// BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1: only then may the caller skip. Otherwise it rethrows and
+// the test fails, because a silent skip is how a dropped instantiation stays green.
+inline bool may_skip_missing_kernel(std::string_view msg) {
+    const bool missing = msg.find("No kernel named") != std::string_view::npos ||
+                         msg.find("kernel bundle") != std::string_view::npos ||
+                         msg.find("PI_ERROR_INVALID_KERNEL_NAME") != std::string_view::npos;
+    const char* allow = std::getenv("BATCHLAS_TEST_ALLOW_MISSING_KERNEL");
+    return missing && allow && std::string_view(allow) == "1";
+}
+
+// A *TranscribedTable test holds untimed sm_89 rows to the old router and skips timed ones. Once
+// a retune times every consulted row it must skip loudly rather than pass on zero rows.
+class TranscribedRowsHeld {
+public:
+    bool skip(bool timed) { timed ? ++timed_ : ++checked_; return timed; }
+    int checked() const { return checked_; }
+    int timed() const { return timed_; }
+private:
+    int checked_ = 0, timed_ = 0;
+};
+#define SKIP_IF_NO_TRANSCRIBED_ROWS(held)                                                      \
+    if ((held).checked() == 0)                                                                 \
+    GTEST_SKIP() << "all " << (held).timed() << " consulted sm_89 rows are timed: the old "   \
+                 << "router's preference no longer applies; delete this test with the "        \
+                 << "transcribed tables"
 
 // Convert std::tuple<Ts...> to GoogleTest type list
 template <class Tuple> struct tuple_to_types;
@@ -278,6 +306,20 @@ template <typename T>
                                          << " (" << slack.reason << "))";
 }
 
+// A vendor build's "no route": select::pick's std::runtime_error("<op>: no runnable kernel on ...").
+// Any other exception fails, so a vendor that ran and then threw cannot pass for a refusal.
+template <typename F>
+::testing::AssertionResult throws_no_runnable_kernel(F&& f) {
+    try {
+        std::forward<F>(f)();
+    } catch (const std::exception& e) {
+        if (std::string_view(e.what()).find("no runnable kernel") != std::string_view::npos)
+            return ::testing::AssertionSuccess();
+        return ::testing::AssertionFailure() << "threw, but not 'no runnable kernel': " << e.what();
+    }
+    return ::testing::AssertionFailure() << "did not throw";
+}
+
 // Unified base test fixture for all BatchLAS tests
 template <typename Config>
 class BatchLASTest : public ::testing::Test {
@@ -338,3 +380,4 @@ protected:
 // EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
 #define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))
 #define EXPECT_VERIFY_SLACK(T, kind, n, value, ...) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value), __VA_ARGS__))
+#define EXPECT_NO_RUNNABLE_KERNEL(...) EXPECT_TRUE(::test_utils::throws_no_runnable_kernel([&] { __VA_ARGS__; }))

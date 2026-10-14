@@ -1,8 +1,9 @@
 # Tuning data layout {#design_tuning_data}
 
 > **Status:** implemented in the tuning PR (2026-10-11), decided by the maintainer on 2026-10-09
-> ("Full: 2 files per op/device"). Replaces the per-dtype tables, the per-run ledger directories,
-> the transcriber CSVs and the converted routing sweeps. Engine: @ref design_tiered_tuning.
+> ("Full: 2 files per op/device"). Replaces the per-dtype tables, the per-run ledger directories
+> and the converted routing sweeps. The only normative page for tables, ledgers, tiers and
+> staleness; other pages point here. Engine: @ref design_tiered_tuning.
 
 Two files per (op, device), one source of truth, one vocabulary.
 
@@ -41,7 +42,24 @@ Tiers, best first: `deep`, `coarse`, `preview`, `custom`, `converted`, `transcri
   table, kept or not.
 
 Writers append under `flock(LOCK_EX)`, one `write()` per line, and repair a torn last line under
-the same lock. Several dtype jobs and processes share one file.
+the same lock. Several dtype jobs and processes share one file. A reader ignores a truncated last
+line with a warning, so a cell is either fully recorded or absent.
+
+**Which record counts.** Per cell, the best current record by tier (order above), then the later
+line. A `cell` record is:
+
+- **current** when every candidate's family hash matches the source tree. A candidate stored as
+  `skipped` is not compared (a change to what can run goes through the hashed `<op>.cc`); one
+  skipped with reason `dominated:<key>` was never tried, so its family is stale whatever its hash;
+- **partly stale** when only some hashes changed, or a family appeared that the record never raced:
+  the next run re-races just those candidates against the stored winner and runner-up, at the
+  stored tier, and appends a merged record;
+- **stale** when the stored winner's hash changed or its family was removed: the cell is re-measured
+  at the running tier.
+
+A record in which every candidate is `error` counts as no record. `best_records` (`ledger.cc` and
+`sweep_to_table.py`) applies this one rule, so planning, refinement, `--status` and table
+generation agree.
 
 **Dirty runs.** A `run` whose `batchlas` ends in `-dirty` is left out with its cells, with a
 warning, by every reader (C++ `read_ledger`, `sweep_to_table.py`). `batchlas_tune` refuses a
@@ -56,10 +74,18 @@ files (common, its own, `kernel-deps`), hash v2:
 - sha256 over the lines `"<sha256(normalized file)>  <path>\n"` in list order, first 8 hex.
 - normalized: `/* ... */` blocks removed (an unterminated one runs to the end), then `//` to the
   end of the line, then every whitespace byte. Naive: string literals are not special.
-- One rule in three implementations: `kernel_hash` in `tools/tune/tune_core.cc`,
-  `scripts/sweep_to_table.py` and `.github/ci/check_tuned_tables.py`. The shared vector
-  `tests/data/kernel_hash_v2/` is checked by `tune_tests`, `sweep_to_table.py --self-test` and
-  `check_tuned_tables.py --self-test`.
+- One rule in two implementations: `kernel_hash` in `tools/tune/tune_core.cc` and
+  `scripts/sweep_to_table.py` (`.github/ci/check_tuned_tables.py` imports the latter). The shared
+  vector `tests/data/kernel_hash_v2/` is checked by `tune_tests`, `sweep_to_table.py --self-test`
+  and `check_tuned_tables.py --self-test`.
+- Table staleness is one function, `sweep_to_table.stale_kernel_warnings`: the header's
+  `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
+  deep, coarse, preview or custom row (all converted/transcribed) carries no hash and is never stale;
+  a missing or unparsable `tiers=` is checked.
+- Shared device headers (`src/sycl/kernel_attrs.hh`, `src/sycl/sscp_target.hh`, `sg_compat.hh` and
+  `src/extensions/sg_partition/`, `group-collectives.hh`) sit in a spec's common section, once,
+  wherever its sources include them; `tune_tests` (`SharedKernelHeadersAreCommonInEverySpec`)
+  follows the includes and checks it.
 
 A comment or whitespace edit therefore leaves every record current. Any other edit to a hashed
 file stales the records of every family that hashes it.
@@ -85,9 +111,15 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
 
 A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
 and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one
-that misses an exact-key combination. The tuner records a sample as tier `custom`:
-`batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures exactly the named
-cells, every candidate, with no lattice and no refinement.
+that misses an exact-key combination.
+`scripts/sweep_to_table.py --emit-sample FILE --op OP --device DEV [--cells N]` writes such a
+sample from the ledger: per dtype and exact-key combination of the measured records, the cells at
+the min, median and max of every log key, then cells spread evenly over the rest up to `N`
+(default 64); it exits 1 when the ledger holds fewer than 64 such cells. The tuner records a sample
+as tier `custom`: `batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures
+exactly the named cells, every candidate, with no lattice and no refinement. A named cell above
+`--cap-gib` is still skipped (`skip:cap`): raise the cap, or its exact-key combination can read as
+missing.
 
 `-dirty` runs are never rehashed. Records that no proof covers stay stale, and a stale family
 must be re-measured.
@@ -108,7 +140,8 @@ dtype=float uplo=L n=1 batch=128 | tiny 0.007526 | lpanel:panel=8 0.007722 | ...
   dtypes. `kernels` is the op's hash over its whole kernel-sources block; `family_kernels` holds
   the hashes the table was derived with.
 - A file not named `<op>.<device>.txt` is rejected by the embed step and skipped, with a warning,
-  in `BATCHLAS_TUNED_DIR`, which reads the same names.
+  in `BATCHLAS_TUNED_DIR`, which reads the same names. An override file replaces the built-in
+  table dtype by dtype: a dtype with rows in it uses them, a dtype it lacks keeps the built-in rows.
 
 ## Generation and the check {#tuning-data-generation-and-check}
 
@@ -122,14 +155,21 @@ scripts/sweep_to_table.py --self-test
 scripts/sweep_to_table.py --rehash-sample RUN_ID --op gemm --device sm_120   # "Kernel hashes"
 ```
 
+- **Rows:** each cell takes its best current record; a lower-tier row is emitted only where no
+  higher-tier row lies within the lower tier's lattice spacing under `select::choose`'s distance,
+  and every row ends in its tier comment (`# deep`). Output is byte-reproducible.
 - **Keys and candidates** come from each dtype's newest run line, never from Python. A cell key
   field that is not a table key (trsm's `uplo`, `diag`) is a hidden grid axis: it is projected
   away, and a dtype whose cells vary it is refused (an A/B run is raw data, not a table).
 - **Freshness** in `--check` is judged with the hashes in the table header. The check therefore
   proves that the table equals the function of the ledger, whatever the sources say today.
 - **Stale kernels** (header hashes against `tools/tune/<op>_spec.cc`'s kernel-sources block) are
-  a warning. A kernel edit does not fail CI; it makes the table stale until the op is retuned.
-  `check_tuned_tables.py` reports the same per op; there is no configure-time check.
+  a warning. A kernel edit does not fail CI; it makes the table stale until the op is retuned, and a
+  stale table stays in use; there is no configure-time check. `sweep_to_table.py --check` and
+  `.github/ci/check_tuned_tables.py` print the same warnings from one function,
+  `sweep_to_table.stale_kernel_warnings`, which compares the op-level `kernels=` and every
+  `family_kernels=` hash (kernel-deps included). A table with only converted/transcribed rows
+  (every sm_89 table) carries no hash and is never reported stale.
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.
 
@@ -140,7 +180,7 @@ is one of that dtype's candidates.
 ## Migration (one-off) {#tuning-data-migration}
 
 `scripts/migrate_tuning_data.py`, committed with the data and deleted in the next commits of the
-same PR (the transcribers went the same way), wrote the new files from the old ones:
+same PR, wrote the new files from the old ones:
 
 - **Deep run (sm_120):** the 183 run files merged into the 19 per-op ledgers: every line, in
   file-name-then-line order per old directory, with `dtype` added. 146,544 lines.
@@ -164,8 +204,7 @@ Deleted afterwards:
 - the per-dtype tables and the per-run ledger directories;
 - `tuned/transcribed/*.csv` and the potrf sweeps under `benchmarks/results/routing/`
   (`sm120_potrf_sweep{,_edges}.jsonl` and their campaign files, `sm89_potrf_archive.jsonl`);
-- the converter, transcriber and raw-tuner inputs of `sweep_to_table.py`, with its Python
-  `OpSpec`, and `cmake/BatchLASTunedStaleness.cmake`.
+- the converter and raw-tuner inputs of `sweep_to_table.py`, with its Python `OpSpec`.
 
 Kept, because a page or a test cites them (no table is generated from them): the old raw trsm
 tuner output `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` (`docs/perf/trsm.md`),

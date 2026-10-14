@@ -275,7 +275,7 @@ LAPACK 'O' is absent. If added, append an enumerator so existing ordinals stay s
   raises `std::invalid_argument` (`src/select/select.hh`). Only `native` and `vendor` fall back.
 - **Order lives in the tables.** Jacobi is ahead of CTA on accuracy evidence
   ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)). The order is
-  the rows of `tuned/gesvd.<dtype>.<arch>.txt`. Jacobi stays admissible to 64, so a pin still
+  the rows of `tuned/gesvd.<arch>.txt`. Jacobi stays admissible to 64, so a pin still
   reaches the 33..64 band
   ([evidence](../perf/gesvd.md#gesvd-what-routes-today)).
 

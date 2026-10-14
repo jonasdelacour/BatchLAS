@@ -89,7 +89,10 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = MVof<T>::make(u(gen), u(gen));
+            for (int i = 0; i < m; ++i) {
+                const auto re = u(gen), im = u(gen);
+                p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+            }
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
@@ -293,7 +296,7 @@ TYPED_TEST(OrgqrCandidates, PinnedCandidatesStraddleTheirLimits) {
     int ran = 0, refused = 0;
     const std::tuple<int, int, int> shapes[] = {{1, 1, 3},   {16, 16, 3},  {33, 17, 2}, {24, 24, 3}, {24, 25, 2},
                                                 {40, 24, 3}, {7, 40, 2},   {512, 64, 1}, {513, 33, 1},
-                                                {300, 300, 1}, {16, 0, 2}, {16, 8, 0}};
+                                                {300, 300, 1}, {16, 0, 2}};
     for (const C& c : oq::candidates<typename TestFixture::T>())
         for (auto [m, n, batch] : shapes) {
             const std::string what = name(c, m, n, batch);
@@ -353,7 +356,7 @@ TYPED_TEST(OrgqrCandidates, CanRunEqualsLaunch) {
     for (const C& c : oq::candidates<T>())
         for (auto [m, n, batch, het] : {std::tuple{8, 8, 2, false}, std::tuple{8, 9, 2, false}, std::tuple{30, 1, 2, false},
                                         std::tuple{1, 30, 2, false}, std::tuple{24, 16, 4, true}, std::tuple{8, 0, 2, false},
-                                        std::tuple{0, 0, 2, false}, std::tuple{8, 8, 0, false}}) {
+                                        std::tuple{0, 0, 2, false}}) {
             if (TestFixture::vendor_word_falls_back(c)) continue;
             if (std::holds_alternative<oq::Vendor>(c) && (n > m || n < 1 || batch < 1 || het)) continue;
             auto a = this->prob(m, n, batch, 61u + m);
@@ -447,15 +450,16 @@ TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
 }
 
 // The named can_run-false cases (RouteOrgqr.CorrectnessGatesIncludeTheOnesInheritedFromOrmqr,
-// ported): n > m, an empty extent, batch 0 and a heterogeneous batch refuse a blocked pin from
-// both orgqr and orgqr_buffer_size; batch 1 and 8192 x 8192 are not correctness gates.
+// ported): n > m, an empty extent and a heterogeneous batch refuse a blocked pin from
+// both orgqr and orgqr_buffer_size (batch 0 returns before selection); batch 1 and 8192 x 8192
+// are not correctness gates.
 TYPED_TEST(OrgqrCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const C blocked{oq::Blocked{}};
     struct Case { const char* what; int m, n, batch; bool het; };
     for (const Case& k : {Case{"n > m", 128, 256, 2, false}, Case{"n = 0", 16, 0, 2, false},
-                          Case{"m = n = 0", 0, 0, 2, false}, Case{"batch 0", 16, 8, 0, false},
+                          Case{"m = n = 0", 0, 0, 2, false},
                           Case{"heterogeneous", 32, 16, 4, true}}) {
         UnifiedVector<T> a(std::size_t(std::max(1, k.m)) * std::max(1, k.n) * std::max(1, k.batch), T(1));
         UnifiedVector<T> tau(std::size_t(std::max(1, std::min(k.m, k.n))) * std::max(1, k.batch), T(0));
@@ -483,8 +487,9 @@ TYPED_TEST(OrgqrCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous batch: no native family can run it (one identity, one apply), so Auto takes the
-// vendor at the full storage order, as before; vendor-free there is no route.
+// A heterogeneous batch: no native family can run it (one identity, one apply) and the vendor
+// runs each item at the full storage order, so Auto finds no runnable kernel (WP3 batch policy);
+// vendor-free, NoRouteError. An empty batch returns before selection, so no shape list has one.
 TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
     using T = typename TestFixture::T;
     auto p = this->prob(32, 16, 4, 71u);
@@ -500,7 +505,7 @@ TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
         (void)orgqr<TestFixture::B, T>(*this->ctx, het, p.tau.to_span(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor");
+    if constexpr (TestFixture::kVendor) EXPECT_NO_RUNNABLE_KERNEL(call());
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
@@ -740,6 +745,7 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // grid and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice, and
 // every row ranks both candidates. sm_120 is deep-measured since 2026-10-09.
 TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
+    test_utils::TranscribedRowsHeld held;
     const std::pair<int, int> points[] = {{1, 1},     {96, 96},    {300, 299},  {511, 511}, {512, 512},
                                           {513, 1},   {513, 513},  {514, 300},  {600, 512}, {640, 513},
                                           {1000, 10}, {2000, 600}, {9000, 9000}, {450, 449}, {512, 384}};
@@ -749,16 +755,17 @@ TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_FALSE(tables.empty()) << dt;
             const select::Table& t = *tables.front();
             ASSERT_EQ(t.device, dev) << dt;
-            EXPECT_TRUE(test_utils::transcribed_only(t)) << t.file;
             for (auto [m, n] : points) {
                 const select::TableRow* row = t.nearest(select::Key{{"m", m}, {"n", n}});
                 ASSERT_NE(row, nullptr) << t.file;
+                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                if (held.skip(row->timed)) continue;
                 const std::string what = t.file + ":" + std::to_string(row->line) + " for " + label(m, n, 0);
                 ASSERT_EQ(row->ranked.size(), 2u) << what;
                 EXPECT_EQ(row->ranked.front().spelling, old_first(m, n, true)) << what;
-                EXPECT_FALSE(row->timed) << what;
             }
         }
+    SKIP_IF_NO_TRANSCRIBED_ROWS(held);
 }
 
 }  // namespace

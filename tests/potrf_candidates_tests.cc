@@ -67,7 +67,8 @@ std::vector<T> make_hpd(int n, unsigned seed) {
     for (int j = 0; j < n; ++j) {
         A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
         for (int i = j + 1; i < n; ++i) {
-            const T v = MatrixView<T, MatrixFormat::Dense>::make((gen() & 1 ? d(gen) : -d(gen)) / R(n), d(gen) / R(n));
+            const auto x = gen() & 1 ? d(gen) : -d(gen);
+            const T v = MatrixView<T, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
             A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }

@@ -10,7 +10,7 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 * **Families** (`src/ops/<op>/choice.hh`, in tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields. See [families and their limits](#lu-families-and-their-limits).
 * **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`. It is the only gate. A `can_run` term must never be a speed term, or the shape becomes unservable in a vendor-free build.
-* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. All 32 LU tables are `source=transcribed:424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The sm_120 rows equal the sm_89 rows, so on sm_120 they are hypotheses until retuned. See [what the tables rank first](#lu-what-the-tables-rank-first).
+* **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The four sm_89 tables are `transcribed` at `424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The four sm_120 tables are deep-measured; getrf, getri and getrs keep 45, 94 and 790 `transcribed` rows where the deep lattice measured nothing near ([tuned/README.md](../../tuned/README.md)). See [what the tables rank first](#lu-what-the-tables-rank-first).
 * **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:225-237`).
 * **Pins**: `BATCHLAS_GETRF_ROUTE`, `BATCHLAS_GETRS_ROUTE`, `BATCHLAS_GETRI_ROUTE`, `BATCHLAS_GESV_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or names a family whose `can_run` refuses the shape throws `std::invalid_argument`. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
 * **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), the blocking factor `nb`, the tiny bucket and its launch bound. The launchers work these out. They are not families, keys or `can_run` terms.
@@ -26,12 +26,12 @@ The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a ho
 | `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:48`) |
 | `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:50`) |
 | `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:53-54`) |
-| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor`; the only family for non-square or heterogeneous A |
+| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
 | `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
 | `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
-| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`; also takes a non-conforming pair |
+| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |
 | `getri` | `blocked` | `getri_blocked.cc`, writes P into C, two public `trsm`, zero workspace | `getri_blocked_available<T>()` (`getri.cc:49-50`) |
-| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B>` (`getri.cc:52`) |
+| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B> && !A.is_heterogeneous()` (`getri.cc:52`) |
 | `gesv` | `tiny` | `gesv_tiny.cc`, fused factor and solve | `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4`, `max_wg >= 64` (`gesv.cc:45-47`) |
 | `gesv` | `blocked` | public `getrf`, then public `getrs`; each child selects for itself | homogeneous A and B (`gesv.cc:49`) |
 
@@ -174,7 +174,7 @@ On the saturating grid, nrhs=1 moves from 0.256x (0 of 28 wins) to 2.117x (28 of
 
 **Why clause B is float-only.** Mid-ladder dips refute the wider candidates: double n=128 at 0.940x (batch 2048); cdouble n=32 at 0.577x. Rejected: float `nrhs <= 8` (3 losses, worst 0.686x), `nrhs <= 4` every type (20 losses, worst 0.577x), the whole capability (55 losses, worst 0.294x). The thinnest margin is cdouble n=32 nrhs=2 at 1.116 (batch 16384); it flattens rather than falls.
 
-**In the tables:** every `tuned/getrs.<dtype>.sm_89.txt` row with nrhs 1-2 and n >= 32 reads `cta vendor blocked`; float rows also at nrhs 3-4.
+**In the tables:** every `tuned/getrs.sm_89.txt` row with nrhs 1-2 and n >= 32 reads `cta vendor blocked`; float rows also at nrhs 3-4.
 
 ### `getrs` order floor evidence
 
@@ -284,7 +284,7 @@ Traps from the same record:
 
 * A harness that shrinks the batch cannot ask the routing question: the CTA-count gate multiplies by batch, and `can_use_64x64_k16_wide_fast_path` reads `stride()`.
 * Two RTX 4090s in one chassis are not independent. A sweep on device 1 beside one on device 0 read `getrf float n=256 batch=128` at 3.31-5.51 ms against 1.006 ms alone, with zero foreign processes. Serialise the box.
-* A stale bench binary reports a stale route. Rebuild every bench binary after a table or `can_run` change ([agent guide](docs/developer/agent-guide.md)).
+* A stale bench binary reports a stale route. Rebuild every bench binary after a table or `can_run` change ([agent guide](../developer/agent-guide.md)).
 * A refused pin used to become the other arm silently. Flat selection throws now. An A/B that does not read the resolved route per arm reports one arm twice and calls it 1.00x.
 * `BATCHLAS_GETRS_ROUTE=native` means the first runnable non-vendor entry. To measure the pre-CTA `native`, pin `blocked`.
 
@@ -380,7 +380,7 @@ P4's raw rows are in the tree: `benchmarks/results/p4_leaf_getrf_{float,cfloat,d
 ### One spelling per ceiling
 
 * `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` takes a runtime `local_mem_size` budget. The footprint covers the pivot-search scratch as well as the tile. 0 means the tier is absent from this build.
-* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:34`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:45-46`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
+* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:34`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:90-91`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
 * `getrf_cta_fits` is the tier's admission test, occupancy-scaled. `getrf_leaf_fits` is the residency question, asked at the whole budget ([panel leaf](#lu-the-panel-leaf-is-not-the-tier-ceiling)).
 * `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:328-332`).
 * `getrf_tiny_buffer_size` is not zero: a short or empty caller `info` span means "not requested" and draws pool scratch.
@@ -575,7 +575,7 @@ On sm_89 the register file is four sub-partitions of 16,384 registers, and a blo
 ceil(warps / 4) * 32 * ((regs + 7) & ~7) <= 16,384
 ```
 
-equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-103`, used by `getrs_fused.cc:99`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
+equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-103`, used by `getrs_fused.cc:156`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
 
 Device-link register counts (1,082 entry functions, 0 with spill):
 

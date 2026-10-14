@@ -2,6 +2,9 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include "test_utils.hh"
+#include <batchlas/blas/extra.hh>
+#include <batchlas/verify/tolerance.hh>
+#include "eigen_verify.hh"
 #include "../src/queue.hh"
 #include "../src/extensions/stedc_levels_plan.hh"
 #include <batchlas/util/group-collectives.hh>
@@ -157,7 +160,6 @@ TYPED_TEST_SUITE(StedcTest, StedcTestTypes);
 
 TYPED_TEST(StedcTest, BatchedMatrices) {
     using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
     const int n = 512;
     // Large-batch behaviour is covered by the n=64/batch=128 fused-CTA tests
     // below; here `n` is what drives the divide-and-conquer merge depth, and
@@ -167,44 +169,25 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
 
     auto a = Vector<float_type>::ones(n, batch);
     auto b = Vector<float_type>::ones(n - 1, batch);
-    auto eigvals = Vector<float_type>::zeros(n, batch);
+    UnifiedVector<float_type> eigvals(static_cast<size_t>(n) * batch);
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 32};
+    const Matrix<float_type> dense = Matrix<float_type>::TriDiagToeplitz(n, float_type(1), float_type(1), float_type(1), batch);
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-
-    (void)stedc(*this->ctx, a.view(), b.view(), eigvals.view(),
+    (void)stedc(*this->ctx, a.view(), b.view(), VectorView<float_type>(eigvals, n, batch),
                       ws, JobType::EigenVectors, params, eigvects.view());
-    
     this->ctx->wait();
 
-    UnifiedVector<float_type> ref_eigvals(n * batch);
-
-    Matrix<float_type> reconstructed = Matrix<float_type>::TriDiagToeplitz(n, float_type(1), float_type(1), float_type(1), batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), reconstructed.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-
-    auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
-    (void)syev(*(this->ctx), reconstructed.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
-    this->ctx->wait();
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
-
-    auto tol = 1e-3f;
-    if (!VectorView<float_type>::all_close(*(this->ctx), eigvals, ref_view, tol)) {
-        FAIL() << "Eigenvalues do not match reference within tolerance " << tol;
-    }
-
-    if (!VectorView<float_type>::all_close(*(this->ctx), eigvals, ritz_vals, tol)) {
-        FAIL() << "Eigenvalues do not match Ritz values within tolerance " << tol;
-    }
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense.view(), eigvals, n);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvects.view(), eigvals, n);
 }
 
 TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
     const int n = 1024;
     // This case builds a dense n x n x batch reference (537 MB at batch=128 in
-    // float) and runs a full SYEV over it -- on the host for the NETLIB
-    // instantiations, where it dominates this whole binary. Keep the deep
+    // float) and checks three items of it on the host. Keep the deep
     // recursion that n=1024 exercises (6 merge levels at recursion_threshold
     // =16); drop the batch multiplicity, which added no coverage. Batched
     // behaviour at large n is still covered by BatchedMatrices above.
@@ -213,54 +196,20 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
 
     auto a = Vector<float_type>::random(n, batch);
     auto b = Vector<float_type>::random(n - 1, batch);
-    auto eigvals = Vector<float_type>::zeros(n, batch);
+    UnifiedVector<float_type> eigvals(static_cast<size_t>(n) * batch);
     auto eigvects = Matrix<float_type>::Identity(n, batch);
     StedcParams<float_type> params= {.recursion_threshold = 16};
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
-    Matrix<float_type> reconstructed = Matrix<float_type>::Zeros(n, n, batch);
-    reconstructed.view().fill_tridiag(*this->ctx, b, a, b).wait();
-    this->ctx->wait();
-    
-    (void)stedc(*this->ctx, a.view(), b.view(), eigvals.view(),
+    Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
+    dense.view().fill_tridiag(*this->ctx, b, a, b).wait();
+    (void)stedc(*this->ctx, a.view(), b.view(), VectorView<float_type>(eigvals, n, batch),
                       ws, JobType::EigenVectors, params, eigvects.view());
-    
     this->ctx->wait();
 
-    UnifiedVector<float_type> ref_eigvals(n * batch);
-
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), reconstructed.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-
-    auto ritz_vals = ritz_values<B, float_type>(*this->ctx, reconstructed, eigvects);
-    (void)syev(*(this->ctx), reconstructed.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
-    this->ctx->wait();
-
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
-    auto diff_vect = Vector<float_type>::zeros(n, batch);
-    
-    VectorView<float_type>::add(*(this->ctx), float_type(1.0), float_type(-1.0), eigvals, ref_view, diff_vect).wait();
-
-    auto tol = std::is_same_v<float_type, double>
-        ? std::numeric_limits<float_type>::epsilon() * 1e7
-        : std::numeric_limits<float_type>::epsilon() * 1e5;
-    for (int j = 0; j < batch; j++) {
-        for (int i = 0; i < n; i++) {
-            float_type diff = std::abs(eigvals(i, j) - ref_view(i, j));
-            if (diff > tol) {
-                FAIL() << "Eigenvalue mismatch at index " << i << " in batch " << j << ": computed " << eigvals(i, j) << ", reference " << ref_view(i, j) << ", diff " << diff << " exceeds tol " << tol;
-            }
-        }
-    }
-    
-    /* if (!VectorView<float_type>::all_close(*(this->ctx), eigvals, ref_view, tol)) {
-        FAIL() << "Eigenvalues do not match reference within tolerance \n" <<
-        eigvals << "\n vs \n" << ref_view << "\n";
-    }   
-    if (!VectorView<float_type>::all_close(*(this->ctx), eigvals, ritz_vals, tol)) {
-        FAIL() << "Eigenvalues do not match Ritz values within tolerance \n" <<
-        eigvals << "\n vs \n" << ritz_vals << "\n";
-    } */
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense.view(), eigvals, n);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvects.view(), eigvals, n);
 }
 
 // The level-synchronous driver is the default; this pins it against the
@@ -302,45 +251,27 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
 
         auto a_rec = a; auto b_rec = b;
         auto a_lvl = a; auto b_lvl = b;
-        auto eigvals_rec = Vector<float_type>::zeros(n, batch);
-        auto eigvals_lvl = Vector<float_type>::zeros(n, batch);
+        UnifiedVector<float_type> eigvals_rec(static_cast<size_t>(n) * batch), eigvals_lvl(eigvals_rec.size());
         auto eigvecs_rec = Matrix<float_type>::Identity(n, batch);
         auto eigvecs_lvl = Matrix<float_type>::Identity(n, batch);
 
         UnifiedVector<std::byte> ws_rec(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
         UnifiedVector<std::byte> ws_lvl(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
-        (void)stedc(*this->ctx, a_rec.view(), b_rec.view(), eigvals_rec.view(), ws_rec, JobType::EigenVectors, params_rec, eigvecs_rec.view());
-        (void)stedc(*this->ctx, a_lvl.view(), b_lvl.view(), eigvals_lvl.view(), ws_lvl, JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
+        (void)stedc(*this->ctx, a_rec.view(), b_rec.view(), VectorView<float_type>(eigvals_rec, n, batch), ws_rec,
+                    JobType::EigenVectors, params_rec, eigvecs_rec.view());
+        (void)stedc(*this->ctx, a_lvl.view(), b_lvl.view(), VectorView<float_type>(eigvals_lvl, n, batch), ws_lvl,
+                    JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
         this->ctx->wait();
 
-        const auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3)
-                       * std::max(float_type(1), std::abs(eigvals_rec(n - 1, 0)));
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                const float_type diff = std::abs(eigvals_rec(i, j) - eigvals_lvl(i, j));
-                ASSERT_LE(diff, tol) << "n=" << n << " eigenvalue mismatch at (" << i << ", batch " << j
-                                     << "): recursive=" << eigvals_rec(i, j) << " levels=" << eigvals_lvl(i, j);
-            }
-        }
-
-        // Eigenvectors are only defined up to sign, so compare Ritz values
-        // rather than the columns themselves.
-        auto ritz = ritz_values<B, float_type>(*this->ctx, dense, eigvecs_lvl);
-        this->ctx->wait();
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                const float_type diff = std::abs(ritz(i, j) - eigvals_lvl(i, j));
-                ASSERT_LE(diff, tol) << "n=" << n << " Ritz mismatch at (" << i << ", batch " << j
-                                     << "): ritz=" << ritz(i, j) << " eig=" << eigvals_lvl(i, j);
-            }
-        }
+        SCOPED_TRACE("n=" + std::to_string(n));
+        test_utils::expect_eigenvalues_agree<float_type>(eigvals_lvl, eigvals_rec, n, batch);
+        test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvecs_lvl.view(), eigvals_lvl, n);
     }
 }
 
 TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
     using T = typename TestFixture::ScalarType;
-    constexpr Backend B = TestFixture::BackendType;
     const int n = 128;
     const int batch = 64;
     using float_type = typename base_type<T>::type;
@@ -351,8 +282,7 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
     auto a_fused = a_base;
     auto b_fused = b_base;
 
-    auto eigvals_base = Vector<float_type>::zeros(n, batch);
-    auto eigvals_fused = Vector<float_type>::zeros(n, batch);
+    UnifiedVector<float_type> eigvals_base(static_cast<size_t>(n) * batch), eigvals_fused(eigvals_base.size());
     auto eigvecs_base = Matrix<float_type>::Identity(n, batch);
     auto eigvecs_fused = Matrix<float_type>::Identity(n, batch);
 
@@ -369,21 +299,13 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
     UnifiedVector<std::byte> ws_base(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_base));
     UnifiedVector<std::byte> ws_fused(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
 
-    (void)stedc(*this->ctx, a_base.view(), b_base.view(), eigvals_base.view(), ws_base, JobType::EigenVectors, params_base, eigvecs_base.view());
-    (void)stedc(*this->ctx, a_fused.view(), b_fused.view(), eigvals_fused.view(), ws_fused, JobType::EigenVectors, params_fused, eigvecs_fused.view());
+    (void)stedc(*this->ctx, a_base.view(), b_base.view(), VectorView<float_type>(eigvals_base, n, batch), ws_base,
+                JobType::EigenVectors, params_base, eigvecs_base.view());
+    (void)stedc(*this->ctx, a_fused.view(), b_fused.view(), VectorView<float_type>(eigvals_fused, n, batch), ws_fused,
+                JobType::EigenVectors, params_fused, eigvecs_fused.view());
     this->ctx->wait();
 
-    auto tol = std::numeric_limits<float_type>::epsilon() * float_type(5e3);
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            float_type diff = std::abs(eigvals_base(i, j) - eigvals_fused(i, j));
-            if (diff > tol) {
-                FAIL() << "FusedMerge eigenvalue mismatch at (" << i << ", batch " << j << ") : baseline="
-                       << eigvals_base(i, j) << " fused=" << eigvals_fused(i, j) << " diff=" << diff
-                       << " tol=" << tol;
-            }
-        }
-    }
+    test_utils::expect_eigenvalues_agree<float_type>(eigvals_fused, eigvals_base, n, batch);
 }
 
 TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
@@ -402,7 +324,7 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
     T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
     this->ctx->wait();
 
-    auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+    UnifiedVector<float_type> eigvals_cta(static_cast<size_t>(n) * batch);
     auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
 
     StedcParams<float_type> params_cta{
@@ -413,28 +335,13 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
     };
 
     UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
+    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
-    // syev reference eigenvalues
-    UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    (void)syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
-    this->ctx->wait();
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
-
-    // CTA solver uses origin-shifted quadratic interpolation adapted from the ROC solver.
-    auto tol = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
-            if (diff > tol) {
-                FAIL() << "FusedCta eigenvalue mismatch vs syev at (" << i << ", batch " << j << ") : ref="
-                       << ref_view(i, j) << " cta=" << eigvals_cta(i, j) << " diff=" << diff
-                       << " tol=" << tol;
-            }
-        }
-    }
+    const std::vector<int> all_items = T_mat.view().all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
 }
 
 // Regression: a merge subproblem of size dd == 1 used to make the extremal-root
@@ -473,9 +380,11 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
         // The tuned default (STEDC_THREADS_PER_ROOT_*, 8 in every bucket) is one
         // of these; parts_per_wg = wg_size / P varies across the sweep.
         for (int P : {4, 8, 16, 32}) {
+            SCOPED_TRACE("log10cond=" + std::to_string(log10_cond) + " P=" + std::to_string(P));
             auto a_cta = diag;
             auto b_cta = sub;
-            auto eigvals = Vector<float_type>::zeros(n, batch);
+            UnifiedVector<float_type> W(static_cast<size_t>(n) * batch);
+            VectorView<float_type> eigvals(W, n, batch);
             auto eigvecs = Matrix<float_type>::Identity(n, batch);
 
             StedcParams<float_type> params{
@@ -486,9 +395,12 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
             };
 
             UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-            (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals.view(), ws, JobType::EigenVectors, params, eigvecs.view());
+            (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals, ws, JobType::EigenVectors, params, eigvecs.view());
             this->ctx->wait();
 
+            const std::vector<int> all_items = dense_A.view().all_items();
+            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense_A.view(), W, n, false, all_items);
+            test_utils::expect_eigenpairs<float_type>(*this->ctx, dense_A.view(), eigvecs.view(), W, n, all_items);
             for (int j = 0; j < batch; ++j) {
                 for (int i = 0; i < n; ++i) {
                     const float_type got = eigvals(i, j);
@@ -518,24 +430,14 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
     auto a_saved = Vector<float_type>::random(n, batch);
     auto b_saved = Vector<float_type>::random(n - 1, batch);
 
-    // Build dense tridiagonal for syev reference
     Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
     T_mat.view().fill_tridiag(*this->ctx, b_saved, a_saved, b_saved).wait();
-    this->ctx->wait();
 
-    UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    (void)syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
-    this->ctx->wait();
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
-
-    auto tol_vs_ref = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
-
-    // Run each partition width and check against syev reference
     for (int P : {4, 8, 16, 32}) {
+        SCOPED_TRACE("secular_threads_per_root=" + std::to_string(P));
         auto a_cta = a_saved;
         auto b_cta = b_saved;
-        auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+        UnifiedVector<float_type> eigvals_cta(static_cast<size_t>(n) * batch);
         auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
 
         StedcParams<float_type> params_cta{
@@ -546,19 +448,13 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
         };
 
         UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-        (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
+        (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                    JobType::EigenVectors, params_cta, eigvecs_cta.view());
         this->ctx->wait();
 
-        for (int j = 0; j < batch; ++j) {
-            for (int i = 0; i < n; ++i) {
-                float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
-                if (diff > tol_vs_ref) {
-                    FAIL() << "FusedCta P=" << P << " eigenvalue mismatch vs syev at (" << i << ", batch " << j
-                           << ") : ref=" << ref_view(i, j) << " cta=" << eigvals_cta(i, j)
-                           << " diff=" << diff << " tol=" << tol_vs_ref;
-                }
-            }
-        }
+        const std::vector<int> all_items = T_mat.view().all_items();
+        test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+        test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
     }
 }
 
@@ -577,9 +473,8 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 
     Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
     T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
-    this->ctx->wait();
 
-    auto eigvals_cta = Vector<float_type>::zeros(n, batch);
+    UnifiedVector<float_type> eigvals_cta(static_cast<size_t>(n) * batch);
     auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
 
     StedcParams<float_type> params_cta{
@@ -590,26 +485,13 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     };
 
     UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals_cta.view(), ws_cta, JobType::EigenVectors, params_cta, eigvecs_cta.view());
+    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                JobType::EigenVectors, params_cta, eigvecs_cta.view());
     this->ctx->wait();
 
-    UnifiedVector<float_type> ref_eigvals(n * batch);
-    auto syev_ws = UnifiedVector<std::byte>(syev_buffer_size(*(this->ctx), T_mat.view(), ref_eigvals, JobType::NoEigenVectors, Uplo::Lower));
-    (void)syev(*(this->ctx), T_mat.view(), ref_eigvals, {.jobz = JobType::NoEigenVectors}, syev_ws);
-    this->ctx->wait();
-    auto ref_view = VectorView<float_type>(ref_eigvals, n, batch);
-
-    auto tol = std::is_same_v<float_type, float> ? float_type(1e-4) : float_type(1e-9);
-    for (int j = 0; j < batch; ++j) {
-        for (int i = 0; i < n; ++i) {
-            float_type diff = std::abs(ref_view(i, j) - eigvals_cta(i, j));
-            if (diff > tol) {
-                FAIL() << "FusedCta non-chunked fallback mismatch vs syev at (" << i << ", batch " << j
-                       << ") : ref=" << ref_view(i, j) << " cta=" << eigvals_cta(i, j)
-                       << " diff=" << diff << " tol=" << tol;
-            }
-        }
-    }
+    const std::vector<int> all_items = T_mat.view().all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
 }
 
 
@@ -677,15 +559,11 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
 
     // Reported converged AND correct. The closed form for Toeplitz(1, 1, 1) is
     // 1 + 2*cos(k*pi/(n+1)), ascending in k measured from the far end.
-    const double tol = std::is_same_v<float_type, float> ? 2e-3 : 1e-8;
-    for (int b = 0; b < batch; ++b) {
-        if (info[b] != 0) continue;
-        for (int i = 0; i < n; ++i) {
-            const double expected = 1.0 + 2.0 * std::cos(M_PI * double(n - i) / double(n + 1));
-            EXPECT_NEAR(static_cast<double>(eigvals(i, b)), expected, tol)
-                << "batch " << b << " eigenvalue " << i;
-        }
-    }
+    std::vector<double> spectrum(n);
+    for (int i = 0; i < n; ++i) spectrum[i] = 1.0 + 2.0 * std::cos(M_PI * double(n - i) / double(n + 1));
+    const std::vector<std::vector<double>> ref(batch, spectrum);
+    EXPECT_VERIFY(float_type, verify::Check::values, n,
+                  MatrixView<float_type>::values_error(eigvals.view(), ref, 3.0, eigvals.view().all_items()));
 }
 
 // THE CASE THAT MATTERS: the same batch, one sweep allowed in the leaf solves.
@@ -821,6 +699,73 @@ TYPED_TEST(StedcTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
         }
     }
 }
+// The Fused merge at n = 64 in float, one merge of two 32-leaves, at two work-group widths: the
+// Loewner product of up to 64 ratios (d_i - lambda_j) / (d_i - d_j) is carried as mantissa and
+// exponent (maybe_rescale_vectors), as in the CTA merges. eigen_residual and orthogonality on the
+// dense tridiagonal.
+TYPED_TEST(StedcTest, StedcFusedN64FloatNoOverflow) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "the fused merge is a GPU kernel"; }
+    const int n = 64, batch = 32;
+    for (const Real log10_cond : {Real(1), Real(5)}) {
+        auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(*this->ctx, n, log10_cond, NormType::Spectral, batch, 1234u);
+        this->ctx->wait();
+        Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i) {
+                diag(i, b) = dense_A.view().at(i, i, b);
+                if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+            }
+        for (const int threads : {8, 128}) {
+            SCOPED_TRACE(::testing::Message() << "log10_cond " << log10_cond << ", merge_threads " << threads);
+            auto d = diag;
+            auto e = sub;
+            auto w = Vector<Real>::zeros(n, batch);
+            auto Q = Matrix<Real>::Identity(n, batch);
+            StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
+            UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+            (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+            this->ctx->wait();
+            EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
+            EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+        }
+    }
+}
+
+// The Fused merge at n = 512 (top merge dd up to 512) with 128- and 256-wide work-groups: every
+// lane's Loewner mantissa is in [0.5, 1), so one group-wide product of them leaves float range
+// (about 2^-0.5dd). maybe_rescale_vectors must renormalize the reduction in rounds.
+TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
+    using Real = typename base_type<typename TestFixture::ScalarType>::type;
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "the fused merge is a GPU kernel"; }
+    const int n = 512, batch = 4;
+    auto dense_A = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(*this->ctx, n, Real(1), NormType::Spectral, batch, 4321u);
+    this->ctx->wait();
+    Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
+    for (int b = 0; b < batch; ++b)
+        for (int i = 0; i < n; ++i) {
+            diag(i, b) = dense_A.view().at(i, i, b);
+            if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+        }
+    for (const int threads : {128, 256}) {
+        SCOPED_TRACE(::testing::Message() << "merge_threads " << threads);
+        auto d = diag;
+        auto e = sub;
+        auto w = Vector<Real>::zeros(n, batch);
+        auto Q = Matrix<Real>::Identity(n, batch);
+        StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
+        UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+        (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+        this->ctx->wait();
+        EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
+        EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

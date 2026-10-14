@@ -3,9 +3,9 @@
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda
 
 gemm selects through flat kernel selection (@ref design_flat_selection). This page lists the choices, the
-`tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The tables are
-transcribed from the old router (`source=transcribed:424a45bc`) and are untimed, so these windows are what Auto
-runs on sm_89.
+`tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The sm_89 table is
+transcribed from the old router (`424a45bc`) and is untimed, so these windows are what Auto runs on sm_89. The
+sm_120 table is deep-measured (`tuned/README.md`).
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
@@ -29,7 +29,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 |---|---|---|---|
 | `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `choice.hh:115-120`) |
+| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:115-120`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (a real `Trans` uses a `ConjTrans` instance; a complex `Trans` is refused), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
@@ -44,7 +44,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 ```
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `choice.hh:104`) is native only through
+batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
 `small`. Candidate counts: float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
@@ -80,9 +80,8 @@ weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CP
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
 build (`gemm.cc:156-164`), and each item chooses separately.
 
-sm_89 and sm_120 tables are both transcribed; `tuned/gemm.sm_120.txt` is the same CSV written for sm_120, so
-sm_120 runs the 4090 decision until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`) replaces it. No gemm sweep
-has been run (maintainer, 2026-10-05).
+The sm_89 table is transcribed. `tuned/gemm.sm_120.txt` comes from the `--tier deep` campaign
+(`tools/tune/gemm_spec.cc`): 32225 deep rows, plus 14733 `transcribed` rows where the lattice measured nothing near.
 
 **Callers.** Every library gemm goes through the public `gemm` and its table: the blocked drivers' trailing
 updates (`src/ops/potrf/potrf.cc:75`, `getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77`), the level-3 `expand` families
@@ -103,7 +102,7 @@ updates (`src/ops/potrf/potrf.cc:75`, `getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77`
 
 ## GEMM: what the transcribed sm_89 rows rank first
 
-Counts read from `tuned/gemm.<dtype>.sm_89.txt` (all four headed `source=transcribed:424a45bc`): the first
+Counts read from `tuned/gemm.sm_89.txt` (every row `transcribed`, run `transcribed-424a45bc`): the first
 entry of every row, and the first entry other than `vendor` (what the native walk and a vendor-free build run).
 The real tables have edge rows at batch 1, 63 and 64 and, for double, k = 1 and 2. The complex tables have
 batch 128, 2048 and 32768 only.
@@ -222,12 +221,12 @@ window ends at 48 (see [The small tiled kernel](#the-small-tiled-kernel)).
 n=64..768 all 48 cells lose, 0.23–0.55×. The transposed register family plateaus near 15–18 TFLOP/s against
 cuBLAS SGEMM at 45+.
 
-**Decides:** `tuned/gemm.float.sm_89.txt` ranks `vendor` first in 11154 of 11226 rows. The other 72 are the NN
+**Decides:** the float rows of `tuned/gemm.sm_89.txt` rank `vendor` first in 11154 of 11226 rows. The other 72 are the NN
 squares up to 48 at batch ≥ 64, which rank `small`.
 
 ### Complex is refused
 
-**Decides:** all 7464 rows of each of `tuned/gemm.cfloat.sm_89.txt` and `tuned/gemm.cdouble.sm_89.txt` rank
+**Decides:** all 7464 cfloat and all 7464 cdouble rows of `tuned/gemm.sm_89.txt` rank
 `vendor` first.
 
 The native complex kernels ran 3.2–7.1× slower than cuBLAS when the window was set (cdouble 0.386–0.392 vs
@@ -459,7 +458,7 @@ population and `vendor` stays first. Against `Tiled16`, raggedness costs little 
 cfloat), which is why the tiles are the rows' first native entry. **A macro-tiled kernel must be swept at sizes
 that are not multiples of its tile**, or the sweep reports its best case as the average.
 
-**Rows.** In `tuned/gemm.cfloat.sm_89.txt` and `tuned/gemm.cdouble.sm_89.txt` (0 exceptions):
+**Rows.** In the cfloat and cdouble rows of `tuned/gemm.sm_89.txt` (0 exceptions):
 
 | rows (per type) | first entry | first native entry |
 |---|---|---|
@@ -537,8 +536,8 @@ those streams are `ldb*4` bytes apart. It is a slope, not a cliff (monotone in p
 ruled out: a 4× allocation at `ld == rows` costs nothing. No mechanism below L2 is established.
 
 **The fix was routing.** `can_use_128x128_fast_path` was a leg predicate, but the old selector also used it as a
-routing gate, so failing it handed the call to a much slower kernel. Routing by a shape-only gate (`gemm_kernels.cc:575`
-in the parent tree) gives geomean 1.74× (pad 0) and 1.75× (pad 384) over 12 shapes, moving native from 0.58× to
+routing gate, so failing it handed the call to a much slower kernel. Routing by a shape-only gate (`gemm_kernels.cc` line 575
+at `08d07619^`) gives geomean 1.74× (pad 0) and 1.75× (pad 384) over 12 shapes, moving native from 0.58× to
 0.99× of cuBLAS at `ld == rows` and 0.54× to 0.93× strided. Examples: 1024×1024×64 b128 ld1408 3.187 → 1.337 ms,
 1000×1024×128 b128 ld1384 2.954 → 1.569 ms, 128×128×8 b512 0.074 → 0.030 ms. It also removes the `ld % 4 != 0`
 cliff (pad 1: 1.874 → 1.003 ms). The gate's bounds each have a counterexample: `mn_min >= 64` (32×1024×32 is a
@@ -717,7 +716,7 @@ before the barrier (48³ β=1: 0.91× → 1.09×). At β = 0 that prefetch is co
 float, square NN, batch ≥ 64, through 48. 49..56 runs the tiled kernel natively but stays vendor first, because 56³
 β=1 is 1.08×. Non-square NN with min_dim ≤ 32 and max 33..56 is unmeasured.
 
-**In the table:** `small` ranks first in exactly 72 rows of `tuned/gemm.float.sm_89.txt`: the NN squares 1, 2, 4, 8,
+**In the table:** `small` ranks first in exactly 72 float rows of `tuned/gemm.sm_89.txt`: the NN squares 1, 2, 4, 8,
 16, 24, 32, 40 and 48 at batch 64, 128, 2048 and 32768, both layouts. The squares 49, 56, 64 and every batch-1 or
 batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheOldVendorEdges`
 (48³ `small`, 49³ and 52³ `vendor`, 32³ b16 `vendor`, b64 `small`). The (NB/4)² work-group and sub-group-32 need

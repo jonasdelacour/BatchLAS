@@ -1,6 +1,6 @@
 # GEMV {#perf_gemv}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-08/09, tables transcribed 2026-10-05
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured 2026-08/09, sm_89 table transcribed 2026-10-05, sm_120 table deep 2026-10-11
 
 Native batched `gemv` for all four scalar types and all three `transA`. This page gives the
 families, the five kernel bodies, the gates that pick a body, the `complex<double>` transposed
@@ -17,13 +17,14 @@ tables, which use `body3_ms / body5_ms`.
 `gemv` decides in `src/ops/gemv/gemv.cc` by flat selection (@ref design_flat_selection).
 `select::run` takes the first entry of the nearest row of `tuned/gemv.<device>.txt` that
 `can_run` admits. The last resort is `vendor`, then `direct` (`src/ops/gemv/choice.hh:30`). The
-tables are transcribed, not timed (`source=transcribed:424a45bc`, `tuned/README.md`).
+sm_89 table is transcribed, not timed (run `transcribed-424a45bc`); the sm_120 table was re-measured at deep
+on 2026-10-11 (`tuned/README.md`).
 
-| spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:53-64`) |
+| spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:55-66`) |
 |---|---|---|---|
 | `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | native term, `gemv_cta_available<T>()`, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
 | `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no `is_gpu` term |
-| `vendor` | `backend::gemv_vendor` | — | `d.has_vendor` |
+| `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()`; no `complex<double>` term since WP3 ([Auto moved](#gemv-complex-double-vendor-route-change)) |
 
 `can_run` is correctness only, never a speed cutoff. The native term (`gemv.cc:55-57`) refuses a
 heterogeneous `A`, negative extents and `batch < 1`, and requires x and y to match A in batch and
@@ -39,6 +40,24 @@ both directions. A `reqd_sub_group_size(32)` launch on a device without 32 abort
 
 Layout is column-major: `A(i,j)` sits at `i + j*ld`, one work-item per output element. `NoTrans` is
 coalesced. `Trans` and `ConjTrans` need the sub-group reduction.
+
+### complex<double>: Auto may now pick cuBLAS {#gemv-complex-double-vendor-route-change}
+
+Until WP3, `can_run(Vendor)` refused `complex<double>` on CUDA (known-defects #13, since fixed),
+so no table row could send it to cuBLAS. With the term gone, every row that ranks `vendor` first
+now runs cuBLAS. **None of those rows is timed:** the deep sm_120 ledger never timed the
+`complex<double>` vendor (it crashed then), so every such row is `transcribed`.
+
+| table | `cdouble` rows | `vendor` first |
+|---|---|---|
+| `tuned/gemv.sm_120.txt` | 1568 | 188 (all transcribed; e.g. `trans=N out=64 red=32768 batch=8192`) |
+| `tuned/gemv.sm_89.txt` | 1408 | 1360 (all transcribed) |
+
+Route diff of `gemv_tests` and `spmm_tests` under Auto (coverage `reached` rows, threadripper02,
+sm_120, main 30627f1f vs this change): one decision moved, `complex<double>` `m=64 n=32768 batch=2`
+NoTrans from `direct` to `vendor`; the test passes. spmm did not move: no `complex<double>` N/N
+one-column row ranks `vendor` first in either table. The 2x4090 box (sm_89, where most rows move)
+was not re-checked, and nothing was timed. A cdouble retune decides these rows.
 
 ### The five kernel bodies
 
@@ -62,9 +81,9 @@ entry points add +0.45% to link time, inside a 0.84 s spread.
 
 ### The cdouble window in the tables
 
-Keys are `trans:exact out:log red:log batch:log` (`choice.hh:34`). `out` and `red` are the y and x
+Keys are `trans:exact out:log red:log batch:log` (`src/ops/gemv/choice.hh:34`). `out` and `red` are the y and x
 lengths and swap with `transA` (`gemv.cc:27-35`); ConjTrans folds to `T` (`gemv.cc:37-44`). The
-grid (`choice.hh:37-39`) straddles every edge: `out` 255/256, `red` 63/64 and 352/353, `batch` 319/320.
+grid (`src/ops/gemv/choice.hh:37-39`) straddles every edge: `out` 255/256, `red` 63/64 and 352/353, `batch` 319/320.
 
 | rows | ranking |
 |---|---|
@@ -84,11 +103,11 @@ checks the rows against the old preference.
 
 These are kernel-internal, not keys, families or `can_run` terms.
 
-**Body 4** (`gemv_seg_width`, `src/sycl/gemv_native.cc:76-81`): `W` is the largest power of two with
+**Body 4** (`gemv_seg_width`, `src/sycl/gemv_native.cc:77-82`): `W` is the largest power of two with
 `W*out_len <= 32`. `W == 1` means no segmentation, so body 4 serves `out_len <= 16` and body 1 takes
 17 and up. It also requires `Device::supports_sub_group_size(32)`, false on `native_cpu`.
 
-**Body 5** (`gemv_seg_trans_width`, `src/sycl/gemv_native.cc:83-107`) has three gates, all on
+**Body 5** (`gemv_seg_trans_width`, `src/sycl/gemv_native.cc:87-109`, `:134-159`) has three gates, all on
 `red_len()` and transcribed cell by cell from a CSV:
 
 | gate | float | `complex<float>` | double | `complex<double>` |
@@ -100,12 +119,12 @@ These are kernel-internal, not keys, families or `can_run` terms.
 `W ∈ {2, 4, 8}` is instantiated; `W = 2` keeps `BATCHLAS_GEMV_SEGT=2` meaning `W = 2`.
 
 * **`BATCHLAS_GEMV_ROUTE`** takes `auto`, `native`, `vendor` or a spelling (`cta`, `direct`). A
-  spelling the shape cannot take throws `invalid_argument` (`src/select/select.hh:402-407`); `cta` on a
+  spelling the shape cannot take throws `invalid_argument` (`src/select/select.hh:414-419`); `cta` on a
   NoTrans call is an error, not a reroute. Only `native` or `vendor` with nothing of their class
   runnable falls back to Auto, with a warning.
 * **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) picks the body-5 spelling inside `cta` and
   bypasses all three gates. It is read on every launch, never latched (`gemv_segt_mode`,
-  `src/sycl/gemv_native.cc:116-124`).
+  `src/sycl/gemv_native.cc:117-125`).
 
 > **Note:** The trace or coverage spelling is the only record of which family ran. It does not name the body.
 
@@ -301,7 +320,7 @@ cases red respectively; the rest are the green ones above. The earlier `preferre
 
 ### The known bad caller
 
-`src/extensions/ortho.cc:189-194`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
+`src/extensions/ortho.cc:190-195`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
 passes `A(Slice(), i)` as `x`. That column has length `A.rows()`, so the lengths agree only when
 `A.rows() == m`. The call is structurally wrong under the vendor. It is not fixed, and no throw was added
 because it would crash a live path. The length checks make both native families unrunnable for it, so it
@@ -330,8 +349,8 @@ worst is 0.75×, the median 1.14×.
   `red_len` 64..352, `out_len >= 256`, `batch >= 320`. The body-5 pass was diffed (0 decisions removed,
   60 added, all gemv). The transcription reproduces the old decision at 100.00% of random off-grid points
   per (device, dtype, scenario) ([Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)).
-* **The tables are untimed.** No tuner sweep of gemv exists on either device. The sm_120 rankings are the
-  sm_89 window carried over.
+* **The sm_89 table is untimed.** The sm_120 table is deep-measured (8558 deep rows, 29 `custom`, 620
+  `transcribed` where the lattice measured nothing near).
 
 ## Raw evidence
 

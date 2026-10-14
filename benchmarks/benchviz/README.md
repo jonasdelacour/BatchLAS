@@ -72,7 +72,7 @@ Warnings (in `info`, run logs and `warnings`):
 
 - an icpx build without `-ffp-model=precise`;
 - an acpp build whose effective fp contract is not `on`: `cmake/BatchLASSyclAcpp.cmake` passes
-  `-ffp-contract=on` to match DPC++ (design page R11);
+  `-ffp-contract=on` to match DPC++ (design page A11);
 - an NVIDIA box with targets that cannot reach it (acpp `generic` can).
 
 **acpp runtime knobs.** Every process run from an acpp tree gets `ACPP_ADAPTIVITY_LEVEL=1`,

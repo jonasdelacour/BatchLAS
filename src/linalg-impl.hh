@@ -992,7 +992,7 @@ namespace batchlas{
     template <typename KernelName>
     size_t get_kernel_max_wg_size(const Queue& ctx){
         try {
-            return impl::kernel_max_wg_size_all_devices<KernelName>(ctx -> get_context(), ctx -> get_device());
+            return impl::kernel_max_wg_size<KernelName>(ctx -> get_context(), ctx -> get_device());
         } catch (...) {
             return (ctx -> get_device()).get_info<sycl::info::device::max_work_group_size>();
         }

@@ -63,8 +63,9 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
         [&](Expand) {
             if (!native) return false;
             const int k = A.rows(), batch = A.batch_size();
-            return backend::detail::expansion_fits(q, k, batch,
-                                                   backend::detail::expanded_workspace_bytes<T>(q, k, batch));
+            return backend::detail::expansion_fits<T>(q, k, batch,
+                                                   backend::detail::expanded_workspace_bytes<T>(q, k, batch),
+                                                   d.max_groups_yz);
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);

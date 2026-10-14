@@ -18,7 +18,7 @@
 //     the repair path; without it these measure U-orthogonality 1.41 with V at
 //     0.00, which is what a half-norm-based criterion misses entirely.
 //
-// The reference is a host Jacobi SVD of the same bidiagonal in double, not a
+// The reference is LAPACKE ?gesdd of the same bidiagonal in double (batchlas::verify), not a
 // second call to anything in this library.
 
 #include <gtest/gtest.h>
@@ -30,16 +30,18 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "eigen_verify.hh"
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <memory>
+#include <string>
 #include <random>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 using namespace batchlas;
@@ -68,46 +70,33 @@ struct bdsdc_types {
 
 using BdsdcTestTypes = typename bdsdc_types<BdsdcConfig>::type;
 
-// Singular values of an upper bidiagonal matrix: LAPACKE in double on the dense form (NaN when
-// the reference is unavailable, so a check against it fails).
-std::vector<double> reference_singular_values(const std::vector<double>& d,
-                                              const std::vector<double>& e,
-                                              int n) {
-    std::vector<double> A(static_cast<size_t>(n) * n, 0.0);
-    for (int i = 0; i < n; ++i) {
-        A[static_cast<size_t>(i) * n + i] = d[static_cast<size_t>(i)];
-        if (i + 1 < n) A[static_cast<size_t>(i + 1) * n + i] = e[static_cast<size_t>(i)];
-    }
-    std::vector<double> s;
-    if (!batchlas::verify::singular_values(n, n, A, s)) s.assign(static_cast<size_t>(n), std::nan(""));
-    return s;
-}
-
 template <typename Config>
 class BdsdcTest : public test_utils::BatchLASTest<Config> {
 protected:
     using Scalar = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    static double sv_tol()   { return std::is_same_v<Scalar, float> ? 2e-4 : 1e-11; }
-    static double vec_tol()  { return std::is_same_v<Scalar, float> ? 1e-3 : 1e-9;  }
-
-    // Core driver: run bdsdc on the given (d,e) and check singular values,
-    // reconstruction of B, and orthogonality of both vector sets.
+    // Core driver: run bdsdc on the given (d,e) and check singular values against LAPACKE,
+    // U diag(s) Vh == B, and orthogonality of both vector sets.
     void run_and_check(const std::vector<double>& dh,
                        const std::vector<double>& eh,
                        int n, int batch, bool vectors, const char* label,
                        double orth_slack = 0.0) {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        SCOPED_TRACE(std::string(label) + " n=" + std::to_string(n));
         auto& ctx = *this->ctx;
         UnifiedVector<Scalar> d(static_cast<size_t>(n) * batch);
         UnifiedVector<Scalar> e(static_cast<size_t>(std::max(1, n - 1)) * batch);
+        Matrix<Scalar> B0 = Matrix<Scalar>::Zeros(n, n, batch);
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
                 d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(dh[static_cast<size_t>(b) * n + i]);
+                B0.view().at(i, i, b) = d[static_cast<size_t>(b) * n + i];
             }
             for (int i = 0; i < n - 1; ++i) {
                 e[static_cast<size_t>(b) * (n - 1) + i] =
                     static_cast<Scalar>(eh[static_cast<size_t>(b) * (n - 1) + i]);
+                B0.view().at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
             }
         }
 
@@ -126,70 +115,35 @@ protected:
         }
         ctx.wait_and_throw();
 
-        auto uat = [&](int b, int i, int j) {
-            return static_cast<double>(
-                U.view().data_ptr()[b * U.view().stride() + static_cast<size_t>(j) * U.view().ld() + i]);
-        };
-        auto vhat = [&](int b, int i, int j) {
-            return static_cast<double>(
-                Vh.view().data_ptr()[b * Vh.view().stride() + static_cast<size_t>(j) * Vh.view().ld() + i]);
-        };
-
-        for (int b = 0; b < batch; ++b) {
-            std::vector<double> db(dh.begin() + static_cast<size_t>(b) * n,
-                                   dh.begin() + static_cast<size_t>(b + 1) * n);
-            std::vector<double> eb(eh.begin() + static_cast<size_t>(b) * std::max(0, n - 1),
-                                   eh.begin() + static_cast<size_t>(b + 1) * std::max(0, n - 1));
-            const auto ref = reference_singular_values(db, eb, n);
-            const double smax = std::max(ref.front(), 1e-300);
-            for (int i = 0; i < n; ++i) {
-                EXPECT_NEAR(static_cast<double>(s[static_cast<size_t>(b) * n + i]),
-                            ref[static_cast<size_t>(i)], sv_tol() * smax)
-                    << label << " sigma n=" << n << " b=" << b << " i=" << i;
-            }
-        }
-
-        if (!vectors) return;
-
-        Matrix<Scalar> Vt(n, n, batch);
-        for (int b = 0; b < batch; ++b)
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) Vt.view()(i, j, b) = Vh.view()(j, i, b);
-
-        for (int b = 0; b < batch; ++b) {
-            // U diag(s) Vh == B
-            double num = 0.0, den = 0.0;
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < n; ++i) {
-                    double acc = 0.0;
-                    for (int t = 0; t < n; ++t) {
-                        acc += uat(b, i, t) * static_cast<double>(s[static_cast<size_t>(b) * n + t]) * vhat(b, t, j);
-                    }
-                    double bij = 0.0;
-                    if (i == j) bij = dh[static_cast<size_t>(b) * n + i];
-                    else if (j == i + 1 && n > 1) bij = eh[static_cast<size_t>(b) * (n - 1) + i];
-                    num += (bij - acc) * (bij - acc);
-                    den += bij * bij;
-                }
-            }
-            EXPECT_LE(std::sqrt(num / std::max(den, 1e-300)), vec_tol())
-                << label << " reconstruction n=" << n << " b=" << b;
-
-            // Orthogonality of U's columns and Vh's rows (the columns of Vh^T).
-            const std::array<int, 1> item{b};
-            const double uorth = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, U.view(), item);
-            const double vorth = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, Vt.view(), item);
+        const auto items = B0.view().all_items();
+        const VectorView<Scalar> sv(s.to_span(), n, batch, 1, n);
+        if (vectors) {
+            const double resid = MV::svd_residual(ctx, B0.view(), U.view(), sv, Vh.view(), items);
+            if (orth_slack > 0.0 && std::is_same_v<Scalar, float>)
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::factorization, n, resid,
+                                    batchlas::verify::Slack{2.0, "graded kappa~1e6 D&C float, n=64: the repaired columns carry the Gram-Schmidt error into U S Vh. Measured 9.15e-5 (c 24); accepted bound 32 n eps (2x of c=16)"});
+            else
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n, resid);
+            // Orthogonality of U's columns and Vh's rows (the columns of Vh^H).
+            Matrix<Scalar> V(n, n, batch);
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) V.view()(i, j, b) = Vh.view()(j, i, b);
+            const double uorth = MV::orthogonality(ctx, U.view(), items);
+            const double vorth = MV::orthogonality(ctx, V.view(), items);
             if (orth_slack > 0.0) {
                 const batchlas::verify::Slack slack{
                     orth_slack,
                     "graded kappa~1e6 D&C, n=64: the repair's Gram-Schmidt accumulates error. Measured 4.75e-3 float (c 1246), 5.08e-13 double (c 71.5); accepted bounds 2048 n eps float, 128 n eps double (8x / 0.5x of c=256)"};
-                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth, slack) << label << " U n=" << n << " b=" << b;
-                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth, slack) << label << " V n=" << n << " b=" << b;
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth, slack) << "U";
+                EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth, slack) << "V";
             } else {
-                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth) << label << " U n=" << n << " b=" << b;
-                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth) << label << " V n=" << n << " b=" << b;
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, uorth) << "U";
+                EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, vorth) << "V";
             }
         }
+
+        test_utils::expect_singular_values_match_lapacke(B0.view(), s, items);
     }
 
     void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0,
@@ -220,12 +174,14 @@ protected:
         std::vector<double> eh(static_cast<size_t>(std::max(0, n - 1)) * batch);
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
-                double v = std::pow(10.0, mag(rng)) * (sign(rng) ? 1.0 : -1.0);
+                const double m10 = std::pow(10.0, mag(rng));
+                double v = m10 * (sign(rng) ? 1.0 : -1.0);
                 if (zero(rng) == 0) v = 0.0;
                 dh[static_cast<size_t>(b) * n + i] = v;
             }
             for (int i = 0; i < n - 1; ++i) {
-                double v = std::pow(10.0, mag(rng)) * (sign(rng) ? 1.0 : -1.0);
+                const double m10 = std::pow(10.0, mag(rng));
+                double v = m10 * (sign(rng) ? 1.0 : -1.0);
                 if (zero(rng) == 0) v = 0.0;
                 eh[static_cast<size_t>(b) * (n - 1) + i] = v;
             }

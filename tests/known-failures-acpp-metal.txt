@@ -14,8 +14,9 @@
 # type_param is the macOS libc++abi spelling (`std::__1::complex<float>`, a space after
 # the comma): copy it from the gtest XML, never from the Linux ledgers.
 #
-# PRESET: verified 2026-10-13 on an Apple M5 Max (applegpu_g17s), macOS 27, tree
-# build-acpp-metal-tests, full serial ctest (104 tests: 98 passed, 5 failed, 1 skipped).
+# PRESET: verified 2026-10-14 on an Apple M5 Max (applegpu_g17s), macOS 27, tree
+# build-acpp-metal-tests, full serial ctest after merging main (105 tests: 99 passed, 5 failed,
+# 1 skipped; the binaries touched by the merge fixes re-run).
 # Backend::SYCL here is float and complex<float> only (Backend 5); the double
 # configurations run as NETLIB on the host (Backend 6). The gtest identities below were
 # checked against real GTEST_OUTPUT XML from a rerun of the failing binaries.
@@ -47,6 +48,8 @@ her2k_tests::Her2kTest/2.OptionStructMatchesPositional;type_param=Her2kConfig<st
 posv_tests::PosvTest/5.PublicPosvSolvesOnBothTriangles;type_param=(anonymous namespace)::PosvConfig<std::__1::complex<float>, (batchlas::Backend)5>
 
 # --- BatchLAS: shared with DPC++ (tests/known-failures.txt) and acpp generic ---
-# docs/design/known-defects.md entry 3: lanczos reads column 0 of a two-column multiply.
+# docs/design/known-defects.md, "lanczos returns a spectrum" (cause open; not entry 3): every
+# item's spectrum comes out ~3x too wide, at batch 1 too. Same three cases as tests/known-failures.txt.
 lanczos_tests::LanczosTestBase.LanczosTest
 lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+lanczos_tests::LanczosStride.ClosedFormSpectrum

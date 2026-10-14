@@ -4,8 +4,8 @@
 // stage 1 degenerated to an unblocked BLAS-2 reduction and stage 2 was a no-op.
 // Now kd > 1 is used and the eigenvectors come back through two back-transforms,
 // Z := Q1 (Q2 Z). These tests pin the properties that ordering has to satisfy:
-// the residual A Z = Z diag(w), orthonormality of Z, and agreement of the
-// spectrum with the blocked path.
+// the residual A Z = Z diag(w), orthonormality of Z, and the spectrum against
+// LAPACKE.
 
 #include <gtest/gtest.h>
 
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -197,7 +198,6 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
 
     for (int n : {32, 64, 129}) {
         const int batch = 3;
@@ -207,6 +207,7 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < n; ++j) A2(i, j, b) = A1(i, j, b);
+        const Matrix<T, MatrixFormat::Dense> A0 = A2;
 
         UnifiedVector<Real> w1(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
@@ -223,19 +224,10 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
-        for (int b = 0; b < batch; ++b) {
-            std::vector<Real> a(w1.begin() + static_cast<ptrdiff_t>(b) * n,
-                                w1.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::vector<Real> c(w2.begin() + static_cast<ptrdiff_t>(b) * n,
-                                w2.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::sort(a.begin(), a.end());
-            std::sort(c.begin(), c.end());
-            Real scale = Real(1);
-            for (Real v : c) scale = std::max(scale, std::abs(v));
-            for (int i = 0; i < n; ++i)
-                EXPECT_NEAR(a[i], c[i], tol * scale)
-                    << "evals-only eigenvalue " << i << " n=" << n << " b=" << b;
-        }
+        // Both paths against LAPACKE of the input (A0, copied before either solver ran).
+        SCOPED_TRACE("n=" + std::to_string(n));
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w1, n, /*sorted_copy=*/true, A0.view().all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w2, n, /*sorted_copy=*/true, A0.view().all_items());
     }
 }
 
@@ -245,7 +237,6 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
 
     for (int n : {32, 64, 129}) {
         const int batch = 3;
@@ -256,6 +247,7 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i)
                 for (int j = 0; j < n; ++j) A2(i, j, b) = A1(i, j, b);
+        const Matrix<T, MatrixFormat::Dense> A0 = A2;
 
         UnifiedVector<Real> w1(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
@@ -272,19 +264,10 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
-        for (int b = 0; b < batch; ++b) {
-            std::vector<Real> a(w1.begin() + static_cast<ptrdiff_t>(b) * n,
-                                w1.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::vector<Real> c(w2.begin() + static_cast<ptrdiff_t>(b) * n,
-                                w2.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::sort(a.begin(), a.end());
-            std::sort(c.begin(), c.end());
-            Real scale = Real(1);
-            for (Real v : c) scale = std::max(scale, std::abs(v));
-            for (int i = 0; i < n; ++i)
-                EXPECT_NEAR(a[i], c[i], tol * scale)
-                    << "eigenvalue " << i << " n=" << n << " b=" << b;
-        }
+        // Both paths against LAPACKE of the input (A0, copied before either solver ran).
+        SCOPED_TRACE("n=" + std::to_string(n));
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w1, n, /*sorted_copy=*/true, A0.view().all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w2, n, /*sorted_copy=*/true, A0.view().all_items());
     }
 }
 #endif
@@ -307,7 +290,6 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
     constexpr Backend B = TestFixture::BackendType;
 
     auto& ctx = *this->ctx;
-    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-9);
     const std::vector<std::pair<int, int>> cases = {
         {64, 48}, {96, 64}, {128, 48}, {100, 32}, {129, 16}, {128, 16}, {96, 24}};
 
@@ -357,30 +339,15 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
                 }
         }
 
-        UnifiedVector<Real> wA(static_cast<size_t>(n) * batch);
         UnifiedVector<Real> wB(static_cast<size_t>(n) * batch);
-        UnifiedVector<std::byte> wsA(syev_blocked_buffer_size(
-            ctx, Acopy.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked(ctx, Acopy.view(), wA.to_span(), JobType::EigenVectors,
-                           Uplo::Lower, wsA.to_span(), StedcParams<Real>{}).wait();
         UnifiedVector<std::byte> wsB(syev_blocked_buffer_size(
             ctx, Bdense.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
         syev_blocked(ctx, Bdense.view(), wB.to_span(), JobType::EigenVectors,
                            Uplo::Lower, wsB.to_span(), StedcParams<Real>{}).wait();
 
-        for (int b = 0; b < batch; ++b) {
-            std::vector<Real> x(wA.begin() + static_cast<ptrdiff_t>(b) * n,
-                                wA.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::vector<Real> y(wB.begin() + static_cast<ptrdiff_t>(b) * n,
-                                wB.begin() + static_cast<ptrdiff_t>(b + 1) * n);
-            std::sort(x.begin(), x.end());
-            std::sort(y.begin(), y.end());
-            Real scale = Real(1);
-            for (Real v : x) scale = std::max(scale, std::abs(v));
-            for (int i = 0; i < n; ++i)
-                EXPECT_NEAR(x[i], y[i], tol * scale)
-                    << "sy2sb band eigenvalue " << i << " n=" << n << " kd=" << kd << " b=" << b;
-        }
+        // The band's spectrum (through syev_blocked) against LAPACKE of the untouched input.
+        SCOPED_TRACE("n=" + std::to_string(n) + " kd=" + std::to_string(kd));
+        test_utils::expect_eigenvalues_match_lapacke<T>(Acopy.view(), wB, n, /*sorted_copy=*/true, Acopy.view().all_items());
       }
     }
 }

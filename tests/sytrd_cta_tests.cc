@@ -262,15 +262,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 
     (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	/* try {
-	} catch (const sycl::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} catch (const std::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} */
-
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 
 	using MV = MatrixView<Real, MatrixFormat::Dense>;
@@ -295,15 +286,6 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 
     (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	/* try {
-	} catch (const sycl::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} catch (const std::exception& ex) {
-		if (is_kernel_not_found_message(ex.what())) GTEST_SKIP() << "Missing kernel bundle: " << ex.what();
-		throw;
-	} */
-
 	// Sanity: compare d/e/tau against a CPU reference implementation.
 	{
 		std::vector<Real> a_ref = extract_host_matrix_colmajor(A0, n);
@@ -355,6 +337,28 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 	EXPECT_THROW(
 		((void)sytrd_cta(ctx, A.view(), d.view(), e.view(), tau.view(), Uplo::Lower, ws.to_span(), 1), ctx.wait()),
 		std::exception);
+}
+#endif
+
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+// Batch 0: no launch, no throw, nothing written (acpp 25.10 launches an empty nd_range).
+TYPED_TEST(SytrdCtaTest, EmptyBatchIsANoOp) {
+	using Real = typename TestFixture::ScalarType;
+	constexpr Backend B = TestFixture::BackendType;
+	const int n = 16;
+	UnifiedVector<Real> sentinel(4 * n * n, Real(7));
+	MatrixView<Real, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 2, (n + 2) * n, 0);
+	VectorView<Real> d(sentinel.data() + 3 * n * n, n, 0), e(sentinel.data() + 3 * n * n + n, n - 1, 0),
+		tau(sentinel.data() + 3 * n * n + 2 * n, n - 1, 0);
+	UnifiedVector<std::byte> ws(1, std::byte{0});
+	for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+		const auto run = [&] {
+			(void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, uplo, ws.to_span(), 1);
+			this->ctx->wait();
+		};
+		EXPECT_NO_THROW(run());
+	}
+	for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
 }
 #endif
 

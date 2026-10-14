@@ -6,8 +6,9 @@ Terse working rules for agents and contributors: toolchain, build performance, t
 routing architecture, measurement rules, GPU kernel facts and repository conventions.
 
 **TL;DR.** Build dependencies: CMake >=3.17 (>=3.21 for `cmake --preset`), a C++20 compiler with
-SYCL 2020 support **and a backend for your GPU vendor**, netlib LAPACK/LAPACKE + CBLAS.
-Runtime needs the same plus a GPU the SYCL runtime exposes. The exercised configuration is
+SYCL 2020 support **and a backend for your GPU vendor**; optionally netlib LAPACKE + CBLAS (the
+NETLIB host backend and the LAPACKE test oracles). Runtime needs the same plus a GPU the SYCL
+runtime exposes. The exercised configuration is
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
 Ubuntu 22.04; see "Tested platforms" in `docs/guide/build.md`.
 
@@ -91,6 +92,16 @@ cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++
 A consumer of an installed BatchLAS must configure the *whole* consuming project with this same
 compiler ("Building against BatchLAS" in `docs/cpp-api.md`).
 
+### 2c. AdaptiveCpp: the second SYCL implementation
+
+BatchLAS also builds with the AdaptiveCpp 25.10 release (`BATCHLAS_SYCL_IMPL=ACPP`; design
+@ref design_sycl_implementations). Presets `acpp` and `acpp-tests` set
+`CMAKE_CXX_COMPILER=/opt/adaptivecpp-25.10.0-cuda13.2/bin/acpp` (trees `build-acpp`,
+`build-acpp-tests`). The hosted CI job `acpp-compile` compiles every target with
+`--acpp-targets=generic` and CUDA off; it runs nothing. An acpp test tree is gated against its own
+ledger, `tests/known-failures-acpp.txt` (`compare_failures.py --sycl-impl ACPP`, or
+`run_local_checks.sh` on an acpp tree).
+
 ## 3. Verifying the Toolchain
 
 ```bash
@@ -114,12 +125,14 @@ Add the install prefix (e.g. `/usr/local/lib`) to `LD_LIBRARY_PATH`, or run `sud
 
 ## 5. CMake Configuration Hints
 
-BatchLAS finds LAPACKE via `find_package(LAPACK REQUIRED COMPONENTS CBLAS LAPACKE)` and SYCL via
-`find_package(SYCL REQUIRED)` (provided by Intel's compiler). For a LAPACKE outside standard
-prefixes:
+There is no `find_package` for SYCL: the compiler is the SYCL implementation. LAPACKE and CBLAS
+are found with `find_library` (`find_netlib_libs` in `cmake/BatchLASDependencies.cmake`): `lapacke`
+in the Debian multiarch directories first, then the default search path; CBLAS (`cblas`, else
+`blas`) from LAPACKE's own directory first. Both are optional: without them configure warns and
+disables the NETLIB host backend. A library outside those paths is named explicitly:
 
 ```bash
-export CMAKE_PREFIX_PATH="/opt/netlib:$CMAKE_PREFIX_PATH"
+cmake -S . -B build -DLAPACKE_LIBRARY=/opt/lib/liblapacke.so -DCBLAS_LIBRARY=/opt/lib/libcblas.so
 ```
 
 ## 6. Quick Smoke Test
@@ -130,8 +143,8 @@ cmake -B build .
 #   cmake -B build-gpu . -DBATCHLAS_CPU_TARGET=none
 
 # Iterating on one algorithm: this builds the library and only this one test
-# binary. Do not build the default target while iterating — it also builds the
-# other 48 test executables, which you are not about to run.
+# binary. Do not build the default target while iterating — it also builds every
+# other test executable (`ctest -N` lists them), which you are not about to run.
 cmake --build build --target stedc_tests -j"$(nproc)"
 ctest --test-dir build -R '^stedc_tests$' --output-on-failure
 
@@ -234,6 +247,10 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
   `__ACPP_PRINT_IR_BEFORE_EMIT=1` prints the LLVM IR the emitter receives (look for `<4 x`,
   `double`, `llvm.nvvm`). A GPU fault under coarse events covers many ops:
   `BATCHLAS_METAL_FLUSH_EACH_OP=1` commits one command buffer per op to attribute it.
+- **A data-dependent loop around barriers never ends on the OpenMP device** (the host NETLIB
+  instantiations run their native kernels there), even at batch 1, unless the loop condition is a
+  group collective: `tridiagonal_solver` broadcasts it (`sycl::group_broadcast`) for NETLIB under
+  acpp only. A host test that hangs at 100% CPU in `__acpp_sscp_kernel` is this.
 - **Float subnormals flush to zero** on the Apple GPU, though the device reports denorm support.
   A test that needs one must probe the device and skip.
 - **Routing on Apple is borrowed**: no `tuned/*.apple_m5_max.txt`, so every op borrows the nearest
@@ -266,8 +283,8 @@ sometimes running): fresh tree, no cache, 284-334 s.
   target, so a GPU-only tree is **not a gate**: the final pre-push run uses full targets
   (`dev-tests`/`cuda` or a default configure), and the vendor-free tree
   (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) is built **only at that final gate**.
-- Build only the target you work on (`--target stedc_tests`). Most test targets are
-  EXCLUDE_FROM_ALL.
+- Build only the target you work on (`--target stedc_tests`). Every test target is in the default
+  target, so a plain build links them all.
 - An incremental relink of `libbatchlas_backends` after a one-line `select.cc` edit is ~17 s,
   whatever `BATCHLAS_SYCL_LINK_JOBS` is (4: 17 s, 16: 18 s). Do not tune it.
 - `cmake --build --target A B C` with many targets can exit 0 and still skip some links. Check
@@ -292,7 +309,7 @@ sometimes running): fresh tree, no cache, 284-334 s.
   `./build/tests/X --gtest_filter=...` -> one binary `ctest -R '^X$'` (`-R` is a substring regex, so
   anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> `-LE slow` -> full only
   before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool,
-  `sg_compat`/`sg_partition`, `include/util`).
+  `sg_compat`/`sg_partition`, `include/batchlas/util`).
 - **On threadripper02, run multi-test scopes through `scripts/ctest_gpus.sh`** (same arguments as
   ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`).
   - Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus`
@@ -358,8 +375,9 @@ passing a wrong answer. Every new or rewritten test needs:
 9. For a capacity guard, a *launch* at the advertised ceiling, not an arithmetic re-derivation.
 10. To verify a revert of an untracked file, use `md5sum` against a pristine copy (`git diff` prints
     nothing).
-11. Verify results with `batchlas::verify` (`EXPECT_VERIFY`; `docs/design/verification.md`). No local
-    residual, reference or tolerance helpers.
+11. Verify results with `batchlas::verify`; in a test the macro is
+    `EXPECT_VERIFY(T, Check::kind, n, value)` (`tests/test_utils.hh`; @ref design_verification). No
+    local residual, reference or tolerance helpers.
 
 ## 9. Architecture: Routing and Dispatch
 
@@ -373,16 +391,11 @@ There is no RouteTable and no `include/batchlas/blas/dispatch/`.
 - `can_run()` is correctness only: false means the launch would throw or give a WRONG ANSWER. Never
   put a speed threshold there, or the shape becomes unservable vendor-free.
 - Speed lives only in tables. `select::choose` (`src/select/select.hh`) takes the first runnable
-  entry of the nearest row of `tuned/<op>.<device>.txt`: exact keys must match; `n`/`batch`
-  are log distance, weighted per key (`n:log:3`: potrf work ~ n^3 x batch). A device with no table
+  entry of the nearest row of `tuned/<op>.<device>.txt`: exact keys match by longest prefix (dropped
+  from the right until a row matches); `n`/`batch` are log distance, weighted per key (`n:log:3`: potrf work ~ n^3 x batch). A device with no table
   borrows the nearest one and warns once; the CPU never borrows; nothing runnable falls to the op's
   last resort.
-- Tables are generated, not hand-edited: `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt`
-  from the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` alone, and CI runs
-  `--check` ("Tuned tables equal their ledgers"; `docs/design/tuning-data.md`). A row tagged
-  `# transcribed` (entries `<spelling> -`) is an old router's order evaluated per grid cell,
-  **untimed**: it reproduces the deleted windows and is not a measurement. A `-dirty` tuner run never
-  reaches a table.
+- Tables, ledgers, tiers, staleness and generation: @ref design_tuning_data (the only normative page).
 - `BATCHLAS_TUNED_DIR=<dir>` overrides tables without a rebuild; `BATCHLAS_SELECT_TRACE=1` prints
   every choice and the runner-up.
 
@@ -394,7 +407,7 @@ Per-op choices:
 | posv | `tiny`/`cta`/`blocked`, no vendor family; its children select for themselves |
 | gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
 | syrk | `gram` (n <= 128; float and double), `triangular` (float), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
-| syr2k | `triangular` (float; real ConjTrans stays on the vendor), `vendor` |
+| syr2k | `triangular` (float; a real ConjTrans runs as Trans), `vendor` |
 | symm | `expand` (mirrored expansion + public gemm, float and double, needs `expansion_fits`), `vendor`; key `form` = sq\|tall\|wide |
 | trmm | `triangular` (Side::Left), `expand` (expansion + public gemm, either side), `vendor` (the `cublas?trmm` loop only; the old `vendor` pin meant expand+gemm, that is now `expand`) |
 

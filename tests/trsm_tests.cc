@@ -126,7 +126,8 @@ protected:
                 for (int i = 0; i < rows; ++i) {
                     if constexpr (std::is_same_v<ScalarType, std::complex<float>> ||
                                   std::is_same_v<ScalarType, std::complex<double>>) {
-                        B_view_full.at(i, j, b) = ScalarType(dist(rng), dist(rng));
+                        const auto re = dist(rng), im = dist(rng);
+                        B_view_full.at(i, j, b) = ScalarType(re, im);
                     } else {
                         B_view_full.at(i, j, b) = static_cast<ScalarType>(dist(rng));
                     }

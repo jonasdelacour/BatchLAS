@@ -31,6 +31,8 @@ run() {
 }
 
 run python3 "$here/check_cmake_syntax.py"
+# Parses CMakePresets.json (every configure, build and test preset) without configuring.
+run cmake -S "$here/../.." --list-presets=all
 run python3 "$here/check_exported_package.py"
 run python3 "$here/check_public_headers.py"
 run python3 "$here/check_no_unprefixed_includes.py"
@@ -47,7 +49,7 @@ run python3 "$here/check_evidence_anchors.py"
 # Checks the INDEX, so it catches a raw benchmark file before it is committed, not after.
 run python3 "$here/check_lfs_pointers.py" --self-test
 run python3 "$here/check_lfs_pointers.py"
-# Stale tuned tables are a warning (flat-kernel-selection.md §6.5): the check always exits 0;
+# Stale tuned tables are a warning (docs/design/tuning-data.md#tuning-data-kernel-hash): exits 0;
 # only its self-test can fail.
 run python3 "$here/check_tuned_tables.py" --self-test
 run python3 "$here/check_tuned_tables.py"
@@ -56,6 +58,8 @@ run python3 "$here/check_tuned_tables.py"
 _root=$(CDPATH= cd -- "$here/../.." && pwd)
 run python3 "$_root/scripts/sweep_to_table.py" --self-test
 run python3 "$_root/scripts/sweep_to_table.py" --check
+# The ctest failure gate's registered-test count, against a fixture (needs ctest, no build).
+run python3 "$here/compare_failures.py" --self-test
 # Plans and write-ups outside docs/ are what the documentation site replaced.
 run python3 "$here/check_markdown_locations.py" --self-test
 run python3 "$here/check_markdown_locations.py"

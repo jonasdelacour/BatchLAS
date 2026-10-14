@@ -1,11 +1,11 @@
-# CI: what it proves, and how to stand the runner up
+# CI: what it proves, and how to stand the runner up {#dev_ci}
 
 > **Status:** current · self-hosted runner: RTX 4090 (sm_89), CUDA 13.2, Ubuntu 22.04
 
 Static checks run on GitHub-hosted runners. The GPU jobs run on one self-hosted workstation, and
 they are the only jobs that install or execute anything. One hosted job, `acpp-compile`, compiles
 every target with AdaptiveCpp. CI gates one configuration (CUDA DPC++ on `sm_89`) and no other row
-of the README "Tested platforms" table.
+of the [Tested platforms](guide/build.md#tested-platforms) table.
 `.github/workflows/ci.yml` is the authority on what runs.
 
 ## What CI covers and what it does not
@@ -19,12 +19,14 @@ of the README "Tested platforms" table.
 | Every `evidence:` pointer resolves; cited slugs are unique across `docs/` | hosted | `check_evidence_anchors.py` |
 | No Markdown outside `docs/`; no raw content under an LFS path | hosted | `check_markdown_locations.py`, `check_lfs_pointers.py` |
 | Docs site builds with zero Doxygen warnings; published on push to `main` | hosted | `docs` and `docs-deploy`; see [The docs jobs](#the-docs-jobs) |
+| Every `tuned/<op>.<device>.txt` equals its ledger, byte for byte | hosted | `tuned-tables-ledgers`: `sweep_to_table.py --self-test` and `--check`, fetching only the ledger LFS objects ([generation and the check](design/tuning-data.md#tuning-data-generation-and-check)) |
+| Stale tables reported | hosted | `tuned-tables`: `check_tuned_tables.py --self-test`, then the staleness report; warning only, never fails |
 | Configure and compile every target with AdaptiveCpp 25.10, generic target, CUDA off | hosted | `acpp-compile`: catches DPC++-only spellings; no CUDA-backend code, nothing runs. See [The acpp-compile job](#the-acpp-compile-job) |
 | Configure with real CUDA DPC++ | GPU, per PR | `-DBATCHLAS_ENABLE_CUDA=ON`, then grep for `Using SYCL targets: … nvidia_gpu_sm_89` |
-| Compile every component library and test binary | GPU, per PR | `cmake --build --preset dev-tests`: 95 library TUs, 61 test executables |
-| Run the suite on a GPU | GPU, per PR | `ctest --preset dev-tests -LE slow`: 65 of 70 tests. The only place wrong numbers, launch failures and device aborts are caught |
+| Compile every component library and test binary | GPU, per PR | `cmake --build --preset dev-tests` |
+| Run the suite on a GPU | GPU, per PR | `ctest --preset dev-tests -LE slow`: every test but the `slow` suites and `consumer_package_tests` (`ctest -N` counts them). The only place wrong numbers, launch failures and device aborts are caught |
 | Package in package mode | GPU, per PR | `cmake --install` to a temp prefix, then `run_local_checks.sh <prefix>` |
-| Four slow suites; packaging end to end | GPU, nightly | Full 70-test `ctest`, with `consumer_package_tests` under `--require` |
+| Four slow suites; packaging end to end | GPU, nightly | Full `ctest`, with `consumer_package_tests` under `--require` |
 | Vendor-free build configures, compiles, links | GPU, nightly | Report-only (`continue-on-error`); not green, no ledger |
 
 Not covered: AMD/ROCm; CPU-only DPC++ and `icpx` builds (see
@@ -43,8 +45,10 @@ every pull request queues behind it.
 | --- | --- | --- | --- |
 | Static checks (`cmake-lint`, `exported-package`, `public-headers`, `comment-density`, `lfs-pointers`) | `ubuntu-latest` | every trigger | Scripts under `.github/ci/`; all run locally with `.github/ci/run_local_checks.sh` |
 | `gpu-build-test` | `[self-hosted, linux, x64, cuda]` | push to `main`, non-fork PRs | Configure, assert the CUDA target, build, `ctest -LE slow`, `compare_failures.py`, install and check the export. Timeout 180 min |
-| `gpu-nightly-full` | same | 03:17 UTC, `workflow_dispatch` with `run_nightly` | Full 70-test `ctest`, then a vendor-free configure, build and ctest that reports without gating. Timeout 360 min |
+| `gpu-nightly-full` | same | 03:17 UTC, `workflow_dispatch` with `run_nightly` | Full `ctest`, then a vendor-free configure, build and ctest that reports without gating. Timeout 360 min |
 | `acpp-compile` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 (cached), then configures BatchLAS with it and compiles library, tests and benchmarks. Timeout 90 min |
+| `tuned-tables` | `ubuntu-latest` | every trigger | `check_tuned_tables.py --self-test`, then the stale-table report (never fails) |
+| `tuned-tables-ledgers` | `ubuntu-latest` | every trigger | Fetches the ledger LFS objects (cached by their pointers' oids), then `sweep_to_table.py --self-test` and `--check` |
 | `docs` | `ubuntu-latest` | every trigger | Builds the site (below) |
 | `docs-deploy` | `ubuntu-latest` | push to `main`, after `docs` | Publishes the Pages artifact |
 
@@ -73,7 +77,7 @@ runner with no GPU and no CUDA toolkit compiles every TU. There is no device lin
 | Toolchain | `clang-20 llvm-20-dev libclang-20-dev libomp-20-dev` from the Ubuntu 24.04 archive (20.1.2, the package the threadripper02 install uses), netlib `liblapacke-dev liblapack-dev libblas-dev`, `ccache` |
 | AdaptiveCpp | `.github/ci/build_adaptivecpp.sh`: tag `v25.10.0`, which must resolve to `9f842c70`; generic compiler and OpenMP runtime only, every GPU backend off. `actions/cache` keyed on tag, commit, `llvm-20-dev` version and the script's hash. 14 MB install |
 | BatchLAS | `.github/ci/acpp_compile.sh`: the `acpp-tests` preset with `CMAKE_CXX_COMPILER=<install>/bin/acpp`, `Release`, `-Werror=unknown-attributes`, `BATCHLAS_ENABLE_CUDA=OFF`, benchmarks on. Fails unless configure printed `Using AdaptiveCpp targets: generic`, `Using AdaptiveCpp for SYCL:` and `Found LAPACKE:`. Builds `all` |
-| Completeness | `.github/ci/check_built_tests.py`: every registered ctest executable must exist (99 of 102 tests here; the other three run `cmake -P`, `python3` or a shell script) |
+| Completeness | `.github/ci/check_built_tests.py`: every registered ctest executable must exist (all but the three tests that run `cmake -P`, `python3` or a shell script) |
 | ccache | `~/.ccache-acpp` in `actions/cache`, per commit, restored from the newest earlier entry |
 
 Measured on threadripper02 with the same scripts and a clean environment:
@@ -260,18 +264,28 @@ python3 .github/ci/compare_failures.py \
     --junit ctest.xml \
     --gtest-dir build/presets/dev-tests/gtest-xml \
     --require consumer_package_tests \
-    --expected-tests 70
+    --expected-tests-from build/presets/dev-tests
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
+- `N` is a fixed count, recorded once from `ctest --preset dev-tests -N` ("Total Tests") on a
+  known-good full configure of `main`, never from the tree under test. Taking it from the same tree
+  makes the guard self-referential: a configure that registers fewer tests (smoke set, CPU tests
+  off, a dropped `add_test`) then still passes. CI's own counts are in
+  `.github/workflows/ci.yml` (its `--expected-tests` arguments) and cover different trees.
 - `--known` defaults to `tests/known-failures.txt`. An AdaptiveCpp tree has its own self-contained
   ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
   (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
   `BATCHLAS_BUILD_DIR` is set. An AdaptiveCpp Metal tree uses a third,
   `tests/known-failures-acpp-metal.txt`, chosen when the cache (or `--gpu-family`, or the
   environment) has `BATCHLAS_GPU_FAMILY_RESOLVED=METAL`.
-- Use `--require` and `--expected-tests` on a full run only. After `ctest -LE slow`,
-  `consumer_package_tests` does not run and the count is 65, so the per-PR job passes neither.
+- `--expected-tests-from <tree>` compares the junit count with what `ctest --test-dir <tree> -N`
+  registers. After `ctest -LE slow`, pass `--label-exclude slow` so the count is filtered the same way.
+  It catches a run that stopped early, not a configure that registered fewer tests: the count shrinks
+  with the tree.
+- `--min-tests N` is the checked-in floor for that case: CI passes 95 after `-LE slow` and 100 on the
+  full run (threadripper02's full-target tree registers 99 and 104). Raise it when tests are added.
+- Use `--require consumer_package_tests` on a full run only: `ctest -LE slow` does not run it.
 
 ### Both directions fail the gate
 
@@ -326,12 +340,12 @@ cmake --build --preset dev-tests            # tens of minutes
 ctest --preset dev-tests
 ```
 
-Full `ctest` is 70 tests. `ctest -LE slow` is 65 tests in about 95 s. Do not run the full suite on
+`ctest -N` counts the tests; `ctest -LE slow` takes about 95 s on the 4090. Do not run the full suite on
 every edit; `tests/README.md` has the scoping table. `scripts/ctest_gpus.sh` was validated only on
 threadripper02; CI and local full gates stay serial.
 
 Two scopes are wrong for a pre-push gate: `ctest -LE slow` excludes the four `slow` suites and
-`consumer_package_tests`; `BATCHLAS_TEST_TARGET_SET=smoke` (the `fast-dev` preset) runs 9 binaries, with
+`consumer_package_tests`; `BATCHLAS_TEST_TARGET_SET=smoke` (the `fast-dev` preset) runs only the smoke binaries, with
 none of the four baseline failures. It is an edit-loop tool only.
 
 ## Why there is no hosted compile job
@@ -371,7 +385,7 @@ sudo journalctl -u 'actions.runner.*' -n 100 --no-pager
 ### ccache is cold, or silently useless
 
 - **Symptom:** the first build after a fresh clone or toolchain change takes tens of minutes (95
-  library and 61 test TUs). The 180-minute timeout is expected; do not kill it. The cache never warms.
+  library and test TUs). The 180-minute timeout is expected; do not kill it. The cache never warms.
 - **Cause:** without `CCACHE_BASEDIR` and `CCACHE_NOHASHDIR=1`, ccache hashes absolute paths, and each
   runner ref lives at a different path. A bare `CMAKE_CXX_COMPILER_LAUNCHER=ccache` got 3/196 hits, with
   no error. Settings in `~/.config/ccache` are not read by the job either.
@@ -413,8 +427,9 @@ with a `<skipped>` child, which includes never-built binaries. The root summary 
 - **Cause:** `BatchLASTest::SetUp` in `test_utils.hh` calls `GTEST_SKIP()` when `should_run_backend` or
   `should_run_float_type` rejects an instantiation. A skip does not fail, so a binary with every case
   skipped exits 0. An unrecognised `BATCHLAS_TEST_BACKEND` skips everything, so one typo in a CI
-  variable gives 70/70 green.
+  variable turns every test green.
 - **Defences:** CI sets neither `BATCHLAS_TEST_BACKEND` nor `BATCHLAS_TEST_FLOAT_TYPE`, and their
   absence from `env:` is a gate. `compare_failures.py` names such binaries under `SKIPPED`, read that
-  section rather than the exit code. `--expected-tests 70` catches missing executables. The
+  section rather than the exit code. A never-built executable is still registered, so it is not a
+  count problem: its `notrun` testcase is classified `FAILED`. The
   assertions in [The environment trap](#the-environment-trap) catch a CPU-only build.

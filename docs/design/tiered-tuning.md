@@ -105,46 +105,19 @@ directory per (op, dtype, device) with one file per run on 2026-10-11.
 | `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set |
 | `audit` | run id, cell key, persistent and fresh-process medians and winners, verdict |
 
-A truncated last line (a killed run) is ignored with a warning, so a cell is either fully recorded
-or absent. Results merge by device key (sm_89, sm_120); the host is recorded.
+Results merge by device key (sm_89, sm_120); the host is recorded.
 
 **Hashes.** Kernel hash v2, which ignores comments and whitespace
 ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A spec's `kernel-sources` block maps each family to its files, plus a common set
-(dispatch, `src/select/`) that every family depends on. Each spec lists its `src/ops/<op>/<op>.cc`,
-where `can_run` lives, so an edit to what can run stales every cell. `kernel-deps` adds files
+(the op's shared headers) that every family depends on; `src/select/` is not hashed. Each spec lists
+its `src/ops/<op>/<op>.cc`, where `can_run` lives, as a common `kernel-deps` entry, so an edit to what
+can run stales every cell. `kernel-deps` adds files
 outside the source list (`// family: <name> "path" ...` or `// common "path" ...`). The posv
 coupling is explicit: posv's families list the potrf and trsm families they call.
 
-**Which record counts.** Precedence is deep > coarse > preview > custom > converted > transcribed.
-converted and transcribed records carry no hash and are always current. A `cell` record is:
-
-- **Current** when every candidate's hash matches the source tree. A candidate stored as `skipped`
-  is not compared, because a change to what can run goes through the hashed `<op>.cc`. A candidate
-  skipped with reason `dominated:<key>` was never tried there, so its family is stale whatever its
-  hash ("Engine: dominance carry-forward removed").
-- **Partly stale** when only some hashes changed, or a family appeared that the record never raced.
-  The next run re-races just those candidates against the stored winner and runner-up, at the stored
-  tier, and appends a merged record. Editing one kernel keeps every deep cell deep.
-- **Stale** when the stored winner's hash changed or its family was removed. The cell is re-measured
-  at the running tier.
-
-A record in which every candidate is `error` counts as no record. `best_records` (in `ledger.cc` and
-`sweep_to_table.py`) applies this one rule, so planning, refinement, `--status` and table generation
-agree.
-
-**Table generation.** `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt` from the ledger
-alone. Output is byte-reproducible, and `--check` (run by CI) re-derives every table with the
-hashes in its header.
-
-- Each cell takes its best current record.
-- A lower-tier row is emitted only to fill a gap: no higher-tier row may lie within the lower tier's
-  lattice spacing under `select::choose`'s distance. A coarse point never sits inside a region a deep
-  run resolved.
-- Converted and transcribed rows survive only where nothing measured covers them.
-- The header reports the tier mix and per-family hashes:
-  `source=ledger:<file> tiers=deep:812,coarse:120,preview:0,custom:0,converted:0,transcribed:0`,
-  `family_kernels=<family>:<hash>,...`, and the op-level `kernels=` hash.
-- Each row ends in a tier comment (`# deep`), which both parsers already strip.
+**Which record counts, table generation:** @ref design_tuning_data
+([the ledger file](tuning-data.md#tuning-data-ledger-file),
+[generation and the check](tuning-data.md#tuning-data-generation-and-check)).
 
 **Import.** `batchlas_tune --import-raw` turns a schema-1 raw sweep into a deep run. Its hashes are
 `legacy:<kernels>` unless the raw file's op hash equals today's, so an old sweep imports stale.
@@ -480,7 +453,7 @@ planning only after the round's last record, and records identical to a one-GPU 
 Added 2026-10-09. Every cell times and verifies at one leading dimension (`ld_pad`, normally 0), so a
 candidate that derives `ld` from `n` verifies, wins and ships. The deep sm_120 run was suspected of
 shipping exactly that for the syev `vendor` family. That suspicion turned out to be wrong
-(@ref md_docs_2design_2known-defects "known defects", the LOBPCG entry), but nothing in the tuner
+(@ref design_known_defects "known defects", the LOBPCG entry), but nothing in the tuner
 could have caught such a defect if it had been real.
 
 **The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified
@@ -556,9 +529,12 @@ The third ran 4.2 h (32,912 cells) and the fourth 4.9 h (35,323 cells), when the
 stopped it. That is about 20.6 h of measuring and 124,724 cell records. On 2026-10-09 two
 follow-up runs went into the same ledger. One re-measured 250 cells that the other user's jobs
 had damaged ("Engine: re-measuring named cells"): 2.5 min on 4 GPUs. The other re-ran gemv in
-full (8,515 cells in 33.5 min on 4 GPUs; float, double and cfloat hit the 2.0x refinement cap), because the defect-13 fix below edited `src/ops/gemv/gemv.cc`
-and so staled every gemv record. The final ledger holds 133,489 records over 118,854
-distinct cells.
+full (8,515 cells in 33.5 min on 4 GPUs), because the defect-13 fix below edited `src/ops/gemv/gemv.cc`
+and so staled every gemv record; that run (`20261009T042647-threadripper02-422873`) was `-dirty`, so
+every reader drops it, and gemv was re-measured at deep on 2026-10-11 (8,558 cells, run
+`20261011T204301-threadripper02-39013`). The campaign wrote 133,489 cell records, the dirty run's
+included. On 2026-10-12 the 19 sm_120 ledgers hold 210,505 cell records: 157,444 measured
+(the 2026-10-11 samples and re-measures included) and 53,061 transcribed.
 
 **Refinement coverage.** Every job's starting lattice is complete. Refinement is not: geqrf,
 ormqr, getri, posv, gesv, orgqr, syev, gesvd and complex getrs got little of it before the stop

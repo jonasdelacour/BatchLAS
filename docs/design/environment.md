@@ -4,7 +4,8 @@
 
 Every `BATCHLAS_*` variable the library reads is captured once into `batchlas::Settings`
 (`include/batchlas/settings.hh`, `src/util/settings.cc`). The user guide is
-[Configuration](../cpp-api.md#configuration). Test and benchmark-only variables are not listed.
+[Configuration](../cpp-api.md#configuration). Test and benchmark-only variables are not listed,
+except [`BATCHLAS_VERIFY_RECORD`](#environment-verify-record-is-read-raw), which is read raw.
 
 ## Snapshot and reload
 
@@ -41,7 +42,7 @@ distinct: `BATCHLAS_KERNEL_TRACE_PATH` falls through to `BATCHLAS_TRACE_PATH` on
 | Variable | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `BATCHLAS_<OP>_ROUTE` | `auto`, `native`, `vendor`, or a choice spelling (`lpanel:panel=8`) | `auto` | Pins the route of one op. See [route pins](#environment-route-pins-are-raw-strings). |
-| `BATCHLAS_TUNED_DIR` | directory | built-in tables | Replaces the table file of the same name (`gemm.sm_89.txt`, every dtype in it). Other names are skipped with a warning. |
+| `BATCHLAS_TUNED_DIR` | directory | built-in tables | A file of the same name (`gemm.sm_89.txt`) replaces the built-in table dtype by dtype: a dtype with rows in the file uses them, a dtype the file lacks keeps the built-in rows. Other names are skipped with a warning. |
 | `BATCHLAS_EXPAND_ROUTE` | `expand`, `loop` | unset | Chooses expansion or the per-item loop for hemm/herk/her2k. |
 | `BATCHLAS_GEMV_SEGT` | `off`, `auto`, `2`, `4`, `8` | unset | Re-read; must not be latched. |
 | `BATCHLAS_GESVD_BIDIAG` | `bdsdc`, `normal`, `bdsqr` | unset | Bidiagonal solver. Changes numerics; see [knobs that override an argument](#environment-knobs-that-override-an-explicit-argument). |
@@ -148,7 +149,7 @@ Tests pin a route with `ScopedPin` (`src/select/select.hh`), which wins over the
 To add a pinned op, add its name to `RoutingSettings::ops`. `BATCHLAS_<OP>_VARIANT`,
 `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KERNEL`, `BATCHLAS_GEMM_EXPERIMENTAL`,
 `BATCHLAS_GEMM_CUBLASDX_KERNEL`, `BATCHLAS_SYEV_SMALL_KERNEL` and `BATCHLAS_SYEV_CTA_MAX_N` are
-retired and no longer read. See `docs/design/flat-kernel-selection.md` (sections 5.3 and 12).
+retired and no longer read. See @ref design_flat_selection (sections 5.2 and 12).
 
 ## Knobs that override an explicit argument {#environment-knobs-that-override-an-explicit-argument}
 
@@ -205,6 +206,17 @@ Fixing these changes behaviour, so each fix belongs in its own commit:
 Three diagnostics knobs open a path for writing: the kernel trace (`kernel_trace_path`), the
 selection coverage (`$BATCHLAS_COVERAGE_OUT.<pid>`) and the band-reduction dump
 (`$BATCHLAS_DUMP_BANDR1_DIR`). Two write from an `atexit` handler. `configure()` lets an embedding application clear them first.
+
+## BATCHLAS_VERIFY_RECORD is read raw {#environment-verify-record-is-read-raw}
+
+`BATCHLAS_VERIFY_RECORD=<path>` makes every `verify::pass` append one calibration row to `<path>`
+(@ref design_verification). It is the one `BATCHLAS_*` variable read under `include/` outside `Settings`, deliberately:
+`verify/tolerance.hh` belongs to the uninstalled `batchlas::verify` target (tests, benchmarks, the
+tuner), not the library, and tests set it with a bare `setenv` mid-process.
+
+- Read with `std::getenv` on every `pass`; no snapshot, no `configure()` override, no reload.
+- The file stays open while the path is unchanged. A new path reopens it; unset or empty closes it.
+- A path that cannot be opened records nothing and is retried on the next `pass`.
 
 ## The unsafe group and its gate {#environment-the-unsafe-group-and-its-gate}
 

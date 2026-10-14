@@ -152,7 +152,7 @@ Event syevx_direct(Queue& ctx,
             // first index of the block, and its true (untruncated) size.
             auto block = sycl::local_accessor<int64_t, 1>(sycl::range<1>(2), h);
 
-            h.parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
                     const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());

@@ -221,6 +221,29 @@ if(BATCHLAS_CUDA_ENABLED)
     find_nvidia_libs()
 endif()
 
+# The CUDA vendor TUs (cublas.cc, cusolver.cc, cusparse.cc) each call into all three libraries,
+# so the CUDA vendor axis is all-or-nothing; a partial set used to fail later with an empty
+# OBJECT library or undefined symbols.
+set(BATCHLAS_HAS_CUDA_VENDOR_TUS FALSE)
+if(BATCHLAS_HAS_CUBLAS OR BATCHLAS_HAS_CUSOLVER OR BATCHLAS_HAS_CUSPARSE)
+    set(_batchlas_cuda_missing "")
+    foreach(_batchlas_lib CUBLAS CUSOLVER CUSPARSE)
+        if(NOT BATCHLAS_HAS_${_batchlas_lib})
+            list(APPEND _batchlas_cuda_missing ${_batchlas_lib})
+        endif()
+    endforeach()
+    if(_batchlas_cuda_missing)
+        list(JOIN _batchlas_cuda_missing ", " _batchlas_cuda_missing)
+        message(FATAL_ERROR "The CUDA vendor libraries are all-or-nothing, and this configure has "
+            "a partial set: missing ${_batchlas_cuda_missing} (disabled by "
+            "BATCHLAS_ENABLE_<name>=OFF, or not found). Enable cuBLAS, cuSOLVER and cuSPARSE "
+            "together, or none (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF for a vendor-free build).")
+    endif()
+    set(BATCHLAS_HAS_CUDA_VENDOR_TUS TRUE)
+    unset(_batchlas_cuda_missing)
+    unset(_batchlas_lib)
+endif()
+
 if(BATCHLAS_DETECTED_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
     find_rocm_libs()
 endif()

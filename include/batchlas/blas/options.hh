@@ -37,9 +37,12 @@
  * `syev`, `ormqr`, `gesvd`) come with and without a `Span<std::byte> ws` argument.
  * Without it, scratch is leased from the Queue's arena, sized by the matching
  * `*_buffer_size`; on an out-of-order queue releasing the lease drains the queue,
- * so pass your own span there to stay asynchronous. These overloads check shapes
- * (squareness, matching rows and batch sizes, minimum span lengths) and throw
- * `batchlas::invalid_argument` on a violation; the positional primaries do not.
+ * so pass your own span there to stay asynchronous. Every option overload, both
+ * spellings, with and without `ws`, checks shapes (squareness, matching rows and
+ * batch sizes, minimum span lengths) and throws `batchlas::invalid_argument` on a
+ * violation; only the deducing spelling also checks pointers. The ordinary spelling
+ * with non-const lvalue arguments can resolve to the queue-dispatch overload, which
+ * lands on the `f<Backend>` form, so that form must check too.
  *
  * Every `uplo` defaults to `Uplo::Lower`. With an explicit workspace, write
  * `PotrfOptions{}`, never a bare `{}`.
@@ -562,12 +565,15 @@ struct SyevOptions {
     Uplo uplo = Uplo::Lower;               ///< triangle of A that is read
 };
 
-/// @brief potrf with a compile-time backend and a caller workspace; no shape checks.
+/// @brief potrf with a compile-time backend and a caller workspace.
 /// @tparam B   backend to run on
 /// @param ws   at least `potrf_buffer_size<B, T>(ctx, A, opts.uplo)` bytes
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::byte> ws) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_square("potrf", "A", A);
+    detail::require_info_span("potrf", opts.info.size(), static_cast<size_t>(A.batch_size()));
     return potrf<B, T>(ctx, V(A), opts.uplo, ws, opts.info);
 }
 
@@ -681,13 +687,19 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> 
                                [&](auto Back) { return getrf<Back.value>(ctx, A, pivots, info); });
 }
 
-/// @brief getrs with a compile-time backend and a caller workspace; no shape checks.
+/// @brief getrs with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MB,
           typename T = detail::dense_scalar_t<MA>>
 inline Event getrs(Queue& ctx, const MA& A, const MB& B_, Span<int64_t> pivots,
                    const GetrsOptions& opts, Span<std::byte> ws) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_square("getrs", "A", A);
+    detail::require_same_rows("getrs", "A", A, "B", B_);
+    detail::require_same_batch("getrs", "A", A, "B", B_);
+    detail::require_span_at_least("getrs", "pivots", pivots.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return getrs<B, T>(ctx, V(A), V(B_), opts.trans, pivots, ws);
 }
 
@@ -855,21 +867,29 @@ inline Event orgqr(Queue& ctx, const MA& A, Span<T> tau) {
                                [&](auto Back) { return orgqr<Back.value>(ctx, A, tau); });
 }
 
-/// @brief syev with a compile-time backend and a caller workspace; no shape checks.
+/// @brief syev with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts, Span<std::byte> ws) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_square("syev", "A", A);
+    detail::require_span_at_least("syev", "W", W.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     return syev<B, T>(ctx, V(A), W, opts.jobz, opts.uplo, ws);
 }
 
-/// @brief syev with a compile-time backend; workspace leased from the arena, no shape checks.
+/// @brief syev with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
                   const SyevOptions& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_square("syev", "A", A);
+    detail::require_span_at_least("syev", "W", W.size(),
+                                  static_cast<size_t>(A.rows()) * A.batch_size());
     auto lease = ctx.workspace(syev_buffer_size<B, T>(ctx, V(A), W, opts.jobz, opts.uplo));
     return syev<B, T>(ctx, V(A), W, opts.jobz, opts.uplo, lease.span());
 }
@@ -921,23 +941,31 @@ struct OrmqrOptions {
     int32_t block_size_hint = 0;           ///< WY panel width; 0 lets the tuning table pick
 };
 
-/// @brief ormqr with a compile-time backend and a caller workspace; no shape checks.
+/// @brief ormqr with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
                    const OrmqrOptions& opts, Span<std::byte> ws) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_same_batch("ormqr", "A", A, "C", C);
+    detail::require_span_at_least("ormqr", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     return ormqr<B, T>(ctx, V(A), V(C), opts.side, opts.trans, tau, ws, opts.block_size_hint);
 }
 
-/// @brief ormqr with a compile-time backend; workspace leased from the arena, no shape checks.
+/// @brief ormqr with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
 inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
                    const OrmqrOptions& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    detail::require_same_batch("ormqr", "A", A, "C", C);
+    detail::require_span_at_least("ormqr", "tau", tau.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     // Size with the same hint the call uses, or the buffer is under-sized.
     auto lease = ctx.workspace(ormqr_buffer_size<B, T>(ctx, V(A), V(C), opts.side, opts.trans,
                                                        tau, opts.block_size_hint));
@@ -992,26 +1020,34 @@ struct GesvdOptions {
     std::optional<Uplo> hermitian_uplo = std::nullopt;
 };
 
-/// @brief gesvd with a compile-time backend and a caller workspace; no shape checks.
+/// @brief gesvd with a compile-time backend and a caller workspace.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
           detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
 inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
                    const MU& U, const MV& Vh, const GesvdOptions& opts, Span<std::byte> ws) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
+    detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     return opts.hermitian_uplo
                ? gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh,
                              *opts.hermitian_uplo, ws)
                : gesvd<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu, opts.jobvh, ws);
 }
 
-/// @brief gesvd with a compile-time backend; workspace leased from the arena, no shape checks.
+/// @brief gesvd with a compile-time backend; workspace leased from the arena.
 /// @tparam B  backend to run on
+/// @throws batchlas::invalid_argument as the Queue-deducing overload
 template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
           detail::DenseMatrixLike MV, typename T = detail::dense_scalar_t<MA>>
 inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
                    const MU& U, const MV& Vh, const GesvdOptions& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
+    if (opts.hermitian_uplo) detail::require_square("gesvd", "A", A);
+    detail::require_span_at_least("gesvd", "singular_values", singular_values.size(),
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     // The query must take the same branch as the call (different scratch needs).
     const size_t bytes =
         opts.hermitian_uplo

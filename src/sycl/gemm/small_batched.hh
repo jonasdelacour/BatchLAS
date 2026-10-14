@@ -59,7 +59,7 @@ Event launch_small_batched(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> slm(sycl::range<1>(static_cast<std::size_t>(kG) * NB * kLdb), h);
-        h.parallel_for<GemmSmallBatchedKernel<T, NB>>(
+        batchlas::impl::parallel_for<GemmSmallBatchedKernel<T, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -156,7 +156,7 @@ Event launch_small_tiled(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> slm(sycl::range<1>(static_cast<std::size_t>(2 * NB * kLd)), h);
-        h.parallel_for<GemmSmallTiledKernel<T, NB, PrefetchC>>(
+        batchlas::impl::parallel_for<GemmSmallTiledKernel<T, NB, PrefetchC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) {

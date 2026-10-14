@@ -528,9 +528,8 @@ endif()
 # failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
 # suites, and the suite list cannot tell you that.
 add_custom_target(batchlas_coverage
-    COMMAND ${CMAKE_COMMAND} -E env
-            BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
-            ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # One sh -c word: the `|| true` must not rest on CMake leaving `||` unquoted under VERBATIM.
+    COMMAND sh -c "BATCHLAS_COVERAGE_OUT='${CMAKE_BINARY_DIR}/coverage.csv' '${CMAKE_CTEST_COMMAND}' --test-dir '${CMAKE_BINARY_DIR}' -LE slow || true"
     # Each test BINARY writes its own shard. Merging is not optional: a single
     # shared file meant every process truncated the last, so this target used to
     # report the rows of whichever binary finished last.
@@ -566,6 +565,12 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(device_calls_tests PROPERTIES
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
 endif()
+
+# no_raw_subgroup_queries: every sub-group capability check goes through
+# Device::supports_sub_group_size, which carries the acpp "exactly {32}" rule.
+add_test(NAME no_raw_subgroup_queries
+    COMMAND sh -c "! grep -rn 'info::device::sub_group_sizes' '${PROJECT_SOURCE_DIR}/src' | grep -v 'util/queue-impl.cc'")
+set_tests_properties(no_raw_subgroup_queries PROPERTIES LABELS "util")
 
 # acpp_jit_tests: the AdaptiveCpp counterpart. acpp JIT-compiles kernels at first launch, so
 # scripts/check_acpp_jit.py runs these CUDA cases against a fresh ACPP_APPDB_DIR, then scans the

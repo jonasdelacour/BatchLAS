@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 
 #include "accessors.hh"
 #include "epilogue_linear.hh"
@@ -44,7 +45,7 @@ Event launch_tiled_general(Queue& ctx,
         const int stride_c = C.stride();
         const int batch = A.batch_size();
 
-        h.parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
             const int local_row = static_cast<int>(item.get_local_id(1));
             const int local_col = static_cast<int>(item.get_local_id(2));
@@ -54,19 +55,21 @@ Event launch_tiled_general(Queue& ctx,
                 return;
             }
 
-            const int batch_a = bid * stride_a;
-            const int batch_b = bid * stride_b;
-            const int batch_c = bid * stride_c;
+            // Rebased per item in 64 bits (bid * stride passes 2^31); offsets within an item stay int.
+            const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+            const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+            T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+            constexpr int batch_a = 0, batch_b = 0, batch_c = 0;
             T sum = T(0);
 
             for (int kk0 = 0; kk0 < k; kk0 += Tile) {
                 const int tile_col = kk0 + local_col;
                 const int tile_row = kk0 + local_row;
                 tile_a[local_row * Tile + local_col] = (row < m && tile_col < k)
-                    ? OperandAccessor<T, OpA>::load(a_ptr, lda, batch_a, row, tile_col)
+                    ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, row, tile_col)
                     : T(0);
                 tile_b[local_row * Tile + local_col] = (col < n && tile_row < k)
-                    ? OperandAccessor<T, OpB>::load(b_ptr, ldb, batch_b, tile_row, col)
+                    ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, tile_row, col)
                     : T(0);
 
                 item.barrier(sycl::access::fence_space::local_space);
@@ -77,7 +80,7 @@ Event launch_tiled_general(Queue& ctx,
             }
 
             if (row < m && col < n) {
-                LinearEpilogue<T>::store(c_ptr + batch_c + col * ldc + row, alpha, beta, sum);
+                LinearEpilogue<T>::store(c_item + batch_c + col * ldc + row, alpha, beta, sum);
             }
         });
     });

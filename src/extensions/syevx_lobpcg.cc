@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "syevx.hh"
 #include "info_span.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
@@ -43,6 +44,13 @@ namespace batchlas {
     struct SyevxJacobiApplyKernel;
 
 namespace {
+
+// BATCHLAS_SYEVX_PROJECTED_VENDOR: the tiny projected solves (XtAX, StAS) go to the vendor syev.
+// The run path and the buffer size must both read it, or vendor-free sizing throws.
+bool projected_vendor_opted_in() {
+    const char* v = batchlas::settings().selection.syevx_projected_vendor.get();
+    return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
+}
 
 // Block power-iteration steps applied to the random start; meaningful only when
 // searching for the largest eigenpairs. Kept small deliberately: an over-compressed
@@ -366,16 +374,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
               spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        // Diagnostic escape hatch for the tiny projected solves (XtAX, StAS).
         // The opt-in names the vendor solver; Backend::SYCL has none, so there it is ignored, not a throw.
         const bool prefer_vendor_projected_syev =
-            (B != Backend::NETLIB) && (B != Backend::SYCL) &&
-            ([]() {
-                if (const char* v = batchlas::settings().selection.syevx_projected_vendor.get()) {
-                    return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
-                }
-                return false;
-            })();
+            (B != Backend::NETLIB) && (B != Backend::SYCL) && projected_vendor_opted_in();
 
         // syev picks its provider from the matrix shape, so workspace demand is NOT
         // monotone in the problem size: the 2*block_vectors restart problem can demand
@@ -442,7 +443,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             const float_type def_floor = jacobi_definiteness_floor<float_type>();
             constexpr size_t wg = 256;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
                         const int bid = int(item.get_group_linear_id());
@@ -612,7 +613,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 // pass instead of 2*neigs sequential (barriering) group reductions.
                 auto lsums = sycl::local_accessor<float_type, 1>(3 * neigs, h);
                 const bool find_largest = params.find_largest;
-                h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
+                batchlas::impl::parallel_for<SyevxResidualsKernel<B,T,MFormat>>(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
                     // X's columns are in the ascending order syev returned them in, so
@@ -867,7 +868,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     const uint32_t seed = static_cast<uint32_t>(it) * 2654435761u + 1u;
                     auto colnorm = sycl::local_accessor<float_type, 1>(size_t(block_vectors), h);
                     auto scale_acc = sycl::local_accessor<float_type, 1>(1, h);
-                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                    batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             const auto tid = item.get_local_linear_id();
                             const auto bid = item.get_group_linear_id();
@@ -944,7 +945,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     auto diag_ptr = jacobi_diag.data();
                     auto usable_ptr = jacobi_usable.data();
                     auto lambdas_span = lambdas;
-                    h.parallel_for<SyevxJacobiApplyKernel<B, T, MFormat>>(
+                    batchlas::impl::parallel_for<SyevxJacobiApplyKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * residual_wg_size)},
                                           sycl::range{size_t(residual_wg_size)}),
                         [=](sycl::nd_item<1> item) {
@@ -999,7 +1000,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     const int64_t R_stride = R.stride();
                     auto col_conv = col_converged.data();
                     const size_t nlock = neigs;
-                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                    batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             const auto tid = item.get_local_linear_id();
                             const auto bid = item.get_group_linear_id();
@@ -1021,7 +1022,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 trace("syevx: restart shift P<-R (device copy)");
                 ctx -> submit([&](sycl::handler& h){
                     auto Sdata = S.data_ptr();
-                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size*128)}, sycl::range{size_t(128)}), [=](sycl::nd_item<1> item){
+                    batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*128)}, sycl::range{size_t(128)}), [=](sycl::nd_item<1> item){
                         auto tid = item.get_local_linear_id();
                         auto bid = item.get_group_linear_id();
                         auto cta = item.get_group();
@@ -1074,7 +1075,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     const float_type eps_n = std::numeric_limits<float_type>::epsilon() * float_type(n);
                     const float_type null_tol = eps_n * eps_n;
                     const bool largest = params.find_largest;
-                    h.parallel_for(sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
+                    batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
                             const auto tid = item.get_local_linear_id();
                             const auto bid = item.get_group_linear_id();
@@ -1179,7 +1180,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const int64_t nn = n;
                 const int64_t ncols = static_cast<int64_t>(neigs);
                 ctx->submit([&](sycl::handler& h) {
-                    h.parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(
+                    batchlas::impl::parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}),
                         [=](sycl::nd_item<1> item) {
                             const int64_t tid = int64_t(item.get_local_linear_id());
@@ -1298,8 +1299,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
-                // Covers the runtime's vendor opt-in (none on Backend::SYCL, which has no vendor solver).
-                if constexpr (B != Backend::NETLIB && B != Backend::SYCL) {
+                // The opt-in names the vendor solver; Backend::SYCL has none, so it is ignored there.
+                if constexpr (B != Backend::NETLIB && B != Backend::SYCL) if (projected_vendor_opted_in()) {
                     const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);

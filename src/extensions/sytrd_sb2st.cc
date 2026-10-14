@@ -478,7 +478,7 @@ Event btrd_lower_inplace(Queue& q,
         const size_t global = groups * static_cast<size_t>(kWorkGroupSize);
         sycl::local_accessor<int, 1> shared_ints(4, h); // {nr, j1, j2, k}
 
-        h.parallel_for<BtrdLowerKernel<T>>(sycl::nd_range<1>(sycl::range<1>(global),
+        batchlas::impl::parallel_for<BtrdLowerKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(global),
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
                                            [=](sycl::nd_item<1> it) {
             using Real = typename base_type<T>::type;
@@ -878,17 +878,7 @@ Event sytrd_sb2st(Queue& ctx,
 
     const Sb2stSubgroupMode mode = parse_mode();
 
-    bool device_has_sg32 = false;
-    {
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                device_has_sg32 = true;
-                break;
-            }
-        }
-    }
+    const bool device_has_sg32 = ctx.device().supports_sub_group_size(32);
 
     bool can_use_subgroup = false;
     if (mode != Sb2stSubgroupMode::ForceOff) {

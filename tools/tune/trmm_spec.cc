@@ -106,6 +106,9 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
             // family: triangular
             "src/backends/trmm_triangular_tiles.hh",
             "src/backends/triangular_tiles.hh",

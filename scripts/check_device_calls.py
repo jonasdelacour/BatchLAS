@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if NVPTX device code calls SPIR-V builtins out of line.
 
-    scripts/check_device_calls.py build/                  # scan build/src/libbatchlas_*.so (or *.dylib)
+    scripts/check_device_calls.py build/                  # scan build/src/libbatchlas*.so or *.dylib (split or monolithic)
     scripts/check_device_calls.py --lib a.so --lib b.so   # scan named libraries
     scripts/check_device_calls.py --self-test
 
@@ -155,7 +155,7 @@ def ptx_of(blob, cuobjdump):
 
 def libraries(build_dir):
     found = {}
-    pats = ("libbatchlas_*.so*", "libbatchlas*.dylib")
+    pats = ("libbatchlas*.so*", "libbatchlas*.dylib")
     for p in sorted(q for pat in pats for q in glob.glob(os.path.join(build_dir, "src", pat))):
         real = os.path.realpath(p)
         if os.path.isfile(real):

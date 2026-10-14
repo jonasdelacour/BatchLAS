@@ -119,6 +119,7 @@ namespace batchlas
 
     // Memory passed from outside
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     Event cond(Queue &ctx,
                 const MatrixView<T, MF> &A,
                 const NormType norm_type,
@@ -129,6 +130,7 @@ namespace batchlas
     }
 
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     size_t cond_buffer_size(Queue &ctx,
                             const MatrixView<T, MF> &A,
                             const NormType norm_type)
@@ -156,6 +158,7 @@ namespace batchlas
 
     // Convenience function which allocates and returns the results stored in an array.
     template <Backend B, typename T, MatrixFormat MF>
+        requires RealScalar<T>
     UnifiedVector<T> cond(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)

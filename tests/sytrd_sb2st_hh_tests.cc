@@ -68,7 +68,8 @@ std::vector<T> make_banded_hermitian(int n, int kd, unsigned seed) {
             T v;
             if constexpr (std::is_same_v<T, std::complex<float>> ||
                           std::is_same_v<T, std::complex<double>>) {
-                v = T(static_cast<Real>(dist(gen)), static_cast<Real>(dist(gen)));
+                const auto re = static_cast<Real>(dist(gen)), im = static_cast<Real>(dist(gen));
+                v = T(re, im);
                 if (i == j) v = T(v.real(), Real(0));
             } else {
                 v = static_cast<T>(dist(gen));

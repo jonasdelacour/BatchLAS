@@ -136,7 +136,7 @@ inline void gebrd_cta_impl(Queue& ctx,
 
         auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
-        cgh.parallel_for<GebrdCTAKernel<T, P>>(
+        impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -281,16 +281,7 @@ Event gebrd_cta(Queue& ctx,
             throw batchlas::invalid_argument("gebrd_cta: batch size mismatch");
         }
 
-        const auto dev = ctx->get_device();
-        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
-        bool has32 = false;
-        for (auto sgs : sg_sizes) {
-            if (static_cast<int32_t>(sgs) == 32) {
-                has32 = true;
-                break;
-            }
-        }
-        if (!has32) {
+        if (!ctx.device().supports_sub_group_size(32)) {
             throw batchlas::unsupported("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
         }
 

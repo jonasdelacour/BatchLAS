@@ -7,7 +7,7 @@ endif()
 
 # The resolved implementation is BATCHLAS_SYCL_IMPL_RESOLVED plus the 0/1 pair
 # BATCHLAS_SYCL_IMPL_DPCPP / _ACPP; the cache entry keeps what the user asked for.
-# Design: docs/design/sycl-implementations.md section 5.1.
+# Design: docs/design/sycl-implementations.md#sycl-impl-build
 set(BATCHLAS_SYCL_IMPL "AUTO" CACHE STRING
     "SYCL implementation: AUTO (ACPP when CMAKE_CXX_COMPILER is the acpp driver), DPCPP or ACPP")
 set_property(CACHE BATCHLAS_SYCL_IMPL PROPERTY STRINGS AUTO DPCPP ACPP)
@@ -32,6 +32,9 @@ if(_batchlas_sycl_impl STREQUAL "AUTO")
     else()
         set(_batchlas_sycl_impl DPCPP)
     endif()
+elseif(_batchlas_sycl_impl STREQUAL "ACPP" AND NOT _batchlas_cxx_is_acpp AND BATCHLAS_ACPP_SWAP_PENDING)
+    message(STATUS "BATCHLAS_SYCL_IMPL=ACPP: switching to the acpp driver; CMake resets the cache and reconfigures")
+    set(_batchlas_sycl_impl DPCPP)
 elseif(_batchlas_sycl_impl STREQUAL "ACPP" AND NOT _batchlas_cxx_is_acpp)
     message(FATAL_ERROR "BATCHLAS_SYCL_IMPL=ACPP needs the AdaptiveCpp driver as the compiler "
         "(-DCMAKE_CXX_COMPILER=<prefix>/bin/acpp); got ${CMAKE_CXX_COMPILER}")
@@ -59,7 +62,7 @@ endif()
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
 # this. PROJECT_IS_TOP_LEVEL would be the idiomatic spelling but needs CMake
-# 3.21 and this project declares 3.14.
+# 3.21 and this project declares 3.17.
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
     set(BATCHLAS_IS_TOP_LEVEL ON)
 else()
@@ -119,9 +122,10 @@ set_property(CACHE BATCHLAS_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 set(BATCHLAS_ENABLE_METAL "AUTO" CACHE STRING
     "Metal backend (AdaptiveCpp only): AUTO (enable when acpp-info lists a Metal GPU), ON (require it), OFF")
 set_property(CACHE BATCHLAS_ENABLE_METAL PROPERTY STRINGS AUTO ON OFF)
-option(BATCHLAS_DISABLE_CUDA_FTZ "Disable flush-to-zero (FTZ) for CUDA device code" ON)
+option(BATCHLAS_DISABLE_CUDA_FTZ
+    "Pass --ftz=false to the CUDA image's runtime JIT options; the AOT ptxas step never sees it" ON)
 option(BATCHLAS_CUDA_DEVICE_LINE_INFO
-    "Pass --generate-line-info to the NVPTX backend in Debug/RelWithDebInfo builds (useful for ncu/nsight, has been observed to fail CUDA JIT program builds)"
+    "Pass --generate-line-info to ptxas in Debug/RelWithDebInfo builds (useful for ncu/nsight)"
     OFF)
 option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)

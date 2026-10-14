@@ -1,4 +1,4 @@
-# POTRF and POSV
+# POTRF and POSV {#perf_potrf}
 
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2
 
@@ -35,7 +35,7 @@ Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel
 * `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (`:43`).
 * `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)` (`:44-48`).
 * `blocked`: `Uplo::Lower`, `potrf_blocked_available<T>()`, `cta_max_n >= 1` (`:50-53`).
-* `vendor`: `d.has_vendor` (`:55`).
+* `vendor`: `d.has_vendor && !A.is_heterogeneous()` (`:56`).
 
 There is no `uplo` term on `cta` or `tiny`: Upper is the same recurrence on `S(i,c) = conj(A(c,i))`, a load and store
 transform. `blocked` has no lower order bound, because a correctness gate must not refuse a shape the driver serves.
@@ -50,8 +50,8 @@ transform. `blocked` has no lower order bound, because a correctness gate must n
 
 ### Known gaps
 
-* `lpanel:panel=16` has never been timed on any device.
-* sm_120 has `uplo=U` rows for float only; other types' Upper take the nearest `uplo=L` row.
+* `lpanel:panel=16` is timed on sm_120 only: 165 of the 189 float `uplo=L` rows rank it, 21 of them first. sm_89 has no
+  timing of it.
 * A table ranks a family only where its sweep timed it. Off-grid cells are guesses.
 * `factor_bench`'s posv `composed` arm pins potrf to `tiny` only up to the type's tiny ceiling; above it, the pin is `native`.
 
@@ -107,7 +107,7 @@ and a bare `native` pin, take the first runnable non-vendor entry of the row. A 
 
 * `local_mem_size` is **101,376 B**. The budget used is `local_mem_size - 4096` = **97,280 B**
   (`select::Device::slm_budget`). `kPotrfReferenceSlmBudget` (`potrf_cta.cc:47`) serves only `potrf_cta_max_n<T>()`.
-* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:45-46` for every `nvidia_gpu_sm_*` target) is wrong
+* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:90-91` for every `nvidia_gpu_sm_*` target) is wrong
   here by 2.06x. No decision reads it.
 * The advertised ceiling is the first miss of a walk with `break`, not `continue`: `potrf_hole_padded` is not monotone
   (47,200 → 49,920 while 49,700 stays 49,700).
@@ -142,7 +142,7 @@ hole (ceiling 101,376).
 > **Warning:** the attribute is sticky per CUfunction. potrf's kernel takes `n` at runtime, so one CUfunction serves every
 > `n`. A 49,064 B launch fails cold and passes after a 65,536 B launch of the same function. The outcome depends on order.
 
-* The pad (`potrf_cta.cc:72-296`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
+* The pad (`src/extensions/potrf_slm_hole.hh:10-16`, applied at `potrf_cta.cc:123`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
   `smem` for any of the eight potrf instantiations) but stays, because one `reduce_over_group` reintroduces the hole.
 * No automated test can cover the hole: any earlier launch above 48 KB masks it.
 * The geqr2 panel shipped without the pad and hit the hole; it now uses potrf's band ([qr.md](qr.md)).
@@ -182,7 +182,7 @@ blocks per SM, so it binds before registers. Vendor-free, float `n = 128` pays a
 
 ### The L ladder {#the-l-ladder}
 
-`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`potrf_cta.cc:50-67, :383-392`): the elements the
+`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`src/extensions/potrf_cta.cc:51-52`, `:93-107`): the elements the
 first trailing update touches, at 24 per work-item. A tile count would be the wrong unit, because `TS` varies by type.
 
 | cell (native µs, batch 4096) | L32 | L64 | L128 | L256 |
@@ -294,11 +294,11 @@ The panel solve is only 5-22% of a vendor-free blocked potrf, so a 2x faster pan
 69-75 of 256 items bad (float), 15/256 (double), non-deterministic; every failing column is `== 1 (mod nb)`.
 
 * **Mechanism** (`src/sycl/trsm_native.cc`): the CTA kernel staged its triangle with a lane-strided loop, then read the
-  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`trsm_native.cc:211`).
+  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`src/sycl/trsm_native.cc:206`).
   Max rel diff against vendor goes from 6.05e+16 to 4.27e-07.
 * **How it hid:** trsm's work-group width comes from `{256,128,64,32}`, and every earlier test ran at `wg = 32`, one
   sub-group, where the race cannot show. Guard: `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
-  (`tests/trsm_tests.cc:538`).
+  (`tests/trsm_tests.cc:451`).
 
 **2. `beta = 0` read unwritten scratch.** The `W x W` diagonal gemm (`alpha = -1, beta = 0`) writes `ws.product`. A native
 gemm's `LinearEpilogue::apply` reads `prior` unconditionally, and `0 * NaN = NaN`, although cuBLAS does not read C at
@@ -360,7 +360,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
-    (`src/extensions/potrf_lpanel_device.hh:158-167`) measured green at batch 1024 to 16384, because the eight dependent
+    (`src/extensions/potrf_lpanel_device.hh:159-168`) measured green at batch 1024 to 16384, because the eight dependent
     prefetch loads cover the window on this card. Record it as *unfalsifiable*, never *covered*. Closing it needs a probe
     that widens the hazard window on purpose. See [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel).
 
@@ -408,7 +408,7 @@ advertised 77 and leaves the single CTA launch. cuSOLVER takes 0.2708 ms there, 
 ### The shared helper: budget, slice, walk and pack {#the-shared-helper-budget-slice-walk-and-pack}
 
 `src/util/resident_capacity.hh` holds the capacity rule for potrf, getrf and geqrf. It is `constexpr` and free of SYCL
-headers. `select::Device` takes its `slm_budget` from `device_slm_budget` (`src/select/select.cc:222`).
+headers. `select::Device` takes its `slm_budget` from `device_slm_budget` (`src/select/select.cc:234-236`).
 
 | helper | what it answers |
 |---|---|
@@ -748,7 +748,7 @@ at the excluded n = 10 Auto is the vendor, 1.000x).
 Four breaks were planted against the deleted route-era predicate. Three went red: admitting the fp64 hole at n = 9..11,
 refusing Upper, and letting Upper reach the Lower-only LPanel. The fourth, firing the window with no tier linked, stayed
 green and is **unfalsifiable**, not covered. Under flat selection the fp64 hole and Upper rows are table data; for
-example, `tuned/potrf.double.sm_89.txt` ranks `vendor` first at n = 9 and 10.
+example, the double rows of `tuned/potrf.sm_89.txt` rank `vendor` first at n = 9 and 10.
 
 ## The fused potrs solve {#the-fused-potrs-solve}
 

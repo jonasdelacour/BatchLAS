@@ -3,7 +3,7 @@
 /// @file
 /// @brief Flat kernel selection: one choose() per op over measured per-device tables.
 /// Spec: docs/design/flat-kernel-selection.md §4-§5. Everything here is generic over a choice
-/// std::variant whose alternatives are family structs (§4.2). @ingroup api_selection
+/// std::variant whose alternatives are family structs (§4.1). @ingroup api_selection
 // State that a test and the library must share (pins, table cache, trace depth) lives in select.cc
 // behind BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
@@ -75,7 +75,7 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
     return describe(q.device(), B, has_library<B>(vendor));
 }
 
-/// The dtype token of a table file name: float, double, cfloat or cdouble.
+/// The dtype key of a table row (the first, exact key of every tuned file): float, double, cfloat or cdouble.
 template <class T>
 constexpr std::string_view dtype_name() {
     if constexpr (std::is_same_v<T, float>) return "float";
@@ -87,7 +87,7 @@ constexpr std::string_view dtype_name() {
     }
 }
 
-// ---- families and spelling (§4.2, §5.2) -----------------------------------------------
+// ---- families and spelling (§4.1, §5.2) -----------------------------------------------
 
 /// A string literal as a template argument: the name of a NoFields family.
 template <std::size_t N>
@@ -283,7 +283,7 @@ struct Table {
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
-/// Parses one single-dtype table (the header or file name gives op, dtype and device).
+/// Parses one single-dtype table: op and device from the header or file name, dtype from the header.
 /// @throws std::runtime_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
 
@@ -300,7 +300,7 @@ struct EmbeddedTable {
 BATCHLAS_API std::span<const EmbeddedTable> embedded_tables();  ///< generated from tuned/*.txt
 
 /// §5.5: own key; same family at-or-below by nearest arch, then above; then sm, gfx, intel,
-/// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR, parsed once per (op, dtype, dir).
+/// other, cpu. Built-in tables plus BATCHLAS_TUNED_DIR; each file is parsed once per dir (not per dtype).
 /// A CPU device gets only its own table.
 BATCHLAS_API std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::string_view dtype,
                                                               const Device& d);
@@ -394,7 +394,7 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
     throw std::runtime_error(std::string(op) + ": no runnable kernel on " + d.key);
 }
 
-// §5.3 / R6. nullopt means "auto": the caller runs the normal walk. The class words
+// §5.2 / R6. nullopt means "auto": the caller runs the normal walk. The class words
 // `native` and `vendor` fall back to auto with a warning; every other spelling throws.
 // `strict` (the tuner's arms): a class word that cannot serve the shape throws too, and
 // `vendor` must resolve to the candidate spelled `vendor`.
@@ -435,7 +435,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 
 }  // namespace detail
 
-// ---- pins (§5.3) ------------------------------------------------------------------------
+// ---- pins (§5.2) ------------------------------------------------------------------------
 
 /// Tag for a strict ScopedPin: a class word ("native", "vendor") that cannot serve the shape
 /// throws std::invalid_argument instead of falling back to auto.
@@ -475,7 +475,7 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
     return *detail::walk(op, dtype, d, key, candidates, can_run, rules, false);
 }
 
-// ---- trace and coverage (§5.6) ----------------------------------------------------------
+// ---- trace and coverage (§5.5) ----------------------------------------------------------
 
 namespace detail {
 /// The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).
@@ -581,14 +581,18 @@ decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<
 }
 
 /// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
-/// pending work (the multi-launch drivers need one).
+/// pending work (the multi-launch drivers need one). q is then ordered after that queue's work,
+/// so q.wait() and q.get_event() cover it.
 template <class F>
-decltype(auto) on_in_order_queue(Queue& q, F&& f) {
+auto on_in_order_queue(Queue& q, F&& f) {
     if (q.in_order()) return f(q);
     Queue in_order(q, true);
     Event dep = q.get_event();
     in_order.enqueue(dep);
-    return f(in_order);
+    auto result = f(in_order);
+    Event done = in_order.get_event();
+    q.enqueue(done);
+    return result;
 }
 
 /// @}
@@ -598,6 +602,7 @@ namespace testing {
 BATCHLAS_API void set_builtin_tables(std::vector<std::pair<std::string, std::string>> files);
 BATCHLAS_API void use_embedded_tables();
 BATCHLAS_API void reset_warnings();
+BATCHLAS_API std::size_t parse_count();  ///< table files parsed since load (the loader's cost)
 }  // namespace testing
 
 }  // namespace batchlas::select

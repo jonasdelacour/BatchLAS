@@ -121,6 +121,17 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
+            "src/sycl/kernel_attrs.hh",
+            "src/sycl/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "src/extensions/sg_compat.hh",
+            "src/extensions/sg_partition/backend_amdgcn.hh",
+            "src/extensions/sg_partition/backend_amdgcn_core.hh",
+            "src/extensions/sg_partition/backend_generic.hh",
+            "src/extensions/sg_partition/backend_nvptx.hh",
+            "src/extensions/sg_partition/backend_spirv.hh",
+            "src/extensions/sg_partition/backend_sscp.hh",
+            "src/extensions/sg_partition/sg_partition.hh",
             // family: cta
             "src/extensions/syev_cta.cc",
             "src/extensions/ormqr_cta.cc",
@@ -167,9 +178,9 @@ public:
         // kernel-deps-begin
         // common "src/ops/syev/syev.cc"
         // blocked and two_stage call the public gemm and trmm (stedc, ormqr_blocked); blocked syr2k, two_stage geqrf.
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/extensions/trmm.cc" "src/extensions/syr2k.cc"
+        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
         // family: blocked "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
-        // family: two_stage "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/extensions/trmm.cc"
+        // family: two_stage "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc"
         // family: two_stage "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
         // family: two_stage "src/extensions/geqrf_blocked.cc" "src/extensions/geqrf_cta.cc" "src/extensions/geqrf_tiny.cc" "src/ops/geqrf/choice.hh"
         // kernel-deps-end

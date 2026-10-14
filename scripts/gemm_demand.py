@@ -15,7 +15,7 @@ Since P3.4 (flat kernel selection) a gemm coverage row names the choice that ran
 
 This script used to carry a Python replica of the deleted router's gemm preferred() so it could
 say what a Vendor->Auto flip "would" move. Both the predicate and the flip are gone: Auto
-reads tuned/gemm.<dtype>.<arch>.txt, so "what Auto does" is the capture itself. To ask what a
+reads tuned/gemm.<arch>.txt, so "what Auto does" is the capture itself. To ask what a
 different table would do, capture again under that table (or under BATCHLAS_GEMM_ROUTE=native
 for the best native entry of every row) and diff the two with scripts/route_diff.sh. No
 replica means nothing here can drift from the library.

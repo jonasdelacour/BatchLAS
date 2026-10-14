@@ -16,13 +16,6 @@ using namespace batchlas;
 
 namespace {
 
-inline bool is_kernel_not_found_message(const std::string& msg) {
-	// SYCL runtimes vary; keep this loose.
-	return msg.find("No kernel named") != std::string::npos ||
-		   msg.find("kernel bundle") != std::string::npos ||
-		   msg.find("PI_ERROR_INVALID_KERNEL_NAME") != std::string::npos;
-}
-
 inline bool is_missing_subgroup32_message(const std::string& msg) {
 	return msg.find("subgroup size 32") != std::string::npos;
 }
@@ -89,14 +82,14 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 			this->ctx->wait();
 		} catch (const sycl::exception& e) {
 			const std::string msg = e.what();
-			if (is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::may_skip_missing_kernel(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}
 			throw;
 		} catch (const std::exception& e) {
 			const std::string msg = e.what();
-			if (is_kernel_not_found_message(msg) || is_missing_subgroup32_message(msg)) {
+			if (test_utils::may_skip_missing_kernel(msg) || is_missing_subgroup32_message(msg)) {
 				skip_reason = msg;
 				return false;
 			}
@@ -139,6 +132,25 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 		            1),
 		 this->ctx->wait()),
 		std::exception);
+}
+
+// Batch 0: no launch, no throw, nothing written (acpp 25.10 launches an empty nd_range).
+TYPED_TEST(OrmqrCtaTest, EmptyBatchIsANoOp) {
+	using T = typename TestFixture::ScalarType;
+	const int n = 16;
+	UnifiedVector<T> sentinel(3 * n * n, T(7));
+	MatrixView<T, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 1, (n + 1) * n, 0);
+	MatrixView<T, MatrixFormat::Dense> C(sentinel.data() + n * n + n, n, n, n, n * n, 0);
+	VectorView<T> tau(sentinel.data() + 2 * n * n + n, n, 0);
+	UnifiedVector<std::byte> ws(1, std::byte{0});
+	for (const Side side : {Side::Left, Side::Right}) {
+		const auto run = [&] {
+			(void)ormqx_cta(*this->ctx, A, tau, C, Uplo::Upper, side, Transpose::Trans, n, ws.to_span(), 1);
+			this->ctx->wait();
+		};
+		EXPECT_NO_THROW(run());
+	}
+	for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], T(7)) << "index " << i;
 }
 
 #endif

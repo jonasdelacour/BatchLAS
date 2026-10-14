@@ -76,12 +76,13 @@ std::optional<Op> op_from_name(std::string_view op) {
     return std::nullopt;
 }
 
+// The runtime spelling of dtype_name<T>, for a trace line that has only the shape's ScalarKind.
 std::string_view dtype_from_scalar(ScalarKind s) {
     switch (s) {
-        case ScalarKind::F32: return "float";
-        case ScalarKind::F64: return "double";
-        case ScalarKind::C32: return "cfloat";
-        case ScalarKind::C64: return "cdouble";
+        case ScalarKind::F32: return dtype_name<float>();
+        case ScalarKind::F64: return dtype_name<double>();
+        case ScalarKind::C32: return dtype_name<std::complex<float>>();
+        case ScalarKind::C64: return dtype_name<std::complex<double>>();
     }
     return "?";
 }
@@ -117,7 +118,11 @@ bool warn_once(const std::string& tag) {
 struct TableState {
     std::optional<std::vector<std::pair<std::string, std::string>>> test_builtin;
     int generation = 0;
-    std::map<std::string, std::vector<const Table*>> cache;
+    std::size_t parses = 0;  // parse_tables calls, for testing::parse_count
+    std::map<std::string, std::vector<const Table*>> cache;  // op|dtype|dir|generation -> tables
+    // file key|generation -> one Table per dtype: a multi-dtype file (gemm ~14 MB) is parsed once,
+    // not once per dtype that asks for it, under the state mutex.
+    std::map<std::string, std::vector<const Table*>> parsed;
 };
 
 TableState& tables_state() {
@@ -125,13 +130,13 @@ TableState& tables_state() {
     return *s;
 }
 
-std::vector<const Table*> load_tables(const TableState& st, std::string_view op, std::string_view dtype,
+std::vector<const Table*> load_tables(TableState& st, std::string_view op, std::string_view dtype,
                                       const std::string& dir) {
     std::map<std::string, const Table*> by_name;
     // Only <op>.<device>.txt names take part: a stray README.txt or a .bak.txt copy in the
     // override dir would otherwise throw from every choose() or compete with the real table.
     // The embed step rejects such names in tuned/ at configure time.
-    auto consider = [&](const std::string& name, std::string_view text, bool is_override) {
+    auto consider = [&](const std::string& name, auto&& read_text, bool is_override) {
         const auto f = split_file_name(name);
         if (f[0].empty()) {
             if (is_override && warned().insert("tuned_name:" + dir + "/" + name).second)
@@ -140,17 +145,27 @@ std::vector<const Table*> load_tables(const TableState& st, std::string_view op,
             return;
         }
         if (f[0] != op) return;
-        for (Table& part : parse_tables(text, name)) {
-            if (part.op != op || part.dtype != dtype) continue;
-            auto* t = new Table(std::move(part));
-            t->is_override = is_override;
-            by_name[t->file] = t;
+        const std::string key = (is_override ? dir + "/" : std::string("builtin:")) + name + "|" +
+                                std::to_string(st.generation);
+        auto it = st.parsed.find(key);
+        if (it == st.parsed.end()) {
+            ++st.parses;
+            std::vector<const Table*> parts;
+            for (Table& part : parse_tables(read_text(), name)) {
+                auto* t = new Table(std::move(part));
+                t->is_override = is_override;
+                parts.push_back(t);
+            }
+            it = st.parsed.emplace(key, std::move(parts)).first;
         }
+        for (const Table* t : it->second)
+            if (t->op == op && t->dtype == dtype) by_name[t->file] = t;
     };
     if (st.test_builtin) {
-        for (const auto& [name, text] : *st.test_builtin) consider(name, text, false);
+        for (const auto& [name, text] : *st.test_builtin)
+            consider(name, [&] { return std::string_view(text); }, false);
     } else {
-        for (const auto& e : embedded_tables()) consider(std::string(e.name), e.text, false);
+        for (const auto& e : embedded_tables()) consider(std::string(e.name), [&] { return e.text; }, false);
     }
     if (!dir.empty()) {
         std::error_code ec;
@@ -161,10 +176,12 @@ std::vector<const Table*> load_tables(const TableState& st, std::string_view op,
         } else {
             for (const auto& ent : std::filesystem::directory_iterator(dir, ec)) {
                 if (!ent.is_regular_file() || ent.path().extension() != ".txt") continue;
-                std::ifstream in(ent.path());
-                std::stringstream buf;
-                buf << in.rdbuf();
-                consider(ent.path().filename().string(), buf.str(), true);
+                consider(ent.path().filename().string(), [&] {
+                    std::ifstream in(ent.path());
+                    std::stringstream buf;
+                    buf << in.rdbuf();
+                    return buf.str();
+                }, true);
             }
         }
     }
@@ -422,9 +439,12 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
 Table parse_table(std::string_view text, std::string_view file) { return parse_one(text, file, false); }
 
 std::vector<Table> parse_tables(std::string_view text, std::string_view file) {
-    const Table all = parse_one(text, file, true);
+    Table all = parse_one(text, file, true);
+    // The rows leave `all` first, so each dtype's Table copies only the header fields.
+    std::vector<TableRow> rows = std::move(all.rows);
+    all.rows.clear();
     std::vector<Table> out;
-    for (const TableRow& r : all.rows) {
+    for (TableRow& r : rows) {
         const std::string& dtype = r.keys[0];
         if (dtype != "float" && dtype != "double" && dtype != "cfloat" && dtype != "cdouble")
             throw std::runtime_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
@@ -438,10 +458,9 @@ std::vector<Table> parse_tables(std::string_view text, std::string_view file) {
             out.push_back(std::move(part));
             t = std::prev(out.end());
         }
-        TableRow row = r;
-        row.keys.erase(row.keys.begin());
-        row.log2_keys.erase(row.log2_keys.begin());
-        t->rows.push_back(std::move(row));
+        r.keys.erase(r.keys.begin());
+        r.log2_keys.erase(r.log2_keys.begin());
+        t->rows.push_back(std::move(r));
     }
     return out;
 }
@@ -525,7 +544,7 @@ std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::strin
         }
         return std::make_tuple(2 + family_rank(t->family), 0, -t->arch_number);
     };
-    // §3/§7.6: the CPU never borrows a GPU table; without its own it reaches the last resort.
+    // §5.5: the CPU never borrows a GPU table; without its own it reaches the last resort.
     if (d.family == "cpu")
         std::erase_if(all, [&](const Table* t) { return t->device != d.key; });
     std::stable_sort(all.begin(), all.end(), [&](const Table* a, const Table* b) { return rank(a) < rank(b); });
@@ -670,6 +689,11 @@ void use_embedded_tables() {
 void reset_warnings() {
     std::lock_guard<std::mutex> lock(state_mutex());
     warned().clear();
+}
+
+std::size_t parse_count() {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    return tables_state().parses;
 }
 
 }  // namespace testing

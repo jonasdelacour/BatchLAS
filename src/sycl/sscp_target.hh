@@ -15,10 +15,9 @@ namespace batchlas::sycl_impl {
 #if BATCHLAS_SYCL_IMPL_ACPP
 
 __attribute__((always_inline)) inline bool on_ptx() {
-    namespace jit = sycl::AdaptiveCpp_jit;
     bool r = false;
     __acpp_if_target_sscp(
-        r = jit::reflect<jit::reflection_query::compiler_backend>() == jit::compiler_backend::ptx;)
+        r = sycl::AdaptiveCpp_jit::reflect<sycl::AdaptiveCpp_jit::reflection_query::compiler_backend>() == sycl::AdaptiveCpp_jit::compiler_backend::ptx;)
     return r;
 }
 
@@ -34,9 +33,8 @@ __attribute__((always_inline)) inline bool on_metal() {
 
 // sm_XY as XY (sm_89 -> 89, sm_120 -> 120); meaningful only when on_ptx().
 __attribute__((always_inline)) inline int target_arch() {
-    namespace jit = sycl::AdaptiveCpp_jit;
     int r = 0;
-    __acpp_if_target_sscp(r = jit::reflect<jit::reflection_query::target_arch>();)
+    __acpp_if_target_sscp(r = sycl::AdaptiveCpp_jit::reflect<sycl::AdaptiveCpp_jit::reflection_query::target_arch>();)
     return r;
 }
 

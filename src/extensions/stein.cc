@@ -156,7 +156,7 @@ Event stein(Queue& ctx,
     auto iterate_evt = ctx->submit([&](sycl::handler& h) {
         auto norm_local = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
-        h.parallel_for<SteinIterateKernel<B, T>>(
+        batchlas::impl::parallel_for<SteinIterateKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_iter},
                               sycl::range{wg_iter}),
             [=](sycl::nd_item<1> item) {
@@ -269,7 +269,7 @@ Event stein(Queue& ctx,
         h.depends_on(iterate_evt);
         auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
-        h.parallel_for<SteinOrthoKernel<B, T>>(
+        batchlas::impl::parallel_for<SteinOrthoKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_ortho},
                               sycl::range{wg_ortho}),
             [=](sycl::nd_item<1> item) {

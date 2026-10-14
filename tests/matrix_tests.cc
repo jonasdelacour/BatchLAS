@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <vector>
 #include <complex>
 #include <string>
@@ -1544,11 +1545,36 @@ TYPED_TEST(MatrixFillTest, GradedHermitianRunsAtN512) {
     }
 }
 
+// Diagonal floor(i/4) + (i%4) 1e-4 plus a Hermitian perturbation of size noise: clusters of four.
+TYPED_TEST(MatrixFillTest, NearDegenerateHermitianIsClusteredAndExactlyHermitian) {
+    using R = typename TestFixture::R;
+    constexpr double noise = 1e-3;
+    for (int n : {1, 9, 33}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        auto m = TestFixture::padded(n, 3);
+        m.view().fill_near_degenerate_hermitian(*this->ctx, noise, 1337u).wait();
+        TestFixture::expect_padding_untouched(m);
+        TestFixture::expect_exactly_hermitian(m);
+        if (n > 1) TestFixture::expect_items_differ(m);
+        // |Re z| < 1 and |z| <= sqrt(2): every entry is noise-sized around its target.
+        const R bound = R(noise * 1.5) + 4 * std::numeric_limits<R>::epsilon() * R(n);
+        for (int b = 0; b < 3; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    const R target = i == j ? R(i / 4) + R(i % 4) * R(1e-4) : R(0);
+                    EXPECT_LE(std::abs(TestFixture::at(m, i, j, b) - typename TestFixture::T(target)), bound)
+                        << "(" << i << "," << j << ") item " << b;
+                }
+    }
+    this->expect_reproducible(12, [&](auto v, unsigned s) { return v.fill_near_degenerate_hermitian(*this->ctx, noise, s); });
+}
+
 TYPED_TEST(MatrixFillTest, SquareFillsRejectARectangularView) {
     Matrix<typename TestFixture::T, MatrixFormat::Dense> m(5, 4, 3);
     EXPECT_THROW((void)m.view().fill_random_spd(*this->ctx), batchlas::invalid_argument);
     EXPECT_THROW((void)m.view().fill_random_pivoted(*this->ctx), batchlas::invalid_argument);
     EXPECT_THROW((void)m.view().fill_graded_hermitian(*this->ctx, 3.0), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3), batchlas::invalid_argument);
 }
 
 // Race guard for the two local-memory kernels: a saturating batch must give, item for item,
@@ -1570,4 +1596,132 @@ TYPED_TEST(MatrixFillTest, LocalMemoryFillsAreRaceFreeAtASaturatingBatch) {
         EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(padded)) << "layout changed the values";
         EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(again)) << "a rerun changed the values";
     }
+}
+
+// compute_nd_range_sizes caps the grid above INT_MAX / 2 work items, so a kernel that handles one
+// element per work-item silently skipped everything past the cap. 2^30 + 32768 floats (4 GiB).
+TEST(MatrixKernels, GridCapCoversAllElements) {
+    Queue q;
+    constexpr int rows = 1 << 15, cols = (1 << 15) + 1;
+    const size_t total = static_cast<size_t>(rows) * cols;
+    if (q.device().type != DeviceType::GPU ||
+        q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) < (size_t{10} << 30))
+        GTEST_SKIP() << "needs a GPU with at least 10 GB";
+    Matrix<float, MatrixFormat::Dense> M(rows, cols, 1);
+    M.view().fill(q, 1.0f).wait();
+    scale(q, 2.0f, M.view()).wait();
+    const float* d = M.view().data_ptr();
+    for (size_t idx : {size_t{0}, size_t{1} << 29, (size_t{1} << 30) - 1, size_t{1} << 30, total - rows, total - 1})
+        EXPECT_EQ(d[idx], 2.0f) << "element " << idx << " of " << total;
+}
+
+// fill_diagonal on a wide padded view: diagonal k holds min(rows - row_off, cols - col_off) entries
+// (none once |k| reaches the edge); nothing else in the storage, padding included, may change.
+namespace {
+constexpr float kDiagPoison = 1234.5f;
+
+Matrix<float, MatrixFormat::Dense> poisoned_wide() {
+    Matrix<float, MatrixFormat::Dense> m(5, 9, 2, 7, 7 * 9 + 3);
+    for (auto& x : m.data()) x = kDiagPoison;
+    return m;
+}
+
+// The number of storage entries that differ from what diagonal k with value 100 b + i + 1 implies.
+std::size_t diagonal_mismatches(Matrix<float, MatrixFormat::Dense>& m, int k) {
+    const int ro = k < 0 ? -k : 0, co = k > 0 ? k : 0;
+    std::size_t bad = 0;
+    for (std::size_t s = 0; s < m.data().size(); ++s) {
+        const int b = int(s / m.stride()), off = int(s % m.stride());
+        const int c = off / m.ld(), r = off % m.ld();
+        const bool on = b < m.batch_size() && c < m.cols() && r < m.rows() && r - ro == c - co && r >= ro;
+        const float want = on ? float(100 * b + (r - ro) + 1) : kDiagPoison;
+        if (m.data()[s] != want) ++bad;
+    }
+    return bad;
+}
+}  // namespace
+
+TEST(FillDiagonalVector, WideViewAndOffsets) {
+    Queue ctx(Device::default_device());
+    UnifiedVector<float> values(9 * 2);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 9; ++i) values[b * 9 + i] = float(100 * b + i + 1);
+    for (int k : {-4, 0, 3}) {
+        SCOPED_TRACE("k=" + std::to_string(k));
+        auto m = poisoned_wide();
+        m.view().fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait();
+        EXPECT_EQ(diagonal_mismatches(m, k), 0u);
+    }
+    // A strided source (inc 2, stride 19) with poison in the skipped slots.
+    UnifiedVector<float> strided(19 * 2, kDiagPoison);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 9; ++i) strided[b * 19 + 2 * i] = float(100 * b + i + 1);
+    for (int k : {-4, 3}) {
+        SCOPED_TRACE("inc=2 k=" + std::to_string(k));
+        auto m = poisoned_wide();
+        m.view().fill_diagonal(ctx, VectorView<float>(strided, 9, 2, Inc{2}, Stride{19}), k).wait();
+        EXPECT_EQ(diagonal_mismatches(m, k), 0u);
+    }
+    // The Span overload packs one run of exactly min(...) values per item.
+    const int d = 5;  // k = 3 on 5x9
+    UnifiedVector<float> packed(d * 2);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < d; ++i) packed[b * d + i] = float(100 * b + i + 1);
+    auto m = poisoned_wide();
+    m.view().fill_diagonal(ctx, packed.to_span(), 3).wait();
+    EXPECT_EQ(diagonal_mismatches(m, 3), 0u) << "Span overload";
+}
+
+TEST(FillDiagonalVector, OffsetsAtOrPastTheEdge) {
+    Queue ctx(Device::default_device());
+    UnifiedVector<float> values(9 * 2);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 9; ++i) values[b * 9 + i] = float(100 * b + i + 1);
+    for (int k : {8, 9, 12, -5, -6}) {
+        SCOPED_TRACE("k=" + std::to_string(k));
+        auto m = poisoned_wide();
+        ASSERT_NO_THROW(m.view().fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait());
+        EXPECT_EQ(diagonal_mismatches(m, k), 0u);
+    }
+}
+
+// The permutation and the values of the seeded fills come from different Philox streams, so a
+// seed that differs by the old XOR salt cannot reproduce one from the other. Sattolo's draws are
+// recovered from the permutation; the bug made them a linear function of fill_random_spd's column 0.
+TEST(SeededFills, IndependentStreams) {
+    constexpr int n = 256;
+    constexpr unsigned int seed = 21u;
+    Queue ctx(Device::default_device());
+    Matrix<float, MatrixFormat::Dense> piv(n, n), spd(n, n);
+    piv.view().fill_random_pivoted(ctx, seed).wait();
+    spd.view().fill_random_spd(ctx, seed ^ 0x5bd1e995u).wait();
+
+    // Row i carries the dominant entry in column perm[i].
+    std::vector<int> perm(n);
+    for (int i = 0; i < n; ++i) {
+        int arg = 0;
+        for (int c = 1; c < n; ++c)
+            if (std::fabs(piv.data()[std::size_t(c) * n + i]) > std::fabs(piv.data()[std::size_t(arg) * n + i])) arg = c;
+        perm[i] = arg;
+    }
+    std::vector<int> cur(n);
+    for (int i = 0; i < n; ++i) cur[i] = i;
+    std::vector<double> x, y;
+    for (int i = n - 1; i > 0; --i) {
+        const int j = int(std::find(cur.begin(), cur.end(), perm[i]) - cur.begin());
+        ASSERT_LT(j, i) << "not a Sattolo cycle at " << i;
+        x.push_back((j + 0.5) / i);
+        y.push_back(spd.data()[i]);
+        std::swap(cur[i], cur[j]);
+    }
+    const double mx = std::accumulate(x.begin(), x.end(), 0.0) / x.size();
+    const double my = std::accumulate(y.begin(), y.end(), 0.0) / y.size();
+    double sxy = 0, sxx = 0, syy = 0;
+    for (std::size_t t = 0; t < x.size(); ++t) {
+        sxy += (x[t] - mx) * (y[t] - my);
+        sxx += (x[t] - mx) * (x[t] - mx);
+        syy += (y[t] - my) * (y[t] - my);
+    }
+    // 255 independent pairs: |r| has sd 0.063, so 0.25 is 4 sd; the shared stream gave r ~ 1.
+    EXPECT_LT(std::fabs(sxy / std::sqrt(sxx * syy)), 0.25);
 }

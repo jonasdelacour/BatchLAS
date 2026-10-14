@@ -446,3 +446,32 @@ TEST(QueueTest, GetEventCoversUsmMemcpyMemsetAndFill) {
     }
     if (devices_run == 0) GTEST_SKIP() << "no cpu or gpu device";
 }
+
+// An empty nd_range launches nothing, but its event must still follow earlier work on an in-order
+// queue, as the launch's would. acpp skips the launch (a 0-block grid errors); returning a
+// default event there made a wait on it return while a 256 MiB copy was still running.
+class EmptyNdRangeKernel;
+TEST(QueueTest, EmptyNdRangeEventFollowsEarlierWork) {
+    constexpr size_t n = size_t(1) << 26;
+    std::optional<Queue> q;
+    try {
+        q.emplace(Device("gpu"), true);
+    } catch (const std::exception&) {
+        GTEST_SKIP() << "no gpu device";
+    }
+    sycl::queue& sq = batchlas::sycl_queue(*q);
+    float* src = sycl::malloc_device<float>(n, sq);
+    float* dst = sycl::malloc_host<float>(n, sq);
+    sq.fill(src, 1.5f, n).wait();
+    std::fill(dst, dst + n, 0.0f);
+    (*q)->memcpy(dst, src, n * sizeof(float));
+    sycl::event e = (*q)->parallel_for<EmptyNdRangeKernel>(sycl::nd_range<1>(0, 32), [=](sycl::nd_item<1>) {
+        dst[0] = -1.0f;
+    });
+    e.wait();
+    EXPECT_EQ(dst[n - 1], 1.5f) << "the copy was still running after a wait on the empty launch";
+    EXPECT_EQ(dst[0], 1.5f) << "the empty launch ran a work-item";
+    q->wait();
+    sycl::free(src, sq);
+    sycl::free(dst, sq);
+}

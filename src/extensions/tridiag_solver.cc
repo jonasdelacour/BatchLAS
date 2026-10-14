@@ -1,37 +1,41 @@
 #include "../linalg-impl.hh"
 #include <batchlas/util/group-collectives.hh>
 #include "../math-helpers.hh"
-#include "../sycl/local_mem.hh"
-#include "../sycl/sscp_target.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "../sycl/local_mem.hh"
+#include "../sycl/sscp_target.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <array>
 #include <complex>
+#include <string>
 #include <tuple>
+#include <batchlas/error.hh>
 #include <batchlas/blas/linalg.hh>
 
 #include "../util/template-instantiations.hh"
 
 namespace batchlas {
 
-template <typename T>
-std::array<T,2> eigvalsh2x2(const std::array<T,4> &A){
-    auto [a,b,c,d] = A;
-    T D = sycl::sqrt(4*b*c+(a-d)*(a-d));
-    return {(a+d-D)/2, (a+d+D)/2};
-}
+#if BATCHLAS_SYCL_IMPL_ACPP
+inline constexpr bool kAcpp = true;
+#else
+inline constexpr bool kAcpp = false;
+#endif
+
+// QR steps allowed per eigenvalue before the item is reported unconverged (LAPACK ?steqr's MAXIT).
+inline constexpr int kTridiagMaxIterations = 30;
 
 template <typename T>
-void apply_all_reflections(const sycl::group<1> &cta, const Span<T> V, const int n, const int m, T* Q) {
+void apply_all_reflections(const sycl::group<1> &cta, const Span<T> V, const int n, const int m, const int ld, T* Q) {
     auto tid = cta.get_local_linear_id();
     auto bdim = cta.get_local_range()[0];
     for(int k = 0; k < n; k++) {
         const T &v0 = V[2*k], &v1 = V[2*k+1];
         for(int l = tid; l < m; l += bdim) {
-            T &q0 = Q[k*m+l], &q1 = Q[(k+1)*m+l];
+            T &q0 = Q[k*ld+l], &q1 = Q[(k+1)*ld+l];
             T vTA = q0*v0 + q1*v1;
             q0 -= 2*v0*vTA;
             q1 -= 2*v1*vTA;
@@ -47,21 +51,13 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     int tix = cta.get_local_linear_id();
     int bdim = cta.get_local_range()[0];
 
-    T local_max = T(0.);
-    for (int i = tix; i < n; i += bdim){
-        local_max = std::max(local_max, std::abs(D[i]) + 2*std::abs(L[i]));
-    }
-    T max_norm = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<T>());
-    (void)max_norm;
-    T numerical_zero = 10*std::numeric_limits<T>::epsilon();
-    T d_n, l_n, l_nm1;
-
-    d_n = D[n]; l_n = L[n]; l_nm1 = L[n-1];
+    // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
+    const T l_nm1 = L[n-1];
 
     sycl::group_barrier(cta);
 
     real_t a[2], v[2];
-    for(int k = tix; k < n + 1; k += bdim){
+    for(int k = tix; k < n; k += bdim){
         D[k] -= shift;
         U[n+1 + k] = real_t(0.);
         if(k < n-1){
@@ -77,7 +73,7 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
 
     if(tix == 0) {
         for(int k = 0; k < n-1; k++) {
-            if (std::abs(L[k]) > numerical_zero) {
+            if (L[k] != real_t(0)) {
                 a[0] = D[k]; a[1] = L[k];
                 real_t anorm = sycl::sqrt(a[0]*a[0] + a[1]*a[1]);
                 v[0] = D[k]; v[1] = L[k];
@@ -140,9 +136,7 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     sycl::group_barrier(cta);
 
     if (tix == 0) {
-        D[n] = d_n;
         L[n-1] = l_nm1;
-        L[n] = l_n;
     }
     sycl::group_barrier(cta);
 }
@@ -173,6 +167,8 @@ Event tridiagonal_solver(Queue& ctx,
     auto D_global = pool.allocate<T>(ctx, !smem_possible ? (n+1) * batch_size : 0);
     auto U_global = pool.allocate<T>(ctx, !smem_possible ? 2 * (n + 1) * batch_size : 0);
     auto L_global = pool.allocate<T>(ctx, !smem_possible ? n * batch_size : 0);
+    UnifiedVector<int32_t> status(batch_size, 0);
+    int32_t* status_ptr = status.data();
 
     ctx->submit([=](sycl::handler& h) {
         auto Vstride = Q.stride();
@@ -184,12 +180,13 @@ Event tridiagonal_solver(Queue& ctx,
         sycl::local_accessor<T, 1> U_smem(smem_possible ? 2 * (n + 1) : 0, h);
         sycl::local_accessor<T, 1> V_smem(smem_possible ? 2 * n : 0, h);
 
-        h.parallel_for(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
 
+            bool failed = false;
             auto solve = [&](Span<T> D, Span<T> L, Span<T> U, Span<T> Vlocal) __attribute__((always_inline)) {
                 auto batch_alphas = Span(alphas.data() + bid * n, n);
                 auto batch_betas = Span(betas.data() + bid * n, n);
@@ -198,7 +195,7 @@ Event tridiagonal_solver(Queue& ctx,
 
                 if (jobz == JobType::EigenVectors) {
                     for (int i = tid; i < n*n; i += bdim) {
-                        batch_Q[i] = T(0);
+                        batch_Q[(i / n) * Vld + i % n] = T(0);
                     }
                     sycl::group_barrier(cta);
                     for (int i = tid; i < n; i += bdim) {
@@ -213,34 +210,28 @@ Event tridiagonal_solver(Queue& ctx,
 
                 sycl::group_barrier(cta);
 
-                for (int k = n-1; k >= 0; k--) {
-                    T d = D[k];
-                    T shift = d;
-                    int i = 0;
-                    real_t GR = (k > 0 ? std::abs(L[k-1]) : 0) + std::abs(L[k]);
-                    int not_done = 1;
-                    while (not_done > 0) {
-                        i++;
+                // Every work-item reads the same local values after T_QTQ's closing barrier, so the
+                // loop decisions agree across the group. Relative deflation as LAPACK ?steqr.
+                const real_t eps = std::numeric_limits<real_t>::epsilon();
+                // TRAP (AdaptiveCpp OpenMP device): a data-dependent loop around barriers never ends
+                // there, even at batch 1, unless its condition is a group collective. Host only.
+                auto uniform = [&](bool c) {
+                    if constexpr (kAcpp && B == Backend::NETLIB) return sycl::group_broadcast(cta, c);
+                    else return c;
+                };
+                for (int k = int(n) - 1; k > 0; k--) {
+                    int it = 0;
+                    while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
+                        if (it++ == kTridiagMaxIterations) { failed = true; break; }
+                        const auto [l0, l1] = internal::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
+                        const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {
-                            apply_all_reflections(cta, Vlocal, k, n, batch_Q);
-                        }
-                        GR = (k > 0 ? std::abs(L[k-1]) : 0) + (k+1 < n ? std::abs(L[k]) : 0);
-                        if (k > 0) {
-                            std::array<T,4> args = {D[k-1], L[k-1], L[k-1], D[k]};
-                            auto [l0, l1] = eigvalsh2x2(args);
-                            shift = std::abs(l0-d) < std::abs(l1-d) ? l0 : l1;
-                        } else {
-                            shift = D[k];
-                        }
-                        if (GR <= std::numeric_limits<real_t>::epsilon() * real_t(10.0)) {
-                            not_done--;
-                        }
-                        if (i > 5) {
-                            break;
+                            apply_all_reflections(cta, Vlocal, k, int(n), int(Vld), batch_Q);
                         }
                     }
                 }
+                if (tid == 0) status_ptr[bid] = failed ? 1 : 0;
 
                 for (int i = tid; i < n; i += bdim) {
                     if constexpr (internal::is_complex<T>::value) {
@@ -273,6 +264,13 @@ Event tridiagonal_solver(Queue& ctx,
         });
     });
 
+    ctx.wait();
+    for (size_t b = 0; b < batch_size; ++b) {
+        if (status_ptr[b] != 0) {
+            throw batchlas::convergence_error("tridiagonal_solver: an eigenvalue did not converge within " +
+                                              std::to_string(kTridiagMaxIterations) + " QR steps");
+        }
+    }
     return ctx.get_event();
 }
 

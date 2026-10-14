@@ -10,6 +10,7 @@
 #include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
+#include <batchlas/no_route.hh>
 
 using namespace batchlas;
 
@@ -381,4 +382,53 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
     // Performance should be reasonable (less than 1 second for this size)
     EXPECT_LT(duration.count(), 1000)
         << "Large matrix norm computation should complete in reasonable time";
+}
+// The spectral norm's scratch (copy, eigenvalues, workspace lease) is local to the call, so the call
+// must have finished with it on return: on an out-of-order Queue, read the result with no wait.
+// Item b is (b+1) * ones(n, n), whose spectral norm is n (b+1). A contract test: the vendor syev
+// path already synchronises the host, so the early free cannot be shown red on CUDA.
+TYPED_TEST(NormTest, SpectralOutOfOrder) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    const int n = 64, batch_size = 64;
+    Queue oq(*this->ctx, false);
+    auto mat = Matrix<T, MatrixFormat::Dense>::Ones(n, n, batch_size);
+    for (int b = 0; b < batch_size; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) mat.view()(i, j, b) = T(real_t(b + 1));
+    UnifiedVector<real_t> result(batch_size, std::numeric_limits<real_t>::quiet_NaN());
+    try {
+        (void)norm(oq, mat.view(), NormType::Spectral, result.to_span());
+    } catch (const batchlas::NoRouteError& e) {
+        GTEST_SKIP() << "the spectral norm needs syev, which has no route in this build: " << e.what();
+    }
+    for (int b = 0; b < batch_size; ++b) {
+        const double want = double(n) * (b + 1);
+        EXPECT_VERIFY(T, batchlas::verify::Check::values, n, std::abs(double(result[b]) - want) / want) << "item " << b;
+    }
+    oq.wait();
+}
+
+// One/Inf accumulate per column/row in local memory sized cols/rows; with 4096 of them the zeroing
+// must stride past the work-group. A first launch on 1e6 entries leaves large sums behind.
+TYPED_TEST(NormTest, OneInfWiderThanWorkgroup) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    const int wide = 4096, narrow = 2, batch_size = 8;
+    for (NormType t : {NormType::One, NormType::Inf}) {
+        const int rows = t == NormType::One ? narrow : wide, cols = t == NormType::One ? wide : narrow;
+        auto poison = Matrix<T, MatrixFormat::Dense>::Ones(rows, cols, batch_size);
+        for (int b = 0; b < batch_size; ++b)
+            for (int j = 0; j < cols; ++j)
+                for (int i = 0; i < rows; ++i) poison.view()(i, j, b) = T(real_t(1e6));
+        auto mat = Matrix<T, MatrixFormat::Dense>::Ones(rows, cols, batch_size);
+        UnifiedVector<real_t> result(batch_size);
+        (void)norm(*(this->ctx), poison.view(), t, result.to_span());
+        (void)norm(*(this->ctx), mat.view(), t, result.to_span());
+        this->ctx->wait();
+        for (int b = 0; b < batch_size; ++b) {
+            SCOPED_TRACE(::testing::Message() << this->norm_name(t) << " item " << b);
+            this->expect_norm_close(t, result[b], double(narrow), rows, cols);
+        }
+    }
 }

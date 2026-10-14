@@ -778,16 +778,17 @@ TEST(GemmMaxDenominator, KnownValues) {
     fill(b, {1, -1, 0, 2});
     fill(c0, {5, 0, -6, 1});
     const MV<double> A(a.data(), 2, 2, 3, 7, 2), B(b.data(), 2, 2, 3, 7, 2), C0(c0.data(), 2, 2, 3, 7, 2);
-    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1), 17.0);
+    const int item1[] = {1};
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, item1), 17.0);
     // B A: |B||A| = [1 2; 7 10] gives [7 10; 14 21]; op(A) = A^T: [13 18; 12 17].
-    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), B, Transpose::NoTrans, A, Transpose::NoTrans, C0, 2.0, -1.0, 1), 21.0);
-    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::Trans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1), 18.0);
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), B, Transpose::NoTrans, A, Transpose::NoTrans, C0, 2.0, -1.0, item1), 21.0);
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::Trans, B, Transpose::NoTrans, C0, 2.0, -1.0, item1), 18.0);
     // beta == 0 never reads C0 (NaN there is ignored); a NaN in A is the result.
     c0[7 + 3 + 1] = std::nan("");
-    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, 1), 16.0);
-    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, 1)));
+    EXPECT_EQ(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, item1), 16.0);
+    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, -1.0, item1)));
     a[7] = std::nan("");
-    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, 1)));
+    EXPECT_TRUE(std::isnan(MV<double>::gemm_max_denominator(ctx(), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, 2.0, 0.0, item1)));
 }
 
 TYPED_TEST(SpmmBackwardError, BadColumnIsNan) {

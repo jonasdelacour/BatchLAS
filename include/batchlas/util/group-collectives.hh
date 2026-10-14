@@ -265,10 +265,12 @@ inline auto joint_reduce(Group g, Ptr first, Ptr last, Op op) {
 }
 
 /// @brief `sycl::joint_exclusive_scan` with an initial value; `result` may equal `first`. Collective.
-/// @pre `first`, `last` and `result` are raw pointers.
+/// @pre `first`, `last` and `result` are raw pointers; `T` is an integral type.
 template <typename Group, typename InPtr, typename OutPtr, typename T, typename Op>
     requires sycl::is_group_v<Group>
 inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result, T init, Op op) {
+    // acpp 25.10's exclusive_scan_over_group is exact only for integers.
+    static_assert(std::is_integral_v<T>, "portable::joint_exclusive_scan: integral T only");
     // AdaptiveCpp's own version writes result[i + 1] while scanning first[i], which corrupts the
     // next chunk's input when the scan is in place. This one reads and writes index i in one chunk.
     const std::ptrdiff_t n = last - first;
@@ -280,7 +282,7 @@ inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr resu
         const T x = i < n ? static_cast<T>(first[i]) : carry;
         const T out = sycl::exclusive_scan_over_group(g, x, carry, op);
         if (i < n) result[i] = out;
-        carry = sycl::group_broadcast(g, op(out, x), width - 1);
+        carry = portable::group_broadcast(g, op(out, x), width - 1);
     }
     sycl::group_barrier(g);
     return result + n;

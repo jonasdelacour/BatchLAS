@@ -113,7 +113,7 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
 // BATCHLAS_SYRK_ROUTE and skip without a GPU, so no *backend* other than CUDA
 // has ever had "syrk leaves the other triangle alone" checked. This one is typed
 // over every backend the build has. It is the contract SyrkOptions::uplo names,
-// and it is exactly what the generic gemm fallback in src/extensions/syrk.cc got
+// and it is exactly what the generic gemm fallback in the deleted src/extensions/syrk.cc got
 // wrong: it aimed one gemm at C, which writes both triangles, with `uplo` an
 // unnamed parameter. That fallback is instantiated for Backend::MKL only, so
 // this test cannot fail in a build without MKL.

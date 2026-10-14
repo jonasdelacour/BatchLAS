@@ -149,7 +149,7 @@ void stedc_merge_step(Queue& ctx,
     ctx -> submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
-        h.parallel_for<StedcComputeV<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
@@ -187,7 +187,7 @@ void stedc_merge_step(Queue& ctx,
         auto scan_mem_include = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto scan_mem_exclude = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
         auto norm_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        h.parallel_for<StedcDeflation<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<StedcDeflation<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
@@ -324,7 +324,7 @@ void stedc_merge_step(Queue& ctx,
         const int64_t nodes_per_item = info_nodes_per_item;
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for<StedcSecularSolve<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<StedcSecularSolve<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group_linear_id();
                 auto bdim = item.get_local_range(0);
                 auto tid = item.get_local_linear_id();
@@ -362,7 +362,7 @@ void stedc_merge_step(Queue& ctx,
         // but uses SYCL group collectives for the product reduction.
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for<StedcRescaleV<B, T>>(
+            batchlas::impl::parallel_for<StedcRescaleV<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
@@ -405,7 +405,7 @@ void stedc_merge_step(Queue& ctx,
 
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
-            h.parallel_for<StedcMatrixUpdate<B, T>>(
+            batchlas::impl::parallel_for<StedcMatrixUpdate<B, T>>(h,
                 sycl::nd_range<1>(batch_size * 128, 128),
                 [=](sycl::nd_item<1> item) {
                     auto bid  = item.get_group_linear_id();
@@ -433,7 +433,7 @@ void stedc_merge_step(Queue& ctx,
     }
 
     ctx -> submit([&](sycl::handler& h) {
-        h.parallel_for<StedcAssignEigenvalues<B, T>>(sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<StedcAssignEigenvalues<B, T>>(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
         auto bid = item.get_group_linear_id();
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
@@ -711,7 +711,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     const bool needs_pad = (N > n);
     ctx->submit([&](sycl::handler& h) {
         auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(needs_pad ? n : 1), h);
-        h.parallel_for<StedcLevelPad<B, T>>(sycl::nd_range<1>(bs * 128, 128), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<StedcLevelPad<B, T>>(h, sycl::nd_range<1>(bs * 128, 128), [=](sycl::nd_item<1> item) {
             const int bid = item.get_group_linear_id();
             const int tid = item.get_local_linear_id();
             const int bdim = item.get_local_range(0);

@@ -15,15 +15,8 @@ The files are plain git, not LFS, so table changes stay readable in diffs.
 
 ## Producing tables
 
-**Never edit a table by hand.** Each is a function of its ledger,
-`benchmarks/results/tuning/ledger/<op>.<device>.jsonl` (Git LFS):
-
-    python3 scripts/sweep_to_table.py                              # every table from its ledger
-    python3 scripts/sweep_to_table.py --op gemv --device sm_120    # one
-    python3 scripts/sweep_to_table.py --check                      # what CI runs
-
-A tiered `batchlas_tune` run with `--out tuned` appends to the ledger and regenerates the tables of
-the ops it measured.
+Each table is generated from its ledger, never edited by hand; the rules and commands are in
+[the tuning data layout](../docs/design/tuning-data.md#tuning-data-generation-and-check).
 
 ## Inventory
 
@@ -78,9 +71,5 @@ user had damaged (`--remeasure-keys`). Details are in
 
 ## Staleness
 
-- Each header carries `kernels=` (the op's kernel-sources block) and `family_kernels=`, kernel
-  hash v2, which ignores comments and whitespace.
-- `python3 scripts/sweep_to_table.py --check` and `python3 .github/ci/check_tuned_tables.py` warn
-  when a hash no longer matches `tools/tune/<op>_spec.cc`'s sources. They never fail on it; the op
-  needs a retune.
-- converted and transcribed rows carry no hash and are never stale.
+The hashes and the staleness warning are specified in
+[the tuning data layout](../docs/design/tuning-data.md#tuning-data-kernel-hash).

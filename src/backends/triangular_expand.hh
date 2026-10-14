@@ -162,7 +162,7 @@ Event expand_mirrored(Queue& ctx,
         auto tile = sycl::local_accessor<T, 1>(
             sycl::range<1>(kMirrorTile * (kMirrorTile + 1)), cgh);
 
-        cgh.parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for(cgh, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int ti = static_cast<int>(item.get_group(1));
             const int tj = static_cast<int>(item.get_group(2));
             if (ti < tj) {

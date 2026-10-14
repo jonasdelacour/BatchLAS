@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include <batchlas/blas/enums.hh>
+#include <batchlas/error.hh>
 
 namespace batchlas {
 
@@ -62,11 +63,12 @@ inline constexpr std::string_view op_name(Op o) {
 }
 
 // The usual cause is a deliberate -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF, so the message
-// says which build switch brings an implementation back.
-class NoRouteError : public std::runtime_error {
+// says which build switch brings an implementation back. A batchlas::unsupported (so also a
+// std::runtime_error); exported, or catch-by-type breaks under -fvisibility=hidden.
+class BATCHLAS_API NoRouteError : public batchlas::unsupported {
 public:
     NoRouteError(Op op, Backend backend, ScalarKind scalar, std::string detail)
-        : std::runtime_error(build_message(op, scalar, detail)),
+        : batchlas::unsupported(build_message(op, scalar, detail)),
           op_(op), backend_(backend), scalar_(scalar) {}
 
     Op op() const { return op_; }

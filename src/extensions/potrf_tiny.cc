@@ -93,7 +93,7 @@ Event potrf_tiny_launch(Queue& ctx,
     constexpr bool real_diag = DM::is_complex;
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<PotrfTinyKernel<T, N>>(
+        batchlas::impl::parallel_for<PotrfTinyKernel<T, N>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kTinySubGroupSize) {

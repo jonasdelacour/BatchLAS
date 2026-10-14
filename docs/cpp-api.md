@@ -1,4 +1,4 @@
-# The BatchLAS C++ API
+# The BatchLAS C++ API {#guide_cpp_api}
 
 > **Status:** current
 
@@ -50,7 +50,7 @@ numerical surface, plus `Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and 
   warns and builds without it when they are missing).
 - **The CUDA toolkit** whenever the CUDA backend is on, which `AUTO` does as soon as the SYCL
   runtime exposes a CUDA device.
-- **CMake 3.14+** for BatchLAS, 3.21+ for a consuming project.
+- **CMake 3.17+** for BatchLAS, 3.21+ for a consuming project.
 
 ```bash
 git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS
@@ -677,7 +677,7 @@ op chooses one **kernel family** for the call: a native kernel (`tiny`, `cta`, `
 `blocked`, ...) or `vendor` (the cuBLAS/cuSOLVER/rocBLAS/host LAPACK call). The decision for an op
 is `src/ops/<op>/<op>.cc`, with its vocabulary in `src/ops/<op>/choice.hh`.
 
-- **Tables, per device.** `tuned/<op>.<dtype>.<arch>.txt` is embedded at build time. A call finds
+- **Tables, per device.** `tuned/<op>.<arch>.txt` (one row set per dtype) is embedded at build time. A call finds
   the nearest measured shape and takes the first family in that row whose correctness predicate
   (`can_run`) admits the call; if none does it tries the next table in borrow order, then the op's
   last-resort order. A GPU with no table borrows the nearest and prints one warning per op. The CPU

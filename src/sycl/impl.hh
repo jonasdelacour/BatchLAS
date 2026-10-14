@@ -7,6 +7,7 @@
 
 #include "../util/internal-api.hh"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
@@ -110,7 +111,7 @@ auto query_stream(Q& q) {
 // Runs f(native stream) ordered in q. DPC++: inline on get_native's stream, exactly as the call
 // sites did. acpp: inside a custom operation, valid for in-order and out-of-order queues, and
 // finished (host side) when this returns. f is copied, so it captures by value; it must not
-// submit to q. Q is QueueImpl: submit_untraced keeps vendor work out of the kernel trace, as on
+// submit to q. Q is QueueImpl: an untraced submit_and_record keeps vendor work out of the kernel trace, as on
 // DPC++, while still recording the queue's last event.
 template <Native N, class Q, class F>
 void run_native(Q& q, F f) {
@@ -123,18 +124,20 @@ void run_native(Q& q, F f) {
     // Out-of-order: after all prior work, as a host call between submissions would be.
     std::vector<sycl::event> deps;
     if (!q.is_in_order()) deps = q.get_wait_list();
-    sycl::event e = q.submit_untraced([&](sycl::handler& h) {
-        h.depends_on(deps);
-        h.AdaptiveCpp_enqueue_custom_operation([f, state](sycl::interop_handle& ih) {
-            try {
-                F call = f;  // f may be a mutable lambda; the operation itself is invoked const
-                call(ih.get_native_queue<backend_v<N>>());
-            } catch (...) {
-                state->error = std::current_exception();
-            }
-            state->done.store(true, std::memory_order_release);
+    sycl::event e = q.submit_and_record(nullptr, [&] {
+        return static_cast<sycl::queue&>(q).submit([&](sycl::handler& h) {
+            h.depends_on(deps);
+            h.AdaptiveCpp_enqueue_custom_operation([f, state](sycl::interop_handle& ih) {
+                try {
+                    F call = f;  // f may be a mutable lambda; the operation itself is invoked const
+                    call(ih.get_native_queue<backend_v<N>>());
+                } catch (...) {
+                    state->error = std::current_exception();
+                }
+                state->done.store(true, std::memory_order_release);
+            });
         });
-    });
+    }, /*traced=*/false);
     // acpp 25.10 runs the operation inside submit (in-order and out-of-order alike). Should a
     // scheduler defer it, wait: the error must reach the caller, and the caller's static vendor
     // handle must never be used by two threads at once.
@@ -171,12 +174,14 @@ inline sycl::event submit_barrier(sycl::queue& q, const std::vector<sycl::event>
 }
 
 // Largest work-group kernel K can launch on dev; throws sycl::exception when the runtime cannot
-// answer. acpp has no kernel_id query, so it reports the device limit.
+// answer. acpp has no kernel_id query and the device limit (1024) aborts a register-heavy kernel
+// at launch, so it answers 256: 8 warps fit the register gate even at 255 registers per thread,
+// ceil(8/4)*32*255 <= 16384 (docs/developer/agent-guide.md §11).
 template <class K>
 std::size_t kernel_max_wg_size(const sycl::context& ctx, const sycl::device& dev) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     (void)ctx;
-    return dev.get_info<sycl::info::device::max_work_group_size>();
+    return std::min<std::size_t>(dev.get_info<sycl::info::device::max_work_group_size>(), 256);
 #else
     auto bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx, {dev}, {sycl::get_kernel_id<K>()});
     const auto kern = bundle.template get_kernel<K>();
@@ -184,17 +189,25 @@ std::size_t kernel_max_wg_size(const sycl::context& ctx, const sycl::device& dev
 #endif
 }
 
-// The same, with the DPC++ bundle built for every device of ctx (get_kernel_max_wg_size's form).
-template <class K>
-std::size_t kernel_max_wg_size_all_devices(const sycl::context& ctx, const sycl::device& dev) {
+// Every nd_range launch from a command group: h.parallel_for([Name], r, rest...), with an empty r a
+// no-op as SYCL specifies. acpp 25.10 launches it as a 0-block grid (CU:1) and errors on an empty
+// command group, so there h gets a no-op operation. QueueImpl::parallel_for skips it itself.
+inline bool skip_empty_launch([[maybe_unused]] sycl::handler& h, [[maybe_unused]] std::size_t global) {
 #if BATCHLAS_SYCL_IMPL_ACPP
-    return kernel_max_wg_size<K>(ctx, dev);
-#else
-    auto kernel_id = sycl::get_kernel_id<K>();
-    auto kernel_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(ctx, {kernel_id});
-    auto kernel = kernel_bundle.get_kernel(kernel_id);
-    return kernel.template get_info<sycl::info::kernel_device_specific::work_group_size>(dev);
+    if (global == 0) {
+        h.AdaptiveCpp_enqueue_custom_operation([](sycl::interop_handle&) {});
+        return true;
+    }
 #endif
+    return false;
+}
+template <class Name, int D, class... Rest>
+void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
+    if (!skip_empty_launch(h, r.get_global_range().size())) h.parallel_for<Name>(r, std::forward<Rest>(rest)...);
+}
+template <int D, class... Rest>
+void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
+    if (!skip_empty_launch(h, r.get_global_range().size())) h.parallel_for(r, std::forward<Rest>(rest)...);
 }
 
 #if BATCHLAS_SYCL_IMPL_ACPP

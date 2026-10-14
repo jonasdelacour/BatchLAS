@@ -112,8 +112,9 @@ dtype=float uplo=L n=512 batch=2048  | blocked 14.10 | vendor 13.74 | lpanel:pan
   needs a `source=ledger:` (or, in a hand-made single table, `source=transcribed:<hex sha>`).
 - `kernels=<hash>` is kernel hash v2 over the op's kernel sources, listed in
   `tools/tune/<op>_spec.cc` between the `kernel-sources-begin` and `kernel-sources-end` markers
-  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning, in
-  `scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`. The table stays in use.
+  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning (one
+  function, used by `scripts/sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py`), and
+  a table with only converted/transcribed rows is never stale. The table stays in use.
 - A candidate in a table must be a member of `candidates<T>()`. The loader checks this on first use,
   and `tuned_tables_tests` checks every shipped table without a GPU.
 
@@ -221,9 +222,9 @@ was gated.
 
 ### 6.5 Staleness check
 
-`scripts/sweep_to_table.py --check` (CI) and `.github/ci/check_tuned_tables.py` recompute each op's
-kernel hash (v2, comments and whitespace ignored). A header hash that differs prints a warning
-(`tuned/potrf.sm_120.txt is stale (kernels 0d38569e -> 3f9a1c2e); retune the op`). It is never an
+One function, `sweep_to_table.stale_kernel_warnings`, used by `scripts/sweep_to_table.py --check`
+and `.github/ci/check_tuned_tables.py`: see [kernel hashes](tuning-data.md#tuning-data-kernel-hash).
+A table with only converted/transcribed rows is never stale. A stale table is a warning, never an
 error. There is no configure-time check.
 
 ## 8. Tests
@@ -304,19 +305,20 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   They honour `BATCHLAS_EXPAND_ROUTE=expand|loop`, and herk's gram opt-in is `BATCHLAS_SYRK_ROUTE=gram`.
   They have no `BATCHLAS_<OP>_ROUTE` and throw `NoRouteError` in a vendor-free build. The planned families are hemm
   `{expand, vendor}`, herk `{gram, fold, vendor}` and her2k `{fold, vendor}`.
-- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`potrf_blocked.cc:329`). `Blocked`
+- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/extensions/potrf_blocked.cc:309`). `Blocked`
   has no fields: `nb` and `W` come from `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`.
-  `lpanel:panel=16` has never been timed, so no table contains it.
+  `lpanel:panel=16` is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
-  work-groups. The phase-5 kernels were not audited for it, and ormqr's blocked driver hits it (known-defects #16).
+  work-groups. The phase-5 kernels were not audited for it. ormqr's blocked driver was reported to hit it
+  (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_route_available`** is conservative (float, or any type with cuBLAS). Widening
   it moves the vendor-free routes of ortho and ormqr, so that is a separate change.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
 
 Known defects that affect routing are in [known defects](known-defects.md) (for example #12, heterogeneous batches
-on the vendor, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
+on the vendor, closed by refusing them in every family's `can_run`, and #13, the cuBLASLt segfault on complex double gemm with a unit dimension, which
 `gemm_vendor_impl` works around with the typed `cublasZgemmStridedBatched`).
 
 ## 12. Per-op families
@@ -327,7 +329,7 @@ unless a line says otherwise.
 ### potrf (Lower and Upper)
 
 - **Families:** `tiny`, `cta`, `lpanel:panel=8`, `blocked`, `vendor`. Float also has
-  `lpanel:panel=16`, which no table times yet. Float has 6 candidates, the other dtypes 5.
+  `lpanel:panel=16`, which only the sm_120 table times. Float has 6 candidates, the other dtypes 5.
 - **Keys:** `uplo:exact n:log:3 batch:log`. `n` weighs 3 because the work grows as n³.
 - **`can_run`:** native needs a GPU, sub-group 32, a homogeneous batch, `n >= 1` and `batch >= 1`.
   - `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= 64`.
@@ -502,7 +504,8 @@ unless a line says otherwise.
   and `q` is the extent of C that Q does not act on. 540 rows.
 - Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
   `choose()`. The vendor spells a real ConjTrans as Trans.
-- `blocked` hits the 65535 grid-z ceiling (known-defects #16).
+- `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
+  Vendor-free past 65535 its sub-gemm or sub-trmm may throw `NoRouteError` itself.
 
 ### spmm {#phase-5-spmm}
 
@@ -555,7 +558,7 @@ The four level-3 ops use the same structure as the op files above, with `NoField
 vendor family calls `backend::<op>_vendor` under `has_library<B>(spec.vendor)`, not the public entry,
 so there is no recursion. Float-only kernels are instantiated only in `if constexpr` arms.
 
-| op | candidates | keys (rows) | Auto (sm_89 and sm_120 transcription) | last resort |
+| op | candidates | keys (rows) | Auto (sm_89 transcription) | last resort |
 |---|---|---|---|---|
 | syrk | float `gram, triangular, vendor`; double `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` (18,450) | n ≤ 128 `gram`; above, `triangular` when squareish or (n ≥ 257, k ≥ 8, batch·T(T+1)/2 ≥ 160, T = ceil(n/128)), else `vendor`; ConjTrans `vendor` first; double above 128 `vendor` | `triangular, gram, vendor` |
 | syr2k | float `triangular, vendor`; double `vendor` | `n:log:2 k:log batch:log` (455) | float batch ≥ 2 `triangular`; batch 1 `vendor`; double `vendor` | `triangular, vendor` |
@@ -576,8 +579,8 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
   because the kernel would answer wrongly. It also needs `max_wg >= gram_threads(n)`. `triangular`
   is float only, and needs `max_wg >= 256` and `T(T+1)/2 <= 65535` tiles. ConjTrans is passed as
   Trans, and the `trans` key keeps real ConjTrans on the vendor.
-- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms, and `transA != ConjTrans`.
-  Real ConjTrans stays on the vendor.
+- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms. The launch folds a
+  real ConjTrans to Trans, and the key has no `trans`, so it follows the Trans rows.
 - **symm.** `expand` is the mirrored expansion into a queue workspace, then the public gemm. It needs
   `max_wg >= 256` and `expansion_fits(q, k, batch, bytes)`. `BATCHLAS_EXPAND_MAX_BYTES` lowers the
   limit. symm does not read `BATCHLAS_EXPAND_ROUTE`.

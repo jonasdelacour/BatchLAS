@@ -50,7 +50,7 @@ def write_table(tuned, rows, fam=None, batchlas="x", date="2026-10-01"):
     fam = fam or hashes()
     head = (f"# op=potrf device=sm_120 batchlas={batchlas} kernels=k family_kernels="
             + ",".join(f"{f}:{h}" for f, h in fam.items()) + f" date={date}\n"
-            "# source=ledger:x tiers=deep:0\n# keys: dtype:exact " + KEYS + "\n")
+            f"# source=ledger:x tiers=deep:{len(rows)}\n# keys: dtype:exact " + KEYS + "\n")
     (Path(tuned) / "potrf.sm_120.txt").write_text(head + "".join(r + "\n" for r in rows))
 
 

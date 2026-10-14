@@ -1,7 +1,7 @@
 # AdaptiveCpp (acpp) counterpart of BatchLASDetectSYCL.cmake (DPC++). Sets every variable
 # the rest of the build reads from that module. Devices come from acpp-info (the acpp
 # runtime's own view), falling back to nvidia-smi; sycl-ls belongs to DPC++.
-# Design: docs/design/sycl-implementations.md section 5.1.
+# Design: docs/design/sycl-implementations.md#sycl-impl-build
 set(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY TRUE)
 include("${CMAKE_CURRENT_LIST_DIR}/BatchLASDetectSYCL.cmake")
 unset(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
@@ -265,7 +265,7 @@ target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-include${BATCHLAS_ACPP_ANNEXG_HEADER}>>")
 
 # The acpp driver adds -ffp-contract=fast at -O2 and above (fusing across statements); DPC++ fuses
-# only within one expression. Spelling it out keeps both rounding the same way (design page, R11).
+# only within one expression. Spelling it out keeps both rounding the same way (design page, A11).
 target_compile_options(batchlas_sycl_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>>")
 target_compile_options(batchlas_sycl_no_cpu_options INTERFACE

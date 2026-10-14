@@ -21,6 +21,8 @@
 #include <cstring>
 #include <type_traits>
 
+#include "../../sycl/kernel_attrs.hh"
+
 namespace batchlas::sgp {
 
 namespace nvptx_detail {
@@ -69,11 +71,11 @@ struct Mask {
     template <typename T, typename Op>
     static T butterfly(uint32_t base, T v, Op op) {
         constexpr uint32_t kW = static_cast<uint32_t>((sizeof(T) + 3) / 4);
-#pragma unroll
+BATCHLAS_UNROLL_FULL
         for (uint32_t m = 1; m < P; m <<= 1) {
             uint32_t w[kW] = {};
             std::memcpy(w, &v, sizeof(T));
-#pragma unroll
+BATCHLAS_UNROLL_FULL
             for (uint32_t i = 0; i < kW; ++i) w[i] = shfl_xor(base, w[i], m);
             T other;
             std::memcpy(&other, w, sizeof(T));
