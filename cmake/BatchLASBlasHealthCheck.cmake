@@ -24,8 +24,6 @@
 # backend re-runs a cheap version of this probe on first double-precision use
 # (src/backends/netlib_lapack.cc) and reports the export line from there.
 
-option(BATCHLAS_CHECK_BLAS_HEALTH "Verify at configure time that the host BLAS computes dgemm correctly" ON)
-
 set(BATCHLAS_OPENBLAS_CORETYPE "" CACHE STRING
     "OPENBLAS_CORETYPE value needed to avoid a broken OpenBLAS kernel. Empty means none needed. Set explicitly to override detection.")
 
@@ -119,9 +117,6 @@ function(_batchlas_run_dgemm_check exe coretype result_var)
 endfunction()
 
 function(batchlas_check_blas_health blas_libraries)
-    if(NOT BATCHLAS_CHECK_BLAS_HEALTH)
-        return()
-    endif()
     if(NOT blas_libraries)
         return()
     endif()
