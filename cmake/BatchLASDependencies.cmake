@@ -16,11 +16,9 @@ function(find_nvidia_libs)
 
     if(TARGET CUDA::cublas)
         message(STATUS "Found cuBLAS: ${CUDA_cublas_LIBRARY}")
-        # NOTE (WP0 S1): this line is the family/library conflation itself --
-        # "we found cuBLAS" is being used to answer "is there a CUDA backend".
-        # S2 replaces it with a derivation from the hardware.
+        # The CUDA device family follows "the toolkit has cuBLAS", vendor-free builds included.
         set(BATCHLAS_HAS_CUDA_BACKEND TRUE PARENT_SCOPE)
-        if(BATCHLAS_ENABLE_CUBLAS)
+        if(BATCHLAS_ENABLE_VENDOR_BLAS)
             set(BATCHLAS_HAS_CUBLAS TRUE PARENT_SCOPE)
         endif()
     else()
@@ -29,11 +27,11 @@ function(find_nvidia_libs)
             "library with -DCUDA_cublas_LIBRARY=<path>.")
     endif()
 
-    if(TARGET CUDA::cusolver AND BATCHLAS_ENABLE_CUSOLVER)
+    if(TARGET CUDA::cusolver AND BATCHLAS_ENABLE_VENDOR_BLAS)
         message(STATUS "Found cuSOLVER: ${CUDA_cusolver_LIBRARY}")
         set(BATCHLAS_HAS_CUSOLVER TRUE PARENT_SCOPE)
     endif()
-    if(TARGET CUDA::cusparse AND BATCHLAS_ENABLE_CUSPARSE)
+    if(TARGET CUDA::cusparse AND BATCHLAS_ENABLE_VENDOR_BLAS)
         message(STATUS "Found cuSPARSE: ${CUDA_cusparse_LIBRARY}")
         set(BATCHLAS_HAS_CUSPARSE TRUE PARENT_SCOPE)
     endif()
@@ -79,14 +77,13 @@ function(find_rocm_libs)
             message(STATUS "Found rocSOLVER: ${ROCSOLVER_LIBRARY}")
         endif()
 
-        # ---- axis 3: which ROCm math libraries are present -----------------
-        if(BATCHLAS_ENABLE_ROCBLAS AND ROCBLAS_LIBRARY)
+        if(BATCHLAS_ENABLE_VENDOR_BLAS AND ROCBLAS_LIBRARY)
             set(BATCHLAS_HAS_ROCBLAS TRUE PARENT_SCOPE)
         endif()
-        if(BATCHLAS_ENABLE_ROCSOLVER AND ROCSOLVER_LIBRARY)
+        if(BATCHLAS_ENABLE_VENDOR_BLAS AND ROCSOLVER_LIBRARY)
             set(BATCHLAS_HAS_ROCSOLVER TRUE PARENT_SCOPE)
         endif()
-        if(BATCHLAS_ENABLE_ROCSPARSE AND HIPSPARSE_LIBRARY)
+        if(BATCHLAS_ENABLE_VENDOR_BLAS AND HIPSPARSE_LIBRARY)
             set(BATCHLAS_HAS_ROCSPARSE TRUE PARENT_SCOPE)
         endif()
 
@@ -114,10 +111,6 @@ function(find_rocm_libs)
 endfunction()
 
 function(find_netlib_libs)
-    if(NOT BATCHLAS_ENABLE_NETLIB)
-        return()
-    endif()
-
     message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
 
     find_library(LAPACKE_LIBRARY NAMES lapacke
@@ -144,15 +137,12 @@ function(find_netlib_libs)
         find_library(CBLAS_LIBRARY NAMES cblas blas)
     endif()
 
-    # ---- axis 3: LAPACKE and CBLAS are independent libraries ---------------
-    # They are found separately above, so record them separately. The host
-    # DEVICE family is a different question -- a CPU SYCL device exists whether
-    # or not netlib is installed -- but that decoupling is S2; here the family
-    # flag keeps its current derivation so the build stays bit-identical.
-    if(BATCHLAS_ENABLE_LAPACKE AND LAPACKE_LIBRARY)
+    # The host device family (BATCHLAS_HAS_HOST_BACKEND, below) follows "netlib is installed",
+    # vendor-free included; HAS_LAPACKE/HAS_CBLAS say whether it may be called.
+    if(BATCHLAS_ENABLE_VENDOR_BLAS AND LAPACKE_LIBRARY)
         set(BATCHLAS_HAS_LAPACKE TRUE PARENT_SCOPE)
     endif()
-    if(BATCHLAS_ENABLE_CBLAS AND CBLAS_LIBRARY)
+    if(BATCHLAS_ENABLE_VENDOR_BLAS AND CBLAS_LIBRARY)
         set(BATCHLAS_HAS_CBLAS TRUE PARENT_SCOPE)
     endif()
 
@@ -203,10 +193,10 @@ if(BATCHLAS_HAS_CUBLAS OR BATCHLAS_HAS_CUSOLVER OR BATCHLAS_HAS_CUSPARSE)
     endforeach()
     if(_batchlas_cuda_missing)
         list(JOIN _batchlas_cuda_missing ", " _batchlas_cuda_missing)
-        message(FATAL_ERROR "The CUDA vendor libraries are all-or-nothing, and this configure has "
-            "a partial set: missing ${_batchlas_cuda_missing} (disabled by "
-            "BATCHLAS_ENABLE_<name>=OFF, or not found). Enable cuBLAS, cuSOLVER and cuSPARSE "
-            "together, or none (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF for a vendor-free build).")
+        message(FATAL_ERROR "The CUDA vendor libraries are all-or-nothing, and this configure "
+            "found a partial set: missing ${_batchlas_cuda_missing}. Point CMake at a complete "
+            "toolkit (-DCUDAToolkit_ROOT=<path>, -DCUDA_<name>_LIBRARY=<path>) or build "
+            "vendor-free (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF).")
     endif()
     set(BATCHLAS_HAS_CUDA_VENDOR_TUS TRUE)
     unset(_batchlas_cuda_missing)

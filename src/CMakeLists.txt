@@ -399,7 +399,6 @@ else()
     set(_batchlas_backends_rocm_lib batchlas_backends_rocm)
 endif()
 
-set(BATCHLAS_LINK_LIBRARIES)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     # PRIVATE: these are absolute -dev symlink paths

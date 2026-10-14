@@ -18,32 +18,6 @@ set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "")
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672)
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2)
 
-# See batchlas_subgroup_workspace_budget_bytes below: this is the DEVICE-GEMM tile cap,
-# not a device capacity, and moving it recompiles a different set of tile variants into
-# gemm, symm, herk, syrk and syr2k. 0 derives it per architecture; a non-zero value
-# overrides the derivation for every architecture at once.
-#
-# The NAME is load-bearing. Its predecessor, BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES,
-# shipped with a default of the literal 45056, and a CACHE entry outlives the list file
-# that declared it: once the derivation replaced that default, every ALREADY-CONFIGURED
-# tree still held 45056, still took the `GREATER 0` branch, and still forced NVIDIA's cap
-# onto every architecture. Renaming is what makes the fix reach those trees, because a
-# stale entry under the old name can no longer be read. Do not rename it back, and do not
-# reintroduce a non-zero default.
-# evidence: docs/perf/gemm.md#the-subgroup-workspace-budget
-set(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES 0 CACHE STRING
-    "Compile-time local-memory cap for the device GEMM tile variants, in bytes; 0 derives it per architecture")
-
-# The configure-time local-memory probe that used to write this is gone: it cost a full
-# SYCL compile, link and run at every fresh configure, and by the end it had no readers at
-# all -- its one former consumer (the tile cap above) is table-derived on purpose, and
-# every resident capacity asks DeviceProperty::LOCAL_MEM_SIZE at run time. Left in an
-# existing cache the entry still reads as a knob, so it is removed rather than orphaned.
-if(DEFINED CACHE{BATCHLAS_GPU_LOCAL_MEM_BYTES})
-    unset(BATCHLAS_GPU_LOCAL_MEM_BYTES CACHE)
-    message(STATUS "Removing BATCHLAS_GPU_LOCAL_MEM_BYTES from the cache; the configure-time local-memory probe it fed no longer exists and nothing reads its result")
-endif()
-
 set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -fsycl
     -Wno-c++20-extensions
@@ -103,12 +77,8 @@ function(batchlas_subgroup_workspace_budget_bytes architecture local_mem_bytes d
     set(_workspace_budget_bytes "${local_mem_bytes}")
 
     if("${device_type}" STREQUAL "gpu")
-        if(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES GREATER 0)
-            set(_workspace_budget_bytes "${BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES}")
-        else()
-            batchlas_architecture_table_local_mem_bytes("${architecture}" "${device_type}" _table_bytes)
-            math(EXPR _workspace_budget_bytes "${_table_bytes} - 4096")
-        endif()
+        batchlas_architecture_table_local_mem_bytes("${architecture}" "${device_type}" _table_bytes)
+        math(EXPR _workspace_budget_bytes "${_table_bytes} - 4096")
 
         if(_workspace_budget_bytes LESS 16384)
             set(_workspace_budget_bytes 16384)
@@ -539,25 +509,27 @@ foreach(_arch ${BATCHLAS_SYCL_TARGETS})
     endif()
 endforeach()
 
-if(BATCHLAS_ENABLE_ROCM)
-    set(_AMD_ARCH "${BATCHLAS_AMD_ARCH}")
-    if(_AMD_ARCH MATCHES "^gfx[0-9]+$")
-        set(_AMD_ARCH "amd_gpu_${_AMD_ARCH}")
-    endif()
-    if(DETECTED_AMD_ARCH AND "${BATCHLAS_AMD_ARCH}" STREQUAL "amd_gpu_gfx942")
-        set(_AMD_ARCH "${DETECTED_AMD_ARCH}")
-    endif()
-    list(FIND BATCHLAS_SYCL_TARGETS "${_AMD_ARCH}" _amd_idx)
-    if(_amd_idx EQUAL -1)
-        list(APPEND BATCHLAS_SYCL_TARGETS "${_AMD_ARCH}")
-    endif()
-    message(STATUS "Compiling for AMD architecture: ${_AMD_ARCH}")
+# With ROCm on, BATCHLAS_AMD_ARCH replaces the detected AMD target, like BATCHLAS_NVIDIA_ARCH below.
+if(BATCHLAS_ENABLE_ROCM AND BATCHLAS_AMD_ARCH)
+    string(REGEX REPLACE "^amd_gpu_" "" _AMD_ARCH "${BATCHLAS_AMD_ARCH}")
+    set(_AMD_ARCH "amd_gpu_${_AMD_ARCH}")
+    list(FILTER BATCHLAS_SYCL_TARGETS EXCLUDE REGEX "^amd_gpu_")
+    list(APPEND BATCHLAS_SYCL_TARGETS "${_AMD_ARCH}")
+elseif(BATCHLAS_ENABLE_ROCM AND NOT DETECTED_AMD_ARCH)
+    message(FATAL_ERROR "BATCHLAS_ENABLE_ROCM=ON but no AMD GPU was detected; name the target "
+        "with -DBATCHLAS_AMD_ARCH=gfx<N>")
 endif()
+foreach(_arch IN LISTS BATCHLAS_SYCL_TARGETS)
+    if(_arch MATCHES "^amd_gpu_")
+        message(STATUS "Compiling for AMD architecture: ${_arch}")
+    endif()
+endforeach()
 
 # BATCHLAS_NVIDIA_ARCH replaces the detected NVIDIA targets: a cross build, or one of several GPUs.
 set(_nvidia_targets "${BATCHLAS_DETECTED_NVIDIA_TARGETS}")
 if(BATCHLAS_NVIDIA_ARCH)
-    string(REGEX REPLACE "^(nvidia_gpu_)?(sm_)?" "" _sm "${BATCHLAS_NVIDIA_ARCH}")
+    string(REGEX REPLACE "^nvidia_gpu_" "" _sm "${BATCHLAS_NVIDIA_ARCH}")
+    string(REGEX REPLACE "^sm_" "" _sm "${_sm}")
     if(NOT _sm MATCHES "^[0-9]+a?$")
         message(FATAL_ERROR "BATCHLAS_NVIDIA_ARCH='${BATCHLAS_NVIDIA_ARCH}': expected sm_<N>, e.g. sm_89")
     endif()
@@ -652,18 +624,12 @@ if(NOT HAS_CPU_SYCL_TARGET)
     set(BATCHLAS_HAS_CPU_TARGET OFF)
 endif()
 
-if(NOT BATCHLAS_ENABLE_CPU_TESTS)
-    message(STATUS "CPU-dependent tests and benchmarks manually disabled")
-    set(BATCHLAS_HAS_CPU_TARGET OFF)
-endif()
-
-if(BATCHLAS_NATIVE_CPU_DISABLE_VECZ)
-    list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _native_cpu_idx)
-    if(NOT _native_cpu_idx EQUAL -1)
-        message(STATUS "Disabling vecz for native_cpu backend (-mllvm -sycl-native-cpu-no-vecz)")
-        list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS -Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
-        list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS -Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
-    endif()
+# vecz crashes clang on the native_cpu backend.
+list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _native_cpu_idx)
+if(NOT _native_cpu_idx EQUAL -1)
+    message(STATUS "Disabling vecz for native_cpu backend (-mllvm -sycl-native-cpu-no-vecz)")
+    list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS -Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
+    list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS -Xclang=-mllvm -Xclang=-sycl-native-cpu-no-vecz)
 endif()
 
 # Every flag-plus-argument pair below is one SHELL: item: CMake de-duplicates options, so a
@@ -678,15 +644,6 @@ if(BATCHLAS_CUDA_ENABLED)
         message(STATUS "Passing --ftz=false to the CUDA image's runtime JIT options (not the AOT ptxas)")
         list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
             "SHELL:-Xsycl-target-backend=nvptx64-nvidia-cuda --ftz=false")
-    endif()
-    if(BATCHLAS_CUDA_DEVICE_LINE_INFO
-       AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
-        message(STATUS "Enabling line info for CUDA device code")
-        # -Xcuda-ptxas, not -Xsycl-target-backend: the latter lands in the image's runtime JIT
-        # options, never on the AOT ptxas line.
-        list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS
-            "SHELL:-Xcuda-ptxas --generate-line-info"
-            "SHELL:-Xcuda-ptxas -w")
     endif()
     if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
         message(STATUS "Preserving CUDA/SYCL CUDA intermediates for device-code inspection")

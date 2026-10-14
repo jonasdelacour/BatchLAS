@@ -62,7 +62,7 @@ cmake --build --preset dev
 | `dev` | default `RelWithDebInfo` library |
 | `dev-tests` | library plus the full test suite |
 | `fast-dev` | library plus the smoke-test subset |
-| `benchmarks` | benchmarks and the tuner (`BATCHLAS_ENABLE_TUNING=ON`) |
+| `benchmarks` | benchmarks and the table tuner (`tools/tune`) |
 | `cuda` | `dev-tests` with `BATCHLAS_ENABLE_CUDA=AUTO` (not `ON`: without a `[cuda:gpu]` it still configures, CPU-only) and `BATCHLAS_ALLOW_UNSAFE_ENV=OFF`; the pre-push gate |
 | `dev-gpu` / `dev-gpu-tests` | drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`) |
 | `release` | `Release`, no tests or benchmarks, one shared library |
@@ -94,26 +94,17 @@ cmake --build build -j8
 | `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables and `batchlas_tune` |
 | `BATCHLAS_BUILD_PYTHON` | build the Python package |
 | `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without an NVIDIA target, see "Device and toolkit detection") or `OFF`. Boolean spellings are accepted (`1`/`TRUE`/`YES` mean `ON`, `0`/`FALSE`/`NO` mean `OFF`); an existing cache entry keeps its value |
-| `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS); the three CUDA libraries are all-or-nothing (a partial `BATCHLAS_ENABLE_CU*` set fails configure); `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
-| `BATCHLAS_ENABLE_<LIB>` | per library, `<LIB>` one of `CUBLAS`, `CUSOLVER`, `CUSPARSE`, `ROCBLAS`, `ROCSOLVER`, `ROCSPARSE`, `LAPACKE`, `CBLAS`: allow it when present (default: `BATCHLAS_ENABLE_VENDOR_BLAS`) |
+| `BATCHLAS_ENABLE_VENDOR_BLAS` | the one switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS), re-read on every configure; `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)). The three CUDA libraries are all-or-nothing: a toolkit missing one fails configure |
 | `BATCHLAS_MONOLITHIC_LIBRARY` | one `libbatchlas.so` instead of the per-component libraries (default `OFF`; the `release` preset turns it on) |
 | `BATCHLAS_ALLOW_UNSAFE_ENV` | honour the `BATCHLAS_*` overrides that disable a safety check (`batchlas::Settings::unsafe`; default `OFF`, see "Presets") |
 | `BATCHLAS_DISABLE_CUDA_FTZ` | no flush-to-zero in CUDA device code (default `ON`) |
 | `BATCHLAS_KEEP_CUDA_INTERMEDIATES` | keep CUDA/SYCL device intermediates for PTX/SASS analysis (default `OFF`) |
 | `BATCHLAS_SANITIZER_FRIENDLY_DEBUG` | unwind-friendly debug flags for sanitizer runs (default `OFF`) |
-| `BATCHLAS_ENABLE_CPU_TESTS` | build the tests and benchmarks that need CPU SYCL kernels (default `ON`) |
-| `BATCHLAS_NATIVE_CPU_DISABLE_VECZ` | disable vecz for the `native_cpu` target, a clang-crash workaround (default `ON`) |
-| `BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES` | compile-time local-memory cap of the device GEMM tiles; `0` (default) derives it per architecture |
-| `BATCHLAS_CHECK_BLAS_HEALTH` | configure-time dgemm health check of the host BLAS (default `ON`) |
 | `BATCHLAS_OPENBLAS_CORETYPE` | `OPENBLAS_CORETYPE` that ctest sets to avoid a broken OpenBLAS kernel; empty means none (set by the health check) |
 | `BATCHLAS_BUILD_DOCS` | add the `batchlas_docs` target (`scripts/build_docs.sh`) |
 | `BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS` | build the `device_blas_*` benchmarks (default `OFF`) |
-| `BATCHLAS_TUNE_BACKEND`, `BATCHLAS_TUNE_TYPE` | backend and type passed to the tuning benchmarks (defaults `CUDA`, `float`) |
-| `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
 | `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
-| `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |
-| `BATCHLAS_ENABLE_TUNING` | enable tuning targets; for benchmark builds |
 | `BATCHLAS_CPU_TARGET` | SYCL CPU target: `auto`, `native_cpu`, `spir64_x86_64`, `none` |
 | `BATCHLAS_TEST_TARGET_SET` | `all` or `smoke` |
 | `BATCHLAS_AMD_ARCH` | override ROCm target architecture |

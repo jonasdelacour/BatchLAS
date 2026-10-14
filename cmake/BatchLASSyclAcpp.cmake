@@ -168,7 +168,7 @@ if(BATCHLAS_CUDA_ENABLED)
     batchlas_locate_cuda_toolkit(${_acpp_cuda_path})
 endif()
 
-if(BATCHLAS_CPU_TARGET STREQUAL "none" OR NOT BATCHLAS_ENABLE_CPU_TESTS)
+if(BATCHLAS_CPU_TARGET STREQUAL "none")
     set(BATCHLAS_HAS_CPU_TARGET OFF)
 elseif(_has_omp AND BATCHLAS_ACPP_TARGETS MATCHES "^(generic|omp)")
     # Host kernels exist only when the target set compiles for the host (generic or omp*).

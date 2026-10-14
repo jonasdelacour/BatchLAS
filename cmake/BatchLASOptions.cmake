@@ -123,16 +123,10 @@ set(BATCHLAS_ENABLE_CUDA "AUTO" CACHE STRING
 set_property(CACHE BATCHLAS_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(BATCHLAS_DISABLE_CUDA_FTZ
     "Pass --ftz=false to the CUDA image's runtime JIT options; the AOT ptxas step never sees it" ON)
-option(BATCHLAS_CUDA_DEVICE_LINE_INFO
-    "Pass --generate-line-info to ptxas in Debug/RelWithDebInfo builds (useful for ncu/nsight)"
-    OFF)
 option(BATCHLAS_ENABLE_ROCM "Enable ROCm support even when no AMD GPU is detected" OFF)
 option(BATCHLAS_BUILD_PYTHON "Build Python bindings" OFF)
-option(BATCHLAS_ENABLE_NETLIB "Enable Netlib BLAS/LAPACK backend" ON)
-option(BATCHLAS_ENABLE_CPU_TESTS "Enable tests/benchmarks requiring CPU SYCL kernel compilation" ON)
 option(BATCHLAS_KEEP_CUDA_INTERMEDIATES "Preserve CUDA and SYCL CUDA device compilation intermediates for PTX/SASS analysis" OFF)
 option(BATCHLAS_SANITIZER_FRIENDLY_DEBUG "Use more unwind-friendly debug flags for sanitizer runs (may slow down builds/runs)" OFF)
-option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python and benchmarks)" OFF)
 
 # Whether the `unsafe` group in batchlas::Settings is allowed to be set from the
 # process environment.
@@ -176,7 +170,13 @@ option(BATCHLAS_ALLOW_UNSAFE_ENV
 
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
-set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
+set(BATCHLAS_AMD_ARCH "" CACHE STRING
+    "AMD architecture (gfxNNN) to build instead of the detected GPU; empty = detect")
+# amd_gpu_gfx942 was the old default and meant "detect"; an existing cache still holds it.
+if(BATCHLAS_AMD_ARCH STREQUAL "amd_gpu_gfx942")
+    set_property(CACHE BATCHLAS_AMD_ARCH PROPERTY VALUE "")
+    set(BATCHLAS_AMD_ARCH "")
+endif()
 set(BATCHLAS_NVIDIA_ARCH "" CACHE STRING
     "NVIDIA architecture (sm_XX) to build instead of the detected GPUs; empty = detect")
 # sm_50 was the old default and meant "detect"; an existing cache still holds it.
@@ -241,44 +241,22 @@ else()
     set(BATCHLAS_CUDA_ENABLED OFF)
 endif()
 
-# Workaround for a vecz crash in the native_cpu backend. Only ever reaches the
-# command line when native_cpu is among the SYCL targets. This used to default
-# from a hardcoded /opt/dpcpp-cuda path match.
-option(BATCHLAS_NATIVE_CPU_DISABLE_VECZ "Disable vecz for native_cpu backend (workaround for clang crash)" ON)
-
 set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
 set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
 set(BATCHLAS_HAS_CPU_TARGET FALSE)
 
 # ---------------------------------------------------------------------------
-# Vendor math libraries -- the third dispatch axis (WP0 step S1).
-#
-# These are deliberately SEPARATE from the BATCHLAS_HAS_<FAMILY>_BACKEND flags
-# above. A device family says which SYCL target a queue runs on; a library flag
-# says whether somebody else's math code is available to call. Today those two
-# questions share one answer -- BatchLASDependencies.cmake sets
-# BATCHLAS_HAS_CUDA_BACKEND from whether it found cuBLAS -- which is why an
-# NVIDIA box without cuBLAS currently has no CUDA backend at all, rather than a
-# CUDA backend with no vendor provider.
-#
-# S1 only DECLARES the axis and probes it. Nothing in C++ reads these macros
-# yet and the family flags keep their existing derivation, so this step is
-# bit-identical; the decoupling itself is S2/S3.
+# Vendor math libraries, separate from the BATCHLAS_HAS_<FAMILY>_BACKEND device families above:
+# a family says which SYCL target a queue runs on, a library flag whether someone else's math
+# code can be called (src/select/vendor.hh). OFF everywhere is the vendor-free build.
 option(BATCHLAS_ENABLE_VENDOR_BLAS
     "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, netlib)"
     ON)
 
-set(BATCHLAS_VENDOR_LIBRARIES
-    CUBLAS CUSOLVER CUSPARSE
-    ROCBLAS ROCSOLVER ROCSPARSE
-    LAPACKE CBLAS)
-
-foreach(_batchlas_lib ${BATCHLAS_VENDOR_LIBRARIES})
-    option(BATCHLAS_ENABLE_${_batchlas_lib}
-        "Allow BatchLAS to use ${_batchlas_lib} when it is present"
-        ${BATCHLAS_ENABLE_VENDOR_BLAS})
-    # Set by the probes in BatchLASDependencies.cmake; "found AND allowed".
+# Re-read on every configure, so turning it OFF in an existing tree does give a vendor-free
+# build. BATCHLAS_HAS_<LIB> ("found AND allowed") is set by BatchLASDependencies.cmake.
+foreach(_batchlas_lib CUBLAS CUSOLVER CUSPARSE ROCBLAS ROCSOLVER ROCSPARSE LAPACKE CBLAS)
     set(BATCHLAS_HAS_${_batchlas_lib} FALSE)
 endforeach()
 unset(_batchlas_lib)

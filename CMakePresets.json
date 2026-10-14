@@ -43,12 +43,11 @@
     {
       "name": "benchmarks",
       "displayName": "Benchmarks",
-      "description": "Build benchmarks and tuning support.",
+      "description": "Build benchmarks and the tools/tune table tuner.",
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/presets/benchmarks",
       "cacheVariables": {
-        "BATCHLAS_BUILD_BENCHMARKS": "ON",
-        "BATCHLAS_ENABLE_TUNING": "ON"
+        "BATCHLAS_BUILD_BENCHMARKS": "ON"
       }
     },
     {

@@ -16,7 +16,6 @@ if(NOT pybind11_FOUND)
     endif()
 endif()
 
-set(BATCHLAS_PY_PACKAGE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/batchlas")
 set(BATCHLAS_PY_PACKAGE_BUILD "${CMAKE_BINARY_DIR}/python/batchlas")
 file(MAKE_DIRECTORY "${BATCHLAS_PY_PACKAGE_BUILD}")
 

@@ -31,7 +31,7 @@ to `BATCHLAS_SYCL_TARGETS`:
    -- CPU device detected by sycl-ls, but no CPU target in fsycl-targets
    -- CPU kernels will not be compiled - disabling CPU-dependent tests/benchmarks
    ```
-3. `BATCHLAS_ENABLE_CPU_TESTS=OFF` (`cmake/BatchLASOptions.cmake:120`, default `ON`) forces `OFF`.
+3. `BATCHLAS_CPU_TARGET=none` forces `OFF` (and drops the CPU target itself).
 
 The result is exported as `BATCHLAS_HAS_CPU_TARGET` (`cmake/backend_config.h.in`, `#cmakedefine01`) and
 to Python as `compiled_features()["has_cpu_target"]`.

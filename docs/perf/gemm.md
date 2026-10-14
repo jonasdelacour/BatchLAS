@@ -613,9 +613,8 @@ and cfloat, and 1 instead of 3 (register-matrix path) for cdouble. The unrecogni
 the `optimized_gemm` and `gemm` paths for float, and the register-matrix and complex rank-2k paths for cdouble.
 
 No benchmark or test has timed any budget except the shipped one; the table is a compile-time census, not a cost.
-A cache entry (`BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES`, default `0` = derive per architecture) replaced the old
-`BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES`, whose cached default of 45056 overrode the derivation on every
-architecture in older build trees. Configure migrates a cached legacy `45056` and warns on other cached values.
+The budget has no override: it is always derived from the architecture table
+(`batchlas_subgroup_workspace_budget_bytes`, `cmake/BatchLASDetectSYCL.cmake`).
 
 ## GEMM: the heterogeneous-batch loop
 
