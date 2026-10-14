@@ -215,10 +215,14 @@ option(BATCHLAS_MONOLITHIC_LIBRARY
     "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
     ${_batchlas_monolithic_default})
 # Monolithic mode used to hide every symbol unconditionally. The in-tree tests reach ~1,000
-# unannotated internal symbols, so a monolithic tree that builds tests needs it OFF.
+# unannotated internal symbols, so a monolithic tree that builds tests defaults it OFF.
+set(_batchlas_hidden_default ON)
+if(BATCHLAS_BUILD_TESTS)
+    set(_batchlas_hidden_default OFF)
+endif()
 cmake_dependent_option(BATCHLAS_HIDDEN_VISIBILITY
     "-fvisibility=hidden on the monolithic library (OFF to link the in-tree tests against it)"
-    ON "BATCHLAS_MONOLITHIC_LIBRARY" OFF)
+    ${_batchlas_hidden_default} "BATCHLAS_MONOLITHIC_LIBRARY" OFF)
 # ld64 rejects undefined symbols in a dylib, and the split components reference each other in
 # cycles with no recorded dependency (src/CMakeLists.txt, the --no-as-needed note).
 if(APPLE AND NOT BATCHLAS_MONOLITHIC_LIBRARY)
