@@ -36,18 +36,30 @@
 namespace batchlas::tune {
 
 // The vendor arm is whichever GPU library this build links. Host (cpu) tables: phase 4.
+// Backend::SYCL (AdaptiveCpp Metal) links none: its vendor arm is refused by the strict pin,
+// and it has double kernels only with device fp64.
 #if BATCHLAS_HAS_CUDA_BACKEND
 inline constexpr Backend kBackend = Backend::CUDA;
-#else
+#define BATCHLAS_TUNE_FP64 1
+#elif BATCHLAS_HAS_ROCM_BACKEND
 inline constexpr Backend kBackend = Backend::ROCM;
+#define BATCHLAS_TUNE_FP64 1
+#else
+inline constexpr Backend kBackend = Backend::SYCL;
+#define BATCHLAS_TUNE_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
 template <class F>
 decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
-    if (dtype == "double") return f.template operator()<double>();
     if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
+#if BATCHLAS_TUNE_FP64
+    if (dtype == "double") return f.template operator()<double>();
     if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
+#else
+    if (dtype == "double" || dtype == "cdouble")
+        throw std::invalid_argument("dtype '" + dtype + "' needs device fp64, which this build lacks");
+#endif
     throw std::invalid_argument("unknown dtype '" + dtype + "'");
 }
 
@@ -55,7 +67,11 @@ decltype(auto) with_dtype(const std::string& dtype, F&& f) {
 template <class F>
 decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
+#if BATCHLAS_TUNE_FP64
     if (dtype == "double") return f.template operator()<double>();
+#else
+    if (dtype == "double") throw std::invalid_argument(op + ": 'double' needs device fp64, which this build lacks");
+#endif
     throw std::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
 }
 

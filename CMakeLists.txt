@@ -12,8 +12,8 @@ else()
     include(cmake/BatchLASDetectSYCL.cmake)
 endif()
 include(cmake/BatchLASDependencies.cmake)
-# tools/tune times a GPU vendor arm (tools/tune/cell_runner.hh): no GPU backend, no tuner.
-if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND)
+# tools/tune times a GPU backend (tools/tune/cell_runner.hh): no GPU backend, no tuner.
+if(BATCHLAS_HAS_CUDA_BACKEND OR BATCHLAS_HAS_ROCM_BACKEND OR BATCHLAS_HAS_SYCL_BACKEND)
     set(BATCHLAS_BUILD_TUNE_TOOL ON)
 else()
     set(BATCHLAS_BUILD_TUNE_TOOL OFF)
