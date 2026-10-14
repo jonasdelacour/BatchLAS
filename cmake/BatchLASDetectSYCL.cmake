@@ -9,27 +9,11 @@ if(CMAKE_SCRIPT_MODE_FILE)
     set(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY TRUE)
 endif()
 
-if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
-if(NOT SYCL_LS)
-    find_program(SYCL_LS sycl-ls)
-endif()
-
-if(SYCL_LS)
-    get_filename_component(SYCL_BIN_DIR "${SYCL_LS}" DIRECTORY)
-    set(SYCL_DIR "${SYCL_BIN_DIR}/../")
-    message(STATUS "Using SYCL tools from: ${SYCL_DIR}")
-else()
-    message(WARNING "sycl-ls not found - GPU architecture auto-detection will be skipped")
-endif()
-endif()
-
 set(BATCHLAS_SYCL_TARGETS "")
 set(BATCHLAS_DETECTED_NVIDIA_GPU FALSE)
 set(BATCHLAS_DETECTED_AMD_GPU FALSE)
-set(BATCHLAS_DETECTED_INTEL_GPU FALSE)
 set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "")
 set(BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "")
-set(BATCHLAS_SYCL_NO_CPU_CXX_OPTIONS "")
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "")
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672)
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2)
@@ -223,183 +207,168 @@ function(batchlas_nvidia_target_has_alias target out_var)
     endif()
 endfunction()
 
+# FindCUDAToolkit searches CUDAToolkit_ROOT, $CUDA_PATH, nvcc on PATH and /usr/local/cuda. The
+# NVIDIA HPC SDK installs the toolkit as <sdk>/<release>/cuda/<version> and puts nothing on a new
+# login's PATH, so a box with only the SDK found no toolkit at all. ARGN (acpp's configured CUDA)
+# is tried first, then the newest SDK toolkit. The pick is cached as CUDAToolkit_ROOT.
+function(batchlas_locate_cuda_toolkit)
+    if(CUDAToolkit_ROOT OR DEFINED ENV{CUDAToolkit_ROOT} OR DEFINED ENV{CUDA_PATH})
+        return()
+    endif()
+    find_program(_batchlas_nvcc nvcc)
+    set(_nvcc "${_batchlas_nvcc}")
+    unset(_batchlas_nvcc CACHE)
+    if(_nvcc OR EXISTS "/usr/local/cuda/bin/nvcc")
+        return()
+    endif()
+    set(_best "")
+    foreach(_dir IN LISTS ARGN)
+        if(EXISTS "${_dir}/bin/nvcc")
+            set(_best "${_dir}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _best)
+        file(GLOB _sdk_toolkits LIST_DIRECTORIES true "/opt/nvidia/hpc_sdk/*/*/cuda/[0-9]*")
+        set(_best_cuda "0")
+        set(_best_sdk "0")
+        foreach(_dir IN LISTS _sdk_toolkits)
+            if(EXISTS "${_dir}/bin/nvcc" AND _dir MATCHES "/([0-9.]+)/cuda/([0-9.]+)$")
+                if(CMAKE_MATCH_2 VERSION_GREATER _best_cuda OR
+                   (CMAKE_MATCH_2 VERSION_EQUAL _best_cuda AND CMAKE_MATCH_1 VERSION_GREATER _best_sdk))
+                    set(_best "${_dir}")
+                    set(_best_cuda "${CMAKE_MATCH_2}")
+                    set(_best_sdk "${CMAKE_MATCH_1}")
+                endif()
+            endif()
+        endforeach()
+    endif()
+    if(_best)
+        get_filename_component(_best "${_best}" REALPATH)
+        set(CUDAToolkit_ROOT "${_best}" CACHE PATH "CUDA toolkit root (no nvcc on PATH; located by BatchLAS)")
+        message(STATUS "CUDA toolkit (no nvcc on PATH): ${_best}")
+    endif()
+endfunction()
+
+# Runs the compiler's own sycl-ls against its own runtime, once. A sycl-ls on PATH can belong to
+# another install (oneAPI's has no CUDA adapter), and neither runs without <prefix>/lib on the
+# loader path, which a plain login shell does not have: detection used to find nothing and the
+# build silently had no GPU target.
+macro(batchlas_run_sycl_ls)
+    get_filename_component(_batchlas_cxx_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(_batchlas_cxx_real "${CMAKE_CXX_COMPILER}" REALPATH)
+    get_filename_component(_batchlas_cxx_real_dir "${_batchlas_cxx_real}" DIRECTORY)
+    get_filename_component(_batchlas_sycl_root "${_batchlas_cxx_real_dir}" DIRECTORY)
+    find_program(SYCL_LS sycl-ls HINTS "${_batchlas_cxx_dir}" "${_batchlas_cxx_real_dir}" NO_DEFAULT_PATH)
+    find_program(SYCL_LS sycl-ls)
+    set(BATCHLAS_SYCL_RUNTIME_DIR "")
+    if(EXISTS "${_batchlas_sycl_root}/lib/libsycl.so")
+        set(BATCHLAS_SYCL_RUNTIME_DIR "${_batchlas_sycl_root}/lib")
+    endif()
+    set(BATCHLAS_SYCL_LS_OUTPUT "")
+    set(BATCHLAS_SYCL_LS_VERBOSE_OUTPUT "")
+    if(SYCL_LS)
+        set(_batchlas_sycl_ls_env "")
+        if(BATCHLAS_SYCL_RUNTIME_DIR AND "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
+            set(_batchlas_sycl_ls_env "LD_LIBRARY_PATH=${BATCHLAS_SYCL_RUNTIME_DIR}")
+        elseif(BATCHLAS_SYCL_RUNTIME_DIR)
+            set(_batchlas_sycl_ls_env "LD_LIBRARY_PATH=${BATCHLAS_SYCL_RUNTIME_DIR}:$ENV{LD_LIBRARY_PATH}")
+        endif()
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E env ${_batchlas_sycl_ls_env} "${SYCL_LS}"
+            OUTPUT_VARIABLE BATCHLAS_SYCL_LS_OUTPUT ERROR_VARIABLE _batchlas_sycl_ls_err
+            RESULT_VARIABLE _batchlas_sycl_ls_rc TIMEOUT 180)
+        if(_batchlas_sycl_ls_rc EQUAL 0)
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E env ${_batchlas_sycl_ls_env} "${SYCL_LS}" --verbose
+                OUTPUT_VARIABLE BATCHLAS_SYCL_LS_VERBOSE_OUTPUT ERROR_QUIET TIMEOUT 180)
+            message(STATUS "Detecting devices using ${SYCL_LS}")
+        else()
+            message(WARNING "${SYCL_LS} failed (${_batchlas_sycl_ls_rc}): ${_batchlas_sycl_ls_err}")
+            set(BATCHLAS_SYCL_LS_OUTPUT "")
+        endif()
+    else()
+        message(WARNING "No sycl-ls next to ${CMAKE_CXX_COMPILER} or on PATH; devices cannot be detected")
+    endif()
+endmacro()
+
+# Fills BATCHLAS_DETECTED_{NVIDIA,AMD}_GPU, BATCHLAS_DETECTED_NVIDIA_TARGETS and the non-NVIDIA GPU
+# targets. NVIDIA codegen flags are added later, once BATCHLAS_NVIDIA_ARCH has had its say.
 function(detect_sycl_gpu_architectures)
-    if(NOT SYCL_LS)
-        message(STATUS "sycl-ls not found, skipping automatic GPU target detection")
-        return()
-    endif()
+    batchlas_normalize_sycl_ls_architectures("${BATCHLAS_SYCL_LS_VERBOSE_OUTPUT}" _verbose)
 
-    message(STATUS "Detecting GPU architectures using sycl-ls...")
-
-    execute_process(
-        COMMAND "${SYCL_LS}"
-        OUTPUT_VARIABLE SYCL_LS_BASIC_OUTPUT
-        ERROR_VARIABLE SYCL_LS_BASIC_ERROR
-        RESULT_VARIABLE SYCL_LS_BASIC_RESULT
-    )
-    if(NOT SYCL_LS_BASIC_RESULT EQUAL 0)
-        message(WARNING "Failed to execute sycl-ls: ${SYCL_LS_BASIC_ERROR}")
-        return()
-    endif()
-
-    execute_process(
-        COMMAND "${SYCL_LS}" --verbose
-        OUTPUT_VARIABLE SYCL_LS_OUTPUT
-        ERROR_VARIABLE SYCL_LS_ERROR
-        RESULT_VARIABLE SYCL_LS_RESULT
-    )
-    if(NOT SYCL_LS_RESULT EQUAL 0)
-        message(WARNING "Failed to execute sycl-ls --verbose: ${SYCL_LS_ERROR}")
-        return()
-    endif()
-    batchlas_normalize_sycl_ls_architectures("${SYCL_LS_OUTPUT}" SYCL_LS_OUTPUT)
-
-    set(_gpu_arch_flags "")
+    set(_targets "")
+    set(_nvidia_targets "")
+    set(_fallback_entries "")
     set(_compile_options "")
-    set(_link_options "")
     set(_has_nvidia_gpu FALSE)
     set(_has_amd_gpu FALSE)
-    set(_has_intel_gpu FALSE)
-    # BATCHLAS_ENABLE_CUDA_MODE is AUTO|ON|OFF (normalised in BatchLASOptions.cmake).
-    if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON")
-        set(_cuda_enabled ON)
-    else()
-        set(_cuda_enabled OFF)
-    endif()
-    set(_cuda_path "")
 
-    if(SYCL_LS_BASIC_OUTPUT MATCHES "\\[cuda:gpu\\]")
+    if(BATCHLAS_SYCL_LS_OUTPUT MATCHES "\\[cuda:gpu\\]")
         set(_has_nvidia_gpu TRUE)
-        message(STATUS "Detected NVIDIA GPU")
     endif()
-    if(SYCL_LS_BASIC_OUTPUT MATCHES "\\[amd:gpu\\].*AMD|\\[hip:gpu\\].*AMD")
+    if(BATCHLAS_SYCL_LS_OUTPUT MATCHES "\\[amd:gpu\\].*AMD|\\[hip:gpu\\].*AMD")
         set(_has_amd_gpu TRUE)
-        message(STATUS "Detected AMD GPU")
-    endif()
-    if(SYCL_LS_BASIC_OUTPUT MATCHES "\\[intel:gpu\\].*Intel")
-        set(_has_intel_gpu TRUE)
-        message(STATUS "Detected Intel GPU")
-    endif()
-    if(SYCL_LS_BASIC_OUTPUT MATCHES "\\[level_zero:gpu\\]")
-        set(_has_intel_gpu TRUE)
-        message(STATUS "Detected Intel Level Zero GPU")
     endif()
 
-    string(REGEX MATCHALL "Architecture: ([^\n]+)" ARCH_MATCHES "${SYCL_LS_OUTPUT}")
-    foreach(ARCH_MATCH ${ARCH_MATCHES})
-        string(REGEX REPLACE "Architecture: ([^\n]+)" "\\1" ARCH_FLAG "${ARCH_MATCH}")
-        string(STRIP "${ARCH_FLAG}" ARCH_FLAG)
-        if(ARCH_FLAG MATCHES "^gfx[0-9]+$")
-            set(ARCH_FLAG "amd_gpu_${ARCH_FLAG}")
+    string(REGEX MATCHALL "Architecture: ([^\n]+)" _arch_matches "${_verbose}")
+    foreach(_match IN LISTS _arch_matches)
+        string(REGEX REPLACE "Architecture: ([^\n]+)" "\\1" _arch "${_match}")
+        string(STRIP "${_arch}" _arch)
+        if(_arch MATCHES "^gfx[0-9]+$")
+            set(_arch "amd_gpu_${_arch}")
         endif()
-        if(ARCH_FLAG MATCHES "_gpu_")
-            list(FIND _gpu_arch_flags "${ARCH_FLAG}" _arch_index)
-            if(_arch_index EQUAL -1)
-                list(APPEND _gpu_arch_flags "${ARCH_FLAG}")
-                message(STATUS "Detected GPU architecture: ${ARCH_FLAG}")
-            endif()
+        if(_arch MATCHES "^nvidia_gpu_")
+            list(APPEND _nvidia_targets "${_arch}")
+        elseif(_arch MATCHES "_gpu_")
+            list(APPEND _targets "${_arch}")
         endif()
     endforeach()
 
-    if(_gpu_arch_flags)
-        list(APPEND BATCHLAS_SYCL_TARGETS ${_gpu_arch_flags})
-        message(STATUS "Added targets to SYCL compilation: ${_gpu_arch_flags}")
-    else()
-        message(STATUS "No specific GPU architectures detected, using default JIT compilation")
-    endif()
-
-    if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON" AND NOT _has_nvidia_gpu)
-        message(FATAL_ERROR
-            "BATCHLAS_ENABLE_CUDA=ON but the SYCL runtime exposes no CUDA device: "
-            "sycl-ls (${SYCL_LS}) printed no '[cuda:gpu]' entry. Building anyway would "
-            "silently target ${BATCHLAS_NVIDIA_ARCH} and produce a library whose kernels "
-            "cannot be found at run time. Use a DPC++ with a CUDA backend (oneAPI + the "
-            "Codeplay oneAPI-for-NVIDIA plugin, or an intel/llvm built with --cuda), or "
-            "configure with -DBATCHLAS_ENABLE_CUDA=AUTO or =OFF.")
-    endif()
-
-    # The NVPTX codegen flags below are keyed on the *hardware*, not on the CUDA
-    # backend option: sycl-ls-detected nvidia_gpu_sm_* targets land in
-    # -fsycl-targets regardless, and those need --cuda-path to compile.
-    # BATCHLAS_ENABLE_CUDA only governs the cuBLAS/cuSOLVER backend.
-    if(_has_nvidia_gpu)
-        message(STATUS "Adding NVIDIA-specific flags")
-        if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "AUTO")
-            set(_cuda_enabled ON)
-        endif()
-
-        find_package(CUDAToolkit QUIET)
-        if(CUDAToolkit_FOUND AND CUDAToolkit_BIN_DIR)
-            get_filename_component(_cuda_path "${CUDAToolkit_BIN_DIR}" DIRECTORY)
-            message(STATUS "Found CUDA at: ${_cuda_path}")
-        elseif(DEFINED ENV{CUDA_PATH})
-            set(_cuda_path "$ENV{CUDA_PATH}")
-            message(STATUS "Using CUDA from environment variable: ${_cuda_path}")
-        else()
-            foreach(CUDA_DIR "/usr/local/cuda" "/opt/cuda")
-                if(EXISTS "${CUDA_DIR}")
-                    set(_cuda_path "${CUDA_DIR}")
-                    message(STATUS "Found CUDA at: ${_cuda_path}")
-                    break()
+    # No CUDA device from sycl-ls although the toolchain has a CUDA adapter (sycl-ls missing or
+    # broken, or a runtime that did not load): ask the driver. Without the adapter the runtime
+    # could not run NVPTX kernels, so building them would only hide the problem.
+    file(GLOB _cuda_adapter "${BATCHLAS_SYCL_RUNTIME_DIR}/libur_adapter_cuda.so*")
+    if(NOT _has_nvidia_gpu AND _cuda_adapter)
+        find_program(BATCHLAS_NVIDIA_SMI nvidia-smi)
+        if(BATCHLAS_NVIDIA_SMI)
+            execute_process(COMMAND "${BATCHLAS_NVIDIA_SMI}" --query-gpu=compute_cap,name --format=csv,noheader
+                OUTPUT_VARIABLE _smi ERROR_QUIET RESULT_VARIABLE _smi_rc TIMEOUT 30)
+            if(_smi_rc EQUAL 0)
+                string(REPLACE "\n" ";" _smi "${_smi}")
+                foreach(_row IN LISTS _smi)
+                    if(_row MATCHES "^([0-9]+)\\.([0-9]+), (.+)$")
+                        set(_has_nvidia_gpu TRUE)
+                        list(APPEND _nvidia_targets "nvidia_gpu_sm_${CMAKE_MATCH_1}${CMAKE_MATCH_2}")
+                        list(APPEND _fallback_entries
+                            "nvidia-smi|gpu|${CMAKE_MATCH_3}|nvidia_gpu_sm_${CMAKE_MATCH_1}${CMAKE_MATCH_2}|32")
+                    endif()
+                endforeach()
+                if(_has_nvidia_gpu)
+                    message(STATUS "sycl-ls listed no CUDA device; using nvidia-smi")
                 endif()
-            endforeach()
-        endif()
-
-        list(APPEND _compile_options -fsycl-unnamed-lambda)
-        list(APPEND _link_options -fsycl-unnamed-lambda)
-        if(_cuda_path)
-            list(APPEND _compile_options "--cuda-path=${_cuda_path}")
-            list(APPEND _link_options "--cuda-path=${_cuda_path}")
-        else()
-            message(WARNING "NVIDIA GPU detected but could not find CUDA installation path. Specify with --cuda-path manually if needed.")
+            endif()
         endif()
     endif()
+
+    list(REMOVE_DUPLICATES _nvidia_targets)
+    list(REMOVE_DUPLICATES _targets)
+    foreach(_t IN LISTS _nvidia_targets _targets)
+        message(STATUS "Detected GPU architecture: ${_t}")
+    endforeach()
 
     if(_has_amd_gpu)
-        message(STATUS "Adding AMD-specific flags")
         list(APPEND _compile_options -fno-sycl-id-queries-fit-in-int)
     endif()
 
-    if(_has_nvidia_gpu OR _has_amd_gpu OR _has_intel_gpu)
-        list(APPEND _compile_options -fsycl-dead-args-optimization)
-    endif()
-
-    # Deliberately a *derived* variable: writing BATCHLAS_ENABLE_CUDA here would
-    # shadow the cache entry and make the documented option unreadable.
-    set(BATCHLAS_CUDA_ENABLED "${_cuda_enabled}" PARENT_SCOPE)
-    set(BATCHLAS_CUDA_PATH "${_cuda_path}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_NVIDIA_GPU "${_has_nvidia_gpu}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_AMD_GPU "${_has_amd_gpu}" PARENT_SCOPE)
-    set(BATCHLAS_DETECTED_INTEL_GPU "${_has_intel_gpu}" PARENT_SCOPE)
-    set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
+    set(BATCHLAS_DETECTED_NVIDIA_TARGETS "${_nvidia_targets}" PARENT_SCOPE)
+    set(BATCHLAS_FALLBACK_DEVICE_ENTRIES "${_fallback_entries}" PARENT_SCOPE)
+    set(BATCHLAS_SYCL_TARGETS "${_targets}" PARENT_SCOPE)
     set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "${_compile_options}" PARENT_SCOPE)
-    set(BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "${_link_options}" PARENT_SCOPE)
 endfunction()
 
 function(collect_sycl_device_limit_info)
-    if(NOT SYCL_LS)
-        message(STATUS "sycl-ls not found, generating conservative device limits")
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
-        return()
-    endif()
-
-    execute_process(
-        COMMAND "${SYCL_LS}" --verbose
-        OUTPUT_VARIABLE SYCL_LS_DEVICE_LIMITS_OUTPUT
-        ERROR_VARIABLE SYCL_LS_DEVICE_LIMITS_ERROR
-        RESULT_VARIABLE SYCL_LS_DEVICE_LIMITS_RESULT
-    )
-    if(NOT SYCL_LS_DEVICE_LIMITS_RESULT EQUAL 0)
-        message(WARNING "Failed to execute sycl-ls --verbose for device limit detection: ${SYCL_LS_DEVICE_LIMITS_ERROR}")
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
-        return()
-    endif()
-
-    batchlas_normalize_sycl_ls_architectures("${SYCL_LS_DEVICE_LIMITS_OUTPUT}" SYCL_LS_DEVICE_LIMITS_OUTPUT)
+    batchlas_normalize_sycl_ls_architectures("${BATCHLAS_SYCL_LS_VERBOSE_OUTPUT}" SYCL_LS_DEVICE_LIMITS_OUTPUT)
     string(REPLACE "\r\n" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
     string(REPLACE "\r" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
     string(REPLACE "\n" ";" _sycl_ls_lines "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
@@ -470,6 +439,24 @@ function(collect_sycl_device_limit_info)
         endif()
     endforeach()
 
+    foreach(_dev IN LISTS BATCHLAS_FALLBACK_DEVICE_ENTRIES)
+        string(REPLACE "|" ";" _f "${_dev}")
+        list(GET _f 2 _name)
+        list(GET _f 3 _arch)
+        list(GET _f 4 _sg)
+        batchlas_architecture_table_local_mem_bytes("${_arch}" gpu _local)
+        batchlas_subgroup_workspace_budget_bytes("${_arch}" "${_local}" gpu _budget)
+        batchlas_safe_subgroups_per_workgroup("${_arch}" gpu _safe)
+        list(APPEND _entries "nvidia-smi|gpu|${_name}|${_arch}|${_sg}|${_local}|${_budget}")
+        if(_min_gpu_workspace_budget_bytes EQUAL 0 OR _budget LESS _min_gpu_workspace_budget_bytes)
+            set(_min_gpu_workspace_budget_bytes "${_budget}")
+        endif()
+        if(_min_gpu_safe_subgroups_per_workgroup EQUAL 0 OR _safe LESS _min_gpu_safe_subgroups_per_workgroup)
+            set(_min_gpu_safe_subgroups_per_workgroup "${_safe}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _entries)
+
     if(_min_gpu_workspace_budget_bytes EQUAL 0)
         set(_min_gpu_workspace_budget_bytes 28672)
     endif()
@@ -513,24 +500,7 @@ function(detect_sycl_cpu_target)
         endif()
     endif()
 
-    if(NOT SYCL_LS)
-        message(STATUS "sycl-ls not found, skipping CPU target detection")
-        set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
-        return()
-    endif()
-
-    execute_process(
-        COMMAND "${SYCL_LS}"
-        OUTPUT_VARIABLE SYCL_LS_CPU_OUTPUT
-        ERROR_VARIABLE SYCL_LS_CPU_ERROR
-        RESULT_VARIABLE SYCL_LS_CPU_RESULT
-    )
-    if(NOT SYCL_LS_CPU_RESULT EQUAL 0)
-        message(WARNING "Failed to execute sycl-ls: ${SYCL_LS_CPU_ERROR}")
-        set(BATCHLAS_HAS_CPU_TARGET OFF PARENT_SCOPE)
-        return()
-    endif()
-
+    set(SYCL_LS_CPU_OUTPUT "${BATCHLAS_SYCL_LS_OUTPUT}")
     if(SYCL_LS_CPU_OUTPUT MATCHES "\\[opencl:cpu\\]" OR SYCL_LS_CPU_OUTPUT MATCHES "\\[host:cpu\\]")
         message(STATUS "Detected SYCL OpenCL CPU device")
         set(BATCHLAS_HAS_CPU_TARGET ON PARENT_SCOPE)
@@ -557,18 +527,15 @@ endfunction()
 
 if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
 
+batchlas_run_sycl_ls()
 detect_sycl_gpu_architectures()
 detect_sycl_cpu_target()
-
 collect_sycl_device_limit_info()
 
 set(DETECTED_AMD_ARCH "")
-set(DETECTED_NVIDIA_ARCH "")
 foreach(_arch ${BATCHLAS_SYCL_TARGETS})
     if(_arch MATCHES "amd_gpu_gfx[0-9]+")
         set(DETECTED_AMD_ARCH "${_arch}")
-    elseif(_arch MATCHES "nvidia_gpu_sm_[0-9]+")
-        set(DETECTED_NVIDIA_ARCH "${_arch}")
     endif()
 endforeach()
 
@@ -587,18 +554,48 @@ if(BATCHLAS_ENABLE_ROCM)
     message(STATUS "Compiling for AMD architecture: ${_AMD_ARCH}")
 endif()
 
-if(BATCHLAS_CUDA_ENABLED)
-    set(_NVIDIA_ARCH "nvidia_gpu_${BATCHLAS_NVIDIA_ARCH}")
-    message(STATUS "Detected NVIDIA architecture: ${DETECTED_NVIDIA_ARCH}")
-    if(DETECTED_NVIDIA_ARCH AND "${BATCHLAS_NVIDIA_ARCH}" STREQUAL "sm_50")
-        message(STATUS "Using detected NVIDIA architecture instead of default")
-        set(_NVIDIA_ARCH "${DETECTED_NVIDIA_ARCH}")
+# BATCHLAS_NVIDIA_ARCH replaces the detected NVIDIA targets: a cross build, or one of several GPUs.
+set(_nvidia_targets "${BATCHLAS_DETECTED_NVIDIA_TARGETS}")
+if(BATCHLAS_NVIDIA_ARCH)
+    string(REGEX REPLACE "^(nvidia_gpu_)?(sm_)?" "" _sm "${BATCHLAS_NVIDIA_ARCH}")
+    if(NOT _sm MATCHES "^[0-9]+a?$")
+        message(FATAL_ERROR "BATCHLAS_NVIDIA_ARCH='${BATCHLAS_NVIDIA_ARCH}': expected sm_<N>, e.g. sm_89")
     endif()
-    list(FIND BATCHLAS_SYCL_TARGETS "${_NVIDIA_ARCH}" _nv_idx)
-    if(_nv_idx EQUAL -1)
-        list(APPEND BATCHLAS_SYCL_TARGETS "${_NVIDIA_ARCH}")
+    set(_nvidia_targets "nvidia_gpu_sm_${_sm}")
+endif()
+if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON" AND NOT _nvidia_targets)
+    message(FATAL_ERROR
+        "BATCHLAS_ENABLE_CUDA=ON but no NVIDIA target: sycl-ls (${SYCL_LS}) printed no '[cuda:gpu]' "
+        "and nvidia-smi found no GPU usable by this compiler's runtime. Use a DPC++ with a CUDA "
+        "backend (oneAPI + the Codeplay oneAPI-for-NVIDIA plugin, or an intel/llvm built with "
+        "--cuda), name the target with -DBATCHLAS_NVIDIA_ARCH=sm_<N>, or configure with "
+        "-DBATCHLAS_ENABLE_CUDA=AUTO or =OFF.")
+endif()
+
+if(_nvidia_targets)
+    # BATCHLAS_ENABLE_CUDA governs only the cuBLAS/cuSOLVER backend; NVPTX device code needs the
+    # toolkit's libdevice whatever it says.
+    if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "AUTO")
+        set(BATCHLAS_CUDA_ENABLED ON)
     endif()
-    message(STATUS "Compiling for NVIDIA architecture: ${_NVIDIA_ARCH}")
+    list(APPEND BATCHLAS_SYCL_TARGETS ${_nvidia_targets})
+    batchlas_locate_cuda_toolkit()
+    find_package(CUDAToolkit QUIET)
+    set(BATCHLAS_CUDA_PATH "")
+    if(CUDAToolkit_FOUND AND CUDAToolkit_BIN_DIR)
+        get_filename_component(BATCHLAS_CUDA_PATH "${CUDAToolkit_BIN_DIR}" DIRECTORY)
+        message(STATUS "Found CUDA at: ${BATCHLAS_CUDA_PATH}")
+        list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "--cuda-path=${BATCHLAS_CUDA_PATH}")
+        list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "--cuda-path=${BATCHLAS_CUDA_PATH}")
+    else()
+        message(WARNING "NVIDIA target ${_nvidia_targets} but no CUDA toolkit found; "
+            "pass -DCUDAToolkit_ROOT=<toolkit>")
+    endif()
+    list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS -fsycl-unnamed-lambda)
+    list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS -fsycl-unnamed-lambda)
+endif()
+if(BATCHLAS_SYCL_TARGETS MATCHES "_gpu_")
+    list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS -fsycl-dead-args-optimization)
 endif()
 
 list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
@@ -763,6 +760,14 @@ if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
     target_link_options(batchlas_sycl_no_cpu_options INTERFACE
         "$<BUILD_INTERFACE:${_targets_no_cpu_esc}>"
     )
+endif()
+
+# The driver links libsycl by name (its own -L makes the directory "implicit") and records no
+# RUNPATH, so every library and test only loaded with the toolchain's lib/ on LD_LIBRARY_PATH.
+# Built and installed binaries carry it instead.
+if(BATCHLAS_SYCL_RUNTIME_DIR AND NOT BATCHLAS_SYCL_RUNTIME_DIR IN_LIST CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES)
+    list(APPEND CMAKE_BUILD_RPATH "${BATCHLAS_SYCL_RUNTIME_DIR}")
+    list(APPEND CMAKE_INSTALL_RPATH "${BATCHLAS_SYCL_RUNTIME_DIR}")
 endif()
 
 # What a consumer's own SYCL translation units need (BatchLAS_SYCL_COMPILE_OPTIONS).

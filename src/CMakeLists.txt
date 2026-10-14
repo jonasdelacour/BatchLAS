@@ -173,9 +173,7 @@ add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)
 
-if(BATCHLAS_ENABLE_SYCL)
-    add_subdirectory(sycl)
-endif()
+add_subdirectory(sycl)
 
 function(batchlas_configure_component target)
     set(options NO_CPU_TARGETS)
@@ -418,27 +416,9 @@ if(BATCHLAS_HAS_HOST_BACKEND)
     )
 endif()
 
-if(BATCHLAS_HAS_CUDA_BACKEND)
-    if(BATCHLAS_CUDA_ARCHITECTURES)
-        set_property(TARGET batchlas_backends_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-    endif()
-endif()
-
 # Everything below needs the CUDA VENDOR component, which only exists when at
 # least one CUDA math library was found.
 if(TARGET batchlas_backends_cuda_obj)
-    if(BATCHLAS_CUDA_ARCHITECTURES)
-        set_property(TARGET batchlas_backends_cuda_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-        set_property(TARGET ${_batchlas_backends_cuda_lib} PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-    endif()
-
-    if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
-        target_compile_options(batchlas_backends_cuda_obj PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:--keep>
-            $<$<COMPILE_LANGUAGE:CUDA>:--keep-dir=${CMAKE_BINARY_DIR}/cuda-intermediates>
-        )
-    endif()
-
     # PRIVATE: PUBLIC exported CUDA::cudart/cublas/cusolver/cusparse into the
     # package interface, which forced find_dependency(CUDAToolkit REQUIRED) on
     # every consumer - including CPU-only teammates who cannot resolve it.

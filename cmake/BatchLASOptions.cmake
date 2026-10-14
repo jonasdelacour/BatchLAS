@@ -2,7 +2,9 @@ include(CMakeDependentOption)
 include(CheckCXXCompilerFlag)
 
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM|Clang")
-    message(WARNING "CMAKE_CXX_COMPILER does not appear to be a SYCL compiler (icpx/clang++). Build may fail.")
+    message(FATAL_ERROR "${CMAKE_CXX_COMPILER} (${CMAKE_CXX_COMPILER_ID}) is not a SYCL compiler. "
+        "Configure a fresh build directory with -DCMAKE_CXX_COMPILER=<dpcpp>/bin/clang++ (or icpx), "
+        "or -DBATCHLAS_SYCL_IMPL=ACPP for AdaptiveCpp (docs/guide/build.md).")
 endif()
 
 # The resolved implementation is BATCHLAS_SYCL_IMPL_RESOLVED plus the 0/1 pair
@@ -93,6 +95,12 @@ if(BATCHLAS_STRIP_RELWITHDEBINFO_G AND CMAKE_CXX_FLAGS_RELWITHDEBINFO MATCHES "(
     message(STATUS "Removed '-g' from RelWithDebInfo flags (BATCHLAS_STRIP_RELWITHDEBINFO_G=ON)")
 endif()
 
+# Installed components find each other ($ORIGIN) and their vendor libraries (link path).
+list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
+if(NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -169,7 +177,13 @@ option(BATCHLAS_ALLOW_UNSAFE_ENV
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
 set(BATCHLAS_AMD_ARCH "amd_gpu_gfx942" CACHE STRING "AMD GPU architecture for ROCm")
-set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA")
+set(BATCHLAS_NVIDIA_ARCH "" CACHE STRING
+    "NVIDIA architecture (sm_XX) to build instead of the detected GPUs; empty = detect")
+# sm_50 was the old default and meant "detect"; an existing cache still holds it.
+if(BATCHLAS_NVIDIA_ARCH STREQUAL "sm_50")
+    set_property(CACHE BATCHLAS_NVIDIA_ARCH PROPERTY VALUE "")
+    set(BATCHLAS_NVIDIA_ARCH "")
+endif()
 set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
     "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
 
@@ -236,7 +250,6 @@ set(BATCHLAS_HAS_HOST_BACKEND FALSE)
 set(BATCHLAS_HAS_CUDA_BACKEND FALSE)
 set(BATCHLAS_HAS_ROCM_BACKEND FALSE)
 set(BATCHLAS_HAS_CPU_TARGET FALSE)
-set(BATCHLAS_ENABLE_SYCL ON)
 
 # ---------------------------------------------------------------------------
 # Vendor math libraries -- the third dispatch axis (WP0 step S1).
@@ -323,5 +336,4 @@ target_compile_definitions(batchlas_build_options INTERFACE
 target_include_directories(batchlas_dep_options INTERFACE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
-    $<BUILD_INTERFACE:/opt/include>
 )

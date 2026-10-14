@@ -187,7 +187,6 @@ function(find_netlib_libs)
 endfunction()
 
 if(BATCHLAS_CUDA_ENABLED)
-    enable_language(CUDA)
     find_nvidia_libs()
 endif()
 
@@ -251,17 +250,14 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     target_include_directories(batchlas_dep_options INTERFACE
         ${BATCHLAS_CUDA_INCLUDE_DIRS}
     )
-
-    set(BATCHLAS_CUDA_ARCHITECTURES "")
-    if(DETECTED_NVIDIA_ARCH MATCHES "nvidia_gpu_sm_([0-9]+)")
-        set(BATCHLAS_CUDA_ARCHITECTURES "${CMAKE_MATCH_1}")
-    elseif(BATCHLAS_NVIDIA_ARCH MATCHES "sm_([0-9]+)")
-        set(BATCHLAS_CUDA_ARCHITECTURES "${CMAKE_MATCH_1}")
-    endif()
 endif()
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_HOST_BACKEND=1)
+    # The headers found next to LAPACKE/CBLAS; src/linalg-impl.hh includes <lapacke.h>.
+    foreach(_batchlas_dir IN LISTS BATCHLAS_NETLIB_INCLUDE_DIRS)
+        target_include_directories(batchlas_dep_options SYSTEM INTERFACE $<BUILD_INTERFACE:${_batchlas_dir}>)
+    endforeach()
 endif()
 if(BATCHLAS_HAS_CUDA_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_CUDA_BACKEND=1)
