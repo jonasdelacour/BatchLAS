@@ -97,8 +97,8 @@ std::size_t workspace(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixF
     }, c);
 }
 
-// n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel; the old router
-// refused both the same way. Thrown before choose() so a pin cannot take them either.
+// n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel, so
+// both throw before choose(): neither Auto nor a pin can take them.
 template <class T>
 void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
                          const char* who) {

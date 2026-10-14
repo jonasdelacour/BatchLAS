@@ -96,7 +96,7 @@ Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     orgqr_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old builder set it: k = min(m, n) reflectors, (Left, NoTrans).
+    // The coverage row's key: k = min(m, n) reflectors, (Left, NoTrans).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
     select::Key trace_key = ops::orgqr::key_of<T>(A);

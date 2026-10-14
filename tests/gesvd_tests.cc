@@ -1116,7 +1116,7 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
 //  * A DIRECT gesvd_cta call must throw. Silently writing m columns into a U
 //    that has k is an overrun.
 //  * A `cta` pin through gesvd() throws (R6: a pin whose can_run is false is an
-//    error, where the old router silently fell back to Auto), and Auto still
+//    error, never a silent fall back to Auto), and Auto still
 //    returns the right answer on a family that can serve it.
 TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     using Scalar = typename TestFixture::Scalar;
@@ -1277,10 +1277,9 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
 // ---------------------------------------------------------------------------
 // Complex GENERAL SVD above n = 32 (follow-up item 5).
 //
-// This used to throw. The old router's blocked predicate returned false for complex
-// and its cta predicate did too outside the Hermitian branch, so complex general
-// input fell through to Vendor, whose only binding is gesvdjBatched at
-// max(m,n) <= 32. Widening gesvdj_cta to 64 is what closes the band.
+// Blocked refuses complex general input and cta refuses it outside the Hermitian
+// branch, so above 32 only the vendor would remain, whose only binding is
+// gesvdjBatched at max(m,n) <= 32. Widening gesvdj_cta to 64 is what closes the band.
 //
 // Note the follow-up list attributes "18 gesvd_tests cases skip for this" to
 // this gap. That is not so: all 18 skips are NETLIB-backend skips of GPU-only

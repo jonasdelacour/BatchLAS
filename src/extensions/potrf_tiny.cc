@@ -6,8 +6,8 @@
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
 // column j of L -- has exactly ONE producer lane, so an indexed shuffle delivers it. The
-// decisive argument is portability: sg_compat.hh's group_barrier(part) expands to NOTHING
-// off NVPTX, so a publish/read pair ordered only by it is silently unordered elsewhere.
+// decisive argument is portability: sg_partition.hh's group_barrier(part) is only a memory fence
+// on masked SPIR-V, so a publish/read pair ordered only by it is not ordered everywhere.
 
 #include "potrf_native.hh"
 #include "tiny_device.hh"

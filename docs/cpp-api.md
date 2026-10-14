@@ -432,7 +432,7 @@ auto Z = Matrix<float>::Zeros(n, n, batch);
 
 Other factories: `RandomTriangular`, `Ones`, `Diagonal`, `Triangular`, `TriDiagToeplitz`. To fill a
 matrix you own, the `fill_*` family on `MatrixView` writes in place and returns an `Event`
-(`fill`, `fill_zeros`, `fill_ones`, `fill_identity`, `fill_diagonal`, `fill_random`, ...; group
+(`fill`, `fill_zeros`, `fill_identity`, `fill_diagonal`, `fill_random`, ...; group
 @ref api_matrix). Pass your own queue: a default-constructed `Queue` builds a fresh one on
 `Device::default_device()`, which targets the wrong device on a multi-GPU box.
 

@@ -21,20 +21,20 @@ def rec(route, ok=True, subroutes=()):
 class Classify(unittest.TestCase):
     def test_pins_that_landed_pass(self):
         self.assertTrue(classify(rec("native:cta"), OPS["potrf"], "batchlas")["ok"])
-        self.assertTrue(classify(rec("vendor:auto"), OPS["potrf"], "vendor")["ok"])
+        self.assertTrue(classify(rec("vendor:vendor"), OPS["potrf"], "vendor")["ok"])
 
     def test_native_pin_that_fell_to_vendor_is_dropped(self):
-        r = classify(rec("vendor:auto"), OPS["potrf"], "batchlas")
+        r = classify(rec("vendor:vendor"), OPS["potrf"], "batchlas")
         self.assertFalse(r["ok"])
-        self.assertIn("vendor:auto", r["reason"])
+        self.assertIn("vendor:vendor", r["reason"])
 
     def test_composed_op_is_judged_by_its_sub_ops(self):
         # Both gesv arms take the outer `blocked` route; only the sub-ops differ.
-        v = classify(rec("native:blocked", subroutes=["getrf=vendor:auto", "getrs=vendor:auto"]),
+        v = classify(rec("native:blocked", subroutes=["getrf=vendor:vendor", "getrs=vendor:vendor"]),
                      OPS["gesv"], "vendor")
         self.assertTrue(v["ok"])
-        self.assertEqual(v["route"], "getrf=vendor:auto+getrs=vendor:auto")
-        n = classify(rec("native:blocked", subroutes=["getrf=vendor:auto", "getrs=native:cta"]),
+        self.assertEqual(v["route"], "getrf=vendor:vendor+getrs=vendor:vendor")
+        n = classify(rec("native:blocked", subroutes=["getrf=vendor:vendor", "getrs=native:cta"]),
                      OPS["gesv"], "batchlas")
         self.assertFalse(n["ok"])
 
@@ -48,11 +48,11 @@ class Coverage(unittest.TestCase):
             with open(os.path.join(d, "cov.123"), "w") as fh:
                 fh.write(HDR)
                 fh.write("reached,syev,float,CUDA,1,64,64,64,1024,native,blocked,6\n")
-                fh.write("reached,gemm,float,AUTO,1,64,64,64,1024,vendor,auto,25\n")
+                fh.write("reached,gemm,float,AUTO,1,64,64,64,1024,vendor,vendor,25\n")
                 fh.write("linked,gemm,float,CUDA,1,0,0,0,0,native,cta,0\n")  # linked is not reached
             c = parse_coverage(os.path.join(d, "cov"), "syev")
         self.assertEqual(c["route"], "native:blocked")
-        self.assertEqual(c["subroutes"], ["gemm=vendor:auto"])
+        self.assertEqual(c["subroutes"], ["gemm=vendor:vendor"])
         self.assertFalse(c["vendor_free"])
 
     def test_no_rows_is_unknown_not_native(self):

@@ -24,7 +24,8 @@
 # vs 8), red on DPC++ at 6b0907ea too and in neither ledger.
 
 # --- shared with DPC++ (tests/known-failures.txt) -----------------------------
-# docs/design/known-defects.md entry 3: lanczos reads column 0 of a two-column multiply.
+# docs/design/known-defects.md, "lanczos returns a spectrum": every item's spectrum comes out
+# ~3x too wide (cause open; NOT entry 3, which is 2x work with a right answer).
 lanczos_tests::LanczosTestBase.LanczosTest
 lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
 

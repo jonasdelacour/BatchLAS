@@ -58,7 +58,7 @@ that sees all four GPUs runs several times slower than one that sees one (cause 
 
 Component labels, one per binary (see `CMakeLists.txt`): `util`, `blas`, `ortho`, `tridiag`,
 `eig`, `sparse`. Run `ctest -L <component>` for the subsystem you touched. After changing shared
-low-level code (`Queue`, `Matrix`/`MatrixView`, the memory pool, `sg_compat`/`sg_partition`,
+low-level code (`Queue`, `Matrix`/`MatrixView`, the memory pool, `sg_partition`,
 anything under `include/batchlas/util`) run the full suite.
 
 The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `stedc_tests`,
@@ -153,9 +153,9 @@ A launch that finds no device image for its kernel ("No kernel named ...") fails
 
 ## Note on the baseline
 
-The suite is not green on `main`. `tests/known-failures.txt` lists accepted failures by test name
-and pinned type parameter (two `lanczos_tests` cases and `steqr_tests`'
-`StressExtremeMagnitudesN32` for two types). CI diffs every run against that ledger; see
+The suite is not green on `main`. `tests/known-failures.txt` lists accepted failures by test name,
+and for typed tests by pinned type parameter; each block names its cause. CI diffs every run
+against that ledger; see
 [the CI page](../docs/ci.md#the-known-failures-workflow).
 
 - `syev_cta_tests` is flaky under `ctest -j2`/`-j4`; `sytrd_blocked_tests` also flakes on

@@ -36,7 +36,7 @@ inline bool may_skip_missing_kernel(std::string_view msg) {
     return missing && allow && std::string_view(allow) == "1";
 }
 
-// A *TranscribedTable test holds untimed sm_89 rows to the old router and skips timed ones. Once
+// A *TranscribedTable test holds untimed sm_89 rows to the transcribed order and skips timed ones. Once
 // a retune times every consulted row it must skip loudly rather than pass on zero rows.
 class TranscribedRowsHeld {
 public:

@@ -35,10 +35,10 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 // 2e-5 cfloat, 1e-10 double, 2e-10 cdouble), which the relative bound exceeds at long reductions in float.
 // The Slack keeps it.
 template <typename T>
-batchlas::verify::Slack old_relative_tolerance(int k) {
-    constexpr double old_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
+batchlas::verify::Slack vendor_comparison_slack(int k) {
+    constexpr double rel_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
                                                                       : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
-    return {std::min(1.0, old_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+    return {std::min(1.0, rel_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
             "the old relative tolerance, kept"};
 }
 
@@ -215,7 +215,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, this->cols,
                         this->gemv_error(A_view, x_vec, y0_vec, y_vec, alpha, beta, Transpose::NoTrans),
-                        old_relative_tolerance<ScalarType>(this->cols));
+                        vendor_comparison_slack<ScalarType>(this->cols));
 }
 
 
@@ -363,7 +363,7 @@ protected:
         EXPECT_VERIFY_SLACK(ScalarType, batchlas::verify::Check::blas, red,
                             MV::gemv_backward_error(*(this->ctx), A_ref_view, c.transA, x_vec, y0_vec, y_vec, MV::up(c.alpha),
                                                     MV::up(c.beta), y_vec.all_items()),
-                            old_relative_tolerance<ScalarType>(red));
+                            vendor_comparison_slack<ScalarType>(red));
 
         for (int b = 0; b < c.batch; ++b) {
             // The gaps between y's live elements must be untouched: a kernel
@@ -1061,9 +1061,4 @@ TYPED_TEST(GemvVendorRefusalTest, ComplexDoubleVendorRunsOnCuda) {
                       MV::gemv_backward_error(*this->ctx, A, Transpose::NoTrans, x, y, y, MV::up(T(1)), MV::up(T(0)),
                                               y.all_items()));
     }
-}
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
 }

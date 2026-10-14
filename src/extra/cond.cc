@@ -45,13 +45,13 @@ namespace batchlas
                         auto eig = pool.allocate<Real>(ctx, static_cast<size_t>(batch_size) * n);
                         auto eig_span = Span<Real>(eig.data(), eig.size());
 
-                        const size_t ws_bytes = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
+                        const size_t ws_bytes = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
                                                                                        A_copy,
                                                                                        eig_span,
                                                                                        JobType::NoEigenVectors,
                                                                                        Uplo::Lower);
                         auto syev_ws = pool.allocate<std::byte>(ctx, ws_bytes);
-                        Event e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx,
+                        Event e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx,
                                                              A_copy,
                                                              eig_span,
                                                              JobType::NoEigenVectors,
@@ -130,7 +130,7 @@ namespace batchlas
             } else {
                 using Real = typename base_type<T>::type;
                 const size_t eig_size = static_cast<size_t>(A.rows()) * A.batch_size();
-                const size_t syev_ws = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
+                const size_t syev_ws = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
                                                                               A,
                                                                               Span<Real>(nullptr, eig_size),
                                                                               JobType::NoEigenVectors,

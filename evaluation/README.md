@@ -4,8 +4,9 @@ Lightweight evaluation tools: a CUDA FP32 perf-regression runner and an STEQR ac
 
 ## Perf regression (CUDA FP32)
 
-`evaluation/perf_eval.py` runs `stedc_benchmark` (recursive and `stedc_flat` via the `flat` arg)
-and `steqr_benchmark`, records a JSON baseline, and compares later runs against it.
+`evaluation/perf_eval.py` runs the cases in `evaluation/perf_cases.json` (`stedc_benchmark` with
+the merge variant as its fourth argument, `StedcMergeVariant` 0 = `Baseline` and 1 = `Fused`, plus
+`steqr_benchmark` and the CTA benchmarks), records a JSON baseline, and compares later runs against it.
 
 **Prerequisites:** the benchmarks are built (`build/benchmarks/stedc_benchmark` and
 `build/benchmarks/steqr_benchmark` exist) and the CUDA backend is enabled.

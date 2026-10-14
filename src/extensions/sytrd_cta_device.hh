@@ -5,55 +5,13 @@
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include "../math-helpers.hh"
 
 #include <cstdint>
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 
 namespace batchlas {
-
-    template <typename U>
-    inline U conj_if_complex(const U& x) {
-        if constexpr (internal::is_complex<U>::value) {
-            return U(x.real(), -x.imag());
-        } else {
-            return x;
-        }
-    }
-
-    template <typename U>
-    inline typename base_type<U>::type abs2_if_complex(const U& x) {
-        using Real = typename base_type<U>::type;
-        if constexpr (internal::is_complex<U>::value) {
-            const Real re = x.real();
-            const Real im = x.imag();
-            return re * re + im * im;
-        } else {
-            return x * x;
-        }
-    }
-
-    // XOR-butterfly reductions: the group size must be a power of two.
-    template <typename T, typename Group>
-    inline T group_reduce_sum(const Group& g, T v) {
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
-    }
-
-    template <typename T, typename Group>
-    inline T group_reduce_max(const Group& g, T v) {
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            const T other = permute_group_by_xor(g, v, offset);
-            v = sycl::fmax(v, other);
-        }
-        return v;
-    }
 
     // Shuffles, not reduce_over_group: DPC++'s CUDA path cannot reduce floating point over a
     // chunked partition. The result is replicated in every lane.
@@ -91,7 +49,7 @@ namespace batchlas {
                          bool x_active) {
         using Real = typename base_type<T>::type;
 
-        const Real xsq = x_active ? abs2_if_complex(x) : Real(0);
+        const Real xsq = x_active ? internal::abs2_if_complex(x) : Real(0);
         const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
         // sumsq is replicated, so every lane computes the scalars instead of serialising on a leader.
         const Real xnorm = sycl::sqrt(sumsq);
@@ -161,11 +119,11 @@ namespace batchlas {
             // Both triangles are written: the rank-2 update below reads the full block.
             if (x_active) {
                 A_local[lane + col * LDA] = x;
-                A_local[col + lane * LDA] = conj_if_complex(x);
+                A_local[col + lane * LDA] = batchlas::device::detail::conj(x);
             }
             if (is_alpha) {
                 A_local[lane + col * LDA] = alpha;
-                A_local[col + lane * LDA] = conj_if_complex(alpha);
+                A_local[col + lane * LDA] = batchlas::device::detail::conj(alpha);
                 tau_lane = taui;
             }
 
@@ -196,7 +154,7 @@ namespace batchlas {
                 W_local[lane] = y;
                 group_barrier(part);
 
-                const T dot_lane = (lane < m) ? (conj_if_complex(V_local[lane]) * W_local[lane]) : T(0);
+                const T dot_lane = (lane < m) ? (batchlas::device::detail::conj(V_local[lane]) * W_local[lane]) : T(0);
                 const T dot = group_reduce_sum_select_from_group(part, dot_lane);
                 const T alpha2 = T(-0.5) * taui * dot;
 
@@ -212,19 +170,19 @@ namespace batchlas {
                         const T v_c = V_local[c];
                         const T w_c = W_local[c];
                         const int32_t idx = lane + c * LDA;
-                        A_local[idx] = A_local[idx] - (v_r * conj_if_complex(w_c) + w_r * conj_if_complex(v_c));
+                        A_local[idx] = A_local[idx] - (v_r * batchlas::device::detail::conj(w_c) + w_r * batchlas::device::detail::conj(v_c));
                     }
                 }
                 group_barrier(part);
 
                 if (is_alpha) {
                     A_local[alpha_row + col * LDA] = alpha;
-                    A_local[col + alpha_row * LDA] = conj_if_complex(alpha);
+                    A_local[col + alpha_row * LDA] = batchlas::device::detail::conj(alpha);
                 }
                 group_barrier(part);
             } else {
                 if (is_alpha) {
-                    A_local[col + alpha_row * LDA] = conj_if_complex(alpha);
+                    A_local[col + alpha_row * LDA] = batchlas::device::detail::conj(alpha);
                 }
             }
 

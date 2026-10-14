@@ -454,10 +454,9 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
 // Routing. Two things are checked here, both behavioural:
 //  1. Auto at n = 12 reaches gesvdj_cta (jacobi leads that table row). "It ran"
 //     is not evidence that the right thing ran -- the accuracy is.
-//  2. Complex GENERAL input through the public gesvd() no longer throws. Before
-//     this kernel, the old router's cta and blocked predicates both returned
-//     false for complex outside the Hermitian branch and dispatch fell through
-//     to Vendor, which throws.
+//  2. Complex GENERAL input through the public gesvd() does not throw: the
+//     cta and blocked families refuse complex outside the Hermitian branch,
+//     so without this kernel only the vendor, which throws, would remain.
 TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;

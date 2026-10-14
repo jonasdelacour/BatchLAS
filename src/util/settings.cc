@@ -111,7 +111,6 @@ void load_selection(SelectionSettings& s) {
     set_if_present(s.syev_two_stage_chase, "BATCHLAS_SYEV_TWO_STAGE_CHASE");
     set_if_present(s.syevx_algorithm, "BATCHLAS_SYEVX_ALGORITHM");
     set_if_present(s.syevx_preconditioner, "BATCHLAS_SYEVX_PRECONDITIONER");
-    set_if_present(s.syevx_bounds_legacy, "BATCHLAS_SYEVX_BOUNDS_LEGACY");
     set_if_present(s.syevx_filter_degree_auto, "BATCHLAS_SYEVX_FILTER_DEGREE_AUTO");
     set_if_present(s.syevx_instr_host, "BATCHLAS_SYEVX_INSTR_HOST");
     set_if_present(s.syevx_projected_vendor, "BATCHLAS_SYEVX_PROJECTED_VENDOR");

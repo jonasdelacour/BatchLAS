@@ -22,7 +22,7 @@ which validates arguments, chooses a kernel and launches it
 
 - One directory per op holds `choice.hh` (the vocabulary) and `<op>.cc`. The op file defines the
   public `<op>` and `<op>_buffer_size` for every backend and is listed in `src/CMakeLists.txt`
-  (`target_sources(batchlas_dispatch_obj PRIVATE ops/<op>/<op>.cc)`). `batchlas_dispatch_obj` is
+  (`target_sources(batchlas_selection_obj PRIVATE ops/<op>/<op>.cc)`). `batchlas_selection_obj` is
   built whatever vendor libraries exist, so the public symbol exists in every build with the device.
 - The vendor implementation is a separate symbol, `backend::<op>_vendor<B, T>` (plus
   `backend::<op>_vendor_buffer_size` when it needs scratch). It is declared in the op's public
@@ -113,9 +113,7 @@ Every step is required; each has a check that fails if skipped.
 - The sizing function is `<op>_buffer_size` and returns bytes. It takes the same arguments as the run
   path up to the workspace and branches identically. Size it with `BumpAllocator::measuring()` +
   `required_bytes()`, never by re-deriving sizes: the allocator checks the alignment-rounded size
-  but advances by the raw size, so an exact simulation is too small. The `*_workspace` /
-  `*_workspace_size` spellings survive only as `[[deprecated]]` aliases (`stedc_workspace_size`,
-  `ritz_values_workspace`).
+  but advances by the raw size, so an exact simulation is too small.
 - Validation of shapes and flags goes in the checked overloads in `include/batchlas/blas/options.hh`
   or a `<op>_validate_params` helper beside the declaration, and is tested through the ordinary
   spelling.

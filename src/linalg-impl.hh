@@ -49,12 +49,6 @@ namespace batchlas{
     template <typename T, BackendLibrary B>
     struct BackendScalar;
 
-    template <typename T, ComputePrecision P, Backend B>
-    struct BlasComputeType;
-
-    template <Transpose T, Backend B>
-    struct BackendTranspose;
-
     template <Backend B>
     struct LinalgHandle;
 
@@ -557,20 +551,6 @@ namespace batchlas{
                 return std::forward<T>(arg);
             }
         }
-
-        template <typename F, typename Tuple, std::size_t... I>
-        auto apply_tuple_impl(F&& f, Tuple&& t, std::index_sequence<I...>) {
-            return f(std::get<I>(std::forward<Tuple>(t))...);
-        }
-
-        template <typename F, typename Tuple>
-        auto apply_tuple(F&& f, Tuple&& t) {
-            return apply_tuple_impl(
-                std::forward<F>(f),
-                std::forward<Tuple>(t),
-                std::make_index_sequence<std::tuple_size_v<std::remove_reference_t<Tuple>>>{}
-            );
-        }
     }
 
     // Combined enum and pointer conversion
@@ -830,22 +810,6 @@ namespace batchlas{
         template <>
         struct BackendScalar<std::complex<double>, BackendLibrary::ROCSOLVER> {
             static constexpr rocblas_datatype type = rocblas_datatype_f64_c;
-        };
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-        template <typename T>
-        struct BlasComputeType<T, ComputePrecision::Default, Backend::ROCM> {
-            static constexpr rocblas_datatype type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? rocblas_datatype_f32_r : rocblas_datatype_f64_r;
-        };
-#endif
-
-// Keyed on the LIBRARIES: these types do not exist under BATCHLAS_HAS_CUDA_BACKEND alone.
-#if BATCHLAS_HAS_CUBLAS
-
-        template <typename T>
-        struct BlasComputeType<T, ComputePrecision::Default, Backend::CUDA> {
-            static constexpr cublasComputeType_t type = (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_64F;
         };
 #endif
 

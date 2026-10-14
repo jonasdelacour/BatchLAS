@@ -447,7 +447,7 @@ eigenvectors, batch 256: n = 33 150.17 against 1.7715 µs (**85× slower**); n =
 slower**). At batch 2048 an n = 33..128 sweep finished no iteration in ten minutes while holding 24 GB. A
 CTA-resident solve saves about 15 launches but runs an unblocked level-2 algorithm in one work-group per matrix
 against a blocked level-3 pipeline. Reverted (`14bad498`; it survives on `worktree-wf_3b4af334-426-9`). The branch
-also rewrote the live n ≤ 32 CTA kernels and the sub-group partition in `sg_compat.hh`, never measured; if wanted
+also rewrote the live n ≤ 32 CTA kernels and the sub-group partition (`src/extensions/sg_partition/`), never measured; if wanted
 it returns as its own change with n ≤ 32 numbers.
 
 > **Note:** benchmark through the forced provider. Under flat selection the cap is `kSmallMaxN = 32` in the small
@@ -603,7 +603,7 @@ also uses a literal the tuning parameter does not reach (see [stedc: open debts]
 |---|---|
 | small-n bake-off (phase A), both precisions (973 measurements) | `benchmarks/results/syev_retune_phaseA.jsonl` (Git LFS) |
 | syev-context block-size sweep (phase B), float | `benchmarks/results/syev_retune_phaseB_float.jsonl` (Git LFS) |
-| driver for both, with its resource caps | `benchmarks/syev_bakeoff_driver.py` |
+| driver for both, with its resource caps | a one-off driver, removed |
 | builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `build/presets/cuda` |
 | commits | `80737301` plan, `afc8ae35` baselines, `c42e5ce9`, `8c24626f` WP4, `405b4120` WP3, `f28a3fcd` WP1, `af8768b0` / `be327f5b` results (PR 68); `73eb5510` per-type routing (PR 65); `924b3a59` constant retune |
 

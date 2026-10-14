@@ -259,8 +259,3 @@ TYPED_TEST(StebzTest, HandlesRepeatedAndZeroOffDiagonals) {
 }
 
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

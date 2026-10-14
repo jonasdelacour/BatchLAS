@@ -496,8 +496,8 @@ TYPED_TEST(GemvCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases (absorbs RouteGemv.CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32's
-// NoTrans clause). An empty batch returns before selection (WP3 batch policy): no pin sees it.
+// The named can_run-false cases, cta's NoTrans clause included. An empty batch returns before
+// selection (WP3 batch policy): no pin sees it.
 TYPED_TEST(GemvCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -520,7 +520,7 @@ TYPED_TEST(GemvCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// RouteGemv.CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32's device clauses, ported: no test
+// Cta's device clauses: no test
 // device lacks sub-group 32 and the host queue flips is_gpu and has_sg32 together, so each clause
 // is checked alone on synthetic devices.
 TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
@@ -546,7 +546,7 @@ TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
     }
 }
 
-// RouteGemv.HeterogeneousBatchIsRefusedByBothNativeTiers, ported: a heterogeneous A has no
+// A heterogeneous A has no
 // native family, and the vendor runs each item at the top-level (m, n). Auto finds no runnable
 // kernel; vendor-free, NoRouteError.
 TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
@@ -630,7 +630,7 @@ TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
 }
 
 // §5.3: a ScopedPin wins over BATCHLAS_GEMV_ROUTE, and nested pins restore the outer one. An env
-// `cta` on NoTrans throws (R6); the old router fell through silently to the vendor.
+// `cta` on NoTrans throws (R6), never a silent fall through to the vendor.
 TYPED_TEST(GemvCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
     const ScopedEnvVar env("BATCHLAS_GEMV_ROUTE", "cta");
@@ -718,7 +718,7 @@ TYPED_TEST(GemvCandidates, AutoReadsEveryKeyField) {
     }
 }
 
-// RouteGemv.OutLenAndRedLenSwapWithTransA, ported: the trace key's out and red are y's and x's
+// The trace key's out and red are y's and x's
 // lengths, which swap with trans; a stored 64x2048 A is out=64 under N and out=2048 under T/C.
 TYPED_TEST(GemvCandidates, TraceKeyOutRedFollowTrans) {
     using T = typename TestFixture::T;
@@ -828,7 +828,7 @@ TYPED_TEST(GemvCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteGemv.DirectHasNoGpuGateAndThatIsTheWholeWorkPackage, ported: on a host queue there is no
+// On a host queue there is no
 // table, so the last resort decides: the vendor (netlib) where compiled, else direct; cta's
 // sub-group body cannot run there, and a direct pin runs and is correct.
 template <typename Config>
@@ -870,7 +870,7 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
 // cta | vendor | direct in the complex<double> window, vendor | cta | direct for other transposed
 // cells, vendor | direct under N; on-grid and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance; AutoReadsTheShippedTable its use).
-TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
+TEST(GemvTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* trans; int out, red, batch; const char* ranked; };
     const Row rows[] = {
@@ -889,7 +889,7 @@ TEST(GemvTranscribedTable, RowsHoldTheOldPreference) {
             const select::Key key{{"trans", r.trans}, {"out", r.out}, {"red", r.red}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;

@@ -5,7 +5,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -139,7 +139,6 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const int32_t nb = static_cast<int32_t>(batch_size);
         const bool is_upper = upper;
         const int32_t max_sweeps = std::max<int32_t>(int32_t(1), static_cast<int32_t>(params.max_sweeps));
-        const Real zero_threshold = static_cast<Real>(std::abs(params.zero_threshold));
         const SteqrShiftStrategy shift_strategy = params.cta_shift_strategy;
         const SteqrUpdateScheme update_scheme = params.cta_update_scheme;
         const bool do_sort = params.sort;
@@ -187,9 +186,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
                             // Hermitian diagonals are real: drop the caller's imaginary round-off.
                             v = T(real_part_f(A_prob(lane, c)));
                         } else if (is_upper) {
-                            v = (lane < c) ? A_prob(lane, c) : conj_if_complex(A_prob(c, lane));
+                            v = (lane < c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         } else {
-                            v = (lane > c) ? A_prob(lane, c) : conj_if_complex(A_prob(c, lane));
+                            v = (lane > c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         }
                     }
                     A_local[base_a + lane + c * LDA] = v;
@@ -217,7 +216,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         const T e_i = select_from_group(part, e_c, static_cast<uint32_t>(i));
                         const Real abs_i = select_from_group(part, offdiag, static_cast<uint32_t>(i));
                         if (lane > i && abs_i != Real(0)) {
-                            phase = phase * (conj_if_complex(e_i) / abs_i);
+                            phase = phase * (batchlas::device::detail::conj(e_i) / abs_i);
                         }
                     }
                 } else {
@@ -244,7 +243,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // ---- Stage 2: eigenvalues only, no accumulator. ----
                     QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     // A STORE, not a raise: exactly one of the three arms below runs per
                     // problem, so this kernel is the item's single writer and needs no
@@ -337,7 +336,7 @@ BATCHLAS_UNROLL_FULL
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
                     QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
@@ -362,7 +361,7 @@ BATCHLAS_UNROLL_FULL
                     group_barrier(part);
 
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
@@ -417,7 +416,7 @@ BATCHLAS_UNROLL_FULL
                             T dot = T(0);
 BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += conj_if_complex(V_local[base_v + r]) * C_col[r];
+                                dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
                             }
                             const T gamma = tau_ii * dot;
 BATCHLAS_UNROLL_FULL

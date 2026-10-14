@@ -66,15 +66,6 @@ inline bool use_grid_latrd(int64_t n) {
 // Helpers used by the legacy kernel
 // ---------------------------------------------------------------------------
 
-template <typename U>
-inline U conj_if_needed(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
 // acc += a * b, and acc += conj(a) * b, in explicit real arithmetic: std::complex *
 // carries an Annex G isnan branch plus __mulsc3 call that stops the symv keeping
 // loads in flight. Product first, then add: the same association as the `acc += a * b`
@@ -113,54 +104,6 @@ inline void mac_conj(U& acc, const U& a, const U& b) {
 // this kernel made the panel 1.16x slower (register pressure). Do not "finish the
 // job" without re-measuring.
 // evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-
-template <typename T>
-inline typename base_type<T>::type abs2_if_complex(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real re = x.real();
-        const Real im = x.imag();
-        return re * re + im * im;
-    } else {
-        return x * x;
-    }
-}
-
-template <typename Real>
-inline Real sign_nonzero_real(Real x) {
-    return (sycl::signbit(x) ? Real(-1) : Real(1));
-}
-
-template <typename T>
-inline T sign_nonzero(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real a = sycl::hypot(x.real(), x.imag());
-        if (a == Real(0)) return T(1);
-        return x / a;
-    } else {
-        return T(sign_nonzero_real(static_cast<Real>(x)));
-    }
-}
-
-template <typename T>
-inline T reduce_sum_group(const sycl::group<1>& g, T x) {
-    if constexpr (internal::is_complex<T>::value) {
-        using R = typename T::value_type;
-        const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
-        return T(re, im);
-    } else {
-        return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
-    }
-}
-
-template <typename T>
-inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
-                                                        typename base_type<T>::type x) {
-    using R = typename base_type<T>::type;
-    return batchlas::portable::reduce_over_group(g, x, sycl::plus<R>());
-}
 
 // ---------------------------------------------------------------------------
 // Helper used by the device kernel
@@ -326,7 +269,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
+                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -345,7 +288,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             }
 
                             const T wrp = Wb(r, p);
-                            val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
+                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -356,9 +299,9 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     const int x0 = i + 2;
                     Real sumsq = Real(0);
                     for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += abs2_if_complex(Ab(r, i));
+                        sumsq += internal::abs2_if_complex(Ab(r, i));
                     }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
+                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
 
                     T alpha = T(0);
                     if (lid == 0 && i + 1 < n) {
@@ -391,7 +334,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_i = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -457,13 +400,13 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         for (int c = i + 1 + lid; c < n; c += wg) {
                             const T vc = v_local[c];
 
-                            gamma_partial += conj_if_needed(Wb(c, pc)) * vc;
+                            gamma_partial += batchlas::device::detail::conj(Wb(c, pc)) * vc;
 
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += conj_if_needed(vcp) * vc;
+                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
                         }
-                        const T gamma = reduce_sum_group(g, gamma_partial);
-                        const T delta = reduce_sum_group(g, delta_partial);
+                        const T gamma = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
+                        const T delta = batchlas::device::detail::reduce_sum_group(g, delta_partial);
 
                         for (int r = i + 1 + lid; r < n; r += wg) {
                             const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
@@ -479,9 +422,9 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     T dot_partial = T(0);
                     for (int r = i + 1 + lid; r < n; r += wg) {
                         const T vr = v_local[r];
-                        dot_partial += conj_if_needed(vr) * wcol_local[r];
+                        dot_partial += batchlas::device::detail::conj(vr) * wcol_local[r];
                     }
-                    const T dot = reduce_sum_group(g, dot_partial);
+                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
 
                     const T alpha2 = T(-0.5) * tau_i * dot;
                     for (int r = i + 1 + lid; r < n; r += wg) {
@@ -511,7 +454,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
@@ -640,7 +583,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         for (int p = 0; p < i; ++p) {
                             const T vip = vip_local[p];
                             const T wip = wip_local[p];
-                            aii -= vip * conj_if_needed(wip) + wip * conj_if_needed(vip);
+                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
                         }
                         Ab(i, i) = aii;
                     }
@@ -658,7 +601,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                 vrp = Ab(r, p);
                             }
                             const T wrp = Wb(r, p);
-                            val -= vrp * conj_if_needed(wip) + wrp * conj_if_needed(vip);
+                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
                         }
                         Ab(r, i) = val;
                     }
@@ -671,9 +614,9 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     // ---- sumsq partial (only over rows this group just wrote) --
                     Real sumsq = Real(0);
                     for (int r = slo + lid; r < rhi; r += wg) {
-                        sumsq += abs2_if_complex(Ab(r, i));
+                        sumsq += internal::abs2_if_complex(Ab(r, i));
                     }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
+                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
                     if (lid == 0) red_sumsq[gg] = pack_real<T>(sumsq);
 
                     grid_barrier(it, bar, G);   // barrier 1
@@ -713,7 +656,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_i = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -761,12 +704,12 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         T delta_partial = T(0);
                         for (int c = rlo + lid; c < rhi; c += wg) {
                             const T vc = v_local[c];
-                            gamma_partial += conj_if_needed(Wb(c, p)) * vc;
+                            gamma_partial += batchlas::device::detail::conj(Wb(c, p)) * vc;
                             const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += conj_if_needed(vcp) * vc;
+                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
                         }
-                        gamma_partial = reduce_sum_group(g, gamma_partial);
-                        delta_partial = reduce_sum_group(g, delta_partial);
+                        gamma_partial = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
+                        delta_partial = batchlas::device::detail::reduce_sum_group(g, delta_partial);
                         if (lid == 0) {
                             red_gamma[static_cast<size_t>(gg) * ib + p] = gamma_partial;
                             red_delta[static_cast<size_t>(gg) * ib + p] = delta_partial;
@@ -803,9 +746,9 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 
                     T dot_partial = T(0);
                     for (int r = rlo + lid; r < rhi; r += wg) {
-                        dot_partial += conj_if_needed(v_local[r]) * wcol_local[r];
+                        dot_partial += batchlas::device::detail::conj(v_local[r]) * wcol_local[r];
                     }
-                    dot_partial = reduce_sum_group(g, dot_partial);
+                    dot_partial = batchlas::device::detail::reduce_sum_group(g, dot_partial);
                     if (lid == 0) red_dot[gg] = dot_partial;
 
                     grid_barrier(it, bar, G);   // barrier 4
@@ -839,7 +782,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                             const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
                             const T wrk = Wb(rr, k);
                             const T wck = Wb(cc, k);
-                            acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
                         }
 
                         T a_rc = Ab(rr, cc) - acc;

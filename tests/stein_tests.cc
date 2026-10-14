@@ -192,7 +192,6 @@ struct CountsFixture {
 } // namespace
 
 // Per-item counts: item 0 wants all 8 vectors, item 1 wants only 3.
-//
 // Item 1's slots 3..7 are deliberately poisoned with values a hair above its last
 // real eigenvalue -- close enough that the phase-2 gap test would fold them into
 // one bogus cluster anchored on that real eigenvalue, which is exactly the shape a
@@ -389,8 +388,3 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
 }
 
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

@@ -37,7 +37,7 @@ preceded flat selection (untimed; provenance in `tuned/README.md`); `tuned/spmm.
 | `transA=T`, either `transB` | `vendor`, then `direct` | `vendor`, then `direct` |
 
 The ranking is identical at all 125 `(m, nrhs, batch)` cells of each block (`m` 1..65536, `nrhs` 1..64,
-`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheOldPreference` (`tests/spmm_candidates_tests.cc:845`) pins it.
+`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` (`tests/spmm_candidates_tests.cc:845`) pins it.
 
 The tables have no batch, extent, `is_gpu` or `nnz` term. Each absence is a measured decision: the ranking is
 constant along that axis.
@@ -170,7 +170,7 @@ small-batch sweep (`run_smallbatch.sh`; 1,024 timed rows, 210 admitted) covers b
 The one row that costs the caller time: `complex<float>`, m=4096, 16 nnz/row, nrhs=50, scattered, `transB=NoTrans`,
 batch 4, at 1.078 (+13.46 µs per call). It is non-monotonic on its own cell, so it is a launch artefact rather than a
 structural loss. Inside the gate, this grid contains no measured non-winner at any batch rung. So no batch floor is
-justified. `SpmmTranscribedTable.RowsHoldTheOldPreference` checks the ranking at batch 1, 300 and 100000.
+justified. `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` checks the ranking at batch 1, 300 and 100000.
 
 Below batch ~64 the timed region is launch latency plus the vendor's per-call host chain. The small-batch ratios show
 no harm and nothing more. The headline comes from the saturated grid alone.

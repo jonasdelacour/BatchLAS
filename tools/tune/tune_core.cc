@@ -665,11 +665,6 @@ std::optional<std::vector<OldChoice>> parse_old_csv(std::string_view text, const
     return out;
 }
 
-std::pair<std::string, std::string> split_origin(const std::string& spelling) {
-    for (const char* o : {"native:", "vendor:"})
-        if (spelling.rfind(o, 0) == 0) return {std::string(o, std::strlen(o) - 1), spelling.substr(std::strlen(o))};
-    return {"native", spelling};
-}
 
 void gate_count(GateCounts& c, const std::string& v) {
     (v == "same" ? c.same : v == "pass" ? c.pass : v == "FAIL" ? c.fail : v == "BAD_ROW" ? c.bad : v == "cap" ? c.cap

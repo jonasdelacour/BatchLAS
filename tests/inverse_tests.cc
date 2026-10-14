@@ -25,8 +25,3 @@ TEST(InverseTest, InverseIdentityCheck) {
                   MV::solve_residual(ctx, A0.view(), Ainverse.view(), MV(nullptr, 0, 0, 1), A0.view().all_items()));
 }
 #endif // BATCHLAS_HAS_GPU_BACKEND
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

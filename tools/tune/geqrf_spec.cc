@@ -144,7 +144,6 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_compat.hh",
             "src/extensions/sg_partition/backend_amdgcn.hh",
             "src/extensions/sg_partition/backend_amdgcn_core.hh",
             "src/extensions/sg_partition/backend_generic.hh",
@@ -177,9 +176,6 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }
-    std::string normalize_route(const std::string& origin, const std::string& algo) const override {
-        return tune::normalize_route<ops::geqrf::GeqrfChoice>(origin, algo);
-    }
     std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int n = int(key_int(req.key, "n"));

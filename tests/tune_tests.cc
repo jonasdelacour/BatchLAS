@@ -317,7 +317,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "27f6fa4b"}, {"potrf", "70b2da1c"}, {"posv", "5f369a91"}, {"trsm", "cf08f292"}};
+        {"gemm", "8678bfc5"}, {"potrf", "6ee22c62"}, {"posv", "5a7eed28"}, {"trsm", "cf08f292"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -336,7 +336,7 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" || p == "src/extensions/sg_compat.hh" ||
+        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
                p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
@@ -627,9 +627,6 @@ TEST(TuneOldCsv, ReadsEveryRowOfAGateCsvAndRejectsWhatItCannotRead) {
     EXPECT_FALSE(parse_old_csv(head + "float,L,44,512,,tiny,,,,,same\n", {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(head, {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(text, {"uplo", "n", "nrhs", "batch"}, {}, &err));
-    EXPECT_EQ(split_origin("native:lpanel"), (std::pair<std::string, std::string>{"native", "lpanel"}));
-    EXPECT_EQ(split_origin("vendor:auto"), (std::pair<std::string, std::string>{"vendor", "auto"}));
-    EXPECT_EQ(split_origin("lpanel:panel=8"), (std::pair<std::string, std::string>{"native", "lpanel:panel=8"}));
 }
 
 TEST(TuneGate, ExitCodeCannotPassAnIncompleteGate) {
@@ -2404,7 +2401,6 @@ public:
     double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
     std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
     std::string spec_file() const override { return "fake_spec.cc"; }
-    std::string normalize_route(const std::string&, const std::string& algo) const override { return algo; }
     std::vector<ArmOutcome> run_cell(const CellRequest&) const override { return {}; }
 };
 

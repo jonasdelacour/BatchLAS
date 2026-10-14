@@ -442,8 +442,8 @@ TYPED_TEST(GesvCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// A heterogeneous A or B is refused before choose(), under Auto and under every pin, with the
-// old router's internal_error. The tiny driver refuses it as well.
+// A heterogeneous A or B is refused before choose(), under Auto and under every pin, with
+// internal_error. The tiny driver refuses it as well.
 TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     using T = typename TestFixture::T;
     using R = RealOf<T>;
@@ -756,7 +756,7 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
 // old window (float n <= 32, cfloat n <= 16, none for double/cdouble) as the first entry, then
 // blocked. Off-grid probes (25, 30, 36, 3000) included. sm_120 is deep-measured since 2026-10-09.
-TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
+TEST(GesvTranscribedTable, RowsHoldTheTranscribedWindowOnSm89) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; int n, nrhs; const char* first; std::size_t len; };
     const Row rows[] = {
@@ -773,7 +773,7 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             ASSERT_EQ(t.device, dev) << r.dtype;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"nrhs", r.nrhs}});
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(r.n);
             ASSERT_EQ(row->ranked.size(), r.len) << what;

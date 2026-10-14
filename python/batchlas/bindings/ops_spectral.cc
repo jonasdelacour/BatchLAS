@@ -903,7 +903,6 @@ void init_spectral_ops(py::module_& module) {
         const auto device_name = optional_string_from_obj(device_name_obj);
         // Only device capabilities are queried here, so the backend is irrelevant.
         Queue& queue = acquire_queue(device_name, Backend::AUTO);
-        namespace dispatch = batchlas::blas::dispatch;
         return visit_dense(matrix, [&](auto tag, const auto& typed_matrix) {
             using scalar_type = typename decltype(tag)::type;
             const auto view = typed_matrix.view();
@@ -914,9 +913,9 @@ void init_spectral_ops(py::module_& module) {
                 static_cast<int>(queue.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
             // These ask syev's own can_run (src/ops/syev/syev.cc), so this
             // introspection cannot drift from what selection actually does.
-            out["cta"] = dispatch::detail::syev_supports_cta<scalar_type>(queue, view);
-            out["blocked"] = dispatch::detail::syev_supports_blocked<scalar_type>(queue, view, uplo);
-            out["two_stage"] = dispatch::detail::syev_supports_two_stage<scalar_type>(queue, view, uplo);
+            out["cta"] = batchlas::ops::syev::detail::syev_supports_cta<scalar_type>(queue, view);
+            out["blocked"] = batchlas::ops::syev::detail::syev_supports_blocked<scalar_type>(queue, view, uplo);
+            out["two_stage"] = batchlas::ops::syev::detail::syev_supports_two_stage<scalar_type>(queue, view, uplo);
             return out;
         });
     });

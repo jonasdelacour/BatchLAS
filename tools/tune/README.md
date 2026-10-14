@@ -266,6 +266,8 @@ is `ok` in every pass of that attempt, and the run becomes a `custom` run of the
 Gate mode compares the old choice with Auto for each cell. Cells come from `--old-csv` (columns
 `dtype`, every key name, `old`; a previous gate CSV works) or from the grid flags with `--parent-bin`,
 a `batchlas_tune` built from the parent commit. Its choice is read from the coverage `reached` row.
+The old choice is compared and pinned verbatim, so it must be a current spelling: a pre-flat-selection
+`native:<algo>` or `vendor:auto` throws as a pin.
 
 - Cells where both agree are `same` and are not timed. Otherwise each pass times `auto` against the old
   spelling pinned, interleaved, with pass 2 in reversed order.

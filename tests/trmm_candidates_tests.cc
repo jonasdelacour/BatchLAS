@@ -1020,7 +1020,7 @@ TYPED_TEST(TrmmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // The sm_89 transcribed tables (no GPU): every dtype holds exactly choice.hh's grid, names the
 // transcribed commit and choice.hh's keys, and reads `triangular | expand | vendor` on Side::Left
 // and `expand | vendor` on Side::Right. sm_120 is deep-measured since 2026-10-09.
-TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
+TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     std::set<std::string> want;
     for (const char* s : {"L", "R"})
@@ -1046,7 +1046,7 @@ TEST(TrmmTranscribedTable, RowsHoldTheChoiceGridAndTheOldPreference) {
             for (const auto& row : t.rows) {
                 const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
                 got.insert(k);
-                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                 if (held.skip(row.timed)) continue;
                 std::string ranked;
                 for (const auto& x : row.ranked) ranked += x.spelling + "|";

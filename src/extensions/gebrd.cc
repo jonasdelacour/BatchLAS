@@ -12,15 +12,6 @@ namespace batchlas {
 namespace {
 
 template <typename T>
-inline T conj_if_needed(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
-        return T(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
 Event gebrd_unblocked_real(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& a,
                            const VectorView<typename base_type<T>::type>& d,
@@ -67,7 +58,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                         Real dot = Real(0);
                         for (int32_t r = i; r < m; ++r) {
                             const Real vr = (r == i) ? Real(1) : A(r, i, b);
-                            dot += conj_if_needed(vr) * A(r, c, b);
+                            dot += batchlas::device::detail::conj(vr) * A(r, c, b);
                         }
                         dot *= tau_l;
                         for (int32_t r = i; r < m; ++r) {
@@ -107,7 +98,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                         Real dot = Real(0);
                         for (int32_t c = i + 1; c < n; ++c) {
                             const Real vc = (c == i + 1) ? Real(1) : A(i, c, b);
-                            dot += A(r, c, b) * conj_if_needed(vc);
+                            dot += A(r, c, b) * batchlas::device::detail::conj(vc);
                         }
                         dot *= tau_r;
                         for (int32_t c = i + 1; c < n; ++c) {

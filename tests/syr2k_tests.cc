@@ -124,11 +124,6 @@ TYPED_TEST(Syr2kTest, LeavesTheOtherTriangleUntouched) {
     }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 #if BATCHLAS_HAS_CUDA_BACKEND
 namespace {
 
@@ -404,20 +399,6 @@ TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
     for (std::size_t e = 0; e < ct.size(); ++e) differ += std::memcmp(&ct[e], &cc[e], sizeof(float)) != 0;
     EXPECT_EQ(differ, 0u) << "ConjTrans differs from Trans";
     expect_syr2k_matches<float>(ctx, A, B, C0, Ct, Uplo::Lower, Transpose::Trans, alpha, beta, k);
-}
-
-// BATCHLAS_SYR2K_ROUTE takes only its own words; the removed legacy spellings (and any typo)
-// throw rather than silently meaning Auto.
-TEST(Syr2kCudaCustomTest, RemovedRouteWordsThrow) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
-    }
-    Matrix<float, MatrixFormat::Dense> A(16, 8, 2), B(16, 8, 2), C(16, 16, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand", "cublasdx", "cta", "tiny"}) {
-        ScopedEnvVar route("BATCHLAS_SYR2K_ROUTE", word);
-        EXPECT_THROW(syr2k(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
-    }
 }
 
 #endif

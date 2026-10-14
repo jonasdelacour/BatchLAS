@@ -449,10 +449,9 @@ TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases (RouteOrgqr.CorrectnessGatesIncludeTheOnesInheritedFromOrmqr,
-// ported): n > m, an empty extent and a heterogeneous batch refuse a blocked pin from
-// both orgqr and orgqr_buffer_size (batch 0 returns before selection); batch 1 and 8192 x 8192
-// are not correctness gates.
+// The can_run-false cases, including the ones orgqr inherits from ormqr: n > m, an empty extent
+// and a heterogeneous batch refuse a blocked pin from both orgqr and orgqr_buffer_size (batch 0
+// returns before selection); batch 1 and 8192 x 8192 are not correctness gates.
 TYPED_TEST(OrgqrCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -573,9 +572,8 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
     }
 }
 
-// Auto against the shipped table this device reads (shipped_table_pick.hh): the old 512 ceiling
-// straddled on each extent, on and off the grid (RouteOrgqr.PreferredIsNative-
-// UpToTheMeasuredCeiling and VendorFreeFallbackHandsOverTheNativeRoute, ported, live).
+// Auto against the shipped table this device reads (shipped_table_pick.hh): the transcribed 512
+// ceiling straddled on each extent, on and off the grid.
 TYPED_TEST(OrgqrCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     struct Row { int m, n, batch; };
@@ -630,9 +628,8 @@ TYPED_TEST(OrgqrCandidates, TraceKeyIsMAndN) {
     expect_q(*this->ctx, p, line);
 }
 
-// RouteOrgqr.VendorFreeFallbackHandsOverTheNativeRoute's other half: with a table naming only
-// the vendor, a vendor-free build takes the last resort, blocked, at n = 64 and above the old
-// ceiling; a vendor build takes the vendor.
+// With a table naming only the vendor, a vendor-free build takes the last resort, blocked, at
+// n = 64 and above the transcribed ceiling; a vendor build takes the vendor.
 TYPED_TEST(OrgqrCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
     const std::string dtype(select::dtype_name<T>());
@@ -656,7 +653,7 @@ TYPED_TEST(OrgqrCandidates, VendorFreeLastResortIsBlocked) {
     }
 }
 
-// The coverage row (§5.6): the backend, the old builder's key (m, n, k = min, Left, NoTrans) and
+// The coverage row (§5.6): the backend, the key (m, n, k = min, Left, NoTrans) and
 // the native flags. threadsafe: the child re-executes the binary, so CUDA is initialised fresh.
 TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
@@ -714,7 +711,7 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteOrgqr's CPU case, ported: on a CPU queue the native driver cannot run, so a blocked pin
+// On a CPU queue the native driver cannot run, so a blocked pin
 // throws and Auto is the vendor (or no route without one).
 template <typename Config>
 class OrgqrCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -741,7 +738,7 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: at
 // grid and off-grid (m, n) below the diagonal, the first entry is the old predicate's choice, and
 // every row ranks both candidates. sm_120 is deep-measured since 2026-10-09.
-TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
+TEST(OrgqrTranscribedTable, RowsHoldTheTranscribedWindowOnSm89) {
     test_utils::TranscribedRowsHeld held;
     const std::pair<int, int> points[] = {{1, 1},     {96, 96},    {300, 299},  {511, 511}, {512, 512},
                                           {513, 1},   {513, 513},  {514, 300},  {600, 512}, {640, 513},
@@ -755,7 +752,7 @@ TEST(OrgqrTranscribedTable, RowsHoldTheOldWindowOnSm89) {
             for (auto [m, n] : points) {
                 const select::TableRow* row = t.nearest(select::Key{{"m", m}, {"n", n}});
                 ASSERT_NE(row, nullptr) << t.file;
-                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                 if (held.skip(row->timed)) continue;
                 const std::string what = t.file + ":" + std::to_string(row->line) + " for " + label(m, n, 0);
                 ASSERT_EQ(row->ranked.size(), 2u) << what;

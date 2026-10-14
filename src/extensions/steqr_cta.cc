@@ -4,7 +4,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 #include "steqr_internal.hh"
@@ -41,7 +41,6 @@ namespace batchlas {
                               MatrixView<T, MatrixFormat::Dense>& eigvects,
                               int32_t n,
                               size_t max_sweeps,
-                              T zero_threshold,
                               SteqrShiftStrategy cta_shift_strategy,
                               SteqrUpdateScheme cta_update_scheme,
                               size_t cta_wg_size_multiplier,
@@ -123,7 +122,6 @@ namespace batchlas {
 
                     const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n,
                                                              static_cast<int32_t>(max_sweeps),
-                                                             zero_threshold,
                                                              cta_shift_strategy, cta_update_scheme);
                     if (live && failed && lane == 0) {
                         // We cannot throw from device code; the host decides how to
@@ -212,13 +210,13 @@ namespace batchlas {
             constexpr int32_t P = decltype(P_tag)::value;
             if (jobz == JobType::EigenVectors) {
                 steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
-                                           params.max_sweeps, params.zero_threshold,
+                                           params.max_sweeps,
                                            params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
                                            status,
                                            pool);
             } else {
                 steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
-                                            params.max_sweeps, params.zero_threshold,
+                                            params.max_sweeps,
                                             params.cta_shift_strategy, params.cta_update_scheme, params.cta_wg_size_multiplier,
                                             status,
                                             pool);

@@ -75,9 +75,7 @@ expect("compute capability is reset per device" "${_leak_arch}" "Architecture: u
 # unrecognised-GPU ones (budget 28672).
 batchlas_architecture_table_local_mem_bytes("nvidia_gpu_sm_120" "gpu" _bytes)
 batchlas_subgroup_workspace_budget_bytes("nvidia_gpu_sm_120" "${_bytes}" "gpu" _budget)
-batchlas_safe_subgroups_per_workgroup("nvidia_gpu_sm_120" "gpu" _subgroups)
 expect("sm_120 workspace budget" "${_budget}" "45056")
-expect("sm_120 safe subgroups per work-group" "${_subgroups}" "2")
 
 batchlas_rewrite_unaliased_nvidia_targets("nvidia_gpu_sm_120;native_cpu" "nvidia_gpu_sm_120"
     _targets _option)

@@ -882,7 +882,7 @@ TYPED_TEST(GemmCandidates, NonDefaultPrecisionHasNoNativeRoute) {
 
 // R6: a spelling that names nothing compiled throws instead of meaning Auto, including the
 // deleted variants' names, the design doc's never-compiled `tiled:tile=64:k=8`, and the removed
-// aliases (old kernel names and old router words), so a resurrected alias goes red.
+// aliases (pre-selection kernel names and route words), so a resurrected alias goes red.
 TYPED_TEST(GemmCandidates, UnknownAndDeletedPinsThrow) {
     using T = typename TestFixture::T;
     const std::vector<std::string> words{
@@ -1231,7 +1231,7 @@ TYPED_TEST(GemmCandidatesCpu, CpuQueueRunsNativeOnlyWithoutAHostBlas) {
 // (AutoReadsTheSm89TranscribedTable runs Auto where sm_89 is read): small leads the float NN
 // squares to 48 and the vendor the rest of float; double is native first; complex is vendor
 // first; a real C folds to T; the old forced-name fallback follows the old kernel.
-TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
+TEST(GemmTranscribedTable, Sm89RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row {
         const char* dtype; const char* ta; const char* tb; const char* layout; int m, n, k, batch;
@@ -1258,7 +1258,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
                               {"n", r.n},   {"k", r.k},   {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
-        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
         if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         std::vector<std::string> got;
@@ -1281,7 +1281,7 @@ TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
 
 // The old preferred() edges below the grid (batch < 64, double k < 2, float native only on NN
 // squares to 48) survive nearest lookup: the transcriber brackets each on both sides.
-TEST(GemmTranscribedTable, Sm89BracketsTheOldVendorEdges) {
+TEST(GemmTranscribedTable, Sm89BracketsTheTranscribedVendorEdges) {
     struct Cell { const char* dtype; const char* ta; const char* tb; const char* layout; int m, n, k, batch; const char* first; };
     const Cell cells[] = {
         {"double", "N", "N", "packed", 256, 256, 256, 8, "vendor"},

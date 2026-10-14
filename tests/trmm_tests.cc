@@ -79,28 +79,6 @@ TYPED_TEST(TrmmTest, AllCombinations) {
     }
 }
 
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-// BATCHLAS_TRMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
-// throw rather than silently meaning Auto.
-TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom trmm test requires a GPU device";
-    }
-    Matrix<float, MatrixFormat::Dense> A(16, 16, 2), B(16, 4, 2), C(16, 4, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "cublasdx"}) {
-        ScopedEnvVar route("BATCHLAS_TRMM_ROUTE", word);
-        EXPECT_THROW(trmm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f}).wait(), std::invalid_argument) << word;
-    }
-}
-
-#endif
-
 // TRMM must not reference the opposite triangle of A, nor its diagonal when
 // Diag::Unit is requested.
 //

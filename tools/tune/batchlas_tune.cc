@@ -413,7 +413,7 @@ public:
         fs::remove(file, ec);
         const auto route = reached_route(ss.str(), spec_.op());
         if (!c.ok || !route) return "error:" + (c.ok ? std::string("no reached row") : c.error);
-        return spec_.normalize_route(route->first, route->second);
+        return route->second;
     }
 
     std::string device_key(int gpu, std::string* name) {
@@ -878,11 +878,7 @@ int Driver::gate() {
         std::string err;
         const auto rows = parse_old_csv(ss.str(), names, o_.dtype_given ? o_.dtypes : std::vector<std::string>{}, &err);
         if (!rows) die(o_.old_csv + ": " + err);
-        // An old binary wrote native:<algo> (e.g. "native:lpanel"): compare canonical forms.
-        for (const OldChoice& r : *rows) {
-            const auto [origin, algo] = split_origin(r.old);
-            cells.push_back({r.dtype, r.key, spec_.normalize_route(origin, algo)});
-        }
+        for (const OldChoice& r : *rows) cells.push_back({r.dtype, r.key, r.old});
         std::printf("== gate: %zu cells from %s\n", cells.size(), o_.old_csv.c_str());
     } else {
         for (const auto& dtype : o_.dtypes)

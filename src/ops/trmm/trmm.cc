@@ -126,7 +126,7 @@ Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
     // and the cuBLAS loop faults on one.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old level-3 recorder wrote it: C's extents and A's order.
+    // The coverage row's key: C's extents and A's order.
     const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA, .uplo = uplo, .side = side, .diag = diag};
     const select::Key key = ops::trmm::key_of<T>(A, B, side);

@@ -1,3 +1,4 @@
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -6,7 +7,7 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
 #include "gesvd_native.hh"
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -34,15 +35,6 @@ class GesvdjCTAKernel;
 // evidence: docs/design/gesvd.md#gesvdj_cta-the-lane-equals-row-mapping-decision
 
 namespace {
-
-template <typename U>
-inline U conj_if_complex_g(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 template <typename U>
 inline typename base_type<U>::type abs_if_complex_g(const U& x) {
@@ -306,7 +298,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         if (row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
-                            v = transposed_f ? conj_if_complex_g(A_prob(c, row)) : A_prob(row, c);
+                            v = transposed_f ? batchlas::device::detail::conj(A_prob(c, row)) : A_prob(row, c);
                         }
                         A_local[base_a + row + c * LD] = v;
                         if constexpr (ComputeV) {
@@ -438,7 +430,7 @@ BATCHLAS_UNROLL_FULL
                                 const int32_t row = lane + rr * static_cast<int32_t>(P);
                                 ap[k][rr] = A_local[base_a + row + ip * LD];
                                 aq[k][rr] = A_local[base_a + row + iq * LD];
-                                acc = acc + conj_if_complex_g(ap[k][rr]) * aq[k][rr];
+                                acc = acc + batchlas::device::detail::conj(ap[k][rr]) * aq[k][rr];
                             }
                             g[k] = ok ? acc : T(0);
                         }
@@ -716,7 +708,7 @@ BATCHLAS_UNROLL_FULL
                                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                             const int32_t row = lane + rr * static_cast<int32_t>(P);
                                             qv[rr] = (row < RR) ? A_local[base_a + row + c2 * LD] : T(0);
-                                            part_dot = part_dot + conj_if_complex_g(qv[rr]) * v[rr];
+                                            part_dot = part_dot + batchlas::device::detail::conj(qv[rr]) * v[rr];
                                         }
                                         const T dot = part_sum_g(part, part_dot);
 BATCHLAS_UNROLL_FULL
@@ -767,7 +759,7 @@ BATCHLAS_UNROLL_FULL
                             if (dst >= LC) continue;
                             const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                             for (int32_t r = 0; r < RR; ++r) {
-                                Vh_prob(dst, r) = conj_if_complex_g(A_local[base_a + r + c * LD]);
+                                Vh_prob(dst, r) = batchlas::device::detail::conj(A_local[base_a + r + c * LD]);
                             }
                         }
                     }
@@ -782,7 +774,7 @@ BATCHLAS_UNROLL_FULL
                             if (dst >= CC) continue;
                             const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                             for (int32_t r = 0; r < CC; ++r) {
-                                Vh_prob(dst, r) = conj_if_complex_g(V_local[base_v + r + c * LD]);
+                                Vh_prob(dst, r) = batchlas::device::detail::conj(V_local[base_v + r + c * LD]);
                             }
                         }
                     } else {

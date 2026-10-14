@@ -134,15 +134,11 @@ public:
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/symm/symm.cc"
-        // family: expand "src/backends/route_common.hh"
         // symm expand calls the public gemm: its native kernels and can_run count too.
         // family: expand "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }
-    std::string normalize_route(const std::string& origin, const std::string& algo) const override {
-        return tune::normalize_route<Y::SymmChoice>(origin, algo);
-    }
     std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
         return with_real_dtype("symm", req.dtype, [&]<class T>() {
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);

@@ -27,7 +27,7 @@
 #
 # THE TYPED-TEST INDEX TRAP
 #   `SteqrTest/0` and `SteqrTest/1` are positional indices into
-#   backend_types_filtered's type list (tests/test_utils.hh:119-150), whose
+#   backend_types_filtered's type list (tests/test_utils.hh:151-181), whose
 #   NETLIB block is compiled out when BATCHLAS_HAS_CPU_TARGET is off. Under a
 #   preset such as dev-gpu-tests, `SteqrTest/0` silently becomes float/CUDA -- a
 #   different test, which a bare-index entry would suppress. The `type_param=`

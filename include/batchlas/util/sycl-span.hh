@@ -71,12 +71,8 @@ struct BATCHLAS_API Span
     /// the advice (errors are swallowed: these are hints). Pass the Queue the data
     /// will be used on; the default Queue() is a new queue on Device::default_device().
     /// @{
-    Event set_read_mostly(const Queue &ctx = Queue()) const;           ///< Mark read-mostly (replicated on read).
-    Event unset_read_mostly(const Queue &ctx = Queue()) const;         ///< Clear read-mostly.
     Event set_preferred_location(const Queue &ctx = Queue()) const;    ///< Prefer residence on the device of @p ctx.
-    Event clear_preferred_location(const Queue &ctx = Queue()) const;  ///< Clear the preferred location.
     Event set_access_device(const Queue &ctx = Queue()) const;         ///< Map for access by the device of @p ctx.
-    Event clear_access_device(const Queue &ctx = Queue()) const;       ///< Clear the access mapping.
     Event prefetch(const Queue &ctx = Queue()) const;                  ///< Migrate to the device of @p ctx.
     /// @}
 

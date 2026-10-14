@@ -175,8 +175,3 @@ TYPED_TEST(RitzValuesTest, SparseExactWorkspaceInPoisonedArena) {
     const VectorView<RealType> w(ritz_vals);
     EXPECT_VERIFY(ScalarType, verify::Check::values, n, MV::values_error(w, ref, norm2, w.all_items()));
 }
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

@@ -4,108 +4,23 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
-#include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
 #include "info_span.hh"
+#include "steqr_internal.hh"
 
 namespace batchlas {
 
-template <typename T> struct FrancisKernel {};
-template <typename T> struct RotationKernel {};
+namespace {
 
-template <typename T>
-auto wilkinson_shift(const T& a, const T& b, const T& c) {
-    // Compute the Wilkinson shift assuming that a, b, c represents the
-    // bottom-right 2x2 block of a matrix
-    // |     :  :|
-    // |     :  :|
-    // |.... a, b|
-    // |.... b, c|
-    // Returns the eigenvalue closest to c
-    const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
-    return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
-}
+// Distinct from steqr_wg.cc's tags: both TUs link into one device image.
+template <typename T> struct SteqrLegacyFrancisKernel {};
+template <typename T> struct SteqrLegacyRotationKernel {};
 
-template <typename T>
-auto givens_rotation(const T& a, const T& b) {
-    auto [c_l, s_l, r] = internal::lartg(a, b);
-    return std::array<T, 2>{c_l, -s_l};
-}
-
-template <typename T>
-T apply_givens_rotation(const VectorView<T>& d,
-                        const VectorView<T>& e,
-                        const T& prev_bulge,
-                        size_t i,
-                        size_t j,
-                        const std::array<T, 2>& givens,
-                        bool QR) {
-    // Apply similarity transform to rows/cols i and j of a tridiagonal matrix T
-    // in a virtual indexing:
-    //   - if QR == true:  virtual index k == physical index k  (top-down QR)
-    //   - if QR == false: virtual index k == physical index (n-1-k) (bottom-up QL)
-    // This way, the same bulge-chasing logic implements both QR and QL iterations.
-    const T c = givens[0]; // Gamma
-    const T s = givens[1]; // Sigma
-
-    const size_t n  = d.size();      // number of diagonal entries
-    const size_t ne = e.size();      // number of off-diagonal entries (n-1)
-
-    // Virtual -> physical index mapping helpers
-    auto d_get = [&](size_t k) -> T {
-        return QR ? d(k) : d(n - 1 - k);
-    };
-    auto d_set = [&](size_t k, T val) {
-        if (QR) {
-            d(k) = val;
-        } else {
-            d(n - 1 - k) = val;
-        }
-    };
-    auto e_get = [&](size_t k) -> T {
-        // e(k) couples d(k) and d(k+1) in virtual indexing
-        return QR ? e(k) : e(ne - 1 - k);
-    };
-    auto e_set = [&](size_t k, T val) {
-        if (QR) {
-            e(k) = val;
-        } else {
-            e(ne - 1 - k) = val;
-        }
-    };
-
-    // Read current 2x2/3x3 “front” of the bulge in virtual indexing
-    T di = d_get(i);
-    T dj = d_get(j);
-    T ei = e_get(i);
-    T ej = (j < ne) ? e_get(j) : T(0);
-
-    // Update diagonal entries
-    T di_new = c * (c * di - ei * s) - s * (ei * c - s * dj);
-    T dj_new = c * (c * dj + ei * s) + s * (ei * c + s * di);
-    d_set(i, di_new);
-    d_set(j, dj_new);
-
-    // Update off-diagonals adjacent to rows/cols i,j in virtual indexing
-    if (i > 0) {
-        T e_im1 = e_get(i - 1);
-        e_set(i - 1, e_im1 * c - prev_bulge * s);
-    }
-
-    T ei_new = c * (c * ei + s * di) - s * (c * dj + s * ei);
-    e_set(i, ei_new);
-
-    if (j < ne) {
-        e_set(j, c * ej);
-    }
-
-    // Return the new bulge element in virtual indexing
-    return -ej * s;
-}
+} // namespace
 
 template <typename T>
 struct SteqrImplScratch {
@@ -134,8 +49,7 @@ Event steqr_impl(Queue& ctx,
                     const Span<ApplyOrder>& order_view, //Order of application of rotations, has #sub_problems number of entries
                     const Span<int32_t>& sweep_counts, //Number of sweeps actually performed per sub-problem
                     BumpAllocator allocator,
-                    size_t max_sweeps, //Maximum number of sweeps to perform
-                    T zero_threshold) {
+                    size_t max_sweeps) { //Maximum number of sweeps to perform
     BATCHLAS_KERNEL_TRACE_SCOPE("steqr");
     // Perform the Francis sweep for the i-th step
     // This function will apply a francis sweep of Givens rotations
@@ -201,8 +115,7 @@ Event steqr_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:francis_sweep");
         ctx->submit([&](sycl::handler& cgh) {
         auto rotations_view = givens_rotations.kernel_view();
-        //auto bsize = n_problems < ncus ? 1 : internal::ceil_div(size_t(n_problems), ncus);
-        batchlas::impl::parallel_for<FrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<SteqrLegacyFrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
             auto i = item.get_global_id(0);
             auto n_problems = scan_view[batch_size - 1];
 
@@ -265,24 +178,24 @@ Event steqr_impl(Queue& ctx,
                 };
 
                 // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = wilkinson_shift(d_get(n - 2),
+                const auto shift = internal::wilkinson_shift(d_get(n - 2),
                                                    e_get(n - 2),
                                                    d_get(n - 1));
 
                 // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = givens_rotation(d_get(0) - shift, e_get(0));
+                auto [c0, s0] = internal::givens_rotation(d_get(0) - shift, e_get(0));
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
-                auto bulge = apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+                auto bulge = internal::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = givens_rotation(e_get(j - 1), bulge);
+                    auto [cj, sj] = internal::givens_rotation(e_get(j - 1), bulge);
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
-                    bulge = apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                    bulge = internal::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
                 }
 
                 bool deflatable = false;
@@ -317,7 +230,7 @@ Event steqr_impl(Queue& ctx,
     ctx -> submit([&](sycl::handler& cgh) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        batchlas::impl::parallel_for<RotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<SteqrLegacyRotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
             auto n_problems = scan_view[batch_size - 1];
@@ -467,7 +380,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     for (int64_t i = 0; i < n - 1; ++i) {
         not_converged[0] = 0; // Safe: the queue is idle at this point.
         (void)steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, sweep_counts,
-                   BumpAllocator(wsl.scratch), params.max_sweeps, params.zero_threshold);
+                   BumpAllocator(wsl.scratch), params.max_sweeps);
 
         ctx -> submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {

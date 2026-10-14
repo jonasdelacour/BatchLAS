@@ -328,57 +328,6 @@ inline std::pair<size_t, size_t> compute_nd_range_sizes(size_t total_work,
     return {global_size, local_size};
 }
 
-/**
- * @brief Compute optimal 2D work-group size for matrix operations
- * 
- * @param rows Number of matrix rows
- * @param cols Number of matrix columns
- * @param device Target device
- * @param kernel_type Type of kernel operation
- * @return std::pair<std::pair<size_t, size_t>, std::pair<size_t, size_t>> {{global_x, global_y}, {local_x, local_y}}
- */
-inline std::pair<std::pair<size_t, size_t>, std::pair<size_t, size_t>> 
-compute_2d_nd_range_sizes(size_t rows, size_t cols, 
-                         const Device& device,
-                         KernelType kernel_type) {
-    const size_t max_wg_size = device.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
-    const DeviceType dev_type = device.type;
-    
-    size_t local_x, local_y;
-    
-    if (dev_type == DeviceType::GPU) {
-        if (rows >= 16 && cols >= 16) {
-            local_x = 16;
-            local_y = 16;
-        } else if (cols >= 32) {
-            local_x = 32;
-            local_y = 8;
-        } else if (rows >= 32) {
-            local_x = 8;
-            local_y = 32;
-        } else {
-            local_x = 8;
-            local_y = 8;
-        }
-    } else {
-        local_x = 8;
-        local_y = 8;
-    }
-    
-    while (local_x * local_y > max_wg_size) {
-        if (local_x >= local_y) {
-            local_x /= 2;
-        } else {
-            local_y /= 2;
-        }
-    }
-    
-    size_t global_x = ((cols + local_x - 1) / local_x) * local_x;
-    size_t global_y = ((rows + local_y - 1) / local_y) * local_y;
-    
-    return {{global_x, global_y}, {local_x, local_y}};
-}
-
 /// @}
 
 } // namespace batchlas
