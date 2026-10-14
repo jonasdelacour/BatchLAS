@@ -206,9 +206,14 @@ set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
 # not shorten it. The product is a 273 MiB libbatchlas.so.0.1.0. Usable for a
 # release build, ruinous as a dev loop - which is the whole reason this
 # defaults OFF.
+# macOS can only build the monolithic shape (check below), so it is the default there.
+set(_batchlas_monolithic_default OFF)
+if(APPLE)
+    set(_batchlas_monolithic_default ON)
+endif()
 option(BATCHLAS_MONOLITHIC_LIBRARY
     "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
-    OFF)
+    ${_batchlas_monolithic_default})
 # Monolithic mode used to hide every symbol unconditionally. The in-tree tests reach ~1,000
 # unannotated internal symbols, so a monolithic tree that builds tests needs it OFF.
 cmake_dependent_option(BATCHLAS_HIDDEN_VISIBILITY
