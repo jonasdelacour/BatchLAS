@@ -67,7 +67,7 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
         [&](Cta) { return sycl_trsm::trsm_native_v1_dispatch<T>(q, A, Bm, alpha, side, uplo, transA, diag); },
         [&](SgLeft) { return sycl_trsm::trsm_native_sg_left_dispatch<T>(q, A, Bm, alpha, uplo, transA, diag); },
         [&](Blocked) {
-            // The public gemm, not gemm_custom: trsm's operands are sub-views carrying the
+            // The public gemm (table-routed): trsm's operands are sub-views carrying the
             // parent's ld, where the native GEMM collapses.
             // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
             return sycl_trsm::trsm_native_blocked<T>(

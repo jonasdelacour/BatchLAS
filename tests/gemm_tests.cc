@@ -239,7 +239,8 @@ protected:
 TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 
 // The old GemmDispatchPolicyTest asserts, against the transcribed sm_89 float table that replaced
-// select_kernel_variant (read with Table::nearest, so every device checks them). The native pick
+// the pre-flat-selection hand-written gemm selector (read with Table::nearest, so every device
+// checks them). The native pick
 // is the first non-vendor entry: what Auto runs vendor-free and what `native` resolves to.
 // A padded ld (272, 258) is layout=strided. The vendor-vs-native order is not asserted here
 // (gemm_candidates_tests.cc AutoReadsTheSm89TranscribedTable runs it).
@@ -1719,9 +1720,4 @@ TYPED_TEST(GemmTest, BatchOffsetAbove2Pow31) {
                       0.0);
         }
     }
-}
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
 }

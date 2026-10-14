@@ -66,8 +66,3 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
 // The two routing regressions that lived here (an unmatched forced provider whose size and
 // call disagreed; a forced blocked on complex Trans) are ported to ormqr_candidates_tests:
 // BufferSizeIsTheChosenFamilysAndRuns and CanRunFalsePinsThrow.
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

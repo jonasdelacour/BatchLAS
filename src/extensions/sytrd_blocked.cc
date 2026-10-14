@@ -86,69 +86,6 @@ inline int32_t latrd_lower_panel_wg_hint_override(int32_t full_n, int32_t batch)
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers (used by both legacy and device kernels)
-// ---------------------------------------------------------------------------
-
-// conj_if_needed delegates to device::detail::conj so it works in both host
-// and device code and produces the same result as the manual implementation.
-template <typename U>
-inline U conj_if_needed(const U& x) {
-    return batchlas::device::detail::conj(x);
-}
-
-// ---------------------------------------------------------------------------
-// Helpers used exclusively by the legacy kernels
-// ---------------------------------------------------------------------------
-
-template <typename T>
-inline typename base_type<T>::type abs2_if_complex(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real re = x.real();
-        const Real im = x.imag();
-        return re * re + im * im;
-    } else {
-        return x * x;
-    }
-}
-
-template <typename Real>
-inline Real sign_nonzero_real(Real x) {
-    return (sycl::signbit(x) ? Real(-1) : Real(1));
-}
-
-template <typename T>
-inline T sign_nonzero(const T& x) {
-    using Real = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
-        const Real a = sycl::hypot(x.real(), x.imag());
-        if (a == Real(0)) return T(1);
-        return x / a;
-    } else {
-        return T(sign_nonzero_real(static_cast<Real>(x)));
-    }
-}
-
-template <typename T>
-inline T reduce_sum_group(const sycl::group<1>& g, T x) {
-    if constexpr (internal::is_complex<T>::value) {
-        using R = typename T::value_type;
-        const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
-        const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
-        return T(re, im);
-    } else {
-        return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
-    }
-}
-
-template <typename T>
-inline typename base_type<T>::type reduce_sum_group_real(const sycl::group<1>& g,
-                                                        typename base_type<T>::type x) {
-    using R = typename base_type<T>::type;
-    return batchlas::portable::reduce_over_group(g, x, sycl::plus<R>());
-}
-
-// ---------------------------------------------------------------------------
 // Helpers used exclusively by the device kernels
 // ---------------------------------------------------------------------------
 
@@ -216,7 +153,7 @@ Event update_vw_lower_small_legacy(Queue& q,
                     const T vck = V[c + k * ldv];
                     const T wrk = W[r + k * ldw];
                     const T wck = W[c + k * ldw];
-                    acc += vrk * conj_if_needed(wck) + wrk * conj_if_needed(vck);
+                    acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
                 }
 
                 A[r + c * lda] -= acc;
@@ -336,9 +273,9 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                     Real sumsq = Real(0);
                     if (lane >= x0 && lane < n) {
-                        sumsq = abs2_if_complex(Al(lane, k));
+                        sumsq = internal::abs2_if_complex(Al(lane, k));
                     }
-                    sumsq = reduce_sum_group_real<T>(g, sumsq);
+                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
 
                     T alpha = T(0);
                     if (lane == alpha_row) {
@@ -371,7 +308,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_k = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -408,9 +345,9 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     T dot_partial = T(0);
                     if (lane >= alpha_row && lane < n) {
                         const T vr = (lane == alpha_row) ? T(1) : Al(lane, k);
-                        dot_partial = conj_if_needed(vr) * W_local[lane];
+                        dot_partial = batchlas::device::detail::conj(vr) * W_local[lane];
                     }
-                    const T dot = reduce_sum_group(g, dot_partial);
+                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
 
                     const T alpha2 = T(-0.5) * tau_k * dot;
                     if (lane >= alpha_row && lane < n) {
@@ -426,10 +363,10 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                             const T vc = (c == alpha_row) ? T(1) : Al(c, k);
                             const T wc = W_local[c];
                             T a_rc = Al(lane, c);
-                            a_rc -= vr * conj_if_needed(wc) + wr * conj_if_needed(vc);
+                            a_rc -= vr * batchlas::device::detail::conj(wc) + wr * batchlas::device::detail::conj(vc);
                             Al(lane, c) = a_rc;
                             if (lane != c) {
-                                Al(c, lane) = conj_if_needed(a_rc);
+                                Al(c, lane) = batchlas::device::detail::conj(a_rc);
                             } else if constexpr (internal::is_complex<T>::value) {
                                 Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
                             }
@@ -556,7 +493,7 @@ Event sytrd_lower_local_small_device(Queue& q,
                         it.barrier(sycl::access::fence_space::local_space);
                         if (lane_in_tail) {
                             for (int c = alpha_row; c < lane; ++c) {
-                                Al(c, lane) = conj_if_needed(Al(lane, c));
+                                Al(c, lane) = batchlas::device::detail::conj(Al(lane, c));
                             }
                         }
                     }
@@ -613,7 +550,7 @@ Event restore_tridiag_lower(Queue& q,
                 if (i < n - 1) {
                     const T ei = Eb[i];
                     A[(i + 1) + i * lda] = ei;
-                    A[i + (i + 1) * lda] = conj_if_needed(ei);
+                    A[i + (i + 1) * lda] = batchlas::device::detail::conj(ei);
                 }
             });
     });

@@ -2249,8 +2249,3 @@ TYPED_TEST(GeqrfTest, AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow) {
 }
 
 // Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

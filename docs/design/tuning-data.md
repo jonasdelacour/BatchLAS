@@ -206,10 +206,11 @@ Deleted afterwards:
   (`sm120_potrf_sweep{,_edges}.jsonl` and their campaign files, `sm89_potrf_archive.jsonl`);
 - the converter and raw-tuner inputs of `sweep_to_table.py`, with its Python `OpSpec`.
 
-Kept, because a page or a test cites them (no table is generated from them): the old raw trsm
-tuner output `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` (`docs/perf/trsm.md`),
+Kept, because a page or a test cites them (no table is generated from them):
 `routing/sm120_posv_sweep.jsonl` (`docs/perf/potrf.md`, `docs/perf/blackwell.md`) and
-`routing/sm120_potrf_phase2_gate.csv` (`tune_tests`).
+`routing/sm120_potrf_phase2_gate.csv` (`tune_tests`). The old raw trsm tuner output
+`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` is kept as provenance; its machine,
+build and grid are in `benchmarks/results/tuning/README.md`.
 
 The deleted files remain in git history at the merge base of this PR.
 

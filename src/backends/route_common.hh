@@ -1,7 +1,6 @@
 #pragma once
 
-// Backend-neutral queue helpers for the level-3 tile and expansion kernels. Nothing here names
-// a CUDA type. Kernel choice for symm/syrk/syr2k/trmm is flat selection (src/ops/<op>).
+// Backend-neutral helpers for the level-3 tile and expansion kernels; names no CUDA type.
 
 #include "../math-helpers.hh"
 
@@ -13,10 +12,6 @@ namespace batchlas::backend::detail {
 
 inline int ceil_div(int value, int divisor) {
     return internal::ceil_div(value, divisor);
-}
-
-inline bool is_gpu_queue(const Queue& ctx) {
-    return ctx.device().type == DeviceType::GPU;
 }
 
 } // namespace batchlas::backend::detail

@@ -139,7 +139,6 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const int32_t nb = static_cast<int32_t>(batch_size);
         const bool is_upper = upper;
         const int32_t max_sweeps = std::max<int32_t>(int32_t(1), static_cast<int32_t>(params.max_sweeps));
-        const Real zero_threshold = static_cast<Real>(std::abs(params.zero_threshold));
         const SteqrShiftStrategy shift_strategy = params.cta_shift_strategy;
         const SteqrUpdateScheme update_scheme = params.cta_update_scheme;
         const bool do_sort = params.sort;
@@ -244,7 +243,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // ---- Stage 2: eigenvalues only, no accumulator. ----
                     QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     // A STORE, not a raise: exactly one of the three arms below runs per
                     // problem, so this kernel is the item's single writer and needs no
@@ -337,7 +336,7 @@ BATCHLAS_UNROLL_FULL
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
                     QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
@@ -362,7 +361,7 @@ BATCHLAS_UNROLL_FULL
                     group_barrier(part);
 
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
-                                             max_sweeps, zero_threshold,
+                                             max_sweeps,
                                              shift_strategy, update_scheme);
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 

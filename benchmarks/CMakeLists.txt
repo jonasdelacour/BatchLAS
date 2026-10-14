@@ -54,7 +54,6 @@ set(BENCHMARK_TARGETS
     transpose_benchmark
     permuted_copy_benchmark
     matrix_copy_benchmark
-    vector_benchmark
     stehr_benchmark
     stedc_benchmark
     latrd_lower_panel_benchmark
@@ -92,20 +91,21 @@ endforeach()
 
 function(batchlas_add_device_blas_vector_target target_name mode policy)
     add_executable(${target_name} device_blas_level2_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_VECTOR_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+    target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_LEVEL2_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
     batchlas_configure_binary_target(${target_name})
     batchlas_register_benchmark(${target_name})
 endfunction()
 
+# trans is the integer value of batchlas::Transpose (1 = Trans), which the source casts back.
 function(batchlas_add_device_blas_trmv_variant_target target_name policy uplo trans diag)
     add_executable(${target_name} device_blas_level2_benchmark.cc)
     target_compile_definitions(${target_name} PRIVATE
-        DEVICE_BLAS_VECTOR_MODE=2
+        DEVICE_BLAS_LEVEL2_MODE=3
         DEVICE_BLAS_POLICY=${policy}
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}"
-        DEVICE_BLAS_TRMV_UPLO=${uplo}
-        DEVICE_BLAS_TRMV_TRANS=${trans}
-        DEVICE_BLAS_TRMV_DIAG=${diag})
+        DEVICE_BLAS_LEVEL2_TRMV_UPLO=${uplo}
+        DEVICE_BLAS_LEVEL2_TRANS=${trans}
+        DEVICE_BLAS_LEVEL2_TRMV_DIAG=${diag})
     batchlas_configure_binary_target(${target_name})
     batchlas_register_benchmark(${target_name})
 endfunction()
@@ -157,11 +157,11 @@ if(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS)
     batchlas_add_device_blas_vector_target(device_blas_gemv_generic_benchmark 1 1)
     batchlas_add_device_blas_vector_target(device_blas_gemv_sg16_benchmark 1 2)
     batchlas_add_device_blas_vector_target(device_blas_gemv_sg32_benchmark 1 3)
-    batchlas_add_device_blas_vector_target(device_blas_trmv_auto_benchmark 2 0)
-    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_auto_benchmark 0 Lower Trans NonUnit)
-    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_auto_benchmark 0 Upper Trans NonUnit)
-    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_unit_auto_benchmark 0 Upper Trans Unit)
-    batchlas_add_device_blas_vector_target(device_blas_symv_auto_benchmark 3 0)
+    batchlas_add_device_blas_vector_target(device_blas_trmv_auto_benchmark 3 0)
+    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_auto_benchmark 0 Lower 1 NonUnit)
+    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_auto_benchmark 0 Upper 1 NonUnit)
+    batchlas_add_device_blas_trmv_variant_target(device_blas_trmv_trans_upper_unit_auto_benchmark 0 Upper 1 Unit)
+    batchlas_add_device_blas_vector_target(device_blas_symv_auto_benchmark 2 0)
 
     batchlas_add_device_blas_matrix_target(device_blas_trmm_auto_benchmark 1 0)
     batchlas_add_device_blas_matrix_target(device_blas_trmm_generic_benchmark 1 1)

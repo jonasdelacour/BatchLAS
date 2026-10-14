@@ -140,9 +140,6 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }
-    std::string normalize_route(const std::string& origin, const std::string& algo) const override {
-        return tune::normalize_route<Y::SymmChoice>(origin, algo);
-    }
     std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
         return with_real_dtype("symm", req.dtype, [&]<class T>() {
             auto q = std::make_shared<Queue>(Device("gpu"), kBackend);

@@ -9,10 +9,3 @@ set(UTIL_SOURCES
 )
 
 target_sources(batchlas_util_obj PRIVATE ${UTIL_SOURCES})
-
-# Add specific SYCL compiler flags for these files
-#set_source_files_properties(
-#    queue-impl.cc
-#    sycl-util-impl.cc
-#    PROPERTIES COMPILE_FLAGS "-fsycl"
-#)

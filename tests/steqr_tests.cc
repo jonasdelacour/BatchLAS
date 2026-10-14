@@ -1572,8 +1572,3 @@ TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
     const auto ref = lapacke_spectra(dense_A.view(), norm2);
     expect_values(evals, ref, norm2, n, std::nullopt, dense_A.view().all_items());
 }
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

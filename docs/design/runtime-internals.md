@@ -49,7 +49,7 @@ declarations (@ref design_symbol_visibility). Private headers follow the additio
   would define an unrelated type and leave `Queue::impl_` pointing at an incomplete one. This is the
   only one of the three rules that fails loudly.
 - Explicit instantiations that name a template by unqualified-id must be in the same namespace.
-- The `operator<<` for `ReferenceWrapper`, `UnifiedVector` and `Span` exists only as in-class friend
+- The `operator<<` for `UnifiedVector` and `Span` exists only as in-class friend
   templates, so it belongs to the enclosing namespace. At global scope the explicit instantiations
   would instantiate the wrong template. Consumers then get an undefined reference, and the library
   build does not fail.
@@ -82,7 +82,7 @@ emit their symbols.
     `_BACKEND_FORMAT_OP`; the sparse vendor TUs use a local shim or a raw `BATCHLAS_INSTANTIATE`.
 - Scalar domains differ per op: `symm`, `syrk` and `syr2k` are real-only; `hemm`, `herk` and
   `her2k` are complex-only. Each domain has its own driver.
-- **`BATCHLAS_FOR_EACH_ENABLED_BACKEND`** instantiates an entry point once per backend the build
+- **`BATCHLAS_FOR_EACH_ENABLED_BACKEND_1`** instantiates an entry point once per backend the build
   compiled. Its arms are pre-guarded (`BATCHLAS_IF_CUDA`, `BATCHLAS_IF_ROCM`, `BATCHLAS_IF_HOST`), so
   a backend that was not compiled expands to nothing. `BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS` and
   `_SCALAR_ALL_BACKENDS` combine the backend and type loops.

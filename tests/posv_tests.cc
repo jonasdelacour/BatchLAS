@@ -139,13 +139,6 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
 }
 
 template <typename T>
-void reset(Sys<T>& p) {
-    std::copy(p.a0.begin(), p.a0.end(), p.a.begin());
-    std::copy(p.b0.begin(), p.b0.end(), p.b.begin());
-    std::fill(p.info.begin(), p.info.end(), int32_t(-12345));
-}
-
-template <typename T>
 MatrixView<T, MatrixFormat::Dense> a_view(Sys<T>& p) {
     return MatrixView<T, MatrixFormat::Dense>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch,
                                               p.aptr.data());
@@ -252,7 +245,6 @@ TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
 // P2. The factor posv leaves behind must be bit-for-bit what potrf leaves behind:
 // posv_tiny.cc's step 1 is a verbatim copy of potrf_tiny.cc's recurrence, so any
 // difference means one of them reordered the arithmetic.
-//
 // ARMED BREAK (R9): in posv_tiny.cc step 1 change `rinv = R(1) / dkk` to
 // `sycl::rsqrt(akk)`. EXPECTED: RED here (the factors differ in the last bits) while
 // P1 stays GREEN, because rsqrt.approx is still accurate enough for the residual

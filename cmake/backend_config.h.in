@@ -52,12 +52,6 @@
 #cmakedefine01 BATCHLAS_HAS_LAPACKE
 #cmakedefine01 BATCHLAS_HAS_CBLAS
 
-#if BATCHLAS_HAS_CUBLAS || BATCHLAS_HAS_ROCBLAS || BATCHLAS_HAS_LAPACKE
-  #define BATCHLAS_HAS_ANY_VENDOR 1
-#else
-  #define BATCHLAS_HAS_ANY_VENDOR 0
-#endif
-
 // OPENBLAS_CORETYPE value that the configure-time BLAS health check found to be
 // required for the host BLAS to compute dgemm correctly (see
 // cmake/BatchLASBlasHealthCheck.cmake). Empty when nothing was needed or the

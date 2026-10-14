@@ -765,8 +765,3 @@ TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
         EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
     }
 }
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

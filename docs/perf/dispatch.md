@@ -100,13 +100,13 @@ in `tests/{symm,syrk,syr2k,trmm}_candidates_tests.cc`. The value comes from the 
 
 Every other word throws: another level-3 op's spelling, `cublasdx`, the legacy `tiles`/`narrow`/`gemm`/`custom`/
 `dx`/`fused` words, `diag_full_gemm`, and the `origin:algorithm` forms `native:auto` and `vendor:auto`
-(`SyrkCudaCustomTest.RemovedRouteWordsThrow`, `SymmCudaCustomTest.RemovedRouteWordsThrow`,
+(`SyrkCandidates.UnknownPinsThrow`, `SymmCandidates.UnknownPinsThrow`,
 `TrmmCandidates.UnknownPinsThrow`). Pins apply and are checked for every dtype.
 
 Two neighbouring variables are not pins of these four ops. `herk` reaches syrk's conjugating Gram kernel only when
 `BATCHLAS_SYRK_ROUTE` is exactly `gram` (`ops::syrk::herk_gram_pinned()` in `src/ops/syrk/choice.hh`).
 `BATCHLAS_EXPAND_ROUTE=expand|loop` is read by hemm, herk and her2k only. `src/backends/route_common.hh` holds only
-`ceil_div` and `is_gpu_queue`.
+`ceil_div`.
 
 ## Measured boundaries {#dispatch-measured-boundaries}
 

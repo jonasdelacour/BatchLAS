@@ -66,7 +66,7 @@ Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivot
         [&](Tiny) { return sycl_getrf::getrf_tiny_dispatch<T>(q, A, pivots, ws, info); },
         [&](Cta) { return sycl_getrf::getrf_cta_dispatch<T>(q, A, pivots, ws, info); },
         [&](Blocked) {
-            // The public gemm and trsm, not gemm_custom: the operands are sub-views carrying the
+            // The public gemm and trsm (table-routed): the operands are sub-views carrying the
             // parent's ld, where the native GEMM collapses.
             // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
             return sycl_getrf::getrf_blocked_dispatch<T>(

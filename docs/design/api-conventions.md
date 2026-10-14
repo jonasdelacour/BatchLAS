@@ -59,7 +59,7 @@ reports "no matching function".
 - `BATCHLAS_ACCEPT_OWNING(NAME)`, placed beside `BATCHLAS_DISPATCH_ON_QUEUE(NAME)`, converts owning
   arguments to views and lets the inner call deduce. Its signature is not copied.
 - `BATCHLAS_ACCEPT_OWNING_NB` does the same for entry points not templated on `Backend`
-  (`norm`, `transpose`, `francis_sweep`, the `steqr_*_buffer_size` pair).
+  (`norm`, `transpose`, the `steqr_*_buffer_size` pair).
 - `detail::view_of` names the view a parameter becomes. Non-owning arguments pass through.
 - It is a last resort. `detail::AnyOwning` keeps it out of all-view calls, and a fixed-parameter
   overload (an option struct, or a fixed arity such as `getrf`'s four-argument form) wins by

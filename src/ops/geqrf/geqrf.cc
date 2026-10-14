@@ -37,7 +37,7 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
         [&](Tiny) { return sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, tau, ws); },
         [&](Cta) { return sycl_geqrf::geqrf_cta_dispatch<T>(q, A, tau, ws); },
         [&](Blocked) {
-            // The public gemm, not gemm_custom: the trailing updates are TN/NN panel products the
+            // The public gemm (table-routed): the trailing updates are TN/NN panel products the
             // native GEMM loses on some shapes, and the gemm table knows which.
             return sycl_geqrf::geqrf_blocked_dispatch<T>(
                 q, A, tau, ws,

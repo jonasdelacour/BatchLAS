@@ -3685,8 +3685,3 @@ TEST(GetrfTinySource, OnlySubGroupBarriersAndNoGroupCollective) {
 
 // The break record for every guarded property, including the breaks that turned
 // nothing red: docs/perf/lu.md#blind-guards-and-what-made-them-blind
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

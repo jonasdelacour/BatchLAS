@@ -23,8 +23,6 @@ namespace batchlas {
     template <typename T>
     struct StedcParams;
 
-    #ifndef SYEVSTRUCTS
-    #define SYEVSTRUCTS
     /// @addtogroup api_eigen
     /// @{
 
@@ -124,7 +122,6 @@ namespace batchlas {
         SortOrder sort_order = SortOrder::Ascending;                ///< Order used when #sort_enabled.
     };
     /// @}
-    #endif
 
     /// @addtogroup api_qr
     /// @{
@@ -709,15 +706,6 @@ namespace batchlas {
     template <Backend B, typename T>
     BATCHLAS_API size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
 
-    /**
-     * @brief One or more implicit Francis QR sweeps over a batch of tridiagonals (d, e).
-     * @warning Declared only: the library defines and instantiates no `francis_sweep`, so a
-     *          call fails at link time.
-     * @ingroup api_tridiag_lowlevel
-     */
-    template <typename T>
-    BATCHLAS_API Event francis_sweep(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1, T zero_threshold = std::numeric_limits<T>::epsilon());
-
     // Convention in the tridiagonal group below: `VectorView<T>` for one vector per batch
     // item (it carries inc/stride/batch_size), `Span<...>` for flat per-item arrays and byte
     // workspaces. Demoting a `VectorView` to a `Span` silently drops the stride.
@@ -894,7 +882,6 @@ namespace batchlas {
         /// better memory reuse. 1 fully serialises them.
         size_t block_size = 32;
         size_t max_sweeps = 50;  ///< Cap on Francis QR sweeps; 2-3 typically suffice per eigenvalue.
-        T zero_threshold = std::numeric_limits<T>::epsilon();  ///< Deflation threshold on the off-diagonal.
         /// If false, the eigenvector matrix is set to the identity and the rotations are
         /// applied to it; if true, they are applied to the caller's matrix (a back-transform).
         bool back_transform = false;
@@ -983,15 +970,6 @@ namespace batchlas {
     /// @}
 
     // === CTA small-matrix extensions (n <= 32) ===
-
-    /**
-     * @brief QR (GEQRF) or QL (GEQLF) reflector layout. Not referenced by any entry point.
-     * @ingroup api_qr
-     */
-    enum class OrmqCtaFactorization {
-        QR,
-        QL,
-    };
 
     /// @addtogroup api_tridiag
     /// @{
@@ -1250,33 +1228,6 @@ namespace batchlas {
                                                                      Uplo uplo,
                                                                      int32_t kd,
                                                                      SytrdBandReductionParams params);
-
-    /** @brief LAPACK-named alias (HB2ST) of sytrd_sb2st(); identical arguments. @ingroup api_tridiag_lowlevel */
-    template <Backend B, typename T>
-    inline Event hetrd_hb2st(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                             const VectorView<typename base_type<T>::type>& d_out,
-                             const VectorView<typename base_type<T>::type>& e_out,
-                             const VectorView<T>& tau_out,
-                             Uplo uplo,
-                             int32_t kd,
-                             const Span<std::byte>& ws,
-                             int32_t block_size) {
-        return sytrd_sb2st<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, block_size);
-    }
-
-    /** @brief LAPACK-named alias of sytrd_sb2st_buffer_size(). @ingroup api_tridiag_lowlevel */
-    template <Backend B, typename T>
-    inline size_t hetrd_hb2st_buffer_size(Queue& ctx,
-                                          const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                          const VectorView<typename base_type<T>::type>& d_out,
-                                          const VectorView<typename base_type<T>::type>& e_out,
-                                          const VectorView<T>& tau_out,
-                                          Uplo uplo,
-                                          int32_t kd,
-                                          int32_t block_size) {
-        return sytrd_sb2st_buffer_size<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, block_size);
-    }
 
     /// @}
 
@@ -1928,19 +1879,6 @@ namespace batchlas {
     template <Backend B, typename T>
     BATCHLAS_API size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
 
-    /**
-     * @brief Old name of stedc_buffer_size(), kept so an out-of-tree caller gets a warning
-     *        and not a link error.
-     * @deprecated Use stedc_buffer_size(); the `*_buffer_size` naming rule is in
-     *             @ref md_docs_2cpp-api.
-     * @ingroup api_tridiag_lowlevel
-     */
-    template <Backend B, typename T>
-    [[deprecated("renamed to stedc_buffer_size")]]
-    inline size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params) {
-        return stedc_buffer_size<B, T>(ctx, n, batch_size, jobz, params);
-    }
-
     /// @}
 
     /// @addtogroup api_eigen
@@ -2015,34 +1953,6 @@ namespace batchlas {
                                               const MatrixView<T, MatrixFormat::Dense>& V,
                                               const VectorView<typename base_type<T>::type>& ritz_vals);
 
-    /**
-     * @brief Old name of ritz_values_buffer_size() (view arguments).
-     * @deprecated Use ritz_values_buffer_size(); kept so out-of-tree callers get a warning.
-     * @ingroup api_eigen_lowlevel
-     */
-    template <Backend B, typename T, MatrixFormat MFormat>
-    [[deprecated("renamed to ritz_values_buffer_size")]]
-    inline size_t ritz_values_workspace(Queue& ctx,
-                                        const MatrixView<T, MFormat>& A,
-                                        const MatrixView<T, MatrixFormat::Dense>& V,
-                                        const VectorView<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, ritz_vals);
-    }
-
-    /**
-     * @brief Old name of ritz_values_buffer_size() (owning arguments).
-     * @deprecated Use ritz_values_buffer_size(); kept so out-of-tree callers get a warning.
-     * @ingroup api_eigen_lowlevel
-     */
-    template <Backend B, typename T, MatrixFormat MFormat>
-    [[deprecated("renamed to ritz_values_buffer_size")]]
-    inline size_t ritz_values_workspace(Queue& ctx,
-                                        const Matrix<T, MFormat>& A,
-                                        const Matrix<T, MatrixFormat::Dense>& V,
-                                        const Vector<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, ritz_vals);
-    }
-
     /// @}
 
     /// @addtogroup api_extra
@@ -2080,13 +1990,6 @@ namespace batchlas {
     BATCHLAS_API Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A);
 
-    /** @brief The allocating inv() on an owning `A`. @ingroup api_extra_lowlevel */
-    template <Backend B, typename T>
-    inline Matrix<T, MatrixFormat::Dense> inv_matrix(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A) {
-        return inv<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
-    }
-
     /**
      * @brief Scales `mat` by `cto / cfrom` without overflow or underflow (LAPACK `?lascl`).
      *
@@ -2122,7 +2025,6 @@ BATCHLAS_ACCEPT_OWNING(ritz_values)
 BATCHLAS_ACCEPT_OWNING(ritz_values_buffer_size)
 BATCHLAS_ACCEPT_OWNING(inv)
 BATCHLAS_ACCEPT_OWNING(inv_buffer_size)
-BATCHLAS_ACCEPT_OWNING_NB(francis_sweep)
 BATCHLAS_ACCEPT_OWNING_NB(steqr_buffer_size)
 BATCHLAS_ACCEPT_OWNING_NB(steqr_cta_buffer_size)
 
@@ -2160,8 +2062,6 @@ BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction)
 BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_single_step)
 BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(sytrd_band_reduction_single_step_buffer_size)
-BATCHLAS_DISPATCH_ON_QUEUE(hetrd_hb2st)
-BATCHLAS_DISPATCH_ON_QUEUE(hetrd_hb2st_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_cta)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_cta_fused)
@@ -2193,39 +2093,8 @@ BATCHLAS_DISPATCH_ON_QUEUE(stedc_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(ritz_values)
 BATCHLAS_DISPATCH_ON_QUEUE(ritz_values_buffer_size)
 
-// Hand-written because BATCHLAS_DISPATCH_ON_QUEUE has nowhere to put [[deprecated]].
-
-/**
- * @brief Queue-deducing form of the old stedc_workspace_size() name.
- * @deprecated Use stedc_buffer_size().
- * @ingroup api_tridiag_lowlevel
- */
-template <typename... Args>
-    requires requires(Queue& probe_ctx, Args&&... probe_args) {
-        stedc_buffer_size<::batchlas::detail::kProbeBackend>(probe_ctx, std::forward<Args>(probe_args)...);
-    }
-[[deprecated("renamed to stedc_buffer_size")]]
-inline auto stedc_workspace_size(Queue& ctx, Args&&... args) {
-    return stedc_buffer_size(ctx, std::forward<Args>(args)...);
-}
-
-/**
- * @brief Queue-deducing form of the old ritz_values_workspace() name.
- * @deprecated Use ritz_values_buffer_size().
- * @ingroup api_eigen_lowlevel
- */
-template <typename... Args>
-    requires requires(Queue& probe_ctx, Args&&... probe_args) {
-        ritz_values_buffer_size<::batchlas::detail::kProbeBackend>(probe_ctx, std::forward<Args>(probe_args)...);
-    }
-[[deprecated("renamed to ritz_values_buffer_size")]]
-inline auto ritz_values_workspace(Queue& ctx, Args&&... args) {
-    return ritz_values_buffer_size(ctx, std::forward<Args>(args)...);
-}
-
 BATCHLAS_DISPATCH_ON_QUEUE(inv)
 BATCHLAS_DISPATCH_ON_QUEUE(inv_buffer_size)
-BATCHLAS_DISPATCH_ON_QUEUE(inv_matrix)
 
 // ---- ortho: option-struct and arena-backed spellings -----------------------
 //

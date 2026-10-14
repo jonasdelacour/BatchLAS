@@ -272,7 +272,6 @@ Event syev_cta(Queue& ctx,
         SteqrParams<Real> steqr_params_local;
         steqr_params_local.block_size = steqr_params.block_size;
         steqr_params_local.max_sweeps = steqr_params.max_sweeps;
-        steqr_params_local.zero_threshold = static_cast<Real>(std::abs(steqr_params.zero_threshold));
         steqr_params_local.back_transform = false;
         steqr_params_local.block_rotations = steqr_params.block_rotations;
         steqr_params_local.sort = steqr_params.sort;
@@ -616,7 +615,6 @@ size_t syev_cta_buffer_size(Queue& ctx,
         SteqrParams<Real> steqr_params_local;
         steqr_params_local.block_size = steqr_params.block_size;
         steqr_params_local.max_sweeps = steqr_params.max_sweeps;
-        steqr_params_local.zero_threshold = static_cast<Real>(std::abs(steqr_params.zero_threshold));
         steqr_params_local.back_transform = false;
         steqr_params_local.block_rotations = steqr_params.block_rotations;
         steqr_params_local.sort = steqr_params.sort;

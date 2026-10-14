@@ -153,7 +153,7 @@ inline void DeviceBlasSquareLevel2Sizes(Benchmark* b) {
 
 } // namespace
 
-MINI_BENCHMARK(device_blas_level2_benchmark) {
+static void device_blas_level2_benchmark(minibench::State& state) {
     auto queue = std::make_shared<Queue>(Device::default_device(), true);
     const std::size_t local_size = device_blas_level2_local_size(*queue);
 
@@ -243,8 +243,8 @@ MINI_BENCHMARK(device_blas_level2_benchmark) {
                     std::move(y),
                     [local_size](Queue& queue, auto a, auto x, auto y) {
                         const auto a_view = a.kernel_view();
-                        launch_batched_level2_kernel<DeviceBlasLevel2Kernel<std::integral_constant<int, 300 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
-                            queue, a.batch_size(), local_size, [=](sycl::nd_item<1> item, int bid) {
+                        launch_batched_level2_kernel_with_workspace<DeviceBlasLevel2Scalar, DeviceBlasLevel2Kernel<std::integral_constant<int, 300 + DEVICE_BLAS_POLICY + 10 * DEVICE_BLAS_LEVEL2_TRANS>>>(
+                            queue, a.batch_size(), local_size, 0, [=](sycl::nd_item<1> item, int bid, DeviceBlasLevel2Scalar*) {
                                 batchlas::device::trmv<kPolicy, kTrmvUplo, kLevel2Trans, kTrmvDiag>(
                                     item.get_group(),
                                     a_view.batch_item(bid),
@@ -268,7 +268,11 @@ static auto* bench_device_blas_level2_benchmark = minibench::RegisterBenchmark(d
 
 template <typename Benchmark>
 Benchmark* register_device_blas_level2_sizes(Benchmark* benchmark) {
+#if DEVICE_BLAS_LEVEL2_MODE == 1
     DeviceBlasGemvSizes(benchmark);
+#else
+    DeviceBlasSquareLevel2Sizes(benchmark);
+#endif
     return benchmark;
 }
 

@@ -34,16 +34,6 @@ template <typename Tag, typename T> class PackVKernelName;
 
 namespace detail {
 
-template <typename U>
-inline U conj_if_needed(const U& x, bool do_conj) {
-    if (!do_conj) return x;
-    if constexpr (batchlas::internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // LARFT -- form T for a block of Householder vectors V (Forward, Columnwise).
 // V is (m x ib) unit-lower (diag = 1, upper = 0). T is (ib x ib) upper
@@ -61,17 +51,6 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
                                                const T* tau_data, int tau_stride,
                                                int tau_offset, int batch) {
     static_assert(WG > 0, "WG must be positive");
-
-    auto reduce_sum = [](const sycl::group<1>& g, T x) {
-        if constexpr (batchlas::internal::is_complex<T>::value) {
-            using R = typename T::value_type;
-            const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
-            return T(re, im);
-        } else {
-            return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
-        }
-    };
 
     return q->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, false>>(h,
@@ -112,12 +91,11 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
                         for (int r = j + 1 + lid; r < m; r += WG) {
                             const T v_rc = v_b[r + col * ld_v];
                             const T v_rj = v_b[r + j * ld_v];
-                            partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
+                            partial += batchlas::device::detail::conj(v_rc) * v_rj;
                         }
-                        const T sum_r = reduce_sum(g, partial);
+                        const T sum_r = batchlas::device::detail::reduce_sum_group(g, partial);
                         if (lid == 0) {
-                            const T sum =
-                                conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
+                            const T sum = batchlas::device::detail::conj(v_b[j + col * ld_v]) + sum_r;
                             t_b[col + j * ld_t] = -tauj * sum;
                         }
                         it.barrier(sycl::access::fence_space::global_space);

@@ -21,20 +21,11 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>
     struct LanczosKernel {};
 
-    template <Backend B, typename T, MatrixFormat MF>
-    struct ApplyReflectionsKernel {};
-
-    template <Backend B, typename T, MatrixFormat MF>
-    struct QTQKernel {};
-
-    template <Backend B, typename T, MatrixFormat MF>
-    struct DiagonalizeKernel {};
-
     namespace {
     // Shared by lanczos and lanczos_buffer_size, which must size exactly what the run uses.
     template <typename T>
     SteqrParams<T> lanczos_steqr_params() {
-        return SteqrParams<T>{32, 10, std::numeric_limits<T>::epsilon(), false, false, true, true, SortOrder::Descending};
+        return SteqrParams<T>{32, 10, false, false, true, true, SortOrder::Descending};
     }
 
     // Item b's off-diagonals start at betas[b * n] (one n-slot per item, n - 1 used).

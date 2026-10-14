@@ -120,9 +120,6 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }
-    std::string normalize_route(const std::string& origin, const std::string& algo) const override {
-        return tune::normalize_route<ops::orgqr::OrgqrChoice>(origin, algo);
-    }
     std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));

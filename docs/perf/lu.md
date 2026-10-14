@@ -63,7 +63,7 @@ The blocked rows are the [getrf window](#getrf-window-evidence) plus [the cfloat
 
 **gesv** (grid n 16|17, 32|33; nrhs 4|5; no batch key): `tiny blocked` at n <= 32 for float and n <= 16 for cfloat; `blocked` alone elsewhere and for double and cdouble. A tiny-first row whose nrhs exceeds 4 runs `blocked`, because `can_run(tiny)` refuses it.
 
-The rows are pinned by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnBothDevices`, `GetrsTranscribedTable.RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold`, `GetriTranscribedTable.RowsHoldTheOldPreference` and `GesvTranscribedTable.RowsHoldTheOldWindowOnBothDevices`. Auto on the real device is pinned by `GetrfCandidates.AutoReproducesTheOldRouterOnTheRealDevice` and the `AutoReadsTheTranscribedTable(s)` cases.
+The rows are pinned by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnSm89`, `GetrsTranscribedTable.RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold`, `GetriTranscribedTable.RowsHoldTheOldPreference` and `GesvTranscribedTable.RowsHoldTheOldWindowOnSm89`. Auto on the real device is pinned by `GetrfCandidates.AutoReadsTheShippedTablesOnTheRealDevice` and the `AutoReadsTheShippedTable(s)` cases.
 
 ### LU: the order among native families
 
@@ -330,7 +330,7 @@ Measured with a `PAD=` knob that moves only the declared byte count: **49,024 B 
 
 ## Open debts
 
-* **`getrf` window has no batch term** (measured at batch 128-1024 only); `GetrfCandidates.AutoReproducesTheOldRouterOnTheRealDevice` asserts `(512, 2)` on an order clause alone.
+* **`getrf` window has no batch term** (measured at batch 128-1024 only); `GetrfCandidates.AutoReadsTheShippedTablesOnTheRealDevice` covers `(512, 2)`, below the measured batch range.
 * **`getri` at batch <= 32 beats cuBLAS by 1.7-28x** for every type, but the batch grid starts at 128. Double and cdouble at batch 1-64 are unmeasured.
 * **`getrs` clause-C batch floor of 128 gives up wins** at batch 32 and 64 (`experiments/wp8_getri/gen_floor.py` is the sweep).
 * **`getrs` clause C is unmeasured above order 1024**, and 84 winning cells in clauses A and B go to the vendor (largest 3.944x, double n=1024 nrhs=4 batch=256). Recovering them needs a timed retune.
@@ -843,6 +843,6 @@ gesv cfloat with `tiny` against the composition reads 0.97-1.19x at n = 17..32, 
 
 ### Armed breaks (column bucket pass)
 
-Run against `getrf_tests`, `gesv_tests` and `posv_tests` on GPU 1, then reverted. The route-layer breaks are table rows checked by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnBothDevices`. **Single buffer instead of the parity pair is green everywhere**: a blind guard, kept for the memory model. Other breaks went red in `T1`-`T11` (tiny), `G1` (gesv) and `P1`, `P7` (posv).
+Run against `getrf_tests`, `gesv_tests` and `posv_tests` on GPU 1, then reverted. The route-layer breaks are table rows checked by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnSm89`. **Single buffer instead of the parity pair is green everywhere**: a blind guard, kept for the memory model. Other breaks went red in `T1`-`T11` (tiny), `G1` (gesv) and `P1`, `P7` (posv).
 
 The RHS pad-column fix is a speed change only; no functional test can see it.

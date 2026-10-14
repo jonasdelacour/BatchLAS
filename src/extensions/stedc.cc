@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#define DEBUG_STEDC 0
 
 namespace batchlas {
 

@@ -27,8 +27,8 @@ A survey of the tree on 2026-10-09 (branch `tuning-deep-sm120`) found:
 | tolerances | 3 schemes, 20+ constants | fixed per type vs `c·n·eps` with c from 4 to 200 |
 
 `tools/tune/residuals.hh` (since deleted) was a port of `benchmarks/factor_bench.cc`. "Is LAPACKE
-available" is decided under three macro names (`BATCHLAS_TUNE_HAVE_LAPACKE`,
-`BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE`, `BATCHLAS_GETRF_TESTS_HAVE_LAPACKE`).
+available" was decided under three macro names; `BATCHLAS_VERIFY_HAVE_LAPACKE` (set by
+`batchlas::verify`) replaced them.
 
 ## Verification: decisions
 

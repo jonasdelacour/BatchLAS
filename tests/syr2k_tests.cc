@@ -124,11 +124,6 @@ TYPED_TEST(Syr2kTest, LeavesTheOtherTriangleUntouched) {
     }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 #if BATCHLAS_HAS_CUDA_BACKEND
 namespace {
 

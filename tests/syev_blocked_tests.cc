@@ -295,13 +295,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 }
 #endif
 
-int main(int argc, char** argv) {
-	::testing::InitGoogleTest(&argc, argv);
-	return RUN_ALL_TESTS();
-}
-
 // --- Uplo::Upper -------------------------------------------------------------
-//
 // Upper had NO coverage anywhere in the syev tests before this. It also had no
 // implementation: sytrd_blocked threw on it, so every Upper call fell through to the vendor.
 // syev_blocked/syev_two_stage now mirror the upper triangle into the lower one and run the

@@ -628,17 +628,6 @@ inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
     throw py::value_error("invalid stedc merge_variant");
 }
 
-inline OrmqCtaFactorization parse_ormqx_factorization(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "qr") {
-        return OrmqCtaFactorization::QR;
-    }
-    if (value == "ql") {
-        return OrmqCtaFactorization::QL;
-    }
-    throw py::value_error("invalid ormqx factorization");
-}
-
 inline Device resolve_device(const std::optional<std::string>& device_name) {
     if (!device_name.has_value()) {
         return Device::default_device();
@@ -1302,7 +1291,6 @@ SteqrParams<T> parse_steqr_params(const py::dict& options) {
     SteqrParams<T> params;
     params.block_size = py_scalar_or_default<std::size_t>(options, "block_size", params.block_size);
     params.max_sweeps = py_scalar_or_default<std::size_t>(options, "max_sweeps", params.max_sweeps);
-    params.zero_threshold = py_scalar_or_default<T>(options, "zero_threshold", params.zero_threshold);
     params.back_transform = py_scalar_or_default<bool>(options, "back_transform", params.back_transform);
     params.block_rotations = py_scalar_or_default<bool>(options, "block_rotations", params.block_rotations);
     params.sort = py_scalar_or_default<bool>(options, "sort", params.sort);

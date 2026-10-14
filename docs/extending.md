@@ -113,9 +113,7 @@ Every step is required; each has a check that fails if skipped.
 - The sizing function is `<op>_buffer_size` and returns bytes. It takes the same arguments as the run
   path up to the workspace and branches identically. Size it with `BumpAllocator::measuring()` +
   `required_bytes()`, never by re-deriving sizes: the allocator checks the alignment-rounded size
-  but advances by the raw size, so an exact simulation is too small. The `*_workspace` /
-  `*_workspace_size` spellings survive only as `[[deprecated]]` aliases (`stedc_workspace_size`,
-  `ritz_values_workspace`).
+  but advances by the raw size, so an exact simulation is too small.
 - Validation of shapes and flags goes in the checked overloads in `include/batchlas/blas/options.hh`
   or a `<op>_validate_params` helper beside the declaration, and is tested through the ordinary
   spelling.

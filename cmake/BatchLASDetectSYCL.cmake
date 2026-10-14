@@ -29,10 +29,7 @@ set(BATCHLAS_DETECTED_AMD_GPU FALSE)
 set(BATCHLAS_DETECTED_INTEL_GPU FALSE)
 set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "")
 set(BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "")
-set(BATCHLAS_SYCL_NO_CPU_CXX_OPTIONS "")
-set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "")
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672)
-set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2)
 
 # See batchlas_subgroup_workspace_budget_bytes below: this is the DEVICE-GEMM tile cap,
 # not a device capacity, and moving it recompiles a different set of tile variants into
@@ -77,9 +74,8 @@ if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
         -fsycl-max-parallel-link-jobs=${BATCHLAS_SYCL_LINK_JOBS})
 endif()
 
-# The per-architecture local-memory table. Two callers: the reported DETECTED_DEVICES
-# row, and the tile cap below, which needs it as the HISTORICAL figure it must not move
-# away from. It is deliberately NOT a device capacity -- no kernel may size anything from
+# The per-architecture local-memory table. Its one caller is the tile cap below, which
+# needs it as the HISTORICAL figure it must not move away from. It is deliberately NOT a device capacity -- no kernel may size anything from
 # it, because a build-host table cannot bind the device the process later opens; every
 # resident capacity asks DeviceProperty::LOCAL_MEM_SIZE instead
 # (src/util/resident_capacity.hh).
@@ -132,22 +128,6 @@ function(batchlas_subgroup_workspace_budget_bytes architecture local_mem_bytes d
     endif()
 
     set(${out_var} "${_workspace_budget_bytes}" PARENT_SCOPE)
-endfunction()
-
-function(batchlas_safe_subgroups_per_workgroup architecture device_type out_var)
-    set(_safe_subgroups 1)
-
-    if("${device_type}" STREQUAL "gpu")
-        if("${architecture}" MATCHES "^nvidia_gpu_sm_[0-9]+$")
-            set(_safe_subgroups 2)
-        elseif("${architecture}" MATCHES "^amd_gpu_gfx[0-9]+$")
-            set(_safe_subgroups 4)
-        elseif("${architecture}" MATCHES "^intel")
-            set(_safe_subgroups 4)
-        endif()
-    endif()
-
-    set(${out_var} "${_safe_subgroups}" PARENT_SCOPE)
 endfunction()
 
 # DPC++ names an NVIDIA device's architecture only if its SYCL table lists it, and that
@@ -379,9 +359,7 @@ endfunction()
 function(collect_sycl_device_limit_info)
     if(NOT SYCL_LS)
         message(STATUS "sycl-ls not found, generating conservative device limits")
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
         return()
     endif()
 
@@ -393,9 +371,7 @@ function(collect_sycl_device_limit_info)
     )
     if(NOT SYCL_LS_DEVICE_LIMITS_RESULT EQUAL 0)
         message(WARNING "Failed to execute sycl-ls --verbose for device limit detection: ${SYCL_LS_DEVICE_LIMITS_ERROR}")
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
         return()
     endif()
 
@@ -404,14 +380,8 @@ function(collect_sycl_device_limit_info)
     string(REPLACE "\r" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
     string(REPLACE "\n" ";" _sycl_ls_lines "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
 
-    set(_entries "")
     set(_min_gpu_workspace_budget_bytes 0)
-    set(_min_gpu_safe_subgroups_per_workgroup 0)
-    set(_current_platform_name "")
     set(_current_device_type "")
-    set(_current_device_name "")
-    set(_current_architecture "unknown")
-    set(_current_subgroup_size 1)
     set(_in_device FALSE)
 
     foreach(_line IN LISTS _sycl_ls_lines)
@@ -428,58 +398,30 @@ function(collect_sycl_device_limit_info)
         if(_trimmed_line MATCHES "^Device \\\[#")
             set(_in_device TRUE)
             set(_current_device_type "")
-            set(_current_device_name "")
-            set(_current_architecture "unknown")
-            set(_current_subgroup_size 1)
             continue()
         endif()
 
         if(_in_device)
             if(_trimmed_line MATCHES "^Type[ ]*:[ ]*(.+)$")
                 set(_current_device_type "${CMAKE_MATCH_1}")
-            elseif(_trimmed_line MATCHES "^Name[ ]*:[ ]*(.+)$")
-                set(_current_device_name "${CMAKE_MATCH_1}")
-            elseif(_trimmed_line MATCHES "^info::device::sub_group_sizes:[ ]*(.+)$")
-                string(REGEX MATCH "([0-9]+)" _subgroup_match "${_trimmed_line}")
-                if(_subgroup_match)
-                    set(_current_subgroup_size "${CMAKE_MATCH_1}")
-                endif()
             elseif(_trimmed_line MATCHES "^Architecture:[ ]*(.+)$")
                 set(_current_architecture "${CMAKE_MATCH_1}")
-                batchlas_architecture_table_local_mem_bytes("${_current_architecture}" "${_current_device_type}" _current_local_mem_bytes)
-                batchlas_subgroup_workspace_budget_bytes("${_current_architecture}" "${_current_local_mem_bytes}" "${_current_device_type}" _current_workspace_budget_bytes)
-                batchlas_safe_subgroups_per_workgroup("${_current_architecture}" "${_current_device_type}" _current_safe_subgroups_per_workgroup)
-
-                set(_entry "${_current_platform_name}|${_current_device_type}|${_current_device_name}|${_current_architecture}|${_current_subgroup_size}|${_current_local_mem_bytes}|${_current_workspace_budget_bytes}")
-                list(FIND _entries "${_entry}" _entry_index)
-                if(_entry_index EQUAL -1)
-                    list(APPEND _entries "${_entry}")
-                endif()
-
                 if("${_current_device_type}" STREQUAL "gpu")
+                    batchlas_architecture_table_local_mem_bytes("${_current_architecture}" "gpu" _current_local_mem_bytes)
+                    batchlas_subgroup_workspace_budget_bytes("${_current_architecture}" "${_current_local_mem_bytes}" "gpu" _current_workspace_budget_bytes)
                     if(_min_gpu_workspace_budget_bytes EQUAL 0 OR _current_workspace_budget_bytes LESS _min_gpu_workspace_budget_bytes)
                         set(_min_gpu_workspace_budget_bytes "${_current_workspace_budget_bytes}")
                     endif()
-                    if(_min_gpu_safe_subgroups_per_workgroup EQUAL 0 OR _current_safe_subgroups_per_workgroup LESS _min_gpu_safe_subgroups_per_workgroup)
-                        set(_min_gpu_safe_subgroups_per_workgroup "${_current_safe_subgroups_per_workgroup}")
-                    endif()
                 endif()
             endif()
-        elseif(_trimmed_line MATCHES "^Name[ ]*:[ ]*(.+)$")
-            set(_current_platform_name "${CMAKE_MATCH_1}")
         endif()
     endforeach()
 
     if(_min_gpu_workspace_budget_bytes EQUAL 0)
         set(_min_gpu_workspace_budget_bytes 28672)
     endif()
-    if(_min_gpu_safe_subgroups_per_workgroup EQUAL 0)
-        set(_min_gpu_safe_subgroups_per_workgroup 2)
-    endif()
 
-    set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "${_entries}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES "${_min_gpu_workspace_budget_bytes}" PARENT_SCOPE)
-    set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP "${_min_gpu_safe_subgroups_per_workgroup}" PARENT_SCOPE)
 endfunction()
 
 function(detect_sycl_cpu_target)

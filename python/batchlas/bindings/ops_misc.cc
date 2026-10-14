@@ -27,28 +27,10 @@ DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) 
 }
 
 template <typename T>
-SparseMatrix sparse_lascl_impl(const SparseMatrix& matrix_wrapper, T cfrom, T cto) {
-    SparseMatrixT<T> out = std::get<SparseMatrixT<T>>(matrix_wrapper.storage).clone();
-    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
-    batchlas::lascl(queue, out.view(), cfrom, cto);
-    queue.wait();
-    return wrap_sparse(std::move(out));
-}
-
-template <typename T>
 DenseVector dense_norm_impl(const DenseMatrix& matrix_wrapper, NormType norm_type) {
     const auto& matrix = std::get<DenseMatrixT<T>>(matrix_wrapper.storage);
     Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
     auto values = batchlas::norm<T, MatrixFormat::Dense>(queue, matrix.view(), norm_type);
-    queue.wait();
-    return wrap_vector_copy(values, matrix.batch_size(), 1);
-}
-
-template <typename T>
-DenseVector sparse_norm_impl(const SparseMatrix& matrix_wrapper, NormType norm_type) {
-    const auto& matrix = std::get<SparseMatrixT<T>>(matrix_wrapper.storage);
-    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
-    auto values = batchlas::norm<T, MatrixFormat::CSR>(queue, matrix.view(), norm_type);
     queue.wait();
     return wrap_vector_copy(values, matrix.batch_size(), 1);
 }
@@ -227,11 +209,6 @@ void init_misc_ops(py::module_& module) {
         });
     });
 
-    module.def("_transpose_sparse", [](const SparseMatrix& matrix) {
-        (void)matrix;
-        throw_not_implemented("sparse transpose is not provided by the native BatchLAS library");
-    });
-
     module.def("_lascl_dense", [](const DenseMatrix& matrix, const py::object& cfrom, const py::object& cto) {
         return visit_dense(matrix, [&](auto tag, const auto&) -> DenseMatrix {
             using scalar_type = typename decltype(tag)::type;
@@ -244,25 +221,12 @@ void init_misc_ops(py::module_& module) {
         });
     });
 
-    module.def("_lascl_sparse", [](const SparseMatrix& matrix, const py::object& cfrom, const py::object& cto) {
-        (void)matrix;
-        (void)cfrom;
-        (void)cto;
-        throw_not_implemented("sparse lascl is not provided by the native BatchLAS library");
-    });
-
     module.def("_norm_dense", [](const DenseMatrix& matrix, const std::string& norm_name) {
         const NormType norm_type = parse_norm_type(norm_name);
         return visit_dense(matrix, [&](auto tag, const auto&) {
             using scalar_type = typename decltype(tag)::type;
             return dense_norm_impl<scalar_type>(matrix, norm_type);
         });
-    });
-
-    module.def("_norm_sparse", [](const SparseMatrix& matrix, const std::string& norm_name) {
-        (void)matrix;
-        (void)norm_name;
-        throw_not_implemented("sparse norm is not provided by the native BatchLAS library");
     });
 
     module.def("_cond_dense", [](const DenseMatrix& matrix,
@@ -280,17 +244,6 @@ void init_misc_ops(py::module_& module) {
                 return cond_impl<scalar_type, MatrixFormat::Dense>(typed_matrix, norm_type, backend, device_name);
             }
         });
-    });
-
-    module.def("_cond_sparse", [](const SparseMatrix& matrix,
-                                   const std::string& norm_name,
-                                   const std::string& backend_name,
-                                   const py::object& device_name_obj) {
-        (void)matrix;
-        (void)norm_name;
-        (void)backend_name;
-        (void)device_name_obj;
-        throw_not_implemented("sparse cond is not provided by the native BatchLAS library");
     });
 
     module.def("_ortho", [](const DenseMatrix& matrix,

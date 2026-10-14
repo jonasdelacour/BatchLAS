@@ -78,11 +78,6 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
     }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 #if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
     Queue ctx;
@@ -208,20 +203,6 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
 
             expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
         }
-    }
-}
-// BATCHLAS_SYMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
-// throw rather than silently meaning Auto.
-TEST(SymmCudaCustomTest, RemovedRouteWordsThrow) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
-    }
-    const int n = 16;
-    Matrix<float, MatrixFormat::Dense> A(n, n, 2), B(n, n, 2), C(n, n, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "triangular", "gram", "cublasdx"}) {
-        ScopedEnvVar route("BATCHLAS_SYMM_ROUTE", word);
-        EXPECT_THROW(symm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }
 }
 

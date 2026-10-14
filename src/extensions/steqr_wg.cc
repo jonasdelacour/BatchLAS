@@ -6,93 +6,20 @@
 #include <batchlas/util/mempool.hh>
 #include <tuple>
 #include <utility>
-#include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
 #include "info_span.hh"
+#include "steqr_internal.hh"
 
 namespace batchlas {
 
 namespace {
 
-template <typename T> struct FrancisKernel {};
-template <typename T> struct RotationKernel {};
-
-template <typename T>
-auto wilkinson_shift(const T& a, const T& b, const T& c) {
-    const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
-    return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
-}
-
-template <typename T>
-auto givens_rotation(const T& a, const T& b) {
-    auto [c_l, s_l, r] = internal::lartg(a, b);
-    (void)r;
-    return std::array<T, 2>{c_l, -s_l};
-}
-
-template <typename T>
-T apply_givens_rotation(const VectorView<T>& d,
-                        const VectorView<T>& e,
-                        const T& prev_bulge,
-                        size_t i,
-                        size_t j,
-                        const std::array<T, 2>& givens,
-                        bool QR) {
-    const T c = givens[0];
-    const T s = givens[1];
-
-    const size_t n = d.size();
-    const size_t ne = e.size();
-
-    auto d_get = [&](size_t k) -> T {
-        return QR ? d(k) : d(n - 1 - k);
-    };
-    auto d_set = [&](size_t k, T val) {
-        if (QR) {
-            d(k) = val;
-        } else {
-            d(n - 1 - k) = val;
-        }
-    };
-    auto e_get = [&](size_t k) -> T {
-        return QR ? e(k) : e(ne - 1 - k);
-    };
-    auto e_set = [&](size_t k, T val) {
-        if (QR) {
-            e(k) = val;
-        } else {
-            e(ne - 1 - k) = val;
-        }
-    };
-
-    T di = d_get(i);
-    T dj = d_get(j);
-    T ei = e_get(i);
-    T ej = (j < ne) ? e_get(j) : T(0);
-
-    T di_new = c * (c * di - ei * s) - s * (ei * c - s * dj);
-    T dj_new = c * (c * dj + ei * s) + s * (ei * c + s * di);
-    d_set(i, di_new);
-    d_set(j, dj_new);
-
-    if (i > 0) {
-        T e_im1 = e_get(i - 1);
-        e_set(i - 1, e_im1 * c - prev_bulge * s);
-    }
-
-    T ei_new = c * (c * ei + s * di) - s * (c * dj + s * ei);
-    e_set(i, ei_new);
-
-    if (j < ne) {
-        e_set(j, c * ej);
-    }
-
-    return -ej * s;
-}
+template <typename T> struct SteqrWgFrancisKernel {};
+template <typename T> struct SteqrWgRotationKernel {};
 
 // The per-pass scratch steqr_wg_impl carves off the pool it is handed; steqr_wg_layout sizes it
 // through workspace_bytes.
@@ -114,8 +41,7 @@ Event steqr_wg_impl(Queue& ctx,
                     const Span<std::array<int32_t, 3>>& deflation_indices,
                     const Span<ApplyOrder>& order_view,
                     BumpAllocator allocator,
-                    size_t max_sweeps,
-                    T zero_threshold) {
+                    size_t max_sweeps) {
     BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg");
     auto n = d.size();
     auto batch_size = d.batch_size();
@@ -175,7 +101,7 @@ Event steqr_wg_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:francis_sweep");
         ctx->submit([&](sycl::handler& cgh) {
             auto rotations_view = givens_rotations.kernel_view();
-            batchlas::impl::parallel_for<FrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus * 128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<SteqrWgFrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus * 128), sycl::range(64)), [=](sycl::nd_item<1> item) {
                 auto i = item.get_global_id(0);
                 auto n_problems = scan_view[batch_size - 1];
 
@@ -233,22 +159,22 @@ Event steqr_wg_impl(Queue& ctx,
                             return QR ? e_(idx) : e_(n_local - 2 - idx);
                         };
 
-                        const auto shift = wilkinson_shift(d_get(n_local - 2),
+                        const auto shift = internal::wilkinson_shift(d_get(n_local - 2),
                                                            e_get(n_local - 2),
                                                            d_get(n_local - 1));
 
-                        auto [c0, s0] = givens_rotation(d_get(0) - shift, e_get(0));
+                        auto [c0, s0] = internal::givens_rotation(d_get(0) - shift, e_get(0));
                         if (store_givens) {
                             rotations_view(0, k, gid) = {c0, s0};
                         }
-                        auto bulge = apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+                        auto bulge = internal::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
 
                         for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = givens_rotation(e_get(j - 1), bulge);
+                            auto [cj, sj] = internal::givens_rotation(e_get(j - 1), bulge);
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {cj, sj};
                             }
-                            bulge = apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                            bulge = internal::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
                         }
 
                         bool deflatable = false;
@@ -279,7 +205,7 @@ Event steqr_wg_impl(Queue& ctx,
         ctx->submit([&](sycl::handler& cgh) {
             auto Qview = Q.kernel_view();
             auto rotations_view = givens_rotations.kernel_view();
-            batchlas::impl::parallel_for<RotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+            batchlas::impl::parallel_for<SteqrWgRotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
                 auto bid = item.get_group(0);
                 auto k = item.get_local_linear_id();
                 auto n_problems = scan_view[batch_size - 1];
@@ -309,7 +235,6 @@ Event steqr_wg_impl(Queue& ctx,
         });
     }
 
-    (void)zero_threshold;
     return ctx.get_event();
 }
 
@@ -394,8 +319,7 @@ Event steqr_wg(Queue& ctx,
                       deflation_indices,
                       apply_order,
                       BumpAllocator(scratch),
-                      params.max_sweeps,
-                      params.zero_threshold);
+                      params.max_sweeps);
     }
 
     // Per-item convergence status. The driver runs a FIXED n-1 passes with no test, so

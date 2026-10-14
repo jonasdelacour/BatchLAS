@@ -401,7 +401,6 @@ else()
     set(_batchlas_backends_rocm_lib batchlas_backends_rocm)
 endif()
 
-set(BATCHLAS_LINK_LIBRARIES)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     # PRIVATE: these are absolute -dev symlink paths
@@ -495,7 +494,7 @@ if(NOT BATCHLAS_MONOLITHIC_LIBRARY)
     # static libraries). A toolchain defaulting to -Wl,--as-needed therefore
     # drops libraries the link genuinely needs, and the documented
     # `target_link_libraries(app PRIVATE BatchLAS::batchlas)` recipe fails with
-    # "undefined reference to batchlas::sycl_gemm::gemm_custom<float>(...)".
+    # an undefined reference to a symbol defined in a sibling component.
     # It keeps every component on the link line; linker options precede link
     # libraries in CMake's link rule, so it covers all of them.
     #

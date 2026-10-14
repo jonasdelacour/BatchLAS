@@ -7,9 +7,8 @@
 // the mask's source (DPC++ chunked_partition and CUDA tiled_partition too).
 // MATCH.ANY slows with the number of distinct masks in the warp, 32 / P, but
 // ptxas shares one check among the collectives of a basic block.
-// A masked collective narrower than the warp uses the chunk mask by default.
-// BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH tests activemask first (all 32 lanes here:
-// the immediate full mask is legal, no check). That test cannot be shared across
+// A masked collective narrower than the warp uses the chunk mask. Testing activemask
+// first (full mask when all 32 lanes are converged) cannot be shared across
 // collectives, and in the collective-dense CTA eigensolvers it measured slower.
 // evidence: docs/perf/steqr.md#full-warp-partition
 // The `c` operand's segment mask ((32 - P) << 8) makes idx chunk-local and
@@ -85,17 +84,6 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-// Not CSE-able (the intrinsic is convergent and reads the active set), so
-// each call tests the warp at that point. A constant false folds the fast path
-// away, leaving the plain chunk-mask collective.
-inline bool warp_converged() {
-#if defined(BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH)
-    return __nvvm_activemask() == ~0u;
-#else
-    return false;
-#endif
-}
-
 template <typename Op, typename T>
 inline constexpr bool is_op_v = std::is_same_v<Op, T>;
 
@@ -160,66 +148,65 @@ struct NvptxBackend {
     static constexpr const char* name = "nvptx";
     static constexpr bool masked_by_default = true;
 
-    // Masked chunks narrower than the warp are the only case that needs the
-    // run-time test; everything else is one immediate-mask instruction.
+    // Masked chunks narrower than the warp use the chunk mask; everything else is
+    // one immediate-mask instruction.
     static constexpr bool kDynamic = Masked && P < 32;
     using Full = nvptx_detail::Mask<P, true>;
     using Chunk = nvptx_detail::Mask<P, false>;
 
     static uint32_t shfl_idx(const sycl::sub_group&, uint32_t base, uint32_t v, uint32_t src) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::shfl_idx(base, v, src);
+            return Chunk::shfl_idx(base, v, src);
         }
         return Full::shfl_idx(base, v, src);
     }
 
     static uint32_t shfl_xor(const sycl::sub_group&, uint32_t base, uint32_t v, uint32_t mask) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::shfl_xor(base, v, mask);
+            return Chunk::shfl_xor(base, v, mask);
         }
         return Full::shfl_xor(base, v, mask);
     }
 
     static uint32_t shfl_down(const sycl::sub_group&, uint32_t base, uint32_t v, uint32_t delta) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::shfl_down(base, v, delta);
+            return Chunk::shfl_down(base, v, delta);
         }
         return Full::shfl_down(base, v, delta);
     }
 
     static uint32_t shfl_up(const sycl::sub_group&, uint32_t base, uint32_t v, uint32_t delta) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::shfl_up(base, v, delta);
+            return Chunk::shfl_up(base, v, delta);
         }
         return Full::shfl_up(base, v, delta);
     }
 
     static uint32_t ballot(const sycl::sub_group&, uint32_t base, bool pred) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::ballot(base, pred);
+            return Chunk::ballot(base, pred);
         }
         return Full::ballot(base, pred);
     }
 
     static void barrier(const sycl::sub_group&, uint32_t base) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return Chunk::barrier(base);
+            return Chunk::barrier(base);
         }
         Full::barrier(base);
     }
 
-    // One convergence test for everything f does: f gets the full-mask (lockstep)
-    // backend when the warp is converged, the chunk-mask ops otherwise.
+    // f gets the chunk-mask ops for a masked chunk, the full-mask (lockstep) backend otherwise.
     template <typename F>
     static decltype(auto) region(F&& f) {
         if constexpr (kDynamic) {
-            if (!nvptx_detail::warp_converged()) return f(NvptxChunkOps<P>{});
+            return f(NvptxChunkOps<P>{});
         }
         return f(NvptxBackend<P, false>{});
     }
 
     // P = 32 integer reductions are one redux.sync. A masked P < 32 partition
-    // takes every reduction so the whole butterfly shares one convergence test.
+    // takes every reduction as one chunk-mask butterfly.
     template <typename T, typename Op>
     static constexpr bool has_native_reduce =
         (P >= 32 && nvptx_detail::kHasRedux && nvptx_detail::redux_ok_v<T, Op>) ||
@@ -230,7 +217,6 @@ struct NvptxBackend {
         if constexpr (P >= 32 && nvptx_detail::kHasRedux && nvptx_detail::redux_ok_v<T, Op>) {
             return nvptx_detail::redux_full(v, op);
         } else {
-            if (nvptx_detail::warp_converged()) return Full::butterfly(base, v, op);
             return Chunk::butterfly(base, v, op);
         }
     }

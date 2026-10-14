@@ -7,32 +7,12 @@
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <vector>
-#include <iostream>
 #include <algorithm>
 
 using namespace batchlas;
 
 std::string GetTestName(Transpose trans, OrthoAlgorithm algo);
 std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorithm algo);
-
-template <typename T>
-void print_matrix(const MatrixView<T, MatrixFormat::Dense>& mat, const std::string& name) {
-    std::cout << "Matrix: " << name << " (" << mat.rows() << "x" << mat.cols() << ") Batch: " << mat.batch_size() << std::endl;
-    auto mat_host = mat.data().to_vector(); // Assuming to_vector copies to host
-
-    for (int b = 0; b < mat.batch_size(); ++b) {
-        std::cout << "Batch " << b << ":" << std::endl;
-        for (int i = 0; i < mat.rows(); ++i) {
-            for (int j = 0; j < mat.cols(); ++j) {
-                // Correct indexing for row-major layout
-                std::cout << mat_host[b * mat.stride() + i * mat.ld() + j] << "\\t";
-            }
-            std::cout << std::endl;
-        }
-    }
-    std::cout << std::endl;
-}
-
 
 template <typename T, Backend B>
 struct OrthoConfig {

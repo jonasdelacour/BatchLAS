@@ -67,16 +67,6 @@ namespace batchlas {
         }
     }
 
-    template <typename T>
-    inline T wilkinson_shift(const T& a, const T& b, const T& c) {
-        // a,b,c represent the 2x2 block:
-        //   [ a  b ]
-        //   [ b  c ]
-        // Return the eigenvalue closest to c.
-        const auto [lambda1, lambda2] = internal::eigenvalues_2x2(a, b, c);
-        return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
-    }
-
     // Compile-time selectable shared-memory cache for Q, column-major:
     // Q_local[base_q + row + col*LDQ] = Q(row, col). LDQ == P suits row-indexed use;
     // a consumer that reads the tile by column (fused SYEV) needs LDQ == P+1 (banks).
@@ -212,11 +202,9 @@ namespace batchlas {
                         T& d,
                         int32_t n,
                         int32_t start_ix,
-                        int32_t end_ix,
-                        T zero_threshold) {
-        // `zero_threshold` is currently unused: deflation follows LAPACK's relative test.
+                        int32_t end_ix) {
+        // Deflation follows LAPACK's relative test; there is no absolute threshold.
         // evidence: docs/algorithms/steqr.md#steqr-the-relative-deflation-criterion
-        (void)zero_threshold;
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);
 
@@ -263,16 +251,6 @@ BATCHLAS_UNROLL_FULL
         for (uint32_t mask = 1u; mask < static_cast<uint32_t>(P); mask <<= 1) {
             const int32_t other = permute_group_by_xor(partition, value, mask);
             value = (other < value) ? other : value;
-        }
-        return value;
-    }
-
-    template <size_t P, typename Partition>
-    inline int32_t partition_reduce_max(const Partition& partition, int32_t value) {
-BATCHLAS_UNROLL_FULL
-        for (uint32_t mask = 1u; mask < static_cast<uint32_t>(P); mask <<= 1) {
-            const int32_t other = permute_group_by_xor(partition, value, mask);
-            value = (other > value) ? other : value;
         }
         return value;
     }
@@ -356,7 +334,7 @@ BATCHLAS_UNROLL_FULL
             if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
                 // For QL, the shift is formed from the leading 2x2 of the physical block (l,l+1).
                 // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
-                mu = wilkinson_shift(dlp1, e0, p0);
+                mu = internal::wilkinson_shift(dlp1, e0, p0);
             } else {
                 const T gg = (dlp1 - p0) / (T(2) * e0);
                 const T rr = sycl::hypot(gg, T(1));
@@ -495,7 +473,7 @@ BATCHLAS_UNROLL_FULL
             T mu = T(0);
             if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
                 // Want eigenvalue closest to D(l); wilkinson_shift picks closest to its third arg.
-                mu = wilkinson_shift(dlp1, e0, p0);
+                mu = internal::wilkinson_shift(dlp1, e0, p0);
             } else {
                 // LAPACK-style stable implicit shift.
                 const T gg = (dlp1 - p0) / (T(2) * e0);
@@ -572,7 +550,6 @@ BATCHLAS_UNROLL_FULL
                                        QCache& qcache,
                                        int32_t n,
                                        int32_t max_sweeps,
-                                       T zero_threshold,
                                        SteqrShiftStrategy cta_shift_strategy,
                                        SteqrUpdateScheme cta_update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -592,7 +569,7 @@ BATCHLAS_UNROLL_FULL
             }
 
             // Deflation pass over the remaining tail to create more zeros in E.
-            deflate(partition, offdiag, diag, n, block_begin, n, zero_threshold);
+            deflate(partition, offdiag, diag, n, block_begin, n);
 
             // Find end of current block: first i>=block_begin where E(i)==0; if none, block ends at n-1.
             const int32_t block_end_candidate =
@@ -654,7 +631,7 @@ BATCHLAS_UNROLL_FULL
                 bool advanced = false;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                     // Deflate within current active subproblem [l..lend].
-                    deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
+                    deflate(partition, offdiag, diag, n, l, block_end + 1);
 
                     // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
                     const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
@@ -717,7 +694,6 @@ BATCHLAS_UNROLL_FULL
                                      QCache& qcache,
                                      int32_t n,
                                      int32_t max_sweeps,
-                                     T zero_threshold,
                                      SteqrShiftStrategy cta_shift_strategy,
                                      SteqrUpdateScheme cta_update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -745,7 +721,7 @@ BATCHLAS_UNROLL_FULL
                     if (bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                         offdiag = T(0);
                     }
-                    deflate(partition, offdiag, diag, n, bb, n, zero_threshold);
+                    deflate(partition, offdiag, diag, n, bb, n);
                     const int32_t be = partition_reduce_min<P>(
                         partition, (lane >= bb && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1));
                     next_block_begin = be + 1;
@@ -800,7 +776,7 @@ BATCHLAS_UNROLL_FULL
                     failed = true;
                     closing = true;
                 } else {
-                    deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
+                    deflate(partition, offdiag, diag, n, l, block_end + 1);
                     m = partition_reduce_min<P>(
                         partition, (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end);
                     if (m == l) {
@@ -855,7 +831,6 @@ BATCHLAS_UNROLL_FULL
                                          QCache& qcache,
                                          int32_t n,
                                          int32_t max_sweeps,
-                                         T zero_threshold,
                                          SteqrShiftStrategy cta_shift_strategy,
                                          SteqrUpdateScheme cta_update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
@@ -884,7 +859,7 @@ BATCHLAS_UNROLL_FULL
                     if (opening && bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
                         offdiag = T(0);
                     }
-                    deflate(partition, offdiag, diag, n, opening ? bb : n, n, zero_threshold);
+                    deflate(partition, offdiag, diag, n, opening ? bb : n, n);
                     const int32_t be = partition_reduce_min<P>(
                         partition, (opening && lane >= bb && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1));
                     const bool opened = opening && be > bb;
@@ -939,7 +914,7 @@ BATCHLAS_UNROLL_FULL
                 const bool cap = testing && sweeps_at_l >= max_sweeps;
                 const bool active = testing && !cap;
                 if (lockstep_any(partition, active)) {
-                    deflate(partition, offdiag, diag, n, active ? l : n, block_end + 1, zero_threshold);
+                    deflate(partition, offdiag, diag, n, active ? l : n, block_end + 1);
                     const int32_t mm = partition_reduce_min<P>(
                         partition, (active && lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end);
                     const bool adv1 = active && mm == l;
@@ -1010,24 +985,23 @@ BATCHLAS_UNROLL_FULL
                                 QCache& qcache,
                                 int32_t n,
                                 int32_t max_sweeps,
-                                T zero_threshold,
                                 SteqrShiftStrategy cta_shift_strategy,
                                 SteqrUpdateScheme cta_update_scheme) {
         if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
             if constexpr (kUseNativeChunkedPartition) {
                 const auto chunk = make_partition<P, true>(partition.sg);
                 return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps,
-                                             zero_threshold, cta_shift_strategy, cta_update_scheme);
+                                             cta_shift_strategy, cta_update_scheme);
             } else if (cta_update_scheme == SteqrUpdateScheme::EXP) {
                 return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                                      zero_threshold, cta_shift_strategy, cta_update_scheme);
+                                                      cta_shift_strategy, cta_update_scheme);
             }
         } else if constexpr (kSteqrCtaFlatPays<T, P>) {
             return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                              zero_threshold, cta_shift_strategy, cta_update_scheme);
+                                              cta_shift_strategy, cta_update_scheme);
         }
         return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
-                                            zero_threshold, cta_shift_strategy, cta_update_scheme);
+                                            cta_shift_strategy, cta_update_scheme);
     }
 
 } // namespace batchlas

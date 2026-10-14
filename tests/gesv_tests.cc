@@ -348,7 +348,7 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
 }
 
 // G7 (the old window) and G8 (can_run vs the launcher) moved to gesv_candidates_tests:
-// AutoReadsTheTranscribedTables and CanRunEqualsLaunch.
+// AutoReadsTheShippedTables and CanRunEqualsLaunch.
 
 // G9. THE PUBLIC OP end to end against the same residual bound and the same pivot
 // list as the tiny tier on the same data.

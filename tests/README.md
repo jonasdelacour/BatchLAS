@@ -153,9 +153,9 @@ A launch that finds no device image for its kernel ("No kernel named ...") fails
 
 ## Note on the baseline
 
-The suite is not green on `main`. `tests/known-failures.txt` lists accepted failures by test name
-and pinned type parameter (two `lanczos_tests` cases and `steqr_tests`'
-`StressExtremeMagnitudesN32` for two types). CI diffs every run against that ledger; see
+The suite is not green on `main`. `tests/known-failures.txt` lists accepted failures by test name,
+and for typed tests by pinned type parameter; each block names its cause. CI diffs every run
+against that ledger; see
 [the CI page](../docs/ci.md#the-known-failures-workflow).
 
 - `syev_cta_tests` is flaky under `ctest -j2`/`-j4`; `sytrd_blocked_tests` also flakes on

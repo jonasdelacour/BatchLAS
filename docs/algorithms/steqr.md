@@ -65,10 +65,7 @@ T_{11} & 0 \\
 \end{bmatrix}.
 \f]
 
-> **Warning:** `SteqrParams::zero_threshold` does not control deflation. It is passed to
-> `steqr_wg`, `steqr_cta` (including the fused `syev` kernel) and `steqr_legacy`, and discarded in
-> each (`(void)zero_threshold` in `src/extensions/steqr_wg.cc` and
-> `src/extensions/steqr_cta_device.hh`). All paths use the relative criterion.
+All paths use the relative criterion; there is no absolute deflation threshold.
 
 ## steqr: safe scaling
 

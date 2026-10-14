@@ -73,7 +73,6 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled32x128RegisterK16: return "gemm_sycl_register_32x128_k16";
     case KernelVariant::Tiled32x128RegisterK16TN: return "gemm_sycl_register_32x128_k16_tn";
     case KernelVariant::Tiled32x128RegisterK16TT: return "gemm_sycl_register_32x128_k16_tt";
-    case KernelVariant::SmallBatched: return "gemm_sycl_small_batched";
     case KernelVariant::Tiled32x32RegisterK16Wide: return "gemm_sycl_register_32x32_k16_wide";
     case KernelVariant::Tiled16x16RegisterK16Wide: return "gemm_sycl_register_16x16_k16_wide";
     }

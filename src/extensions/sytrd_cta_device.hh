@@ -21,40 +21,6 @@ namespace batchlas {
         }
     }
 
-    template <typename U>
-    inline typename base_type<U>::type abs2_if_complex(const U& x) {
-        using Real = typename base_type<U>::type;
-        if constexpr (internal::is_complex<U>::value) {
-            const Real re = x.real();
-            const Real im = x.imag();
-            return re * re + im * im;
-        } else {
-            return x * x;
-        }
-    }
-
-    // XOR-butterfly reductions: the group size must be a power of two.
-    template <typename T, typename Group>
-    inline T group_reduce_sum(const Group& g, T v) {
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            v += permute_group_by_xor(g, v, offset);
-        }
-        return v;
-    }
-
-    template <typename T, typename Group>
-    inline T group_reduce_max(const Group& g, T v) {
-        for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
-             offset > 0;
-             offset >>= 1) {
-            const T other = permute_group_by_xor(g, v, offset);
-            v = sycl::fmax(v, other);
-        }
-        return v;
-    }
-
     // Shuffles, not reduce_over_group: DPC++'s CUDA path cannot reduce floating point over a
     // chunked partition. The result is replicated in every lane.
     template <typename T, typename Group>
@@ -91,7 +57,7 @@ namespace batchlas {
                          bool x_active) {
         using Real = typename base_type<T>::type;
 
-        const Real xsq = x_active ? abs2_if_complex(x) : Real(0);
+        const Real xsq = x_active ? internal::abs2_if_complex(x) : Real(0);
         const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
         // sumsq is replicated, so every lane computes the scalars instead of serialising on a leader.
         const Real xnorm = sycl::sqrt(sumsq);

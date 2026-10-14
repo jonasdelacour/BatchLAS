@@ -41,7 +41,6 @@ enum class KernelVariant {
     Tiled32x128RegisterK16,
     Tiled32x128RegisterK16TN,
     Tiled32x128RegisterK16TT,
-    SmallBatched,
     Tiled32x32RegisterK16Wide,
     Tiled16x16RegisterK16Wide,
 };

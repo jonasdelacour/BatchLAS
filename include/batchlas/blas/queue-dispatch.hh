@@ -251,7 +251,7 @@ inline view_t<A> as_view(const A& a) {
     }
 
 // BATCHLAS_ACCEPT_OWNING for an entry point not templated on Backend (norm,
-// transpose, francis_sweep, steqr_*_buffer_size); those have no dispatch overload.
+// transpose, steqr_*_buffer_size); those have no dispatch overload.
 #define BATCHLAS_ACCEPT_OWNING_NB(NAME)                                         \
     template <typename... Args>                                                 \
         requires ::batchlas::detail::AnyOwning<Args...> &&                      \

@@ -467,9 +467,6 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **`francis_sweep` is declared and never defined.** `include/batchlas/blas/extensions.hh`
-  declares it `BATCHLAS_API`. A call compiles and fails at link time. Delete the declaration or
-  implement it.
 - **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:30` addresses
   `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
   also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.

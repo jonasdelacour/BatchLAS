@@ -150,7 +150,6 @@ struct OldChoice {
 };
 std::optional<std::vector<OldChoice>> parse_old_csv(std::string_view text, const std::vector<std::string>& key_names,
                                                     const std::vector<std::string>& dtypes, std::string* err);
-std::pair<std::string, std::string> split_origin(const std::string& spelling);  // "vendor:auto" -> both parts
 
 // Verdicts same|pass|FAIL|BAD_ROW|ERROR|cap. Exit 1 on a FAIL, else 3 on ERROR/BAD_ROW or none gated.
 struct GateCounts {

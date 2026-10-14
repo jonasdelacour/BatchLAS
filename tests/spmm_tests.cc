@@ -1004,9 +1004,4 @@ TYPED_TEST(SpmmCoverageTest, ZeroNrhsLeavesCUntouched) {
     this->run_case(c);
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 // The mutation checks that verify this suite: docs/perf/spmm.md#the-eleventh-blind-guard

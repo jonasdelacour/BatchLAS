@@ -249,9 +249,9 @@ set(BATCHLAS_ENABLE_SYCL ON)
 # NVIDIA box without cuBLAS currently has no CUDA backend at all, rather than a
 # CUDA backend with no vendor provider.
 #
-# S1 only DECLARES the axis and probes it. Nothing in C++ reads these macros
-# yet and the family flags keep their existing derivation, so this step is
-# bit-identical; the decoupling itself is S2/S3.
+# C++ reads the library flags (backend_config.h) to decide whether a vendor
+# route exists (src/select/vendor.hh). The family flags keep their old
+# derivation; decoupling them from the library probes is still open.
 option(BATCHLAS_ENABLE_VENDOR_BLAS
     "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, netlib)"
     ON)
