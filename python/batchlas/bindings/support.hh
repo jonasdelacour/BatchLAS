@@ -375,8 +375,7 @@ decltype(auto) visit_backend(Queue& queue, F&& fn) {
 // before handing results back to Python, so the next borrower is safely ordered
 // behind this call.
 //
-// Note this now resolves the backend once. The old version called the dispatch
-// switch twice -- once to size, once to invoke.
+// The backend is resolved once, for both the size and the invoke call.
 template <typename SizeFn, typename InvokeFn>
 void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
     visit_backend(queue, [&](auto backend_tag) {

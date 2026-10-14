@@ -17,7 +17,6 @@
 
 #include "batch_launch.hh"
 #include "level3_shape.hh"
-#include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
 #include "syrk_gram_tiles.hh"
 #include "../ops/syrk/choice.hh"
@@ -258,17 +257,13 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    // BATCHLAS_EXPAND_ROUTE (-1 when unset). One definition, in ../expansion_budget.hh, which
-    // sytrd_blocked.cc also reads to predict her2k's route; a second parse here would drift.
-    inline int rankk_route_pin() {
-        return ::batchlas::backend::detail::expansion_route_pin();
-    }
-
     // GEMM over the whole n x n product vs the per-item cublas?herk loop. A conjunction, unlike
     // the expansion's disjunction: the GEMM pays twice the arithmetic, so it needs an n ceiling.
+    // BATCHLAS_EXPAND_ROUTE (-1 when unset) is parsed once, in ../expansion_budget.hh, which
+    // sytrd_blocked.cc also reads to predict her2k's route; a second parse here would drift.
     // evidence: docs/perf/level3.md#herk-and-her2k-the-gemm-plus-fold-crossovers
     inline bool herk_gemm_preferred(int n, int batch) {
-        const int pin = rankk_route_pin();
+        const int pin = ::batchlas::backend::detail::expansion_route_pin();
         if (pin >= 0) {
             return pin != 0;
         }
@@ -309,8 +304,8 @@ namespace batchlas {
 
         const auto shape = detail::expand_group_shape(n);
         const sycl::range<3> global(static_cast<std::size_t>(batch),
-                                    static_cast<std::size_t>(detail::ceil_div(n, shape.cols) * shape.cols),
-                                    static_cast<std::size_t>(detail::ceil_div(n, shape.rows) * shape.rows));
+                                    static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.cols) * shape.cols),
+                                    static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.rows) * shape.rows));
         const sycl::range<3> local(1,
                                    static_cast<std::size_t>(shape.cols),
                                    static_cast<std::size_t>(shape.rows));

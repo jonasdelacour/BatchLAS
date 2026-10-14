@@ -360,8 +360,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
                 auto p = make_spd<T>(n, nrhs, 96, uplo, 4242u + unsigned(n * 16 + nrhs));
                 auto A = a_view(p); auto Bv = b_view(p);
                 // Upper above both Upper-capable potrf tiers has no native potrf, and a
-                // vendor-free build no cuSOLVER either: the composed potrf has no route
-                // (main's old router threw the same NoRouteError here).
+                // vendor-free build no cuSOLVER either: the composed potrf has no route.
                 const bool native = potrf_native_runs<B, T>(*this->ctx, A, uplo);
                 if (!native && !batchlas::select::solver_vendor_available<B>) {
                     EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo)), batchlas::NoRouteError)

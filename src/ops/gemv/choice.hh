@@ -17,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemv_vendor; any s
 
 using GemvChoice = std::variant<Cta, Direct, Vendor>;  ///< fieldless: body and segment width W derived in the drivers
 
-template <class T>  /// Every compiled choice, in tie-break order: the old ladder.
+template <class T>  /// Every compiled choice, in tie-break order: the transcribed ladder.
 constexpr auto candidates() { return select::all_of<GemvChoice>(); }
 
 /// can_run's device terms (host-callable for tests). Cta body 3 is reqd_sub_group_size(32).
@@ -33,7 +33,7 @@ inline constexpr select::OpSpec spec{Op::gemv, select::Lib::level3, {last_resort
 /// Keys: trans exact (ConjTrans folds to T); out, red: y and x lengths (swap with trans). Work ~ out red batch.
 inline constexpr std::array<std::string_view, 4> key_names{"trans:exact", "out:log", "red:log", "batch:log"};
 
-/// Both sides of every old threshold plus a coarse log grid; the transcriber spells the same.
+/// Both sides of every transcribed threshold plus a coarse log grid; the transcriber spells the same.
 inline constexpr std::array<int, 8> grid_out{1, 8, 64, 255, 256, 1024, 4096, 32768};
 inline constexpr std::array<int, 11> grid_red{1, 8, 32, 63, 64, 128, 352, 353, 1024, 4096, 32768};
 inline constexpr std::array<int, 8> grid_batch{1, 16, 128, 319, 320, 1024, 8192, 32768};

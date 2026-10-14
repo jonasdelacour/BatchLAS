@@ -7,7 +7,7 @@
 #include "../util/template-instantiations.hh"
 
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include "../math-helpers.hh"

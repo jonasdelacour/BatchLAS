@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <utility>
 
-namespace batchlas::blas::dispatch::detail {
+namespace batchlas::ops::ormqr::detail {
 
 template <Backend B, typename T, typename... Args>  /// backend::ormqr_vendor. @throws NoRouteError without the library.
 Event ormqr_vendor_or_throw(Args&&... args) {
@@ -31,4 +31,4 @@ std::size_t ormqr_vendor_buffer_size_or_throw(Args&&... args) {
     }
 }
 
-} // namespace batchlas::blas::dispatch::detail
+} // namespace batchlas::ops::ormqr::detail

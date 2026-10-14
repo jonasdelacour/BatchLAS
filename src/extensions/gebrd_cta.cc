@@ -1,7 +1,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 
 #include "../math-helpers.hh"
 #include "../queue.hh"

@@ -24,7 +24,7 @@ inline constexpr select::OpSpec spec{Op::orgqr, select::Lib::factorization, {las
 
 inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};  ///< work ~ m n^2; no batch key
 
-/// Both sides of the old 512 ceiling, a coarse log grid elsewhere, n <= m (transcriber: tuned/README.md).
+/// Both sides of the transcribed 512 ceiling, a coarse log grid elsewhere, n <= m (transcriber: tuned/README.md).
 inline constexpr std::array<int, 17> grid{1, 2, 4, 8, 16, 32, 64, 128, 256, 384, 512, 513, 768, 1024, 2048, 4096,
                                           8192};
 

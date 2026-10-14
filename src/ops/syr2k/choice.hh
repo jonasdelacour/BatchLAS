@@ -32,7 +32,7 @@ inline constexpr select::OpSpec spec{Op::syr2k, select::Lib::level3, {last_resor
 /// Keys: n = C's order, weight 2 (work ~ n^2 k batch); k = op(A)'s inner extent; batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};
 
-// The transcribed grid; the old rule turned on batch 1|2 alone (tuned/README.md).
+// The transcribed grid; the transcribed rule turned on batch 1|2 alone (tuned/README.md).
 inline constexpr std::array<int, 13> grid_n{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};  ///< n axis
 inline constexpr std::array<int, 5> grid_k{1, 8, 64, 512, 4096};  ///< k axis of the grid
 inline constexpr std::array<int, 7> grid_batch{1, 2, 3, 128, 1024, 8192, 32768};  ///< batch axis of the grid

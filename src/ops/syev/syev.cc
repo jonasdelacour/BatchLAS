@@ -85,7 +85,7 @@ std::size_t workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T
         [&](Blocked) { return syev_blocked_buffer_size<B, T>(q, A, jobz, uplo, StedcParams<Real<T>>{}); },
         [&](TwoStage) { return syev_two_stage_buffer_size<B, T>(q, A, jobz, uplo, StedcParams<Real<T>>{}); },
         [&](Vendor) {
-            return blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(q, A, w, jobz, uplo);
+            return ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(q, A, w, jobz, uplo);
         },
     }, c);
 }
@@ -100,12 +100,12 @@ Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, Job
         [&](Jacobi) { return syev_jacobi_cta<B, T>(q, A, w, jobz, uplo, ws, JacobiParams<T>(), info); },
         [&](Blocked) { return syev_blocked<B, T>(q, A, w, jobz, uplo, ws, StedcParams<Real<T>>{}, info); },
         [&](TwoStage) { return syev_two_stage<B, T>(q, A, w, jobz, uplo, ws, StedcParams<Real<T>>{}, info); },
-        [&](Vendor) { return blas::dispatch::detail::syev_vendor_or_throw<B, T>(q, A, w, jobz, uplo, ws, info); },
+        [&](Vendor) { return ops::syev::detail::syev_vendor_or_throw<B, T>(q, A, w, jobz, uplo, ws, info); },
     }, c);
 }
 
-// Every driver refuses a non-square A; the old router sent one to the vendor, which then read
-// rows() as the order. Thrown before choose() so neither Auto nor a pin can take it.
+// Every driver refuses a non-square A, and the vendor would read rows() as the order.
+// Thrown before choose() so neither Auto nor a pin can take it.
 template <class T>
 void validate(const MV<T>& A, const char* who) {
     if (A.rows() != A.cols())
@@ -156,7 +156,7 @@ size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     return ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
 }
 
-namespace blas::dispatch::detail {
+namespace ops::syev::detail {
 
 template <typename T>
 bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -181,7 +181,7 @@ SYEV_SUPPORTS_INSTANTIATE(std::complex<float>)
 SYEV_SUPPORTS_INSTANTIATE(std::complex<double>)
 #undef SYEV_SUPPORTS_INSTANTIATE
 
-}  // namespace blas::dispatch::detail
+}  // namespace ops::syev::detail
 
 #define SYEV_INSTANTIATE(B_, fp) \
     BATCHLAS_INSTANTIATE_OP(B_, fp, syev) BATCHLAS_INSTANTIATE_OP(B_, fp, syev_buffer_size)

@@ -1,3 +1,4 @@
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -22,15 +23,6 @@
 namespace batchlas {
 
 namespace {
-
-template <typename U>
-inline U conj_if_complex(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 // Diagnostics, not a safety override: it prints the stage name and drains the
 // pipeline, removing no check and selecting no different kernel, so it is
@@ -152,7 +144,7 @@ Event syev_cta(Queue& ctx,
                 const int32_t col = static_cast<int32_t>(rem / nn);
 
                 if (row < col) {
-                    A(row, col, b) = conj_if_complex(A(col, row, b));
+                    A(row, col, b) = batchlas::device::detail::conj(A(col, row, b));
                 } else if (row == col) {
                     if constexpr (internal::is_complex<T>::value) {
                         A(row, col, b) = T(A(row, col, b).real(), typename base_type<T>::type(0));

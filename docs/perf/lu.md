@@ -63,7 +63,7 @@ The blocked rows are the [getrf window](#getrf-window-evidence) plus [the cfloat
 
 **gesv** (grid n 16|17, 32|33; nrhs 4|5; no batch key): `tiny blocked` at n <= 32 for float and n <= 16 for cfloat; `blocked` alone elsewhere and for double and cdouble. A tiny-first row whose nrhs exceeds 4 runs `blocked`, because `can_run(tiny)` refuses it.
 
-The rows are pinned by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnSm89`, `GetrsTranscribedTable.RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold`, `GetriTranscribedTable.RowsHoldTheOldPreference` and `GesvTranscribedTable.RowsHoldTheOldWindowOnSm89`. Auto on the real device is pinned by `GetrfCandidates.AutoReadsTheShippedTablesOnTheRealDevice` and the `AutoReadsTheShippedTable(s)` cases.
+The rows are pinned by `GetrfTranscribedTable.RowsHoldTheTranscribedPreferenceOnSm89`, `GetrsTranscribedTable.RowsHoldTheTranscribedPreferenceOnBothSidesOfEveryThreshold`, `GetriTranscribedTable.RowsHoldTheTranscribedPreference` and `GesvTranscribedTable.RowsHoldTheTranscribedWindowOnSm89`. Auto on the real device is pinned by `GetrfCandidates.AutoReadsTheShippedTablesOnTheRealDevice` and the `AutoReadsTheShippedTable(s)` cases.
 
 ### LU: the order among native families
 
@@ -843,6 +843,6 @@ gesv cfloat with `tiny` against the composition reads 0.97-1.19x at n = 17..32, 
 
 ### Armed breaks (column bucket pass)
 
-Run against `getrf_tests`, `gesv_tests` and `posv_tests` on GPU 1, then reverted. The route-layer breaks are table rows checked by `GetrfTranscribedTable.RowsHoldTheOldPreferenceOnSm89`. **Single buffer instead of the parity pair is green everywhere**: a blind guard, kept for the memory model. Other breaks went red in `T1`-`T11` (tiny), `G1` (gesv) and `P1`, `P7` (posv).
+Run against `getrf_tests`, `gesv_tests` and `posv_tests` on GPU 1, then reverted. The route-layer breaks are table rows checked by `GetrfTranscribedTable.RowsHoldTheTranscribedPreferenceOnSm89`. **Single buffer instead of the parity pair is green everywhere**: a blind guard, kept for the memory model. Other breaks went red in `T1`-`T11` (tiny), `G1` (gesv) and `P1`, `P7` (posv).
 
 The RHS pad-column fix is a speed change only; no functional test can see it.

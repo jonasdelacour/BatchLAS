@@ -33,9 +33,9 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 }
 
 // Correctness only (R3): false means the driver would throw. Tiny's clauses are the argument
-// checks of gesv_tiny_dispatch, plus the old router's NETLIB refusal: the GPU kernel packs 1-based
+// checks of gesv_tiny_dispatch, plus a NETLIB refusal: the GPU kernel packs 1-based
 // int32 pivots into the int64 span's low half where netlib writes true int64. No family takes a
-// heterogeneous batch (the old router refused it on every route).
+// heterogeneous batch.
 template <Backend Bk, class T>
 bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
     const int64_t n = A.rows(), nrhs = B.cols();
@@ -78,8 +78,8 @@ std::size_t workspace(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>
     }, c);
 }
 
-// n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel; the old router
-// refused both the same way. Thrown before choose() so a pin cannot take them either.
+// n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel, so
+// both throw before choose(): neither Auto nor a pin can take them.
 template <class T>
 void throw_if_unservable(const MV<T>& A, const MV<T>& Bm, const char* who) {
     if (A.is_heterogeneous() || Bm.is_heterogeneous())
@@ -100,7 +100,7 @@ Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::gesv::throw_if_unservable<T>(A, B, "gesv");
-    // The coverage row's key: m = k = order, n = nrhs (the old GesvShape's spelling).
+    // The coverage row's key: m = k = order, n = nrhs.
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size()};
     return select::run<Back, T>(
         ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),

@@ -1830,9 +1830,9 @@ TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
 // hard race anywhere a sub-group is not a warp. The apply needs EXACTLY TWO -- one between
 // the elementwise product and the column sum (RAW on the tile), one between the column sum
 // and the update (RAW on y, plus the inter-chunk WAR on the tile, covered only because y is
-// a separate array). The SPELLING is load-bearing too: sg_compat.hh's group_barrier(part)
-// is a NO-OP off NVPTX, so a publish/read pair ordered by it is correct here and silently
-// unordered on AMD. Barrier the PLAIN sub-group everywhere.
+// a separate array). The SPELLING is load-bearing too: sg_partition.hh's group_barrier(part)
+// is only a memory fence on masked SPIR-V, so a publish/read pair ordered by it is correct
+// here and not ordered everywhere. Barrier the PLAIN sub-group everywhere.
 // evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
 TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
     const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
@@ -1854,9 +1854,9 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
            "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
            "is warp-uniform here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is a NO-OP unless kUseNativeChunkedPartition "
-           "(sg_compat.hh:153), so ordering a publish/read pair with it is correct on this "
-           "box and silently unordered elsewhere: " << part_barrier;
+        << path << ": group_barrier(part) is backend-specific (src/extensions/sg_partition/; "
+           "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
+           "correct on this box and not ordered everywhere: " << part_barrier;
 }
 
 // Every barrier in the file, by SPELLING rather than by argument: the first code line

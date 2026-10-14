@@ -1,3 +1,4 @@
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
@@ -381,15 +382,6 @@ inline T gesvd_zero_sigma_tol(T sigma_max) {
     return std::numeric_limits<T>::epsilon() * sigma_max;
 }
 
-template <typename T>
-inline T gesvd_conj_if_needed(const T& value) {
-    if constexpr (internal::is_complex<T>::value) {
-        return T(value.real(), -value.imag());
-    } else {
-        return value;
-    }
-}
-
 template <typename Real>
 void build_hermitian_svd_permutation(Queue& ctx,
                                      const VectorView<Real>& eigenvalues,
@@ -490,7 +482,7 @@ void build_hermitian_vectors(Queue& ctx,
 
             if (want_vh) {
                 for (int32_t col = 0; col < n; ++col) {
-                    Vh(tgt, col, b) = sign * gesvd_conj_if_needed(Q(col, src, b));
+                    Vh(tgt, col, b) = sign * batchlas::device::detail::conj(Q(col, src, b));
                 }
             }
         });

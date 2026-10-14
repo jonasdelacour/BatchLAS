@@ -24,7 +24,7 @@ inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};  //
 
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< ~ n^2 nrhs batch
 
-/// A log grid plus both sides of every old threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
+/// A log grid plus both sides of every transcribed threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
 /// batch 127/128); the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 18> grid_n{1, 2, 4, 8, 16, 24, 31, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                                             768, 1024};

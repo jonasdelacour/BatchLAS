@@ -8,7 +8,7 @@
 #include "sytrd_sb2st_cta_instantiations.hh"
 
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 
 #include <sycl/sycl.hpp>
 

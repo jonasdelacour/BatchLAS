@@ -52,7 +52,7 @@ inline int32_t sy2sb_ormqr_nb_env(bool& has_override) {
 }
 
 // Returns the block-size hint to pass to ormqr / ormqr_buffer_size. 0 means "no
-// hint", i.e. let the dispatch use its tuning table (the old behaviour).
+// hint", i.e. let ormqr's kernel selection use its tuning table.
 inline int32_t sy2sb_ormqr_block_size_hint(int n, int batch, int kd) {
     bool has_override = false;
     const int32_t forced = sy2sb_ormqr_nb_env(has_override);

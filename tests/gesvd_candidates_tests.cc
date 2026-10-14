@@ -465,7 +465,7 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
                     std::string why;
                     const bool run = this->direct(c, b, &why);
                     // Blocked Hermitian Upper: syev_blocked mirrors Upper into Lower and launches,
-                    // but can_run keeps the old router's Lower-only clause (gesvd.md, deviation).
+                    // but can_run keeps a Lower-only clause (gesvd.md, deviation).
                     const bool upper_blocked = std::holds_alternative<gs::Blocked>(c) && h == 'U' && m == n;
                     if (!upper_blocked) {
                         EXPECT_EQ(pin, run) << name(c, s) << ": can_run says " << pin << ", the driver "
@@ -478,8 +478,8 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// An empty shape (m or n = 0) is refused by every native family's can_run, as the old router's
-// size gate had it: the drivers' validate throws on it. Auto takes the base outcome, the vendor
+// An empty shape (m or n = 0) is refused by every native family's size gate in
+// can_run: the drivers' validate throws on it. Auto takes the base outcome, the vendor
 // where it exists and a NoRouteError vendor-free, never a native family. An empty batch returns
 // before selection (WP3 batch policy): a no-op under Auto and every pin.
 TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
@@ -709,7 +709,7 @@ TYPED_TEST(GesvdCandidates, PinPrecedence) {
 }
 
 // Auto against the shipped table of this device (shipped_table_pick.hh), on the shapes that
-// straddled the old router's edges (ported from gesvd_tests' DefaultProviderRoutesSmallGeneralToJacobi):
+// straddle the transcribed edges:
 // general n = 32 for every job, Hermitian 30..33 both triangles, thin 32|40 x 9, 48, 64, 70 x 50.
 TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
@@ -944,7 +944,7 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them.
 // sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
+TEST(GesvdTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* herm; const char* vec; int m, n; const char* ranked; };
     const Row rows[] = {
@@ -963,7 +963,7 @@ TEST(GesvdTranscribedTable, RowsHoldTheOldPreference) {
             const select::Key key{{"herm", r.herm}, {"vec", r.vec}, {"m", r.m}, {"n", r.n}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;

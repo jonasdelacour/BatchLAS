@@ -26,7 +26,7 @@ inline constexpr select::OpSpec spec{Op::spmm, select::Lib::sparse, {last_resort
 inline constexpr std::array<std::string_view, 5> key_names{
     "transA:exact", "transB:exact", "m:log", "nrhs:log", "batch:log"};
 
-/// The transcriber (tuned/README.md) spells the same grid; the old predicates read no extent.
+/// The transcriber (tuned/README.md) spells the same grid; the transcribed predicates read no extent.
 inline constexpr std::array<int, 5> grid_m{1, 16, 256, 4096, 65536};
 inline constexpr std::array<int, 5> grid_nrhs{1, 2, 4, 16, 64};
 inline constexpr std::array<int, 5> grid_batch{1, 8, 128, 1024, 16384};

@@ -4,7 +4,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 #include "steqr_internal.hh"

@@ -5,7 +5,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -186,9 +186,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
                             // Hermitian diagonals are real: drop the caller's imaginary round-off.
                             v = T(real_part_f(A_prob(lane, c)));
                         } else if (is_upper) {
-                            v = (lane < c) ? A_prob(lane, c) : conj_if_complex(A_prob(c, lane));
+                            v = (lane < c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         } else {
-                            v = (lane > c) ? A_prob(lane, c) : conj_if_complex(A_prob(c, lane));
+                            v = (lane > c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         }
                     }
                     A_local[base_a + lane + c * LDA] = v;
@@ -216,7 +216,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         const T e_i = select_from_group(part, e_c, static_cast<uint32_t>(i));
                         const Real abs_i = select_from_group(part, offdiag, static_cast<uint32_t>(i));
                         if (lane > i && abs_i != Real(0)) {
-                            phase = phase * (conj_if_complex(e_i) / abs_i);
+                            phase = phase * (batchlas::device::detail::conj(e_i) / abs_i);
                         }
                     }
                 } else {
@@ -416,7 +416,7 @@ BATCHLAS_UNROLL_FULL
                             T dot = T(0);
 BATCHLAS_UNROLL_FULL
                             for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                                dot += conj_if_complex(V_local[base_v + r]) * C_col[r];
+                                dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
                             }
                             const T gamma = tau_ii * dot;
 BATCHLAS_UNROLL_FULL

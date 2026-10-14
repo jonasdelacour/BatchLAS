@@ -127,7 +127,7 @@ Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     backend::shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
     // An empty problem is a no-op under any pin, as syrk's and trmm's are (the cuBLAS loop faults on one).
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old record_level3_route wrote it: C's extents and A's order.
+    // The coverage row's key: C's extents and A's order.
     const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = C.batch_size(), .uplo = uplo,
                                 .side = side};
     const select::Key key = ops::symm::key_of<T>(C);

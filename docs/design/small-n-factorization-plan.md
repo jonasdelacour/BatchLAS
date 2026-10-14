@@ -46,7 +46,7 @@ above ~192-256.
 - **R1** Registers are the store; local memory is the mailbox. Per-matrix local memory is O(N) or
   O(N x NB) for N > 32. Target >= 4 resident work-groups per SM.
 - **R2** Compile-time column count with ladder N in {8, 16, 32}; rows stay runtime.
-  N = 24 is not available: `SubGroupPartition<P>` (`src/extensions/sg_compat.hh`) needs P to divide 32.
+  N = 24 is not available: `SubGroupPartition<P>` (`src/extensions/sg_partition/sg_partition.hh`) needs P to divide 32.
 - **R3** The sub-group is the synchronisation unit for n <= 32. No work-group barrier in those kernels.
 - **R4** No `reduce_over_group` over a work-group. Use sub-group collectives plus one slot per
   sub-group. Check that static shared memory is 0 (the 48 KB launch hole).

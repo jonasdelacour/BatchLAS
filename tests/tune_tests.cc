@@ -317,7 +317,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "8678bfc5"}, {"potrf", "4a449ee4"}, {"posv", "bafcf8ef"}, {"trsm", "cf08f292"}};
+        {"gemm", "8678bfc5"}, {"potrf", "6ee22c62"}, {"posv", "5a7eed28"}, {"trsm", "cf08f292"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -336,7 +336,7 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" || p == "src/extensions/sg_compat.hh" ||
+        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
                p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");

@@ -480,10 +480,8 @@ TYPED_TEST(GeqrfCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases, each with its message (absorbs route_vocabulary_tests'
-// RouteGeqrf.WideIsUnsupportedByEveryNativeArm, CorrectnessGatesAreNotSpeedGates and
-// CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds): wide, empty, tiny on a tall panel and one
-// order past its ceiling, cta one row past its area.
+// The named can_run-false cases, each with its message: wide, empty, tiny on a tall panel and
+// one order past its ceiling, cta one row past its area (an area and a height, not two extents).
 TYPED_TEST(GeqrfCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     const int t = this->tiny_max();
@@ -526,7 +524,7 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     else EXPECT_THROW(size(), batchlas::NoRouteError);
 }
 
-// §5.3, and RouteGeqrf.BatchlasGeqrfRouteIsActuallyRead ported: spellings (case-folded) and the
+// §5.3: spellings (case-folded) and the
 // class words, via ScopedPin and via BATCHLAS_GEQRF_ROUTE. Auto and bare `native` (the row's best
 // runnable non-vendor) come from the shipped table; bare `vendor` falls back to Auto where there
 // is no vendor.
@@ -589,7 +587,7 @@ TYPED_TEST(GeqrfCandidates, ScopedPinBeatsTheEnvironment) {
 }
 
 // Auto and the class word `native` against the shipped table of this device (table_pick) at the
-// window edges the deleted RouteGeqrf tests pinned: per-type order floors, the tall-panel clause,
+// transcribed window edges: per-type order floors, the tall-panel clause,
 // the tiny window and its gaps, the CTA/Blocked crossover. A regenerated table moves the
 // expectation, not the test.
 TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
@@ -671,9 +669,9 @@ TYPED_TEST(GeqrfCandidates, TraceShowsTheLookupKey) {
     }
 }
 
-// RouteGeqrf.VendorFreeFallbackHandsOverTheNativeRoute, ported: with a table naming only the
-// vendor, a vendor-free build takes the last resort, blocked; a vendor build takes the vendor.
-TYPED_TEST(GeqrfCandidates, VendorFreeWalkIsTheOldTieBreak) {
+// With a table naming only the vendor, a vendor-free build takes the last resort, blocked; a
+// vendor build takes the vendor.
+TYPED_TEST(GeqrfCandidates, VendorOnlyRowTakesLastResortVendorFree) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     const std::string dtype(select::dtype_name<T>());
@@ -754,7 +752,7 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteGeqrf.CorrectnessGatesAreNotSpeedGates' CPU case, ported: on a CPU queue no native
+// On a CPU queue no native
 // family can run, so native pins throw and Auto is the vendor (or no route without one).
 template <typename Config>
 class GeqrfCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -790,7 +788,7 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
 // the old preference (the old predicates read no architecture). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
+TEST(GeqrfTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* form; int n, aspect; const char* ranked; };
     const Row rows[] = {
@@ -810,7 +808,7 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
             ASSERT_EQ(t.device, device) << r.dtype;
             const select::TableRow* row = t.nearest({{"form", r.form}, {"n", r.n}, {"aspect", r.aspect}});
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;

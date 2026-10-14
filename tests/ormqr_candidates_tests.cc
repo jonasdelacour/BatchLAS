@@ -711,7 +711,7 @@ TYPED_TEST(OrmqrCandidates, VendorFreeLastResortIsBlocked) {
     expect_applied(*this->ctx, p, "vendor-only table");
 }
 
-// The coverage row (§5.6): the real backend (the old builder left it AUTO), m/n/k from A, side,
+// The coverage row (§5.6): the real backend (never AUTO), m/n/k from A, side,
 // transA and the native flags. threadsafe: the child re-executes the binary.
 TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
@@ -798,7 +798,7 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them:
 // blocked | vendor except complex Trans (vendor alone), on and off the grid. sm_120 is
 // deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
+TEST(OrmqrTranscribedTable, RowsHoldTheTranscribedPreferenceOnSm89) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* side; const char* trans; int m, k, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {{"float", "L", "T", 8, 8, 32, 128, "blocked", 2},    {"double", "R", "C", 3000, 7, 1, 99, "blocked", 2},
@@ -813,7 +813,7 @@ TEST(OrmqrTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             const select::Key key{{"side", r.side}, {"trans", r.trans}, {"m", r.m}, {"k", r.k}, {"q", r.q}, {"batch", r.batch}};
             const select::TableRow* row = t.nearest(key);
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             const std::string what = t.file + ":" + std::to_string(row->line);
             ASSERT_EQ(row->ranked.size(), r.len) << what;

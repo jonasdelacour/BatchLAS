@@ -30,7 +30,8 @@ constexpr auto candidates() {
 inline constexpr std::array<std::string_view, 3> last_resort{"triangular", "gram", "vendor"};  ///< none runs
 inline constexpr select::OpSpec spec{Op::syrk, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-/// Keys: form (old squareish ratio of n, k) and trans N|T|C exact; n weight 2 (work ~ n^2 k batch); k = op(A)'s inner.
+/// Keys: form (transcribed squareish ratio of n, k) and trans N|T|C exact; n weight 2 (work ~ n^2 k batch);
+/// k = op(A)'s inner.
 inline constexpr std::array<std::string_view, 5> key_names{"form:exact", "trans:exact", "n:log:2", "k:log",
                                                            "batch:log"};
 
@@ -38,7 +39,7 @@ inline std::string_view form_of(std::int64_t a, std::int64_t b) {
     return 2 * std::min(a, b) >= std::max(a, b) ? "sq" : (a > 2 * b ? "tall" : "wide");
 }
 
-// Both sides of every old threshold (n 128|129 and each 128-tile band edge,
+// Both sides of every transcribed threshold (n 128|129 and each 128-tile band edge,
 // k 7|8, every band's batch floor); the transcriber spells the same grid.
 inline constexpr std::array<int, 30> grid_n{1,   2,   4,   8,   16,  32,   64,   128,  129,  256,
                                             257, 384, 385, 512, 513, 640,  641,  768,  769,  896,

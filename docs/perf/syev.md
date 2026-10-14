@@ -447,7 +447,7 @@ eigenvectors, batch 256: n = 33 150.17 against 1.7715 µs (**85× slower**); n =
 slower**). At batch 2048 an n = 33..128 sweep finished no iteration in ten minutes while holding 24 GB. A
 CTA-resident solve saves about 15 launches but runs an unblocked level-2 algorithm in one work-group per matrix
 against a blocked level-3 pipeline. Reverted (`14bad498`; it survives on `worktree-wf_3b4af334-426-9`). The branch
-also rewrote the live n ≤ 32 CTA kernels and the sub-group partition in `sg_compat.hh`, never measured; if wanted
+also rewrote the live n ≤ 32 CTA kernels and the sub-group partition (`src/extensions/sg_partition/`), never measured; if wanted
 it returns as its own change with n ≤ 32 numbers.
 
 > **Note:** benchmark through the forced provider. Under flat selection the cap is `kSmallMaxN = 32` in the small

@@ -8,7 +8,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include "../math-helpers.hh"
 #include "../sycl/kernel_attrs.hh"
 
@@ -988,7 +988,7 @@ BATCHLAS_UNROLL_FULL
                                 SteqrShiftStrategy cta_shift_strategy,
                                 SteqrUpdateScheme cta_update_scheme) {
         if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
-            if constexpr (kUseNativeChunkedPartition) {
+            if constexpr (batchlas::sgp::kMaskedByDefault) {
                 const auto chunk = make_partition<P, true>(partition.sg);
                 return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps,
                                              cta_shift_strategy, cta_update_scheme);

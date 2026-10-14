@@ -1,5 +1,6 @@
 //#include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -281,21 +282,6 @@ namespace batchlas {
 
             template <typename T> struct GesvdVhKernel;
 
-            // Local trait: batchlas::internal::is_complex is not visible in this TU,
-            // and pulling in the header that defines it just for a conjugate is not
-            // worth the include coupling in a backend wrapper.
-            template <typename U> struct is_cplx : std::false_type {};
-            template <typename U> struct is_cplx<std::complex<U>> : std::true_type {};
-
-            template <typename U>
-            inline U conj_v(const U& x) {
-                if constexpr (is_cplx<U>::value) {
-                    return U(x.real(), -x.imag());
-                } else {
-                    return x;
-                }
-            }
-
             // cuSOLVER's gesvdj family returns V; the BatchLAS gesvd contract is V^H.
             // Out-of-place: an in-place transpose would race between work-items.
             // src is n x n column-major with ld == n and stride == n*n (cuSOLVER's layout).
@@ -317,7 +303,7 @@ namespace batchlas {
                             const int64_t r = lin / nn;
                             const int64_t c = lin - r * nn;
                             // Vh(r,c) = conj(V(c,r)); V(i,j) == src[b*nn*nn + j*nn + i]
-                            Vh(r, c, b) = conj_v(src[b * nn * nn + r * nn + c]);
+                            Vh(r, c, b) = batchlas::device::detail::conj(src[b * nn * nn + r * nn + c]);
                         });
                 });
             }

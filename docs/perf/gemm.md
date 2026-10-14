@@ -718,7 +718,7 @@ float, square NN, batch ≥ 64, through 48. 49..56 runs the tiled kernel nativel
 
 **In the table:** `small` ranks first in exactly 72 float rows of `tuned/gemm.sm_89.txt`: the NN squares 1, 2, 4, 8,
 16, 24, 32, 40 and 48 at batch 64, 128, 2048 and 32768, both layouts. The squares 49, 56, 64 and every batch-1 or
-batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheOldVendorEdges`
+batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheTranscribedVendorEdges`
 (48³ `small`, 49³ and 52³ `vendor`, 32³ b16 `vendor`, b64 `small`). The (NB/4)² work-group and sub-group-32 need
 outside the tiled leg are `can_run` terms (`small_wg`, `small_fits` in `choice.hh`).
 

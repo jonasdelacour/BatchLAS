@@ -164,7 +164,7 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
             });
     }
     ops::gemm::validate<T>(A, B, C, transA, transB);
-    // An empty batch launches nothing under any pin, as the old native range did.
+    // An empty batch launches nothing under any pin.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
     // No family takes a zero extent (vendor-free there was no route): an empty C is a no-op and

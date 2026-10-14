@@ -112,7 +112,7 @@ The explicit-instantiation tables in vendor TUs (`cusolver.cc`, `rocblas.cc`, `r
 `rocsparse.cc`, `netlib_lapack.cc`, and the cuBLAS and cuSPARSE TUs) name only `backend::`-qualified
 `*_vendor` symbols. Public entry points and their `*_buffer_size()` queries are instantiated in
 `src/ops/<op>/<op>.cc` (the level-3 family shares one TU under `src/ops/`). Those files compile into
-`batchlas_dispatch_obj` in every build, keyed on device family. The vendor call inside is
+`batchlas_selection_obj` in every build, keyed on device family. The vendor call inside is
 `if constexpr`-gated, so the public symbol exists even without the library. A public-op row in a
 vendor TU would be a duplicate symbol, and a vendor-free build would lose the op. The rule is per op:
 a new op under `src/ops/` follows it with no change here. Design record:
@@ -347,13 +347,13 @@ that area's objects.
 | Object library | Holds |
 | --- | --- |
 | `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; the target `generate_export_header()` is keyed on (@ref design_symbol_visibility) |
-| `batchlas_dispatch_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU |
+| `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU |
 | `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | vendor wrapper TUs; the CUDA and ROCm libraries exist only when a vendor library of that family is enabled |
 | `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers under `src/extensions/` |
 | `batchlas_sycl_obj` | native SYCL kernels under `src/sycl/` |
 | `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/` (queue, settings, SYCL utilities) and `src/extra/` (norms, cond, transpose, random matrices) |
 
-- **Selection is compiled unconditionally.** `batchlas_dispatch_obj` has no vendor condition. Its
+- **Selection is compiled unconditionally.** `batchlas_selection_obj` has no vendor condition. Its
   vendor calls are `if constexpr`-gated on the `BATCHLAS_HAS_*` macros. This makes
   `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` a complete library rather than a link error.
 - **An empty vendor object library is a CMake error.** "A CUDA device is present" is not enough to
@@ -387,7 +387,7 @@ BatchLAS therefore needs no data files at run time.
   removing a table reconfigures. It runs `cmake/BatchLASEmbedTables.cmake` as a custom command that
   depends on the tables. The script writes `<build>/generated/select/tuned_tables.cc`, which defines
   `select::embedded_tables()` (declared in `src/select/select.hh`) as a sorted array of
-  `{file name, text}` pairs. The TU is compiled into `batchlas_dispatch_obj`.
+  `{file name, text}` pairs. The TU is compiled into `batchlas_selection_obj`.
 - A file not named `<op>.<device>.txt` is a configure error. The loader would otherwise skip
   it silently. At run time `select::parse_tables` splits each file into one table per dtype (its
   first key, `dtype:exact`; @ref design_tuning_data).

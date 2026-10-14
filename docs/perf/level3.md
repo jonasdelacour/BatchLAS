@@ -92,8 +92,8 @@ per-item `cblas_?hemm`/`?herk`/`?her2k` loops; ROCm instantiates none of the thr
 ### Level-3: dtype reach of the native families
 
 `gram` and `triangular` admit non-float scalars, so double `syrk` at n <= 128 and `trmm` in every dtype
-run vendor-free; `syr2k` has no non-float family. `level3_tile_route_available`
-(`src/select/vendor.hh:94-96`) is deliberately kept float-or-cuBLAS, because `sytrd_blocked`, `ortho`,
+run vendor-free; `syr2k` has no non-float family. `level3_tile_substitution_enabled`
+(`src/select/vendor.hh:96-98`) is deliberately kept float-or-cuBLAS, because `sytrd_blocked`, `ortho`,
 `ormqr_blocked` and the coverage census read it; widening it would move their routes.
 
 ### Level-3: before flat selection

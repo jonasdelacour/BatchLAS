@@ -77,7 +77,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     geqrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key: m, n and k = min(m, n), as the old shape builder set them.
+    // The coverage row's key: m, n and k = min(m, n).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size()};
     const select::Key key = ops::geqrf::key_of<T>(A);

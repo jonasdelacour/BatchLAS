@@ -44,7 +44,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
 // and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
-// off non-GPU queues, as the old router did; dimension checks are left to the drivers. Both run
+// off non-GPU queues; dimension checks are left to the drivers. Both run
 // each item at the top-level extents (no heterogeneous A or C). No batch term: past 65535 the
 // sub-ops take the vendor, or vendor-free may throw NoRouteError themselves (known-defects #16).
 template <class T>
@@ -90,7 +90,7 @@ std::size_t workspace(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T
     return std::visit(overloaded{
         [&](Blocked) { return ormqr_blocked_buffer_size<B, T>(q, A, C, side, trans, tau, block_size<T>(A, hint)); },
         [&](Vendor) -> std::size_t {
-            return blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans),
+            return ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans),
                                                                                   tau);
         },
     }, c);
@@ -102,7 +102,7 @@ Event launch(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Sid
     return std::visit(overloaded{
         [&](Blocked) { return ormqr_blocked<B, T>(q, A, C, side, trans, tau, ws, block_size<T>(A, hint)); },
         [&](Vendor) {
-            return blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans), tau, ws);
+            return ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans), tau, ws);
         },
     }, c);
 }
@@ -115,8 +115,7 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old builder had it (m, n = A's extents, k = reflectors), plus
-    // the backend, which that builder never set.
+    // The coverage row's key (m, n = A's extents, k = reflectors); select::run adds the backend.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = trans, .side = side};
     const select::Key key = ops::ormqr::key_of<T>(A, C, side, trans);

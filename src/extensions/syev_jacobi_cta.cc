@@ -1,3 +1,4 @@
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -5,7 +6,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -23,25 +24,14 @@ namespace batchlas {
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 class SyevJacobiCTAKernel;
 
-// ---------------------------------------------------------------------------
 // Tier-A Jacobi eigensolver: partition-resident cyclic two-sided Jacobi. One
 // SubGroupPartition<P> owns one problem; A and (optionally) Z stay in local memory
 // for the whole solve. Accuracy-oriented: with the RELATIVE off-diagonal threshold
 // below, graded input keeps small relative eigenvalue error (proved for SPD input).
 // evidence: docs/perf/syev.md#syev-the-jacobi-kernel-design-and-its-accuracy-argument
 // evidence: docs/perf/syev.md#syev-the-2026-08-03-small-n-bake-off
-// ---------------------------------------------------------------------------
 
 namespace {
-
-template <typename U>
-inline U conj_if_complex_j(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 template <typename U>
 inline typename base_type<U>::type abs_if_complex_j(const U& x) {
@@ -261,9 +251,9 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     T v = T(0);
                     if (lane < nn && c < nn) {
                         if constexpr (Upper) {
-                            v = (lane <= c) ? A_prob(lane, c) : conj_if_complex_j(A_prob(c, lane));
+                            v = (lane <= c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         } else {
-                            v = (lane >= c) ? A_prob(lane, c) : conj_if_complex_j(A_prob(c, lane));
+                            v = (lane >= c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         }
                         if (lane == c) {
                             // The diagonal of a Hermitian matrix is real by
@@ -442,8 +432,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                 T cu22 = T(ck);
                                 if constexpr (kNeedPhase) {
                                     const T dk = Rd_local[base_r + k];
-                                    cu21 = -(conj_if_complex_j(dk) * T(sk));
-                                    cu22 = conj_if_complex_j(dk) * T(ck);
+                                    cu21 = -(batchlas::device::detail::conj(dk) * T(sk));
+                                    cu22 = batchlas::device::detail::conj(dk) * T(ck);
                                 }
 
                                 const int32_t ip = base_a + pk + lane * LD;

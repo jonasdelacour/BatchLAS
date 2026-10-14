@@ -26,7 +26,7 @@ Two independent questions decide whether a call can reach a vendor library:
 family. The third question, whose code runs for a call, is the op's **choice**: a value of the op's
 family variant. The vendor library is the family `vendor`.
 
-* **Public definitions** live in `src/ops/<op>/<op>.cc`, compiled into `batchlas_dispatch_obj` and
+* **Public definitions** live in `src/ops/<op>/<op>.cc`, compiled into `batchlas_selection_obj` and
   instantiated on the device family. The vendor TUs (`cublas.cc`, `cusolver.cc`, `rocblas.cc`,
   `netlib_lapack.cc`, ...) define and instantiate only `backend::<op>_vendor<B, T>`. The public symbol
   therefore exists in every build that has the device.
@@ -70,10 +70,11 @@ Rejected: a stub TU per absent library that defines a throwing `backend::<op>_ve
 already shipped. Header and non-op callers use `*_vendor_or_throw` shims instead, for example
 `syev_vendor_or_throw` in `src/ops/syev/vendor.hh`.
 
-Whether the native kernel is **linked** is a separate question, answered by
-`select::level3_tile_route_available<B, T>`: `B == Backend::CUDA && (T is float || BATCHLAS_HAS_CUBLAS)`.
-Do not test `B == Backend::CUDA` alone. The backend is still `CUDA` in a vendor-free build, and the
-tile TUs are not compiled there.
+Whether `sytrd_blocked`, `ortho` and `ormqr_blocked` swap a gemm for a level-3 **tile kernel** is a
+separate question, answered by `select::level3_tile_substitution_enabled<B, T>`:
+`B == Backend::CUDA && (T is float || BATCHLAS_HAS_CUBLAS)`. Do not test `B == Backend::CUDA` alone:
+the backend is still `CUDA` in a vendor-free build. The gate is narrower than where those kernels now
+run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
 
 ### The vendor gate: why the tile route predicate is per backend and scalar
 

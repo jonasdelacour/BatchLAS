@@ -4,7 +4,6 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
-#include <batchlas/internal/sytrd_blocked.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
@@ -714,7 +713,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     // evidence: docs/perf/sytrd.md#sytrd-the-rank-2k-trailing-update-in-the-blocked-reduction
     // evidence: docs/perf/syev.md#syev-her2k-trailing-update-for-complex-float-wp3
     constexpr bool rank2k_trailing_update_supported =
-        select::level3_tile_route_available<B, T> &&
+        select::level3_tile_substitution_enabled<B, T> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&

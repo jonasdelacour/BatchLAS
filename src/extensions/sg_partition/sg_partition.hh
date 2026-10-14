@@ -115,10 +115,6 @@ inline decltype(auto) region(F&& f) {
 
 } // namespace sgp
 
-// Kept for the call sites that ask whether masked partitions are the native
-// (divergence-safe, zero-padding) choice on this target.
-inline constexpr bool kUseNativeChunkedPartition = sgp::kMaskedByDefault;
-
 template <size_t P, bool Masked = sgp::kMaskedByDefault>
 struct SubGroupPartition {
     static_assert(sgp::is_pow2_v<static_cast<uint32_t>(P)>, "partition size must be a power of two");

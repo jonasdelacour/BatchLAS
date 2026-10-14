@@ -253,7 +253,7 @@ sometimes running): fresh tree, no cache, 284-334 s.
   `./build/tests/X --gtest_filter=...` -> one binary `ctest -R '^X$'` (`-R` is a substring regex, so
   anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> `-LE slow` -> full only
   before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool,
-  `sg_compat`/`sg_partition`, `include/batchlas/util`).
+  `sg_partition`, `include/batchlas/util`).
 - **On threadripper02, run multi-test scopes through `scripts/ctest_gpus.sh`** (same arguments as
   ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`).
   - Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus`

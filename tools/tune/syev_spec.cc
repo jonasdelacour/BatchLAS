@@ -124,7 +124,6 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_compat.hh",
             "src/extensions/sg_partition/backend_amdgcn.hh",
             "src/extensions/sg_partition/backend_amdgcn_core.hh",
             "src/extensions/sg_partition/backend_generic.hh",

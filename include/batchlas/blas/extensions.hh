@@ -1037,6 +1037,16 @@ namespace batchlas {
      * @brief Blocked symmetric/Hermitian tridiagonal reduction, n > 32: LATRD-style panel
      *        plus a BLAS-3 trailing update. Same SYTD2-style output as `sytrd_cta`.
      *        In-order queue only.
+     *
+     * A is overwritten with the reflector storage (LAPACK `sytd2` layout, with the tridiagonal
+     * entries restored on the first off-diagonal), the diagonal goes to `d_out`, the
+     * off-diagonal to `e_out` and the reflector scalars to `tau_out`.
+     *
+     * @pre `ctx` is in-order (SYCL kernels and backend BLAS calls are not separately ordered)
+     * @pre `ws` holds at least sytrd_blocked_buffer_size() bytes (the W panel)
+     * @throws batchlas::invalid_argument on a non-square A, short d/e/tau, a batch mismatch or
+     *         an out-of-order `ctx`
+     * @throws batchlas::unsupported for `Uplo::Upper` (only Lower is implemented)
      */
     template <Backend B, typename T>
     BATCHLAS_API Event sytrd_blocked(Queue& ctx,

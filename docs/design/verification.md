@@ -176,7 +176,7 @@ The only `orthogonality` site that changed from columns to rows is `orgqr_tests`
 
 The tail migration (the last tests on the library) kept every older bound that was stricter than the
 kind's as a `Slack` with factor ≤ 1 and the old bound as its reason: gemm and gemv float against the
-old vendor-comparison tolerance (`old_vendor_tolerance`, `old_relative_tolerance`), the sytrd
+old vendor-comparison tolerance (`vendor_comparison_tolerance`, `vendor_comparison_slack`), the sytrd
 eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's exact data, the sb2st float spectra
 (1/16 per chase step, at most 1; double stays at factor 1), trsm's vendor-substitute
 `‖AX − B‖ / ‖B‖ < 1e-5`, the float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked,

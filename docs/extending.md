@@ -22,7 +22,7 @@ which validates arguments, chooses a kernel and launches it
 
 - One directory per op holds `choice.hh` (the vocabulary) and `<op>.cc`. The op file defines the
   public `<op>` and `<op>_buffer_size` for every backend and is listed in `src/CMakeLists.txt`
-  (`target_sources(batchlas_dispatch_obj PRIVATE ops/<op>/<op>.cc)`). `batchlas_dispatch_obj` is
+  (`target_sources(batchlas_selection_obj PRIVATE ops/<op>/<op>.cc)`). `batchlas_selection_obj` is
   built whatever vendor libraries exist, so the public symbol exists in every build with the device.
 - The vendor implementation is a separate symbol, `backend::<op>_vendor<B, T>` (plus
   `backend::<op>_vendor_buffer_size` when it needs scratch). It is declared in the op's public

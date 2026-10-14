@@ -1,6 +1,5 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/linalg.hh>
-#include <batchlas/internal/ormbr.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>

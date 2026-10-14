@@ -38,8 +38,8 @@ select::Key key_of(const MatrixView<T, MF>& A, const Dense<T>& C, Transpose tran
             {"m", A.rows()}, {"nrhs", C.cols()}, {"batch", A.batch_size()}};
 }
 
-// Do the views describe one C = alpha op(A) op(B) + beta C? The old shape builder's checks
-// (it sent anything else to the vendor, the only validation in the tree): extents agree, batch
+// Do the views describe one C = alpha op(A) op(B) + beta C? Checks
+// (the only validation in the tree): extents agree, batch
 // sizes agree, positive lds, and a CSR offset stride of at least m + 1 (the bodies read ro[i + 1]).
 template <class T, MatrixFormat MF>
 bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C, Transpose transA,
@@ -63,7 +63,7 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // with one (ld, stride) per dense operand, so neither may be heterogeneous; a CSR view varies per
 // item only through nnz(b), which the bodies bound by row_offsets. m, k or nrhs 0 is a legal call
 // (the driver quick-returns on the host); an empty batch returns before selection. One cuSPARSE
-// term, off the old Auto path: a conjugated single-row B is an error status the vendor arm never
+// term: a conjugated single-row B is an error status the vendor arm never
 // checks (C unwritten, a silent wrong answer). complex<double> N/N with one column ran clean once
 // defect 13's aligned scalars landed, so it is no longer refused (known-defects #17).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
@@ -135,7 +135,7 @@ Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, Matr
            Span<std::byte> workspace) {
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old shape builder wrote it: m, k = A as stored, n = nrhs.
+    // The coverage row's key: m, k = A as stored, n = nrhs.
     const coverage::Shape shape{.m = A.rows(), .n = C.cols(), .k = A.cols(), .batch = A.batch_size(),
                                 .transA = transA, .transB = transB};
     const select::Key key = ops::spmm::key_of<T, MFormat>(A, C, transA, transB);
