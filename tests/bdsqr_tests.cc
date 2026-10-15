@@ -77,11 +77,11 @@ protected:
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
                 d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(dh[static_cast<size_t>(b) * n + i]);
-                B0.view().at(i, i, b) = d[static_cast<size_t>(b) * n + i];
+                B0.at(i, i, b) = d[static_cast<size_t>(b) * n + i];
             }
             for (int i = 0; i < n - 1; ++i) {
                 e[static_cast<size_t>(b) * (n - 1) + i] = static_cast<Scalar>(eh[static_cast<size_t>(b) * (n - 1) + i]);
-                B0.view().at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
+                B0.at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
             }
         }
 
@@ -95,24 +95,24 @@ protected:
         auto U = Matrix<Scalar>::Identity(n, batch);
         auto Vh = Matrix<Scalar>::Identity(n, batch);
         if (vectors) {
-            (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
+            (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U, Vh, true);
         } else {
             (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         }
         ctx.wait_and_throw();
 
-        const auto items = B0.view().all_items();
+        const auto items = B0.all_items();
         const VectorView<Scalar> sv(s.to_span(), n, batch, 1, n);
         if (vectors) {
             EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
-                          MV::svd_residual(ctx, B0.view(), U.view(), sv, Vh.view(), items));
-            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U.view(), items))
+                          MV::svd_residual(ctx, B0, U, sv, Vh, items));
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U, items))
                 << "U";
-            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh.view(), items))
+            EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh, items))
                 << "Vh (square: orthonormal columns iff orthonormal rows)";
         }
 
-        test_utils::expect_singular_values_match_lapacke(B0.view(), s, items);
+        test_utils::expect_singular_values_match_lapacke(B0, s, items);
     }
 
     void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0) {
@@ -211,17 +211,17 @@ TYPED_TEST(BdsqrTest, GradedNearOverflow) {
     UnifiedVector<std::byte> ws(bdsqr_buffer_size<Scalar>(ctx, dv, ev, s.to_span()));
     auto U = Matrix<Scalar>::Identity(n, batch);
     auto Vh = Matrix<Scalar>::Identity(n, batch);
-    (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
+    (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U, Vh, true);
     ctx.wait_and_throw();
     for (auto& x : s) x /= scale;
 
     const VectorView<Scalar> sv(s.to_span(), n, batch, 1, n);
-    test_utils::expect_singular_values_match_lapacke(A0.view(), s, A0.view().all_items());
+    test_utils::expect_singular_values_match_lapacke(A0, s, A0.all_items());
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
-                  MV::svd_residual(ctx, A0.view(), U.view(), sv, Vh.view(), A0.view().all_items()));
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U.view(), U.view().all_items()));
+                  MV::svd_residual(ctx, A0, U, sv, Vh, A0.all_items()));
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, U, U.all_items()));
     // Vh is square, so orthonormal columns mean orthonormal rows.
-    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh.view(), Vh.view().all_items()));
+    EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh, Vh.all_items()));
 }
 
 

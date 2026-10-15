@@ -15,7 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 /// @file
-/// @brief Backend deduction from the Queue, owning-argument acceptance and the USM pointer check.
+/// @brief Backend deduction from the Queue and the USM pointer check.
 /// @ingroup api_dispatch
 
 namespace batchlas {
@@ -30,16 +30,10 @@ namespace batchlas {
  * `blas/options.hh` deduce the same way. Library code templated on `Backend` must
  * call the `f<B>` spelling, never the deducing one.
  *
- * <b>Every entry point also accepts owning arguments.</b> Wherever a positional
- * primary takes a `MatrixView` or `VectorView`, an owning `Matrix` or `Vector` may be
- * passed instead (the option-struct overloads take `Matrix` or `MatrixView` directly),
- * in any position and mixed freely with views; `T` and `MatrixFormat` are deduced
- * from it as they would be from its view. `BATCHLAS_ACCEPT_OWNING(f)` (and
- * `BATCHLAS_ACCEPT_OWNING_NB(f)` for entry points not templated on `Backend`)
- * generates these overloads. Two argument lists are not accepted: a bare `{}` in
- * any position (name the type, e.g. `PotrfOptions{}`), and a call that names some
- * template arguments and leaves others to deduction (`spmm<Back, T>(ctx, Matrix, ...)`;
- * write `spmm<Back>(ctx, ...)`). Both are compile errors, never wrong answers.
+ * <b>Every entry point also accepts owning arguments.</b> A `Matrix` is a `MatrixView`
+ * and a `Vector` is a `VectorView` (public inheritance), so an owning argument binds to
+ * a view parameter directly and deduces `T` and `MatrixFormat` through derived-to-base
+ * deduction, in any position and with any template arguments named.
  *
  * <b>Pointer checks.</b> The deducing spellings check that every non-empty pointer
  * argument is reachable from the queue's device and throw `std::invalid_argument`
@@ -264,38 +258,6 @@ inline constexpr Backend kProbeBackend =
     Backend::NETLIB;
 #endif
 
-// Owning arguments: deduction ignores Matrix -> MatrixView conversions, so the view
-// is named here. Non-owning arguments pass through as themselves.
-// evidence: docs/design/api-conventions.md#api-conventions-owning-matrix-and-vector-arguments
-template <class A>
-struct view_of {
-    using type = const A&;
-};
-template <class T, MatrixFormat F>
-struct view_of<Matrix<T, F>> {
-    using type = MatrixView<T, F>;
-};
-template <class T>
-struct view_of<Vector<T>> {
-    using type = VectorView<T>;
-};
-template <class A>
-using view_t = typename view_of<std::remove_cvref_t<A>>::type;
-
-// True for exactly the argument types view_of rewrites.
-template <class A>
-inline constexpr bool is_owning_arg_v =
-    !std::is_same_v<view_t<A>, const std::remove_cvref_t<A>&>;
-
-// Gate on the owning forwarder: without it the forwarder claims every call.
-template <class... A>
-concept AnyOwning = (is_owning_arg_v<A> || ...);
-
-template <class A>
-inline view_t<A> as_view(const A& a) {
-    return static_cast<view_t<A>>(a);
-}
-
 }  // namespace detail
 
 }  // namespace batchlas
@@ -318,35 +280,4 @@ inline view_t<A> as_view(const A& a) {
             ::batchlas::detail::needs_fp64_v<Args...>>(ctx, #NAME, [&](auto Back) { \
             return NAME<Back.value>(ctx, std::forward<Args>(args)...);          \
         });                                                                     \
-    }
-
-// Owning-argument overload of every `NAME<Back>` spelling at once; the inner call
-// deduces, so no signature is restated. Last resort by construction (AnyOwning plus
-// the requires-clause). The pack is `const Args&...`, NEVER `Args&&...`: a
-// forwarding pack beats the checked option overloads for prvalues (an 8x4 matrix
-// once passed getrf's squareness check that way). A bare `{}` or a partly explicit
-// template argument list does not reach it, by design.
-// evidence: docs/design/api-conventions.md#api-conventions-the-owning-pack-is-const-args-never-args
-#define BATCHLAS_ACCEPT_OWNING(NAME)                                            \
-    template <Backend Back, typename... Args>                                   \
-        requires ::batchlas::detail::AnyOwning<Args...> &&                      \
-                 requires(Queue& probe_ctx, const Args&... probe_args) {        \
-                     NAME<Back>(probe_ctx,                                      \
-                                ::batchlas::detail::as_view(probe_args)...);    \
-                 }                                                              \
-    inline auto NAME(Queue& ctx, const Args&... args) {                         \
-        return NAME<Back>(ctx, ::batchlas::detail::as_view(args)...);           \
-    }
-
-// BATCHLAS_ACCEPT_OWNING for an entry point not templated on Backend (norm,
-// transpose, steqr_*_buffer_size); those have no dispatch overload.
-#define BATCHLAS_ACCEPT_OWNING_NB(NAME)                                         \
-    template <typename... Args>                                                 \
-        requires ::batchlas::detail::AnyOwning<Args...> &&                      \
-                 requires(Queue& probe_ctx, const Args&... probe_args) {        \
-                     NAME(probe_ctx,                                            \
-                          ::batchlas::detail::as_view(probe_args)...);          \
-                 }                                                              \
-    inline auto NAME(Queue& ctx, const Args&... args) {                         \
-        return NAME(ctx, ::batchlas::detail::as_view(args)...);                 \
     }

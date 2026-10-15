@@ -76,14 +76,14 @@ void run_ortho_case(miniacc::State& state, const char* impl_name) {
         q->wait();
 
         auto Q = dense_A.clone();
-        UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q.view(), Transpose::NoTrans, Algo));
-        (void)ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), Algo);
+        UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q, Transpose::NoTrans, Algo));
+        (void)ortho<B, Real>(*q, Q, Transpose::NoTrans, ws.to_span(), Algo);
         q->wait();
 
         const auto ortho_vals = miniacc_acc::orthogonality_residuals<B, Real>(*q, Q);
         const bool have_measured_cond = (m == n);
         UnifiedVector<Real> conds = have_measured_cond
-            ? cond<B>(*q, dense_A.view(), NormType::Spectral)
+            ? cond<B>(*q, dense_A, NormType::Spectral)
             : UnifiedVector<Real>();
         q->wait();
 

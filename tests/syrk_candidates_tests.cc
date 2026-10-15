@@ -238,8 +238,8 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     Cm.fill(T(1));
     UnifiedVector<int> rows(batch), cols(batch);
     for (int b = 0; b < batch; ++b) rows[b] = n - b, cols[b] = k - (b % 2);
-    const auto hetA = A.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hetC = Cm.view().with_active_dims(rows.to_span(), rows.to_span());
+    const auto hetA = A.with_active_dims(rows.to_span(), cols.to_span());
+    const auto hetC = Cm.with_active_dims(rows.to_span(), rows.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous() && hetC.is_heterogeneous());
     struct Case { const char* what; MVof<T> a, c; };
     const Case cases[] = {

@@ -298,7 +298,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     }
 
     (void)batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
+        *ctx, A, B, tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
     using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -381,7 +381,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
 
     EXPECT_THROW(
         ((void)batchlas::sycl_trsm::trsm_native_v1_dispatch<Wide>(
-            *ctx, A.view(), B.view(), Wide(1), Side::Right, Uplo::Lower,
+            *ctx, A, B, Wide(1), Side::Right, Uplo::Lower,
             Transpose::NoTrans, Diag::NonUnit)),
         std::runtime_error)
         << "n=33 exceeds the CTA capacity; silently solving 32 of 33 rows is the "
@@ -423,7 +423,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
     }
     using MV = MatrixView<T, MatrixFormat::Dense>;
     (void)batchlas::sycl_trsm::trsm_native_blocked<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
+        *ctx, A, B, tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
         [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
            ComputePrecision p) -> Event {
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
@@ -845,7 +845,7 @@ TEST(TrsmNativeSgLeft, OrderAboveSubGroupWidthThrows) {
     Matrix<float, MatrixFormat::Dense> A(33, 33, 2);
     Matrix<float, MatrixFormat::Dense> B(33, 4, 2);
     EXPECT_THROW((void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
-                     *ctx, A.view(), B.view(), 1.0f, Uplo::Lower, Transpose::NoTrans,
+                     *ctx, A, B, 1.0f, Uplo::Lower, Transpose::NoTrans,
                      Diag::NonUnit),
                  std::exception);
 }
@@ -902,7 +902,7 @@ TEST(TrsmNativeSgLeft, NonFiniteReciprocalFallsBackToDivision) {
                 Bv.at(r, c, b) = (b == 1 && r == 5) ? tiny : 2.0f * (1 + c);
     }
     (void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
-        *ctx, A.view(), B.view(), 1.0f, Uplo::Lower, Transpose::NoTrans,
+        *ctx, A, B, 1.0f, Uplo::Lower, Transpose::NoTrans,
         Diag::NonUnit);
     ctx->wait();
     for (int b = 0; b < bs; ++b)
@@ -946,7 +946,7 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
         const int n = 512, bs = 8193;
         Matrix<T, MatrixFormat::Dense> A(n, n, bs);
         Matrix<T, MatrixFormat::Dense> B(n, 1, bs);
-        const std::size_t sa = static_cast<std::size_t>(A.view().stride());
+        const std::size_t sa = static_cast<std::size_t>(A.stride());
         ASSERT_GE(sa * (bs - 1), std::size_t(1) << 31) << "the last item must start at or past 2^31 elements";
         std::vector<T> a0(static_cast<std::size_t>(n) * n), b0(n);
         for (int j = 0; j < n; ++j) {
@@ -956,10 +956,10 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
                     i == j ? T(float(n + 1), 0.5f) : (i > j ? T(0.3f * std::sin(i + 2.0f * j), 0.2f) : T(9e9f, 0));
         }
         for (int b : {0, bs - 1}) {
-            std::copy(a0.begin(), a0.end(), A.view().data_ptr() + sa * b);
-            std::copy(b0.begin(), b0.end(), B.view().data_ptr() + static_cast<std::size_t>(n) * b);
+            std::copy(a0.begin(), a0.end(), A.data_ptr() + sa * b);
+            std::copy(b0.begin(), b0.end(), B.data_ptr() + static_cast<std::size_t>(n) * b);
         }
-        (void)backend::trsm_vendor<Backend::CUDA, T>(*ctx, A.view(), B.view(), Side::Left, Uplo::Lower,
+        (void)backend::trsm_vendor<Backend::CUDA, T>(*ctx, A, B, Side::Left, Uplo::Lower,
                                                      Transpose::NoTrans, Diag::NonUnit, T(1));
         ctx->wait();
         // Only items 0 and bs - 1 hold a system; B0 repeats b0 so that both read the same right-hand side.
@@ -974,17 +974,17 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
             for (int i = 0; i < j; ++i) a_lower[i + static_cast<std::size_t>(j) * n] = T(0);
         using MV = MatrixView<T, MatrixFormat::Dense>;
         using P = MV::promoted_type;
-        const double a_norm = norm(*ctx, MV(a_lower.data(), n, n, n).astype<P>(std::vector<int>{0}).view())[0];
-        const auto bnorms = norm(*ctx, B0.astype<P>(items).view());
-        const auto xnorms = norm(*ctx, B.view().astype<P>(items).view());
+        const double a_norm = norm(*ctx, MV(a_lower.data(), n, n, n).astype<P>(std::vector<int>{0}))[0];
+        const auto bnorms = norm(*ctx, B0.astype<P>(items));
+        const auto xnorms = norm(*ctx, B.view().astype<P>(items));
         double factor = 1.0;
         for (std::size_t g = 0; g < items.size(); ++g) {
             const double bn = bnorms[g], xn = xnorms[g];
             factor = std::min(factor, 1e-5 * bn / (batchlas::verify::bound<T>(batchlas::verify::Check::solve, n) * (a_norm * xn + bn)));
         }
         EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::solve, n,
-                            MV::trsm_residual(*ctx, A.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit,
-                                              B.view(), B0, MV::up(T(1)), items),
+                            MV::trsm_residual(*ctx, A, Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit,
+                                              B, B0, MV::up(T(1)), items),
                             (batchlas::verify::Slack{factor, "the old ||AX-B||/||B|| < 1e-5"}));
     }
 }

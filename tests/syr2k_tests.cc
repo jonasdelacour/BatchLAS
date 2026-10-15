@@ -59,15 +59,15 @@ TYPED_TEST(Syr2kTest, MatchesGemmReference) {
             Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);
             Matrix<T, MatrixFormat::Dense> C(n, n, batch);
 
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
             syr2k(*(this->ctx),
-                      A.view(),
-                      B.view(),
-                      C.view(),
+                      A,
+                      B,
+                      C,
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            expect_syr2k_matches(*(this->ctx), A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+            expect_syr2k_matches(*(this->ctx), A, B, C0, C, uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -104,7 +104,7 @@ TYPED_TEST(Syr2kTest, LeavesTheOtherTriangleUntouched) {
                             C(i, j, b) = referenced ? T(0.25) * T(i + j) : poison;
                         }
 
-                syr2k(*(this->ctx), A.view(), B.view(), C.view(),
+                syr2k(*(this->ctx), A, B, C,
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
                 for (int b = 0; b < batch; ++b)
@@ -168,7 +168,7 @@ void expect_triangle_respected(Queue& ctx,
                                float alpha,
                                float beta,
                                int k) {
-    expect_syr2k_matches<float>(ctx, A.view(), B.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+    expect_syr2k_matches<float>(ctx, A, B, C0, C, uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
@@ -211,9 +211,9 @@ void expect_route_respects_triangle(Queue& ctx,
             {
                 ScopedEnvVar route_variant("BATCHLAS_SYR2K_ROUTE", variant);
                 syr2k(ctx,
-                      A.view(),
-                      B.view(),
-                      C_custom.view(),
+                      A,
+                      B,
+                      C_custom,
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
             }
 
@@ -358,14 +358,14 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
                 auto C_custom = C0.clone();
 
                 syr2k(ctx,
-                      A.view(),
-                      B.view(),
-                      C_custom.view(),
+                      A,
+                      B,
+                      C_custom,
                       {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
                 // Only the referenced triangle is read from C0, so a surviving NaN there is a read across the boundary.
                 SCOPED_TRACE(::testing::Message() << "n=" << shape.n << ", k=" << shape.k);
-                expect_syr2k_matches<float>(ctx, A.view(), B.view(), C0.view(), C_custom.view(), uplo, transA, alpha, beta, shape.k);
+                expect_syr2k_matches<float>(ctx, A, B, C0, C_custom, uplo, transA, alpha, beta, shape.k);
             }
         }
     }

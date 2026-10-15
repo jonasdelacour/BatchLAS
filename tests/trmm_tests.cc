@@ -35,10 +35,10 @@ double trmm_error(Queue& ctx, const Matrix<T>& A, const Matrix<T>& B, const Matr
                   Diag diag) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     auto tri = A.clone();
-    tri.view().triangularize(ctx, uplo, diag).wait();
+    tri.triangularize(ctx, uplo, diag).wait();
     if (side == Side::Left)
-        return MV::gemm_backward_error(ctx, tri.view(), trans, B.view(), Transpose::NoTrans, C.view(), C.view(), 1.0, 0.0);
-    return MV::gemm_backward_error(ctx, B.view(), Transpose::NoTrans, tri.view(), trans, C.view(), C.view(), 1.0, 0.0);
+        return MV::gemm_backward_error(ctx, tri, trans, B, Transpose::NoTrans, C, C, 1.0, 0.0);
+    return MV::gemm_backward_error(ctx, B, Transpose::NoTrans, tri, trans, C, C, 1.0, 0.0);
 }
 
 TYPED_TEST(TrmmTest, AllCombinations) {
@@ -61,11 +61,11 @@ TYPED_TEST(TrmmTest, AllCombinations) {
                     Matrix<T> A = Matrix<T, MatrixFormat::Dense>::RandomTriangular(n, uplo, diag, batchSize);
                     
 
-                    // compute C = trmm(A.view(),B.view()) with the current combination
+                    // compute C = trmm(A,B) with the current combination
                     trmm(*(this->ctx),
-                             A.view(),
-                             B.view(),
-                             C.view(),
+                             A,
+                             B,
+                             C,
                              {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
 
                     EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(*(this->ctx), A, B, C, side, uplo, trans, diag))
@@ -131,7 +131,7 @@ TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
                             this->ctx->wait();
 
                             auto C = Matrix<T, MatrixFormat::Dense>::Zeros(shape.rows, shape.cols, shape.batch);
-                            trmm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
+                            trmm(*(this->ctx), A_poisoned, B, C,
                                  {.side = side, .uplo = uplo, .trans = trans, .diag = diag})
                                 .wait();
 

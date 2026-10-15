@@ -64,6 +64,8 @@ whether a null pointer is legal.
   Factories (`Identity`, `Random`, `Zeros`, ...) wait before returning, so the host can read elements.
 - `MatrixView<T, F>` aliases caller memory and must not outlive it, including in-flight kernels. A view
   over `sycl::malloc_device` memory is not host-dereferenceable.
+- `Matrix<T, F>` derives from `MatrixView<T, F>` (a view of its own storage), and `Vector<T>` from
+  `VectorView<T>`; see @ref design_api_conventions for what that means for overloads.
 - `Matrix::clone()` copies in the source layout. For CSR it allocates `matrix_stride` slots per item.
 
 ## Matrix model: the pointer array and sliced views

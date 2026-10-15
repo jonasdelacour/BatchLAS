@@ -513,7 +513,7 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
         std::vector<MatrixMetrics<Real>> baseline_metrics;
         try {
             baseline_metrics = run_sparse_syevx_once<B>(*q,
-                                                        csr.view(),
+                                                        csr,
                                                         neigs,
                                                         extra_dirs,
                                                         max_iters,
@@ -579,7 +579,7 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
 
         try {
             const auto factor_start = std::chrono::steady_clock::now();
-            preconditioner = iluk_factorize(*q, csr.view(), iluk_params);
+            preconditioner = iluk_factorize(*q, csr, iluk_params);
             q->wait_and_throw();
             factor_time_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - factor_start).count();
             precond_nnz = static_cast<double>(preconditioner->lu.nnz());
@@ -608,7 +608,7 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
         std::vector<MatrixMetrics<Real>> iluk_metrics;
         try {
             iluk_metrics = run_sparse_syevx_once<B>(*q,
-                                                    csr.view(),
+                                                    csr,
                                                     neigs,
                                                     extra_dirs,
                                                     max_iters,

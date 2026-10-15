@@ -672,8 +672,8 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
     Bm.fill(MVof<T>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
-    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hetA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hetB = Bm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous());
     struct Case { const char* what; MVof<T> a, b; };
     const Case cases[] = {{"A heterogeneous", hetA, Bm.view()}, {"B heterogeneous", A.view(), hetB}};

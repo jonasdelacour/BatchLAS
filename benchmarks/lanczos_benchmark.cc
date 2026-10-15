@@ -21,8 +21,8 @@ static void BM_LANCZOS(minibench::State& state) {
     LanczosParams<T> params;
     params.ortho_algorithm = OrthoAlgorithm::CGS2;
 
-    size_t ws_size = lanczos_buffer_size(*q, Acsr.view(), W.to_span(),
-                                           JobType::NoEigenVectors, V.view(), params);
+    size_t ws_size = lanczos_buffer_size(*q, Acsr, W.to_span(),
+                                           JobType::NoEigenVectors, V, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,

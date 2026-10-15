@@ -78,7 +78,7 @@ protected:
         UnifiedVector<real_t> result(mat.batch_size());
 
         for (auto ntype : all_norms) {
-            (void)norm(*(this->ctx), mat.view(), ntype, result.to_span());
+            (void)norm(*(this->ctx), mat, ntype, result.to_span());
             this->ctx->wait();
 
             for (int b = 0; b < mat.batch_size(); ++b) {
@@ -95,7 +95,7 @@ protected:
         UnifiedVector<real_t> result(mat.batch_size());
 
         for (auto ntype : all_norms) {
-            (void)norm(*(this->ctx), mat.view(), ntype, result.to_span());
+            (void)norm(*(this->ctx), mat, ntype, result.to_span());
             this->ctx->wait();
 
             for (int b = 0; b < mat.batch_size(); ++b) {
@@ -288,7 +288,7 @@ TYPED_TEST(NormTest, LargeBatchNorms) {
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 777);
     auto result = UnifiedVector<real_t>(batch_size);
     
-    (void)norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
+    (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
     this->ctx->wait();
     
     for (int b = 0; b < batch_size; ++b) {
@@ -308,7 +308,7 @@ TYPED_TEST(NormTest, DifferentMatrixSizes) {
         auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, 1, 888);
         auto result = UnifiedVector<real_t>(1);
         
-        (void)norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
+        (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
         this->ctx->wait();
         
         EXPECT_GT(result[0], real_t(0))
@@ -365,7 +365,7 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
     
     auto start = std::chrono::high_resolution_clock::now();
 
-    (void)norm(*(this->ctx), mat.view(), NormType::Frobenius, result.to_span());
+    (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
     this->ctx->wait();
     
     auto end = std::chrono::high_resolution_clock::now();
@@ -398,7 +398,7 @@ TYPED_TEST(NormTest, SpectralOutOfOrder) {
             for (int i = 0; i < n; ++i) mat.view()(i, j, b) = T(real_t(b + 1));
     UnifiedVector<real_t> result(batch_size, std::numeric_limits<real_t>::quiet_NaN());
     try {
-        (void)norm(oq, mat.view(), NormType::Spectral, result.to_span());
+        (void)norm(oq, mat, NormType::Spectral, result.to_span());
     } catch (const batchlas::NoRouteError& e) {
         GTEST_SKIP() << "the spectral norm needs syev, which has no route in this build: " << e.what();
     }
@@ -423,8 +423,8 @@ TYPED_TEST(NormTest, OneInfWiderThanWorkgroup) {
                 for (int i = 0; i < rows; ++i) poison.view()(i, j, b) = T(real_t(1e6));
         auto mat = Matrix<T, MatrixFormat::Dense>::Ones(rows, cols, batch_size);
         UnifiedVector<real_t> result(batch_size);
-        (void)norm(*(this->ctx), poison.view(), t, result.to_span());
-        (void)norm(*(this->ctx), mat.view(), t, result.to_span());
+        (void)norm(*(this->ctx), poison, t, result.to_span());
+        (void)norm(*(this->ctx), mat, t, result.to_span());
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             SCOPED_TRACE(::testing::Message() << this->norm_name(t) << " item " << b);

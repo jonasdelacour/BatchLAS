@@ -241,13 +241,9 @@ BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend(). See
+// BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
-BATCHLAS_ACCEPT_OWNING(gesvd)
-BATCHLAS_ACCEPT_OWNING(gesvd_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_buffer_size)

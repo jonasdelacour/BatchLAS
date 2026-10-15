@@ -110,7 +110,7 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
                         }
                         this->ctx->wait();
 
-                        herk(*(this->ctx), A.view(), C.view(),
+                        herk(*(this->ctx), A, C,
                              {.alpha = scaling.alpha,
                               .beta = scaling.beta,
                               .uplo = uplo,
@@ -118,9 +118,9 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
 
                         using MV = MatrixView<T, MatrixFormat::Dense>;
                         const double err = MV::gemm_backward_error(
-                            *(this->ctx), A.view(), trans, A.view(),
-                            trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(),
-                            MV::up(T(scaling.alpha)), MV::up(T(scaling.beta)), C.view().all_items(), uplo);
+                            *(this->ctx), A, trans, A,
+                            trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0, C,
+                            MV::up(T(scaling.alpha)), MV::up(T(scaling.beta)), C.all_items(), uplo);
                         EXPECT_VERIFY(T, batchlas::verify::Check::blas, k, err)
                             << "herk read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
                             << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
@@ -186,20 +186,20 @@ TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
 
         Matrix<T, MatrixFormat::Dense> C_lower(n, n, batch);
         Matrix<T, MatrixFormat::Dense> C_upper(n, n, batch);
-        (void)C_lower.view().fill_zeros(*(this->ctx));
-        (void)C_upper.view().fill_zeros(*(this->ctx));
+        (void)C_lower.fill_zeros(*(this->ctx));
+        (void)C_upper.fill_zeros(*(this->ctx));
         this->ctx->wait();
 
-        herk(*(this->ctx), A.view(), C_lower.view(), {.uplo = Uplo::Lower, .trans = trans}).wait();
-        herk(*(this->ctx), A.view(), C_upper.view(), {.uplo = Uplo::Upper, .trans = trans}).wait();
+        herk(*(this->ctx), A, C_lower, {.uplo = Uplo::Lower, .trans = trans}).wait();
+        herk(*(this->ctx), A, C_upper, {.uplo = Uplo::Upper, .trans = trans}).wait();
 
         using MV = MatrixView<T, MatrixFormat::Dense>;
         const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                          MV::gemm_backward_error(*(this->ctx), A.view(), trans, A.view(), other, C.view(), C.view(), 1.0, 0.0,
-                                                  C.view().all_items(), uplo))
+                          MV::gemm_backward_error(*(this->ctx), A, trans, A, other, C, C, 1.0, 0.0,
+                                                  C.all_items(), uplo))
                 << "herk's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
                 << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }
@@ -231,13 +231,13 @@ TYPED_TEST(HerkTest, OptionStructMatchesPositional) {
     }
     this->ctx->wait();
 
-    (void)herk(*(this->ctx), A.view(), C_defaults.view(), {});
-    (void)herk<Ba, T>(*(this->ctx), A.view(), C_defaults_pos.view(),
+    (void)herk(*(this->ctx), A, C_defaults, {});
+    (void)herk<Ba, T>(*(this->ctx), A, C_defaults_pos,
                 real_t(1), real_t(0), Uplo::Lower, Transpose::NoTrans);
 
-    (void)herk(*(this->ctx), A.view(), C_named.view(),
+    (void)herk(*(this->ctx), A, C_named,
          {.alpha = real_t(1.5), .uplo = Uplo::Upper});
-    (void)herk<Ba, T>(*(this->ctx), A.view(), C_named_pos.view(),
+    (void)herk<Ba, T>(*(this->ctx), A, C_named_pos,
                 real_t(1.5), real_t(0), Uplo::Upper, Transpose::NoTrans);
     this->ctx->wait();
 
@@ -296,17 +296,17 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
                 }
                 this->ctx->wait();
 
-                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
-                herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, uplo, transA).wait();
+                herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait();
 
                 // Only the requested triangle is the answer; its conjugate half is not computed.
                 using MV = MatrixView<T, MatrixFormat::Dense>;
                 EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
                               MV::gemm_backward_error(
-                                  *(this->ctx), A.view(), transA, A.view(),
-                                  transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0.view(), C.view(),
-                                  MV::up(T(alpha)), MV::up(T(beta)), C.view().all_items(), uplo))
+                                  *(this->ctx), A, transA, A,
+                                  transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans, C0, C,
+                                  MV::up(T(alpha)), MV::up(T(beta)), C.all_items(), uplo))
                     << "route=" << route << " n=" << n << " trans=" << static_cast<int>(transA) << " uplo=" << static_cast<int>(uplo);
             }
         }
@@ -342,11 +342,11 @@ TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
             for (int d = 0; d < n; ++d) C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
         auto C = C0.clone();
         this->ctx->wait();
-        ASSERT_NO_THROW((herk<Ba, T>(*(this->ctx), A.view(), C.view(), alpha, beta, Uplo::Lower, Transpose::NoTrans).wait()));
+        ASSERT_NO_THROW((herk<Ba, T>(*(this->ctx), A, C, alpha, beta, Uplo::Lower, Transpose::NoTrans).wait()));
         using MV = MatrixView<T, MatrixFormat::Dense>;
         EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                      MV::gemm_backward_error(*(this->ctx), A.view(), Transpose::NoTrans, A.view(), Transpose::ConjTrans,
-                                              C0.view(), C.view(), MV::up(T(alpha)), MV::up(T(beta)),
-                                              C.view().all_items(), Uplo::Lower));
+                      MV::gemm_backward_error(*(this->ctx), A, Transpose::NoTrans, A, Transpose::ConjTrans,
+                                              C0, C, MV::up(T(alpha)), MV::up(T(beta)),
+                                              C.all_items(), Uplo::Lower));
     }
 }

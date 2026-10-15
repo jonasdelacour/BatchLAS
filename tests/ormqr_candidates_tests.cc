@@ -166,8 +166,8 @@ double apply_error(Queue& ctx, const Apply<T>& p, int it) {
     const auto C0 = MVof<T>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
     const auto C = MVof<T>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
     if (s.side == Side::Left)
-        return MVof<D>::gemm_backward_error(ctx, Q.view(), s.trans, C0.view(), Transpose::NoTrans, C0.view(), C.view(), D(1), D(0));
-    return MVof<D>::gemm_backward_error(ctx, C0.view(), Transpose::NoTrans, Q.view(), s.trans, C0.view(), C.view(), D(1), D(0));
+        return MVof<D>::gemm_backward_error(ctx, Q, s.trans, C0, Transpose::NoTrans, C0, C, D(1), D(0));
+    return MVof<D>::gemm_backward_error(ctx, C0, Transpose::NoTrans, Q, s.trans, C0, C, D(1), D(0));
 }
 
 // The checked items against the reference, every element outside C's footprint bit for bit,

@@ -52,7 +52,7 @@ void ExpectPinRefused(Queue& ctx, const char* word, int m, int n, int k, Transpo
     auto C0 = C.clone();
     const GemmPin pin(word);
     try {
-        (void)gemm(ctx, A.view(), B.view(), C.view(),
+        (void)gemm(ctx, A, B, C,
                    {.alpha = T(2), .beta = T(-1), .transA = ta, .transB = tb});
         ctx.wait();
         ADD_FAILURE() << "accepted";
@@ -123,7 +123,7 @@ void ExpectGemmExact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpo
 // Item b of M over its active extent, as a single-item view (the checks take no heterogeneous view).
 template <typename T>
 auto ActiveItem(const Matrix<T>& M, int b, int rows, int cols) {
-    return MatrixView<T, MatrixFormat::Dense>(M.view().data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
+    return MatrixView<T, MatrixFormat::Dense>(M.data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
 }
 
 // Everything of the parent outside the rows [r0, r0 + m) x columns [0, n) sub-block is bit for bit as it was:
@@ -170,12 +170,12 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
 
     {
         const GemmPin force_kernel(kernel_name);
-        (void)gemm(ctx, A.view(), B.view(), C.view(),
+        (void)gemm(ctx, A, B, C,
                    {.alpha = alpha, .beta = beta, .transA = transA, .transB = transB});
     }
     ctx.wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), transA, B.view(), transB, C0.view(), C.view(), alpha, beta, k, tol_scale));
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A, transA, B, transB, C0, C, alpha, beta, k, tol_scale));
 }
 
 } // namespace
@@ -354,7 +354,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
                 for (int i = 0; i < mm; ++i) C(i, j, b) = C0(i, j, b);
         {
             const GemmPin pin(word);
-            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans,
+            (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
                        Transpose::NoTrans, ComputePrecision::Default);
             this->ctx->wait();
         }
@@ -366,12 +366,12 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     }
     if constexpr (!test_utils::is_complex<ScalarType>::value) {
         const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 would not
-        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+        (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
                    ComputePrecision::Default);
         this->ctx->wait();
     } else {
         const GemmPin pin("small");
-        EXPECT_THROW(((void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans,
+        EXPECT_THROW(((void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
                                  Transpose::NoTrans, ComputePrecision::Default)),
                      std::invalid_argument);
     }
@@ -432,7 +432,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
 
     const Matrix<ScalarType> C0 = C.clone();
 
-    (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(0),
+    (void)gemm(*(this->ctx), A, B, C, ScalarType(1), ScalarType(0),
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -504,7 +504,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
 
     const Matrix<ScalarType> C0 = C.clone();
 
-    (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta,
+    (void)gemm(*(this->ctx), A, B, C, alpha, beta,
                                     Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
 
     this->ctx->wait();
@@ -545,7 +545,7 @@ TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
     for (int col = 0; col < b_cols[0]; ++col)
         for (int row = 0; row < b_rows[0]; ++row) B(row, col, 0) = entry(2 + row + col, 1 - (col % 3));
 
-    (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(3), ScalarType(0), Transpose::NoTrans,
+    (void)gemm(*(this->ctx), A, B, C, ScalarType(3), ScalarType(0), Transpose::NoTrans,
                Transpose::NoTrans, ComputePrecision::Default);
     this->ctx->wait();
 
@@ -596,13 +596,13 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     auto C = Matrix<ScalarType>::Zeros(size, size, batch_size);
 
     (void)gemm(*(this->ctx),
-                      A.view(),
-                      B.view(),
-                      C.view(),
+                      A,
+                      B,
+                      C,
                       {.alpha = ScalarType(1), .beta = ScalarType(0)});
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans, C, C,
                                                   ScalarType(1), ScalarType(0), size, 50));
 }
 
@@ -620,14 +620,14 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
     {
         const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
-                          A.view(),
-                          B.view(),
-                          C.view(),
+                          A,
+                          B,
+                          C,
                           {.alpha = ScalarType(1), .beta = ScalarType(1)});
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, C,
                                                   ScalarType(1), ScalarType(1), size, 75));
 }
 
@@ -726,14 +726,14 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
     {
         const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
-                          A.view(),
-                          B.view(),
-                          C.view(),
+                          A,
+                          B,
+                          C,
                           {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = Transpose::Trans, .transB = Transpose::Trans});
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::Trans, B.view(), Transpose::Trans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::Trans, B, Transpose::Trans, C0, C,
                                                   ScalarType(1), ScalarType(1), k, 50));
 }
 
@@ -971,10 +971,10 @@ void Run128x128Compare(Queue& ctx, int m, int n, int k, int batch_size, ScalarTy
     auto C0 = C.clone();
     {
         const GemmPin force_kernel(kernel);
-        (void)gemm(ctx, A.view(), B.view(), C.view(), {.alpha = alpha, .beta = beta});
+        (void)gemm(ctx, A, B, C, {.alpha = alpha, .beta = beta});
     }
     ctx.wait();
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A, Transpose::NoTrans, B, Transpose::NoTrans, C0, C,
                                                   alpha, beta, k));
 }
 
@@ -1058,12 +1058,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
 
     {
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+        (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, C,
                                                   ScalarType(2), ScalarType(-1), size));
 }
 
@@ -1089,12 +1089,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     // differ most.
     {
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+        (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, C0.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans, C0, C,
                                                   ScalarType(2), ScalarType(-1), k));
 }
 
@@ -1114,14 +1114,14 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     {
         const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
-                          A.view(),
-                          B.view(),
-                          C.view(),
+                          A,
+                          B,
+                          C,
                           {.alpha = ScalarType(1), .beta = ScalarType(0), .transA = Transpose::ConjTrans});
     }
     this->ctx->wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A.view(), Transpose::ConjTrans, B.view(), Transpose::NoTrans, C.view(), C.view(),
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), A, Transpose::ConjTrans, B, Transpose::NoTrans, C, C,
                                                   ScalarType(1), ScalarType(0), k, 50));
 }
 
@@ -1494,7 +1494,7 @@ TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
         }
         {
             const GemmPin force_kernel(kname);
-            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+            (void)gemm(*(this->ctx), A, B, C,
                  {.alpha = ScalarType(2), .beta = ScalarType(-1)});
         }
         this->ctx->wait();
@@ -1718,7 +1718,7 @@ TYPED_TEST(GemmTest, BatchOffsetAbove2Pow31) {
                 (void)gemm(*this->ctx, A, A, C, {.alpha = T(2), .beta = T(1)});
             }
             this->ctx->wait();
-            EXPECT_EQ(MV::gemm_backward_error(*this->ctx, A, Transpose::NoTrans, A, Transpose::NoTrans, C0.view(), C, T(2),
+            EXPECT_EQ(MV::gemm_backward_error(*this->ctx, A, Transpose::NoTrans, A, Transpose::NoTrans, C0, C, T(2),
                                               T(1), items),
                       0.0);
         }

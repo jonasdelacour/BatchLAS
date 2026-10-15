@@ -64,7 +64,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
     {
         // Fill batch 0 from A0, and replicate across batch for deterministic inputs.
         Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0.view(), AB0.view(), static_cast<int>(n), kd);
+        fill_lower_band_from_dense<T>(A0, AB0, static_cast<int>(n), kd);
         for (size_t b = 0; b < batch; ++b) {
             for (int j = 0; j < static_cast<int>(n); ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -82,7 +82,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     const size_t ws_bytes = sytrd_sb2st_buffer_size(*q,
-                                                         AB.view(),
+                                                         AB,
                                                          VectorView<Real>(d),
                                                          VectorView<Real>(e),
                                                          VectorView<T>(tau),
@@ -128,7 +128,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
     {
         Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0.view(), AB0.view(), static_cast<int>(n), kd);
+        fill_lower_band_from_dense<T>(A0, AB0, static_cast<int>(n), kd);
         for (size_t b = 0; b < batch; ++b) {
             for (int j = 0; j < static_cast<int>(n); ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -146,7 +146,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
-                                                                   AB.view(),
+                                                                   AB,
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
                                                                    VectorView<T>(tau),

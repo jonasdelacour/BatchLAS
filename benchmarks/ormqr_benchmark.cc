@@ -15,13 +15,13 @@ static void BM_ORMQR(minibench::State& state) {
     auto A = Matrix<T>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     UnifiedVector<T> tau(m * batch);
-    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A, tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    (void)geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*q, A, tau.to_span(), ws_geqrf.to_span());
     q->wait();
 
     auto Q = Matrix<T>::Identity(m, batch);
-    size_t orm_ws = ormqr_buffer_size(*q, A.view(), Q.view(), Side::Left,
+    size_t orm_ws = ormqr_buffer_size(*q, A, Q, Side::Left,
                                          Transpose::NoTrans, tau.to_span());
     UnifiedVector<std::byte> ws(orm_ws);
 

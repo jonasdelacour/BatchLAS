@@ -334,7 +334,7 @@ TEST(VerifyOutOfOrder, SameAsInOrder) {
             if (r < n) ci[std::size_t(b) * n + r] = (r * 5 + b) % n;
         }
     const MatrixView<T, MatrixFormat::CSR> S(y.data().data(), ro.data(), ci.data(), n, n, batchlas::NonZeros{n}, n, n + 1, batch);
-    const auto all = A0.view().all_items();
+    const auto all = A0.all_items();
     using Q = batchlas::Queue;
     using batchlas::Uplo;
     const auto checksum = [](const auto& M) {
@@ -343,40 +343,40 @@ TEST(VerifyOutOfOrder, SameAsInOrder) {
         return s;
     };
     const std::pair<const char*, std::function<double(Q&)>> cases[] = {
-        {"potrf_residual", [&](Q& q) { return MV<T>::potrf_residual(q, A0.view(), F.view(), Uplo::Lower, all); }},
-        {"getrf_residual", [&](Q& q) { return MV<T>::getrf_residual(q, A0.view(), F.view(), piv, all); }},
-        {"qr_residual", [&](Q& q) { return MV<T>::qr_residual(q, A0.view(), F.view(), tv, all); }},
-        {"svd_residual", [&](Q& q) { return MV<T>::svd_residual(q, A0.view(), U.view(), sv, Vh.view(), all); }},
+        {"potrf_residual", [&](Q& q) { return MV<T>::potrf_residual(q, A0, F, Uplo::Lower, all); }},
+        {"getrf_residual", [&](Q& q) { return MV<T>::getrf_residual(q, A0, F, piv, all); }},
+        {"qr_residual", [&](Q& q) { return MV<T>::qr_residual(q, A0, F, tv, all); }},
+        {"svd_residual", [&](Q& q) { return MV<T>::svd_residual(q, A0, U, sv, Vh, all); }},
         {"trsm_residual", [&](Q& q) {
-             return MV<T>::trsm_residual(q, F.view(), batchlas::Side::Left, Uplo::Upper, Transpose::NoTrans, batchlas::Diag::NonUnit,
-                                         X.view(), B0.view(), 1.0, all);
+             return MV<T>::trsm_residual(q, F, batchlas::Side::Left, Uplo::Upper, Transpose::NoTrans, batchlas::Diag::NonUnit,
+                                         X, B0, 1.0, all);
          }},
-        {"similarity_residual", [&](Q& q) { return MV<T>::similarity_residual(q, A0.view(), U.view(), F.view(), all); }},
-        {"form_q", [&](Q& q) { return checksum(MV<T>::form_q(q, F.view(), tv, all, n)); }},
-        {"qr_reconstruction", [&](Q& q) { return MV<T>::qr_reconstruction(q, A0.view(), U.view(), F.view(), all); }},
-        {"solve_residual", [&](Q& q) { return MV<T>::solve_residual(q, A0.view(), Transpose::NoTrans, X.view(), B0.view(), all); }},
+        {"similarity_residual", [&](Q& q) { return MV<T>::similarity_residual(q, A0, U, F, all); }},
+        {"form_q", [&](Q& q) { return checksum(MV<T>::form_q(q, F, tv, all, n)); }},
+        {"qr_reconstruction", [&](Q& q) { return MV<T>::qr_reconstruction(q, A0, U, F, all); }},
+        {"solve_residual", [&](Q& q) { return MV<T>::solve_residual(q, A0, Transpose::NoTrans, X, B0, all); }},
         {"solve_residual probe", [&](Q& q) {
-             return MV<T>::solve_residual(q, A0.view(), Transpose::NoTrans, X.view(), B0.view(), all, 0.0);
+             return MV<T>::solve_residual(q, A0, Transpose::NoTrans, X, B0, all, 0.0);
          }},
-        {"lu_solve_residual", [&](Q& q) { return MV<T>::lu_solve_residual(q, F.view(), piv, Transpose::NoTrans, X.view(), B0.view(), all); }},
+        {"lu_solve_residual", [&](Q& q) { return MV<T>::lu_solve_residual(q, F, piv, Transpose::NoTrans, X, B0, all); }},
         {"lu_solve_residual probe", [&](Q& q) {
-             return MV<T>::lu_solve_residual(q, F.view(), piv, Transpose::NoTrans, X.view(), B0.view(), all, 0.0);
+             return MV<T>::lu_solve_residual(q, F, piv, Transpose::NoTrans, X, B0, all, 0.0);
          }},
-        {"orthogonality", [&](Q& q) { return MV<T>::orthogonality(q, U.view(), all); }},
-        {"eigen_residual", [&](Q& q) { return MV<T>::eigen_residual(q, A0.view(), U.view(), sv, all); }},
+        {"orthogonality", [&](Q& q) { return MV<T>::orthogonality(q, U, all); }},
+        {"eigen_residual", [&](Q& q) { return MV<T>::eigen_residual(q, A0, U, sv, all); }},
         {"gemm_backward_error", [&](Q& q) {
-             return MV<T>::gemm_backward_error(q, A0.view(), Transpose::Trans, F.view(), Transpose::NoTrans, U.view(), X.view(), 1.0, 0.5,
+             return MV<T>::gemm_backward_error(q, A0, Transpose::Trans, F, Transpose::NoTrans, U, X, 1.0, 0.5,
                                                all, Uplo::Lower);
          }},
         {"gemm_max_denominator", [&](Q& q) {
-             return MV<T>::gemm_max_denominator(q, A0.view(), Transpose::Trans, F.view(), Transpose::NoTrans, U.view(), 1.0, 0.5, all);
+             return MV<T>::gemm_max_denominator(q, A0, Transpose::Trans, F, Transpose::NoTrans, U, 1.0, 0.5, all);
          }},
-        {"gemv_backward_error", [&](Q& q) { return MV<T>::gemv_backward_error(q, A0.view(), Transpose::Trans, tv, sv, yv, 1.0, 0.5, all); }},
+        {"gemv_backward_error", [&](Q& q) { return MV<T>::gemv_backward_error(q, A0, Transpose::Trans, tv, sv, yv, 1.0, 0.5, all); }},
         {"spmm_backward_error", [&](Q& q) {
-             return MV<T>::spmm_backward_error(q, S, Transpose::NoTrans, F.view(), Transpose::NoTrans, U.view(), X.view(), 1.0, 0.5, all);
+             return MV<T>::spmm_backward_error(q, S, Transpose::NoTrans, F, Transpose::NoTrans, U, X, 1.0, 0.5, all);
          }},
         {"rank2k_backward_error", [&](Q& q) {
-             return MV<T>::rank2k_backward_error(q, A0.view(), F.view(), Transpose::NoTrans, U.view(), X.view(), Uplo::Lower, 1.0, 0.5,
+             return MV<T>::rank2k_backward_error(q, A0, F, Transpose::NoTrans, U, X, Uplo::Lower, 1.0, 0.5,
                                                  false, all);
          }},
     };

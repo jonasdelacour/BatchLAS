@@ -75,11 +75,11 @@ struct SymmProblem {
         auto a = av.template astype<T>(items);
         auto b = view(B, m, n, ldb, sb).template astype<T>(items), c0 = view(C0, m, n, ldb, sb).template astype<T>(items),
              c = view(C, m, n, ldb, sb).template astype<T>(items);
-        (void)a.view().symmetrize(q, Uplo::Lower);
+        (void)a.symmetrize(q, Uplo::Lower);
         q.wait();
         const Transpose nt = Transpose::NoTrans;
-        return {MV::gemm_backward_error(q, a.view(), nt, b.view(), nt, c0.view(), c.view(), MV::up(alpha), MV::up(beta),
-                                        a.view().all_items()),
+        return {MV::gemm_backward_error(q, a, nt, b, nt, c0, c, MV::up(alpha), MV::up(beta),
+                                        a.all_items()),
                 0};
     }
 };

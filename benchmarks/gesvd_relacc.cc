@@ -183,9 +183,9 @@ void run_gesvd_relacc(miniacc::State& state) {
                 seed + static_cast<unsigned>(attempt) * 7919u);
             q->wait();
             generator_failed = false;
-            const Real* ap = A.view().data_ptr();
-            const int64_t ast = A.view().stride();
-            const int64_t ald = A.view().ld();
+            const Real* ap = A.data_ptr();
+            const int64_t ast = A.stride();
+            const int64_t ald = A.ld();
             for (int b = 0; b < cur_batch && !generator_failed; ++b) {
                 for (int c = 0; c < n && !generator_failed; ++c) {
                     for (int r = 0; r < n; ++r) {
@@ -218,24 +218,24 @@ void run_gesvd_relacc(miniacc::State& state) {
         try {
             if constexpr (Impl == RelAccImpl::BatchlasCta) {
                 const size_t ws_bytes = gesvd_cta_buffer_size<B, Real>(
-                    *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                    *q, A_work, s.to_span(), U, Vh,
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                (void)gesvd_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvd_cta<B, Real>(*q, A_work, s.to_span(), U, Vh,
                                    SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::CusolverJacobi) {
                 const size_t ws_bytes = backend::gesvd_vendor_buffer_size<B, Real>(
-                    *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                    *q, A_work, s.to_span(), U, Vh,
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                (void)backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)backend::gesvd_vendor<B, Real>(*q, A_work, s.to_span(), U, Vh,
                                                SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::BatchlasBlocked) {
                 const size_t ws_bytes = gesvd_blocked_buffer_size<B, Real>(
-                    *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                    *q, A_work, s.to_span(), U, Vh,
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                (void)gesvd_blocked<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvd_blocked<B, Real>(*q, A_work, s.to_span(), U, Vh,
                                        SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::QrPrecond) {
                 // Tier 2 hypothesis test, deliberately OUT of kernel.
@@ -248,9 +248,9 @@ void run_gesvd_relacc(miniacc::State& state) {
                 // either, and it is a large piece of delicate code to write on
                 // spec.
                 UnifiedVector<Real> tau(static_cast<size_t>(n) * cur_batch);
-                const size_t qr_ws = geqrf_buffer_size<B, Real>(*q, A_work.view(), tau.to_span());
+                const size_t qr_ws = geqrf_buffer_size<B, Real>(*q, A_work, tau.to_span());
                 UnifiedVector<std::byte> qws(qr_ws);
-                (void)geqrf<B, Real>(*q, A_work.view(), tau.to_span(), qws.to_span());
+                (void)geqrf<B, Real>(*q, A_work, tau.to_span(), qws.to_span());
                 q->wait_and_throw();
                 // Zero the strict lower triangle by hand rather than calling
                 // MatrixView::triangularize. That helper indexes `i*ld + j` while
@@ -262,9 +262,9 @@ void run_gesvd_relacc(miniacc::State& state) {
                 // matrix, which showed up only as a singular-value mismatch
                 // against the known spectrum.
                 {
-                    Real* Rp = A_work.view().data_ptr();
-                    const int64_t rld = A_work.view().ld();
-                    const int64_t rst = A_work.view().stride();
+                    Real* Rp = A_work.data_ptr();
+                    const int64_t rld = A_work.ld();
+                    const int64_t rst = A_work.stride();
                     for (int b = 0; b < cur_batch; ++b) {
                         for (int col = 0; col < n; ++col) {
                             for (int row = col + 1; row < n; ++row) {
@@ -274,16 +274,16 @@ void run_gesvd_relacc(miniacc::State& state) {
                     }
                 }
                 // The host check now compares against R, not A.
-                MatrixView<Real, MatrixFormat::Dense>::copy(*q, A.view(), A_work.view()).wait();
+                MatrixView<Real, MatrixFormat::Dense>::copy(*q, A, A_work).wait();
 
                 GesvdjParams<Real> jp;
                 jp.sweep_counts = sweeps.to_span();
-                (void)gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvdj_cta<B, Real>(*q, A_work, s.to_span(), U, Vh,
                                     SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
             } else {
                 GesvdjParams<Real> jp;
                 jp.sweep_counts = sweeps.to_span();
-                (void)gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvdj_cta<B, Real>(*q, A_work, s.to_span(), U, Vh,
                                     SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
             }
             q->wait_and_throw();
@@ -307,12 +307,12 @@ void run_gesvd_relacc(miniacc::State& state) {
         // Read the batch item through the view's own stride rather than assuming
         // n*n packing; Matrix is packed today but the host check should not depend
         // on that.
-        const Real* A_base = A.view().data_ptr();
-        const Real* U_base = U.view().data_ptr();
-        const Real* Vh_base = Vh.view().data_ptr();
-        const int64_t A_stride = A.view().stride();
-        const int64_t U_stride = U.view().stride();
-        const int64_t Vh_stride = Vh.view().stride();
+        const Real* A_base = A.data_ptr();
+        const Real* U_base = U.data_ptr();
+        const Real* Vh_base = Vh.data_ptr();
+        const int64_t A_stride = A.stride();
+        const int64_t U_stride = U.stride();
+        const int64_t Vh_stride = Vh.stride();
 
         for (int b = 0; b < cur_batch; ++b) {
             const size_t soff = static_cast<size_t>(b) * static_cast<size_t>(n);

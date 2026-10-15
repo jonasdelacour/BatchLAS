@@ -174,8 +174,6 @@ PREDEFINED             = BATCHLAS_DOXYGEN \
                          BATCHLAS_API= \
                          BATCHLAS_NO_GLOBAL_NAMES \
                          "BATCHLAS_DISPATCH_ON_QUEUE(x)=" \
-                         "BATCHLAS_ACCEPT_OWNING(x)=" \
-                         "BATCHLAS_ACCEPT_OWNING_NB(x)=" \
                          BATCHLAS_HAS_HOST_BACKEND=1 \
                          BATCHLAS_HAS_CUDA_BACKEND=1 \
                          BATCHLAS_HAS_ROCM_BACKEND=0 \

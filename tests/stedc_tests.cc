@@ -175,12 +175,12 @@ TYPED_TEST(StedcTest, BatchedMatrices) {
     const Matrix<float_type> dense = Matrix<float_type>::TriDiagToeplitz(n, float_type(1), float_type(1), float_type(1), batch);
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-    (void)stedc(*this->ctx, a.view(), b.view(), VectorView<float_type>(eigvals, n, batch),
-                      ws, JobType::EigenVectors, params, eigvects.view());
+    (void)stedc(*this->ctx, a, b, VectorView<float_type>(eigvals, n, batch),
+                      ws, JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense.view(), eigvals, n);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvects.view(), eigvals, n);
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense, eigvects, eigvals, n);
 }
 
 TYPED_TEST(StedcTest, BatchedRandomMatrices) {
@@ -203,13 +203,13 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
 
     Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
-    dense.view().fill_tridiag(*this->ctx, b, a, b).wait();
-    (void)stedc(*this->ctx, a.view(), b.view(), VectorView<float_type>(eigvals, n, batch),
-                      ws, JobType::EigenVectors, params, eigvects.view());
+    dense.fill_tridiag(*this->ctx, b, a, b).wait();
+    (void)stedc(*this->ctx, a, b, VectorView<float_type>(eigvals, n, batch),
+                      ws, JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense.view(), eigvals, n);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvects.view(), eigvals, n);
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense, eigvects, eigvals, n);
 }
 
 // The level-synchronous driver is the default; this pins it against the
@@ -230,7 +230,7 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         auto b = Vector<float_type>::random(n - 1, batch);
 
         Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
-        dense.view().fill_tridiag(*this->ctx, b, a, b).wait();
+        dense.fill_tridiag(*this->ctx, b, a, b).wait();
         this->ctx->wait();
 
         // merge_variant is pinned rather than left on Auto so the driver is the
@@ -258,15 +258,15 @@ TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
         UnifiedVector<std::byte> ws_rec(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_rec));
         UnifiedVector<std::byte> ws_lvl(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_lvl));
 
-        (void)stedc(*this->ctx, a_rec.view(), b_rec.view(), VectorView<float_type>(eigvals_rec, n, batch), ws_rec,
-                    JobType::EigenVectors, params_rec, eigvecs_rec.view());
-        (void)stedc(*this->ctx, a_lvl.view(), b_lvl.view(), VectorView<float_type>(eigvals_lvl, n, batch), ws_lvl,
-                    JobType::EigenVectors, params_lvl, eigvecs_lvl.view());
+        (void)stedc(*this->ctx, a_rec, b_rec, VectorView<float_type>(eigvals_rec, n, batch), ws_rec,
+                    JobType::EigenVectors, params_rec, eigvecs_rec);
+        (void)stedc(*this->ctx, a_lvl, b_lvl, VectorView<float_type>(eigvals_lvl, n, batch), ws_lvl,
+                    JobType::EigenVectors, params_lvl, eigvecs_lvl);
         this->ctx->wait();
 
         SCOPED_TRACE("n=" + std::to_string(n));
         test_utils::expect_eigenvalues_agree<float_type>(eigvals_lvl, eigvals_rec, n, batch);
-        test_utils::expect_eigenpairs<float_type>(*this->ctx, dense.view(), eigvecs_lvl.view(), eigvals_lvl, n);
+        test_utils::expect_eigenpairs<float_type>(*this->ctx, dense, eigvecs_lvl, eigvals_lvl, n);
     }
 }
 
@@ -299,10 +299,10 @@ TYPED_TEST(StedcTest, FusedMergeMatchesBaseline) {
     UnifiedVector<std::byte> ws_base(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_base));
     UnifiedVector<std::byte> ws_fused(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_fused));
 
-    (void)stedc(*this->ctx, a_base.view(), b_base.view(), VectorView<float_type>(eigvals_base, n, batch), ws_base,
-                JobType::EigenVectors, params_base, eigvecs_base.view());
-    (void)stedc(*this->ctx, a_fused.view(), b_fused.view(), VectorView<float_type>(eigvals_fused, n, batch), ws_fused,
-                JobType::EigenVectors, params_fused, eigvecs_fused.view());
+    (void)stedc(*this->ctx, a_base, b_base, VectorView<float_type>(eigvals_base, n, batch), ws_base,
+                JobType::EigenVectors, params_base, eigvecs_base);
+    (void)stedc(*this->ctx, a_fused, b_fused, VectorView<float_type>(eigvals_fused, n, batch), ws_fused,
+                JobType::EigenVectors, params_fused, eigvecs_fused);
     this->ctx->wait();
 
     test_utils::expect_eigenvalues_agree<float_type>(eigvals_fused, eigvals_base, n, batch);
@@ -321,7 +321,7 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
 
     // Build dense tridiagonal for syev reference
     Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
-    T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
+    T_mat.fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
     this->ctx->wait();
 
     UnifiedVector<float_type> eigvals_cta(static_cast<size_t>(n) * batch);
@@ -335,13 +335,13 @@ TYPED_TEST(StedcTest, FusedCtaMergeMatchesReference) {
     };
 
     UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
-                JobType::EigenVectors, params_cta, eigvecs_cta.view());
+    (void)stedc(*this->ctx, a_cta, b_cta, VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                JobType::EigenVectors, params_cta, eigvecs_cta);
     this->ctx->wait();
 
-    const std::vector<int> all_items = T_mat.view().all_items();
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
+    const std::vector<int> all_items = T_mat.all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat, eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat, eigvecs_cta, eigvals_cta, n, all_items);
 }
 
 // Regression: a merge subproblem of size dd == 1 used to make the extremal-root
@@ -395,12 +395,12 @@ TYPED_TEST(StedcTest, FusedCtaConditionedHeavyDeflation) {
             };
 
             UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-            (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), eigvals, ws, JobType::EigenVectors, params, eigvecs.view());
+            (void)stedc(*this->ctx, a_cta, b_cta, eigvals, ws, JobType::EigenVectors, params, eigvecs);
             this->ctx->wait();
 
-            const std::vector<int> all_items = dense_A.view().all_items();
-            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense_A.view(), W, n, false, all_items);
-            test_utils::expect_eigenpairs<float_type>(*this->ctx, dense_A.view(), eigvecs.view(), W, n, all_items);
+            const std::vector<int> all_items = dense_A.all_items();
+            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense_A, W, n, false, all_items);
+            test_utils::expect_eigenpairs<float_type>(*this->ctx, dense_A, eigvecs, W, n, all_items);
             for (int j = 0; j < batch; ++j) {
                 for (int i = 0; i < n; ++i) {
                     const float_type got = eigvals(i, j);
@@ -431,7 +431,7 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
     auto b_saved = Vector<float_type>::random(n - 1, batch);
 
     Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
-    T_mat.view().fill_tridiag(*this->ctx, b_saved, a_saved, b_saved).wait();
+    T_mat.fill_tridiag(*this->ctx, b_saved, a_saved, b_saved).wait();
 
     for (int P : {4, 8, 16, 32}) {
         SCOPED_TRACE("secular_threads_per_root=" + std::to_string(P));
@@ -448,13 +448,13 @@ TYPED_TEST(StedcTest, FusedCtaPartitionWidths) {
         };
 
         UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-        (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
-                    JobType::EigenVectors, params_cta, eigvecs_cta.view());
+        (void)stedc(*this->ctx, a_cta, b_cta, VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                    JobType::EigenVectors, params_cta, eigvecs_cta);
         this->ctx->wait();
 
-        const std::vector<int> all_items = T_mat.view().all_items();
-        test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
-        test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
+        const std::vector<int> all_items = T_mat.all_items();
+        test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat, eigvals_cta, n, false, all_items);
+        test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat, eigvecs_cta, eigvals_cta, n, all_items);
     }
 }
 
@@ -472,7 +472,7 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     auto b_cta = Vector<float_type>::random(n - 1, batch);
 
     Matrix<float_type> T_mat = Matrix<float_type>::Zeros(n, n, batch);
-    T_mat.view().fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
+    T_mat.fill_tridiag(*this->ctx, b_cta, a_cta, b_cta).wait();
 
     UnifiedVector<float_type> eigvals_cta(static_cast<size_t>(n) * batch);
     auto eigvecs_cta = Matrix<float_type>::Identity(n, batch);
@@ -485,13 +485,13 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     };
 
     UnifiedVector<std::byte> ws_cta(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params_cta));
-    (void)stedc(*this->ctx, a_cta.view(), b_cta.view(), VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
-                JobType::EigenVectors, params_cta, eigvecs_cta.view());
+    (void)stedc(*this->ctx, a_cta, b_cta, VectorView<float_type>(eigvals_cta, n, batch), ws_cta,
+                JobType::EigenVectors, params_cta, eigvecs_cta);
     this->ctx->wait();
 
-    const std::vector<int> all_items = T_mat.view().all_items();
-    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat.view(), eigvals_cta, n, false, all_items);
-    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat.view(), eigvecs_cta.view(), eigvals_cta, n, all_items);
+    const std::vector<int> all_items = T_mat.all_items();
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(T_mat, eigvals_cta, n, false, all_items);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, T_mat, eigvecs_cta, eigvals_cta, n, all_items);
 }
 
 
@@ -546,8 +546,8 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-    (void)stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
-          eigvects.view(), info.to_span());
+    (void)stedc(*this->ctx, d, e, eigvals, ws, JobType::EigenVectors, params,
+          eigvects, info.to_span());
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -563,7 +563,7 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
     for (int i = 0; i < n; ++i) spectrum[i] = 1.0 + 2.0 * std::cos(M_PI * double(n - i) / double(n + 1));
     const std::vector<std::vector<double>> ref(batch, spectrum);
     EXPECT_VERIFY(float_type, verify::Check::values, n,
-                  MatrixView<float_type>::values_error(eigvals.view(), ref, 3.0, eigvals.view().all_items()));
+                  MatrixView<float_type>::values_error(eigvals, ref, 3.0, eigvals.all_items()));
 }
 
 // THE CASE THAT MATTERS: the same batch, one sweep allowed in the leaf solves.
@@ -609,8 +609,8 @@ TYPED_TEST(StedcTest, InfoIsZeroWhenDeflationLeavesOnePole) {
         };
         UnifiedVector<int32_t> info(batch, int32_t(-1));
         UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-        (void)stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
-                    eigvects.view(), info.to_span());
+        (void)stedc(*this->ctx, d, e, eigvals, ws, JobType::EigenVectors, params,
+                    eigvects, info.to_span());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << "item " << b;
@@ -621,7 +621,7 @@ TYPED_TEST(StedcTest, InfoIsZeroWhenDeflationLeavesOnePole) {
         std::vector<int> items(batch);
         for (int b = 0; b < batch; ++b) items[b] = b;
         EXPECT_VERIFY(float_type, verify::Check::values, n,
-                      MatrixView<float_type>::values_error(eigvals.view(), ref, 1.0 + c, items));
+                      MatrixView<float_type>::values_error(eigvals, ref, 1.0 + c, items));
     }
 }
 
@@ -641,8 +641,8 @@ TYPED_TEST(StedcTest, InfoReportsLeafSolvesThatExhaustTheirSweepBudget) {
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-    (void)stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
-          eigvects.view(), info.to_span());
+    (void)stedc(*this->ctx, d, e, eigvals, ws, JobType::EigenVectors, params,
+          eigvects, info.to_span());
     this->ctx->wait();
 
     int reported = 0;
@@ -686,10 +686,10 @@ TYPED_TEST(StedcTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     UnifiedVector<std::byte> ws1(bytes_a);
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
-    (void)stedc(*this->ctx, d0.view(), e0.view(), w0.view(), ws0, JobType::EigenVectors, params,
-          z0.view(), info.to_span());
-    (void)stedc(*this->ctx, d1.view(), e1.view(), w1.view(), ws1, JobType::EigenVectors, params,
-          z1.view(), Span<int32_t>{});
+    (void)stedc(*this->ctx, d0, e0, w0, ws0, JobType::EigenVectors, params,
+          z0, info.to_span());
+    (void)stedc(*this->ctx, d1, e1, w1, ws1, JobType::EigenVectors, params,
+          z1, Span<int32_t>{});
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -715,8 +715,8 @@ TYPED_TEST(StedcTest, StedcFusedN64FloatNoOverflow) {
         Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < n; ++i) {
-                diag(i, b) = dense_A.view().at(i, i, b);
-                if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+                diag(i, b) = dense_A.at(i, i, b);
+                if (i < n - 1) sub(i, b) = dense_A.at(i + 1, i, b);
             }
         for (const int threads : {8, 128}) {
             SCOPED_TRACE(::testing::Message() << "log10_cond " << log10_cond << ", merge_threads " << threads);
@@ -726,10 +726,10 @@ TYPED_TEST(StedcTest, StedcFusedN64FloatNoOverflow) {
             auto Q = Matrix<Real>::Identity(n, batch);
             StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
             UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-            (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+            (void)stedc(*this->ctx, d, e, w, ws, JobType::EigenVectors, params, Q);
             this->ctx->wait();
-            EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
-            EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+            EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A, Q, w, dense_A.all_items()));
+            EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q, Q.all_items()));
         }
     }
 }
@@ -748,8 +748,8 @@ TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
     Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
     for (int b = 0; b < batch; ++b)
         for (int i = 0; i < n; ++i) {
-            diag(i, b) = dense_A.view().at(i, i, b);
-            if (i < n - 1) sub(i, b) = dense_A.view().at(i + 1, i, b);
+            diag(i, b) = dense_A.at(i, i, b);
+            if (i < n - 1) sub(i, b) = dense_A.at(i + 1, i, b);
         }
     for (const int threads : {128, 256}) {
         SCOPED_TRACE(::testing::Message() << "merge_threads " << threads);
@@ -759,9 +759,9 @@ TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
         auto Q = Matrix<Real>::Identity(n, batch);
         StedcParams<Real> params{.recursion_threshold = 32, .merge_variant = StedcMergeVariant::Fused, .merge_threads = threads, .enable_rescale = true};
         UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
-        (void)stedc(*this->ctx, d.view(), e.view(), w.view(), ws, JobType::EigenVectors, params, Q.view());
+        (void)stedc(*this->ctx, d, e, w, ws, JobType::EigenVectors, params, Q);
         this->ctx->wait();
-        EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A.view(), Q.view(), w.view(), dense_A.view().all_items()));
-        EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view(), Q.view().all_items()));
+        EXPECT_VERIFY(Real, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, dense_A, Q, w, dense_A.all_items()));
+        EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q, Q.all_items()));
     }
 }

@@ -117,10 +117,10 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
 
             Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size);
 
-            size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), transA, algo);
+            size_t buffer_size = ortho_buffer_size(*(this->ctx), A, transA, algo);
             UnifiedVector<std::byte> workspace(buffer_size);
 
-            (void)ortho(*(this->ctx), A.view(), transA, workspace.to_span(), algo);
+            (void)ortho(*(this->ctx), A, transA, workspace.to_span(), algo);
             this->ctx->wait();
 
             this->check_orthonormality(A, transA, kOrtho);
@@ -161,18 +161,18 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(A_rows, A_cols, false, batch_size);
                 Matrix<T, MatrixFormat::Dense> M = Matrix<T, MatrixFormat::Dense>::Random(M_rows, M_cols, false, batch_size);
 
-                size_t ortho_M_buffer_size = ortho_buffer_size(*(this->ctx), M.view(), transM, algo);
+                size_t ortho_M_buffer_size = ortho_buffer_size(*(this->ctx), M, transM, algo);
                 UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-                (void)ortho(*(this->ctx), M.view(), transM, workspace_M_ortho.to_span(), algo);
+                (void)ortho(*(this->ctx), M, transM, workspace_M_ortho.to_span(), algo);
                 this->ctx->wait();
 
                 this->check_orthonormality(M, transM, kOrtho);
 
-                size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), M.view(), transA, transM, algo);
+                size_t buffer_size = ortho_buffer_size(*(this->ctx), A, M, transA, transM, algo);
                 UnifiedVector<std::byte> workspace(buffer_size);
                 const size_t iterations = 2;
 
-                (void)ortho(*(this->ctx), A.view(), M.view(), transA, transM, workspace.to_span(), algo, iterations);
+                (void)ortho(*(this->ctx), A, M, transA, transM, workspace.to_span(), algo, iterations);
                 this->ctx->wait();
 
                 this->check_orthonormality(A, transA, kOrtho);
@@ -197,13 +197,13 @@ TYPED_TEST(OrthoMatrixTest, ShiftChol3IllConditioned) {
         const double log10_cond = std::is_same_v<Real, float> ? 4.5 : 12.0;
         select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", "vendor");
         Matrix<T, MatrixFormat::Dense> H(k, k, batch_size);
-        H.view().fill_graded_hermitian(*this->ctx, log10_cond, 7u).wait();
+        H.fill_graded_hermitian(*this->ctx, log10_cond, 7u).wait();
         auto A = Matrix<T, MatrixFormat::Dense>::Zeros(m, k, batch_size);
         for (int b = 0; b < batch_size; ++b)
             for (int j = 0; j < k; ++j)
                 for (int i = 0; i < k; ++i) A.view()(i, j, b) = H.view()(i, j, b) / Real(1024);
-        UnifiedVector<std::byte> workspace(ortho_buffer_size(*(this->ctx), A.view(), Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
-        (void)ortho(*(this->ctx), A.view(), Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::ShiftChol3);
+        UnifiedVector<std::byte> workspace(ortho_buffer_size(*(this->ctx), A, Transpose::NoTrans, OrthoAlgorithm::ShiftChol3));
+        (void)ortho(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::ShiftChol3);
         this->ctx->wait();
         this->check_orthonormality(A, Transpose::NoTrans, kOrtho);
     }
@@ -222,12 +222,12 @@ TYPED_TEST(OrthoMatrixTest, Cgs2PaddedLd) {
         for (int b = 0; b < batch_size; ++b)
             for (int j = 0; j < k; ++j)
                 for (int i = m; i < ld; ++i) buf.view()(i, j, b) = T(1e3);
-        const MatrixView<T, MatrixFormat::Dense> A(buf.view().data_ptr(), m, k, ld, ld * k, batch_size);
+        const MatrixView<T, MatrixFormat::Dense> A(buf.data_ptr(), m, k, ld, ld * k, batch_size);
         UnifiedVector<std::byte> workspace(ortho_buffer_size(*(this->ctx), A, Transpose::NoTrans, OrthoAlgorithm::CGS2));
         (void)ortho(*(this->ctx), A, Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::CGS2);
         this->ctx->wait();
         Matrix<T, MatrixFormat::Dense> packed(m, k, batch_size);
-        MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), packed.view(), A).wait();
+        MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), packed, A).wait();
         this->check_orthonormality(packed, Transpose::NoTrans, kOrtho);
         for (int b = 0; b < batch_size; ++b)
             for (int j = 0; j < k; ++j)

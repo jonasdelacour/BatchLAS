@@ -24,7 +24,7 @@ static void BM_GEQRF(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     // Get buffer size and allocate workspace
-    size_t buffer_size = geqrf_buffer_size(*q, matrices.view(), tau.to_span());
+    size_t buffer_size = geqrf_buffer_size(*q, matrices, tau.to_span());
     UnifiedVector<std::byte> workspace(buffer_size);
     state.SetKernel(q,
                     bench::pristine(matrices),

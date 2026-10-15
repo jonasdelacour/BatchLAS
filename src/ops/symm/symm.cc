@@ -90,13 +90,13 @@ template <Backend B, class T>
 Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
                       Uplo uplo) {
     Matrix<T, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
-    MV<T>::copy(q, full.view(), A).wait();
-    full.view().symmetrize(q, uplo).wait();
+    MV<T>::copy(q, full, A).wait();
+    full.symmetrize(q, uplo).wait();
     if (side == Side::Left)
-        (void)gemm<B, T>(q, full.view(), Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+        (void)gemm<B, T>(q, full, Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
                          ComputePrecision::Default);
     else
-        (void)gemm<B, T>(q, Bm, full.view(), C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+        (void)gemm<B, T>(q, Bm, full, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
                          ComputePrecision::Default);
     q.wait();
     return q.create_event_after_external_work();

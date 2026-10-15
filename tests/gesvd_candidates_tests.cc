@@ -300,8 +300,8 @@ protected:
         const Pin pin("gesvd", c);
         const auto h = uplo_of(p.s.herm);
         try {
-            if (h) (void)gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), p.s.ju, p.s.jv, *h);
-            else (void)gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), p.s.ju, p.s.jv);
+            if (h) (void)gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U, p.Vh, p.s.ju, p.s.jv, *h);
+            else (void)gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U, p.Vh, p.s.ju, p.s.jv);
             return true;
         } catch (const std::invalid_argument& e) {
             if (std::string(e.what()).find("cannot run this shape") == std::string::npos) throw;
@@ -611,20 +611,20 @@ TYPED_TEST(GesvdCandidates, ExactWorkspaceInAPoisonedArena) {
             const Pin pin("gesvd", c);
             const auto h = uplo_of(s.herm);
             Queue& q = *this->ctx;
-            const std::size_t bytes = h ? gesvd_buffer_size<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv, *h)
-                                        : gesvd_buffer_size<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv);
+            const std::size_t bytes = h ? gesvd_buffer_size<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv, *h)
+                                        : gesvd_buffer_size<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv);
             constexpr std::size_t kTail = 4096;
             UnifiedVector<std::byte> arena(bytes + kTail, std::byte{0xA5});
             const Span<std::byte> w(arena.data(), bytes);
             if (bytes > 0) {
                 const Span<std::byte> short_w(arena.data(), bytes - 1);
-                EXPECT_THROW((h ? gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv, *h, short_w)
-                                : gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv, short_w)),
+                EXPECT_THROW((h ? gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv, *h, short_w)
+                                : gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv, short_w)),
                              batchlas::workspace_error)
                     << name(c, s);
             }
-            if (h) (void)gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv, *h, w, p.info.to_span());
-            else (void)gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv, w, p.info.to_span());
+            if (h) (void)gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv, *h, w, p.info.to_span());
+            else (void)gesvd<B, T>(q, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv, w, p.info.to_span());
             q.wait();
             for (std::size_t i = bytes; i < arena.size(); ++i)
                 ASSERT_EQ(arena[i], std::byte{0xA5}) << name(c, s) << ": wrote past the workspace at +" << (i - bytes);
@@ -924,9 +924,9 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     const Spec s{8, 8, 2, 'N'};
     auto run = [&](Svd<T>& p) {
         const std::size_t bytes =
-            gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv);
+            gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
-        (void)gesvd<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U.view(), p.Vh.view(), s.ju, s.jv,
+        (void)gesvd<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv,
                           Span<std::byte>(ws.data(), bytes), p.info.to_span());
         this->ctx->wait();
     };

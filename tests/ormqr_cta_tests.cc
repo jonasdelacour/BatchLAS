@@ -54,8 +54,8 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 	Matrix<T, MatrixFormat::Dense> A_fact = A0;
 
 	UnifiedVector<T> tau(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-	UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(ctx_cpu, A_fact.view(), tau.to_span()), std::byte{0});
-	geqrf(ctx_cpu, A_fact.view(), tau.to_span(), ws_geqrf.to_span()).wait();
+	UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(ctx_cpu, A_fact, tau.to_span()), std::byte{0});
+	geqrf(ctx_cpu, A_fact, tau.to_span(), ws_geqrf.to_span()).wait();
 	ctx_cpu.wait();
 
 	VectorView<T> tau_view(tau.to_span(), /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
@@ -69,9 +69,9 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
 		UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 		try {
 			ormqx_cta(*this->ctx,
-			             A_fact.view(),
+			             A_fact,
 			             tau_view,
-			             C_cta.view(),
+			             C_cta,
 			             Uplo::Upper, //QR factorization
 			             side,
 			             trans,
@@ -121,9 +121,9 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 
 	EXPECT_THROW(
 		((void)ormqx_cta(*this->ctx,
-		            A.view(),
+		            A,
 		            VectorView<T>(tau),
-		            C.view(),
+		            C,
 		            Uplo::Upper, //QR factorization
 		            Side::Left,
 		            Transpose::NoTrans,

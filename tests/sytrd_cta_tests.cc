@@ -178,14 +178,14 @@ Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_cta(Queue& ctx,
 	}
 
 	UnifiedVector<std::byte> ws_ormqr(
-		ormqr_buffer_size(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data()));
+		ormqr_buffer_size(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data()));
 
 	// Apply Qsub := Qsub * Q (since Qsub starts as identity, this forms Qsub).
 	// ormqr applies the product of Householder reflectors encoded in Aq/tau_qr.
 	// We run it on the provided execution context.
 	//
 	// Some backends may require a non-empty workspace.
-	ormqr(ctx, Aq.view(), Qsub.view(), Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
+	ormqr(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
 
 	Matrix<Real, MatrixFormat::Dense> Q = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
 	auto Qv = Q.view();
@@ -260,14 +260,14 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	Vector<Real> tau(n - 1, batch);
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
-    (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
+    (void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 
 	using MV = MatrixView<Real, MatrixFormat::Dense>;
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
 	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0.view(), Q.view(), Tri.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
 }
 
 TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
@@ -284,7 +284,7 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 	Vector<Real> tau(n - 1, batch);
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
-    (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
+    (void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
 	// Sanity: compare d/e/tau against a CPU reference implementation.
 	{
@@ -307,7 +307,7 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 				dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(Aoutv(r, k, 0)) - double(a_ref[static_cast<std::size_t>(r + k * n)])));
 			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
 		}
-		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / norm(*this->ctx, A0.view().template astype<double>().view())[0]);
+		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / norm(*this->ctx, A0.view().template astype<double>())[0]);
 		// Reference agreement (absolute elementwise difference vs the independent host sytd2), borrowing the factorization kind's bound.
 		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_refl);
 	}
@@ -315,9 +315,9 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
 
 	using MV = MatrixView<Real, MatrixFormat::Dense>;
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
 	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0.view(), Q.view(), Tri.view()));
+	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
 }
 #endif
 
@@ -335,7 +335,7 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
 	EXPECT_THROW(
-		((void)sytrd_cta(ctx, A.view(), d.view(), e.view(), tau.view(), Uplo::Lower, ws.to_span(), 1), ctx.wait()),
+		((void)sytrd_cta(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
 		std::exception);
 }
 #endif

@@ -1939,21 +1939,6 @@ namespace batchlas {
         return ritz_vals;
     }
 
-    /**
-     * @brief The allocating ritz_values() on owning `A` and `V`.
-     *
-     * @trap The one owning-argument twin BATCHLAS_ACCEPT_OWNING cannot replace: a call
-     *       with some template arguments explicit and the rest deduced, such as
-     *       `ritz_values<B, float_type>(ctx, A, V)`, puts `float_type` into the generated
-     *       forwarder's pack, and the primary cannot deduce `MFormat` through
-     *       `Matrix -> MatrixView`. `ritz_values<B>(ctx, A, V)` needs no overload.
-     */
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline auto ritz_values(Queue& ctx,
-                            const Matrix<T, MFormat>& A,
-                            const Matrix<T, MatrixFormat::Dense>& V) {
-        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V));
-    }
 
 
     /** @brief Required workspace size, in bytes, for ritz_values(). @ingroup api_eigen_lowlevel */
@@ -2015,28 +2000,9 @@ namespace batchlas {
 
 namespace batchlas {
 
-// Backend-deducing (BATCHLAS_DISPATCH_ON_QUEUE) and owning-argument (BATCHLAS_ACCEPT_OWNING)
-// overloads; see blas/queue-dispatch.hh. A name absent from the owning list has its own
-// arity-changing forwarder above (the A-only `syevx` and `lanczos`), which no pack expresses.
+// Backend-deducing overloads (BATCHLAS_DISPATCH_ON_QUEUE); see blas/queue-dispatch.hh.
 // evidence: docs/cpp-api.md#which-type-each-parameter-takes
 
-BATCHLAS_ACCEPT_OWNING(ortho)
-BATCHLAS_ACCEPT_OWNING(ortho_buffer_size)
-BATCHLAS_ACCEPT_OWNING(syevx)
-BATCHLAS_ACCEPT_OWNING(syevx_buffer_size)
-BATCHLAS_ACCEPT_OWNING(lanczos)
-BATCHLAS_ACCEPT_OWNING(tridiagonal_solver)
-BATCHLAS_ACCEPT_OWNING(stebz)
-BATCHLAS_ACCEPT_OWNING(stein)
-BATCHLAS_ACCEPT_OWNING(steqr)
-BATCHLAS_ACCEPT_OWNING(steqr_cta)
-BATCHLAS_ACCEPT_OWNING(stedc)
-BATCHLAS_ACCEPT_OWNING(ritz_values)
-BATCHLAS_ACCEPT_OWNING(ritz_values_buffer_size)
-BATCHLAS_ACCEPT_OWNING(inv)
-BATCHLAS_ACCEPT_OWNING(inv_buffer_size)
-BATCHLAS_ACCEPT_OWNING_NB(steqr_buffer_size)
-BATCHLAS_ACCEPT_OWNING_NB(steqr_cta_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(ortho)
 BATCHLAS_DISPATCH_ON_QUEUE(ortho_buffer_size)
@@ -2156,21 +2122,6 @@ inline Event ortho(Queue& ctx,
     return ortho<B, T>(ctx, A, opts.transA, lease.span(), opts.algorithm);
 }
 
-template <Backend B, typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const OrthoOptions& opts,
-        Span<std::byte> workspace) {
-    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts, workspace);
-}
-
-template <Backend B, typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const OrthoOptions& opts) {
-    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts);
-}
-
 template <typename T>
 inline Event ortho(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -2193,21 +2144,6 @@ inline Event ortho(Queue& ctx,
                                [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts); });
 }
 
-template <typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const OrthoOptions& opts,
-        Span<std::byte> workspace) {
-    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts, workspace);
-}
-
-template <typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const OrthoOptions& opts = {}) {
-    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), opts);
-}
-
 /// @}
 
 namespace detail {
@@ -2225,16 +2161,8 @@ template <Backend B, typename T>
 Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
             detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
-template <Backend B, typename T>
-Event ortho(Queue&, const Matrix<T, MatrixFormat::Dense>&,
-            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
-
 template <typename T>
 Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-            detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
-
-template <typename T>
-Event ortho(Queue&, const Matrix<T, MatrixFormat::Dense>&,
             detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
 // ---- orthogonalisation against an external metric ---------------------------
@@ -2264,25 +2192,6 @@ inline Event ortho(Queue& ctx,
                        opts.iterations);
 }
 
-template <Backend B, typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const Matrix<T, MatrixFormat::Dense>& M,
-        const OrthoAgainstOptions& opts,
-        Span<std::byte> workspace) {
-    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
-                       MatrixView<T, MatrixFormat::Dense>(M), opts, workspace);
-}
-
-template <Backend B, typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const Matrix<T, MatrixFormat::Dense>& M,
-        const OrthoAgainstOptions& opts) {
-    return ortho<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
-                       MatrixView<T, MatrixFormat::Dense>(M), opts);
-}
-
 template <typename T>
 inline Event ortho(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -2309,25 +2218,6 @@ inline Event ortho(Queue& ctx,
     }
     return with_backend_for<T>(ctx, "ortho",
                                [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts); });
-}
-
-template <typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const Matrix<T, MatrixFormat::Dense>& M,
-        const OrthoAgainstOptions& opts,
-        Span<std::byte> workspace) {
-    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
-                    MatrixView<T, MatrixFormat::Dense>(M), opts, workspace);
-}
-
-template <typename T>
-inline Event ortho(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const Matrix<T, MatrixFormat::Dense>& M,
-        const OrthoAgainstOptions& opts = {}) {
-    return ortho<T>(ctx, MatrixView<T, MatrixFormat::Dense>(A),
-                    MatrixView<T, MatrixFormat::Dense>(M), opts);
 }
 
 /// @}

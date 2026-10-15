@@ -147,11 +147,11 @@ void expect_symm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     const MV B0 = at0(p.b), C0 = at0(p.c);
     const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
-    MV::copy(ctx, A0.view(), at0(p.a)).wait();
-    A0.view().symmetrize(ctx, s.uplo).wait();
+    MV::copy(ctx, A0, at0(p.a)).wait();
+    A0.symmetrize(ctx, s.uplo).wait();
     const double err = s.side == Side::Left
-        ? MV::gemm_backward_error(ctx, A0.view(), Transpose::NoTrans, B0, Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items)
-        : MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items);
+        ? MV::gemm_backward_error(ctx, A0, Transpose::NoTrans, B0, Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items)
+        : MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0, Transpose::NoTrans, C0, C1, MV::up(p.alpha), MV::up(p.beta), items);
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k, err))
         << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
         << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k);
@@ -229,9 +229,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     Cm.fill(T(0.25));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - 2 * b, cols[b] = n - b;
-    const auto hA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
-    const auto hC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hB = Bm.with_active_dims(act.to_span(), cols.to_span());
+    const auto hC = Cm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hA.is_heterogeneous() && hB.is_heterogeneous() && hC.is_heterogeneous());
     struct Case { const char* what; MVof<T> a, b, c; };
     const Case cases[] = {{"A heterogeneous", hA, Bm.view(), Cm.view()},
@@ -471,13 +471,13 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     A.fill(T(1)), Bm.fill(T(1)), Cm.fill(T(0));
     UnifiedVector<int> act(batch);
     for (int i = 0; i < batch; ++i) act[i] = n - i;
-    const auto hB = Bm.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hC = Cm.view().with_active_dims(act.to_span(), act.to_span());
+    const auto hB = Bm.with_active_dims(act.to_span(), act.to_span());
+    const auto hC = Cm.with_active_dims(act.to_span(), act.to_span());
     std::string why;
-    EXPECT_FALSE(this->direct(C{sy::Expand{}}, A.view(), hB, hC, T(1), T(0), Side::Left, Uplo::Lower, &why))
+    EXPECT_FALSE(this->direct(C{sy::Expand{}}, A, hB, hC, T(1), T(0), Side::Left, Uplo::Lower, &why))
         << "expand ran a heterogeneous B/C";
     const Pin pin("symm", C{sy::Expand{}});
-    EXPECT_THROW(((void)symm<B, T>(*this->ctx, A.view(), hB, hC, T(1), T(0), Side::Left, Uplo::Lower)), std::invalid_argument);
+    EXPECT_THROW(((void)symm<B, T>(*this->ctx, A, hB, hC, T(1), T(0), Side::Left, Uplo::Lower)), std::invalid_argument);
     EXPECT_EQ(disagreements, 0);
 }
 
@@ -494,13 +494,13 @@ TYPED_TEST(SymmCandidates, GridBatchCeiling) {
         Matrix<T, MatrixFormat::Dense> A(1, 1, batch), Bm(1, 2, batch), Cm(1, 2, batch);
         A.fill(T(2)), Bm.fill(T(3)), Cm.fill(T(1));
         auto call = [&] {
-            (void)symm<B, T>(*this->ctx, A.view(), Bm.view(), Cm.view(), T(1), T(1), Side::Left, Uplo::Lower);
+            (void)symm<B, T>(*this->ctx, A, Bm, Cm, T(1), T(1), Side::Left, Uplo::Lower);
             this->ctx->wait();
         };
         std::string why;
         Matrix<T, MatrixFormat::Dense> Cd(1, 2, batch);
         Cd.fill(T(1));
-        const bool launches = this->direct(C{sy::Expand{}}, A.view(), Bm.view(), Cd.view(), T(1), T(1), Side::Left, Uplo::Lower, &why);
+        const bool launches = this->direct(C{sy::Expand{}}, A, Bm, Cd, T(1), T(1), Side::Left, Uplo::Lower, &why);
         EXPECT_EQ(launches, batch <= dev.max_groups_yz) << "direct expand at batch " << batch << ": " << why;
         {
             const Pin pin("symm", C{sy::Expand{}});
@@ -575,9 +575,9 @@ TYPED_TEST(SymmCandidates, CanRunFalsePinsThrow) {
     A.fill(T(1)), Bm.fill(T(1)), Cm.fill(T(0));
     UnifiedVector<int> act(batch);
     for (int i = 0; i < batch; ++i) act[i] = n - i;
-    const auto hA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hB = Bm.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hC = Cm.view().with_active_dims(act.to_span(), act.to_span());
+    const auto hA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hB = Bm.with_active_dims(act.to_span(), act.to_span());
+    const auto hC = Cm.with_active_dims(act.to_span(), act.to_span());
     struct Case { const char* what; MVof<T> a, b, c; const char* budget; };
     const Case cases[] = {{"A heterogeneous", hA, Bm.view(), Cm.view(), nullptr},
                           {"B heterogeneous", A.view(), hB, Cm.view(), nullptr},
@@ -606,12 +606,12 @@ TYPED_TEST(SymmCandidates, HeterogeneousBatchHasNoRoute) {
     auto Bm = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 5);
     UnifiedVector<int> act(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - 2 * b;
-    const auto hA = A.view().with_active_dims(act.to_span(), act.to_span());
+    const auto hA = A.with_active_dims(act.to_span(), act.to_span());
     // The A-only case is not a throw but a wrong answer: the expansion mirrors the full storage
     // order, so item 1 (active order 14) picks up rows 14..15 of B.
     Matrix<T, MatrixFormat::Dense> Cd(n, n, batch);
     Cd.fill(T(0));
-    ASSERT_TRUE(this->direct(C{sy::Expand{}}, hA, Bm.view(), Cd.view(), T(1), T(0), Side::Left, Uplo::Lower));
+    ASSERT_TRUE(this->direct(C{sy::Expand{}}, hA, Bm, Cd, T(1), T(0), Side::Left, Uplo::Lower));
     double off = 0;
     for (int i = 0; i < act[1]; ++i) {
         double want = 0;

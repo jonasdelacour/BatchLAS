@@ -125,10 +125,10 @@ void run_gesvd_cta_acc(miniacc::State& state) {
 
         auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/is_complex<Scalar>::value, cur_batch, seed);
         Matrix<Scalar> A_ref(n, n, cur_batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_ref, A).wait();
 
         Matrix<Scalar> A_work(n, n, cur_batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_work.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*q, A_work, A).wait();
 
         Matrix<Scalar> U(n, n, cur_batch);
         Matrix<Scalar> Vh(n, n, cur_batch);
@@ -138,19 +138,19 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             const size_t ws_bytes = [&]() {
                 if constexpr (is_complex<Scalar>::value) {
                     return gesvd_cta_buffer_size<B, Scalar>(*q,
-                                                            A_work.view(),
+                                                            A_work,
                                                             s.to_span(),
-                                                            U.view(),
-                                                            Vh.view(),
+                                                            U,
+                                                            Vh,
                                                             SvdVectors::All,
                                                             SvdVectors::All,
                                                             Uplo::Lower);
                 } else {
                     return gesvd_cta_buffer_size<B, Scalar>(*q,
-                                                            A_work.view(),
+                                                            A_work,
                                                             s.to_span(),
-                                                            U.view(),
-                                                            Vh.view(),
+                                                            U,
+                                                            Vh,
                                                             SvdVectors::All,
                                                             SvdVectors::All);
                 }
@@ -158,20 +158,20 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             UnifiedVector<std::byte> ws(ws_bytes);
             if constexpr (is_complex<Scalar>::value) {
                 (void)gesvd_cta<B, Scalar>(*q,
-                                     A_work.view(),
+                                     A_work,
                                      s.to_span(),
-                                     U.view(),
-                                     Vh.view(),
+                                     U,
+                                     Vh,
                                      SvdVectors::All,
                                      SvdVectors::All,
                                      Uplo::Lower,
                                      ws.to_span());
             } else {
                 (void)gesvd_cta<B, Scalar>(*q,
-                                     A_work.view(),
+                                     A_work,
                                      s.to_span(),
-                                     U.view(),
-                                     Vh.view(),
+                                     U,
+                                     Vh,
                                      SvdVectors::All,
                                      SvdVectors::All,
                                      ws.to_span());
@@ -195,9 +195,9 @@ void run_gesvd_cta_acc(miniacc::State& state) {
         }
 
         for (int b = 0; b < cur_batch; ++b) {
-            auto Ub = U.view().batch_item(b);
-            auto Vhb = Vh.view().batch_item(b);
-            auto Ab_ref = A_ref.view().batch_item(b);
+            auto Ub = U.batch_item(b);
+            auto Vhb = Vh.batch_item(b);
+            auto Ab_ref = A_ref.batch_item(b);
 
             double u_ortho_num = 0.0;
             double vh_ortho_num = 0.0;

@@ -56,14 +56,14 @@ TYPED_TEST(SyrkTest, MatchesGemmReference) {
             Matrix<T, MatrixFormat::Dense> C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
             Matrix<T, MatrixFormat::Dense> C(n, n, batch);
 
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
             syrk(*(this->ctx),
-                     A.view(),
-                     C.view(),
+                     A,
+                     C,
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
-            expect_syrk_matches(*(this->ctx), A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+            expect_syrk_matches(*(this->ctx), A, C0, C, uplo, transA, alpha, beta, k);
         }
     }
 }
@@ -97,13 +97,13 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
                     Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
                 Matrix<T, MatrixFormat::Dense> C(n, n, batch);
 
-                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+                MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
-                syrk(*(this->ctx), A.view(), C.view(),
+                syrk(*(this->ctx), A, C,
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
                 SCOPED_TRACE(::testing::Message() << "n=" << n);
-                expect_syrk_matches(*(this->ctx), A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+                expect_syrk_matches(*(this->ctx), A, C0, C, uplo, transA, alpha, beta, k);
             }
         }
     }
@@ -142,7 +142,7 @@ TYPED_TEST(SyrkTest, LeavesTheOtherTriangleUntouched) {
                             C(i, j, b) = referenced ? T(0.25) * T(i + j) : poison;
                         }
 
-                syrk(*(this->ctx), A.view(), C.view(),
+                syrk(*(this->ctx), A, C,
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
 
                 for (int b = 0; b < batch; ++b)
@@ -199,7 +199,7 @@ void expect_triangle_respected(Queue& ctx,
                                float alpha,
                                float beta,
                                int k) {
-    expect_syrk_matches<float>(ctx, A.view(), C0.view(), C.view(), uplo, transA, alpha, beta, k);
+    expect_syrk_matches<float>(ctx, A, C0, C, uplo, transA, alpha, beta, k);
     const int n = C.rows();
     for (int b = 0; b < C.batch_size(); ++b) {
         for (int j = 0; j < n; ++j) {
@@ -256,8 +256,8 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
                 {
                     ScopedEnvVar force_route("BATCHLAS_SYRK_ROUTE", "triangular");
                     syrk(ctx,
-                         A.view(),
-                         C_custom.view(),
+                         A,
+                         C_custom,
                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 }
 
@@ -302,15 +302,15 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
             auto C_native = C0.clone();
 
             syrk(ctx,
-                 A.view(),
-                 C_auto.view(),
+                 A,
+                 C_auto,
                  {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
             {
                 // `native` is a tile kernel, never the both-triangles GEMM it used to reach.
                 ScopedEnvVar native_route("BATCHLAS_SYRK_ROUTE", "native");
                 syrk(ctx,
-                     A.view(),
-                     C_native.view(),
+                     A,
+                     C_native,
                      {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
             }
 

@@ -32,7 +32,7 @@ static void BM_SYEVX(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
+    size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
                                           JobType::NoEigenVectors,
                                           MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
@@ -82,7 +82,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
+    size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
                                           JobType::NoEigenVectors,
                                           MatrixView<T, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
@@ -130,8 +130,8 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     params.absolute_tolerance = 1e-6;
     params.relative_tolerance = 1e-6;
 
-    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
-                                          JobType::EigenVectors, V.view(), params);
+    size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
+                                          JobType::EigenVectors, V, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -295,16 +295,16 @@ double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) 
         auto V = Matrix<T>(n, static_cast<int>(neigs), 1);
 
         UnifiedVector<std::byte> ws(syevx_buffer_size(
-            q, A.view(), W.to_span(), neigs, JobType::EigenVectors, V.view(), params));
-        (void)syevx(q, A.view(), W.to_span(), neigs, ws.to_span(),
-              JobType::EigenVectors, V.view(), params);
+            q, A, W.to_span(), neigs, JobType::EigenVectors, V, params));
+        (void)syevx(q, A, W.to_span(), neigs, ws.to_span(),
+              JobType::EigenVectors, V, params);
         q.wait_and_throw();
 
         auto A_dense = A.template convert_to<MatrixFormat::Dense>();
         UnifiedVector<Real> W_ref(n);
         UnifiedVector<std::byte> syev_ws(syev_buffer_size(
-            q, A_dense.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-        (void)syev(q, A_dense.view(), W_ref.to_span(),
+            q, A_dense, W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+        (void)syev(q, A_dense, W_ref.to_span(),
              {.jobz = JobType::NoEigenVectors}, syev_ws);
         q.wait_and_throw();
 
@@ -359,8 +359,8 @@ static void BM_SYEVX_SparseImpl(minibench::State& state) {
     // caller wants them, so NoEigenVectors would measure nearly the same work
     // while leaving the accuracy probe with nothing to check -- and vectors are
     // what a sparse partial eigensolve is normally called for.
-    size_t ws_size = syevx_buffer_size(*q, A.view(), W.to_span(), neigs,
-                                       JobType::EigenVectors, V.view(), params);
+    size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
+                                       JobType::EigenVectors, V, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -452,8 +452,8 @@ static void BM_SYEVX_RangePosition(minibench::State& state) {
     params.iu = il + int64_t(neigs) - 1;
     params.order = SortOrder::Ascending;
 
-    size_t ws_size = syevx_buffer_size<B>(*q, A.view(), W.to_span(), neigs,
-                                          JobType::EigenVectors, V.view(), params);
+    size_t ws_size = syevx_buffer_size<B>(*q, A, W.to_span(), neigs,
+                                          JobType::EigenVectors, V, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,

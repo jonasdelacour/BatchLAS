@@ -24,7 +24,7 @@ static void BM_Ortho(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, batch);
-    UnifiedVector<std::byte> workspace(ortho_buffer_size(*q, A.view(), tr, algo));
+    UnifiedVector<std::byte> workspace(ortho_buffer_size(*q, A, tr, algo));
 
     state.SetKernel(q,
                     bench::pristine(A),

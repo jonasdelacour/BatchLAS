@@ -48,10 +48,10 @@ static void BM_GESVD_CTA(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> s(n * batch);
 
     const size_t ws_size = gesvd_cta_buffer_size(*q,
-                                                       A.view(),
+                                                       A,
                                                        s.to_span(),
-                                                       U.view(),
-                                                       Vh.view(),
+                                                       U,
+                                                       Vh,
                                                        jobu,
                                                        jobvh);
     UnifiedVector<std::byte> workspace(ws_size);

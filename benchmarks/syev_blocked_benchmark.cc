@@ -54,7 +54,7 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     const size_t ws_size = syev_blocked_buffer_size(*q,
-                                                         A.view(),
+                                                         A,
                                                          jobz,
                                                          Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);

@@ -117,12 +117,12 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower) {
     Vector<Real> e(n - 1, batch);
     Vector<Real> tau(n - 1, batch);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-    sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+    sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
+    expect_spectrum<Real>(A0, d, e, float_old_power<Real>(n));
 }
 
 // The blocked trailing update (A22 -= V W^H + W V^H) only runs when the trailing
@@ -143,7 +143,7 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     const int nb = 32;
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
-    const auto items = A0.view().all_items();
+    const auto items = A0.all_items();
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     const auto slack = float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"});
 
@@ -157,11 +157,11 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
         Vector<Real> tau(n - 1, batch);
 
         const size_t ws_bytes =
-            sytrd_blocked_buffer_size<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+            sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
         UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-        sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
-        const double err = spectrum_error(A0.view(), d, e, items);
+        sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        const double err = spectrum_error(A0, d, e, items);
         SCOPED_TRACE(route);
         expect_values_err<Real>(n, err, slack);
         return err;
@@ -192,12 +192,12 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     Vector<Real> e(n - 1, batch);
     Vector<Real> tau(n - 1, batch);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-    sytrd_blocked<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+    sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
+    expect_spectrum<Real>(A0, d, e, float_old_power<Real>(n));
 }
 #endif
 
@@ -224,15 +224,15 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
         Vector<Real> e(n - 1, batch);
         Vector<Real> tau(n - 1, batch);
 
-        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*ctx, A, d, e, tau, Uplo::Lower, nb);
         UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
         {
             ScopedEnvVar trailing_update("BATCHLAS_SYTRD_TRAILING_UPDATE", "syr2k");
-            sytrd_blocked<B, Real>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+            sytrd_blocked<B, Real>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
         }
 
-        expect_spectrum<Real>(A0.view(), d, e, float_old_power<Real>(n));
+        expect_spectrum<Real>(A0, d, e, float_old_power<Real>(n));
     }
 }
 
@@ -259,12 +259,12 @@ TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReferenc
     Vector<Scalar> e(n - 1, batch);
     Vector<Scalar> tau(n - 1, batch);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-    sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+    sytrd_blocked<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
 
-    expect_spectrum<Scalar>(A0.view(), d, e);
+    expect_spectrum<Scalar>(A0, d, e);
 }
 #endif
 
@@ -287,17 +287,17 @@ void run_latrd_grid_case(int n, int batch, int nb, const char* impl) {
     Vector<Scalar> e(n - 1, batch);
     Vector<Scalar> tau(n - 1, batch);
 
-    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+    const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
     {
         ScopedEnvVar latrd_impl("BATCHLAS_LATRD_IMPL", impl);
-        sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        sytrd_blocked<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
     }
     ctx->wait();
 
     SCOPED_TRACE(::testing::Message() << "impl=" << impl << " n=" << n << " batch=" << batch << " nb=" << nb);
-    expect_spectrum<Scalar>(A0.view(), d, e, float_slack<Real>(kSlackLatrd), A0.view().all_items());
+    expect_spectrum<Scalar>(A0, d, e, float_slack<Real>(kSlackLatrd), A0.all_items());
 }
 
 TEST(SytrdBlockedLatrdGridCudaTest, SmallBatchMatchesNetlibReference) {
@@ -364,14 +364,14 @@ TEST(SytrdBlockedLatrdGridCudaTest, GridMatchesLegacyTridiagonal) {
                     for (int k = 0; k < 2; ++k) {
                         Matrix<Scalar, MatrixFormat::Dense> A = A0;
                         Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
-                        const size_t wsb = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+                        const size_t wsb = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, nb);
                         // Deliberately NOT zero-initialized: sytrd's W workspace
                         // comes from a shared BumpAllocator in syev_blocked, so
                         // any read of an unwritten W entry must be caught here.
                         UnifiedVector<std::byte> ws(wsb, std::byte{0x7f});
                         {
                             ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", k == 0 ? "legacy" : "grid");
-                            sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+                            sytrd_blocked<B, Scalar>(*ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
                         }
                         ctx->wait();
                         ds[k] = UnifiedVector<Scalar>(static_cast<std::size_t>(n) * batch);
@@ -424,9 +424,9 @@ TEST(SytrdBlockedLatrdGridCudaTest, SyevBlockedSpectrumMatchesLegacy) {
                 StedcParams<Scalar> params;
                 params.recursion_threshold = 32;
                 UnifiedVector<std::byte> ws(
-                    syev_blocked_buffer_size<B, Scalar>(*ctx, A.view(), jobz, Uplo::Lower, params));
+                    syev_blocked_buffer_size<B, Scalar>(*ctx, A, jobz, Uplo::Lower, params));
                 ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", k == 0 ? "legacy" : "grid");
-                syev_blocked<B, Scalar>(*ctx, A.view(), W[k].to_span(), jobz, Uplo::Lower,
+                syev_blocked<B, Scalar>(*ctx, A, W[k].to_span(), jobz, Uplo::Lower,
                                         ws.to_span(), params).wait();
                 ctx->wait();
             }

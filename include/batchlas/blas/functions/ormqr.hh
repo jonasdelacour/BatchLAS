@@ -154,8 +154,6 @@ BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
-BATCHLAS_ACCEPT_OWNING(ormqr)
-BATCHLAS_ACCEPT_OWNING(ormqr_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(ormqr)
 BATCHLAS_DISPATCH_ON_QUEUE(ormqr_buffer_size)

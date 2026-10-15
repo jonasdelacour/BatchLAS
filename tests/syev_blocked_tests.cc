@@ -68,12 +68,12 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 			StedcParams<Real> params;
 			params.recursion_threshold = 32;
 			auto ws_blk = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(*this->ctx,
-																	A_blk.view(),
+																	A_blk,
 																	JobType::NoEigenVectors,
 																	Uplo::Lower,
 																	params));
 			syev_blocked<B, Scalar>(*this->ctx,
-							A_blk.view(),
+							A_blk,
 							W_blk.to_span(),
 							JobType::NoEigenVectors,
 							Uplo::Lower,
@@ -87,7 +87,7 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 		// float n = 320: the kind's 32 n u ||A||_2 (||A||_2 ~ 20) is 6x the old 2e-3 absolute.
 		std::optional<verify::Slack> slack;
 		if (std::is_same_v<Real, float> && n == 320) slack = verify::Slack{0.25, "old float bound 2e-3 absolute, ||A||_2 ~ 20 at n = 320"};
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n, false, A0.view().all_items(), slack);
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_blk, n, false, A0.all_items(), slack);
 	}
 }
 
@@ -108,12 +108,12 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 		StedcParams<Real> params;
 		params.recursion_threshold = 32;
 		auto ws_blk = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(*this->ctx,
-																A_blk.view(),
+																A_blk,
 																JobType::EigenVectors,
 																Uplo::Lower,
 																params));
 		syev_blocked<B, Scalar>(*this->ctx,
-						A_blk.view(),
+						A_blk,
 						W_blk.to_span(),
 						JobType::EigenVectors,
 						Uplo::Lower,
@@ -121,8 +121,8 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 						params).wait();
 	}
 
-	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_blk, n);
-	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_blk.view(), W_blk, n);
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_blk, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_blk, W_blk, n);
 }
 
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
@@ -141,12 +141,12 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	{
 		ScopedEnvVar route("BATCHLAS_SYEV_ROUTE", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-																								  A_two_stage.view(),
+																								  A_two_stage,
 																								  W_two_stage.to_span(),
 																								  JobType::NoEigenVectors,
 																								  Uplo::Lower));
 		syev(*this->ctx,
-                                 A_two_stage.view(),
+                                 A_two_stage,
                                  W_two_stage.to_span(),
                                  {.jobz = JobType::NoEigenVectors},
                                  ws_two_stage.to_span()).wait();
@@ -180,12 +180,12 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	{
 		ScopedEnvVar route("BATCHLAS_SYEV_ROUTE", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-															  A_two_stage.view(),
+															  A_two_stage,
 															  W_two_stage.to_span(),
 															  JobType::EigenVectors,
 															  Uplo::Lower));
 		syev(*this->ctx,
-                                 A_two_stage.view(),
+                                 A_two_stage,
                                  W_two_stage.to_span(),
                                  {},
                                  ws_two_stage.to_span()).wait();
@@ -195,7 +195,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 		EXPECT_TRUE(std::isfinite(W_two_stage[i])) << "non-finite eigenvalue at i=" << i;
 	}
 
-	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_two_stage.view(), W_two_stage, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_two_stage, W_two_stage, n);
 }
 // n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
 // sytrd_block_size_default<T> now returns a different panel width for complex
@@ -229,11 +229,11 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 
 	{
 		auto ws = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-															A.view(),
+															A,
 															W.to_span(),
 															JobType::EigenVectors,
 															Uplo::Lower));
-		syev(*this->ctx, A.view(), W.to_span(), {}, ws.to_span()).wait();
+		syev(*this->ctx, A, W.to_span(), {}, ws.to_span()).wait();
 	}
 
 	for (std::size_t i = 0; i < W.size(); ++i) {
@@ -248,7 +248,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 		}
 	}
 
-	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n);
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n);
 }
 
 // The n <= 32 range, where Auto picks among the three CTA kernels rather than a
@@ -275,11 +275,11 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 
 		{
 			auto ws = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
-																A.view(),
+																A,
 																W.to_span(),
 																JobType::EigenVectors,
 																Uplo::Lower));
-			syev(*this->ctx, A.view(), W.to_span(), {}, ws.to_span()).wait();
+			syev(*this->ctx, A, W.to_span(), {}, ws.to_span()).wait();
 		}
 
 		for (int i = 0; i < n; ++i) {
@@ -290,7 +290,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 				<< "eigenvalues not ascending, n=" << n << " i=" << i;
 		}
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n);
 	}
 }
 #endif
@@ -313,10 +313,10 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 template <typename Scalar>
 Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFormat::Dense>& A0) {
 	Matrix<Scalar, MatrixFormat::Dense> M = A0;
-	const int n = M.view().rows();
-	const int ld = static_cast<int>(M.view().ld());
-	for (int b = 0; b < M.view().batch_size(); ++b) {
-		Scalar* Mb = M.view().data().data() + static_cast<std::size_t>(b) * M.view().stride();
+	const int n = M.rows();
+	const int ld = static_cast<int>(M.ld());
+	for (int b = 0; b < M.batch_size(); ++b) {
+		Scalar* Mb = M.data().data() + static_cast<std::size_t>(b) * M.stride();
 		for (int c = 0; c < n; ++c)
 			for (int r = c + 1; r < n; ++r) Mb[r + c * ld] = MatrixView<Scalar, MatrixFormat::Dense>::conj(Mb[c + r * ld]);
 	}
@@ -348,8 +348,8 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 
 	// Poison the strictly-lower triangle so it no longer mirrors the upper one.
 	for (int b = 0; b < batch; ++b) {
-		Scalar* Ab = A0.view().data().data() + static_cast<std::size_t>(b) * A0.view().stride();
-		const int ld = static_cast<int>(A0.view().ld());
+		Scalar* Ab = A0.data().data() + static_cast<std::size_t>(b) * A0.stride();
+		const int ld = static_cast<int>(A0.ld());
 		for (int c = 0; c < n; ++c) {
 			for (int r = c + 1; r < n; ++r) {
 				Ab[r + c * ld] = Scalar(Real(-7.5));   // garbage, deliberately not symmetric
@@ -366,7 +366,7 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 	// the mirror never ran. The spectrum read from the LOWER triangle must differ from the
 	// Upper one (LAPACKE on both) -- that is what makes the Upper comparison below meaningful.
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
-	ASSERT_GT(lapacke_spectrum_gap(A0.view(), A_sym.view()), 1.0)
+	ASSERT_GT(lapacke_spectrum_gap(A0, A_sym), 1.0)
 		<< "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
 #endif
 
@@ -375,12 +375,12 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
 		StedcParams<Real> params;
 		params.recursion_threshold = 32;
 		auto ws = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(
-			*this->ctx, A_ours.view(), JobType::NoEigenVectors, Uplo::Upper, params));
-		syev_blocked<B, Scalar>(*this->ctx, A_ours.view(), W_ours.to_span(),
+			*this->ctx, A_ours, JobType::NoEigenVectors, Uplo::Upper, params));
+		syev_blocked<B, Scalar>(*this->ctx, A_ours, W_ours.to_span(),
 								JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 	}
 
-	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, A_sym.view().all_items());
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym, W_ours, n, false, A_sym.all_items());
 }
 
 // Same, through the two-stage provider, which has its own mirror call site.
@@ -398,8 +398,8 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 		Matrix<Scalar, MatrixFormat::Dense> A0 =
 			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 909);
 		for (int b = 0; b < batch; ++b) {
-			Scalar* Ab = A0.view().data().data() + static_cast<std::size_t>(b) * A0.view().stride();
-			const int ld = static_cast<int>(A0.view().ld());
+			Scalar* Ab = A0.data().data() + static_cast<std::size_t>(b) * A0.stride();
+			const int ld = static_cast<int>(A0.ld());
 			for (int c = 0; c < n; ++c) {
 				for (int r = c + 1; r < n; ++r) {
 					Ab[r + c * ld] = Scalar(Real(3.25));
@@ -414,11 +414,11 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 		{
 			StedcParams<Real> params;
 			auto ws = UnifiedVector<std::byte>(syev_two_stage_buffer_size<B, Scalar>(
-				*this->ctx, A_ours.view(), JobType::NoEigenVectors, Uplo::Upper, params));
-			syev_two_stage<B, Scalar>(*this->ctx, A_ours.view(), W_ours.to_span(),
+				*this->ctx, A_ours, JobType::NoEigenVectors, Uplo::Upper, params));
+			syev_two_stage<B, Scalar>(*this->ctx, A_ours, W_ours.to_span(),
 									  JobType::NoEigenVectors, Uplo::Upper, ws.to_span(), params).wait();
 		}
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym.view(), W_ours, n, false, A_sym.view().all_items());
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A_sym, W_ours, n, false, A_sym.all_items());
 	}
 }

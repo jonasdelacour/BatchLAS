@@ -167,14 +167,6 @@ Event trsm(Queue&,
            const MatrixView<T, MatrixFormat::Dense>&,
            Side, Uplo, Transpose, Diag, T) = delete;
 
-/// @brief Deleted: the old argument order with `alpha` last, owning-Matrix spelling.
-/// @ingroup api_blas3
-template <Backend Back, typename T>
-Event trsm(Queue&,
-           const Matrix<T, MatrixFormat::Dense>&,
-           const Matrix<T, MatrixFormat::Dense>&,
-           Side, Uplo, Transpose, Diag, T) = delete;
-
 }  // namespace batchlas
 
 
@@ -206,7 +198,6 @@ namespace batchlas {
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
 
-BATCHLAS_ACCEPT_OWNING(trsm)
 
 BATCHLAS_DISPATCH_ON_QUEUE(trsm)
 

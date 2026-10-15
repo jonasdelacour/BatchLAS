@@ -558,7 +558,7 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     UnifiedVector<T> x(n * batch, T(1)), y(m * batch, T(0));
     UnifiedVector<int> rows(batch), cols(batch);
     for (int b = 0; b < batch; ++b) rows[b] = m - b, cols[b] = n;
-    const auto het = A.view().with_active_dims(rows.to_span(), cols.to_span());
+    const auto het = A.with_active_dims(rows.to_span(), cols.to_span());
     ASSERT_TRUE(het.is_heterogeneous());
     const VectorView<T> X(x.data(), n, batch), Y(y.data(), m, batch);
     for (const C& c : gv::candidates<T>()) {

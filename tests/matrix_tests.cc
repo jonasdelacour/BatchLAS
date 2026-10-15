@@ -124,6 +124,40 @@ TEST(MatrixDenseTest, MoveConstructorAndAssignment) {
     }
 }
 
+// A Matrix is a MatrixView of its own storage: every (re)allocation must re-point the view half.
+TEST(MatrixDenseTest, ViewHalfFollowsTheOwnedStorage) {
+    Matrix<float, MatrixFormat::Dense> a(3, 2, 4, /*ld=*/5, /*stride=*/13);
+    a.fill(1.0f);
+    EXPECT_EQ(static_cast<const MatrixView<float>&>(a).data_ptr(), a.data().data());
+
+    Matrix<float, MatrixFormat::Dense> b(a);
+    EXPECT_NE(b.data_ptr(), a.data_ptr());
+    EXPECT_EQ(b.kernel_view().data_, b.data().data());
+    b(1, 1, 3) = 9.0f;
+    EXPECT_FLOAT_EQ(a(1, 1, 3), 1.0f);
+
+    float* const moved = b.data_ptr();
+    Matrix<float, MatrixFormat::Dense> c(std::move(b));
+    EXPECT_EQ(c.data_ptr(), moved);
+    EXPECT_EQ(b.data().size(), 0u);
+    a = c;
+    EXPECT_NE(a.data_ptr(), c.data_ptr());
+    EXPECT_FLOAT_EQ(a(1, 1, 3), 9.0f);
+
+    UnifiedVector<int> rows(4, 2), cols(4, 1);
+    c.set_active_dims(rows.to_span(), cols.to_span());
+    EXPECT_EQ(c.rows(2), 2);
+    EXPECT_EQ(MatrixView<float>(c).cols(3), 1);
+    EXPECT_NE(c.active_rows().data(), rows.data());
+
+    Vector<float> x(4, 0.0f, 2, Stride{6}, Inc{1});
+    x(3, 1) = 2.0f;
+    Vector<float> y(x);
+    y(3, 1) = 5.0f;
+    EXPECT_FLOAT_EQ(x(3, 1), 2.0f);
+    EXPECT_EQ(y.data_ptr(), y.data().data());
+}
+
 TEST(MatrixDenseTest, StaticFactoryMethods) {
     constexpr int n = 5;
     constexpr int batch = 2;
@@ -195,7 +229,7 @@ TEST(MatrixDenseTest, CopyFromView) {
     src.fill(9.0f);
     Matrix<float, MatrixFormat::Dense> dst(2, 2, 1);
     dst.fill(0.0f);
-    dst.copy_from(src.view());
+    dst.copy_from(src);
     for (auto v : dst.data()) EXPECT_FLOAT_EQ(v, 9.0f);
 }
 
@@ -211,7 +245,7 @@ TEST(MatrixDenseTest, ExceptionOnCopyFromMismatchedShape) {
     // catch-all runtime_error this used to assert. Spelled as the concrete type
     // rather than std::exception so that a future reclassification has to come
     // here and be argued about.
-    EXPECT_THROW(a.copy_from(b.view()), batchlas::invalid_argument);
+    EXPECT_THROW(a.copy_from(b), batchlas::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -670,7 +704,7 @@ TEST(MatrixCSRTest, NonZerosSpellingAllocatesAndRoundTrips) {
         EXPECT_FLOAT_EQ(copy.data()[i], values[i]);
 
     // A view over one batch item sees that item's values.
-    auto item = from_data.view().batch_item(1);
+    auto item = from_data.batch_item(1);
     EXPECT_EQ(item.batch_size(), 1);
     EXPECT_EQ(item.nnz(), nnz);
     for (int i = 0; i < nnz; ++i)
@@ -725,7 +759,7 @@ TEST(MatrixCSRTest, CopyFromView) {
     int col_indices[nnz] = {0, 1};
     Matrix<float, MatrixFormat::CSR> src(values, row_offsets, col_indices, rows, cols, NonZeros{nnz}, nnz, rows + 1, batch);
     Matrix<float, MatrixFormat::CSR> dst(rows, cols, NonZeros{nnz}, batch);
-    dst.copy_from(src.view());
+    dst.copy_from(src);
     for (int i = 0; i < nnz; ++i) EXPECT_FLOAT_EQ(dst.data()[i], values[i]);
     for (int i = 0; i < rows + 1; ++i) EXPECT_EQ(dst.row_offsets()[i], row_offsets[i]);
     for (int i = 0; i < nnz; ++i) EXPECT_EQ(dst.col_indices()[i], col_indices[i]);
@@ -738,7 +772,7 @@ TEST(MatrixCSRTest, ExceptionOnCopyFromMismatchedShape) {
     // catch-all runtime_error this used to assert. Spelled as the concrete type
     // rather than std::exception so that a future reclassification has to come
     // here and be argued about.
-    EXPECT_THROW(a.copy_from(b.view()), batchlas::invalid_argument);
+    EXPECT_THROW(a.copy_from(b), batchlas::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -778,7 +812,7 @@ TEST(MatrixTriangularize, UpperKeepsUpperTriangle) {
             for (int i = 0; i < n; ++i)
                 mat.data()[b * stride + j * ld + i] = tri_marker(i, j);
 
-    mat.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
+    mat.triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
 
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
@@ -800,14 +834,14 @@ TEST(MatrixTriangularize, LowerKeepsLowerTriangle) {
 
     Queue ctx;
     Matrix<float, MatrixFormat::Dense> mat(n, n, batch);
-    const int ld = mat.view().ld();
-    const int stride = mat.view().stride();
+    const int ld = mat.ld();
+    const int stride = mat.stride();
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 mat.data()[b * stride + j * ld + i] = tri_marker(i, j);
 
-    mat.view().triangularize(ctx, Uplo::Lower, Diag::NonUnit).wait();
+    mat.triangularize(ctx, Uplo::Lower, Diag::NonUnit).wait();
 
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
@@ -828,12 +862,12 @@ TEST(MatrixTriangularize, UnitDiagonalOverwritesDiagonal) {
 
     Queue ctx;
     Matrix<float, MatrixFormat::Dense> mat(n, n, 1);
-    const int ld = mat.view().ld();
+    const int ld = mat.ld();
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i)
             mat.data()[j * ld + i] = tri_marker(i, j);
 
-    mat.view().triangularize(ctx, Uplo::Upper, Diag::Unit).wait();
+    mat.triangularize(ctx, Uplo::Upper, Diag::Unit).wait();
 
     for (int j = 0; j < n; ++j) {
         for (int i = 0; i < n; ++i) {
@@ -856,12 +890,12 @@ TEST(MatrixTriangularize, NonSquareTallAndWide) {
         const int cols = shape.second;
 
         Matrix<float, MatrixFormat::Dense> mat(rows, cols, 1);
-        const int ld = mat.view().ld();
+        const int ld = mat.ld();
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
                 mat.data()[j * ld + i] = tri_marker(i, j);
 
-        mat.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
+        mat.triangularize(ctx, Uplo::Upper, Diag::NonUnit).wait();
 
         for (int j = 0; j < cols; ++j) {
             for (int i = 0; i < rows; ++i) {
@@ -1258,7 +1292,7 @@ TEST(MatrixDenseTest, CopyFromViewWithPaddedLdAndStride) {
             for (int i = 0; i < rows; ++i)
                 sraw[b * src_stride + j * src_ld + i] = major_marker(i, j, b);
 
-    dst.copy_from(src.view());
+    dst.copy_from(src);
     auto view = dst.view();
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
@@ -1282,7 +1316,7 @@ TEST(MatrixDenseTest, CopyFromViewPackedBatched) {
     for (size_t k = 0; k < sraw.size(); ++k) sraw[k] = static_cast<float>(k) + 0.25f;
     std::fill(dst.data().begin(), dst.data().end(), 0.0f);
 
-    dst.copy_from(src.view());
+    dst.copy_from(src);
     for (size_t k = 0; k < sraw.size(); ++k)
         EXPECT_FLOAT_EQ(dst.data()[k], sraw[k]) << "element " << k;
 }
@@ -1426,7 +1460,7 @@ TYPED_TEST(MatrixFillTest, RandomSpdIsHermitianAndStrictlyDiagonallyDominant) {
     for (int n : {1, 5, 37}) {
         SCOPED_TRACE("n=" + std::to_string(n));
         auto m = TestFixture::padded(n, 4);
-        m.view().fill_random_spd(*this->ctx, 7u).wait();
+        m.fill_random_spd(*this->ctx, 7u).wait();
         TestFixture::expect_padding_untouched(m);
         TestFixture::expect_exactly_hermitian(m);
         if (n > 1) TestFixture::expect_items_differ(m);
@@ -1443,8 +1477,8 @@ TYPED_TEST(MatrixFillTest, RandomSpdIsHermitianAndStrictlyDiagonallyDominant) {
     this->expect_reproducible(9, [&](auto v, unsigned s) { return v.fill_random_spd(*this->ctx, s); });
     if constexpr (TestFixture::BackendType != Backend::NETLIB) {
         auto q = TestFixture::padded(9, 3), d = TestFixture::padded(9, 3);
-        q.view().fill_random_spd(*this->ctx, 5u).wait();
-        d.view().fill_random_spd(5u).wait();
+        q.fill_random_spd(*this->ctx, 5u).wait();
+        d.fill_random_spd(5u).wait();
         EXPECT_TRUE(TestFixture::active(q) == TestFixture::active(d)) << "queue-less twin differs";
     }
 }
@@ -1455,7 +1489,7 @@ TYPED_TEST(MatrixFillTest, RandomPivotedMovesEveryRowPerItem) {
         SCOPED_TRACE("n=" + std::to_string(n));
         constexpr int batch = 5;
         auto m = TestFixture::padded(n, batch);
-        m.view().fill_random_pivoted(*this->ctx, 3u).wait();
+        m.fill_random_pivoted(*this->ctx, 3u).wait();
         TestFixture::expect_padding_untouched(m);
         TestFixture::expect_items_differ(m);
         std::vector<std::vector<int>> owner(batch, std::vector<int>(n, -1));
@@ -1485,7 +1519,7 @@ TYPED_TEST(MatrixFillTest, GradedHermitianIsExactlyHermitian) {
     for (int n : {1, 16, 70}) {
         SCOPED_TRACE("n=" + std::to_string(n));
         auto m = TestFixture::padded(n, 3);
-        m.view().fill_graded_hermitian(*this->ctx, 6.0, 21u).wait();
+        m.fill_graded_hermitian(*this->ctx, 6.0, 21u).wait();
         TestFixture::expect_padding_untouched(m);
         TestFixture::expect_exactly_hermitian(m);
         // n == 1: lambda = 1, and H M H only rounds it (|v|^2 is 1 to a few ulps).
@@ -1507,7 +1541,7 @@ TYPED_TEST(MatrixFillTest, GradedHermitianHasTheRequestedSpectrum) {
             for (double cond : {3.0, 6.0}) {
                 SCOPED_TRACE("n=" + std::to_string(n) + " log10_cond=" + std::to_string(cond));
                 auto m = TestFixture::padded(n, 3);
-                m.view().fill_graded_hermitian(*this->ctx, cond, 5u).wait();
+                m.fill_graded_hermitian(*this->ctx, cond, 5u).wait();
                 for (int b = 0; b < 3; ++b) {
                     std::vector<T> a;
                     for (int j = 0; j < n; ++j)
@@ -1531,7 +1565,7 @@ TYPED_TEST(MatrixFillTest, GradedHermitianHasTheRequestedSpectrum) {
 TYPED_TEST(MatrixFillTest, GradedHermitianRunsAtN512) {
     constexpr int n = 512;
     auto m = TestFixture::padded(n, 2);
-    m.view().fill_graded_hermitian(*this->ctx, 6.0, 4u).wait();
+    m.fill_graded_hermitian(*this->ctx, 6.0, 4u).wait();
     TestFixture::expect_padding_untouched(m);
     TestFixture::expect_exactly_hermitian(m);
     TestFixture::expect_items_differ(m);
@@ -1552,7 +1586,7 @@ TYPED_TEST(MatrixFillTest, NearDegenerateHermitianIsClusteredAndExactlyHermitian
     for (int n : {1, 9, 33}) {
         SCOPED_TRACE("n=" + std::to_string(n));
         auto m = TestFixture::padded(n, 3);
-        m.view().fill_near_degenerate_hermitian(*this->ctx, noise, 1337u).wait();
+        m.fill_near_degenerate_hermitian(*this->ctx, noise, 1337u).wait();
         TestFixture::expect_padding_untouched(m);
         TestFixture::expect_exactly_hermitian(m);
         if (n > 1) TestFixture::expect_items_differ(m);
@@ -1571,10 +1605,10 @@ TYPED_TEST(MatrixFillTest, NearDegenerateHermitianIsClusteredAndExactlyHermitian
 
 TYPED_TEST(MatrixFillTest, SquareFillsRejectARectangularView) {
     Matrix<typename TestFixture::T, MatrixFormat::Dense> m(5, 4, 3);
-    EXPECT_THROW((void)m.view().fill_random_spd(*this->ctx), batchlas::invalid_argument);
-    EXPECT_THROW((void)m.view().fill_random_pivoted(*this->ctx), batchlas::invalid_argument);
-    EXPECT_THROW((void)m.view().fill_graded_hermitian(*this->ctx, 3.0), batchlas::invalid_argument);
-    EXPECT_THROW((void)m.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.fill_random_spd(*this->ctx), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.fill_random_pivoted(*this->ctx), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.fill_graded_hermitian(*this->ctx, 3.0), batchlas::invalid_argument);
+    EXPECT_THROW((void)m.fill_near_degenerate_hermitian(*this->ctx, 1e-3), batchlas::invalid_argument);
 }
 
 // Race guard for the two local-memory kernels: a saturating batch must give, item for item,
@@ -1585,8 +1619,8 @@ TYPED_TEST(MatrixFillTest, LocalMemoryFillsAreRaceFreeAtASaturatingBatch) {
     for (int which = 0; which < 2; ++which) {
         SCOPED_TRACE(which == 0 ? "pivoted" : "graded");
         auto run = [&](Matrix<T, MatrixFormat::Dense>& m) {
-            if (which == 0) m.view().fill_random_pivoted(*this->ctx, 8u).wait();
-            else m.view().fill_graded_hermitian(*this->ctx, 4.0, 8u).wait();
+            if (which == 0) m.fill_random_pivoted(*this->ctx, 8u).wait();
+            else m.fill_graded_hermitian(*this->ctx, 4.0, 8u).wait();
         };
         auto padded = TestFixture::padded(n, batch);
         Matrix<T, MatrixFormat::Dense> packed(n, n, batch), again(n, n, batch);
@@ -1609,8 +1643,8 @@ TEST(MatrixKernels, GridCapCoversAllElements) {
         GTEST_SKIP() << "needs a GPU with at least 10 GB";
     Matrix<float, MatrixFormat::Dense> M(rows, cols, 1);
     M.view().fill(q, 1.0f).wait();
-    scale(q, 2.0f, M.view()).wait();
-    const float* d = M.view().data_ptr();
+    scale(q, 2.0f, M).wait();
+    const float* d = M.data_ptr();
     for (size_t idx : {size_t{0}, size_t{1} << 29, (size_t{1} << 30) - 1, size_t{1} << 30, total - rows, total - 1})
         EXPECT_EQ(d[idx], 2.0f) << "element " << idx << " of " << total;
 }
@@ -1649,7 +1683,7 @@ TEST(FillDiagonalVector, WideViewAndOffsets) {
     for (int k : {-4, 0, 3}) {
         SCOPED_TRACE("k=" + std::to_string(k));
         auto m = poisoned_wide();
-        m.view().fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait();
+        m.fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait();
         EXPECT_EQ(diagonal_mismatches(m, k), 0u);
     }
     // A strided source (inc 2, stride 19) with poison in the skipped slots.
@@ -1659,7 +1693,7 @@ TEST(FillDiagonalVector, WideViewAndOffsets) {
     for (int k : {-4, 3}) {
         SCOPED_TRACE("inc=2 k=" + std::to_string(k));
         auto m = poisoned_wide();
-        m.view().fill_diagonal(ctx, VectorView<float>(strided, 9, 2, Inc{2}, Stride{19}), k).wait();
+        m.fill_diagonal(ctx, VectorView<float>(strided, 9, 2, Inc{2}, Stride{19}), k).wait();
         EXPECT_EQ(diagonal_mismatches(m, k), 0u);
     }
     // The Span overload packs one run of exactly min(...) values per item.
@@ -1668,7 +1702,7 @@ TEST(FillDiagonalVector, WideViewAndOffsets) {
     for (int b = 0; b < 2; ++b)
         for (int i = 0; i < d; ++i) packed[b * d + i] = float(100 * b + i + 1);
     auto m = poisoned_wide();
-    m.view().fill_diagonal(ctx, packed.to_span(), 3).wait();
+    m.fill_diagonal(ctx, packed.to_span(), 3).wait();
     EXPECT_EQ(diagonal_mismatches(m, 3), 0u) << "Span overload";
 }
 
@@ -1680,7 +1714,7 @@ TEST(FillDiagonalVector, OffsetsAtOrPastTheEdge) {
     for (int k : {8, 9, 12, -5, -6}) {
         SCOPED_TRACE("k=" + std::to_string(k));
         auto m = poisoned_wide();
-        ASSERT_NO_THROW(m.view().fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait());
+        ASSERT_NO_THROW(m.fill_diagonal(ctx, VectorView<float>(values, 9, 2, 1, 9), k).wait());
         EXPECT_EQ(diagonal_mismatches(m, k), 0u);
     }
 }
@@ -1693,8 +1727,8 @@ TEST(SeededFills, IndependentStreams) {
     constexpr unsigned int seed = 21u;
     Queue ctx(Device::default_device());
     Matrix<float, MatrixFormat::Dense> piv(n, n), spd(n, n);
-    piv.view().fill_random_pivoted(ctx, seed).wait();
-    spd.view().fill_random_spd(ctx, seed ^ 0x5bd1e995u).wait();
+    piv.fill_random_pivoted(ctx, seed).wait();
+    spd.fill_random_spd(ctx, seed ^ 0x5bd1e995u).wait();
 
     // Row i carries the dominant entry in column perm[i].
     std::vector<int> perm(n);

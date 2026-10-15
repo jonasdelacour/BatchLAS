@@ -68,7 +68,7 @@ namespace batchlas {
         // queue and outlives the call; the next lease reuses it, which the
         // in-order queue orders behind this work.
         auto workspace = ctx.workspace(inv_buffer_size<B>(ctx, A));
-        (void)inv<B>(ctx, A, Aout.view(), workspace.span());
+        (void)inv<B>(ctx, A, Aout, workspace.span());
         return Aout;
     }
 

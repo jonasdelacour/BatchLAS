@@ -171,8 +171,6 @@ BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
-BATCHLAS_ACCEPT_OWNING(potrf)
-BATCHLAS_ACCEPT_OWNING(potrf_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(potrf)
 BATCHLAS_DISPATCH_ON_QUEUE(potrf_buffer_size)

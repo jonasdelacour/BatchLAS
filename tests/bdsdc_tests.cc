@@ -91,12 +91,12 @@ protected:
         for (int b = 0; b < batch; ++b) {
             for (int i = 0; i < n; ++i) {
                 d[static_cast<size_t>(b) * n + i] = static_cast<Scalar>(dh[static_cast<size_t>(b) * n + i]);
-                B0.view().at(i, i, b) = d[static_cast<size_t>(b) * n + i];
+                B0.at(i, i, b) = d[static_cast<size_t>(b) * n + i];
             }
             for (int i = 0; i < n - 1; ++i) {
                 e[static_cast<size_t>(b) * (n - 1) + i] =
                     static_cast<Scalar>(eh[static_cast<size_t>(b) * (n - 1) + i]);
-                B0.view().at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
+                B0.at(i, i + 1, b) = e[static_cast<size_t>(b) * (n - 1) + i];
             }
         }
 
@@ -109,16 +109,16 @@ protected:
 
         Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
         if (vectors) {
-            (void)bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
+            (void)bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U, Vh, true);
         } else {
             (void)bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         }
         ctx.wait_and_throw();
 
-        const auto items = B0.view().all_items();
+        const auto items = B0.all_items();
         const VectorView<Scalar> sv(s.to_span(), n, batch, 1, n);
         if (vectors) {
-            const double resid = MV::svd_residual(ctx, B0.view(), U.view(), sv, Vh.view(), items);
+            const double resid = MV::svd_residual(ctx, B0, U, sv, Vh, items);
             if (orth_slack > 0.0 && std::is_same_v<Scalar, float>)
                 EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::factorization, n, resid,
                                     batchlas::verify::Slack{2.0, "graded kappa~1e6 D&C float, n=64: the repaired columns carry the Gram-Schmidt error into U S Vh. Measured 9.15e-5 (c 24); accepted bound 32 n eps (2x of c=16)"});
@@ -129,8 +129,8 @@ protected:
             for (int b = 0; b < batch; ++b)
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i) V.view()(i, j, b) = Vh.view()(j, i, b);
-            const double uorth = MV::orthogonality(ctx, U.view(), items);
-            const double vorth = MV::orthogonality(ctx, V.view(), items);
+            const double uorth = MV::orthogonality(ctx, U, items);
+            const double vorth = MV::orthogonality(ctx, V, items);
             if (orth_slack > 0.0) {
                 const batchlas::verify::Slack slack{
                     orth_slack,
@@ -143,7 +143,7 @@ protected:
             }
         }
 
-        test_utils::expect_singular_values_match_lapacke(B0.view(), s, items);
+        test_utils::expect_singular_values_match_lapacke(B0, s, items);
     }
 
     void check(int n, int batch, unsigned seed, bool vectors, double dscale = 1.0,

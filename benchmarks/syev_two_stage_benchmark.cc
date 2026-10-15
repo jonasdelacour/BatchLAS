@@ -60,7 +60,7 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     const size_t ws_size = syev_two_stage_buffer_size(
-        *q, A.view(), JobType::EigenVectors, Uplo::Lower);
+        *q, A, JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,
@@ -81,7 +81,7 @@ static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
     const size_t ws_size = syev_blocked_buffer_size(
-        *q, A.view(), JobType::EigenVectors, Uplo::Lower);
+        *q, A, JobType::EigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,

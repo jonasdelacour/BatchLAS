@@ -186,7 +186,7 @@ inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
     // (void) on an Event is deliberate: the in-order Queue already orders the next call.
-    (void)add_into<T>(ctx, A, B, C.view());
+    (void)add_into<T>(ctx, A, B, C);
     return C;
 }
 
@@ -196,7 +196,7 @@ inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    (void)subtract_into<T>(ctx, A, B, C.view());
+    (void)subtract_into<T>(ctx, A, B, C);
     return C;
 }
 
@@ -206,7 +206,7 @@ inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    (void)multiply_into<T>(ctx, A, B, C.view());
+    (void)multiply_into<T>(ctx, A, B, C);
     return C;
 }
 
@@ -216,7 +216,7 @@ inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    (void)divide_into<T>(ctx, A, B, C.view());
+    (void)divide_into<T>(ctx, A, B, C);
     return C;
 }
 
@@ -226,7 +226,7 @@ inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              T alpha) {
     auto C = detail::like(A);
-    (void)axpby_into<T>(ctx, alpha, A, T(0), A, C.view());
+    (void)axpby_into<T>(ctx, alpha, A, T(0), A, C);
     return C;
 }
 
@@ -257,7 +257,7 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     const auto m = ta ? A.cols() : A.rows();
     const auto n = tb ? B.rows() : B.cols();
     Matrix<T, MatrixFormat::Dense> C(m, n, A.batch_size());
-    (void)gemm(ctx, A, B, C.view(),
+    (void)gemm(ctx, A, B, C,
          GemmOptions<T>{.alpha = opts.alpha,
                         .beta = T(0),  // C is fresh
                         .transA = opts.transA,
@@ -281,8 +281,8 @@ inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                Uplo uplo = kDefaultUplo) {
     auto L = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, L.view(), A);
-    (void)potrf(ctx, L.view(), {.uplo = uplo});
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, L, A);
+    (void)potrf(ctx, L, {.uplo = uplo});
     return L;
 }
 
@@ -298,8 +298,8 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
     auto work = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
-    (void)syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work, A);
+    (void)syev(ctx, work, W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
     ctx.wait();  // ~Matrix frees `work` without waiting, as in svd()
     return W;
 }
@@ -331,11 +331,11 @@ inline Eigh<T> eigh(Queue& ctx,
     // here would find batchlas::linalg::detail.
     ::batchlas::detail::require_square("eigh", "A", A);
     auto V = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V, A);
     // Positional because SyevOptions has no `info` field.
     auto lease = ctx.workspace(
-        syev_buffer_size(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo));
-    (void)syev(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo, lease.span(),
+        syev_buffer_size(ctx, V, W.to_span(), JobType::EigenVectors, uplo));
+    (void)syev(ctx, V, W.to_span(), JobType::EigenVectors, uplo, lease.span(),
                info.to_span());
     // No wait needed: `info` is moved into the result (unlike svd()'s local scratch).
     return Eigh<T>{std::move(W), std::move(V), std::move(info)};
@@ -359,10 +359,10 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& B,
                                             Transpose trans = Transpose::NoTrans) {
     auto LU = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU, A);
 
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, B);
 
     const size_t n_pivots = static_cast<size_t>(A.rows()) * static_cast<size_t>(A.batch_size());
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
@@ -373,14 +373,14 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     // evidence: docs/design/api-conventions.md#api-conventions-linalgsolve-keeps-its-transpose-branch
     if (trans == Transpose::NoTrans) {
         // Released before the pivot lease (reverse order): the arena reuses it at once.
-        auto lease = ctx.workspace(gesv_buffer_size(ctx, LU.view(), X.view()));
-        (void)gesv(ctx, LU.view(), X.view(), pivots, lease.span(), Span<int32_t>{});
+        auto lease = ctx.workspace(gesv_buffer_size(ctx, LU, X));
+        (void)gesv(ctx, LU, X, pivots, lease.span(), Span<int32_t>{});
         ctx.wait();  // ~Matrix frees `LU` without waiting, as in svd()
         return X;
     }
 
-    (void)getrf(ctx, LU.view(), pivots);
-    (void)getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    (void)getrf(ctx, LU, pivots);
+    (void)getrs(ctx, LU, X, pivots, {.trans = trans});
     ctx.wait();
     return X;
 }
@@ -404,13 +404,13 @@ inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
                                                 const MatrixView<T, MatrixFormat::Dense>& B,
                                                 Uplo uplo = Uplo::Lower) {
     auto F = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, F.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, F, A);
 
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, B);
 
-    auto lease = ctx.workspace(posv_buffer_size(ctx, F.view(), X.view(), uplo));
-    (void)posv(ctx, F.view(), X.view(), uplo, lease.span(), Span<int32_t>{});
+    auto lease = ctx.workspace(posv_buffer_size(ctx, F, X, uplo));
+    (void)posv(ctx, F, X, uplo, lease.span(), Span<int32_t>{});
     ctx.wait();  // ~Matrix frees `F` without waiting, as in svd()
     return X;
 }
@@ -421,7 +421,7 @@ inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
     auto C = detail::like(A);
-    (void)triangular_mask_into<T>(ctx, A, C.view(), Uplo::Upper, k);
+    (void)triangular_mask_into<T>(ctx, A, C, Uplo::Upper, k);
     return C;
 }
 
@@ -431,7 +431,7 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
     auto C = detail::like(A);
-    (void)triangular_mask_into<T>(ctx, A, C.view(), Uplo::Lower, k);
+    (void)triangular_mask_into<T>(ctx, A, C, Uplo::Lower, k);
     return C;
 }
 
@@ -518,7 +518,7 @@ inline Svd<T> svd(Queue& ctx,
     const int batch = A.batch_size();
 
     auto work = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work, A);
 
     Matrix<T, MatrixFormat::Dense> U(static_cast<int>(m),
                                      static_cast<int>(svd_u_cols(vectors, m, k)), batch);
@@ -530,8 +530,8 @@ inline Svd<T> svd(Queue& ctx,
     UnifiedVector<int32_t> info(static_cast<size_t>(batch));
     // Positional because GesvdOptions has no `info` field.
     auto lease = ctx.workspace(::batchlas::gesvd_buffer_size(
-        ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors));
-    (void)::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors,
+        ctx, work, S.to_span(), U, Vh, vectors, vectors));
+    (void)::batchlas::gesvd(ctx, work, S.to_span(), U, Vh, vectors, vectors,
                       lease.span(), info.to_span());
 
     // ~Matrix frees `work` without waiting; returning early frees it under the kernels.
@@ -553,10 +553,10 @@ struct Lu {
 template <typename T>
 inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     auto LU = detail::like(A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU, A);
     UnifiedVector<int64_t> pivots(static_cast<size_t>(A.rows()) *
                                   static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::getrf(ctx, LU.view(), pivots.to_span());
+    (void)::batchlas::getrf(ctx, LU, pivots.to_span());
     return Lu<T>{std::move(LU), std::move(pivots)};
 }
 

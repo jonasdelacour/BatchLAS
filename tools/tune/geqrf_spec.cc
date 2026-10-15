@@ -76,7 +76,7 @@ struct GeqrfProblem {
         const VectorView<T> tv(tau.data(), k, batch, 1, k);
         const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<T>(verify::Check::factorization, m);
         auto Q = MV::form_q(q, Av, tv, Av.default_items(), k);
-        const double orth = PV::orthogonality(q, Q.view(), Q.view().all_items()) / verify::bound<T>(verify::Check::orthogonality, m);
+        const double orth = PV::orthogonality(q, Q, Q.all_items()) / verify::bound<T>(verify::Check::orthogonality, m);
         return {verify::nanmax(res, orth), 0};
     }
 };

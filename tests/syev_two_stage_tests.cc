@@ -47,7 +47,7 @@ void expect_residual(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& A0, const
                      UnifiedVector<typename base_type<T>::type>& w, int n, const char* what) {
     using Real = typename base_type<T>::type;
     const VectorView<Real> wv(w, n, Z.batch_size());
-    const double resid = MatrixView<T, MatrixFormat::Dense>::eigen_residual(ctx, A0.view(), Z.view(), wv, Z.view().all_items());
+    const double resid = MatrixView<T, MatrixFormat::Dense>::eigen_residual(ctx, A0, Z, wv, Z.all_items());
     EXPECT_VERIFY(T, batchlas::verify::Check::eigen_residual, n, resid)
         << what << " n=" << n;
 }
@@ -108,13 +108,13 @@ TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
-            ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+            ctx, A0, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
 
-        syev_two_stage(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+        syev_two_stage(ctx, A0, w.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
-        test_utils::expect_eigenpairs<T>(ctx, Aref.view(), A0.view(), w, n, A0.view().all_items());
+        test_utils::expect_eigenpairs<T>(ctx, Aref, A0, w, n, A0.all_items());
     }
 }
 
@@ -143,9 +143,9 @@ TYPED_TEST(SyevTwoStageTest, AwkwardSizesStayAccurate) {
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_two_stage_buffer_size(
-            ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+            ctx, A0, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
 
-        syev_two_stage(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+        syev_two_stage(ctx, A0, w.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -174,8 +174,8 @@ TYPED_TEST(SyevTwoStageTest, BlockedBaselineResidual) {
 
         UnifiedVector<Real> w(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> ws(syev_blocked_buffer_size(
-            ctx, A0.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked(ctx, A0.view(), w.to_span(), JobType::EigenVectors,
+            ctx, A0, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked(ctx, A0, w.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws.to_span(), StedcParams<Real>{})
             .wait();
 
@@ -213,21 +213,21 @@ TYPED_TEST(SyevTwoStageTest, DISABLED_EigenvaluesOnlyMatchesBlocked) {
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
 
         UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size(
-            ctx, A1.view(), JobType::NoEigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_two_stage(ctx, A1.view(), w1.to_span(), JobType::NoEigenVectors,
+            ctx, A1, JobType::NoEigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_two_stage(ctx, A1, w1.to_span(), JobType::NoEigenVectors,
                              Uplo::Lower, ws1.to_span(), StedcParams<Real>{})
             .wait();
 
         UnifiedVector<std::byte> ws2(syev_blocked_buffer_size(
-            ctx, A2.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
+            ctx, A2, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked(ctx, A2, w2.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
         // Both paths against LAPACKE of the input (A0, copied before either solver ran).
         SCOPED_TRACE("n=" + std::to_string(n));
-        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w1, n, /*sorted_copy=*/true, A0.view().all_items());
-        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w2, n, /*sorted_copy=*/true, A0.view().all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0, w1, n, /*sorted_copy=*/true, A0.all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0, w2, n, /*sorted_copy=*/true, A0.all_items());
     }
 }
 
@@ -253,21 +253,21 @@ TYPED_TEST(SyevTwoStageTest, SpectrumMatchesBlocked) {
         UnifiedVector<Real> w2(static_cast<size_t>(n) * batch);
 
         UnifiedVector<std::byte> ws1(syev_two_stage_buffer_size(
-            ctx, A1.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_two_stage(ctx, A1.view(), w1.to_span(), JobType::EigenVectors,
+            ctx, A1, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_two_stage(ctx, A1, w1.to_span(), JobType::EigenVectors,
                              Uplo::Lower, ws1.to_span(), StedcParams<Real>{})
             .wait();
 
         UnifiedVector<std::byte> ws2(syev_blocked_buffer_size(
-            ctx, A2.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked(ctx, A2.view(), w2.to_span(), JobType::EigenVectors,
+            ctx, A2, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked(ctx, A2, w2.to_span(), JobType::EigenVectors,
                            Uplo::Lower, ws2.to_span(), StedcParams<Real>{})
             .wait();
 
         // Both paths against LAPACKE of the input (A0, copied before either solver ran).
         SCOPED_TRACE("n=" + std::to_string(n));
-        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w1, n, /*sorted_copy=*/true, A0.view().all_items());
-        test_utils::expect_eigenvalues_match_lapacke<T>(A0.view(), w2, n, /*sorted_copy=*/true, A0.view().all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0, w1, n, /*sorted_copy=*/true, A0.all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(A0, w2, n, /*sorted_copy=*/true, A0.all_items());
     }
 }
 #endif
@@ -309,8 +309,8 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
         Matrix<T, MatrixFormat::Dense> ab(kd + 1, n, batch);
         Vector<T> tau1(std::max(1, n - kd), batch);
         UnifiedVector<std::byte> ws1(sytrd_sy2sb_buffer_size(
-            ctx, A.view(), ab.view(), tau1.view(), Uplo::Lower, kd));
-        sytrd_sy2sb(ctx, A.view(), ab.view(), tau1.view(), Uplo::Lower, kd, ws1.to_span())
+            ctx, A, ab, tau1, Uplo::Lower, kd));
+        sytrd_sy2sb(ctx, A, ab, tau1, Uplo::Lower, kd, ws1.to_span())
             .wait();
 
         // Expand the band back to a dense Hermitian matrix.
@@ -341,13 +341,13 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
 
         UnifiedVector<Real> wB(static_cast<size_t>(n) * batch);
         UnifiedVector<std::byte> wsB(syev_blocked_buffer_size(
-            ctx, Bdense.view(), JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
-        syev_blocked(ctx, Bdense.view(), wB.to_span(), JobType::EigenVectors,
+            ctx, Bdense, JobType::EigenVectors, Uplo::Lower, StedcParams<Real>{}));
+        syev_blocked(ctx, Bdense, wB.to_span(), JobType::EigenVectors,
                            Uplo::Lower, wsB.to_span(), StedcParams<Real>{}).wait();
 
         // The band's spectrum (through syev_blocked) against LAPACKE of the untouched input.
         SCOPED_TRACE("n=" + std::to_string(n) + " kd=" + std::to_string(kd));
-        test_utils::expect_eigenvalues_match_lapacke<T>(Acopy.view(), wB, n, /*sorted_copy=*/true, Acopy.view().all_items());
+        test_utils::expect_eigenvalues_match_lapacke<T>(Acopy, wB, n, /*sorted_copy=*/true, Acopy.all_items());
       }
     }
 }

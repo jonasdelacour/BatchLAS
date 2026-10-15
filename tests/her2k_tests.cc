@@ -102,7 +102,7 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
                         }
                         this->ctx->wait();
 
-                        her2k(*(this->ctx), A.view(), B.view(), C.view(),
+                        her2k(*(this->ctx), A, B, C,
                               {.alpha = scaling.alpha,
                                .beta = scaling.beta,
                                .uplo = uplo,
@@ -111,9 +111,9 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
                         // C0's diagonal is read as real, as BLAS does.
                         EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
                                       MV::rank2k_backward_error(
-                                          *(this->ctx), A.view(), B.view(), trans, C0.view(), C.view(), uplo,
+                                          *(this->ctx), A, B, trans, C0, C, uplo,
                                           MV::up(scaling.alpha),
-                                          MV::up(T(scaling.beta)), true, C.view().all_items()))
+                                          MV::up(T(scaling.beta)), true, C.all_items()))
                             << "her2k read storage it must not touch: " << route << " route, n=" << n << ", k=" << k
                             << ", trans=" << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans")
                             << ", uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper") << ", beta=" << scaling.beta;
@@ -181,22 +181,22 @@ TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
 
         Matrix<T, MatrixFormat::Dense> C_lower(n, n, batch);
         Matrix<T, MatrixFormat::Dense> C_upper(n, n, batch);
-        (void)C_lower.view().fill_zeros(*(this->ctx));
-        (void)C_upper.view().fill_zeros(*(this->ctx));
+        (void)C_lower.fill_zeros(*(this->ctx));
+        (void)C_upper.fill_zeros(*(this->ctx));
         this->ctx->wait();
 
-        her2k(*(this->ctx), A.view(), B.view(), C_lower.view(),
+        her2k(*(this->ctx), A, B, C_lower,
               {.alpha = alpha, .uplo = Uplo::Lower, .trans = trans}).wait();
-        her2k(*(this->ctx), A.view(), B.view(), C_upper.view(),
+        her2k(*(this->ctx), A, B, C_upper,
               {.alpha = alpha, .uplo = Uplo::Upper, .trans = trans}).wait();
 
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             const auto& C = uplo == Uplo::Lower ? C_lower : C_upper;
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
                           MV::rank2k_backward_error(
-                              *(this->ctx), A.view(), B.view(), trans, C.view(), C.view(), uplo,
+                              *(this->ctx), A, B, trans, C, C, uplo,
                               MV::up(alpha), MV::up(T(0)), true,
-                              C.view().all_items()))
+                              C.all_items()))
                 << "her2k's " << (uplo == Uplo::Lower ? "lower" : "upper") << " triangle: trans="
                 << (trans == Transpose::NoTrans ? "NoTrans" : "ConjTrans");
         }
@@ -229,13 +229,13 @@ TYPED_TEST(Her2kTest, OptionStructMatchesPositional) {
     }
     this->ctx->wait();
 
-    (void)her2k(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
-    (void)her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
+    (void)her2k(*(this->ctx), A, B, C_defaults, {});
+    (void)her2k<Ba, T>(*(this->ctx), A, B, C_defaults_pos,
                  T(1), real_t(0), Uplo::Lower, Transpose::NoTrans);
 
-    (void)her2k(*(this->ctx), A.view(), B.view(), C_named.view(),
+    (void)her2k(*(this->ctx), A, B, C_named,
           {.alpha = T(1.5, 0.25), .uplo = Uplo::Upper});
-    (void)her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
+    (void)her2k<Ba, T>(*(this->ctx), A, B, C_named_pos,
                  T(1.5, 0.25), real_t(0), Uplo::Upper, Transpose::NoTrans);
     this->ctx->wait();
 

@@ -65,7 +65,7 @@ static void BM_SYEV_CTA(minibench::State& state) {
     SteqrParams<T> params;
     params.cta_wg_size_multiplier = wg_mult;
 
-    const size_t ws_size = syev_cta_buffer_size(*q, A.view(), jobz, params);
+    const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -102,7 +102,7 @@ static void BM_SYEV_NETLIB_REF(minibench::State& state) {
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    const size_t ws_size = syev_buffer_size(*q, A.view(), W.to_span(), jobz, uplo);
+    const size_t ws_size = syev_buffer_size(*q, A, W.to_span(), jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,

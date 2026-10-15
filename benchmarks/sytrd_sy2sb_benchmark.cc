@@ -58,8 +58,8 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
     auto q = std::make_shared<Queue>(device_str, /*in_order=*/in_order);
 
     const size_t ws_bytes = sytrd_sy2sb_buffer_size(*q,
-                                                         A.view(),
-                                                         AB.view(),
+                                                         A,
+                                                         AB,
                                                          VectorView<T>(tau),
                                                          uplo,
                                                          kd);

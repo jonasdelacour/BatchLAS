@@ -204,16 +204,16 @@ int run_accuracy(const Options& opt) {
                 cur_batch,
                 opt.seed + static_cast<unsigned int>(sample_id));
             q->wait();
-            accuracy::share_inputs(opt.inputs, sample_id, dense_A.view());
+            accuracy::share_inputs(opt.inputs, sample_id, dense_A);
 
-            const auto conds = cond<B>(*q, dense_A.view(), NormType::Spectral);
+            const auto conds = cond<B>(*q, dense_A, NormType::Spectral);
             q->wait();
-            const auto in_hash = accuracy::input_hashes(dense_A.view());
+            const auto in_hash = accuracy::input_hashes(dense_A);
 
             auto run_ortho_case = [&](OrthoAlgorithm algo, const char* impl_name) {
                 auto Q = dense_A.clone();
-                UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q.view(), Transpose::NoTrans, algo));
-                (void)ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), algo);
+                UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q, Transpose::NoTrans, algo));
+                (void)ortho<B, Real>(*q, Q, Transpose::NoTrans, ws.to_span(), algo);
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, Q);
                 emit_rows(sample_id, target_log10s, conds, ortho_vals, impl_name, cur_batch, in_hash);
@@ -231,8 +231,8 @@ int run_accuracy(const Options& opt) {
                 auto A = dense_A.clone();
                 UnifiedVector<Real> eigvals(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
                 UnifiedVector<std::byte> ws(
-                    syev_buffer_size<B, Real>(*q, A.view(), eigvals.to_span(), JobType::EigenVectors, Uplo::Lower));
-                (void)syev<B>(*q, A.view(), eigvals.to_span(), {}, ws.to_span());
+                    syev_buffer_size<B, Real>(*q, A, eigvals.to_span(), JobType::EigenVectors, Uplo::Lower));
+                (void)syev<B>(*q, A, eigvals.to_span(), {}, ws.to_span());
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, A);
                 emit_rows(sample_id, target_log10s, conds, ortho_vals, "syev", cur_batch, in_hash);
@@ -249,7 +249,7 @@ int run_accuracy(const Options& opt) {
                 if (run_steqr) {
                     Vector<Real> d_work(n, Real(0), cur_batch);
                     Vector<Real> e_work(std::max(0, n - 1), Real(0), cur_batch);
-                    extract_tridiagonal(*q, dense_A.view(), d_work, e_work);
+                    extract_tridiagonal(*q, dense_A, d_work, e_work);
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     UnifiedVector<std::byte> ws(
@@ -270,7 +270,7 @@ int run_accuracy(const Options& opt) {
                 if (run_steqr_cta) {
                     Vector<Real> d_work(n, Real(0), cur_batch);
                     Vector<Real> e_work(std::max(0, n - 1), Real(0), cur_batch);
-                    extract_tridiagonal(*q, dense_A.view(), d_work, e_work);
+                    extract_tridiagonal(*q, dense_A, d_work, e_work);
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     steqr_params.cta_update_scheme = opt.scheme;
@@ -293,7 +293,7 @@ int run_accuracy(const Options& opt) {
                 if (run_stedc) {
                     Vector<Real> d_work(n, Real(0), cur_batch);
                     Vector<Real> e_work(std::max(0, n - 1), Real(0), cur_batch);
-                    extract_tridiagonal(*q, dense_A.view(), d_work, e_work);
+                    extract_tridiagonal(*q, dense_A, d_work, e_work);
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     StedcParams<Real> stedc_params{};
