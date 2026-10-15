@@ -1,7 +1,6 @@
 // Every spmm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-spmm. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct driver, never assumed from the pin being accepted.
-// Ports the RouteSpmm.* cases of route_vocabulary_tests that still describe behaviour.
 #include <gtest/gtest.h>
 #include <batchlas/verify/tolerance.hh>
 
@@ -337,7 +336,7 @@ protected:
 
 TYPED_TEST_SUITE(SpmmCandidates, Types);
 
-// §8.1 / RouteSpmm.AllNineTransposeCombinationsSupported: each candidate on all nine (transA,
+// §8.1: each candidate on all nine (transA,
 // transB) spellings, rectangular both ways, nrhs straddling the gather's 2-column block, distinct
 // per-item patterns with heterogeneous nnz, complex alpha/beta, beta != 0.
 TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
@@ -440,7 +439,7 @@ TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
             }
 }
 
-// RouteSpmm.ZeroExtentsAreSupportedNegativeAreNot, ported: m, k or nrhs 0 is a legal call that
+// An m, k or nrhs of 0 is a legal call that
 // every candidate accepts (Direct quick-returns on the host); C stays C = beta C where it exists.
 TYPED_TEST(SpmmCandidates, ZeroExtentsAreAccepted) {
     using T = typename TestFixture::T;
@@ -549,7 +548,7 @@ TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
             }
 }
 
-// RouteSpmm.HeterogeneousBatchRefused, ported: a heterogeneous B or C has no native route (one
+// A heterogeneous B or C has no native route (one
 // launch has one ld/stride per dense operand), nor a vendor route (no vendor reads per-item
 // dense extents). Auto finds no runnable kernel; vendor-free, NoRouteError.
 TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
@@ -585,8 +584,8 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
     else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
-// R6: a spelling that names nothing compiled throws instead of meaning Auto (RouteSpmm's
-// SilentPinFallThrough is now an error: `cta` and `blocked` have no spmm body).
+// R6: a spelling that names nothing compiled throws instead of meaning Auto (`cta` and
+// `blocked` have no spmm body).
 TYPED_TEST(SpmmCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "cta", "blocked", "native:cta", "direct:1", "native:vendor", "gather",
@@ -602,9 +601,9 @@ TYPED_TEST(SpmmCandidates, UnknownPinsThrow) {
     EXPECT_THROW(this->run(p), std::invalid_argument) << "an environment typo must throw, not mean Auto";
 }
 
-// §5.3 / RouteSpmm.BatchlasSpmmRouteIsActuallyRead and ForcedNativeStillReachesTheRefusedScatter:
+// §5.3:
 // spellings (case-folded) and class words via ScopedPin and the environment, on a transposed A
-// (outside the old preferred window) so `native` must reach the scatter.
+// (outside the transcribed preferred window) so `native` must reach the scatter.
 TYPED_TEST(SpmmCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     for (Transpose ta : {Transpose::NoTrans, Transpose::ConjTrans}) {
@@ -674,8 +673,8 @@ TYPED_TEST(SpmmCandidates, ScopedPinBeatsTheEnvironment) {
     expect_correct(*this->ctx, r, "outer direct");
 }
 
-// Auto against the shipped table of this device (shipped_table_pick.hh; RouteSpmm's Preferred*
-// and AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot, ported): every trans pair at grid
+// Auto against the shipped table of this device (shipped_table_pick.hh): every trans
+// pair at grid
 // and off-grid sizes, and on the CPU queue its own cpu table. Direct everywhere once the vendor is
 // gone.
 TYPED_TEST(SpmmCandidates, AutoReadsTheShippedTables) {
@@ -753,7 +752,7 @@ TYPED_TEST(SpmmCandidates, AutoReadsEveryKeyField) {
 }
 
 // The trace line prints key_of itself: m is A.rows as stored (not the output extent), ConjTrans
-// prints as T (RouteSpmm.OutRowsAndRedRowsSwapWithTransA: the key never spells out_rows).
+// prints as T (the key never spells out_rows).
 TYPED_TEST(SpmmCandidates, TraceKeyIsKeyOf) {
     using T = typename TestFixture::T;
     const Pin pin("spmm", C{sp::Direct{}});
@@ -768,7 +767,7 @@ TYPED_TEST(SpmmCandidates, TraceKeyIsKeyOf) {
     }
 }
 
-// RouteSpmm.NoGpuGateOnDirect, ported: on a CPU queue Direct runs all nine spellings, and Auto
+// On a CPU queue Direct runs all nine spellings, and Auto
 // on a NoTrans CPU spmm is Direct even with netlib present.
 TYPED_TEST(SpmmCandidates, DirectHasNoGpuGate) {
     using T = typename TestFixture::T;
@@ -846,7 +845,7 @@ TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
 // The sm_89 and cpu transcribed rows, read with Table::nearest directly so every build checks
 // them: the old clause at grid and off-grid sizes (no size term, so any size reads the same).
 // sm_120 is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
+TEST(SpmmTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     for (const char* dev : {"sm_89", "cpu"})
         for (const char* dtype : {"float", "double", "cfloat", "cdouble"})
@@ -861,7 +860,7 @@ TEST(SpmmTranscribedTable, RowsHoldTheOldPreference) {
                         const select::Key key{{"transA", ta}, {"transB", tb}, {"m", m}, {"nrhs", nrhs}, {"batch", batch}};
                         const select::TableRow* row = t.nearest(key);
                         ASSERT_NE(row, nullptr) << t.file;
-                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                         if (held.skip(row->timed)) continue;
                         const std::string what = t.file + ":" + std::to_string(row->line);
                         const bool window = std::string(ta) == "N" && !(std::string(dtype) == "cfloat" && std::string(tb) == "T");

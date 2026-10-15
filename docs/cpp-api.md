@@ -46,8 +46,8 @@ numerical surface, plus `Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and 
 - **A clang-based SYCL compiler, clang 16 or newer.** Developed with intel/llvm DPC++ built with
   `--cuda` at `/opt/dpcpp-cuda`; substitute your prefix. Build the library and every consumer with
   the same compiler, or the link fails with undefined references to the constrained entry points.
-- **LAPACKE and CBLAS** for the host backend (`BATCHLAS_ENABLE_NETLIB`, on by default; configure
-  warns and builds without it when they are missing).
+- **LAPACKE and CBLAS** for the host backend (configure warns and builds without it when they are
+  missing).
 - **The CUDA toolkit** whenever the CUDA backend is on, which `AUTO` does as soon as the SYCL
   runtime exposes a CUDA device.
 - **CMake 3.17+** for BatchLAS, 3.21+ for a consuming project.
@@ -64,7 +64,7 @@ cmake --install build --prefix "$HOME/inst"   # <prefix> in the consumer command
 
 Options worth knowing: `BATCHLAS_ENABLE_CUDA` (`AUTO` default; `ON` makes configure fail when no
 CUDA device is exposed), `BATCHLAS_NVIDIA_ARCH` (detected; pass it only when cross-building),
-`BATCHLAS_ENABLE_NETLIB` (`ON`), `BATCHLAS_ENABLE_ROCM` (`OFF`), `BATCHLAS_BUILD_TESTS`,
+`BATCHLAS_ENABLE_VENDOR_BLAS` (`ON`; `OFF` is the vendor-free build), `BATCHLAS_ENABLE_ROCM` (`OFF`), `BATCHLAS_BUILD_TESTS`,
 `BATCHLAS_BUILD_BENCHMARKS`, `BATCHLAS_BUILD_PYTHON`, and `BATCHLAS_ALLOW_UNSAFE_ENV` (`OFF`; see
 [Configuration](#configuration)). `CMakePresets.json` has `dev` and `dev-tests` presets.
 
@@ -432,7 +432,7 @@ auto Z = Matrix<float>::Zeros(n, n, batch);
 
 Other factories: `RandomTriangular`, `Ones`, `Diagonal`, `Triangular`, `TriDiagToeplitz`. To fill a
 matrix you own, the `fill_*` family on `MatrixView` writes in place and returns an `Event`
-(`fill`, `fill_zeros`, `fill_ones`, `fill_identity`, `fill_diagonal`, `fill_random`, ...; group
+(`fill`, `fill_zeros`, `fill_identity`, `fill_diagonal`, `fill_random`, ...; group
 @ref api_matrix). Pass your own queue: a default-constructed `Queue` builds a fresh one on
 `Device::default_device()`, which targets the wrong device on a multi-GPU box.
 

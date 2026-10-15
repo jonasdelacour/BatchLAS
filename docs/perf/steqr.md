@@ -104,7 +104,7 @@ harness.
 |---|---|---|
 | Warp chase at `P < 32` (native settle, warp vote, padded chase) | 0.72-0.93x float, 0.94-1.0x double; padding adds about ten selects per rotation | Rejected |
 | Lockstep solver on NVPTX (every phase voted, padded chase) | float n=4 0.69x, n=8 0.81x, n=12 0.78x, n=16 0.78x | Rejected |
-| NVPTX convergence fast path (`BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH`, `src/extensions/sg_partition/backend_nvptx.hh`) | Slower than the shared check in collective-dense CTA solvers; off by default | Rejected |
+| NVPTX convergence fast path (`__nvvm_activemask` check in `backend_nvptx.hh`) | Slower than the shared check in collective-dense CTA solvers | Rejected; code removed |
 | `redux.sync` with a per-chunk mask | ptxas serialises the warp; slower than the butterfly | Rejected; the backend uses `redux.sync` only with the full mask |
 
 > **Note:** For a non-immediate member mask, ptxas guards each basic block's collectives with

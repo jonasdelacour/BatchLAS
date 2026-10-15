@@ -197,10 +197,6 @@ struct SelectionSettings {
     /// request and to a configured ILU(k) factor.
     EnvValue syevx_preconditioner{};
 
-    /// `BATCHLAS_SYEVX_BOUNDS_LEGACY`: reverts to the previous spectral-bounds computation.
-    /// Parsed with `atoi != 0`, so `true`, `on` and `yes` are all false.
-    EnvValue syevx_bounds_legacy{};
-
     /// `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO`: derive the Chebyshev filter degree automatically.
     /// Off by default because it wins only at batch 1. Parsed with `atoi != 0`.
     // evidence: docs/perf/syevx.md#syevx-automatic-chebyshev-filter-degree

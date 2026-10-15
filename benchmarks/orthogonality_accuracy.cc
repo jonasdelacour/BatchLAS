@@ -27,7 +27,6 @@ namespace {
 using accuracy::extract_tridiagonal;
 using accuracy::orthogonality_residuals;
 using accuracy::parse_shift_strategy;
-using accuracy::starts_with;
 using accuracy::to_lower;
 
 struct Options {
@@ -58,11 +57,11 @@ Options parse_args(int argc, char** argv) {
             return "";
         };
 
-        if (starts_with(arg, "--inputs")) {
+        if (arg.starts_with("--inputs")) {
             opt.inputs = get_value(arg);
-        } else if (starts_with(arg, "--impl")) {
+        } else if (arg.starts_with("--impl")) {
             opt.impl = to_lower(get_value(arg));
-        } else if (starts_with(arg, "--scheme")) {
+        } else if (arg.starts_with("--scheme")) {
             const auto val = to_lower(get_value(arg));
             if (val == "pg") {
                 opt.scheme = SteqrUpdateScheme::PG;
@@ -71,27 +70,27 @@ Options parse_args(int argc, char** argv) {
             } else {
                 throw std::invalid_argument("Invalid --scheme value (use pg or exp)");
             }
-        } else if (starts_with(arg, "--backend")) {
+        } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);
-        } else if (starts_with(arg, "--type")) {
+        } else if (arg.starts_with("--type")) {
             opt.dtype = get_value(arg);
-        } else if (starts_with(arg, "--n")) {
+        } else if (arg.starts_with("--n")) {
             opt.n = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--batch")) {
+        } else if (arg.starts_with("--batch")) {
             opt.batch = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--samples")) {
+        } else if (arg.starts_with("--samples")) {
             opt.samples = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--log10-cond-min")) {
+        } else if (arg.starts_with("--log10-cond-min")) {
             opt.log10_cond_min = std::stod(get_value(arg));
-        } else if (starts_with(arg, "--log10-cond-max")) {
+        } else if (arg.starts_with("--log10-cond-max")) {
             opt.log10_cond_max = std::stod(get_value(arg));
-        } else if (starts_with(arg, "--seed")) {
+        } else if (arg.starts_with("--seed")) {
             opt.seed = static_cast<unsigned int>(std::stoul(get_value(arg)));
-        } else if (starts_with(arg, "--max-sweeps")) {
+        } else if (arg.starts_with("--max-sweeps")) {
             opt.max_sweeps = static_cast<size_t>(std::stoul(get_value(arg)));
-        } else if (starts_with(arg, "--cta-shift")) {
+        } else if (arg.starts_with("--cta-shift")) {
             opt.cta_shift = get_value(arg);
-        } else if (starts_with(arg, "--output")) {
+        } else if (arg.starts_with("--output")) {
             opt.output = get_value(arg);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Orthogonality accuracy sampler\n\n"

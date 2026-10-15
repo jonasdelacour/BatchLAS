@@ -101,17 +101,6 @@ std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
     return out;
 }
 
-// A coverage `reached` row (chosen_origin, chosen_algo) -> a pin spelling for this op.
-// Flat-selection rows carry the spelling; a pre-flat-selection binary (--old-csv) wrote
-// native:<algo> or vendor:auto, and its bare `lpanel` is the only algo that is not a spelling.
-template <class Choice>
-std::string normalize_route(const std::string& origin, const std::string& algo) {
-    if (origin == "vendor") return "vendor";
-    const std::string text = algo == "lpanel" ? "lpanel:panel=8" : algo;
-    if (auto c = select::parse<Choice>(text)) return select::to_string(*c);
-    return origin + ":" + algo;
-}
-
 // The arms of one cell in one process: probe, warm-up, timed runs and verification, shared by
 // the fixed-rep protocol (run_arms) and the race (run_race).
 template <class Choice, class Problem>

@@ -96,7 +96,7 @@ With the vendor present, `cta` ranks first only for `complex<double>`, `transA !
 can run. Without a vendor, `cta` takes every transposed GPU call.
 
 The band is on `red_len` (`n` under NoTrans, `m` otherwise). A window written on `out_len` tests the
-wrong extent and inverts. `tests/gemv_candidates_tests.cc` (`GemvTranscribedTable.RowsHoldTheOldPreference`)
+wrong extent and inverts. `tests/gemv_candidates_tests.cc` (`GemvTranscribedTable.RowsHoldTheTranscribedPreference`)
 checks the rows against the old preference.
 
 ### The sub-route gates

@@ -90,10 +90,6 @@ struct AggregateStats {
     int win_count = 0;
 };
 
-bool starts_with(const std::string& s, const std::string& prefix) {
-    return s.rfind(prefix, 0) == 0;
-}
-
 template <typename T>
 std::vector<T> parse_csv_list(const std::string& text) {
     std::vector<T> values;
@@ -126,29 +122,29 @@ Options parse_args(int argc, char** argv) {
             return "";
         };
 
-        if (starts_with(arg, "--n")) {
+        if (arg.starts_with("--n")) {
             opt.n = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--batch")) {
+        } else if (arg.starts_with("--batch")) {
             opt.batch = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--neigs")) {
+        } else if (arg.starts_with("--neigs")) {
             opt.neigs = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--extra-directions")) {
+        } else if (arg.starts_with("--extra-directions")) {
             opt.extra_directions = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--iterations")) {
+        } else if (arg.starts_with("--iterations")) {
             opt.iterations = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--samples-per-bucket")) {
+        } else if (arg.starts_with("--samples-per-bucket")) {
             opt.samples_per_bucket = std::stoi(get_value(arg));
-        } else if (starts_with(arg, "--tolerance")) {
+        } else if (arg.starts_with("--tolerance")) {
             opt.tolerance = std::stof(get_value(arg));
-        } else if (starts_with(arg, "--seed")) {
+        } else if (arg.starts_with("--seed")) {
             opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
-        } else if (starts_with(arg, "--densities")) {
+        } else if (arg.starts_with("--densities")) {
             opt.densities = get_value(arg);
-        } else if (starts_with(arg, "--diagonal-boosts")) {
+        } else if (arg.starts_with("--diagonal-boosts")) {
             opt.diagonal_boosts = get_value(arg);
-        } else if (starts_with(arg, "--levels")) {
+        } else if (arg.starts_with("--levels")) {
             opt.levels = get_value(arg);
-        } else if (starts_with(arg, "--output-prefix")) {
+        } else if (arg.starts_with("--output-prefix")) {
             opt.output_prefix = get_value(arg);
         } else if (arg == "--help" || arg == "-h") {
             std::cout

@@ -6,9 +6,6 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/settings.hh>
 #include <batchlas/util/sycl-span.hh>
-#ifndef DEVICE_CAST
-    #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
-#endif
 
 namespace {
 class QueueGetEventNoopKernel;

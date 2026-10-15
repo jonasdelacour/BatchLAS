@@ -1,7 +1,6 @@
 // Every getri candidate, pinned: docs/design/flat-kernel-selection.md §8. The limit oracle is the
 // drivers' own checks; which kernel ran is read back from the select trace or a bit-for-bit
-// comparison with the direct driver, never assumed from the pin being accepted. The old
-// RouteGetri.* cases of route_vocabulary_tests and getrf_tests' getri route readbacks live here.
+// comparison with the direct driver, never assumed from the pin being accepted.
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
@@ -60,7 +59,7 @@ bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
 
-// The old router's preference (route_getri.hh at 424a45bc, the transcribed commit): Blocked for
+// The transcribed preference (route_getri.hh at 424a45bc, the transcribed commit): Blocked for
 // float from order 128 and cfloat from order 256, the vendor otherwise. Written from the deleted
 // predicate, not read from the tables, so a table that drifts from it goes red.
 template <typename T>
@@ -491,9 +490,9 @@ TYPED_TEST(GetriCandidates, UnknownPinsThrow) {
         << "a typo in the environment must be reported, not silently Auto";
 }
 
-// The named can_run-false cases (RouteGetri.CorrectnessGatesIncludeTheOnesInheritedFromTrsm,
-// ported): order 0 and a non-square A, each with its message (batch 0 returns before selection);
-// batch 1 and 2, n = 32 at a saturating batch and a huge order are NOT gates.
+// The named can_run-false cases, the ones inherited from trsm included: order 0 and a non-square
+// A, each with its message (batch 0 returns before selection); batch 1 and 2, n = 32 at a
+// saturating batch and a huge order are NOT gates.
 TYPED_TEST(GetriCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -531,7 +530,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
-// RouteLuPivotFormat's getri half, ported: GPU backends pack 1-based int32 pivots into the int64
+// GPU backends pack 1-based int32 pivots into the int64
 // span and netlib writes genuine int64, so on a GPU queue a NETLIB getri must never take Blocked.
 // evidence: docs/perf/lu.md#lu-correctness-findings
 TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
@@ -563,8 +562,7 @@ TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
 }
 #endif
 
-// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment
-// (RouteGetri.BareOriginResolvesToASpecificAlgorithm and BatchlasGetriRouteIsActuallyRead).
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
 TYPED_TEST(GetriCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
@@ -624,8 +622,7 @@ TYPED_TEST(GetriCandidates, ScopedPinBeatsTheEnvironment) {
 
 // Auto against the shipped table of this device (shipped_table_pick.hh): both sides of each old
 // window edge, on and off the grid, at batch 2 and 3 (inverse_tests' extents, below the grid) and
-// 300. Vendor-free that is Blocked everywhere (RouteGetri.VendorFreeFallbackHandsOverTheNativeRoute
-// and getrf_tests' L12 getri readbacks, ported).
+// 300. Vendor-free that is Blocked everywhere.
 TYPED_TEST(GetriCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -679,7 +676,7 @@ TYPED_TEST(GetriCandidates, TraceLineShowsTheKey) {
     this->expect_inverted(p, line);
 }
 
-// RouteGetri.AbsentDriverIsUnsupported, ported as far as a build can show it: every type's
+// Every type's
 // driver is compiled here; with a table naming only the vendor, a vendor-free build takes the
 // last resort, Blocked, and a vendor build the vendor.
 TYPED_TEST(GetriCandidates, VendorFreeLastResortIsBlocked) {
@@ -701,7 +698,7 @@ TYPED_TEST(GetriCandidates, VendorFreeLastResortIsBlocked) {
 }
 
 // A pinned vendor getri reading a natively-written getrf factor, and the reverse: the pivot
-// contract across two independently pinned ops (RouteLuFamily's getri half, now with kernels).
+// contract across two independently pinned ops.
 TYPED_TEST(GetriCandidates, PinsAreIndependentOfGetrf) {
     if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor getri";
     const std::pair<const char*, C> pairs[] = {{"native", C{gi::Vendor{}}}, {"vendor", C{gi::Blocked{}}}};
@@ -787,7 +784,7 @@ TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteGetri's CPU case, ported: on a CPU queue Blocked cannot run, so its pin throws and Auto is
+// On a CPU queue Blocked cannot run, so its pin throws and Auto is
 // the vendor (netlib, with its genuine int64 pivots) or, without one, no route.
 template <typename Config>
 class GetriCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -861,7 +858,7 @@ TYPED_TEST(GetriVendor, AliasedAAndC) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
 // old preference, every dtype, at on-grid, edge and off-grid keys. sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
+TEST(GetriTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
@@ -873,7 +870,7 @@ TEST(GetriTranscribedTable, RowsHoldTheOldPreference) {
                 for (int batch : {1, 2, 3, 300, 100000}) {
                     const select::TableRow* row = t.nearest({{"n", n}, {"batch", batch}});
                     ASSERT_NE(row, nullptr) << t.file;
-                    // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                    // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                     if (held.skip(row->timed)) continue;
                     const std::string what = t.file + ":" + std::to_string(row->line) + " for n=" +
                                              std::to_string(n) + " batch=" + std::to_string(batch);

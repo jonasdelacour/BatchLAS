@@ -166,7 +166,7 @@ void launch_batched_matrix_tile_kernel_with_workspace(Queue& queue,
     });
 }
 
-MINI_BENCHMARK(device_blas_matrix_benchmark) {
+static void device_blas_matrix_benchmark(minibench::State& state) {
     const int n = state.range(0);
     const int k = state.range(1);
     const int batch = std::max(1, state.range(3) != 0 ? state.range(3) : state.range(2));

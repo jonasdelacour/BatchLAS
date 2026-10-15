@@ -53,7 +53,7 @@ coverage, self-hosted runner setup and retiring a ledger entry.
 ## Presets
 
 ```bash
-export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"   # the presets set no job count
+export CMAKE_BUILD_PARALLEL_LEVEL=8   # the presets set no job count; wider builds have OOM-killed
 cmake --preset dev
 cmake --build --preset dev
 ```
@@ -63,7 +63,7 @@ cmake --build --preset dev
 | `dev` | default `RelWithDebInfo` library |
 | `dev-tests` | library plus the full test suite |
 | `fast-dev` | library plus the smoke-test subset |
-| `benchmarks` | benchmarks and the tuner (`BATCHLAS_ENABLE_TUNING=ON`) |
+| `benchmarks` | benchmarks and the table tuner (`tools/tune`) |
 | `cuda` | `dev-tests` with `BATCHLAS_ENABLE_CUDA=AUTO` (not `ON`: without a `[cuda:gpu]` it still configures, CPU-only) and `BATCHLAS_ALLOW_UNSAFE_ENV=OFF`; the pre-push gate |
 | `dev-gpu` / `dev-gpu-tests` | drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`) |
 | `release` | `Release`, no tests or benchmarks, one shared library |
@@ -87,7 +87,7 @@ cmake -S . -B build \
   -DBATCHLAS_BUILD_TESTS=ON \
   -DBATCHLAS_BUILD_BENCHMARKS=OFF \
   -DBATCHLAS_BUILD_PYTHON=OFF
-cmake --build build -j"$(nproc)"
+cmake --build build -j8
 ```
 
 | option | meaning |
@@ -95,31 +95,22 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_BUILD_TESTS` | build unit tests |
 | `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables and `batchlas_tune` |
 | `BATCHLAS_BUILD_PYTHON` | build the Python package |
-| `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without a `[cuda:gpu]` in `sycl-ls`) or `OFF`. Boolean spellings are accepted (`1`/`TRUE`/`YES` mean `ON`, `0`/`FALSE`/`NO` mean `OFF`); an existing cache entry keeps its value |
-| `BATCHLAS_ENABLE_VENDOR_BLAS` | master switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS); the three CUDA libraries are all-or-nothing (a partial `BATCHLAS_ENABLE_CU*` set fails configure); `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)) |
-| `BATCHLAS_ENABLE_<LIB>` | per library, `<LIB>` one of `CUBLAS`, `CUSOLVER`, `CUSPARSE`, `ROCBLAS`, `ROCSOLVER`, `ROCSPARSE`, `LAPACKE`, `CBLAS`: allow it when present (default: `BATCHLAS_ENABLE_VENDOR_BLAS`) |
+| `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without an NVIDIA target, see "Device and toolkit detection") or `OFF`. Boolean spellings are accepted (`1`/`TRUE`/`YES` mean `ON`, `0`/`FALSE`/`NO` mean `OFF`); an existing cache entry keeps its value |
+| `BATCHLAS_ENABLE_VENDOR_BLAS` | the one switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS), re-read on every configure; `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)). The three CUDA libraries are all-or-nothing: a toolkit missing one fails configure |
 | `BATCHLAS_MONOLITHIC_LIBRARY` | one `libbatchlas.so` instead of the per-component libraries (default `OFF`; the `release` preset turns it on) |
 | `BATCHLAS_ALLOW_UNSAFE_ENV` | honour the `BATCHLAS_*` overrides that disable a safety check (`batchlas::Settings::unsafe`; default `OFF`, see "Presets") |
 | `BATCHLAS_DISABLE_CUDA_FTZ` | no flush-to-zero in CUDA device code (default `ON`) |
 | `BATCHLAS_KEEP_CUDA_INTERMEDIATES` | keep CUDA/SYCL device intermediates for PTX/SASS analysis (default `OFF`) |
 | `BATCHLAS_SANITIZER_FRIENDLY_DEBUG` | unwind-friendly debug flags for sanitizer runs (default `OFF`) |
-| `BATCHLAS_ENABLE_CPU_TESTS` | build the tests and benchmarks that need CPU SYCL kernels (default `ON`) |
-| `BATCHLAS_NATIVE_CPU_DISABLE_VECZ` | disable vecz for the `native_cpu` target, a clang-crash workaround (default `ON`) |
-| `BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES` | compile-time local-memory cap of the device GEMM tiles; `0` (default) derives it per architecture |
-| `BATCHLAS_CHECK_BLAS_HEALTH` | configure-time dgemm health check of the host BLAS (default `ON`) |
 | `BATCHLAS_OPENBLAS_CORETYPE` | `OPENBLAS_CORETYPE` that ctest sets to avoid a broken OpenBLAS kernel; empty means none (set by the health check) |
 | `BATCHLAS_BUILD_DOCS` | add the `batchlas_docs` target (`scripts/build_docs.sh`) |
 | `BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS` | build the `device_blas_*` benchmarks (default `OFF`) |
-| `BATCHLAS_TUNE_BACKEND`, `BATCHLAS_TUNE_TYPE` | backend and type passed to the tuning benchmarks (defaults `CUDA`, `float`) |
-| `BATCHLAS_CUDA_DEVICE_LINE_INFO` | pass `--generate-line-info` to the NVPTX backend in Debug/RelWithDebInfo, for `ncu`/Nsight (default `OFF`; has failed CUDA JIT program builds) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
 | `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
-| `BATCHLAS_ENABLE_NETLIB` | enable the host netlib backend |
-| `BATCHLAS_ENABLE_TUNING` | enable tuning targets; for benchmark builds |
 | `BATCHLAS_CPU_TARGET` | SYCL CPU target: `auto`, `native_cpu`, `spir64_x86_64`, `none` |
 | `BATCHLAS_TEST_TARGET_SET` | `all` or `smoke` |
 | `BATCHLAS_AMD_ARCH` | override ROCm target architecture |
-| `BATCHLAS_NVIDIA_ARCH` | override CUDA target architecture |
+| `BATCHLAS_NVIDIA_ARCH` | empty (default): the detected NVIDIA GPUs; `sm_XX`: build that architecture instead (cross builds, no GPU needed). The old default `sm_50` is read as empty |
 | `BATCHLAS_USE_CCACHE` | cache compilations with ccache when on `PATH` or in `~/.local/bin` (default `ON`; your own `CMAKE_CXX_COMPILER_LAUNCHER` wins) |
 | `BATCHLAS_CCACHE_SHARE_ACROSS_TREES` | let sibling checkouts and worktrees share cache entries (default `ON`; turn off for source-level debugging) |
 | `BATCHLAS_CCACHE_MAXSIZE` | ccache size limit (default `20G`) |
@@ -135,6 +126,23 @@ cmake --build build -j"$(nproc)"
 | `BATCHLAS_MONOLITHIC_LIBRARY` | one shared library instead of the component libraries (the `release` shape). Required on macOS: ld64 rejects the components' cyclic undefined symbols |
 | `BATCHLAS_HIDDEN_VISIBILITY` | `-fvisibility=hidden` on the monolithic library (default `ON`; only with `BATCHLAS_MONOLITHIC_LIBRARY`). `OFF` lets the in-tree tests link against it, since they reach about 1,000 unexported internal symbols |
 | `BATCHLAS_ACPP_SLM_OPTIN` | AdaptiveCpp + CUDA: a launch interposer that opts kernels into more than 48 KiB of local memory (default `OFF`; [SYCL implementations](../design/sycl-implementations.md#sycl-impl-slm-budget)) |
+
+### Device and toolkit detection {#guide_build_detection}
+
+Configure needs only the compiler (`-DCMAKE_CXX_COMPILER=<dpcpp>/bin/clang++`, `icpx`, or
+`-DBATCHLAS_SYCL_IMPL=ACPP`); no `setvars.sh`, `LD_LIBRARY_PATH`, `CUDA_PATH` or `nvcc` on `PATH`.
+
+- DPC++ devices come from the `sycl-ls` next to the compiler, run with the compiler's `lib/` on the
+  loader path. If it lists no `[cuda:gpu]` but the toolchain ships `libur_adapter_cuda.so`,
+  `nvidia-smi` supplies the GPUs. AdaptiveCpp uses `acpp-info`, then `nvidia-smi`.
+- The CUDA toolkit is what `FindCUDAToolkit` finds (`CUDAToolkit_ROOT`, `$CUDA_PATH`, `nvcc` on
+  `PATH`, `/usr/local/cuda`). Failing that, AdaptiveCpp's own `default-cuda-path`
+  (`etc/AdaptiveCpp/acpp-cuda.json`), then the newest NVIDIA HPC SDK toolkit
+  (`/opt/nvidia/hpc_sdk/*/*/cuda/<version>`), cached as `CUDAToolkit_ROOT`.
+- Built and installed binaries carry an RPATH to the DPC++ runtime (`<compiler>/../lib`), the
+  vendor libraries they link and `$ORIGIN`, so they run without `LD_LIBRARY_PATH`.
+- A self-built `intel/llvm --cuda` has no CPU adapter: outside a oneAPI environment there is no CPU
+  device, and the tree is GPU-only (`No SYCL CPU device detected`).
 
 ## macOS: Apple GPU through AdaptiveCpp Metal
 

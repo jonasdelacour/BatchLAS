@@ -666,27 +666,6 @@ MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrienta
     }
 }
 
-template <typename T>
-template <typename BinaryOperatorOp>
-Event VectorView<T>::hadamard_product(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z, BinaryOperatorOp op) {
-    detail::require_device_fp64<T>(ctx, "VectorView::hadamard_product");
-    // Implementation of hadamard product
-    // z = a*x .* b*y
-    auto [global_size, local_size] = compute_nd_range_sizes(
-        z.size() * z.batch_size(), ctx.device(), KernelType::ELEMENTWISE);
-
-    return static_cast<EventImpl>(ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t global_id = item.get_global_id(0);
-        size_t total_work_items = item.get_global_range(0);
-        for (size_t idx = global_id; idx < x.size() * x.batch_size(); idx += total_work_items) {
-            size_t bid = idx / x.size();
-            size_t i = idx % x.size();
-            z(i, bid) = op(a * x(i, bid), b * y(i, bid));
-        }
-    }));
-}
-
-
 // Copy from another matrix view
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
@@ -2172,22 +2151,6 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
     }
 }
 
-template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M>
-    requires DenseMatrixFormat<M>
-MatrixView<T, MType> MatrixView<T, MType>::deep_copy(const MatrixView<T, MType>& other,
-                                                     T* data,
-                                                     T** data_ptrs) {
-    MatrixView<T, MType> result(data, other.rows_, other.cols_, other.ld_, other.stride_, other.batch_size_, data_ptrs);
-    Queue q(Device::default_device());
-    q -> memcpy(data, other.data_.data(), other.data_.size() * sizeof(T));
-    if (data_ptrs) {
-        q -> memcpy(data_ptrs, other.data_ptrs_.data(), other.data_ptrs_.size() * sizeof(T*));
-    }
-    q -> wait();
-    return result;
-}
-
 template <typename T, MatrixFormat MType> struct CopyKernel3D {};
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src) {
@@ -2679,18 +2642,6 @@ template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<d
 
 //----------------------------------------------------------------------
 
-
-//----------------------------------------------------------------------
-// Deep copy instantiations
-template MatrixView<float, MatrixFormat::Dense> MatrixView<float, MatrixFormat::Dense>::deep_copy(const MatrixView<float, MatrixFormat::Dense>&, float*, float**);
-template MatrixView<double, MatrixFormat::Dense> MatrixView<double, MatrixFormat::Dense>::deep_copy(const MatrixView<double, MatrixFormat::Dense>&, double*, double**);
-template MatrixView<std::complex<float>, MatrixFormat::Dense> MatrixView<std::complex<float>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>*, std::complex<float>**);
-template MatrixView<std::complex<double>, MatrixFormat::Dense> MatrixView<std::complex<double>, MatrixFormat::Dense>::deep_copy(const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>*, std::complex<double>**);
-
-template Event VectorView<float>::hadamard_product<std::plus<float>>(const Queue&, float a, float b, const VectorView<float>&, const VectorView<float>&, const VectorView<float>&, std::plus<float>) ;
-template Event VectorView<double>::hadamard_product<std::plus<double>>(const Queue&, double a, double b, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, std::plus<double>) ;
-template Event VectorView<std::complex<float>>::hadamard_product<std::plus<std::complex<float>>>(const Queue&, std::complex<float> a, std::complex<float> b, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, const VectorView<std::complex<float>>&, std::plus<std::complex<float>>) ;
-template Event VectorView<std::complex<double>>::hadamard_product<std::plus<std::complex<double>>>(const Queue&, std::complex<double> a, std::complex<double> b, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, const VectorView<std::complex<double>>&, std::plus<std::complex<double>>) ;  
 
 // fill instantiations
 template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;

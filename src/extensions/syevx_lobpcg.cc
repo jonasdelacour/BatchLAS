@@ -183,7 +183,7 @@ ProjectedSyevPin projected_syev_pin(const batchlas::Queue& ctx,
                                     const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& M) {
     std::string source;
     if (B == batchlas::Backend::NETLIB || batchlas::select::detail::pin_text("syev", &source)) return std::nullopt;
-    if (!batchlas::blas::dispatch::detail::syev_supports_cta<T>(ctx, M)) return std::nullopt;
+    if (!batchlas::ops::syev::detail::syev_supports_cta<T>(ctx, M)) return std::nullopt;
     return ProjectedSyevPin(std::in_place, "syev", batchlas::ops::syev::CtaFused{});
 }
 
@@ -388,9 +388,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
         size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
-            const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_xtax_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_restart_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
             ws_projected = std::max(ws_projected,
                                     std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
@@ -545,7 +545,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         trace_wait("syevx: XtAX gemm done");
         trace("syevx: syev XtAX");
         if (prefer_vendor_projected_syev) {
-            (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            (void)ops::syev::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
             const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, XtAX);
             (void)syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
@@ -1104,7 +1104,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             }
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
-                (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                (void)ops::syev::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
                 const ProjectedSyevPin pin = projected_syev_pin<B, T>(ctx, StAS);
                 (void)syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
@@ -1301,9 +1301,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
 
                 // The opt-in names the vendor solver; Backend::SYCL has none, so it is ignored there.
                 if constexpr (B != Backend::NETLIB && B != Backend::SYCL) if (projected_vendor_opted_in()) {
-                    const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_xtax_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_restart_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     ws_projected = std::max(ws_projected,
                                             std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
                 }

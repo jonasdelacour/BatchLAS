@@ -480,7 +480,7 @@ namespace {
 // measurement-hygiene rule says produces overhead ratios, not algorithm ratios.
 //
 // Deliberately NOT a sweep: this exists to answer one yes/no question, and the
-// existing crossover map (benchmarks/syevx_crossover_rtx4090.csv) stays valid.
+// existing crossover map (docs/perf/syevx.md) stays valid.
 template <typename Benchmark>
 inline void SyevxRangePositionSizes(Benchmark* b) {
     for (int position : {0, 1, 2}) {

@@ -516,7 +516,7 @@ TYPED_TEST(PosvCandidates, CanRunEqualsLaunch) {
 }
 
 // A heterogeneous A or B (the other homogeneous) is refused before choose(), under Auto and
-// under every pin, with the old router's internal_error. Blocked's vendor children would
+// under every pin, with internal_error. Blocked's vendor children would
 // otherwise solve at the full storage order; the padding is nonzero and indefinite so such a
 // solve would be wrong, not merely harmless. The natives' own drivers refuse it as well.
 TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
@@ -863,9 +863,9 @@ TYPED_TEST(PosvCandidates, EmptyShapesThrowBeforeChoose) {
 }
 
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them:
-// the old router's window (float/double/cdouble to their tier ceiling, cfloat above 24 only at
+// the transcribed window (float/double/cdouble to their tier ceiling, cfloat above 24 only at
 // nrhs > 2) as the first entry, then cta, then blocked.
-TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
+TEST(PosvTranscribedTable, Sm89RowsHoldTheTranscribedWindow) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* uplo; int n, nrhs, batch; const char* first; std::size_t len; };
     const Row rows[] = {
@@ -883,7 +883,7 @@ TEST(PosvTranscribedTable, Sm89RowsHoldTheOldWindow) {
         const select::Key key{{"uplo", r.uplo}, {"n", r.n}, {"nrhs", r.nrhs}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
-        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
         if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         ASSERT_EQ(row->ranked.size(), r.len) << what;

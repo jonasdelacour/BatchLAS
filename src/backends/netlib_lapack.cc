@@ -22,7 +22,7 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
 
-#include "gemm_variant.hh"
+#include "gemm_heterogeneous.hh"
 #include "host_blas_health.hh"
 #include "../util/template-instantiations.hh"
 #include <batchlas/settings.hh>
@@ -126,7 +126,7 @@ namespace batchlas{
         auto C_view = C;
         // No double-precision guard here: the CSR path below is hand-written and
         // never calls into the host BLAS, so a broken dgemm cannot affect it.
-        return detail::submit_host_task(ctx, "netlib.spmm", [=] {
+        return ::batchlas::detail::submit_host_task(ctx, "netlib.spmm", [=] {
             if constexpr (MFormat == MatrixFormat::CSR) {
                 int batch = A_view.batch_size();
                 // alpha == 0 means A is NOT READ -- not its values, not its
@@ -227,7 +227,7 @@ namespace batchlas{
         auto A_view = descrA;
         auto B_view = descrB;
         auto C_view = descrC;
-        return detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
             if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
                 throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
             }
@@ -293,7 +293,7 @@ namespace batchlas{
         auto A_view = A;
         auto X_view = X;
         auto Y_view = Y;
-        return detail::submit_host_task<T>(ctx, "netlib.gemv", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.gemv", [=] {
             const int m = A_view.rows();
             const int n = A_view.cols();
             if (A_view.batch_size() > 1) {
@@ -354,7 +354,7 @@ namespace batchlas{
 
         auto A_view = descrA;
         auto B_view = descrB;
-        return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
             const int m = B_view.rows();
             const int n = B_view.cols();
             constexpr bool is_complex = std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
@@ -466,7 +466,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
             const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("SYMM", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?symm takes A's order from side, not as an argument
 
@@ -514,7 +514,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
             const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("HEMM", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?hemm takes A's order from side, not as an argument
 
@@ -561,7 +561,7 @@ namespace batchlas{
                Transpose transA) {
         auto A_view = A;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
             const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("HERK", A_view, C_view, transA, /*hermitian=*/true);
 
             // The two real slots have no callee because BLAS has no real
@@ -606,7 +606,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
             const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("HER2K", A_view, B_view, C_view, transA, /*hermitian=*/true);
 
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
@@ -649,7 +649,7 @@ namespace batchlas{
                Transpose transA) {
         auto A_view = A;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
             const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("SYRK", A_view, C_view, transA, /*hermitian=*/false);
 
             // The two complex slots have no callee because this overload is
@@ -693,7 +693,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
             const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("SYR2K", A_view, B_view, C_view, transA, /*hermitian=*/false);
 
             // The two complex slots have no callee because this overload is
@@ -741,7 +741,7 @@ namespace batchlas{
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
-        return detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
             const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("TRMM", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?trmm takes A's order from side, not as an argument
 
@@ -799,7 +799,7 @@ namespace batchlas{
         // its own -- so an empty span simply means "do not record".
         auto info = info_out;
         const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
-        return detail::submit_host_task<T>(ctx, "netlib.potrf", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.potrf", [=] {
             if (A_view.batch_size() == 1) {
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
@@ -842,7 +842,7 @@ namespace batchlas{
         // syev_vendor_buffer_size still returns 0 whether or not status is asked for.
         auto info = info_out;
         const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
-        return detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
             if (A_view.batch_size() == 1) {
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
@@ -891,7 +891,7 @@ namespace batchlas{
         // This path calls LAPACKE directly rather than going through
         // submit_host_task, so it has to run the double-precision health check
         // itself; otherwise a broken host dgemm is silent here.
-        detail::host_blas_double_guard<T>();
+        ::batchlas::detail::host_blas_double_guard<T>();
 
         if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
             throw batchlas::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
@@ -1040,7 +1040,7 @@ namespace batchlas{
         });
         Event conv_event(std::move(conv_impl));
         ctx.enqueue(conv_event);
-        return detail::submit_host_task<T>(ctx, "netlib.getrs", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrs", [=] {
             int nrhs = B_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
@@ -1096,7 +1096,7 @@ namespace batchlas{
         auto info = info_out;
         const bool want_info = info.size() >= static_cast<size_t>(batch);
 
-        Event getrf_event = detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
+        Event getrf_event = ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
             for (int i = 0; i < batch; ++i) {
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
@@ -1160,7 +1160,7 @@ namespace batchlas{
         const bool want_info = info.size() >= static_cast<size_t>(batch);
         // ld- and stride-aware; submit_host_task waits for it before the LAPACKE calls.
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C_view, A_view);
-        return detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
             auto piv_in = piv.as_span<int64_t>();
             for (int b = 0; b < batch; ++b) {
                 auto Cb = C_view[b];
@@ -1204,7 +1204,7 @@ namespace batchlas{
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
-        return detail::submit_host_task<T>(ctx, "netlib.geqrf", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.geqrf", [=] {
             int m = A_view.rows();
             int n = A_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
@@ -1246,7 +1246,7 @@ namespace batchlas{
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
-        return detail::submit_host_task<T>(ctx, "netlib.orgqr", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.orgqr", [=] {
             int m = A_view.rows();
             int n = A_view.cols();
             int k = std::min(m, n);
@@ -1293,7 +1293,7 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = C;
         auto tau_view = tau;
-        return detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
+        return ::batchlas::detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
             static_cast<void>(workspace);
             int m = C_view.rows();
             int n = C_view.cols();

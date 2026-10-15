@@ -81,8 +81,3 @@ TEST(MiniBenchCliTest, BackendTypeFiltering) {
     GTEST_SKIP() << "No supported backend compiled";
 #endif
 }
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

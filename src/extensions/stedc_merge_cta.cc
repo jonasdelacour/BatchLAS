@@ -7,7 +7,7 @@
 #include "../util/template-instantiations.hh"
 
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
 #include "../math-helpers.hh"
@@ -554,29 +554,6 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
 }
 
 template <typename T, typename Partition>
-inline ShiftedEvalResult<T, Partition> evaluate_shifted_partition(
-    const Partition& partition,
-    const VectorView<T>& d_prob,
-    const VectorView<T>& z_prob,
-    int32_t dd,
-    int32_t pole_index,
-    int32_t skip,   // -1 = full (no skip), 0 = skip pole_index, 1 = skip both
-    T origin,
-    T tau,
-    T rho_inv) {
-    const PartitionAdapter<Partition> adapter{partition};
-    const auto r = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, pole_index, skip,
-                                               origin, tau, rho_inv);
-    return {r.secular_value,
-            r.secular_derivative,
-            r.lower_sum,
-            r.lower_derivative,
-            r.upper_sum,
-            r.upper_derivative,
-            r.error_estimate};
-}
-
-template <typename T, typename Partition>
 inline RocRoot<T> solve_root_roc_partition(const Partition& partition,
                                   const VectorView<T>& d_prob,
                                   const VectorView<T>& z_prob,
@@ -597,31 +574,6 @@ inline RocRoot<T> solve_root_ext_partition(const Partition& partition,
                                   int32_t max_iter) {
     const PartitionAdapter<Partition> adapter{partition};
     return solve_root_ext_generic(adapter, d_prob, z_prob, dd, rho, max_iter);
-}
-
-template <typename T>
-inline ShiftedEvalResult<T, sycl::group<1>> evaluate_shifted_wg(
-    const sycl::group<1>& wg,
-    int32_t tid,
-    int32_t bdim,
-    const VectorView<T>& d_prob,
-    const VectorView<T>& z_prob,
-    int32_t dd,
-    int32_t pole_index,
-    int32_t skip,
-    T origin,
-    T tau,
-    T rho_inv) {
-    const WorkgroupAdapter adapter{wg, tid, bdim};
-    const auto r = evaluate_shifted_generic<T>(adapter, d_prob, z_prob, dd, pole_index, skip,
-                                               origin, tau, rho_inv);
-    return {r.secular_value,
-            r.secular_derivative,
-            r.lower_sum,
-            r.lower_derivative,
-            r.upper_sum,
-            r.upper_derivative,
-            r.error_estimate};
 }
 
 template <typename T>

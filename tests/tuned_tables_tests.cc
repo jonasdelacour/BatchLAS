@@ -221,7 +221,7 @@ std::vector<std::string> spelling_problems(const sel::Table& t) {
 }
 
 // §6.3: entries within 3% of the best lead, in candidate-list order; the rest ascend in time.
-// A transcribed row has no times: its order is the old router's, so it is not checked here.
+// A transcribed row has no times: its order is the transcribed one, so it is not checked here.
 // A ledger table keeps the tiered race's order (survivors, then the eliminated by median;
 // docs/design/tiered-tuning.md), whose medians come from different rep counts: not checked either.
 std::vector<std::string> tie_rule_problems(const sel::Table& t) {

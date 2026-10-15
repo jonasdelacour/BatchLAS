@@ -69,8 +69,7 @@ public:
     KernelBlock kernel_block(const std::string& repo) const;
     // Family -> repo-relative files (own section plus deps; common is kernel_block().common).
     virtual std::map<std::string, std::vector<std::string>> family_sources(const std::string& repo) const;
-    // A coverage `reached` route -> this op's pin spelling; then the child side: run one cell.
-    virtual std::string normalize_route(const std::string& origin, const std::string& algo) const = 0;
+    // The child side: run one cell.
     virtual std::vector<ArmOutcome> run_cell(const CellRequest& req) const = 0;
 
     // The coarse grid: the full lattice of axes(), unless overridden (gemm's demand-driven shapes).

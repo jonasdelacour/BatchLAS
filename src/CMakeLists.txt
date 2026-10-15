@@ -7,9 +7,9 @@ add_library(batchlas_core_obj OBJECT
     #util/sycl-util-impl.cc
 )
 add_library(batchlas_backends_obj OBJECT)
-# The vendor-independent public entry points: src/select/ and src/ops/<op>/. Compiled
+# Flat kernel selection: src/select/*.cc, the tuned-tables TU and every src/ops/<op>/<op>.cc. Compiled
 # unconditionally; the vendor calls inside are `if constexpr`-gated on the BATCHLAS_HAS_* macros.
-add_library(batchlas_dispatch_obj OBJECT)
+add_library(batchlas_selection_obj OBJECT)
 # These carry the VENDOR wrapper TUs, so they exist only when that family's TUs
 # are compiled: an OBJECT library with no sources is a hard CMake error. The CUDA
 # set is all-or-nothing (BATCHLAS_HAS_CUDA_VENDOR_TUS, BatchLASDependencies.cmake).
@@ -35,7 +35,7 @@ add_library(batchlas_sycl_obj OBJECT)
 set(BATCHLAS_OBJECT_LIBS
     batchlas_core_obj
     batchlas_backends_obj
-    batchlas_dispatch_obj
+    batchlas_selection_obj
     batchlas_extensions_eigen_obj
     batchlas_extensions_factorization_obj
     batchlas_extensions_tridiag_obj
@@ -149,33 +149,31 @@ add_custom_command(
     COMMENT "Embedding tuned selection tables"
     VERBATIM
 )
-target_sources(batchlas_dispatch_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
+target_sources(batchlas_selection_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
 # src/select. ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
-target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/orgqr/orgqr.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/ormqr/ormqr.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/getrf/getrf.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/getrs/getrs.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/getri/getri.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/gesv/gesv.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/gesvd/gesvd.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/spmm/spmm.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/syev/syev.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/symm/symm.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/level3/level3.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/syrk/syrk.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/syr2k/syr2k.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/trmm/trmm.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/gemv/gemv.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/geqrf/geqrf.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/orgqr/orgqr.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/ormqr/ormqr.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/getrf/getrf.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/getrs/getrs.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/getri/getri.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/symm/symm.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/level3/level3.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)
 
-if(BATCHLAS_ENABLE_SYCL)
-    add_subdirectory(sycl)
-endif()
+add_subdirectory(sycl)
 
 function(batchlas_configure_component target)
     set(options NO_CPU_TARGETS)
@@ -274,14 +272,14 @@ add_library(batchlas_core SHARED
 )
 batchlas_configure_component(batchlas_core)
 
-# batchlas_dispatch_obj rides in this component rather than getting a .so of its
+# batchlas_selection_obj rides in this component rather than getting a .so of its
 # own: it is the public face of exactly these entry points, and a separate
 # library would add an install target and an export entry for two dozen
 # forwarding functions. The separation that matters is at TU level -- the
-# definitions are no longer inside a vendor file -- not at library level.
+# definitions are not inside a vendor file -- not at library level.
 add_library(batchlas_backends SHARED
     $<TARGET_OBJECTS:batchlas_backends_obj>
-    $<TARGET_OBJECTS:batchlas_dispatch_obj>
+    $<TARGET_OBJECTS:batchlas_selection_obj>
 )
 batchlas_configure_component(batchlas_backends)
 
@@ -401,7 +399,6 @@ else()
     set(_batchlas_backends_rocm_lib batchlas_backends_rocm)
 endif()
 
-set(BATCHLAS_LINK_LIBRARIES)
 
 if(BATCHLAS_HAS_HOST_BACKEND)
     # PRIVATE: these are absolute -dev symlink paths
@@ -418,27 +415,9 @@ if(BATCHLAS_HAS_HOST_BACKEND)
     )
 endif()
 
-if(BATCHLAS_HAS_CUDA_BACKEND)
-    if(BATCHLAS_CUDA_ARCHITECTURES)
-        set_property(TARGET batchlas_backends_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-    endif()
-endif()
-
 # Everything below needs the CUDA VENDOR component, which only exists when at
 # least one CUDA math library was found.
 if(TARGET batchlas_backends_cuda_obj)
-    if(BATCHLAS_CUDA_ARCHITECTURES)
-        set_property(TARGET batchlas_backends_cuda_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-        set_property(TARGET ${_batchlas_backends_cuda_lib} PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
-    endif()
-
-    if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
-        target_compile_options(batchlas_backends_cuda_obj PRIVATE
-            $<$<COMPILE_LANGUAGE:CUDA>:--keep>
-            $<$<COMPILE_LANGUAGE:CUDA>:--keep-dir=${CMAKE_BINARY_DIR}/cuda-intermediates>
-        )
-    endif()
-
     # PRIVATE: PUBLIC exported CUDA::cudart/cublas/cusolver/cusparse into the
     # package interface, which forced find_dependency(CUDAToolkit REQUIRED) on
     # every consumer - including CPU-only teammates who cannot resolve it.
@@ -495,7 +474,7 @@ if(NOT BATCHLAS_MONOLITHIC_LIBRARY)
     # static libraries). A toolchain defaulting to -Wl,--as-needed therefore
     # drops libraries the link genuinely needs, and the documented
     # `target_link_libraries(app PRIVATE BatchLAS::batchlas)` recipe fails with
-    # "undefined reference to batchlas::sycl_gemm::gemm_custom<float>(...)".
+    # an undefined reference to a symbol defined in a sibling component.
     # It keeps every component on the link line; linker options precede link
     # libraries in CMake's link rule, so it covers all of them.
     #

@@ -1,15 +1,14 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/linalg.hh>
-#include <batchlas/internal/ormbr.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
-#include <batchlas/util/group-collectives.hh>
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../select/vendor.hh"
 #include "../util/template-instantiations.hh"
+#include "larft_wy.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -26,34 +25,10 @@ inline char upper_ascii(char c) {
 }
 
 template <typename T>
-inline T conj_if_needed(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
-        return T(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
-inline T conj_if_needed(const T& x, bool do_conj) {
-    if (!do_conj) return x;
-    return conj_if_needed(x);
-}
-
-template <typename T>
 class OrmbrPKernel;
 
-template <typename T>
-class OrmbrPLarftKernel32;
-
-template <typename T>
-class OrmbrPLarftKernel64;
-
-template <typename T>
-class OrmbrPLarftKernel128;
-
-template <typename T>
-class OrmbrPLarftKernel256;
+// Kernel-name tag for this TU's instantiations of the shared wy:: LARFT.
+struct OrmbrPWyTag;
 
 template <typename T>
 class PackPPanelKernel;
@@ -126,7 +101,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             if (col >= 1) {
                 const int32_t i = col - 1;
                 if (row >= col + 1 && row < nn) {
-                    AQ(row, col, b) = conj_if_needed(A(i, row, b));
+                    AQ(row, col, b) = batchlas::device::detail::conj(A(i, row, b));
                 }
             }
         });
@@ -175,149 +150,6 @@ size_t ormbr_p_cta_buffer_size(Queue& ctx,
     return size;
 }
 
-template <typename T, int WG, typename KernelName>
-sycl::event ormbr_larft_forward_columnwise_batched_wg(Queue& q,
-                                                      T* t_data,
-                                                      int ld_t,
-                                                      int stride_t,
-                                                      const T* v_data,
-                                                      int ld_v,
-                                                      int stride_v,
-                                                      int m,
-                                                      int ib,
-                                                      const T* tau_data,
-                                                      int tau_stride,
-                                                      int tau_offset,
-                                                      int batch) {
-    static_assert(WG > 0, "WG must be positive");
-
-    auto reduce_sum = [](const sycl::group<1>& g, T x) {
-        if constexpr (internal::is_complex<T>::value) {
-            using R = typename T::value_type;
-            const R re = batchlas::portable::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = batchlas::portable::reduce_over_group(g, x.imag(), sycl::plus<R>());
-            return T(re, im);
-        } else {
-            return batchlas::portable::reduce_over_group(g, x, sycl::plus<T>());
-        }
-    };
-
-    return q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<KernelName>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
-                              sycl::range<1>(static_cast<size_t>(WG))),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
-
-                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
-                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
-                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
-
-                const sycl::group<1> g = it.get_group();
-                const int lid = static_cast<int>(it.get_local_linear_id());
-
-                if (lid == 0) {
-                    for (int j = 0; j < ib; ++j) {
-                        for (int i = 0; i < ib; ++i) {
-                            t_b[i + j * ld_t] = T(0);
-                        }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::global_space);
-
-                for (int j = 0; j < ib; ++j) {
-                    const T tauj = tau_b[j];
-                    if (tauj == T(0)) {
-                        if (lid == 0) {
-                            t_b[j + j * ld_t] = T(0);
-                        }
-                        it.barrier(sycl::access::fence_space::global_space);
-                        continue;
-                    }
-
-                    for (int col = 0; col < j; ++col) {
-                        T partial = T(0);
-                        for (int r = j + 1 + lid; r < m; r += WG) {
-                            const T v_rc = v_b[r + col * ld_v];
-                            const T v_rj = v_b[r + j * ld_v];
-                            partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
-                        }
-                        const T sum_r = reduce_sum(g, partial);
-                        if (lid == 0) {
-                            const T sum = conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
-                            t_b[col + j * ld_t] = -tauj * sum;
-                        }
-                        it.barrier(sycl::access::fence_space::global_space);
-                    }
-
-                    if (lid == 0) {
-                        for (int row = 0; row < j; ++row) {
-                            T acc = T(0);
-                            for (int col = row; col < j; ++col) {
-                                acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
-                            }
-                            t_b[row + j * ld_t] = acc;
-                        }
-                        t_b[j + j * ld_t] = tauj;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-            });
-    });
-}
-
-template <typename T>
-sycl::event ormbr_larft_forward_columnwise_batched(Queue& q,
-                                                   T* t_data,
-                                                   int ld_t,
-                                                   int stride_t,
-                                                   const T* v_data,
-                                                   int ld_v,
-                                                   int stride_v,
-                                                   int m,
-                                                   int ib,
-                                                   const T* tau_data,
-                                                   int tau_stride,
-                                                   int tau_offset,
-                                                   int batch) {
-    if (ib <= 8 && m <= 64) {
-        return ormbr_larft_forward_columnwise_batched_wg<T, 32, OrmbrPLarftKernel32<T>>(
-            q,
-            t_data, ld_t, stride_t,
-            v_data, ld_v, stride_v,
-            m, ib,
-            tau_data, tau_stride, tau_offset,
-            batch);
-    }
-    if (ib <= 16 && m <= 128) {
-        return ormbr_larft_forward_columnwise_batched_wg<T, 64, OrmbrPLarftKernel64<T>>(
-            q,
-            t_data, ld_t, stride_t,
-            v_data, ld_v, stride_v,
-            m, ib,
-            tau_data, tau_stride, tau_offset,
-            batch);
-    }
-    if (ib <= 32 && m <= 256) {
-        return ormbr_larft_forward_columnwise_batched_wg<T, 128, OrmbrPLarftKernel128<T>>(
-            q,
-            t_data, ld_t, stride_t,
-            v_data, ld_v, stride_v,
-            m, ib,
-            tau_data, tau_stride, tau_offset,
-            batch);
-    }
-
-    return ormbr_larft_forward_columnwise_batched_wg<T, 256, OrmbrPLarftKernel256<T>>(
-        q,
-        t_data, ld_t, stride_t,
-        v_data, ld_v, stride_v,
-        m, ib,
-        tau_data, tau_stride, tau_offset,
-        batch);
-}
-
 template <typename T>
 sycl::event pack_p_panel_batched(Queue& q,
                                  T* v_out,
@@ -347,7 +179,7 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 } else if (r > c) {
                                                     const int row = i0 + c;
                                                     const int col = i0 + 1 + r;
-                                                    val = conj_if_needed(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
+                                                    val = batchlas::device::detail::conj(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
                                                 }
                                                 v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
                                             });
@@ -437,12 +269,12 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
                                       Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
                                       a, i0, ib, nq);
 
-        (void)ormbr_larft_forward_columnwise_batched<T>(ctx,
-                                                        Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
-                                                        Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
-                                                        m, ib,
-                                                        tau.data_ptr(), tau.stride(), i0,
-                                                        batch);
+        (void)wy::larft_forward_columnwise_batched_t<OrmbrPWyTag, T, false>(ctx,
+                                                                         Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
+                                                                         Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
+                                                                         m, ib,
+                                                                         tau.data_ptr(), tau.stride(), i0,
+                                                                         batch);
 
         auto Ublk = Vmat({0, m}, {0, ib});
         auto Tblk = Tmat({0, ib}, {0, ib});

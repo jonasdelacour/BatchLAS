@@ -8,7 +8,7 @@
 // partition must reach every partition collective, so no kernel here returns early.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 
 #include "../sycl/device_scalar.hh"
 #include "../sycl/kernel_attrs.hh"
@@ -224,7 +224,7 @@ inline D tiny_load_pad_identity(const D* __restrict base, int r, int c, int n,
 }
 
 // (magnitude, key) PAIR argmax. The XOR mask is a power of two below N and so uniform
-// across the whole 32-lane sub-group, which sg_compat.hh's non-NVPTX fallback requires.
+// across the whole 32-lane sub-group, which sg_partition.hh's generic backend requires.
 // THE CALLER OWES A NaN-FREE SEED: NaN loses every comparison, so it survives every round
 // and the lanes disagree about the winner. evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
 template <int N, typename R, typename Part>

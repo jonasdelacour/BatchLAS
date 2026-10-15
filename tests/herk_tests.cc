@@ -350,8 +350,3 @@ TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
                                               C.view().all_items(), Uplo::Lower));
     }
 }
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

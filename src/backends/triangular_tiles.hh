@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include "../sycl/kernel_attrs.hh"
 
 namespace batchlas::backend::detail {
@@ -34,17 +35,6 @@ inline const TileVec4<T>& tile_vec4(const T* p) {
 template <typename T>
 inline TileVec4<T>& tile_vec4(T* p) {
     return *reinterpret_cast<TileVec4<T>*>(p);
-}
-
-// Conjugation is a no-op on a real scalar, which is what lets one kernel serve
-// both the plain and the ^H spellings rather than two near-copies.
-template <typename T>
-inline T conj_if(const T& value) {
-    if constexpr (is_std_complex_v<T>) {
-        return std::conj(value);
-    } else {
-        return value;
-    }
 }
 
 // accum + a * b, written out: std::complex operator* is the __mulsc3 libcall.

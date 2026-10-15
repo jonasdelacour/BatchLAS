@@ -145,7 +145,7 @@ nsys `cuda_gpu_kern_sum`, vendor-free (not committed, not timings; agree with `o
 
 ### `ormqr` WY `trmm` gate
 
-`wy_trmm_applicable` (`src/extensions/ormqr_blocked.cc:50-62`) picks the trmm tile kernel over a GEMM for the WY apply inside `blocked`: `route_has_tile_kernel && !is_complex<T> && ib <= 64`, where `route_has_tile_kernel` is `select::level3_tile_route_available<B, T>` (`src/select/vendor.hh:94-96`). It is a leg derived inside the family, so no table sees it. `BATCHLAS_ORMQR_WY=gemm|trmm` pins it (`ormqr_blocked.cc:32-46`).
+`wy_trmm_applicable` (`src/extensions/ormqr_blocked.cc:50-62`) picks the trmm tile kernel over a GEMM for the WY apply inside `blocked`: `tile_kernel_enabled && !is_complex<T> && ib <= 64`, where `tile_kernel_enabled` is `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:96-98`). It is a leg derived inside the family, so no table sees it. `BATCHLAS_ORMQR_WY=gemm|trmm` pins it (`ormqr_blocked.cc:32-46`).
 
 On `ormqr_blocked_benchmark`, `Side::Left`, `ConjTrans`, batch 256 (128 for cdouble), nb in {16,32,64}, gemm/trmm (> 1 means trmm ahead): float 1.006-1.046x, double 1.004-1.016x, **cfloat 0.944-0.995x**, cdouble 0.958-1.010x. The n set was not recorded, so this is unverified. `ib <= 64` stays: past it the tile kernel measured 0.83-0.97x in float (a local dip; it is ahead again at m >= 512, 1.07-1.32x), and no `ormqr` block width reaches there. netlib is excluded (OpenBLAS `?trmm` is weak on a 16x16 triangle, 0.336-1.199x), as is ROCm (`rocblas_?trmm` is a per-batch loop).
 
@@ -240,7 +240,7 @@ Git tag `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-inde
 
 ### How the window is guarded
 
-`GeqrfCandidates.AutoReadsTheTranscribedTable` runs every edge shape through Auto and the `native` walk (floors, tall clause, tiny window and gaps, CTA/blocked crossover, area fit); `GeqrfTranscribedTable.RowsHoldTheOldPreference` (:820) reads both devices' rows. The first skips unless the budget is 97,280 B and the table is the transcription. A route-era `preferred()` that answered true for CTA once pre-empted the tier hook and shipped CTA at double n = 96, where blocked is 1.37x faster; a table row cannot have this defect, and the remaining risk is a row ranking `cta` first past the crossover, which the guards read.
+`GeqrfCandidates.AutoReadsTheTranscribedTable` runs every edge shape through Auto and the `native` walk (floors, tall clause, tiny window and gaps, CTA/blocked crossover, area fit); `GeqrfTranscribedTable.RowsHoldTheTranscribedPreference` (:820) reads both devices' rows. The first skips unless the budget is 97,280 B and the table is the transcription. A route-era `preferred()` that answered true for CTA once pre-empted the tier hook and shipped CTA at double n = 96, where blocked is 1.37x faster; a table row cannot have this defect, and the remaining risk is a row ranking `cta` first past the crossover, which the guards read.
 
 ## The shipped `orgqr` ceiling
 
@@ -503,7 +503,7 @@ Default route, `--arms=vendor,auto`, resolved route read back from `BATCHLAS_COV
 
 ### Break sweeps: the register panel leaf
 
-R9, double, `GeqrfTest/5`. Every break below was **RED**: dropping `r < j` from the `v` select (residual 63.1 vs 1.78e-15 at 7 x 5); store guard `k < n` to `k < N`; dropping `m <= max_m` from `geqrf_panel_reg_fits` (the launch aborts: "The kernel uses 136 registers per work-item"); `kGeqrfAutoPrefersRegisterLeaf = true` without the height policy (four other guards too); `launch_max_rows` 384 to 448 (red at m = 416, `UR_RESULT_ERROR_OUT_OF_RESOURCES`, caught); `geqrf_panel_reg_preferred` gating on `fits` only (`AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow`); double order floor 76 to 96 (red at the `at=76` probe, now read by `GeqrfTranscribedTable.RowsHoldTheOldPreference`).
+R9, double, `GeqrfTest/5`. Every break below was **RED**: dropping `r < j` from the `v` select (residual 63.1 vs 1.78e-15 at 7 x 5); store guard `k < n` to `k < N`; dropping `m <= max_m` from `geqrf_panel_reg_fits` (the launch aborts: "The kernel uses 136 registers per work-item"); `kGeqrfAutoPrefersRegisterLeaf = true` without the height policy (four other guards too); `launch_max_rows` 384 to 448 (red at m = 416, `UR_RESULT_ERROR_OUT_OF_RESOURCES`, caught); `geqrf_panel_reg_preferred` gating on `fits` only (`AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow`); double order floor 76 to 96 (red at the `at=76` probe, now read by `GeqrfTranscribedTable.RowsHoldTheTranscribedPreference`).
 
 Removing barrier B3 is red, but **only from m = 129, n = 16** (the first height with five sub-groups) and green for every `m <= 128`; the guard exists only because the ladder reaches past 128.
 
@@ -541,7 +541,7 @@ These grids were first taken while NVML was broken (kernel module 595.84 against
 
 Four breaks against `geqrf_tests` on the route-era `tiny_window()`: admit n = 17..20 (a measured float loss) **RED**; let CTA answer inside the window too (R8b) **RED**; fire the window with `tiny_max_n == 0` green; drop the square-only gate green (`supports()` already refused both, so the property was defended twice; a green break is evidence about the test, not the code).
 
-Under flat selection the two live breaks are a float row in 17..20 ranking `tiny` first and a window row ranking `cta` ahead of `tiny`; `GeqrfCandidates.AutoReadsTheTranscribedTable` runs both edges through Auto and the `native` walk, and `GeqrfTranscribedTable.RowsHoldTheOldPreference` reads float 17 and 21 directly. The other two terms live only in `can_run` (`can_run.hh:32`), armed with a pin by `GeqrfCandidates.CanRunFalsePinsThrow` (`tests/geqrf_candidates_tests.cc:482`) and `PinnedCandidatesStraddleTheirLimits` (:346).
+Under flat selection the two live breaks are a float row in 17..20 ranking `tiny` first and a window row ranking `cta` ahead of `tiny`; `GeqrfCandidates.AutoReadsTheTranscribedTable` runs both edges through Auto and the `native` walk, and `GeqrfTranscribedTable.RowsHoldTheTranscribedPreference` reads float 17 and 21 directly. The other two terms live only in `can_run` (`can_run.hh:32`), armed with a pin by `GeqrfCandidates.CanRunFalsePinsThrow` (`tests/geqrf_candidates_tests.cc:482`) and `PinnedCandidatesStraddleTheirLimits` (:346).
 
 ## The re-cut, against a working guard
 

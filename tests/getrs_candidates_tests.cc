@@ -533,10 +533,9 @@ TYPED_TEST(GetrsCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false shapes (absorbs RouteGetrs.CorrectnessGatesAreNotSpeedGates and
-// FusedGetrsHandsBackAtBothCeilings' table half): empty order or rhs, one past the width,
-// a non-square A, B's rows or batch disagreeing with A. An empty batch returns before selection
-// (WP3 batch policy), so no pin sees it.
+// The named can_run-false shapes (and LuTest.FusedGetrsHandsBackAtBothCeilings' table half):
+// empty order or rhs, one past the width, a non-square A, B's rows or batch disagreeing with A.
+// An empty batch returns before selection (WP3 batch policy), so no pin sees it.
 TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -563,7 +562,7 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// RouteLuPivotFormat's getrs half, ported: under Backend::NETLIB (true int64 pivots) no native
+// Under Backend::NETLIB (true int64 pivots) no native
 // family runs even on a GPU queue, because they read packed int32.
 TYPED_TEST(GetrsCandidates, NetlibBackendRunsNoNativeFamily) {
 #if BATCHLAS_HAS_HOST_BACKEND
@@ -678,7 +677,7 @@ TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
 }
 
 // Auto against the shipped table of this device (shipped_table_pick.hh) on both sides of every
-// threshold the old router read: n 31/32, nrhs 2/3, 4/5 (float), 8/9, 63/64, 127/128, batch
+// transcribed threshold: n 31/32, nrhs 2/3, 4/5 (float), 8/9, 63/64, 127/128, batch
 // 127/128; on- and off-grid.
 TYPED_TEST(GetrsCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
@@ -730,7 +729,7 @@ TYPED_TEST(GetrsCandidates, TraceLineShowsTheKey) {
     expect_solved(*this->ctx, p, line);
 }
 
-// RouteGetrs.VendorFreeFallbackHandsOverTheNativeRoute, ported: with a table naming only the
+// With a table naming only the
 // vendor, a vendor-free build takes the last resort, blocked, at any width.
 TYPED_TEST(GetrsCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
@@ -803,7 +802,7 @@ TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteGetrs.CorrectnessGatesAreNotSpeedGates' CPU case, ported: on a CPU queue no native
+// On a CPU queue no native
 // family runs, so native pins throw and Auto is the vendor (or no route without one).
 template <typename Config>
 class GetrsCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -831,8 +830,8 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 
 // The sm_89 transcribed rows, read with Table::nearest directly so every machine checks them: for
 // every dtype, the first entry (vendor present) and the first native entry that fits (vendor-free)
-// equal the old router at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
-TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold) {
+// equal the transcribed preference at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
+TEST(GetrsTranscribedTable, RowsHoldTheTranscribedPreferenceOnBothSidesOfEveryThreshold) {
     test_utils::TranscribedRowsHeld held;
     const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
     for (const char* dev : {"sm_89"})
@@ -846,7 +845,7 @@ TEST(GetrsTranscribedTable, RowsHoldTheOldPreferenceOnBothSidesOfEveryThreshold)
                     for (int batch : {1, 100, 127, 128, 129, 40000}) {
                         const select::TableRow* row = t.nearest({{"n", n}, {"nrhs", nrhs}, {"batch", batch}});
                         ASSERT_NE(row, nullptr);
-                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                         if (held.skip(row->timed)) continue;
                         const std::string what = t.file + ":" + std::to_string(row->line) + " n=" + std::to_string(n) +
                                                  " nrhs=" + std::to_string(nrhs) + " batch=" + std::to_string(batch);

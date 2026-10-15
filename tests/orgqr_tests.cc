@@ -198,8 +198,3 @@ TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
     EXPECT_VERIFY(T, verify::Check::factorization, m, MV::qr_reconstruction(*this->ctx, A0v, Qv, Fv, Qv.all_items()));
 }
 
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-

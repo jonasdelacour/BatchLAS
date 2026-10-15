@@ -8,8 +8,6 @@ experiments. The design is in @ref design_syevx; range selection is in @ref desi
 
 Raw data:
 
-- `benchmarks/syevx_crossover_rtx4090.csv`: eigenvalues-only and eigenvector grid, 2026-08-02, before the
-  baseline fix (see [the superseded grid](#syevx-the-first-gpu-crossover-measurement-superseded-baseline)).
 - `benchmarks/results/syevx_sparse_shape_rtx4090.csv`, `benchmarks/results/syevx_sparse_gap_rtx4090.csv`:
   Git LFS, 2026-08-06.
 
@@ -214,8 +212,7 @@ reads a contiguous column run; a second kernel reduces the per-(matrix, row-grou
 one-work-item-per-matrix kernel took 80.2 % of the solve at `n = 1024` (RTX 4090).
 
 - Bit-identical to the legacy kernel, because the inner `j` loop stays serial and ascending. Keep that
-  order if the kernel is touched.
-- `BATCHLAS_SYEVX_BOUNDS_LEGACY=1` restores the serial kernel for A/B.
+  order if the kernel is touched. The legacy kernel is deleted.
 
 ## LOBPCG hardening in syevx
 

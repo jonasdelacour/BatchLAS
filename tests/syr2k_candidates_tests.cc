@@ -507,7 +507,7 @@ TYPED_TEST(Syr2kCandidates, UnknownPinsThrow) {
     for (const char* word : {"cublasdx", "tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm",
                              "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled",
                              "native:auto", "vendor:auto", "bogus", "gram", "expand", "cta", "blocked",
-                             "triangular:1", "native:triangular"}) {
+                             "tiny", "triangular:1", "native:triangular"}) {
         auto p = make_prob<T>(Spec{});
         const Pin pin("syr2k", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -917,7 +917,7 @@ TYPED_TEST(Syr2kCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 // transcribed:ff340fc6; float `triangular | vendor` from batch 2 and `vendor | triangular` at
 // batch 1, double `vendor` everywhere; spot rows through nearest(). sm_120 is deep-measured since
 // 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
+TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheTranscribedRule) {
     test_utils::TranscribedRowsHeld held;
     for (const char* dt : {"float", "double"})
         for (const char* dev : {"sm_89"}) {
@@ -942,7 +942,7 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                         ASSERT_EQ(row.keys.size(), 3u) << t.file << ":" << row.line;
                         EXPECT_EQ(row.keys[0] + " " + row.keys[1] + " " + row.keys[2], want_key)
                             << t.file << ":" << row.line;
-                        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                         if (held.skip(row.timed)) continue;
                         std::vector<std::string> ranked;
                         for (const auto& e : row.ranked) ranked.push_back(e.spelling);

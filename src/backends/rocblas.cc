@@ -9,7 +9,6 @@
 
 #include "batch_launch.hh"
 #include "level3_shape.hh"
-#include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
 
 namespace batchlas {

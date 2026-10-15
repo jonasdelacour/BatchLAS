@@ -272,8 +272,8 @@ the old constant, so enabling the derivation never makes a step less selective.
 Precedence: `BATCHLAS_SYEVX_FILTER_DEGREE` > `params.filter_degree` > derived > `kDefaultFilterDegree`. An
 explicit value turns the derivation off. `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0` restores the constant exactly.
 
-**Trap:** `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` and `BATCHLAS_SYEVX_BOUNDS_LEGACY` are parsed with `atoi`, not
-`env_truthy`, so `true` and `on` read as false. This is kept, so existing spellings keep their meaning.
+**Trap:** `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` is parsed with `atoi`, not `env_truthy`, so `true` and `on`
+read as false. This is kept, so existing spellings keep their meaning.
 
 ## syevx validation
 

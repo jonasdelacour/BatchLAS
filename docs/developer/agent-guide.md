@@ -145,7 +145,7 @@ cmake -B build .
 # Iterating on one algorithm: this builds the library and only this one test
 # binary. Do not build the default target while iterating — it also builds every
 # other test executable (`ctest -N` lists them), which you are not about to run.
-cmake --build build --target stedc_tests -j"$(nproc)"
+cmake --build build --target stedc_tests -j8
 ctest --test-dir build -R '^stedc_tests$' --output-on-failure
 
 # Before pushing, build and run everything. The final gate is a full-target
@@ -153,7 +153,7 @@ ctest --test-dir build -R '^stedc_tests$' --output-on-failure
 # (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF) built only now. One test per GPU slot (§8)
 # where ctest_gpus.sh has been validated (threadripper02); on the 2x4090 box, and
 # wherever configure printed "GPU test resources: none", keep it serial.
-cmake --build build -j"$(nproc)"
+cmake --build build -j8
 scripts/ctest_gpus.sh --test-dir build      # threadripper02
 ctest --test-dir build                       # 2x4090 box (OOM history, docs/ci.md)
 
@@ -266,6 +266,9 @@ object in that `.so`, single-threaded, so `-j` cannot shorten it. Measured on th
 (64 cores, 4x RTX PRO 6000, default target = library + 82 test binaries, -j32, other builds
 sometimes running): fresh tree, no cache, 284-334 s.
 
+- **Cap build parallelism at `-j8`** unless you have measured headroom. Heavy SYCL TUs exceed 14 GB
+  each, and wide builds (`-j20`, `-j28`, or two `-j` builds side by side) have been OOM-killed
+  several times. Run one build at a time; add a second only after checking `free -g`.
 - **ccache is on by default** (`BATCHLAS_USE_CCACHE`, `cmake/BatchLASCcache.cmake`) when `ccache`
   is on `PATH` or in `~/.local/bin`; configure prints `ccache enabled (...)`. No ccache: drop the
   static binary from https://github.com/ccache/ccache/releases into `~/.local/bin` (no root).
@@ -309,7 +312,7 @@ sometimes running): fresh tree, no cache, 284-334 s.
   `./build/tests/X --gtest_filter=...` -> one binary `ctest -R '^X$'` (`-R` is a substring regex, so
   anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> `-LE slow` -> full only
   before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool,
-  `sg_compat`/`sg_partition`, `include/batchlas/util`).
+  `sg_partition`, `include/batchlas/util`).
 - **On threadripper02, run multi-test scopes through `scripts/ctest_gpus.sh`** (same arguments as
   ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`).
   - Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus`

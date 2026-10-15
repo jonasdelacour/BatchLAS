@@ -75,9 +75,7 @@ expect("compute capability is reset per device" "${_leak_arch}" "Architecture: u
 # unrecognised-GPU ones (budget 28672).
 batchlas_architecture_table_local_mem_bytes("nvidia_gpu_sm_120" "gpu" _bytes)
 batchlas_subgroup_workspace_budget_bytes("nvidia_gpu_sm_120" "${_bytes}" "gpu" _budget)
-batchlas_safe_subgroups_per_workgroup("nvidia_gpu_sm_120" "gpu" _subgroups)
 expect("sm_120 workspace budget" "${_budget}" "45056")
-expect("sm_120 safe subgroups per work-group" "${_subgroups}" "2")
 
 batchlas_rewrite_unaliased_nvidia_targets("nvidia_gpu_sm_120;native_cpu" "nvidia_gpu_sm_120"
     _targets _option)
@@ -128,9 +126,7 @@ expect("acpp-info records carry the vendor as a sixth field" "${_acpp_devices}"
     "OpenMP|cpu|AdaptiveCpp OpenMP host device|<native-cpu>|1|the AdaptiveCpp project;Metal|gpu|Apple M5 Max|applegpu_g17s|32|Apple;OpenCL|gpu|Apple M5 Max|unknown|1|Apple")
 batchlas_architecture_table_local_mem_bytes("apple_gpu_g17s" "gpu" _apple_bytes)
 batchlas_subgroup_workspace_budget_bytes("apple_gpu_g17s" "${_apple_bytes}" "gpu" _apple_budget)
-batchlas_safe_subgroups_per_workgroup("apple_gpu_g17s" "gpu" _apple_subgroups)
 expect("Apple GPU workspace budget" "${_apple_budget}" "28672")
-expect("Apple GPU safe subgroups per work-group" "${_apple_subgroups}" "1")
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -DBATCHLAS_SOURCE_DIR=${BATCHLAS_SOURCE_DIR} -DBATCHLAS_EXPECT_FATAL=1

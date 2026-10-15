@@ -37,9 +37,7 @@
 # remaining lines are traps. The remedy is the same as before: relocate
 # prose into docs/ with an `evidence:` anchor, in the same commit as the
 # target heading (.github/ci/check_evidence_anchors.py resolves every
-# pointer), then delete the line here. Earlier assessment, 2026-09-15:
-# tests/sg_compat_tests.cc went 19.27% -> 14.13% by deleting 18 banner-rule
-# lines and nothing else.
+# pointer), then delete the line here.
 # ---------------------------------------------------------------------
 
 src/util/resident_capacity.hh                    # 45 lines of constexpr helpers, one invariant each (barrier scope, the non-monotone walk, the single budget spelling); every measured number is in docs/perf/potrf.md#the-shared-helper-budget-slice-walk-and-pack

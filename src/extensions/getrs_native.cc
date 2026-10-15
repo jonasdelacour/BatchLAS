@@ -278,10 +278,10 @@ Event getrs_blocked_dispatch(Queue& ctx,
     }
     if (!solve_trsm) {
         throw batchlas::invalid_argument(
-            "getrs_blocked: the solve seam is empty. Inject the ROUTED batchlas::trsm "
+            "getrs_blocked: the solve seam is empty. Inject the public batchlas::trsm "
             "(the facade does; a direct caller must too) -- this driver deliberately has "
-            "no native fallback, so that the router, and not this file, chooses the trsm "
-            "arm.");
+            "no native fallback, so that kernel selection, and not this file, chooses the trsm "
+            "candidate.");
     }
 
     // PACKED 1-BASED int32, the format the vendor paths read and a native getrf

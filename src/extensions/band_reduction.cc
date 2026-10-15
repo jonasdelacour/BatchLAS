@@ -33,24 +33,6 @@ namespace batchlas {
 namespace {
 
 template <typename T>
-inline T conj_if_needed(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
-        return T(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
-template <typename T>
-inline typename base_type<T>::type real_part(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
-        return static_cast<typename base_type<T>::type>(x.real());
-    } else {
-        return static_cast<typename base_type<T>::type>(x);
-    }
-}
-
-template <typename T>
 inline void enforce_real_diagonal(T& x) {
     if constexpr (internal::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
@@ -209,7 +191,7 @@ inline void band_extract_block(Queue& ctx,
                              } else {
                                  const int r = j - i;
                                  if (r <= kd) {
-                                     val = conj_if_needed(safe_get(AB, r, i, b));
+                                     val = batchlas::device::detail::conj(safe_get(AB, r, i, b));
                                  }
                              }
                              if (i == j) {
@@ -317,7 +299,7 @@ inline void band_scatter_block(Queue& ctx,
                                  const int r = -diff;
                                  if (r > kd) return;
                                  // Store A(j,i) in the lower band.
-                                 T val = conj_if_needed(safe_get(I, ii, jj, b));
+                                 T val = batchlas::device::detail::conj(safe_get(I, ii, jj, b));
                                  if (r == 0) {
                                      enforce_real_diagonal(val);
                                  }
@@ -1018,7 +1000,7 @@ inline void bandr1_extract_tridiagonal_output(
                          [=](sycl::id<2> idx) {
                              const int b = static_cast<int>(idx[0]);
                              const int j = static_cast<int>(idx[1]);
-                             dptr[b * d_stride + j * d_inc] = real_part(AB(0, j, b));
+                             dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
                          });
     });
 
@@ -1268,7 +1250,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
             });
         });
 
@@ -1303,7 +1285,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
             });
         });
 

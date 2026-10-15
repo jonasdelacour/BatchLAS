@@ -68,8 +68,9 @@ closed and kept only for numbering.
 ## Defect 2: `cond` calls the vendor `syev` directly
 
 - **Symptom:** throws in a vendor-free build.
-- **Cause:** `src/extra/cond.cc:48`, `:54` and `:131` call
-  `blas::dispatch::detail::syev_vendor_or_throw`, which bypasses the public `syev` selection.
+- **Cause:** `src/extra/cond.cc:48`, `:54` and `:133` call
+  `ops::syev::detail::syev_vendor_or_throw` and its buffer-size query, which bypass the public
+  `syev` selection.
 - **Fix needs:** call the public `syev` and `syev_buffer_size`, and move the workspace query with
   the call. The shims are in `src/ops/syev/vendor.hh`.
 - **Status:** open.
@@ -483,9 +484,6 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **`francis_sweep` is declared and never defined.** `include/batchlas/blas/extensions.hh`
-  declares it `BATCHLAS_API`. A call compiles and fails at link time. Delete the declaration or
-  implement it.
 - **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:30` addresses
   `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
   also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
@@ -495,15 +493,14 @@ refuted.
   `internal_error` for an empty or heterogeneous batch, where `invalid_argument` or `unsupported`
   would fit. Reclassifying either changes behaviour for callers that catch the current type. See
   [kernel selection throws outside the hierarchy](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
-- **`internal/sytrd_blocked.hh` declares a second, undefined `sytrd_blocked`.** It takes
-  `Span<std::byte> ws` by value with no default `block_size`
-  (`include/batchlas/internal/sytrd_blocked.hh:46-53`). The definition at
-  `src/extensions/sytrd_blocked.cc:916` is the `const Span<std::byte>&` overload. A translation unit
-  that sees only the internal header fails at link time. The fix is to make the internal
-  declaration match, or drop it.
 
 ## Fixed while documenting
 
+- **`internal/sytrd_blocked.hh` declared a second, undefined `sytrd_blocked`.** It took
+  `Span<std::byte> ws` by value with no default `block_size`, while the definition in
+  `src/extensions/sytrd_blocked.cc` is the `const Span<std::byte>&` overload, so a translation unit
+  that saw only the internal header failed at link time. The header is deleted; the one
+  declaration, with its contract, is in `batchlas/blas/extensions.hh`.
 - **`miniacc --help` terminated its host.** `miniacc::ParseCommandLine` called `std::exit(0)`,
   which skips destructors in the caller's frames. It now sets `CliOptions::help_requested`, and
   `MiniAccMain` returns 0 (`include/batchlas/util/miniacc.hh`).

@@ -17,7 +17,7 @@
 /// @file
 /// @brief miniacc: a header-only accuracy-benchmark harness (register cases, sample, summarise, CSV).
 ///
-/// Registered with MINI_ACC_BENCHMARK(fn); a program built with MINI_ACC_MAIN()
+/// Registered with MINI_ACC_BENCHMARK_REGISTER_SIZES; a program built with MINI_ACC_MAIN()
 /// parses `--samples`, `--seed`, `--log10-cond`, `--csv`, `--benchmark_filter`,
 /// `--backend`, `--type` and positional argument lists. Installed because it is
 /// under include/batchlas; not a stable interface.
@@ -251,12 +251,6 @@ inline Benchmark* RegisterBenchmark(const std::string& name, BenchFunc func) {
     registry().emplace_back(name, std::move(func));
     return &registry().back();
 }
-
-#define MINI_ACC_BENCHMARK(fn)                                               \
-    static void fn(miniacc::State&);                                         \
-    static miniacc::Benchmark* ACC_BENCHMARK_##fn =                          \
-        miniacc::RegisterBenchmark(#fn, fn);                                 \
-    static void fn(miniacc::State& state)
 
 inline MetricSummary summarize_metric(const std::vector<SampleRow>& rows,
                                       const std::string& metric_name) {

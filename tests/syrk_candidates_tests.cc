@@ -665,7 +665,7 @@ TYPED_TEST(SyrkCandidates, HeterogeneousBatchHasNoRoute) {
 // the warning) where there is no vendor.
 TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
-    // float: gram cannot run and the old rule took the vendor (tall, n in 129..256); double: gram.
+    // float: gram cannot run and the transcribed rule takes the vendor (tall, n in 129..256); double: gram.
     const Spec s = TestFixture::kFloat ? Spec{200, 53, 2} : Spec{96, 20, 3};
     std::string auto_pick;
     {
@@ -740,7 +740,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
 }
 
 // Auto against the shipped table of this device (shipped_table_pick.hh), on each side of every
-// threshold the old rule read: gram 128|129, the batch floor of the 3-tile band (26|27) and of the
+// transcribed threshold: gram 128|129, the batch floor of the 3-tile band (26|27) and of the
 // 13-tile band (1|2), n 256|257, k 7|8, all three forms, N, T and C. A row with no runnable entry
 // (vendor-free double, say) must throw NoRouteError.
 TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
@@ -1052,8 +1052,8 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnSm89) {
                 << e.name << ": syrk is real-only";
 }
 
-// Spot rows through Table::nearest, off the grid: the old rule's decision at the snapped cell.
-TEST(SyrkTranscribedTable, OffGridRowsHoldTheOldRule) {
+// Spot rows through Table::nearest, off the grid: the transcribed rule's decision at the snapped cell.
+TEST(SyrkTranscribedTable, OffGridRowsHoldTheTranscribedRule) {
     struct Row { const char* dtype; const char* t; int n, k, batch; const char* ranked; };
     const Row rows[] = {{"float", "N", 100, 3000, 7, "gram|triangular|vendor|"},
                         {"float", "T", 140, 150, 9, "triangular|vendor|"},

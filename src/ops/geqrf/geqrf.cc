@@ -37,7 +37,7 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
         [&](Tiny) { return sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, tau, ws); },
         [&](Cta) { return sycl_geqrf::geqrf_cta_dispatch<T>(q, A, tau, ws); },
         [&](Blocked) {
-            // The public gemm, not gemm_custom: the trailing updates are TN/NN panel products the
+            // The public gemm (table-routed): the trailing updates are TN/NN panel products the
             // native GEMM loses on some shapes, and the gemm table knows which.
             return sycl_geqrf::geqrf_blocked_dispatch<T>(
                 q, A, tau, ws,
@@ -77,7 +77,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     geqrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key: m, n and k = min(m, n), as the old shape builder set them.
+    // The coverage row's key: m, n and k = min(m, n).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size()};
     const select::Key key = ops::geqrf::key_of<T>(A);

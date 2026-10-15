@@ -27,8 +27,8 @@ the DPC++ tree's `-I`/`-D` flags. The patches were regex shims applied to the co
 
 ## What was DPC++-specific at the probe {#sycl-impl-dpcpp-specific}
 
-Most of the DPC++ dependence already sits behind a handful of choke points. `sycl::ext::*` is almost
-unused (one benchmark uses `chunked_partition`). There is no `host_task`, no `interop_handle`, no
+Most of the DPC++ dependence already sits behind a handful of choke points. `sycl::ext::*` is not
+used in code. There is no `host_task`, no `interop_handle`, no
 specialization constants and no `sycl::stream`.
 
 | Construct | Where | Count |

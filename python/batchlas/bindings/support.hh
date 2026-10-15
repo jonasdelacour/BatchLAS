@@ -375,8 +375,7 @@ decltype(auto) visit_backend(Queue& queue, F&& fn) {
 // before handing results back to Python, so the next borrower is safely ordered
 // behind this call.
 //
-// Note this now resolves the backend once. The old version called the dispatch
-// switch twice -- once to size, once to invoke.
+// The backend is resolved once, for both the size and the invoke call.
 template <typename SizeFn, typename InvokeFn>
 void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
     visit_backend(queue, [&](auto backend_tag) {
@@ -626,17 +625,6 @@ inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
         return StedcMergeVariant::FusedCta;
     }
     throw py::value_error("invalid stedc merge_variant");
-}
-
-inline OrmqCtaFactorization parse_ormqx_factorization(std::string value) {
-    value = lower_copy(std::move(value));
-    if (value == "qr") {
-        return OrmqCtaFactorization::QR;
-    }
-    if (value == "ql") {
-        return OrmqCtaFactorization::QL;
-    }
-    throw py::value_error("invalid ormqx factorization");
 }
 
 inline Device resolve_device(const std::optional<std::string>& device_name) {
@@ -1302,7 +1290,6 @@ SteqrParams<T> parse_steqr_params(const py::dict& options) {
     SteqrParams<T> params;
     params.block_size = py_scalar_or_default<std::size_t>(options, "block_size", params.block_size);
     params.max_sweeps = py_scalar_or_default<std::size_t>(options, "max_sweeps", params.max_sweeps);
-    params.zero_threshold = py_scalar_or_default<T>(options, "zero_threshold", params.zero_threshold);
     params.back_transform = py_scalar_or_default<bool>(options, "back_transform", params.back_transform);
     params.block_rotations = py_scalar_or_default<bool>(options, "block_rotations", params.block_rotations);
     params.sort = py_scalar_or_default<bool>(options, "sort", params.sort);

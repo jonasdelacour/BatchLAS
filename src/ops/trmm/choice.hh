@@ -32,7 +32,7 @@ inline constexpr int kNativeWg = 256;  ///< widest native work-group: the 128-ro
 /// Keys: side exact; order = A.rows(), weight 2 (work ~ order^2 q batch); q = B.cols() (Left) or B.rows() (Right).
 inline constexpr std::array<std::string_view, 4> key_names{"side:exact", "order:log:2", "q:log", "batch:log"};
 
-// The transcription grid (tuned/README.md); the old rule read only the side.
+// The transcription grid (tuned/README.md); the transcribed rule read only the side.
 inline constexpr std::array<int, 9> grid_order{1, 16, 32, 64, 128, 256, 512, 1024, 2048};  ///< order axis
 inline constexpr std::array<int, 5> grid_q{1, 16, 128, 1024, 4096};  ///< q axis of the grid
 inline constexpr std::array<int, 4> grid_batch{1, 128, 1024, 32768};  ///< batch axis of the grid

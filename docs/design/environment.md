@@ -61,7 +61,6 @@ distinct: `BATCHLAS_KERNEL_TRACE_PATH` falls through to `BATCHLAS_TRACE_PATH` on
 | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `givens` | unset | Read by the solve and by the sizing query. |
 | `BATCHLAS_SYEVX_ALGORITHM` | method name | `SyevxParams::method` | Overrides the explicit method. An unrecognised value parses to `Auto`. |
 | `BATCHLAS_SYEVX_PRECONDITIONER` | preconditioner name | unset | Overrides a `SyevxParams` field. Loses to an explicit request and to a configured ILU(k). |
-| `BATCHLAS_SYEVX_BOUNDS_LEGACY` | `atoi` nonzero | off | `true`, `on`, `yes` are false. |
 | `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` | `atoi` nonzero | off | [evidence](../perf/syevx.md#syevx-automatic-chebyshev-filter-degree) |
 | `BATCHLAS_SYEVX_INSTR_HOST` | first character `1`, `t`, `T`, `y`, `Y` | unset | `on` does not work. |
 | `BATCHLAS_SYEVX_PROJECTED_VENDOR` | first character `1`, `t`, `T`, `y`, `Y` | unset | Changes the workspace size. |

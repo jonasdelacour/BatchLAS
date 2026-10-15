@@ -162,12 +162,6 @@ TYPED_TEST(SyrkTest, LeavesTheOtherTriangleUntouched) {
     }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
-// The native GPU kernels: CUDA, or SYCL (AdaptiveCpp Metal, vendor-free).
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 namespace {
 
@@ -323,19 +317,6 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
             expect_triangle_respected(ctx, A, C_auto, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
             expect_triangle_respected(ctx, A, C_native, C0, uplo, Transpose::NoTrans, alpha, beta, shape.k);
         }
-    }
-}
-// BATCHLAS_SYRK_ROUTE takes only its own words; the removed legacy spellings (and any typo)
-// throw rather than silently meaning Auto.
-TEST(SyrkCudaCustomTest, RemovedRouteWordsThrow) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
-    }
-    Matrix<float, MatrixFormat::Dense> A(16, 8, 2), C(16, 16, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "expand", "cublasdx"}) {
-        ScopedEnvVar route("BATCHLAS_SYRK_ROUTE", word);
-        EXPECT_THROW(syrk(ctx, A.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }
 }
 

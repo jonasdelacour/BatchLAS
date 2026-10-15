@@ -3,6 +3,7 @@
 // rationale and for the schedule, which is validated in
 // playground/sb2st_hh_sequential.py.
 
+#include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
@@ -36,15 +37,6 @@ namespace batchlas {
 namespace internal {
 
 namespace {
-
-template <typename U>
-inline U conj_if(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 template <typename T>
 inline T real_part_as_T(const T& x) {
@@ -219,7 +211,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                         return (r <= kdw) ? AB[r + j * ldw] : T(0);
                     }
                     const int32_t r = j - i;
-                    return (r <= kdw) ? conj_if(AB[r + i * ldw]) : T(0);
+                    return (r <= kdw) ? batchlas::device::detail::conj(AB[r + i * ldw]) : T(0);
                 };
                 auto bset = [&](int32_t i, int32_t j, T val) {
                     if (i >= j) {
@@ -227,7 +219,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                         if (r <= kdw) AB[r + j * ldw] = val;
                     } else {
                         const int32_t r = j - i;
-                        if (r <= kdw) AB[r + i * ldw] = conj_if(val);
+                        if (r <= kdw) AB[r + i * ldw] = batchlas::device::detail::conj(val);
                     }
                 };
 
@@ -279,14 +271,14 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     // kappa = v^H W v
                     T part = T(0);
                     for (int32_t i = lid; i < m; i += kWg) {
-                        part += conj_if(vloc[i]) * wloc[i];
+                        part += batchlas::device::detail::conj(vloc[i]) * wloc[i];
                     }
                     const T kappa = group_sum(wg, part);
 
                     // w = conj(tau) p - (|tau|^2 kappa / 2) v
-                    const T coef = tau * conj_if(tau) * kappa * T(Real(0.5));
+                    const T coef = tau * batchlas::device::detail::conj(tau) * kappa * T(Real(0.5));
                     for (int32_t i = lid; i < m; i += kWg) {
-                        wloc[i] = conj_if(tau) * wloc[i] - coef * vloc[i];
+                        wloc[i] = batchlas::device::detail::conj(tau) * wloc[i] - coef * vloc[i];
                     }
                     sycl::group_barrier(wg);
 
@@ -294,8 +286,8 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     // simply strides the inner index.
                     for (int32_t r = ti; r < m; r += kRowsPar) {
                         for (int32_t j = ts; j <= r; j += kTpr) {
-                            T val = bget(a + r, a + j) - wloc[r] * conj_if(vloc[j]) -
-                                    vloc[r] * conj_if(wloc[j]);
+                            T val = bget(a + r, a + j) - wloc[r] * batchlas::device::detail::conj(vloc[j]) -
+                                    vloc[r] * batchlas::device::detail::conj(wloc[j]);
                             if (r == j) val = real_part_as_T(val);
                             bset(a + r, a + j, val);
                         }
@@ -320,7 +312,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                         y = tau * reduce_tpr(y);
                         if (rr < nr) {
                             for (int32_t j = c0 + ts; j <= c1; j += kTpr) {
-                                bset(i, j, bget(i, j) - y * conj_if(vloc[j - c0]));
+                                bset(i, j, bget(i, j) - y * batchlas::device::detail::conj(vloc[j - c0]));
                             }
                         }
                     }
@@ -338,7 +330,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                         T z = T(0);
                         if (cc < nc) {
                             for (int32_t i = r0 + ts; i <= r1; i += kTpr) {
-                                z += conj_if(vloc[i - r0]) * bget(i, j);
+                                z += batchlas::device::detail::conj(vloc[i - r0]) * bget(i, j);
                             }
                         }
                         z = tau * reduce_tpr(z);
@@ -544,7 +536,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
 
                         T acc = T(0);
                         for (int32_t r = grp; r < L; r += G) {
-                            acc += conj_if(V(r, k)) * Zl[(s + r) * C + col];
+                            acc += batchlas::device::detail::conj(V(r, k)) * Zl[(s + r) * C + col];
                         }
                         if constexpr (G > 1) {
                             for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
@@ -646,7 +638,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
 
                     T acc = T(0);
                     for (int32_t r = grp; r < L; r += G) {
-                        acc += conj_if(V(r, k)) * Zl[(s + r) * C + col];
+                        acc += batchlas::device::detail::conj(V(r, k)) * Zl[(s + r) * C + col];
                     }
                     if constexpr (G > 1) {
                         for (uint32_t m = C; m < static_cast<uint32_t>(kSg); m <<= 1) {
@@ -875,7 +867,7 @@ streaming:
                     for (int32_t c = c0; c < c1; ++c) {
                         T part = T(0);
                         for (int32_t r = lane; r < L; r += 32) {
-                            part += conj_if(V(r, k)) * Z(s + r, c);
+                            part += batchlas::device::detail::conj(V(r, k)) * Z(s + r, c);
                         }
                         const T sum = group_sum(sg, part);
                         for (int32_t r = lane; r < L; r += 32) {

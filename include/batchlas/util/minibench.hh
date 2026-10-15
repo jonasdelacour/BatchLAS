@@ -102,16 +102,6 @@ inline std::vector<std::string> parse_list(const std::string& str) {
     return vals;
 }
 
-inline std::vector<int> make_range(int start, int end, int step = 1) {
-    std::vector<int> vals;
-    if (step == 0) step = 1;
-    if (end < start && step > 0) step = -step;
-    for (int v = start; (step > 0 ? v <= end : v >= end); v += step) {
-        vals.push_back(v);
-    }
-    return vals;
-}
-
 using MetricsFunc = std::function<void(Result&)>;
 
 struct State {
@@ -158,14 +148,6 @@ struct State {
 
     int range(size_t idx) const { return idx < ranges_.size() ? ranges_[idx] : 0; }
 
-    void PauseTiming() {
-        if (running_) {
-            auto now = clock::now();
-            elapsed_ += now - start_;
-            running_ = false;
-        }
-    }
-
     void ResumeTiming() {
         if (!running_) {
             start_ = clock::now();
@@ -189,10 +171,6 @@ struct State {
 
     void SetMetric(const std::string& name, double value, MetricType type = Normal) {
         metrics_[name] = {value, type};
-    }
-
-    void SetInternalIterations(size_t iterations) {
-        internal_iterations_ = iterations;
     }
 
     void SetMetricsFunc(MetricsFunc fn) { metrics_fn_ = std::move(fn); }
@@ -222,7 +200,6 @@ struct State {
     void SetPrepare(std::function<void()> prepare_once) { prepare_once_ = std::move(prepare_once); }
     void SetBeforeEachRun(std::function<void()> before_each_run) { before_each_run_ = std::move(before_each_run); }
     void SetTimedKernelMs(std::function<double()> timed_kernel_ms) { timed_kernel_ms_ = std::move(timed_kernel_ms); }
-    void SetBatchEnd(std::function<void()> fn) { batch_end_fn_ = (fn); }
     bool HasKernel() const { return static_cast<bool>(kernel_once_); }
     void RunKernelOnce() { if (kernel_once_) kernel_once_(); }
     void RunPrepareOnce() { if (prepare_once_) prepare_once_(); }
@@ -813,42 +790,6 @@ inline void SteqrBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-template <typename Benchmark>
-inline void SteqrCtaBenchSizes(Benchmark* b) {
-    for (int s : {8, 16, 32}) {
-        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
-            for (int wg_mult : {1, 2, 4, 8}) {
-                for (int shift_kind : {0, 1}) {
-                    b->Args({s, bs, /*n_sweeps=*/0, wg_mult, shift_kind});
-                }
-            }
-        }
-    }
-}
-
-template <typename Benchmark>
-inline void SteqrTunedBenchSizes(Benchmark* b) {
-    SteqrCtaBenchSizes(b);
-}
-
-template <typename Benchmark>
-inline void SteqrTunedBenchSizesNetlib(Benchmark* b) {
-    SteqrCtaBenchSizesNetlib(b);
-}
-
-template <typename Benchmark>
-inline void SteqrCtaBenchSizesNetlib(Benchmark* b) {
-    for (int s : {8, 16, 32}) {
-        for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
-            for (int wg_mult : {1, 2, 4, 8}) {
-                for (int shift_kind : {0, 1}) {
-                    b->Args({s, bs, /*n_sweeps=*/0, wg_mult, shift_kind});
-                }
-            }
-        }
-    }
-}
-
 // Reduced size set for CPU/NETLIB benchmarks
 template <typename Benchmark>
 inline void SquareBatchSizesNetlib(Benchmark* b) {
@@ -856,13 +797,6 @@ inline void SquareBatchSizesNetlib(Benchmark* b) {
         for (int bs : {1, 10, 100}) {
             b->Args({s, s, bs});
         }
-    }
-}
-
-template <typename Benchmark>
-inline void CubeSizes(Benchmark* b) {
-    for (int s : {64, 128, 256, 512, 1024, 2048, 4096, 8192}) {
-        b->Args({s, s, s});
     }
 }
 
@@ -977,36 +911,6 @@ inline void SyevxCrossoverSizesNetlib(Benchmark* b) {
                 for (int algo : {1, 2, 3, 4}) {
                     if (algo == 4 && !SyevxLobpcgFits<Benchmark>(n, ne)) continue;
                     b->Args({n, bs, ne, algo});
-                }
-            }
-        }
-    }
-}
-
-template <typename Benchmark>
-inline void OrthoBenchSizes(Benchmark* b) {
-    for (int algo = 0; algo < static_cast<int>(batchlas::OrthoAlgorithm::NUM_ALGORITHMS); ++algo) {
-        for (int m : {64, 128, 256, 512, 1024}) {
-            for (int n : {64, 128, 256, 512, 1024}) {
-                for (int bs : {1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
-                    if (m >= n) {
-                        b->Args({m, n, bs, algo});
-                    }
-                }
-            }
-        }
-    }
-}
-
-template <typename Benchmark>
-inline void OrthoBenchSizesNetlib(Benchmark* b) {
-    for (int algo = 0; algo < static_cast<int>(batchlas::OrthoAlgorithm::NUM_ALGORITHMS); ++algo) {
-        for (int m : {16, 32, 64, 128}) {
-            for (int n : {16, 32, 64, 128}) {
-                for (int bs : {1, 10, 100}) {
-                    if (m >= n) {
-                        b->Args({m, n, bs, algo});
-                    }
                 }
             }
         }

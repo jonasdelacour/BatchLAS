@@ -7,13 +7,8 @@
 #include <complex>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include <batchlas/util/reference-wrapper.hh>
 #include "../queue.hh"
 #include <batchlas/backend_config.h>
-
-#ifndef DEVICE_CAST
-    #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
-#endif
 
 // SYCL 2020 leaves mem_advise's advice values implementation-defined; the
 // UR_USM_ADVICE_FLAG_* ones are DPC++'s Unified Runtime. Advice is only a hint
@@ -31,12 +26,6 @@ using namespace sycl;
 // SILENTLY define unrelated functions (consumer link error only). The std::array operator<< is
 // file-local (no ADL). evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions
 namespace batchlas {
-
-template <typename U>
-constexpr std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<U>& ref) {
-    os << ref.get();
-    return os;
-}
 
 template <typename U, size_t N>
 constexpr std::ostream& operator<<(std::ostream& os, const std::array<U,N>& arr) {
@@ -98,30 +87,6 @@ void UnifiedVector<T>::resize(size_t new_size) {
 }
 
 template <typename T>
-Event Span<T>::set_read_mostly(const Queue &ctx) const {
-    if (!data_ || this->size_bytes() == 0) return Event{};
-    try {
-        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY);
-    } catch (const sycl::exception&) {
-        return Event{};
-    } catch (...) {
-        return Event{};
-    }
-}
-
-template <typename T>
-Event Span<T>::unset_read_mostly(const Queue &ctx) const {
-    if (!data_ || this->size_bytes() == 0) return Event{};
-    try {
-        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY);
-    } catch (const sycl::exception&) {
-        return Event{};
-    } catch (...) {
-        return Event{};
-    }
-}
-
-template <typename T>
 Event Span<T>::set_preferred_location(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
@@ -134,34 +99,10 @@ Event Span<T>::set_preferred_location(const Queue &ctx) const {
 }
 
 template <typename T>
-Event Span<T>::clear_preferred_location(const Queue &ctx) const {
-    if (!data_ || this->size_bytes() == 0) return Event{};
-    try {
-        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION);
-    } catch (const sycl::exception&) {
-        return Event{};
-    } catch (...) {
-        return Event{};
-    }
-}
-
-template <typename T>
 Event Span<T>::set_access_device(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
         return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE);
-    } catch (const sycl::exception&) {
-        return Event{};
-    } catch (...) {
-        return Event{};
-    }
-}
-
-template <typename T>
-Event Span<T>::clear_access_device(const Queue &ctx) const {
-    if (!data_ || this->size_bytes() == 0) return Event{};
-    try {
-        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -286,11 +227,6 @@ bool Span<T>::operator==(const Span<T> other) const {
 }
 
 
-template <size_t N, typename... Args, std::size_t... I>
-void resize_all(std::array<int,N>&& sizes, std::tuple<Args...>&& args, std::index_sequence<I...>){
-    (std::get<I>(args).resize(sizes[I], typename std::decay_t<decltype(std::get<I>(args))>::value_type{}), ...);
-}
-
 
 template struct UnifiedVector<int8_t>;
 template struct UnifiedVector<int16_t>;
@@ -332,9 +268,6 @@ template struct UnifiedVector<std::array<double,2>*>;
 template struct UnifiedVector<std::array<double,3>*>;
 template struct UnifiedVector<std::array<float,2>*>;
 template struct UnifiedVector<std::array<float,3>*>;
-//template struct UnifiedVector<NodeNeighbours<uint16_t>>;
-//template struct UnifiedVector<NodeNeighbours<uint32_t>>;
-//template struct UnifiedVector<Constants<float,uint16_t>>;
 
 template struct Span<int8_t>;
 template struct Span<int16_t>;
@@ -408,11 +341,5 @@ template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32
 template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint16_t,6>>& vec);
 template std::ostream& operator<<(std::ostream& os, const Span<std::array<uint32_t,6>>& vec);
 
-
-template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<int>& ref);
-template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<size_t>& ref);
-template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<float>& ref);
-template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<double>& ref);
-template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<uint16_t>& ref);
 
 }  // namespace batchlas

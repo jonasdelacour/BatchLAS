@@ -1370,9 +1370,4 @@ TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
     }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 #endif  // BATCHLAS_HAS_GPU_BACKEND

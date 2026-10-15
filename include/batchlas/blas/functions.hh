@@ -1,5 +1,5 @@
-#ifndef BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
-#define BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
+#ifndef BATCHLAS_BLAS_FUNCTIONS_HH
+#define BATCHLAS_BLAS_FUNCTIONS_HH
 
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
@@ -40,7 +40,7 @@ namespace batchlas {
 
 } // namespace batchlas
 
-#endif // BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
+#endif // BATCHLAS_BLAS_FUNCTIONS_HH
 
 // Last: the option overloads name every positional declaration above.
 #include <batchlas/blas/options.hh>

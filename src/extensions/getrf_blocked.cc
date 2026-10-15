@@ -230,10 +230,10 @@ Event getrf_blocked_dispatch(Queue& ctx,
     }
     if (!panel_trsm) {
         throw batchlas::invalid_argument(
-            "getrf_blocked: the panel-solve trsm seam is empty. Inject the ROUTED "
+            "getrf_blocked: the panel-solve trsm seam is empty. Inject the public "
             "batchlas::trsm (the facade does; a direct caller must too) -- this driver "
             "deliberately has no native fallback for it, so that trsm, and not this "
-            "file, chooses the trsm arm.");
+            "file, chooses the trsm candidate.");
     }
 
     const int nb = getrf_blocked_nb<T>(n);

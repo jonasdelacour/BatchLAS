@@ -29,22 +29,6 @@ namespace detail {
     }
 
     template <typename T>
-    UnifiedVector<T> build_log_spectrum(int n, real_t<T> log10_cond) {
-        UnifiedVector<T> diag_vals(n);
-        if (n == 1) {
-            diag_vals[0] = real_to_T<T>(real_t<T>(1));
-            return diag_vals;
-        }
-
-        const real_t<T> step = log10_cond / real_t<T>(n - 1);
-        for (int i = 0; i < n; ++i) {
-            const real_t<T> s = std::pow(real_t<T>(10), step * real_t<T>(i));
-            diag_vals[i] = real_to_T<T>(s);
-        }
-        return diag_vals;
-    }
-
-    template <typename T>
     UnifiedVector<T> build_spectrum_kappa2(int n, real_t<T> log10_kappa2) {
         UnifiedVector<T> diag_vals(n);
         if (n == 1) {

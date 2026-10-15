@@ -20,7 +20,7 @@ namespace batchlas
         if constexpr (B == Backend::SYCL) {
             return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
         } else {
-            return blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, A, eig,
+            return ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, A, eig,
                                                                                   JobType::NoEigenVectors,
                                                                                   Uplo::Lower);
         }
@@ -64,7 +64,7 @@ namespace batchlas
                             // No vendor solver (the vendor-free SYCL backend): the public syev's native kernels.
                             e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
                         } else {
-                            e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, A_copy, eig_span,
+                            e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx, A_copy, eig_span,
                                                                                    JobType::NoEigenVectors,
                                                                                    Uplo::Lower, syev_ws);
                         }

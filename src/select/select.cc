@@ -421,7 +421,7 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
                 static_cast<unsigned char>(c)); }))
             fail("source=" + t.source + ": the commit after 'transcribed:' must be a hex sha");
     } else if (t.source.rfind("ledger:", 0) == 0) {
-        // A ledger table keeps the old router's rows beside measured ones: untimed rows are allowed.
+        // A ledger table keeps transcribed rows beside measured ones: untimed rows are allowed.
     } else if (const auto u = std::find_if(t.rows.begin(), t.rows.end(), [](const TableRow& r) { return !r.timed; });
                u != t.rows.end()) {
         line_no = u->line;

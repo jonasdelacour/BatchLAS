@@ -254,8 +254,3 @@ TEST(SyevxResolveRangeTest, EndIndexBlocksResolveToTheExtremalRequest) {
         EXPECT_EQ(bottom.reverse, bottom_idx.reverse);
     }
 }
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

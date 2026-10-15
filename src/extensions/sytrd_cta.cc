@@ -5,7 +5,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
@@ -187,11 +187,11 @@ namespace batchlas {
                                 const int32_t row = s + lane;
                                 A_local[base_a + row + col * static_cast<int32_t>(P)] = x;
                                 // Keep symmetry (optional but helpful for later stages).
-                                A_local[base_a + col + row * static_cast<int32_t>(P)] = conj_if_complex(x);
+                                A_local[base_a + col + row * static_cast<int32_t>(P)] = batchlas::device::detail::conj(x);
                             }
                             if (is_alpha) {
                                 A_local[base_a + s + col * static_cast<int32_t>(P)] = alpha;
-                                A_local[base_a + col + s * static_cast<int32_t>(P)] = conj_if_complex(alpha);
+                                A_local[base_a + col + s * static_cast<int32_t>(P)] = batchlas::device::detail::conj(alpha);
                             }
 
                             if (lane == 0) {
@@ -231,7 +231,7 @@ namespace batchlas {
                                 group_barrier(part);
 
                                 // dot = v^H x
-                                const T dot_lane = (lane < m) ? (conj_if_complex(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
+                                const T dot_lane = (lane < m) ? (batchlas::device::detail::conj(V_local[base_v + lane]) * W_local[base_w + lane]) : T(0);
                                 const T dot = group_reduce_sum_select_from_group(part, dot_lane);
                                 const T alpha2 = T(-0.5) * taui * dot;
 
@@ -252,7 +252,7 @@ namespace batchlas {
                                         const T v_c = V_local[base_v + c];
                                         const T w_c = W_local[base_w + c];
                                         const int32_t idx = base_a + row + col2 * static_cast<int32_t>(P);
-                                        A_local[idx] = A_local[idx] - (v_r * conj_if_complex(w_c) + w_r * conj_if_complex(v_c));
+                                        A_local[idx] = A_local[idx] - (v_r * batchlas::device::detail::conj(w_c) + w_r * batchlas::device::detail::conj(v_c));
                                     }
                                 }
                                 group_barrier(part);
@@ -260,7 +260,7 @@ namespace batchlas {
                                 // Restore subdiagonal element.
                                 if (lane == 0) {
                                     A_local[base_a + s + col * static_cast<int32_t>(P)] = alpha;
-                                    A_local[base_a + col + s * static_cast<int32_t>(P)] = conj_if_complex(alpha);
+                                    A_local[base_a + col + s * static_cast<int32_t>(P)] = batchlas::device::detail::conj(alpha);
                                 }
                                 group_barrier(part);
                             }

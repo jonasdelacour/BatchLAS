@@ -33,7 +33,7 @@ namespace {
 enum class WyPin { Measured, Gemm, Trmm };
 
 inline WyPin wy_pin() {
-    // Latched, as before: this feeds a sizing decision as well as the call.
+    // Latched: this feeds a sizing decision as well as the call.
     static const WyPin result = []() {
         const char* v = batchlas::settings().selection.ormqr_wy.get();
         if (!v) return WyPin::Measured;
@@ -46,7 +46,7 @@ inline WyPin wy_pin() {
 }
 
 // Substitute the trmm only where its batched triangular tile kernel is both
-// linked and ahead of the GEMM it replaces: real types, ib <= 64.
+// enabled and ahead of the GEMM it replaces: real types, ib <= 64.
 // evidence: docs/perf/qr.md#ormqr-wy-trmm-gate
 template <Backend B, typename T>
 inline bool wy_trmm_applicable(int ib) {
@@ -54,11 +54,11 @@ inline bool wy_trmm_applicable(int ib) {
     if (pin != WyPin::Measured) {
         return pin == WyPin::Trmm;
     }
-    // Ask whether the tile kernel is linked, not what the backend is: a
-    // vendor-free build is still Backend::CUDA but need not compile that TU.
-    constexpr bool route_has_tile_kernel = select::level3_tile_route_available<B, T>;
+    // Ask whether the tile substitution is enabled for (B, T), not what the
+    // backend is: a vendor-free build is still Backend::CUDA.
+    constexpr bool tile_kernel_enabled = select::level3_tile_substitution_enabled<B, T>;
     constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
-    return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64;
+    return tile_kernel_enabled && type_beats_gemm_at_this_m && ib <= 64;
 }
 
 inline bool use_device_ormqr() {

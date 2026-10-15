@@ -44,7 +44,5 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
 
 template Event lascl<MatrixFormat::Dense, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, float, float);
 template Event lascl<MatrixFormat::Dense, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, double, double);
-//template Event lascl<MatrixFormat::Dense, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>, std::complex<float>);
-//template Event lascl<MatrixFormat::Dense, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>, std::complex<double>);
 
 }

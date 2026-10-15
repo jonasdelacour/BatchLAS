@@ -57,7 +57,7 @@ select::Key key_of(const MV<T>& A, const Job& j) {
 // Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
 // Hermitian form; Cta and Blocked run complex input only through the Hermitian shortcut
 // (gesvd_native_impl throws `unsupported` for complex general); Cta cannot write a genuinely thin
-// U; Blocked's Hermitian arm is Lower-only, as the old router had it (Upper is unverified). Every
+// U; Blocked's Hermitian arm is Lower-only (Upper is unverified). Every
 // family, the vendor included, runs each item at the top-level (m, n): no heterogeneous batch.
 template <class T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const Job& j) {

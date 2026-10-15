@@ -72,7 +72,6 @@ class LanczosOptions:
 class SteqrOptions:
     block_size: int = 32
     max_sweeps: int = 10
-    zero_threshold: object = None
     back_transform: bool = False
     block_rotations: bool = False
     sort: bool = True

@@ -90,24 +90,24 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
 // C against alpha op(A) op(B) + beta C0, componentwise in double on every item (Check::blas, k the inner
 // dimension). The reference is the library's, not another gemm: the vendor and the other native kernels
 // are no oracle for each other, and a vendor pin is Auto vendor-free.
-// The comparisons this replaced used an absolute tolerance of old_scale * the old vendor-comparison bound against a
+// The comparisons this replaced used an absolute tolerance of tol_scale * the old vendor-comparison bound against a
 // vendor result, tighter than the relative bound at large k in float. The Slack keeps that power: factor <= 1 so
 // that factor * bound * (largest denominator over the checked items) is at most the old absolute tolerance.
 template <typename T>
-constexpr double old_vendor_tolerance() {  // the old test_utils::tolerance vendor-comparison bound
+constexpr double vendor_comparison_tolerance() {  // the old test_utils::tolerance vendor-comparison bound
     if constexpr (batchlas::is_std_complex_v<T>) return std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10;
     else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
 }
 
 template <typename T, class VA, class VB, class VC0, class VC>
 ::testing::AssertionResult GemmMatchesDefinition(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
-                                                 const VC& C, T alpha, T beta, int k, double old_scale = 100) {
+                                                 const VC& C, T alpha, T beta, int k, double tol_scale = 100) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const double err = MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta), C.all_items());
     const double den = MV::gemm_max_denominator(ctx, A, ta, B, tb, C0, MV::up(alpha), MV::up(beta), C.all_items());
-    const double old_tol = old_vendor_tolerance<T>() * old_scale;
+    const double abs_tol = vendor_comparison_tolerance<T>() * tol_scale;
     const batchlas::verify::Slack slack{
-        std::min(1.0, old_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),
+        std::min(1.0, abs_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),
         "the old absolute tolerance against the vendor, kept"};
     return test_utils::verify_pass<T>(batchlas::verify::Check::blas, k, err, slack);
 }
@@ -153,7 +153,7 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
                                   Transpose transB,
                                   ScalarType alpha = ScalarType(1),
                                   ScalarType beta = ScalarType(1),
-                                  double old_scale = 75) {
+                                  double tol_scale = 75) {
     SKIP_UNLESS_NATIVE(ctx);
     if (int rm, rn, rk, ru; std::sscanf(kernel_name, "reg:m=%d:n=%d:k=%d:u=%d", &rm, &rn, &rk, &ru) == 4 &&
                             !RegTileFitsOrIsRefused(ctx, kernel_name, rm, rn, rk, ru))
@@ -175,7 +175,7 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
     }
     ctx.wait();
 
-    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), transA, B.view(), transB, C0.view(), C.view(), alpha, beta, k, old_scale));
+    ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A.view(), transA, B.view(), transB, C0.view(), C.view(), alpha, beta, k, tol_scale));
 }
 
 } // namespace
@@ -243,12 +243,11 @@ protected:
 
 TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 
-// The old GemmDispatchPolicyTest asserts, against the transcribed sm_89 float table that replaced
-// select_kernel_variant (read with Table::nearest, so every device checks them). The native pick
-// is the first non-vendor entry: what Auto runs vendor-free and what `native` resolves to.
-// A padded ld (272, 258) is layout=strided. The vendor-vs-native order is not asserted here
-// (gemm_candidates_tests.cc AutoReadsTheSm89TranscribedTable runs it).
-TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
+// The native pick of each transcribed row of the sm_89 float gemm table (read with Table::nearest,
+// so every device checks them) is the first non-vendor entry: what Auto runs vendor-free and what
+// `native` resolves to. A padded ld (272, 258) is layout=strided. The vendor-vs-native order is not
+// asserted here (gemm_candidates_tests.cc AutoReadsTheSm89TranscribedTable runs it).
+TEST(GemmTranscribedTable, Sm89NativeRowsHoldTheTranscribedSelector) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* ta; const char* layout; int m, n, k; const char* native; };
     const Row rows[] = {
@@ -259,7 +258,7 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
         {"N", "strided", 256, 256, 256, "reg:m=128:n=128:k=8:u=1"},  // ld 272 and ld 258
         {"T", "packed", 256, 128, 256, "reg:m=128:n=32:k=32:u=1"},
         {"T", "strided", 256, 128, 256, "reg:m=128:n=32:k=32:u=1"},
-        // Off-grid: the old selector chose 128x32x16 for packed 512x64x512 NN; the nearest
+        // Off-grid: the transcribed selector chose 128x32x16 for packed 512x64x512 NN; the nearest
         // transcribed row is m=512 n=128 k=128, so the table now names 128x128x8.
         {"N", "packed", 512, 64, 512, "reg:m=128:n=128:k=8:u=1"},
         {"N", "strided", 512, 64, 512, "reg:m=128:n=32:k=16:u=1"},
@@ -273,7 +272,7 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
                               {"n", r.n},   {"k", r.k},  {"batch", 1}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr);
-        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
         if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         const auto it = std::find_if(row->ranked.begin(), row->ranked.end(),
@@ -1724,9 +1723,4 @@ TYPED_TEST(GemmTest, BatchOffsetAbove2Pow31) {
                       0.0);
         }
     }
-}
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
 }

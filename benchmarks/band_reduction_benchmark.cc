@@ -31,10 +31,6 @@ enum class BandReductionMode {
 BandReductionMode g_mode = BandReductionMode::Phase;
 int32_t g_phase_reduce = 0;
 
-inline bool starts_with(const std::string& s, const std::string& prefix) {
-    return s.rfind(prefix, 0) == 0;
-}
-
 inline std::vector<int32_t> parse_int_list(const std::string& csv) {
     std::vector<int32_t> out;
     std::stringstream ss(csv);
@@ -194,13 +190,13 @@ int main(int argc, char** argv) {
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string arg(argv[i]);
-            if (starts_with(arg, "--nb-seq=")) {
+            if (arg.starts_with("--nb-seq=")) {
                 g_block_size_seq = parse_int_list(arg.substr(std::string("--nb-seq=").size()));
-            } else if (starts_with(arg, "--d-seq=")) {
+            } else if (arg.starts_with("--d-seq=")) {
                 g_d_seq = parse_int_list(arg.substr(std::string("--d-seq=").size()));
-            } else if (starts_with(arg, "--mode=")) {
+            } else if (arg.starts_with("--mode=")) {
                 g_mode = parse_mode_or_throw(arg.substr(std::string("--mode=").size()));
-            } else if (starts_with(arg, "--phase-reduce=")) {
+            } else if (arg.starts_with("--phase-reduce=")) {
                 g_phase_reduce = static_cast<int32_t>(std::stoi(arg.substr(std::string("--phase-reduce=").size())));
                 if (g_phase_reduce < 0) {
                     throw std::runtime_error("--phase-reduce must be >= 0");

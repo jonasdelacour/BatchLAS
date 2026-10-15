@@ -156,7 +156,7 @@ void append_static_rows(std::ostringstream& out) {
     // availability is per (backend, scalar).
     // evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
     using namespace batchlas::select;
-    const bool tiles_f32 = level3_tile_route_available<B, float>;
+    const bool tiles_f32 = level3_tile_substitution_enabled<B, float>;
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        true},

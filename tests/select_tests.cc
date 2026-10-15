@@ -639,7 +639,7 @@ TEST_F(Select, BadPinsThrow) {
     EXPECT_NE(pin_error("wide:1:2").find("not a compiled"), std::string::npos);
     EXPECT_NE(pin_error("cta", all_but({"cta"})).find("cta cannot run this shape on sm_120"), std::string::npos);
     EXPECT_EQ(pin_error("vendor", all_but({"vendor"})), "<no throw>");  // a class word, like native
-    // There are no aliases: the old router's origin:algorithm spellings are not choices.
+    // There are no aliases: origin:algorithm spellings are not choices.
     for (const char* old : {"native:tiny", "native:lpanel", "vendor:auto", "auto:auto", "netlib"})
         EXPECT_NE(pin_error(old).find("is not a valid choice: '" + std::string(old) + "'"),
                   std::string::npos)

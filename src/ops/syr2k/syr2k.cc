@@ -36,7 +36,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     return {{"n", C.rows()}, {"k", inner<T>(A, transA)}, {"batch", C.batch_size()}};
 }
 
-// Correctness only (R3). The kernel is wired for CUDA (the old reach, design D6) and
+// Correctness only (R3). The kernel is wired for CUDA (design D6) and
 // instantiated for float. One launch covers the batch with a single (n, k, ld, stride), so no
 // heterogeneous operand. A real ConjTrans is Trans, folded by the launch, so it is no term. The
 // grid terms are the launch's own limits (GridCeilingsAreCanRunTerms). Every vendor loop (cuBLAS,
@@ -88,7 +88,7 @@ Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as syrk's does (the cuBLAS loop faults on one).
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage key the old level-3 recorder wrote: m = n = C's order, k = op(A)'s inner extent.
+    // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::syr2k::inner<T>(A, transA),
                                 .batch = C.batch_size(), .transA = transA, .uplo = uplo};
     const select::Key key = ops::syr2k::key_of<T>(A, C, transA);

@@ -300,11 +300,6 @@ void SparseSyevxIlukSizes(Benchmark* b) {
     }
 }
 
-template <typename Benchmark>
-void SparseSyevxIlukSizesNetlib(Benchmark* b) {
-    SparseSyevxIlukSizes(b);
-}
-
 template <typename Real>
 struct SparseRunBuffers {
     UnifiedVector<Real> eigvals;

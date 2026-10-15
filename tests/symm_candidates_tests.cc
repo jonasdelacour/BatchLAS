@@ -206,7 +206,7 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-// The old router (ff340fc6 symm_custom_dispatch.cc + triangular_expand.hh), restated: float,
+// The transcribed rule (ff340fc6 symm_custom_dispatch.cc + triangular_expand.hh), restated: float,
 // squareish C, and batch >= 4 or max(m, n) >= 256 took the expansion; everything else the vendor.
 template <typename T>
 std::string old_auto(int m, int n, int batch) {
@@ -716,8 +716,8 @@ TYPED_TEST(SymmCandidates, ScopedPinBeatsTheEnvironment) {
 }
 
 // Auto against the shipped table of this device (shipped_table_pick.hh), at cells on both sides of
-// every threshold the old router read (batch 3|4, max(m, n) 255|256, the squareish form), on and
-// off the grid. On a transcribed table that is the old rule (SymmTranscribedTable checks the rows).
+// every transcribed threshold (batch 3|4, max(m, n) 255|256, the squareish form), on and
+// off the grid. On a transcribed table that is the transcribed rule (SymmTranscribedTable checks the rows).
 TYPED_TEST(SymmCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -926,9 +926,9 @@ TYPED_TEST(SymmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 }
 
 // The sm_89 transcription (no GPU): the table holds exactly choice.hh's grid, every row ranks
-// both candidates, and the float first entries restate the old rule at the cell's form
+// both candidates, and the float first entries restate the transcribed rule at the cell's form
 // representative (double: vendor everywhere). sm_120 is deep-measured since 2026-10-09.
-TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
+TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheTranscribedRule) {
     test_utils::TranscribedRowsHeld held;
     auto rep = [](const std::string& form, int m, int n) {
         if (std::string(sy::form_of(m, n)) == form) return std::pair{m, n};
@@ -954,7 +954,7 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
                             want.insert(std::string(f) + " " + std::to_string(m) + " " + std::to_string(n) + " " + std::to_string(b));
             for (const auto& row : t.rows) {
                 got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3]);
-                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                 if (held.skip(row.timed)) continue;
                 ASSERT_EQ(row.ranked.size(), 2u) << t.file << ":" << row.line;
                 const auto [rm, rn] = rep(row.keys[0], std::stoi(row.keys[1]), std::stoi(row.keys[2]));

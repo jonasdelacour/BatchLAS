@@ -96,12 +96,12 @@ constexpr const char* library_name(Lib l) {
     }
 }
 
-// Is a level-3 tile kernel linked for (B, T)? Kept at its pre-flat-selection value (float, or
-// cuBLAS) for sytrd_blocked, ortho, ormqr_blocked and coverage: double syrk gram, symm expand and
-// every trmm family now run vendor-free too, but widening this moves ortho's and ormqr's routes.
+// Where sytrd_blocked, ortho and ormqr_blocked swap a gemm for a level-3 tile kernel, and
+// coverage's float native rows: a native GPU backend and (float, or CUDA with cuBLAS). Narrower than where those
+// kernels now run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
 // evidence: docs/design/vendor-independence.md#the-vendor-gate-why-the-tile-route-predicate-is-per-backend-and-scalar
 template <Backend B, typename T>
-inline constexpr bool level3_tile_route_available =
+inline constexpr bool level3_tile_substitution_enabled =
     native_gpu_backend<B> && (std::is_same_v<T, float> || (B == Backend::CUDA && bool(BATCHLAS_HAS_CUBLAS)));
 
 /// The single funnel for "nothing can serve this call": records the miss, then throws NoRouteError.

@@ -350,7 +350,7 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" || p == "src/extensions/sg_compat.hh" ||
+        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
                p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
@@ -635,9 +635,6 @@ TEST(TuneOldCsv, ReadsEveryRowOfAGateCsvAndRejectsWhatItCannotRead) {
     EXPECT_FALSE(parse_old_csv(head + "float,L,44,512,,tiny,,,,,same\n", {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(head, {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(text, {"uplo", "n", "nrhs", "batch"}, {}, &err));
-    EXPECT_EQ(split_origin("native:lpanel"), (std::pair<std::string, std::string>{"native", "lpanel"}));
-    EXPECT_EQ(split_origin("vendor:auto"), (std::pair<std::string, std::string>{"vendor", "auto"}));
-    EXPECT_EQ(split_origin("lpanel:panel=8"), (std::pair<std::string, std::string>{"native", "lpanel:panel=8"}));
     // Last, so a skip leaves the synthetic cases above checked. A previous gate's output: 87 of
     // its 120 rows have empty fields.
     const std::string gate = read_file(fs::path(BATCHLAS_TUNE_SOURCE_DIR) /
@@ -2429,7 +2426,6 @@ public:
     double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
     std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
     std::string spec_file() const override { return "fake_spec.cc"; }
-    std::string normalize_route(const std::string&, const std::string& algo) const override { return algo; }
     std::vector<ArmOutcome> run_cell(const CellRequest&) const override { return {}; }
 };
 

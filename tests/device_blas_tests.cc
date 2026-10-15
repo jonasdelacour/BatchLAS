@@ -166,25 +166,6 @@ void run_nd_item_kernel_with_workspace(Queue& ctx,
     ctx.wait_and_throw();
 }
 
-template <typename KernelFunc>
-void run_nd_item_kernel_3d(Queue& ctx, int rows, int cols, KernelFunc&& kernel) {
-    constexpr size_t local_rows = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixLocalRows);
-    constexpr size_t local_cols = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixLocalCols);
-    constexpr size_t tile_rows = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixTileM);
-    constexpr size_t tile_cols = static_cast<size_t>(batchlas::device::detail::subgroup::kRegisterMatrixTileN);
-    const size_t group_rows = (static_cast<size_t>(rows) + tile_rows - 1) / tile_rows;
-    const size_t group_cols = (static_cast<size_t>(cols) + tile_cols - 1) / tile_cols;
-
-    ctx->submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, group_rows * local_rows, group_cols * local_cols),
-                                         sycl::range<3>(1, local_rows, local_cols)),
-                       [=](sycl::nd_item<3> item) {
-                           kernel(item);
-                       });
-    });
-    ctx.wait_and_throw();
-}
-
 template <typename T, typename KernelFunc>
 void run_nd_item_kernel_3d_with_workspace(Queue& ctx,
                                           int rows,

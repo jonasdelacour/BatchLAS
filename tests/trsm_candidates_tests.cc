@@ -608,9 +608,8 @@ TYPED_TEST(TrsmCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases, each with its message (absorbs route_vocabulary_tests'
-// RouteTrsm.CorrectnessGatesAreNotSpeedGates and AbsentKernelIsUnsupportedRatherThanSelectable:
-// order 0, q 0, one past the CTA ceiling, sg_left on Side::Right).
+// The named can_run-false cases, each with its message: order 0, q 0, one past the CTA ceiling,
+// sg_left on Side::Right.
 TYPED_TEST(TrsmCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -640,7 +639,7 @@ TYPED_TEST(TrsmCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// RouteTrsm.AbsentKernelIsUnsupportedRatherThanSelectable, ported: a build without the kernel
+// A build without the kernel
 // reports cta_max 0 and blocked unavailable, which this build does not; what can be launched is
 // that both natives exist here and that blocked serves what cta's ceiling refuses.
 TYPED_TEST(TrsmCandidates, BlockedServesPastTheCtaCeiling) {
@@ -834,7 +833,7 @@ TYPED_TEST(TrsmCandidates, AutoReadsEveryKeyField) {
     }
 }
 
-// RouteTrsm.RhsCountFollowsSide, ported: the trace key's q is B.cols on Side::Left and B.rows
+// The trace key's q is B.cols on Side::Left and B.rows
 // on Side::Right, and order is A's order on both.
 TYPED_TEST(TrsmCandidates, TraceKeyQFollowsSide) {
     using T = typename TestFixture::T;
@@ -848,7 +847,7 @@ TYPED_TEST(TrsmCandidates, TraceKeyQFollowsSide) {
     }
 }
 
-// RouteTrsm.VendorFreeStillFindsANativeRouteAtEveryOrder, ported: with a table naming only the
+// With a table naming only the
 // vendor, a vendor-free build takes the last resort, blocked, at order 32 and at order 4096;
 // under the shipped tables Auto runs the table's first runnable entry at 32.
 TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
@@ -947,7 +946,7 @@ TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// RouteTrsm.CorrectnessGatesAreNotSpeedGates' CPU case, ported: on a CPU queue no native
+// On a CPU queue no native
 // family can run, so native pins throw and Auto is the vendor (or no route without one).
 template <typename Config>
 class TrsmCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -983,7 +982,7 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them:
 // cta | blocked | vendor up to order 32 and blocked | vendor above, on both sides and trans.
-TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
+TEST(TrsmTranscribedTable, Sm89RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* side; const char* trans; int n, q, batch; const char* first; std::size_t len; };
     const Row rows[] = {
@@ -1000,7 +999,7 @@ TEST(TrsmTranscribedTable, Sm89RowsHoldTheOldPreference) {
         const select::Key key{{"side", r.side}, {"trans", r.trans}, {"order", r.n}, {"q", r.q}, {"batch", r.batch}};
         const select::TableRow* row = t.nearest(key);
         ASSERT_NE(row, nullptr) << t.file;
-        // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+        // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
         if (held.skip(row->timed)) continue;
         const std::string what = t.file + ":" + std::to_string(row->line);
         ASSERT_EQ(row->ranked.size(), r.len) << what;

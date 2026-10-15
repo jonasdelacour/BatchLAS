@@ -313,7 +313,7 @@ protected:
             else if (std::holds_alternative<sy::Jacobi>(c)) need = syev_jacobi_cta_buffer_size<B, T>(*q, A, j);
             else if (std::holds_alternative<sy::Blocked>(c)) need = syev_blocked_buffer_size<B, T>(*q, A, j, u);
             else if (std::holds_alternative<sy::TwoStage>(c)) need = syev_two_stage_buffer_size<B, T>(*q, A, j, u);
-            else need = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(*q, A, w, j, u);
+            else need = batchlas::ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(*q, A, w, j, u);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(need, 1));
             const auto wsp = ws.to_span();
             if (std::holds_alternative<sy::Cta>(c)) (void)syev_cta<B, T>(*q, A, w, j, u, wsp, sp, 0);
@@ -321,7 +321,7 @@ protected:
             else if (std::holds_alternative<sy::Jacobi>(c)) (void)syev_jacobi_cta<B, T>(*q, A, w, j, u, wsp);
             else if (std::holds_alternative<sy::Blocked>(c)) (void)syev_blocked<B, T>(*q, A, w, j, u, wsp);
             else if (std::holds_alternative<sy::TwoStage>(c)) (void)syev_two_stage<B, T>(*q, A, w, j, u, wsp);
-            else (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(*q, A, w, j, u, wsp);
+            else (void)batchlas::ops::syev::detail::syev_vendor_or_throw<B, T>(*q, A, w, j, u, wsp);
             q->wait();
             return true;
         } catch (const std::exception& e) {
@@ -502,15 +502,14 @@ TYPED_TEST(SyevCandidates, CanRunFalsePinsThrow) {
             << word;
     }
     // The Python binding's introspection asks the same can_run: no family takes a rectangle.
-    namespace det = blas::dispatch::detail;
-    EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, rect));
-    EXPECT_FALSE(det::syev_supports_blocked<T>(*this->ctx, rect, Uplo::Lower));
-    EXPECT_FALSE(det::syev_supports_two_stage<T>(*this->ctx, rect, Uplo::Upper));
+    EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, rect));
+    EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_blocked<T>(*this->ctx, rect, Uplo::Lower));
+    EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_two_stage<T>(*this->ctx, rect, Uplo::Upper));
     const MVof<T> sq32(a.data(), 32, 32, 32, 0, 1), sq33(a.data(), 33, 33, 33, 0, 1);
-    EXPECT_TRUE(det::syev_supports_cta<T>(*this->ctx, sq32));
-    EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, sq33));
-    EXPECT_TRUE(det::syev_supports_blocked<T>(*this->ctx, sq33, Uplo::Upper));
-    EXPECT_TRUE(det::syev_supports_two_stage<T>(*this->ctx, sq33, Uplo::Lower));
+    EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq32));
+    EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq33));
+    EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_blocked<T>(*this->ctx, sq33, Uplo::Upper));
+    EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_two_stage<T>(*this->ctx, sq33, Uplo::Lower));
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and BATCHLAS_SYEV_ROUTE. The
@@ -612,7 +611,7 @@ TYPED_TEST(SyevCandidates, TraceLineShowsTheKey) {
     EXPECT_NE(line.find("jobz=N n=7 batch=5 ->"), std::string::npos) << line;
 }
 
-// Auto against the shipped table of this device (shipped_table_pick.hh) at the old router's
+// Auto against the shipped table of this device (shipped_table_pick.hh) at the transcribed
 // edges: the small-kernel pick per type at n 8|9, the cdouble CTA-vs-vendor edge 24|25, CTA's 32|33.
 TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
@@ -728,11 +727,10 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     }
     // The syev_supports_* bindings ask can_run with Backend::AUTO, so only the is_gpu term refuses.
     {
-        namespace det = blas::dispatch::detail;
         auto sq = make_eig<T>(s);
-        EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, sq.A()));
-        EXPECT_FALSE(det::syev_supports_blocked<T>(*this->ctx, sq.A(), Uplo::Lower));
-        EXPECT_FALSE(det::syev_supports_two_stage<T>(*this->ctx, sq.A(), Uplo::Upper));
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_blocked<T>(*this->ctx, sq.A(), Uplo::Lower));
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_two_stage<T>(*this->ctx, sq.A(), Uplo::Upper));
     }
     auto p = make_eig<T>(s);
     auto call = [&] {
@@ -752,7 +750,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
 // old threshold on its two sides, per type and jobz (the old predicates, syev.hh@424a45bc). sm_120
 // is deep-measured since 2026-10-09 (tuned_tables_tests checks its provenance).
-TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
+TEST(SyevTranscribedTable, RowsHoldTheTranscribedPreference) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; const char* jobz; int n; const char* ranked; };
     const Row rows[] = {
@@ -775,7 +773,7 @@ TEST(SyevTranscribedTable, RowsHoldTheOldPreference) {
                 ASSERT_EQ(t.device, dev) << r.dtype;
                 const select::TableRow* row = t.nearest({{"jobz", r.jobz}, {"n", r.n}, {"batch", batch}});
                 ASSERT_NE(row, nullptr) << t.file;
-                // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+                // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
                 if (held.skip(row->timed)) continue;
                 std::string got;
                 for (const auto& e : row->ranked) got += (got.empty() ? "" : "|") + e.spelling;

@@ -12,15 +12,6 @@
 
 namespace batchlas {
 
-template <typename T>
-auto givens_rotation_r(const T& a, const T& b) {
-    T r = std::hypot(a, b);
-    if (internal::is_numerically_zero(r)) {
-        return std::array<T, 3>{T(1), T(0), T(0)};
-    }
-    return std::array<T, 3>{a / r, b / r, r};
-}
-
 
 template <typename T>
 auto sec_eval(const sycl::group<1>& cta, const VectorView<T>& v, const VectorView<T>& d, const T& x, const int32_t i, const int32_t n, const sycl::local_accessor<T, 1>& psi_buffer) {

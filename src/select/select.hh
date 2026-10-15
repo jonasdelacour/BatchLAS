@@ -418,7 +418,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
                 return k;
             }
         if (strict) throw std::invalid_argument(refused);
-        warn_pin_fallback(op, "vendor", d);  // a vendor-free build: the old router fell through too
+        warn_pin_fallback(op, "vendor", d);  // a vendor-free build: `vendor` falls back to Auto
         return std::nullopt;
     }
     std::string err;

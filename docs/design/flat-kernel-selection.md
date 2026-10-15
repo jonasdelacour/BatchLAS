@@ -313,7 +313,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
 - **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
   work-groups. The phase-5 kernels were not audited for it. ormqr's blocked driver was reported to hit it
   (known-defects #16), but that did not reproduce on sm_120.
-- **`select::level3_tile_route_available`** is conservative (float, or any type with cuBLAS). Widening
+- **`select::level3_tile_substitution_enabled`** is conservative (float, or any type with cuBLAS). Widening
   it moves the vendor-free routes of ortho and ormqr, so that is a separate change.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
 

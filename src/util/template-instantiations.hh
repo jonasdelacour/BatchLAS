@@ -42,16 +42,11 @@
     BATCHLAS_FOR_EACH_REAL_TYPE_1(INVOKE, arg1) \
     BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(INVOKE, arg1)
 
-#define BATCHLAS_FOR_EACH_MATRIX_FORMAT_1(INVOKE, arg1) \
-    INVOKE(arg1, MatrixFormat::Dense) \
-    INVOKE(arg1, MatrixFormat::CSR)
-
 #define BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(INVOKE, arg1, arg2) \
     INVOKE(arg1, arg2, MatrixFormat::Dense) \
     INVOKE(arg1, arg2, MatrixFormat::CSR)
 
-// Arms are pre-guarded (a macro cannot emit #if). MKL is deliberately absent: its TUs
-// instantiate a different set, and a blanket loop would add or drop exported symbols.
+// Arms pre-guarded (a macro cannot emit #if). No MKL arm: a blanket loop would change exports.
 #include <batchlas/backend_config.h>
 
 #if BATCHLAS_HAS_HOST_BACKEND
@@ -77,12 +72,6 @@
 
 // INVOKE gets the Backend enumerator LAST, matching the type loops above. Type-free: an
 // INVOKE that loops over types itself must use the DEVICE loops for Backend::SYCL.
-#define BATCHLAS_FOR_EACH_ENABLED_BACKEND(INVOKE) \
-    BATCHLAS_IF_CUDA(INVOKE(Backend::CUDA)) \
-    BATCHLAS_IF_ROCM(INVOKE(Backend::ROCM)) \
-    BATCHLAS_IF_SYCL(INVOKE(Backend::SYCL)) \
-    BATCHLAS_IF_HOST(INVOKE(Backend::NETLIB))
-
 #define BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(INVOKE, arg1) \
     BATCHLAS_IF_CUDA(INVOKE(arg1, Backend::CUDA)) \
     BATCHLAS_IF_ROCM(INVOKE(arg1, Backend::ROCM)) \

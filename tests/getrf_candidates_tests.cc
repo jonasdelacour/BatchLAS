@@ -396,7 +396,7 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
 }
 
-// The squareness gate (route_vocabulary's RouteGetrf.Squareness..., ported): every native pin
+// The squareness gate: every native pin
 // refuses a non-square getrf. On a GPU queue the vendor is cuBLAS getrfBatched, square-only, so
 // there is no route; vendor-free, NoRouteError. NETLIB and ROCm take it: GetrfVendor below.
 TYPED_TEST(GetrfCandidates, NonSquareHasNoRouteOnTheGpuQueue) {
@@ -535,7 +535,7 @@ TYPED_TEST(GetrfCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// The pivot-format gate (route_vocabulary's RouteLuPivotFormat getrf half, ported): the native
+// The pivot-format gate: the native
 // tiers write packed int32 where netlib writes int64, so a NETLIB getrf runs no native family,
 // even on a GPU queue.
 TYPED_TEST(GetrfCandidates, NetlibBackendRunsNoNativeFamily) {
@@ -626,7 +626,7 @@ TYPED_TEST(GetrfCandidates, ScopedPinBeatsTheEnvironment) {
 }
 
 // Auto against the shipped tables on the real device (shipped_table_pick.hh), on the cells that
-// straddled the old router's edges (getrf_tests' L12/T9 and the RouteGetrf windows, ported): the
+// straddle the transcribed edges: the
 // tiny window, the blocked windows on both of cfloat's axes; off-grid orders and batches on purpose.
 TYPED_TEST(GetrfCandidates, AutoReadsTheShippedTablesOnTheRealDevice) {
     using T = typename TestFixture::T;
@@ -784,7 +784,7 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: each
 // threshold of the old predicates from both sides. sm_120 is deep-measured since 2026-10-09.
-TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
+TEST(GetrfTranscribedTable, RowsHoldTheTranscribedPreferenceOnSm89) {
     test_utils::TranscribedRowsHeld held;
     struct Row { const char* dtype; int n, batch; const char* ranked; };
     const Row rows[] = {
@@ -808,7 +808,7 @@ TEST(GetrfTranscribedTable, RowsHoldTheOldPreferenceOnSm89) {
             ASSERT_EQ(t.device, dev) << r.dtype;
             const select::TableRow* row = t.nearest(select::Key{{"n", r.n}, {"batch", r.batch}});
             ASSERT_NE(row, nullptr) << t.file;
-            // A measured (timed) row ranks by the tuner, not by the old router: nothing to hold it to.
+            // A measured (timed) row ranks by the tuner, not by the transcription: nothing to hold it to.
             if (held.skip(row->timed)) continue;
             std::string got;
             for (const auto& e : row->ranked) got += (got.empty() ? "" : " ") + e.spelling;

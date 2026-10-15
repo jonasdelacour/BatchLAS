@@ -40,7 +40,6 @@
 
 namespace batchlas {
 
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsPartialKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsReduceKernel;
 template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterInitKernel;
@@ -120,11 +119,6 @@ Event syevx_filtered(Queue& ctx,
     if (const char* av = batchlas::settings().selection.syevx_filter_degree_auto.get()) {
         if (std::atoi(av) != 0 && !degree_explicit) auto_degree = true;
     }
-    bool legacy_bounds = false;
-    // Trap: atoi, not env_truthy, so "true"/"on" are FALSE here. Kept deliberately.
-    if (const char* bv = batchlas::settings().selection.syevx_bounds_legacy.get()) {
-        legacy_bounds = (std::atoi(bv) != 0);
-    }
     const bool find_largest = params.find_largest;
 
     BumpAllocator pool(workspace);
@@ -201,8 +195,8 @@ Event syevx_filtered(Queue& ctx,
 
     // ---- Gershgorin bounds: only need to be conservative (a loose interval costs
     // sharpness, never correctness). Invariant: the inner j loop stays serial and
-    // ascending, so the parallel kernel is bit-identical to the legacy one
-    // (BATCHLAS_SYEVX_BOUNDS_LEGACY=1). evidence: docs/perf/syevx.md#syevx-the-parallel-gershgorin-bounds-kernel
+    // ascending, so the bounds are bit-identical to a serial row-by-row scan.
+    // evidence: docs/perf/syevx.md#syevx-the-parallel-gershgorin-bounds-kernel
     auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) {
         Real diag = Real(0);
         Real radius = Real(0);
@@ -243,29 +237,7 @@ Event syevx_filtered(Queue& ctx,
         std::max<size_t>(1, (static_cast<size_t>(n) + kBoundsWG - 1) / kBoundsWG);
     // Outside the BumpAllocator on purpose; see syevx_filtered_buffer_size.
     UnifiedVector<Real> bounds_partial(2 * row_groups * static_cast<size_t>(batch));
-    if (legacy_bounds) {
-        auto lo = lo_span.data();
-        auto hi = hi_span.data();
-        auto Akv = A.kernel_view();
-        const int64_t nn = n;
-        ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterBoundsKernel<B, T, MFormat>>(
-                sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
-                    const int b = static_cast<int>(tid[0]);
-                    Real l = std::numeric_limits<Real>::max();
-                    Real u = -std::numeric_limits<Real>::max();
-                    for (int64_t i = 0; i < nn; ++i) {
-                        const sycl::vec<Real, 2> rb = row_bound(Akv, i, b, nn);
-                        l = sycl::min(l, rb[0]);
-                        u = sycl::max(u, rb[1]);
-                    }
-                    // Degenerate spectrum: widen so e > 0 below.
-                    if (!(u > l)) { u = l + Real(1); }
-                    lo[b] = l;
-                    hi[b] = u;
-                });
-        });
-    } else {
+    {
         auto Akv = A.kernel_view();
         auto part = bounds_partial.data();
         const int64_t nn = n;

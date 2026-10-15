@@ -5,7 +5,7 @@
 
 using namespace batchlas;
 
-// Batched STEQR benchmark
+// Batched tridiagonal_solver benchmark (eigenvalues and eigenvectors)
 template <typename T, Backend B>
 static void BM_STEHR(minibench::State& state) {
     const size_t n = state.range(0);

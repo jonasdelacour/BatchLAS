@@ -3506,9 +3506,4 @@ TEST(SyevxInfoTest, InfoReportsItemsThatExhaustTheIterationBudget) {
 }
 // The resolver's own normalization table now lives in tests/syevx_range_tests.cc:
 // it needs no device, so it belongs in a binary that is not labelled `slow`.
-
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
 #endif // BATCHLAS_HAS_GPU_BACKEND

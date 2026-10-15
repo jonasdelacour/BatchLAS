@@ -62,7 +62,7 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 /// @param workspace  device-accessible scratch of at least spmm_buffer_size bytes
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor
+/// @throws batchlas::NoRouteError in a build without the vendor
 ///         sparse library for `B` when the native kernel does not support the call
 ///         (a heterogeneous batch, or negative extents).
 /// @note No argument validation is done up front: a shape the native kernel
@@ -99,7 +99,7 @@ BATCHLAS_API Event spmm(Queue& ctx,
 /// @param transA  the spmm call's `transA`
 /// @param transB  the spmm call's `transB`
 /// @return required workspace size in bytes (may be 0)
-/// @throws batchlas::dispatch::NoRouteError under the same conditions as spmm
+/// @throws batchlas::NoRouteError under the same conditions as spmm
 /// @ingroup api_sparse_lowlevel
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,

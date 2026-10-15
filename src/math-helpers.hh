@@ -50,6 +50,46 @@ namespace batchlas {
             }
         }
 
+        template <typename T>
+        inline base_float_t<T> real_part(const T& x) {
+            if constexpr (is_complex<T>::value) {
+                return static_cast<base_float_t<T>>(x.real());
+            } else {
+                return static_cast<base_float_t<T>>(x);
+            }
+        }
+
+        // re*re + im*im in explicit real arithmetic; not interchangeable with norm_squared bit for bit.
+        template <typename T>
+        inline base_float_t<T> abs2_if_complex(const T& x) {
+            using Real = base_float_t<T>;
+            if constexpr (is_complex<T>::value) {
+                const Real re = x.real();
+                const Real im = x.imag();
+                return re * re + im * im;
+            } else {
+                return x * x;
+            }
+        }
+
+        template <typename Real>
+        inline Real sign_nonzero_real(Real x) {
+            return (sycl::signbit(x) ? Real(-1) : Real(1));
+        }
+
+        // x/|x| (complex) or +-1 by sign bit (real); never 0, and 1 for a complex zero.
+        template <typename T>
+        inline T sign_nonzero(const T& x) {
+            using Real = base_float_t<T>;
+            if constexpr (is_complex<T>::value) {
+                const Real a = sycl::hypot(x.real(), x.imag());
+                if (a == Real(0)) return T(1);
+                return x / a;
+            } else {
+                return T(sign_nonzero_real(static_cast<Real>(x)));
+            }
+        }
+
         template <typename K>
         inline constexpr K ceil_div(K num, K denom) {
             return (num + denom - 1) / denom;
@@ -480,6 +520,13 @@ namespace batchlas {
             }
 
             return std::array{rt1, rt2};
+        }
+
+        // The eigenvalue of [[a, b], [b, c]] closest to c.
+        template <typename T>
+        inline T wilkinson_shift(const T& a, const T& b, const T& c) {
+            const auto [lambda1, lambda2] = eigenvalues_2x2(a, b, c);
+            return std::abs(lambda1 - c) < std::abs(lambda2 - c) ? lambda1 : lambda2;
         }
 
         // LAPACK ?LAS2: {ssmin, ssmax}, the singular values of the upper triangular [[f, g], [0, h]],

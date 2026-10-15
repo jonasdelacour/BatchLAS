@@ -613,9 +613,8 @@ and cfloat, and 1 instead of 3 (register-matrix path) for cdouble. The unrecogni
 the `optimized_gemm` and `gemm` paths for float, and the register-matrix and complex rank-2k paths for cdouble.
 
 No benchmark or test has timed any budget except the shipped one; the table is a compile-time census, not a cost.
-A cache entry (`BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES`, default `0` = derive per architecture) replaced the old
-`BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES`, whose cached default of 45056 overrode the derivation on every
-architecture in older build trees. Configure migrates a cached legacy `45056` and warns on other cached values.
+The budget has no override: it is always derived from the architecture table
+(`batchlas_subgroup_workspace_budget_bytes`, `cmake/BatchLASDetectSYCL.cmake`).
 
 ## GEMM: the heterogeneous-batch loop
 
@@ -718,7 +717,7 @@ float, square NN, batch ≥ 64, through 48. 49..56 runs the tiled kernel nativel
 
 **In the table:** `small` ranks first in exactly 72 float rows of `tuned/gemm.sm_89.txt`: the NN squares 1, 2, 4, 8,
 16, 24, 32, 40 and 48 at batch 64, 128, 2048 and 32768, both layouts. The squares 49, 56, 64 and every batch-1 or
-batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheOldVendorEdges`
+batch-63 square rank `vendor` first. The edges are checked by `GemmTranscribedTable.Sm89BracketsTheTranscribedVendorEdges`
 (48³ `small`, 49³ and 52³ `vendor`, 32³ b16 `vendor`, b64 `small`). The (NB/4)² work-group and sub-group-32 need
 outside the tiled leg are `can_run` terms (`small_wg`, `small_fits` in `choice.hh`).
 

@@ -8,7 +8,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "sg_compat.hh"
+#include "sg_partition/sg_partition.hh"
 #include <batchlas/backend_config.h>
 
 #include "../util/template-instantiations.hh"
@@ -49,15 +49,6 @@ struct PlainVec {
 };
 template <typename T, int N>
 using ColVec = std::conditional_t<internal::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
-
-template <typename U>
-inline U conj_val(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
 
 // Reduce sum over a group.
 // NOTE: For non-uniform chunked partitions on CUDA, reduce_over_group may be
@@ -115,7 +106,7 @@ inline void apply_reflector_small(const Partition& part,
                                   bool left,
                                   bool conj_trans) {
     // tau_eff = tau for H, conj(tau) for H^H
-    const T tau_eff = conj_trans ? detail::conj_val(tau) : tau;
+    const T tau_eff = conj_trans ? batchlas::device::detail::conj(tau) : tau;
 
     if (tau_eff == T(0) || len <= 0) return;
 
@@ -126,7 +117,7 @@ inline void apply_reflector_small(const Partition& part,
             T dot = T(0);
             for (int32_t r = 0; r < len; ++r) {
                 const T v_r = V_local[r];
-                dot += detail::conj_val(v_r) * C_local[(offset + r) + lane * P_i];
+                dot += batchlas::device::detail::conj(v_r) * C_local[(offset + r) + lane * P_i];
             }
             Work_local[lane] = tau_eff * dot;
         }
@@ -315,7 +306,7 @@ BATCHLAS_UNROLL_FULL
 
                 for (int32_t ii = i0; ii != i1; ii += step) {
                     const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
-                    const T tau_eff = TransposeOrConj ? detail::conj_val(tau_i) : tau_i;
+                    const T tau_eff = TransposeOrConj ? batchlas::device::detail::conj(tau_i) : tau_i;
 
                     // Stage the reflector indexed by *absolute row*, explicitly zeroed
                     // outside its support.  The rank-1 update can then run over the
@@ -343,7 +334,7 @@ BATCHLAS_UNROLL_FULL
                         T dot = T(0);
 BATCHLAS_UNROLL_FULL
                         for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
-                            dot += detail::conj_val(V_local[base_v + r]) * C_col[r];
+                            dot += batchlas::device::detail::conj(V_local[base_v + r]) * C_col[r];
                         }
                         const T gamma = tau_eff * dot;
 BATCHLAS_UNROLL_FULL

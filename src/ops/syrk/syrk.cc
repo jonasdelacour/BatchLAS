@@ -40,7 +40,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 }
 
 // Correctness only (R3): false means the kernel would throw or answer wrongly. The tile kernels
-// are portable SYCL wired only for CUDA (the old reach), take one (n, k, ld, stride) per launch
+// are portable SYCL wired only for CUDA, take one (n, k, ld, stride) per launch
 // (no heterogeneous batch) and put the batch, and triangular its tile count, in grid dimensions
 // capped at 65535. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
 // can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
@@ -101,7 +101,7 @@ Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key, as the old router recorded it: m = n = C's order, k = op(A)'s inner extent.
+    // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::syrk::inner<T>(A, transA),
                                 .batch = A.batch_size(), .transA = transA, .uplo = uplo};
     const select::Key key = ops::syrk::key_of<T>(A, C, transA);

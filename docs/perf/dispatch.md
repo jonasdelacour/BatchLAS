@@ -26,9 +26,10 @@ inline constexpr bool level3_vendor_available =
   vendor call only under `if constexpr (select::has_library<B>(spec.vendor))`, so an absent library is not compiled.
 - With nothing runnable, `select::throw_no_vendor_route<T>` records a coverage miss and throws
   `batchlas::NoRouteError` (`include/batchlas/no_route.hh`).
-- `select::level3_tile_route_available<B, T>` (`src/select/vendor.hh:94-96`) is the "kernel is linked" predicate for
-  `ormqr_blocked.cc`, `ortho.cc`, `sytrd_blocked.cc` and the static coverage table. It keeps its pre-flat-selection
-  value on purpose: widening it would move ortho's and ormqr's vendor-free routes.
+- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:96-98`) gates where `ormqr_blocked.cc`,
+  `ortho.cc` and `sytrd_blocked.cc` swap a gemm for a level-3 tile kernel, and the static coverage table's float
+  native rows: CUDA and (float or a cuBLAS build). It is narrower than where those kernels now run vendor-free;
+  widening it would change ortho's and ormqr's choices, which are unmeasured.
 
 ## Level-3 route arms {#level-3-route-arms}
 
@@ -100,13 +101,12 @@ in `tests/{symm,syrk,syr2k,trmm}_candidates_tests.cc`. The value comes from the 
 
 Every other word throws: another level-3 op's spelling, `cublasdx`, the legacy `tiles`/`narrow`/`gemm`/`custom`/
 `dx`/`fused` words, `diag_full_gemm`, and the `origin:algorithm` forms `native:auto` and `vendor:auto`
-(`SyrkCudaCustomTest.RemovedRouteWordsThrow`, `SymmCudaCustomTest.RemovedRouteWordsThrow`,
+(`SyrkCandidates.UnknownPinsThrow`, `SymmCandidates.UnknownPinsThrow`,
 `TrmmCandidates.UnknownPinsThrow`). Pins apply and are checked for every dtype.
 
 Two neighbouring variables are not pins of these four ops. `herk` reaches syrk's conjugating Gram kernel only when
 `BATCHLAS_SYRK_ROUTE` is exactly `gram` (`ops::syrk::herk_gram_pinned()` in `src/ops/syrk/choice.hh`).
-`BATCHLAS_EXPAND_ROUTE=expand|loop` is read by hemm, herk and her2k only. `src/backends/route_common.hh` holds only
-`ceil_div` and `is_gpu_queue`.
+`BATCHLAS_EXPAND_ROUTE=expand|loop` is read by hemm, herk and her2k only.
 
 ## Measured boundaries {#dispatch-measured-boundaries}
 
@@ -231,7 +231,7 @@ above, with different constants.
 
 herk's rule is a conjunction with a large-n ceiling, because its GEMM computes both triangles and keeps one. The
 her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` before their window
-(`expansion_route_pin` in `src/expansion_budget.hh`, read by `rankk_route_pin` in `cublas.cc`), and both also need
+(`expansion_route_pin` in `src/expansion_budget.hh`, read by `herk_gemm_preferred` in `cublas.cc`), and both also need
 `expansion_fits`, else they take the vendor loop.
 
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
@@ -254,7 +254,7 @@ Built, measured, rejected.
 | Complex Gram tiles (`herk`) | 0.217 vs 0.206 ms at n=32, batch 2048; 2.08 vs 1.57 ms at n=128, batch 512. A complex multiply is four real ones, so herk is compute bound where real syrk is bandwidth bound | Rejected. The conjugating path stays reachable only with `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`), so it stays testable |
 | `syr2k` for the `sytrd_blocked` trailing update, in `double` | 7.7x and 7.4x slower at n2=256, batch 1024; 1.9x slower at n2=512, batch 512; 1.55x faster only at n2=2048, batch 32 | Rejected for `double`. Float ships: 1.25x–1.66x on the update, 1.07x–1.27x end to end. The float path drops the upper-triangle symmetrize pass: nothing in the `sytrd_blocked` pipeline reads A's upper triangle, so the pass cost more than half the win |
 | `syr2k` at n = 1024 after WP1 S2, reported 10.9% faster | Repeating the step gave a 5.65–6.40 ms spread: noise | Not a win. Repeat flattering results as carefully as alarming ones |
-| `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_route_available<B, T>` |
+| `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_substitution_enabled<B, T>` |
 | Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:157-161` records that no build option exists |
 
 ## Correctness findings {#dispatch-correctness-findings}
@@ -361,7 +361,7 @@ kernels (`NoRouteError`), not dispatch faults.
 Later, the level-3 wave added vendor-free routes for float syr2k at batch 1, double symm and syrk `n <= 128`, and
 every trmm dtype on both sides (flat-kernel-selection.md §12).
 
-The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are compiled into `batchlas_dispatch_obj`
+The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are compiled into `batchlas_selection_obj`
 whatever vendor library is present (`src/CMakeLists.txt:171-175`); `BACKEND_COMMON_SOURCES`
 (`src/backends/CMakeLists.txt:1-3`) holds only `backend_handle_instantiations.cc`. The vendor TUs keep their library
 gates (`src/backends/CMakeLists.txt:49-63`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not

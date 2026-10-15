@@ -1085,27 +1085,6 @@ namespace batchlas {
         /// @brief An empty 0 x 0 view with batch size 0.
         MatrixView() = default;
 
-        /// @brief Copies @p other's span into @p data and returns a view of the copy in @p other's layout.
-        ///
-        /// Runs on a new queue on Device::default_device() and waits.
-        /// @param other      view to copy
-        /// @param data       destination, at least as long as `other.data()`
-        /// @param data_ptrs  optional destination for a copy of @p other's pointer array
-        template <typename U = T, MatrixFormat M = MType>
-            requires DenseMatrixFormat<M>
-        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
-                                                T* data, //storage for the new view
-                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
-                                                );
-
-        /// @brief CSR form of deep_copy(): values, offsets and indices each go to caller storage.
-        template <typename U = T, MatrixFormat M = MType>
-            requires CsrMatrixFormat<M>
-        static MatrixView<T, MType> deep_copy(const MatrixView<T, MType>& other, //Matrix view to copy from
-                                                T* data, int* row_offsets, int* col_indices, //storage for the new view
-                                                T** data_ptrs = nullptr //optional array of pointers to the start of each matrix in a batch
-                                                );
-
         /// @brief Enqueues dest := src on @p ctx, honouring each side's ld and stride.
         /// @return the event of the copy; a no-op when both views share a base pointer
         /// @throws batchlas::invalid_argument if rows, cols or batch size differ
@@ -1636,11 +1615,6 @@ namespace batchlas {
             return fill(ctx, detail::convert_to_fill_value<T>(0));
         }
 
-        /// @brief fill() with one. Deliberately has no queue-less form.
-        Event fill_ones(const Queue& ctx) const {
-            return fill(ctx, detail::convert_to_fill_value<T>(1));
-        }
-
         /// @brief Zeros every item, then sets its main diagonal to @p value.
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
@@ -1964,11 +1938,6 @@ namespace batchlas {
     template <typename T, MatrixFormat MType>
     std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view);
 
-    /// @brief Backend-library descriptor for a vector; defined in src/.
-    /// @ingroup api_internal_helpers
-    template <typename T = float>
-    class BackendVectorHandle; // Forward declaration with default parameter
-
     /// @brief Owning batch of `batch_size()` vectors of length `size()` in USM shared memory.
     ///
     /// Element i of item b lives at `data()[b * stride() + i * inc()]`. The default
@@ -2111,23 +2080,12 @@ namespace batchlas {
             VectorView<T>(*this).stream_formatted_to(os, max_elements);
         }
 
-        /// @name Backend descriptor
-        /// The backend-library vector descriptor (internal_helpers), created on first use.
-        /// @{
-        BackendVectorHandle<T>* operator->();
-        BackendVectorHandle<T>& operator*();
-        const BackendVectorHandle<T>* operator->() const;
-        const BackendVectorHandle<T>& operator*()  const;
-        /// @}
-
     private:
         UnifiedVector<T> data_;
         int size_ = 0;
         int inc_ = 1;
         int stride_ = 0;
         int batch_size_ = 1;
-
-        //std::shared_ptr<BackendVectorHandle<T>> backend_handle_;
     };
 
     /// @brief Non-owning view of a batch of strided vectors: the vector argument type of the entry points.
@@ -2319,21 +2277,6 @@ namespace batchlas {
             return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, required), n, batch_size_, inc_, stride_);
         }
 
-        /// @brief Element-wise z_i := op(a * x_i, b * y_i) for every item; the default op gives z = (a x) .* (b y).
-        ///
-        /// z is overwritten, not accumulated. Enqueued on @p ctx; returns its Event.
-        /// @pre x, y and z have the same size and batch size
-        template <typename BinaryOperatorOp = std::multiplies<T>>
-        static Event hadamard_product(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z, BinaryOperatorOp op = BinaryOperatorOp());
-
-        /// @brief Element-wise z := a * x + b * y for every item (overwrites z).
-        static Event add(const Queue& ctx, T a, T b, const VectorView<T>& x, const VectorView<T>& y, const VectorView<T>& z) {
-            return hadamard_product(ctx, a, b, x, y, z, std::plus<T>());
-        }
-
-        //Computes result = x' * y
-        //Event dot(const Queue& ctx, const VectorView<T>& x, const VectorView<T>& y, T& result);
-
         /// @brief Prints the leading @p max_elements entries of each item in scientific notation.
         /// @return @p os, with its format flags restored
         std::ostream& stream_formatted_to(std::ostream& os, int max_elements = 10, int max_cols_to_print = 10) const {
@@ -2362,22 +2305,12 @@ namespace batchlas {
             stream_formatted_to(os, max_elements);
         }
 
-        /// @name Backend descriptor
-        /// The backend-library vector descriptor (internal_helpers), created on first use.
-        /// @{
-        BackendVectorHandle<T>* operator->();
-        BackendVectorHandle<T>& operator*();
-        const BackendVectorHandle<T>* operator->() const;
-        const BackendVectorHandle<T>& operator*() const;
-        /// @}
-
     private:
         Span<T> data_;
         int size_ = 0;
         int inc_ = 1;
         int stride_ = 0;
         int batch_size_ = 1;
-        //std::weak_ptr<BackendVectorHandle<T>> backend_handle_;
     };
 
     // ------------------------------------------------------------------
