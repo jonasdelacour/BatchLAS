@@ -105,6 +105,7 @@ from ._api import (
     trsm,
     zeros,
 )
+from . import linalg
 
 __all__ = [
     "ApiMisuseError",
@@ -160,6 +161,7 @@ __all__ = [
     "inv",
     "lanczos",
     "lascl",
+    "linalg",
     "multiply",
     "norm",
     "ones",

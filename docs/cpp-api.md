@@ -902,7 +902,8 @@ loops); `scale` works in place.
 - There is no `linalg::qr`; compose `geqrf` and `orgqr`. The wrapper is withheld because of an
   unexplained wrong-answer defect ([Known defects](design/known-defects.md)).
 
-Design of the layer and option structs: [API conventions](design/api-conventions.md).
+Design of the layer and option structs: [API conventions](design/api-conventions.md). Python binds
+the layer as `batchlas.linalg` (@ref python_examples).
 
 ---
 

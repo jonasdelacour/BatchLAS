@@ -5,36 +5,6 @@ namespace batchlas::python {
 
 namespace {
 
-// getrf's pivot span is int64-typed, but every queue except NETLIB packs 1-based int32 into it
-// (include/batchlas/blas/functions/getrf.hh). Python sees plain 1-based int64 per item, and the
-// packing is redone on the way back into getrs/getri on the same backend.
-bool pivots_packed_int32(const Queue& queue) {
-    return queue.backend() != Backend::NETLIB;
-}
-
-py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, bool packed, int pivots_per_batch,
-                                     int batch_size) {
-    const auto* packed_data = reinterpret_cast<const int32_t*>(pivots.data());
-    auto read = [&](std::size_t index) -> int64_t { return packed ? packed_data[index] : pivots[index]; };
-    if (batch_size == 1) {
-        py::array_t<int64_t> out(std::vector<py::ssize_t>{pivots_per_batch});
-        auto view = out.mutable_unchecked<1>();
-        for (int index = 0; index < pivots_per_batch; ++index) {
-            view(index) = read(static_cast<std::size_t>(index));
-        }
-        return out;
-    }
-
-    py::array_t<int64_t> out({batch_size, pivots_per_batch});
-    auto view = out.mutable_unchecked<2>();
-    for (int batch = 0; batch < batch_size; ++batch) {
-        for (int index = 0; index < pivots_per_batch; ++index) {
-            view(batch, index) = read(static_cast<std::size_t>(batch * pivots_per_batch + index));
-        }
-    }
-    return out;
-}
-
 // Per-item status, sized only when requested: an empty span is the C++ layer's
 // "not requested" and leaves the call bit-identical.
 UnifiedVector<int32_t> requested_info(bool return_info, int batch_size) {

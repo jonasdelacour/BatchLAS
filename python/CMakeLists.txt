@@ -53,6 +53,7 @@ set(BATCHLAS_PY_PACKAGE_FILES
     batchlas/__init__.py
     batchlas/_api.py
     batchlas/_options.py
+    batchlas/linalg.py
 )
 
 foreach(_py_file IN LISTS BATCHLAS_PY_PACKAGE_FILES)
