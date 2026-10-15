@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import os
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -22,6 +24,19 @@ from ._options import (
 )
 
 ILUKPreconditioner = _ext._ILUKPreconditioner
+
+# Mirrors of include/batchlas/error.hh, raised by the extension's translator.
+BatchLASException = _ext.BatchLASException
+InvalidArgumentError = _ext.InvalidArgumentError
+OutOfRangeError = _ext.OutOfRangeError
+BatchLASError = _ext.BatchLASError
+UnsupportedError = _ext.UnsupportedError
+DeviceError = _ext.DeviceError
+WorkspaceError = _ext.WorkspaceError
+ConvergenceError = _ext.ConvergenceError
+InternalError = _ext.InternalError
+ApiMisuseError = _ext.ApiMisuseError
+NoRouteError = _ext.NoRouteError
 
 _DENSE_MATRIX_TYPE = _ext._DenseMatrix
 _DENSE_VECTOR_TYPE = _ext._DenseVector
@@ -272,8 +287,74 @@ def _unwrap_with_out(value: Any, out: Any = None):
     return _copy_out(_unwrap(value), out)
 
 
+def _svd_vectors(compute_vectors: bool | str) -> str:
+    if isinstance(compute_vectors, str):
+        return compute_vectors
+    return "all" if compute_vectors else "none"
+
+
 def available_backends() -> list[str]:
+    """Every ``backend=`` spelling this build accepts, ``"auto"`` first."""
     return list(_ext.available_backends())
+
+
+def reload_settings() -> None:
+    """Re-read every ``BATCHLAS_*`` variable from the process environment.
+
+    The library captures its environment once; a variable changed after the
+    first call is not seen until this runs. Do not call it between a
+    ``*_buffer_size`` query and its solve (none of these wrappers do).
+    """
+    _ext._reload_settings()
+
+
+def _route_variable(op: str) -> str:
+    name = str(op).strip().lower()
+    if name not in _ext._route_ops:
+        hint = ""
+        if name in ("hemm", "herk", "her2k"):
+            hint = " (hemm, herk and her2k are pinned by BATCHLAS_EXPAND_ROUTE)"
+        raise InvalidArgumentError(
+            f"no BATCHLAS_<OP>_ROUTE for op {op!r}{hint}; route ops: {', '.join(_ext._route_ops)}"
+        )
+    return f"BATCHLAS_{name.upper()}_ROUTE"
+
+
+def route_pin(op: str) -> str | None:
+    """The ``BATCHLAS_<OP>_ROUTE`` value the library currently holds, or None if unset."""
+    _route_variable(op)
+    return _ext._route_pin(str(op).strip().lower())
+
+
+def set_route(op: str, spelling: str | None) -> None:
+    """Pin ``op``'s route for this process: ``"auto"``, ``"native"``, ``"vendor"`` or a
+    choice spelling such as ``"reg:m=128:n=128:k=8:u=1"``; ``None`` removes the pin.
+
+    Sets ``BATCHLAS_<OP>_ROUTE`` in ``os.environ`` and the C environment, then
+    reloads the settings. The spelling is checked when the op next runs: a pin that
+    does not parse, is not compiled in, or cannot run the shape makes that call
+    raise InvalidArgumentError (``native``/``vendor`` fall back to auto instead).
+    """
+    variable = _route_variable(op)
+    if spelling is None:
+        os.environ.pop(variable, None)
+        _ext._setenv(variable, None)
+    else:
+        os.environ[variable] = str(spelling)
+        _ext._setenv(variable, str(spelling))
+    _ext._reload_settings()
+
+
+@contextlib.contextmanager
+def route(op: str, spelling: str | None):
+    """Context manager form of set_route; restores the previous pin on exit."""
+    variable = _route_variable(op)
+    previous = os.environ.get(variable)
+    set_route(op, spelling)
+    try:
+        yield
+    finally:
+        set_route(op, previous)
 
 
 def available_devices() -> list[dict[str, Any]]:
@@ -452,6 +533,103 @@ def syr2k(
     )
 
 
+def hemm(
+    a: Any,
+    b: Any,
+    *,
+    alpha: Any = 1,
+    beta: Any = 0,
+    side: str = "left",
+    uplo: str = "lower",
+    backend: str = "auto",
+    device: str | None = None,
+    out: Any = None,
+):
+    """Hermitian product: symm with ``a`` Hermitian. Complex dtypes only.
+
+    Only the ``uplo`` triangle of ``a`` is read; the diagonal's imaginary part is
+    taken as zero. Vendor builds only: raises NoRouteError in a vendor-free build.
+    """
+    return _unwrap_with_out(
+        _ext._hemm(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            alpha,
+            beta,
+            side,
+            uplo,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
+        ),
+        out,
+    )
+
+
+def herk(
+    a: Any,
+    *,
+    alpha: float = 1.0,
+    beta: float = 0.0,
+    uplo: str = "lower",
+    trans_a: str = "n",
+    backend: str = "auto",
+    device: str | None = None,
+    out: Any = None,
+):
+    """Hermitian rank-k update ``alpha op(A) op(A)^H + beta C``. Complex dtypes only.
+
+    ``alpha`` and ``beta`` are real; ``trans_a`` is ``"n"`` or ``"c"``. Only the
+    ``uplo`` triangle of the result is written. Raises NoRouteError vendor-free.
+    """
+    return _unwrap_with_out(
+        _ext._herk(
+            _coerce_dense_matrix(a),
+            alpha,
+            beta,
+            uplo,
+            trans_a,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
+        ),
+        out,
+    )
+
+
+def her2k(
+    a: Any,
+    b: Any,
+    *,
+    alpha: Any = 1,
+    beta: float = 0.0,
+    uplo: str = "lower",
+    trans_a: str = "n",
+    backend: str = "auto",
+    device: str | None = None,
+    out: Any = None,
+):
+    """Hermitian rank-2k update ``alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C``.
+
+    Complex dtypes only; ``beta`` is real; ``trans_a`` is ``"n"`` or ``"c"``. Only
+    the ``uplo`` triangle of the result is written. Raises NoRouteError vendor-free.
+    """
+    return _unwrap_with_out(
+        _ext._her2k(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            alpha,
+            beta,
+            uplo,
+            trans_a,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            None if out is None else _coerce_dense_matrix(out),
+        ),
+        out,
+    )
+
+
 def trmm(
     a: Any,
     b: Any,
@@ -538,9 +716,84 @@ def spmm(
     )
 
 
-def potrf(a: Any, *, uplo: str = "lower", backend: str = "auto", device: str | None = None):
+def potrf(
+    a: Any,
+    *,
+    uplo: str = "lower",
+    backend: str = "auto",
+    device: str | None = None,
+    return_info: bool = False,
+):
+    """Cholesky factorization; returns the factor in the ``uplo`` triangle.
+
+    ``return_info=True`` returns ``(factor, info)``: a NumPy int32 array of
+    ``batch_size`` entries, 0 for an item that factorised and ``i > 0`` when the
+    leading minor of order ``i`` is not positive definite.
+    """
     return _unwrap(
-        _ext._potrf(_coerce_dense_matrix(a), uplo, _normalize_backend(backend, device), _normalize_device(device))
+        _ext._potrf(
+            _coerce_dense_matrix(a),
+            uplo,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            return_info,
+        )
+    )
+
+
+def gesv(
+    a: Any,
+    b: Any,
+    *,
+    return_factors: bool = False,
+    backend: str = "auto",
+    device: str | None = None,
+    return_info: bool = False,
+):
+    """Solve ``A X = B`` by LU with partial pivoting (getrf then getrs).
+
+    Returns ``x``; with ``return_factors`` ``(x, lu, pivots)`` in getrf's format.
+    ``return_info=True`` appends a NumPy int32 ``info`` array: 0, or ``i > 0`` when
+    ``U[i-1, i-1]`` is exactly zero and that item's ``x`` is meaningless.
+    """
+    return _unwrap(
+        _ext._gesv(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            return_factors,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            return_info,
+        )
+    )
+
+
+def posv(
+    a: Any,
+    b: Any,
+    *,
+    uplo: str = "lower",
+    return_factors: bool = False,
+    backend: str = "auto",
+    device: str | None = None,
+    return_info: bool = False,
+):
+    """Solve ``A X = B`` for Hermitian positive-definite ``A`` (potrf then two trsm).
+
+    Only the ``uplo`` triangle of ``a`` is read. Returns ``x``; with
+    ``return_factors`` ``(x, factor)``, the Cholesky factor in the ``uplo``
+    triangle. ``return_info=True`` appends potrf's int32 ``info`` array.
+    """
+    return _unwrap(
+        _ext._posv(
+            _coerce_dense_matrix(a),
+            _coerce_dense_matrix(b),
+            uplo,
+            return_factors,
+            _normalize_backend(backend, device),
+            _normalize_device(device),
+            return_info,
+        )
     )
 
 
@@ -569,13 +822,22 @@ def getrs(
     )
 
 
-def getri(lu: Any, pivots: Any, *, backend: str = "auto", device: str | None = None):
+def getri(
+    lu: Any,
+    pivots: Any,
+    *,
+    backend: str = "auto",
+    device: str | None = None,
+    return_info: bool = False,
+):
+    """Inverse from getrf's factors. ``return_info=True`` returns ``(inverse, info)``."""
     return _unwrap(
         _ext._getri(
             _coerce_dense_matrix(lu),
             np.asarray(pivots, dtype=np.int64),
             _normalize_backend(backend, device),
             _normalize_device(device),
+            return_info,
         )
     )
 
@@ -625,15 +887,17 @@ def ormqr(
 def gesvd(
     a: Any,
     *,
-    compute_vectors: bool = True,
+    compute_vectors: bool | str = True,
     uplo: str | None = None,
     backend: str = "auto",
     device: str | None = None,
     return_info: bool = False,
 ):
-    """Singular value decomposition.
+    """Singular value decomposition of ``m x n`` items, ``k = min(m, n)``.
 
-    Returns ``s`` (or ``(u, s, vh)`` with ``compute_vectors``).
+    Returns ``s`` (``k`` values) or ``(u, s, vh)``. ``compute_vectors`` is
+    ``True``/``"all"`` (``u`` is ``m x m``, ``vh`` is ``n x n``), ``"thin"``
+    (``u`` is ``m x k``, ``vh`` is ``k x n``) or ``False``/``"none"``.
 
     ``return_info=True`` appends a per-item convergence status as a NumPy int32
     array of ``batch_size`` entries -- ``(s, info)`` or ``(u, s, vh, info)``.
@@ -645,7 +909,7 @@ def gesvd(
     return _unwrap(
         _ext._gesvd(
             _coerce_dense_matrix(a),
-            compute_vectors,
+            _svd_vectors(compute_vectors),
             uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
@@ -657,7 +921,7 @@ def gesvd(
 def gesvd_blocked(
     a: Any,
     *,
-    compute_vectors: bool = True,
+    compute_vectors: bool | str = True,
     uplo: str | None = None,
     backend: str = "auto",
     device: str | None = None,
@@ -665,7 +929,7 @@ def gesvd_blocked(
     return _unwrap(
         _ext._gesvd_blocked(
             _coerce_dense_matrix(a),
-            compute_vectors,
+            _svd_vectors(compute_vectors),
             uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
@@ -724,7 +988,7 @@ def gebrd_blocked(
 def gesvd_cta(
     a: Any,
     *,
-    compute_vectors: bool = True,
+    compute_vectors: bool | str = True,
     uplo: str | None = None,
     backend: str = "auto",
     device: str | None = None,
@@ -737,7 +1001,7 @@ def gesvd_cta(
     return _unwrap(
         _ext._gesvd_cta(
             _coerce_dense_matrix(a),
-            compute_vectors,
+            _svd_vectors(compute_vectors),
             uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),

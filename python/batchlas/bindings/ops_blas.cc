@@ -239,6 +239,89 @@ DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
 }
 
 template <typename T>
+DenseMatrix dense_hemm_impl(const DenseMatrix& a_wrapper,
+                            const DenseMatrix& b_wrapper,
+                            const py::object& alpha_object,
+                            const py::object& beta_object,
+                            Side side,
+                            Uplo uplo,
+                            Backend backend,
+                            const std::optional<std::string>& device_name,
+                            const py::object& c_object) {
+    ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
+    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    if (a.batch_size() != b.batch_size()) {
+        throw py::value_error("matrix batch sizes must match");
+    }
+    const T alpha = scalar_from_object<T>(alpha_object);
+    const T beta = scalar_from_object<T>(beta_object);
+    DenseMatrixT<T> c =
+        resolve_accumulator<T>(c_object, DenseMatrixT<T>(b.rows(), b.cols(), b.batch_size()), beta, "hemm");
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
+        constexpr Backend B = decltype(backend_tag)::value;
+        batchlas::hemm<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
+    });
+    queue.wait();
+    return wrap_dense(std::move(c));
+}
+
+template <typename T>
+DenseMatrix dense_herk_impl(const DenseMatrix& a_wrapper,
+                            const py::object& alpha_object,
+                            const py::object& beta_object,
+                            Uplo uplo,
+                            Transpose trans_a,
+                            Backend backend,
+                            const std::optional<std::string>& device_name,
+                            const py::object& c_object) {
+    using real_type = typename base_type<T>::type;
+    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
+    const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
+    const real_type alpha = scalar_from_object<real_type>(alpha_object);
+    const real_type beta = scalar_from_object<real_type>(beta_object);
+    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), T(beta), "herk");
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
+        constexpr Backend B = decltype(backend_tag)::value;
+        batchlas::herk<B, T>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
+    });
+    queue.wait();
+    return wrap_dense(std::move(c));
+}
+
+template <typename T>
+DenseMatrix dense_her2k_impl(const DenseMatrix& a_wrapper,
+                             const DenseMatrix& b_wrapper,
+                             const py::object& alpha_object,
+                             const py::object& beta_object,
+                             Uplo uplo,
+                             Transpose trans_a,
+                             Backend backend,
+                             const std::optional<std::string>& device_name,
+                             const py::object& c_object) {
+    using real_type = typename base_type<T>::type;
+    ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
+    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    if (a.batch_size() != b.batch_size()) {
+        throw py::value_error("matrix batch sizes must match");
+    }
+    const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
+    const T alpha = scalar_from_object<T>(alpha_object);
+    const real_type beta = scalar_from_object<real_type>(beta_object);
+    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), T(beta), "her2k");
+    Queue& queue = acquire_queue(device_name, backend);
+    visit_backend(queue, [&](auto backend_tag) {
+        constexpr Backend B = decltype(backend_tag)::value;
+        batchlas::her2k<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
+    });
+    queue.wait();
+    return wrap_dense(std::move(c));
+}
+
+template <typename T>
 DenseMatrix dense_trmm_impl(const DenseMatrix& a_wrapper,
                             const DenseMatrix& b_wrapper,
                             const py::object& alpha_object,
@@ -488,6 +571,74 @@ void init_blas_ops(py::module_& module) {
                 throw_not_implemented("syr2k only supports float32 and float64");
             } else {
                 return dense_syr2k_impl<scalar_type>(a, b, alpha, beta, uplo, trans_a, backend, device_name, out_object);
+            }
+        });
+    });
+
+    module.def("_hemm", [](const DenseMatrix& a,
+                            const DenseMatrix& b,
+                            const py::object& alpha,
+                            const py::object& beta,
+                            const std::string& side_name,
+                            const std::string& uplo_name,
+                            const std::string& backend_name,
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
+        const Backend backend = parse_backend(backend_name);
+        const Side side = parse_side(side_name);
+        const Uplo uplo = parse_uplo(uplo_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> DenseMatrix {
+            using scalar_type = typename decltype(tag)::type;
+            if constexpr (std::is_floating_point_v<scalar_type>) {
+                throw_not_implemented("hemm only supports complex64 and complex128; use symm");
+            } else {
+                return dense_hemm_impl<scalar_type>(a, b, alpha, beta, side, uplo, backend, device_name, out_object);
+            }
+        });
+    });
+
+    module.def("_herk", [](const DenseMatrix& a,
+                            const py::object& alpha,
+                            const py::object& beta,
+                            const std::string& uplo_name,
+                            const std::string& trans_a_name,
+                            const std::string& backend_name,
+                            const py::object& device_name_obj,
+                            const py::object& out_object) {
+        const Backend backend = parse_backend(backend_name);
+        const Uplo uplo = parse_uplo(uplo_name);
+        const Transpose trans_a = parse_transpose(trans_a_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> DenseMatrix {
+            using scalar_type = typename decltype(tag)::type;
+            if constexpr (std::is_floating_point_v<scalar_type>) {
+                throw_not_implemented("herk only supports complex64 and complex128; use syrk");
+            } else {
+                return dense_herk_impl<scalar_type>(a, alpha, beta, uplo, trans_a, backend, device_name, out_object);
+            }
+        });
+    });
+
+    module.def("_her2k", [](const DenseMatrix& a,
+                             const DenseMatrix& b,
+                             const py::object& alpha,
+                             const py::object& beta,
+                             const std::string& uplo_name,
+                             const std::string& trans_a_name,
+                             const std::string& backend_name,
+                             const py::object& device_name_obj,
+                             const py::object& out_object) {
+        const Backend backend = parse_backend(backend_name);
+        const Uplo uplo = parse_uplo(uplo_name);
+        const Transpose trans_a = parse_transpose(trans_a_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> DenseMatrix {
+            using scalar_type = typename decltype(tag)::type;
+            if constexpr (std::is_floating_point_v<scalar_type>) {
+                throw_not_implemented("her2k only supports complex64 and complex128; use syr2k");
+            } else {
+                return dense_her2k_impl<scalar_type>(a, b, alpha, beta, uplo, trans_a, backend, device_name, out_object);
             }
         });
     });

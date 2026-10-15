@@ -25,16 +25,132 @@ py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, int p
     return out;
 }
 
+// Per-item status, sized only when requested: an empty span is the C++ layer's
+// "not requested" and leaves the call bit-identical.
+UnifiedVector<int32_t> requested_info(bool return_info, int batch_size) {
+    UnifiedVector<int32_t> info;
+    if (return_info) info.resize(static_cast<std::size_t>(batch_size));
+    return info;
+}
+
+// `info` goes LAST, after every other output, as in _gesvd and _syev.
+py::object with_info(py::object result, const UnifiedVector<int32_t>& info, int batch_size, bool return_info) {
+    if (!return_info) return result;
+    py::list parts;
+    if (py::isinstance<py::tuple>(result)) {
+        for (py::handle part : result) parts.append(part);
+    } else {
+        parts.append(result);
+    }
+    parts.append(info_to_python(info, batch_size));
+    return py::tuple(parts);
+}
+
+UnifiedVector<int64_t> pivots_from_numpy(const py::array_t<int64_t, py::array::forcecast>& pivots_array,
+                                         int pivots_per_batch,
+                                         int batch_size) {
+    const py::buffer_info pivots_info = pivots_array.request();
+    if (pivots_info.ndim < 1 || pivots_info.ndim > 2 ||
+        (pivots_info.ndim == 1 && batch_size != 1) ||
+        (pivots_info.ndim == 1 && static_cast<int>(pivots_info.shape[0]) != pivots_per_batch) ||
+        (pivots_info.ndim == 2 && (static_cast<int>(pivots_info.shape[0]) != batch_size ||
+                                   static_cast<int>(pivots_info.shape[1]) != pivots_per_batch))) {
+        throw py::value_error("pivots shape does not match LU factors");
+    }
+    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
+    if (pivots_info.ndim == 1) {
+        auto view = pivots_array.unchecked<1>();
+        for (int index = 0; index < pivots_per_batch; ++index) {
+            pivots[static_cast<std::size_t>(index)] = view(index);
+        }
+    } else {
+        auto view = pivots_array.unchecked<2>();
+        for (int batch = 0; batch < batch_size; ++batch) {
+            for (int index = 0; index < pivots_per_batch; ++index) {
+                pivots[static_cast<std::size_t>(batch * pivots_per_batch + index)] = view(batch, index);
+            }
+        }
+    }
+    return pivots;
+}
+
 template <typename T>
-DenseMatrix dense_potrf_impl(const DenseMatrix& a_wrapper,
-                             Uplo uplo,
-                             Backend backend,
-                             const std::optional<std::string>& device_name) {
+py::object dense_potrf_impl(const DenseMatrix& a_wrapper,
+                            Uplo uplo,
+                            Backend backend,
+                            const std::optional<std::string>& device_name,
+                            bool return_info) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    const int batch_size = out.batch_size();
+    UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::potrf(queue, out.view(), {.uplo = uplo});
+    batchlas::potrf(queue, out.view(), PotrfOptions{.uplo = uplo, .info = info.to_span()});
     queue.wait();
-    return wrap_dense(std::move(out));
+    return with_info(py::cast(wrap_dense(std::move(out))), info, batch_size, return_info);
+}
+
+template <typename T>
+py::object dense_gesv_impl(const DenseMatrix& a_wrapper,
+                           const DenseMatrix& b_wrapper,
+                           bool return_factors,
+                           Backend backend,
+                           const std::optional<std::string>& device_name,
+                           bool return_info) {
+    ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
+    DenseMatrixT<T> lu = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    DenseMatrixT<T> x = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
+    const int batch_size = lu.batch_size();
+    const int pivots_per_batch = lu.rows();
+    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
+    UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
+    Queue& queue = acquire_queue(device_name, backend);
+    run_backend_with_workspace(
+        queue,
+        [&](auto backend_tag) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            return batchlas::gesv_buffer_size<B, T>(queue, lu.view(), x.view());
+        },
+        [&](auto backend_tag, Span<std::byte> workspace) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            batchlas::gesv<B, T>(queue, lu.view(), x.view(), pivots.to_span(), workspace, info.to_span());
+        });
+    queue.wait();
+    py::object result = return_factors
+        ? py::object(py::make_tuple(wrap_dense(std::move(x)), wrap_dense(std::move(lu)),
+                                    pivots_to_numpy(pivots, pivots_per_batch, batch_size)))
+        : py::cast(wrap_dense(std::move(x)));
+    return with_info(std::move(result), info, batch_size, return_info);
+}
+
+template <typename T>
+py::object dense_posv_impl(const DenseMatrix& a_wrapper,
+                           const DenseMatrix& b_wrapper,
+                           Uplo uplo,
+                           bool return_factors,
+                           Backend backend,
+                           const std::optional<std::string>& device_name,
+                           bool return_info) {
+    ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
+    DenseMatrixT<T> factor = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    DenseMatrixT<T> x = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
+    const int batch_size = factor.batch_size();
+    UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
+    Queue& queue = acquire_queue(device_name, backend);
+    run_backend_with_workspace(
+        queue,
+        [&](auto backend_tag) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            return batchlas::posv_buffer_size<B, T>(queue, factor.view(), x.view(), uplo);
+        },
+        [&](auto backend_tag, Span<std::byte> workspace) {
+            constexpr Backend B = decltype(backend_tag)::value;
+            batchlas::posv<B, T>(queue, factor.view(), x.view(), uplo, workspace, info.to_span());
+        });
+    queue.wait();
+    py::object result = return_factors
+        ? py::object(py::make_tuple(wrap_dense(std::move(x)), wrap_dense(std::move(factor))))
+        : py::cast(wrap_dense(std::move(x)));
+    return with_info(std::move(result), info, batch_size, return_info);
 }
 
 template <typename T>
@@ -62,31 +178,7 @@ DenseMatrix dense_getrs_impl(const DenseMatrix& lu_wrapper,
     const auto& lu = std::get<DenseMatrixT<T>>(lu_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
 
-    const py::buffer_info pivots_info = pivots_array.request();
-    const int batch_size = lu.batch_size();
-    const int pivots_per_batch = lu.rows();
-    if ((pivots_info.ndim == 1 && batch_size != 1) ||
-        (pivots_info.ndim == 1 && static_cast<int>(pivots_info.shape[0]) != pivots_per_batch) ||
-        (pivots_info.ndim == 2 && (static_cast<int>(pivots_info.shape[0]) != batch_size ||
-                                   static_cast<int>(pivots_info.shape[1]) != pivots_per_batch))) {
-        throw py::value_error("pivots shape does not match LU factors");
-    }
-
-    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
-    if (pivots_info.ndim == 1) {
-        auto view = pivots_array.unchecked<1>();
-        for (int index = 0; index < pivots_per_batch; ++index) {
-            pivots[static_cast<std::size_t>(index)] = view(index);
-        }
-    } else {
-        auto view = pivots_array.unchecked<2>();
-        for (int batch = 0; batch < batch_size; ++batch) {
-            for (int index = 0; index < pivots_per_batch; ++index) {
-                pivots[static_cast<std::size_t>(batch * pivots_per_batch + index)] = view(batch, index);
-            }
-        }
-    }
-
+    UnifiedVector<int64_t> pivots = pivots_from_numpy(pivots_array, lu.rows(), lu.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
     batchlas::getrs(queue, lu.view(), out.view(), pivots.to_span(), {.trans = trans_a});
     queue.wait();
@@ -94,41 +186,20 @@ DenseMatrix dense_getrs_impl(const DenseMatrix& lu_wrapper,
 }
 
 template <typename T>
-DenseMatrix dense_getri_impl(const DenseMatrix& lu_wrapper,
-                             const py::array_t<int64_t, py::array::forcecast>& pivots_array,
-                             Backend backend,
-                             const std::optional<std::string>& device_name) {
+py::object dense_getri_impl(const DenseMatrix& lu_wrapper,
+                            const py::array_t<int64_t, py::array::forcecast>& pivots_array,
+                            Backend backend,
+                            const std::optional<std::string>& device_name,
+                            bool return_info) {
     const auto& lu = std::get<DenseMatrixT<T>>(lu_wrapper.storage);
     DenseMatrixT<T> out(lu.rows(), lu.cols(), lu.batch_size());
-    const py::buffer_info pivots_info = pivots_array.request();
-    const int pivots_per_batch = lu.rows();
     const int batch_size = lu.batch_size();
-    if ((pivots_info.ndim == 1 && batch_size != 1) ||
-        (pivots_info.ndim == 1 && static_cast<int>(pivots_info.shape[0]) != pivots_per_batch) ||
-        (pivots_info.ndim == 2 && (static_cast<int>(pivots_info.shape[0]) != batch_size ||
-                                   static_cast<int>(pivots_info.shape[1]) != pivots_per_batch))) {
-        throw py::value_error("pivots shape does not match LU factors");
-    }
-
-    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
-    if (pivots_info.ndim == 1) {
-        auto view = pivots_array.unchecked<1>();
-        for (int index = 0; index < pivots_per_batch; ++index) {
-            pivots[static_cast<std::size_t>(index)] = view(index);
-        }
-    } else {
-        auto view = pivots_array.unchecked<2>();
-        for (int batch = 0; batch < batch_size; ++batch) {
-            for (int index = 0; index < pivots_per_batch; ++index) {
-                pivots[static_cast<std::size_t>(batch * pivots_per_batch + index)] = view(batch, index);
-            }
-        }
-    }
-
+    UnifiedVector<int64_t> pivots = pivots_from_numpy(pivots_array, lu.rows(), batch_size);
+    UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
     Queue& queue = acquire_queue(device_name, backend);
-    batchlas::getri(queue, lu.view(), out.view(), pivots.to_span());
+    batchlas::getri(queue, lu.view(), out.view(), pivots.to_span(), info.to_span());
     queue.wait();
-    return wrap_dense(std::move(out));
+    return with_info(py::cast(wrap_dense(std::move(out))), info, batch_size, return_info);
 }
 
 template <typename T>
@@ -187,24 +258,28 @@ DenseMatrix dense_ormqr_impl(const DenseMatrix& qr_wrapper,
 
 template <typename T>
 py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
-                            bool compute_vectors,
+                            SvdVectors job,
                             Backend backend,
                             const std::optional<std::string>& device_name,
                             bool blocked,
                             std::optional<Uplo> hermitian_uplo,
                             bool return_info = false) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
-    const int n = out.rows();
-    Vector<typename base_type<T>::type> singular_values(n, out.batch_size());
+    const bool compute_vectors = job != SvdVectors::None;
+    const int m = out.rows();
+    const int n = out.cols();
+    const int k = std::min(m, n);
+    Vector<typename base_type<T>::type> singular_values(k, out.batch_size());
     // Per-item convergence status, left EMPTY unless asked for: an empty span is
     // how the C++ layer spells "not requested", it costs no workspace, and it
     // leaves the answer bit-for-bit unchanged. The batch-wide throw this
     // replaces took the converged items' answers down with the one that failed.
     UnifiedVector<int32_t> info;
     if (return_info) info.resize(static_cast<std::size_t>(out.batch_size()));
-    DenseMatrixT<T> u = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size()) : DenseMatrixT<T>(1, 1, out.batch_size());
-    DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size()) : DenseMatrixT<T>(1, 1, out.batch_size());
-    const SvdVectors job = compute_vectors ? SvdVectors::All : SvdVectors::None;
+    DenseMatrixT<T> u = compute_vectors ? DenseMatrixT<T>(m, static_cast<int>(svd_u_cols(job, m, k)), out.batch_size())
+                                        : DenseMatrixT<T>(1, 1, out.batch_size());
+    DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(static_cast<int>(svd_vh_rows(job, n, k)), n, out.batch_size())
+                                         : DenseMatrixT<T>(1, 1, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
         queue,
@@ -390,7 +465,7 @@ py::tuple dense_gebrd_variant_impl(const DenseMatrix& a_wrapper,
 
 template <typename T>
 py::object dense_gesvd_cta_impl(const DenseMatrix& a_wrapper,
-                                bool compute_vectors,
+                                SvdVectors job,
                                 Backend backend,
                                 const std::optional<std::string>& device_name,
                                 std::optional<Uplo> hermitian_uplo) {
@@ -398,13 +473,14 @@ py::object dense_gesvd_cta_impl(const DenseMatrix& a_wrapper,
     if (out.rows() != out.cols()) {
         throw py::value_error("gesvd_cta requires square matrices");
     }
+    // Square input: a Thin factor is the full one, so Thin and All share shapes.
+    const bool compute_vectors = job != SvdVectors::None;
     const int n = out.rows();
     Vector<typename base_type<T>::type> singular_values(n, out.batch_size());
     DenseMatrixT<T> u = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size())
                                         : DenseMatrixT<T>(1, 1, out.batch_size());
     DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size())
                                          : DenseMatrixT<T>(1, 1, out.batch_size());
-    const SvdVectors job = compute_vectors ? SvdVectors::All : SvdVectors::None;
     Queue& queue = acquire_queue(device_name, backend);
     run_backend_with_workspace(
         queue,
@@ -496,13 +572,44 @@ void init_factorization_ops(py::module_& module) {
     module.def("_potrf", [](const DenseMatrix& a,
                              const std::string& uplo_name,
                              const std::string& backend_name,
-                             const py::object& device_name_obj) {
+                             const py::object& device_name_obj,
+                             bool return_info) {
         const Uplo uplo = parse_uplo(uplo_name);
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
-        return visit_dense(a, [&](auto tag, const auto&) {
+        return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_potrf_impl<scalar_type>(a, uplo, backend, device_name);
+            return dense_potrf_impl<scalar_type>(a, uplo, backend, device_name, return_info);
+        });
+    });
+
+    module.def("_gesv", [](const DenseMatrix& a,
+                            const DenseMatrix& b,
+                            bool return_factors,
+                            const std::string& backend_name,
+                            const py::object& device_name_obj,
+                            bool return_info) {
+        const Backend backend = parse_backend(backend_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> py::object {
+            using scalar_type = typename decltype(tag)::type;
+            return dense_gesv_impl<scalar_type>(a, b, return_factors, backend, device_name, return_info);
+        });
+    });
+
+    module.def("_posv", [](const DenseMatrix& a,
+                            const DenseMatrix& b,
+                            const std::string& uplo_name,
+                            bool return_factors,
+                            const std::string& backend_name,
+                            const py::object& device_name_obj,
+                            bool return_info) {
+        const Uplo uplo = parse_uplo(uplo_name);
+        const Backend backend = parse_backend(backend_name);
+        const auto device_name = optional_string_from_obj(device_name_obj);
+        return visit_dense(a, [&](auto tag, const auto&) -> py::object {
+            using scalar_type = typename decltype(tag)::type;
+            return dense_posv_impl<scalar_type>(a, b, uplo, return_factors, backend, device_name, return_info);
         });
     });
 
@@ -535,12 +642,13 @@ void init_factorization_ops(py::module_& module) {
     module.def("_getri", [](const DenseMatrix& lu,
                              const py::array_t<int64_t, py::array::forcecast>& pivots,
                              const std::string& backend_name,
-                             const py::object& device_name_obj) {
+                             const py::object& device_name_obj,
+                             bool return_info) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
-        return visit_dense(lu, [&](auto tag, const auto&) {
+        return visit_dense(lu, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_getri_impl<scalar_type>(lu, pivots, backend, device_name);
+            return dense_getri_impl<scalar_type>(lu, pivots, backend, device_name, return_info);
         });
     });
 
@@ -602,7 +710,7 @@ void init_factorization_ops(py::module_& module) {
     });
 
     module.def("_gesvd", [](const DenseMatrix& a,
-                             bool compute_vectors,
+                             const std::string& vectors_name,
                              const py::object& uplo_name_obj,
                              const std::string& backend_name,
                              const py::object& device_name_obj,
@@ -615,13 +723,13 @@ void init_factorization_ops(py::module_& module) {
             : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, false,
+            return dense_gesvd_impl<scalar_type>(a, parse_svd_vectors(vectors_name), backend, device_name, false,
                                                  hermitian_uplo, return_info);
         });
     });
 
     module.def("_gesvd_blocked", [](const DenseMatrix& a,
-                                     bool compute_vectors,
+                                     const std::string& vectors_name,
                                      const py::object& uplo_name_obj,
                                      const std::string& backend_name,
                                      const py::object& device_name_obj) {
@@ -633,7 +741,7 @@ void init_factorization_ops(py::module_& module) {
             : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, true, hermitian_uplo);
+            return dense_gesvd_impl<scalar_type>(a, parse_svd_vectors(vectors_name), backend, device_name, true, hermitian_uplo);
         });
     });
 
@@ -722,7 +830,7 @@ void init_factorization_ops(py::module_& module) {
     });
 
     module.def("_gesvd_cta", [](const DenseMatrix& a,
-                                 bool compute_vectors,
+                                 const std::string& vectors_name,
                                  const py::object& uplo_name_obj,
                                  const std::string& backend_name,
                                  const py::object& device_name_obj) {
@@ -734,7 +842,7 @@ void init_factorization_ops(py::module_& module) {
             : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_cta_impl<scalar_type>(a, compute_vectors, backend, device_name, hermitian_uplo);
+            return dense_gesvd_cta_impl<scalar_type>(a, parse_svd_vectors(vectors_name), backend, device_name, hermitian_uplo);
         });
     });
 }

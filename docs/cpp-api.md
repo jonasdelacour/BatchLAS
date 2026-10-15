@@ -514,7 +514,8 @@ The from-data constructors are in @ref api_matrix and @ref design_matrix_model.
 
 Every exception BatchLAS raises is a `batchlas::` type from `batchlas/error.hh`. Each derives from
 both the `std::` exception that site threw before and an empty tag base, `batchlas::exception`, so
-existing `std::` handlers still catch it (and Python raises the same type as before).
+existing `std::` handlers still catch it. Python raises a subclass of the builtin type it raised
+before (@ref design_error_model).
 
 ```cpp
 #include <batchlas/error.hh>

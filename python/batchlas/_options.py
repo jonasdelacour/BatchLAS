@@ -16,6 +16,10 @@ class ILUKOptions:
 
 @dataclass(slots=True)
 class SyevxOptions:
+    # Algorithm family (SyevxParams::method): "auto", "direct", "direct_subset",
+    # "filtered" or "lobpcg". BATCHLAS_SYEVX_ALGORITHM overrides it.
+    method: str = "auto"
+    # Orthogonalisation inside the iterative solvers (SyevxParams::algorithm).
     algorithm: str = "chol2"
     ortho_iterations: int = 2
     iterations: int = 100
@@ -34,6 +38,10 @@ class SyevxOptions:
     iluk_levels_of_fill: int = 0
     iluk_drop_tolerance: object = None
     iluk_fill_factor: object = None
+    # "auto", "none", "jacobi", "jacobi_shifted" or "iluk".
+    preconditioner_type: str = "auto"
+    filter_degree: int = 0  # Chebyshev degree for "filtered"; 0 selects a default
+    init_power_iterations: int = -1  # LOBPCG start-block power steps; -1 default, 0 off
     # ---- Range selection (LAPACK ?syevx's RANGE argument) ------------------
     # Every default below is byte-for-byte the C++ SyevxParams default, so an
     # existing caller who never touches them gets exactly the historical
@@ -103,6 +111,7 @@ class JacobiOptions:
 @dataclass(slots=True)
 class StedcOptions:
     recursion_threshold: int = 0
+    algorithm: str = "auto"  # merge-tree driver: "auto", "levels" or "recursive"
     secular_solver: str = "rocm"
     leaf_steqr_params: SteqrOptions = field(default_factory=SteqrOptions)
     merge_variant: str = "auto"

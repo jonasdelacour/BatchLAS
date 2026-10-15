@@ -145,6 +145,9 @@ misses them. `select::detail::pin_text` and `resolve_pin` (`src/select`) parse t
 - `native` and `vendor` warn once and fall back to `auto` when nothing in their class can run.
 
 Tests pin a route with `ScopedPin` (`src/select/select.hh`), which wins over the environment.
+Python pins with `batchlas.set_route(op, spelling)` or the `batchlas.route(op, spelling)` context
+manager: both set the variable in `os.environ` and with `::setenv`, then call
+`detail::reload_settings()` (also exposed as `batchlas.reload_settings()`).
 To add a pinned op, add its name to `RoutingSettings::ops`. `BATCHLAS_<OP>_VARIANT`,
 `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KERNEL`, `BATCHLAS_GEMM_EXPERIMENTAL`,
 `BATCHLAS_GEMM_CUBLASDX_KERNEL`, `BATCHLAS_SYEV_SMALL_KERNEL` and `BATCHLAS_SYEV_CTA_MAX_N` are

@@ -154,7 +154,7 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     // `params`, and `history` stays last.
     py::object counts_object = py::none();
     if (report_counts) {
-        py::array_t<int32_t> counts_out({static_cast<py::ssize_t>(matrix.batch_size())});
+        py::array_t<int32_t> counts_out = int32_array(matrix.batch_size());
         auto counts_view = counts_out.mutable_unchecked<1>();
         for (int batch = 0; batch < matrix.batch_size(); ++batch) {
             counts_view(static_cast<py::ssize_t>(batch)) = counts[static_cast<std::size_t>(batch)];
@@ -194,7 +194,7 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
         history["current_residual_history"] = history_array(current_history);
         history["convergence_rate_history"] = history_array(rate_history);
         history["ritz_value_history"] = history_array(ritz_history);
-        py::array_t<int32_t> iterations_out({static_cast<py::ssize_t>(matrix.batch_size())});
+        py::array_t<int32_t> iterations_out = int32_array(matrix.batch_size());
         auto iterations_view = iterations_out.mutable_unchecked<1>();
         for (int batch = 0; batch < matrix.batch_size(); ++batch) {
             iterations_view(static_cast<std::size_t>(batch)) =
