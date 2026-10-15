@@ -11,8 +11,8 @@ struct OrmqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
-#include "ormqr_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/ormqr_verify.hh>
 using OrmqrTestTypes = typename test_utils::backend_types<OrmqrConfig>::type;
 
 template <typename Config>

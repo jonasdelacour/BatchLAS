@@ -106,7 +106,7 @@ with one tile-group.
 
 ## Device group BLAS: where it is used
 
-- Library: `src/extensions/latrd_lower_panel.cc`, `larft_wy.hh`, `ormqr_cta.cc`, `ormqr_blocked.cc`,
+- Library: `src/ops/syev/sytrd/latrd_lower_panel.cc`, `larft_wy.hh`, `ormqr_cta.cc`, `ormqr_blocked.cc`,
   `sytrd_blocked.cc`, `src/math-helpers.hh`.
 - Tests: `tests/device_blas_tests.cc`. Benchmarks: `benchmarks/device_blas_level{2,3}_benchmark.cc`.
 

@@ -6,22 +6,22 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include "../src/select/coverage.hh"
+#include <src/select/coverage.hh>
 #include <batchlas/no_route.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
-#include "shipped_table_pick.hh"
+#include <tests/test_utils.hh>
+#include <tests/shipped_table_pick.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/getrf_native.hh"
-#include "../src/ops/getrf/choice.hh"
-#include "../src/util/resident_capacity.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/choice.hh>
+#include <src/util/resident_capacity.hh>
 
 #include <algorithm>
 #include <cmath>

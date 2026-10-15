@@ -62,7 +62,7 @@ src/, tests/ or benchmarks/ count normally: those are not published by Doxygen.
 USAGE
 -----
     python3 .github/ci/check_comment_density.py                 # src include tests benchmarks
-    python3 .github/ci/check_comment_density.py src/extensions  # a subtree
+    python3 .github/ci/check_comment_density.py src/ops        # a subtree
     python3 .github/ci/check_comment_density.py --ceiling 25
     python3 .github/ci/check_comment_density.py --fix-suggest   # what to move, with line ranges
                                                                 # (waived files too -- they ARE the burn-down list)
@@ -714,7 +714,7 @@ def main(argv=None):
     # name next.
     #
     # Resolve it against the WHOLE repo, not against `targets`: a subtree scan
-    # (`... check_comment_density.py src/extensions`) legitimately sees none of
+    # (`... check_comment_density.py src/ops`) legitimately sees none of
     # the waived files, and reporting every waiver as stale there would make
     # every narrow run exit 1 for no reason.
     if waivers:

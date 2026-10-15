@@ -1,5 +1,5 @@
-#include "../queue.hh"
-#include "../sycl/local_mem.hh"
+#include <src/queue.hh>
+#include <src/sycl/local_mem.hh>
 #include <cstdio>
 #include <map>
 #include <mutex>

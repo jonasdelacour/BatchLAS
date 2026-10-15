@@ -17,8 +17,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/symm/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/symm/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <memory>
 #include <stdexcept>
@@ -126,7 +126,7 @@ public:
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
             // family: expand
-            "src/backends/triangular_expand.hh",
+            "src/kernels/common/triangular_expand.hh",
             "src/expansion_budget.hh",
             // common
             "src/ops/symm/choice.hh",
@@ -135,7 +135,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/symm/symm.cc"
         // symm expand calls the public gemm: its native kernels and can_run count too.
-        // family: expand "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }

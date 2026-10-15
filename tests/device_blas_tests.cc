@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <batchlas/verify/tolerance.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <algorithm>
 #include <array>
@@ -17,7 +17,7 @@
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/util/group-collectives.hh>
 
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 using namespace batchlas;
 

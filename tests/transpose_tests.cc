@@ -3,7 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND

@@ -39,9 +39,9 @@ specialization constants and no `sycl::stream`.
 | `ext_oneapi_submit_barrier`, `ext_oneapi_memcpy2d` | `queue-impl.cc`, `netlib_lapack.cc`, `matrix.cc` | already macro-guarded, with fallback |
 | `mem_advise` with UR flags | `sycl-util-impl.cc` | already guarded (`SYCL_IMPLEMENTATION_ONEAPI`) |
 | `kernel_bundle` / `get_kernel_id` | `get_kernel_max_wg_size` (`linalg-impl.hh`), `stedc_merge_cta.cc` | 2 helpers |
-| `__SYCL_DEVICE_ONLY__` + `__NVPTX__` dispatch, `__nvvm_*` / `__spirv_*` / AMDGCN intrinsics | `src/extensions/sg_partition/` (4 backends) | 1 directory, used by 17 files |
+| `__SYCL_DEVICE_ONLY__` + `__NVPTX__` dispatch, `__nvvm_*` / `__spirv_*` / AMDGCN intrinsics | `src/kernels/common/sg_partition/` (4 backends) | 1 directory, used by 17 files |
 | `[[intel::max_work_group_size, min_work_groups_per_cu]]` | `BATCHLAS_LAUNCH_BOUNDS` (`src/queue.hh`), used in 4 kernels | 1 macro |
-| Inline PTX `asm` (L2 prefetch loads) | `src/sycl/gemm/register_128x128.hh` | 1 file, `#if`-guarded |
+| Inline PTX `asm` (L2 prefetch loads) | `src/ops/gemm/kernels/register_128x128.hh` | 1 file, `#if`-guarded |
 | `[[sycl::reqd_sub_group_size(32)]]` | spelled directly | 26 files (acpp warns and ignores it) |
 | oneDPL `<oneapi/dpl/random>` in kernels | `matrix.cc`, `lanczos.cc`, `syevx_lobpcg.cc` | done (C10): `src/util/philox.hh`, oneDPL is no longer a dependency |
 | `info::device::version` parsed as `"8.9"` | `Device::cuda_compute_capability` (`queue-impl.cc`); feeds the table key `sm_<cc>` in `select::describe` | 1 site |
@@ -155,7 +155,7 @@ algorithms). A few sites outside them still test `BATCHLAS_SYCL_IMPL_ACPP` direc
 - **Trap:** a target intrinsic or inline `asm` must also sit inside `__acpp_if_target_sscp(...)`;
   `on_ptx()` alone does not keep it out of the x86 host object, where instruction selection
   rejects it.
-- `sg_partition` has a fifth backend, `SscpBackend` (`src/extensions/sg_partition/backend_sscp.hh`).
+- `sg_partition` has a fifth backend, `SscpBackend` (`src/kernels/common/sg_partition/backend_sscp.hh`).
   Its PTX leg is `NvptxBackend` unchanged; the `__nvvm_*` names it calls are defined over the LLVM
   intrinsics through asm labels (`llvm.nvvm.shfl.sync.*`, `vote.ballot.sync`, `activemask`,
   `redux.sync.*`), so they keep the intrinsics' `convergent` attribute. Every other JIT target takes
@@ -569,14 +569,14 @@ hold the two copies equal.
 
 | Metal fact | Consequence | Where |
 | --- | --- | --- |
-| No generic address space: a pointer chosen between local and global memory at run time is rejected ("Conflicting address space information in PHI node") | the body is instantiated once per storage combination under `on_metal()`; elsewhere the pointers are selected once, as before | sb2st chase (`src/extensions/sytrd_sb2st_cta.cc`), tridiagonal solve (`src/extensions/tridiag_solver.cc`) |
-| No floating-point atomics on threadgroup memory | One and Inf norms give each column or row sum to one work-item on Metal | `src/extra/norm.cc` |
+| No generic address space: a pointer chosen between local and global memory at run time is rejected ("Conflicting address space information in PHI node") | the body is instantiated once per storage combination under `on_metal()`; elsewhere the pointers are selected once, as before | sb2st chase (`src/ops/syev/sytrd/sytrd_sb2st_cta.cc`), tridiagonal solve (`src/ops/syev/tridiag/tridiag_solver.cc`) |
+| No floating-point atomics on threadgroup memory | One and Inf norms give each column or row sum to one work-item on Metal | `src/util/norm.cc` |
 | No static (program-scope) local memory | `wg_reduce_floating` uses AdaptiveCpp's own reduce on Metal; its typed scratch has no rounding defect ([group algorithms](#sycl-impl-group-algorithms)) | `include/batchlas/util/group-collectives.hh` |
-| No vector types in the emitter | under `BATCHLAS_DEVICE_NO_VECTOR_TYPES`: `Vec4` and `tiny_r4` are 16-byte structs, `Raw16` is an `unsigned __int128` (emitted as `uint4`). CUDA codegen keeps the vectors | `src/sycl/gemm/vec4.hh`, `src/extensions/tiny_device.hh`, `src/sycl/gemm/register_64x64_k16_wide.hh` |
+| No vector types in the emitter | under `BATCHLAS_DEVICE_NO_VECTOR_TYPES`: `Vec4` and `tiny_r4` are 16-byte structs, `Raw16` is an `unsigned __int128` (emitted as `uint4`). CUDA codegen keeps the vectors | `src/ops/gemm/kernels/vec4.hh`, `src/kernels/common/tiny_device.hh`, `src/ops/gemm/kernels/register_64x64_k16_wide.hh` |
 | No double | see [the no-fp64 policy](#sycl-impl-metal-fp64-policy) | |
 | Float subnormals flush to zero, in safe math too; `info::device` still reports denorm support | a test that needs a subnormal must probe the device | `TrsmNativeSgLeft.NonFiniteReciprocalFallsBackToDivision` probes and skips |
 | `logb(0)` and `logb(inf)` are finite (`(float)ilogb(fabs(x))` in the Metal libkernel) | Annex G complex division of zero, inf or NaN may give wrong special values; normal-range results are unaffected. Not tested | `src/sycl/annexg_complex.hh` (`annexg::div`) |
-| An arm64 host rejects the `"l"` asm constraint | the PTX L2-prefetch asm is compiled only on x86 hosts | `src/sycl/gemm/register_128x128.hh` |
+| An arm64 host rejects the `"l"` asm constraint | the PTX L2-prefetch asm is compiled only on x86 hosts | `src/ops/gemm/kernels/register_128x128.hh` |
 
 `sycl_impl::on_metal()` (`src/sycl/sscp_target.hh`) is JIT-time reflection on the compiler backend
 (spelled as the number 4, since acpp 25.10 has no `metal` enumerator); a private copy sits in

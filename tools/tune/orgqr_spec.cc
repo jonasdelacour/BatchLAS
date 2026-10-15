@@ -17,8 +17,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/orgqr/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/orgqr/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <memory>
@@ -103,9 +103,9 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             // family: blocked
-            "src/extensions/orgqr_blocked.cc",
+            "src/ops/orgqr/kernels/orgqr_blocked.cc",
             // common
-            "src/extensions/orgqr_native.hh",
+            "src/ops/orgqr/orgqr_native.hh",
             "src/ops/orgqr/choice.hh",
         };
         // kernel-sources-end
@@ -113,10 +113,10 @@ public:
         // common "src/ops/orgqr/orgqr.cc"
         // orgqr blocked applies the public ormqr to an identity: ormqr's kernels and selection count, and
         // through ormqr blocked the public gemm and trmm too.
-        // family: blocked "src/extensions/ormqr_blocked.cc" "include/batchlas/internal/ormqr_blocked.hh" "src/extensions/larft_wy.hh" "src/ops/ormqr/choice.hh" "src/ops/ormqr/ormqr.cc"
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh"
-        // family: blocked "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
-        // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/backends/trmm_triangular_tiles.hh" "src/backends/triangular_tiles.hh" "src/backends/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
+        // family: blocked "src/ops/ormqr/kernels/ormqr_blocked.cc" "include/batchlas/internal/ormqr_blocked.hh" "src/kernels/common/larft_wy.hh" "src/ops/ormqr/choice.hh" "src/ops/ormqr/ormqr.cc"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }

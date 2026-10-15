@@ -3,9 +3,9 @@
 #include <batchlas/blas/device.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 using namespace batchlas;
 

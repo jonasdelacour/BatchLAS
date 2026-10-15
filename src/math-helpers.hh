@@ -9,8 +9,8 @@
 
 #include <complex>
 
-#include "queue.hh"
-#include "sycl/sscp_target.hh"
+#include <src/queue.hh>
+#include <src/sycl/sscp_target.hh>
 
 
 namespace batchlas {

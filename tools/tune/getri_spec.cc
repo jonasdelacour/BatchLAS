@@ -12,8 +12,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/getri/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/getri/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <memory>
@@ -100,16 +100,16 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             // family: blocked
-            "src/extensions/getri_blocked.cc",
+            "src/ops/getri/kernels/getri_blocked.cc",
             // common
-            "src/extensions/getri_native.hh",
+            "src/ops/getri/getri_native.hh",
             "src/ops/getri/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/getri/getri.cc"
         // blocked calls the public trsm: its native kernels count too.
-        // family: blocked "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getri_spec.cc"; }

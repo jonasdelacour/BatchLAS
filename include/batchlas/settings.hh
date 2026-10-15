@@ -121,7 +121,7 @@ struct SelectionSettings {
     /// and her2k, so a test can reach the arm the shape would not have picked (symm and trmm pin
     /// `expand` through their `BATCHLAS_<OP>_ROUTE`). Not op-keyed, so RoutingSettings does not
     /// hold it.
-    // Read at two sites (src/expansion_budget.hh, src/backends/triangular_expand.hh) by two
+    // Read at two sites (src/expansion_budget.hh, src/kernels/common/triangular_expand.hh) by two
     // independent parsers that currently agree; both read this one field.
     EnvValue expand_route{};
 

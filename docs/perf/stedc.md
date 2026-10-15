@@ -22,7 +22,7 @@ Status: **done**. End-to-end gain on the CTA path is 4-9% on its own (the loops 
 5.5% at matched settings); with the multiplier change they enabled it is 15-20%, see
 [stedc: end-to-end merge speedup](#stedc-end-to-end-merge-speedup).
 
-`maybe_rescale_vectors` and `normalize_vectors` (`src/extensions/stedc_merge_cta.cc`) looped over
+`maybe_rescale_vectors` and `normalize_vectors` (`src/ops/syev/stedc/stedc_merge_cta.cc`) looped over
 `eid = 0 .. dd-1` with a whole-work-group reduction and a barrier per index. Both loops are
 independent per index, so the CTA variant runs one index per sub-group partition, concurrently, with
 one `group_barrier(wg)` between the phases. The WG variant (`WorkgroupAdapter`, `(0, 1)`) is
@@ -69,7 +69,7 @@ and dereferenced `d_prob(prev)` unconditionally. When a subproblem deflates to `
 
 Fix: solve the single-pole case in closed form. With one pole, \f$x = d_0 + \rho z_0^2\f$, so the CTA
 solver returns `{d_prob(0), rho * z0 * z0}` before computing `prev`. The non-CTA `sec_solve_ext_roc`
-(`src/extensions/stedc_secular.cc`) gets the same guard.
+(`src/ops/syev/stedc/stedc_secular.cc`) gets the same guard.
 
 To find such faults, `compute-sanitizer` cannot attach (SYCL initializes CUDA first). Rebuild with
 device asserts on instead:
@@ -113,7 +113,7 @@ concurrent columns.
 
 ## stedc: deflation-aware back-transform GEMM
 
-Status: **done**, gated at \f$n \ge 512\f$ (`stedc_deflation_gemm_min_n`, `src/extensions/stedc.cc`).
+Status: **done**, gated at \f$n \ge 512\f$ (`stedc_deflation_gemm_min_n`, `src/ops/syev/stedc/stedc.cc`).
 
 Each merge level issued a dense \f$n \times n \times n\f$ GEMM. `Qprime` is identity beyond its first
 `n_reduced` columns, so as a block it is \f$M = [W \mid I]\f$, and
@@ -160,7 +160,7 @@ The matching algorithm is boundary-row divide and conquer
 
 ## stedc: the level-synchronous driver
 
-`src/extensions/stedc.cc` has two drivers over one size-uniform merge that combines P independent
+`src/ops/syev/stedc/stedc.cc` has two drivers over one size-uniform merge that combines P independent
 subproblems of size s pairwise.
 
 - **Recursive driver:** P = batch, one tree node at a time, depth-first. The \f$2^l\f$ sibling merges at
@@ -177,7 +177,7 @@ place: doubling the leaf leading dimension made the CTA STEQR kernel 10% slower 
 
 ## stedc: the leaf cap at the sub-group width
 
-`plan_stedc_levels` (`src/extensions/stedc_levels_plan.hh`) never lets a leaf exceed the device
+`plan_stedc_levels` (`src/ops/syev/stedc/stedc_levels_plan.hh`) never lets a leaf exceed the device
 sub-group width. `steqr` uses `steqr_cta` only up to that width and falls to `steqr_wg` above it,
 about 14x slower one step past the edge (batch 10,416, eigenvectors: n = 32 0.26 us, n = 36 3.76 us,
 n = 40 4.87 us).
@@ -196,7 +196,7 @@ After the fix, native-T accumulation matched double to the reported digits (n = 
 
 ## stedc: the rejected private-pole fast path
 
-The fused merge kernel (`src/extensions/stedc_merge_kernels.cc`) initializes each column of `Q_bid`
+The fused merge kernel (`src/ops/syev/stedc/stedc_merge_kernels.cc`) initializes each column of `Q_bid`
 with the poles and runs the secular solver in place. A variant that kept the poles in a private
 `T d_priv[128]` array and copied back after the solve gave a bimodal orthogonality distribution for
 float n <= 64. The in-place form matches the baseline exactly.

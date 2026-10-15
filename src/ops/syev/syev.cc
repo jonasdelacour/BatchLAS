@@ -8,10 +8,10 @@
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/settings.hh>
 
-#include "choice.hh"
-#include "vendor.hh"
-#include "../../select/select.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/syev/choice.hh>
+#include <src/ops/syev/vendor.hh>
+#include <src/select/select.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstddef>

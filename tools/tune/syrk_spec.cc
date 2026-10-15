@@ -16,8 +16,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/syrk/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/syrk/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <memory>
 #include <stdexcept>
@@ -131,11 +131,11 @@ public:
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
             // family: gram
-            "src/backends/syrk_gram_tiles.hh",
+            "src/ops/syrk/kernels/syrk_gram_tiles.hh",
             // family: triangular
-            "src/backends/syrk_triangular_tiles.hh",
+            "src/ops/syrk/kernels/syrk_triangular_tiles.hh",
             // common
-            "src/backends/triangular_tiles.hh",
+            "src/kernels/common/triangular_tiles.hh",
             "src/ops/syrk/choice.hh",
         };
         // kernel-sources-end

@@ -68,7 +68,7 @@ and remove the label when it no longer dominates.
 
 ## The sub-group partition layer
 
-`sg_partition_tests` covers `src/extensions/sg_partition/` (`SubGroupPartition<P, Masked>` and
+`sg_partition_tests` covers `src/kernels/common/sg_partition/` (`SubGroupPartition<P, Masked>` and
 every collective). It is header-only, links no BatchLAS library, and builds alone:
 `cmake --build build --target sg_partition_tests`. Run it once per device:
 

@@ -1,6 +1,6 @@
-#include "backend_handle_impl.hh"
+#include <src/backends/backend_handle_impl.hh>
 
-#include "../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

@@ -39,6 +39,7 @@ target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="
 # The command users run. It must stay SYCL-free (no batchlas_configure_binary_target): linking
 # libbatchlas or libsycl would put a CUDA context on every visible GPU (see launcher.cc).
 add_executable(batchlas_tune launcher.cc)
+target_include_directories(batchlas_tune PRIVATE "${PROJECT_SOURCE_DIR}")
 add_dependencies(batchlas_tune batchlas_tune_impl)
 target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE="${BATCHLAS_OPENBLAS_CORETYPE}")
 
@@ -46,3 +47,4 @@ target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE
 # no batchlas_configure_binary_target, no SYCL.
 add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc tune_core.cc)
 target_compile_features(tune_replay PRIVATE cxx_std_20)
+target_include_directories(tune_replay PRIVATE "${PROJECT_SOURCE_DIR}")

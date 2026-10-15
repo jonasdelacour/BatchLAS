@@ -1,7 +1,7 @@
 # Ritz values (Rayleigh quotients) {#guide_ritz_values}
 
 > **Status:** current · signatures verified against
-> `include/batchlas/blas/extensions.hh` (lines 1621-1672) and `src/extensions/ritz_values.cc`
+> `include/batchlas/blas/extensions.hh` (lines 1621-1672) and `src/ops/ritz_values/ritz_values.cc`
 > on 2026-09-30.
 
 `ritz_values` returns the Rayleigh quotient of every trial-vector column, for dense or CSR
@@ -105,7 +105,7 @@ Shape mismatches fail an `assert`, so a release build does not diagnose them.
 - Scalar types: `float`, `double`, `std::complex<float>`, `std::complex<double>`.
 - Formats of `A`: `Dense`, `CSR`.
 - Backends: `NETLIB`, `CUDA`, `ROCM`, each only when compiled in
-  (`src/extensions/ritz_values.cc:182-192`). There is no `Backend::SYCL` or `Backend::MKL` instantiation.
+  (`src/ops/ritz_values/ritz_values.cc:182-192`). There is no `Backend::SYCL` or `Backend::MKL` instantiation.
 
 ## Tests
 

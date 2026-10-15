@@ -1,11 +1,11 @@
-#include "race.hh"
+#include <tools/tune/race.hh>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
 
-#include "tune_core.hh"
+#include <tools/tune/tune_core.hh>
 
 namespace batchlas::tune {
 

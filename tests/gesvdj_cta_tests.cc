@@ -14,10 +14,10 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
-#include "eigen_verify.hh"
-#include "../src/extensions/gesvd_native.hh"
-#include "../src/util/resident_capacity.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
+#include <src/ops/gesvd/gesvd_native.hh>
+#include <src/util/resident_capacity.hh>
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>

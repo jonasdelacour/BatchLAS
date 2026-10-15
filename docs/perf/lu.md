@@ -290,7 +290,7 @@ Traps from the same record:
 
 ## The shape of the GETRF device code
 
-`src/extensions/getrf_cta_device.hh` holds the native GETRF panel's device code. `getf2_panel_device` is LAPACK ?GETF2 over a `Tile` providing `at(r, c)`, instantiated on a `local_accessor` (CTA tier) and on a raw global pointer (blocked tier's panel leaf). Four spellings are load-bearing:
+`src/ops/getrf/getrf_cta_device.hh` holds the native GETRF panel's device code. `getf2_panel_device` is LAPACK ?GETF2 over a `Tile` providing `at(r, c)`, instantiated on a `local_accessor` (CTA tier) and on a raw global pointer (blocked tier's panel leaf). Four spellings are load-bearing:
 
 * **The pivot search is a sub-group butterfly plus a scan over 32 SLM slots**, never `sycl::reduce_over_group` ([48 KB hole](#lu-the-48-kb-launch-hole)).
 * **The pivot metric is LAPACK's `cabs1`** (|Re| + |Im|), not the modulus cuBLAS uses for complex ([correctness findings](#lu-correctness-findings)).
@@ -544,7 +544,7 @@ Register counts match the wg=128 table. All 22 entries: frame 0, spill 0, 0 byte
 
 ## The register panel leaf
 
-**P4, 2026-09-11.** `src/extensions/getrf_panel_reg.cc` and `getrf_panel_reg_device.hh`: one work-group per `m x ncols` panel. Work-item `tid` owns physical row `tid` of a compile-time `D rA[NB]`, NB = 32, pivoting by lazy relabel and publishing the pivot row through NB words of local memory. It is a drop-in for `getrf_panel_factorize`: same global 1-based `ipiv`, same read-modify-written `info`, same `cabs1`.
+**P4, 2026-09-11.** `src/ops/getrf/kernels/getrf_panel_reg.cc` and `getrf_panel_reg_device.hh`: one work-group per `m x ncols` panel. Work-item `tid` owns physical row `tid` of a compile-time `D rA[NB]`, NB = 32, pivoting by lazy relabel and publishing the pivot row through NB words of local memory. It is a drop-in for `getrf_panel_factorize`: same global 1-based `ipiv`, same read-modify-written `info`, same `cabs1`.
 
 **The register leaf is the default.** It is faster at 153 of 156 paired cells, by 1.01x to 2.13x. The exceptions are double n=32 at its three rungs. `BATCHLAS_GETRF_LEAF=slm` selects the local-memory panel. It moved cfloat's `getrf` floor from 512 to 256 at batch >= 256. The leaf is a derived spelling inside `blocked`, not a family. Its local-memory footprint is `NB*sizeof(D) + 32*(sizeof(R)+4)`, under a kilobyte for every type. The work-group is `roundup(m, 32)`, one row per work-item.
 
@@ -687,7 +687,7 @@ Three orders x three batches x three types = 27 paired cells no longer resolve `
 
 ## The fused gesv tier
 
-`src/extensions/gesv_tiny.cc`: one launch for `A X = B` at n <= 32 (cdouble 16) and nrhs <= 4. `getrf_tiny`'s elimination carries the RHS in `D rB[NR]` alongside `D rA[N]`, with forward substitution fused into elimination and back substitution in the same kernel. The `blocked` family is the composition: public `getrf` then public `getrs`, each selecting from its own table (`gesv.cc:60-66`). `BATCHLAS_GESV_ROUTE=tiny` reaches the kernel at any shape `can_run(tiny)` admits.
+`src/ops/gesv/kernels/gesv_tiny.cc`: one launch for `A X = B` at n <= 32 (cdouble 16) and nrhs <= 4. `getrf_tiny`'s elimination carries the RHS in `D rB[NR]` alongside `D rA[N]`, with forward substitution fused into elimination and back substitution in the same kernel. The `blocked` family is the composition: public `getrf` then public `getrs`, each selecting from its own table (`gesv.cc:60-66`). `BATCHLAS_GESV_ROUTE=tiny` reaches the kernel at any shape `can_run(tiny)` admits.
 
 * **No batched vendor gesv exists on any backend.** cuBLAS, cuSOLVER and rocSOLVER ship none, so `GesvChoice` has no vendor family and a `vendor` pin runs Auto.
 * **B is permuted for free.** Lane `lane` loads row `lane` of B, and its `rowid` moves with A's under the lazy relabel. No `laswp` is needed.

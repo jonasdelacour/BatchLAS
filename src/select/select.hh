@@ -7,8 +7,8 @@
 // State that a test and the library must share (pins, table cache, trace depth) lives in select.cc
 // behind BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
-#include "coverage.hh"
-#include "vendor.hh"
+#include <src/select/coverage.hh>
+#include <src/select/vendor.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/export.hh>

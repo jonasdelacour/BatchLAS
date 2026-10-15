@@ -3,7 +3,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <cstdlib>
 #include <memory>

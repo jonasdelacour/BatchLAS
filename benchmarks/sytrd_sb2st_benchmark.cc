@@ -2,7 +2,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
 
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <batchlas/backend_config.h>
 

@@ -2,7 +2,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <sycl/sycl.hpp>
 
-#include "../src/util/philox.hh"
+#include <src/util/philox.hh>
 
 #include <cmath>
 #include <complex>

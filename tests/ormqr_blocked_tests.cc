@@ -9,9 +9,9 @@
 #include <cstdlib>
 #include <type_traits>
 
-#include "test_utils.hh"
-#include "ormqr_verify.hh"
-#include "../src/ops/ormqr/vendor.hh"
+#include <tests/test_utils.hh>
+#include <tests/ormqr_verify.hh>
+#include <src/ops/ormqr/vendor.hh>
 
 using namespace batchlas;
 

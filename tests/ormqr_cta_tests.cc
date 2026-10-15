@@ -22,8 +22,8 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
 
 } // namespace
 
-#include "test_utils.hh"
-#include "ormqr_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/ormqr_verify.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 

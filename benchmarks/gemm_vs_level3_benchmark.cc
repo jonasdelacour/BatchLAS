@@ -1,4 +1,4 @@
-// Head-to-head: the GEMM spellings that src/extensions actually uses, against
+// Head-to-head: the GEMM spellings that src/ops actually uses, against
 // the specialised level-3 op that expresses the same thing.
 //
 // Every shape here is lifted from a real call site, not invented:
@@ -23,7 +23,7 @@
 
 #include <batchlas/blas/linalg.hh>
 
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <batchlas/backend_config.h>
 
@@ -243,7 +243,7 @@ void configure_tw(minibench::State& state) {
         // Left side, upper triangle, non-unit diagonal: larft's T exactly.
         //
         // The CUDA and ROCm paths overwrite C (beta = 0); only the MKL fallback
-        // in src/extensions accumulates into it. PR #61 charged trmm a zeroing
+        // in src/ops accumulates into it. PR #61 charged trmm a zeroing
         // pass here to be safe against that, which on a GPU is pure overhead --
         // at ib = 32, nC = 256, batch 2048 the fill alone is ~70 us of a 189 us
         // measurement, and it inflated every trmm row in that report. The GPU

@@ -27,12 +27,12 @@
 #include <type_traits>
 #include <vector>
 
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 
-#include "../src/ops/gesvd/choice.hh"
-#include "../src/extensions/gesvd_native.hh"
-#include "../src/util/resident_capacity.hh"
+#include <src/ops/gesvd/choice.hh>
+#include <src/ops/gesvd/gesvd_native.hh>
+#include <src/util/resident_capacity.hh>
 
 using namespace batchlas;
 

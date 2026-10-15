@@ -2,7 +2,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/backend_config.h>
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <cstdio>
 #include <string>

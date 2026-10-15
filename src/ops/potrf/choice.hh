@@ -3,7 +3,7 @@
 /// @file
 /// @brief potrf: tiny, cta, lpanel:panel, blocked, vendor. evidence: docs/perf/potrf.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <complex>

@@ -8,8 +8,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "test_utils.hh"
-#include "../src/select/vendor.hh"
+#include <tests/test_utils.hh>
+#include <src/select/vendor.hh>
 
 using namespace batchlas;
 

@@ -10,7 +10,7 @@ instantiated scalar type. Interior ranges on the iterative paths are deferred. T
 
 ## syevx range: starting point
 
-`stebz` (`src/extensions/stebz.cc`) already supports all three LAPACK ranges. A Value range becomes an
+`stebz` (`src/ops/syev/tridiag/stebz.cc`) already supports all three LAPACK ranges. A Value range becomes an
 index range per item through two Sturm counts, and the count is written to `m[bid]`. Sturm counts are
 exact (sign changes of the LDL pivots), so \f$m = \mathrm{count}(v_u) - \mathrm{count}(v_l)\f$ is correct
 even inside a tight cluster, and an empty interval gives \f$m = 0\f$.
@@ -233,4 +233,4 @@ cmake --build build-bench -j 32 --target syevx_benchmark
 ./build-bench/benchmarks/syevx_benchmark --name BM_SYEVX_RangePosition
 ```
 
-Reading the benchmark: `Direct` cannot depend on position, so its spread across bottom, middle and top (equal block width) is the noise floor. `DirectSubset` is flat if its spread stays inside that band. If not, the thresholds argument fails, and the `kSyevxSubsetMinN` / `kSyevxSubsetMinWork` gate in `src/extensions/syevx.cc` needs a range-aware term.
+Reading the benchmark: `Direct` cannot depend on position, so its spread across bottom, middle and top (equal block width) is the noise floor. `DirectSubset` is flat if its spread stays inside that band. If not, the thresholds argument fails, and the `kSyevxSubsetMinN` / `kSyevxSubsetMinWork` gate in `src/ops/syevx/syevx.cc` needs a range-aware term.

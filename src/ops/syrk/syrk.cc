@@ -6,12 +6,12 @@
 
 #include <batchlas/blas/functions/syrk.hh>
 
-#include "choice.hh"
-#include "../../backends/level3_shape.hh"
-#include "../../backends/syrk_gram_tiles.hh"
-#include "../../backends/syrk_triangular_tiles.hh"
-#include "../../select/select.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/syrk/choice.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
+#include <src/ops/syrk/kernels/syrk_triangular_tiles.hh>
+#include <src/select/select.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <cstdint>
 #include <stdexcept>

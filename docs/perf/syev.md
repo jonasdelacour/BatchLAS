@@ -32,14 +32,14 @@ Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-low
 | n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
 | backend scope | `can_run` | any GPU backend with a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm has no table and borrows the sm tables with a warning (untested) |
 | values-only blocked solve | `syev_blocked.stebz_evals` | `stebz` bisection off the tridiagonal, no `stedc` |
-| complex panel width | `sytrd_block_size_default<T>`, `src/extensions/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
-| complex trailing update | `rank2k_trailing_update_supported`, `src/extensions/sytrd_blocked.cc` | float and complex<float> use the rank-2k path on the CUDA backend. double, complex<double> and other backends keep the GEMM pair |
-| sb2st back-transform | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/extensions/sytrd_sb2st_hh.cc` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
+| complex panel width | `sytrd_block_size_default<T>`, `src/ops/syev/kernels/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
+| complex trailing update | `rank2k_trailing_update_supported`, `src/ops/syev/sytrd/sytrd_blocked.cc` | float and complex<float> use the rank-2k path on the CUDA backend. double, complex<double> and other backends keep the GEMM pair |
+| sb2st back-transform | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/ops/syev/sytrd/sytrd_sb2st_hh.cc` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
 | block sizes | `ORMQR_BLOCK_SIZE_*`, `SYTRD_BLOCK_SIZE_*`, `include/batchlas/tuning_params.hh` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (buckets n ≤ 64/128/256/512/else) |
 | sy2sb WY width | `SY2SB_ORMQR_NB_LARGE = 32` | n ≤ 512 bucket only |
 | stedc | `STEDC_*`, `tuning_params.hh` | leaf threshold 32, merge variant 2 (FusedCta), threads-per-root 8, wg multiplier 8 |
-| stedc leaf cap | `plan_stedc_levels`, `src/extensions/stedc_levels_plan.hh` | leaf ≤ threshold, a hard cap |
-| two-stage band width | `choose_two_stage_kd`, `src/extensions/two_stage_common.hh` | kd = 32 |
+| stedc leaf cap | `plan_stedc_levels`, `src/ops/syev/stedc/stedc_levels_plan.hh` | leaf ≤ threshold, a hard cap |
+| two-stage band width | `choose_two_stage_kd`, `src/kernels/common/two_stage_common.hh` | kd = 32 |
 
 **Pinning a family.** `BATCHLAS_SYEV_ROUTE=<family>` (case-folded; also `native`, `vendor`, `auto`)
 or a `select::ScopedPin`. A pin that `can_run` refuses, or an unknown word, throws
@@ -146,7 +146,7 @@ The Lower-only blocked and two-stage pipelines get Upper input by mirroring the 
 beats vendor (Upper) at every shape (n = 320 vectors 2.95×, n = 1024 values 3.39×, n = 256 vectors 1.02×) and
 Upper/Lower is 1.003×–1.020×. A native Upper reduction could recover at most that 0.3%–2.0%, so it was rejected.
 
-`mirror_upper_to_lower` (`src/extensions/uplo_mirror.{hh,cc}`) writes \f$A_{ji} := \overline{A_{ij}}\f$ in place
+`mirror_upper_to_lower` (`src/ops/syev/uplo_mirror.hh`, `kernels/uplo_mirror.cc`) writes \f$A_{ji} := \overline{A_{ij}}\f$ in place
 (`syev` overwrites A); the diagonal is left alone and a complex diagonal's imaginary part is not forced to zero, as
 the Lower path already assumes. The header is declaration-only with explicit instantiations in `uplo_mirror.cc`
 (a SYCL kernel name needs one definition: inline in both `syev_blocked.cc` and `syev_two_stage.cc` gave "definition
@@ -321,7 +321,7 @@ consumer where the next retune cannot overwrite them.
 
 ### syev: complex panel width in the 256 to 512 bucket
 
-`sytrd_block_size_default<T>` (`src/extensions/syev_blocked.cc`) returns 32 for complex at 256 < n ≤ 512. The
+`sytrd_block_size_default<T>` (`src/ops/syev/kernels/syev_blocked.cc`) returns 32 for complex at 256 < n ≤ 512. The
 harness value 8 costs complex 1.16×–1.20×: a complex panel column moves twice the bytes and does four times the
 flops per element, so it needs a wider panel to amortise the O(n) barrier-and-reduction chain of
 `latrd_lower_panel`. complex<float>, eigenvectors, blocked, µs/matrix, median of 5, device 1, 2026-08-07:
@@ -447,7 +447,7 @@ eigenvectors, batch 256: n = 33 150.17 against 1.7715 µs (**85× slower**); n =
 slower**). At batch 2048 an n = 33..128 sweep finished no iteration in ten minutes while holding 24 GB. A
 CTA-resident solve saves about 15 launches but runs an unblocked level-2 algorithm in one work-group per matrix
 against a blocked level-3 pipeline. Reverted (`14bad498`; it survives on `worktree-wf_3b4af334-426-9`). The branch
-also rewrote the live n ≤ 32 CTA kernels and the sub-group partition (`src/extensions/sg_partition/`), never measured; if wanted
+also rewrote the live n ≤ 32 CTA kernels and the sub-group partition (`src/kernels/common/sg_partition/`), never measured; if wanted
 it returns as its own change with n ≤ 32 numbers.
 
 > **Note:** benchmark through the forced provider. Under flat selection the cap is `kSmallMaxN = 32` in the small

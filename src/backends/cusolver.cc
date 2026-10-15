@@ -1,16 +1,16 @@
 //#include <batchlas/blas/linalg.hh>
-#include "../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <batchlas/blas/linalg.hh>
 
 #include <batchlas/blas/functions/syev.hh>
-#include "../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {

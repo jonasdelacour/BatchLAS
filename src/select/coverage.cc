@@ -1,6 +1,6 @@
-#include "coverage.hh"
+#include <src/select/coverage.hh>
 
-#include "vendor.hh"
+#include <src/select/vendor.hh>
 
 #include <cstdio>
 #include <cstdlib>

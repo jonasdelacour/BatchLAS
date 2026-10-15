@@ -3,7 +3,7 @@
 /// @file
 /// @brief geqrf: tiny, cta, blocked, vendor. evidence: docs/perf/qr.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <cstdint>

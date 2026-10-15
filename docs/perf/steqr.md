@@ -3,7 +3,7 @@
 > **Status:** current · RTX 4090 (sm_89)
 
 `steqr_cta` solves one tridiagonal problem per chunk of `P` lanes, `P` in {4, 8, 16, 32}, so a
-warp holds `32/P` problems. The device solve `steqr_cta_solve` (`src/extensions/steqr_cta_device.hh`)
+warp holds `32/P` problems. The device solve `steqr_cta_solve` (`src/ops/syev/steqr/steqr_cta_device.hh`)
 also runs inside the fused small-n SYEV kernel and at the stedc leaves. This page records the
 lane-scheduling choices that shipped, the ones that did not, and their numbers.
 
@@ -111,7 +111,7 @@ harness.
 > MATCH.ANY + REDUX.OR + VOTEU.ANY + BRA.DIV, whatever the mask's source. The fast path tests
 > `activemask` first, which wins only where collectives are sparse.
 
-Partition-primitive changes (`src/extensions/sg_partition/`) are judged by real-kernel A/B (`steqr`
+Partition-primitive changes (`src/kernels/common/sg_partition/`) are judged by real-kernel A/B (`steqr`
 and `syev_cta` at n = 5..16, batch 16,384), never by microbenchmark. Full-warp and maskless rewrites
 that won microbenchmarks lost in these kernels.
 
@@ -205,7 +205,7 @@ The current boundary lives in the float n <= 32 rows of `tuned/syev.*.txt`. Sele
 
 ## CTA STEQR: chase micro-structure decisions
 
-The device building blocks live in `src/extensions/steqr_cta_device.hh`, shared by `steqr_cta.cc` and
+The device building blocks live in `src/ops/syev/steqr/steqr_cta_device.hh`, shared by `steqr_cta.cc` and
 `syev_cta_fused.cc`, so a fused-versus-partitioned comparison measures fusion rather than two solvers.
 None of these choices has a recorded before/after figure; read them as reasons.
 

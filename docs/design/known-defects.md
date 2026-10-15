@@ -14,24 +14,24 @@ closed and kept only for numbering.
 
 | # | where | status |
 |---|---|---|
-| 1 | `src/extensions/ortho.cc:190-192` | open, latent (routed to the vendor) |
-| 2 | `src/extra/cond.cc:48,54,131` | open, throws in a vendor-free build |
-| 3 | `src/extensions/lanczos.cc:111-116` | open, 2x work, right answer |
+| 1 | `src/ops/ortho/ortho.cc:190-192` | open, latent (routed to the vendor) |
+| 2 | `src/util/cond.cc:48,54,131` | open, throws in a vendor-free build |
+| 3 | `src/ops/lanczos/lanczos.cc:111-116` | open, 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:37-38,70-71` | open, inferred, unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:399,411,428,440` | open, NaN from unwritten workspace |
 | 6 | `src/backends/netlib_lapack.cc:1165` | open, wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh` (deleted) | closed: not a defect |
 | 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
-| 10 | `src/extensions/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
-| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
+| 10 | `src/ops/syev/sytrd/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
+| 11 | `src/ops/gemm/kernels/epilogue_linear.hh`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
-| 18 | `src/extensions/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
+| 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
 | 19 | `src/ops/potrf/potrf.cc` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
@@ -42,7 +42,7 @@ closed and kept only for numbering.
 
 - **Symptom:** under `transA = Trans` or `ConjTrans`, the CGS arm builds a view whose extents and
   leading dimension do not describe the memory, and passes a vector of the wrong length.
-- **Cause:** `src/extensions/ortho.cc:190-192` (was `:218-224` when filed):
+- **Cause:** `src/ops/ortho/ortho.cc:190-192` (was `:218-224` when filed):
 
   ```cpp
   auto A_i = transA == Transpose::NoTrans
@@ -68,7 +68,7 @@ closed and kept only for numbering.
 ## Defect 2: `cond` calls the vendor `syev` directly
 
 - **Symptom:** throws in a vendor-free build.
-- **Cause:** `src/extra/cond.cc:48`, `:54` and `:133` call
+- **Cause:** `src/util/cond.cc:48`, `:54` and `:133` call
   `ops::syev::detail::syev_vendor_or_throw` and its buffer-size query, which bypass the public
   `syev` selection.
 - **Fix needs:** call the public `syev` and `syev_buffer_size`, and move the workspace query with
@@ -78,7 +78,7 @@ closed and kept only for numbering.
 ## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
 - **Symptom:** the result is correct, but both the sparse and dense arms do twice the level-3 work.
-- **Cause:** `src/extensions/lanczos.cc:112-117`. `padded_vector` and `padded_output` are two
+- **Cause:** `src/ops/lanczos/lanczos.cc:112-117`. `padded_vector` and `padded_output` are two
   columns wide (`:56`). The consumer reads only column 0, `local_v_next = Span(v_next_ptr + bid*2*n, n)`
   at `:132`.
 - **Note:** the red `lanczos_tests` cases are not this defect. One cause, steqr reading item
@@ -149,7 +149,7 @@ wrote both triangles and was reachable only through those pins.
 - **Symptom:** `SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal` gave a wrong answer in
   about one run in seven, with eigenvalue differences of \f$5\times10^{-5}\f$ against a tolerance
   of \f$10^{-8}\f$.
-- **Cause:** in `src/extensions/latrd_lower_panel.cc`, the column-update loop writes
+- **Cause:** in `src/ops/syev/sytrd/latrd_lower_panel.cc`, the column-update loop writes
   `Ab(r, i)` for `r = rlo + lid`. The sumsq loop immediately after reads the same column for
   `r = slo + lid`. No barrier separated them. For group 0, `slo == rlo + 1`, so each work-item
   reads the row written by `lid + 1`. The race shows only at a sub-group boundary. It needs
@@ -184,9 +184,9 @@ wrote both triangles and was reachable only through those pins.
   `orgqr` at 1x1 and 33x20 routes that gemm to `direct` and `tiled`, so
   `OrgqrCandidates.ExactWorkspaceInAPoisonedArena` (0xff arena) went NaN for cfloat and cdouble.
   The sm_89/old tables sent those shapes to families that skip `C`, which hid it.
-- **Cause:** `LinearEpilogue::apply` (`src/sycl/gemm/epilogue_linear.hh`), used by `tiled_general.hh`
+- **Cause:** `LinearEpilogue::apply` (`src/ops/gemm/kernels/epilogue_linear.hh`), used by `tiled_general.hh`
   and `register_tiled_common.hh`, computed `alpha * acc + beta * prior` unconditionally.
-  `launch_direct` in `src/sycl/gemm_kernels.cc` read `c_ptr` the same way. `0 * NaN` is `NaN`.
+  `launch_direct` in `src/ops/gemm/kernels/gemm_kernels.cc` read `c_ptr` the same way. `0 * NaN` is `NaN`.
   Reference BLAS does not read `C` at `beta == 0`. `small`, `wide` and the 128x128 tile already
   skipped it.
 - **Fix:** `LinearEpilogue::store` skips the load at `beta == 0`, and all three families call it.
@@ -342,7 +342,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   1.1e-3 at \f$\kappa = 174\f$, 0.20 at \f$2.9 \cdot 10^3\f$ and 0.996 at \f$10^4\f$. V stays at
   1.5e-6. `jacobi` and `blocked` stay at or below 6e-6 on the same matrices.
 - **Cause:** CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag`,
-  `src/extensions/gesvd_blocked.cc:68-71`). V comes from the eigenvectors of \f$B^T B\f$, and
+  `src/ops/gesvd/kernels/gesvd_blocked.cc:68-71`). V comes from the eigenvectors of \f$B^T B\f$, and
   `build_bidiag_vectors` forms \f$u_i = B v_i / \sigma_i\f$ (`:596`), which scales the error of
   \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
   [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
@@ -389,7 +389,7 @@ batch-1 layouts, all four dtypes, against a closed-form graded spectrum with poi
 and passes on the unchanged wrapper. Dumping the vendor's inputs and outputs inside LOBPCG showed
 the eigenpairs it returned were correct. What it returned, though, were Ritz vectors whose P and R
 coefficients were **exactly zero** for two converged columns. LOBPCG builds the next P from those
-coefficients (`C_p`, `src/extensions/syevx_lobpcg.cc`), so two P columns were null, the next
+coefficients (`C_p`, `src/ops/syevx/kernels/syevx_lobpcg.cc`), so two P columns were null, the next
 \f$S^T A S\f$ had zero rows and columns at 6 and 7, and the projected problem gained an
 eigenvalue 0. Taking the smallest end selects it whenever 0 lies below the wanted Ritz values (here
 -0.337, -0.041, **0**, 0.74), which gives a zero column in X. The largest end never reaches it. The
@@ -409,7 +409,7 @@ pin each family so the result no longer depends on the table.
 
 **Status:** worked around on both CTA paths; not reproduced.
 
-`src/extensions/syev_cta.cc` (the `uplo_eff` note) says the CTA SYTRD/SYEV pipeline is wrong for
+`src/ops/syev/kernels/syev_cta.cc` (the `uplo_eff` note) says the CTA SYTRD/SYEV pipeline is wrong for
 `Uplo::Lower`. It runs the Upper pipeline and first symmetrizes `A_upper := conj(A_lower)`. No test
 or failure was recorded. The fused kernel (`syev_cta_fused.cc`) also always runs Upper, so neither
 path reaches the Lower `sytrd_cta` kernel.
@@ -445,7 +445,7 @@ so this is not the steqr stride bug fixed 2026-10-12 (defect 3, note). Red tests
 `LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`, `LanczosStride.ClosedFormSpectrum`.
 
 **Lead (unconfirmed):** the SVQB2 re-orthogonalization in `lanczos_iteration`
-(`src/extensions/lanczos.cc`) rotates the column pair \f$[v_{it-1}, v_{it}]\f$ after their
+(`src/ops/lanczos/lanczos.cc`) rotates the column pair \f$[v_{it-1}, v_{it}]\f$ after their
 alphas and betas were recorded, which breaks the three-term recurrence the tridiagonal assumes.
 Raising steqr's `max_sweeps` from 10 to 50 changed nothing.
 
@@ -457,13 +457,13 @@ re-orthogonalize only against earlier vectors, or recompute alpha and beta after
 Located to a line but not confirmed by a test. Each moves to a numbered entry when confirmed or
 refuted.
 
-- **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung.** `src/extensions/gesvdj_cta.cc:361`
+- **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung.** `src/ops/gesvd/kernels/gesvdj_cta.cc:361`
   reads `Nrm_local[base_n + lane]` only for `lane < CC`. Correctness holds, but the overflow headroom
   for 33 to 64 columns is narrower than the design claims. See
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling). To settle it, use
   graded input with the largest column norm in columns 32..63, near overflow.
 - **Recursive `stedc` may merge from unset eigenvectors under `NoEigenVectors`.**
-  `src/extensions/stedc.cc:536` forwards `jobz` to the leaf, but merges always consume the leaf
+  `src/ops/syev/stedc/stedc.cc:536` forwards `jobz` to the leaf, but merges always consume the leaf
   vectors. The level-synchronous driver ignores `jobz` (`:640`). To settle it, call
   `stedc(..., NoEigenVectors, ...)` with `StedcAlgorithm::Recursive` on a poisoned eigenvector
   buffer. See [stedc: eigenvalues-only still builds eigenvectors](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
@@ -484,7 +484,7 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/extensions/tridiag_solver.cc:30` addresses
+- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/ops/syev/tridiag/tridiag_solver.cc:30` addresses
   `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
   also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
 - **Kernel selection throws outside the error hierarchy.** `src/select/` throws `std::invalid_argument`
@@ -498,7 +498,7 @@ refuted.
 
 - **`internal/sytrd_blocked.hh` declared a second, undefined `sytrd_blocked`.** It took
   `Span<std::byte> ws` by value with no default `block_size`, while the definition in
-  `src/extensions/sytrd_blocked.cc` is the `const Span<std::byte>&` overload, so a translation unit
+  `src/ops/syev/sytrd/sytrd_blocked.cc` is the `const Span<std::byte>&` overload, so a translation unit
   that saw only the internal header failed at link time. The header is deleted; the one
   declaration, with its contract, is in `batchlas/blas/extensions.hh`.
 - **`miniacc --help` terminated its host.** `miniacc::ParseCommandLine` called `std::exit(0)`,

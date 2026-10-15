@@ -35,7 +35,7 @@ refused; it quick-returns.
 Do not use `get_property(MAX_SUB_GROUP_SIZE)`: it returns `sub_group_sizes()[0]`, which is wrong in
 both directions. A `reqd_sub_group_size(32)` launch on a device without 32 aborts.
 
-> **Note:** `direct` has no GPU gate on purpose. `src/sycl/gemv_native.cc` also builds for
+> **Note:** `direct` has no GPU gate on purpose. `src/ops/gemv/kernels/gemv_native.cc` also builds for
 > `native_cpu`, and bodies 1 and 2 need no collective, local memory or required sub-group size.
 
 Layout is column-major: `A(i,j)` sits at `i + j*ld`, one work-item per output element. `NoTrans` is
@@ -103,11 +103,11 @@ checks the rows against the old preference.
 
 These are kernel-internal, not keys, families or `can_run` terms.
 
-**Body 4** (`gemv_seg_width`, `src/sycl/gemv_native.cc:77-82`): `W` is the largest power of two with
+**Body 4** (`gemv_seg_width`, `src/ops/gemv/kernels/gemv_native.cc:77-82`): `W` is the largest power of two with
 `W*out_len <= 32`. `W == 1` means no segmentation, so body 4 serves `out_len <= 16` and body 1 takes
 17 and up. It also requires `Device::supports_sub_group_size(32)`, false on `native_cpu`.
 
-**Body 5** (`gemv_seg_trans_width`, `src/sycl/gemv_native.cc:87-109`, `:134-159`) has three gates, all on
+**Body 5** (`gemv_seg_trans_width`, `src/ops/gemv/kernels/gemv_native.cc:87-109`, `:134-159`) has three gates, all on
 `red_len()` and transcribed cell by cell from a CSV:
 
 | gate | float | `complex<float>` | double | `complex<double>` |
@@ -124,7 +124,7 @@ These are kernel-internal, not keys, families or `can_run` terms.
   runnable falls back to Auto, with a warning.
 * **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) picks the body-5 spelling inside `cta` and
   bypasses all three gates. It is read on every launch, never latched (`gemv_segt_mode`,
-  `src/sycl/gemv_native.cc:117-125`).
+  `src/ops/gemv/kernels/gemv_native.cc:117-125`).
 
 > **Note:** The trace or coverage spelling is the only record of which family ran. It does not name the body.
 
@@ -320,7 +320,7 @@ cases red respectively; the rest are the green ones above. The earlier `preferre
 
 ### The known bad caller
 
-`src/extensions/ortho.cc:190-195`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
+`src/ops/ortho/ortho.cc:190-195`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
 passes `A(Slice(), i)` as `x`. That column has length `A.rows()`, so the lengths agree only when
 `A.rows() == m`. The call is structurally wrong under the vendor. It is not fixed, and no throw was added
 because it would crash a live path. The length checks make both native families unrunnable for it, so it

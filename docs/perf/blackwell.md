@@ -21,7 +21,7 @@ and are not on main.
 | Section | On main | sm_120 table on main |
 |---|---|---|
 | [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:308`), `scripts/check_device_calls.py` | n/a |
-| [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/sycl/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, deep |
+| [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/ops/spmm/kernels/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, deep |
 | [compute-capability key](#compute-capability-key) | yes | n/a |
 | [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.sm_120.txt`, deep |
 | [potrf LPanel vector sB](#potrf-lpanel-vector-sb) | yes | `tuned/potrf.sm_120.txt`, deep, timed with vector sB |
@@ -31,7 +31,7 @@ and are not on main.
 | [LU getrs fused](#lu-getrs-fused), [NR 1](#lu-getrs-fused-nr-1), [sm89 rows](#lu-getrs-fused-sm89-rows) | yes (`c9352406`) | `tuned/getrs.sm_120.txt`, deep; the branch's vendor-present sm_120 getrs window is not code |
 | [getrf windows](#lu-getrf-windows), [native tier](#lu-getrf-native-tier), [gesv](#lu-gesv), [end to end](#lu-end-to-end), [getrs windows](#getrs-windows-after-the-trsm-fix) | no | deep (getrf, getrs, gesv) |
 | [geqrf skinny panels](#geqrf-skinny-panels) | no (no `geqrf_skinny.cc`) | `tuned/geqrf.sm_120.txt`, deep |
-| [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.cc:98`) | n/a |
+| [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/ops/trsm/kernels/trsm_native.cc:98`) | n/a |
 | [trsm sub-group Left kernel](#trsm-sub-group-left-kernel), [side right](#trsm-side-right-on-sm120) | kernel yes (candidate `sg_left`); windows no | `tuned/trsm.sm_120.txt`, deep: every dtype ranks `sg_left` first in some Left rows at order <= 32 |
 | [gemm](#gemm-native-register-tiled-selector) | 16x16 and 32x32 wide NN tiles yes; selector windows no | `tuned/gemm.sm_120.txt`, deep: every wide tile, the 16x16 and 32x32 NN tiles included, ranks first in some rows |
 
@@ -89,7 +89,7 @@ which is why the self-built 4090 numbers never showed this.
 
 ### cfloat spmm under the precise fp model
 
-The flag slows one kernel: the native CSR gather (`SpmmGatherKernel`, `src/sycl/spmm_native.cc`) for
+The flag slows one kernel: the native CSR gather (`SpmmGatherKernel`, `src/ops/spmm/kernels/spmm_native.cc`) for
 cfloat, 5.51 -> 6.49 ms at n=16384, 16 nnz/row, nrhs=64, batch=32 (cuSPARSE 5.76). The kernel is
 L2-bound: each `Cx<float>` element of B was two 4-byte `LDG.E` loads of one sector, and precise
 if-converts the 8-column block and issues all 16 halves at once, so both halves of each pair miss
@@ -144,7 +144,7 @@ A device with no table of its own borrows the nearest one with a one-time warnin
 "not CUDA". All four GPUs here return 120.
 
 `is_sm120_family` (120 <= cc < 130) is no longer a routing predicate. It survives only in the
-per-architecture register charge of the fused getrs launch (`src/extensions/getrs_fused.cc:127`).
+per-architecture register charge of the fused getrs launch (`src/ops/getrs/kernels/getrs_fused.cc:127`).
 
 `tests/util_device_queue_tests.cc` checks the value against the CUDA runtime's
 `prop.major*10+prop.minor` for each NVIDIA GPU, paired by ordinal; CPU and non-NVIDIA devices must
@@ -363,7 +363,7 @@ In-library register counts exceed the sm_89 table: float Trans nrhs 5..8 uses 86
 sm_89 row handed out a 768-lane launch that the driver refused (`FusedGetrsLaunchHoleAt48KiB`). On
 sm_120 the cap reads a probed row.
 
-On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/extensions/getrs_fused.cc:243-244`)
+On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/ops/getrs/kernels/getrs_fused.cc:243-244`)
 and the sm_120 register rows (`:127`). Branch-only: a vendor-present sm_120 window (float nrhs <= 8 at
 n >= 256; cfloat nrhs <= 4 at n >= 128 and nrhs <= 8 at n >= 512), later moved to float n >= 192 and
 cfloat n >= 96 / n >= 384 ([getrs windows](#getrs-windows-after-the-trsm-fix)). Main's sm_120 getrs
@@ -673,7 +673,7 @@ ortho shapes never reach a capped rung and stayed within 3%.
 
 ### trsm sub-group Left kernel
 
-> **On main.** The kernel is `sycl_trsm::trsm_native_sg_left_dispatch` (`src/sycl/trsm_sg_left.cc`), the
+> **On main.** The kernel is `sycl_trsm::trsm_native_sg_left_dispatch` (`src/ops/trsm/kernels/trsm_sg_left.cc`), the
 > trsm candidate `sg_left` (Left, order <= 32, sub-group 32; `src/ops/trsm/choice.hh:15`). The branch's
 > window is not on main. The float rows of the deep `tuned/trsm.sm_120.txt` decide, and they reproduce the
 > window's shape: at batch 32768 the `side=L trans=N` rows rank `sg_left` first for q <= 83 at order 8,
@@ -720,7 +720,7 @@ measured column; ties within 3% go to the side the neighbouring cells favour. Th
 comes from V1 (V1 at cfloat n16 q64 takes 0.91 ms, against 0.31 ms at n=12 and 1.48 ms at n=24). double
 and cdouble were not measured and keep V1. On the branch the blocked driver's diagonal solves used the
 same kernel through `trsm_native_v1_buckets`; on main that function runs V1 only
-(`src/sycl/trsm_native.cc:313`), so `blocked`'s diagonal solves do not reach `sg_left`.
+(`src/ops/trsm/kernels/trsm_native.cc:313`), so `blocked`'s diagonal solves do not reach `sg_left`.
 
 Tests (`TrsmNativeSgLeft.*`) call the kernel directly with a padded ld, a batch stride and large finite
 poison. Planted breaks over all of `trsm_tests`: reading A with ld = n turns 10 tests red; dropping the
@@ -809,7 +809,7 @@ Kernel choice was checked with `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 > The old kernel names (`16x16x16wide`, `32x32x16wide`, ...) are not pin words; they throw.
 
 The branch's windows were keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
-(`src/sycl/gemm_kernels.cc`); cc 0 and 89 kept the 4090 ladder. Vendor-build factorizations were
+(`src/ops/gemm/kernels/gemm_kernels.cc`); cc 0 and 89 kept the 4090 ladder. Vendor-build factorizations were
 unchanged (potrf, getrf and geqrf in float, cfloat and cdouble at n = 128-512 measured new/base
 0.996-1.003).
 

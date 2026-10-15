@@ -22,8 +22,8 @@
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/gesvd/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/gesvd/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -184,37 +184,37 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: jacobi
-            "src/extensions/gesvdj_cta.cc",
+            "src/ops/gesvd/kernels/gesvdj_cta.cc",
             // family: cta
-            "src/extensions/gebrd_cta.cc",
-            "src/extensions/ormqr_cta.cc",
+            "src/ops/gesvd/gebrd/gebrd_cta.cc",
+            "src/ops/ormqr/kernels/ormqr_cta.cc",
             // family: blocked
-            "src/extensions/gebrd_blocked.cc",
-            "src/extensions/bdsdc.cc",
-            "src/extensions/ormbr.cc",
+            "src/ops/gesvd/gebrd/gebrd_blocked.cc",
+            "src/ops/gesvd/bdsdc/bdsdc.cc",
+            "src/ops/gesvd/ormbr/ormbr.cc",
             // common
-            "src/extensions/gesvd_blocked.cc",
-            "src/extensions/gesvd_native.hh",
-            "src/extensions/gebrd.cc",
+            "src/ops/gesvd/kernels/gesvd_blocked.cc",
+            "src/ops/gesvd/gesvd_native.hh",
+            "src/ops/gesvd/gebrd/gebrd.cc",
             "src/ops/gesvd/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/gesvd/gesvd.cc"
         // cta runs syev_cta (steqr); blocked syev_blocked, stedc (bdsdc) and the public gemm, trmm and syr2k.
-        // family: cta "src/extensions/syev_cta.cc" "src/extensions/sytrd_cta.cc" "src/extensions/sytrd_cta_device.hh" "src/extensions/steqr.cc" "src/extensions/steqr_cta.cc" "src/extensions/steqr_cta_device.hh" "src/extensions/steqr_wg.cc"
-        // family: blocked "src/extensions/syev_blocked.cc" "src/extensions/sytrd_blocked.cc" "src/extensions/latrd_lower_panel.cc" "src/extensions/sytrd_cta.cc" "src/extensions/steqr.cc" "src/extensions/steqr_wg.cc"
-        // family: blocked "src/extensions/stedc.cc" "src/extensions/stedc_merge_cta.cc" "src/extensions/stedc_merge_kernels.cc" "src/extensions/stedc_secular.cc" "src/extensions/ormqr_blocked.cc" "src/extensions/uplo_mirror.cc"
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
-        // family: blocked "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
+        // family: cta "src/ops/syev/kernels/syev_cta.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/sytrd/sytrd_cta_device.hh" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_cta.cc" "src/ops/syev/steqr/steqr_cta_device.hh" "src/ops/syev/steqr/steqr_wg.cc"
+        // family: blocked "src/ops/syev/kernels/syev_blocked.cc" "src/ops/syev/sytrd/sytrd_blocked.cc" "src/ops/syev/sytrd/latrd_lower_panel.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_wg.cc"
+        // family: blocked "src/ops/syev/stedc/stedc.cc" "src/ops/syev/stedc/stedc_merge_cta.cc" "src/ops/syev/stedc/stedc_merge_kernels.cc" "src/ops/syev/stedc/stedc_secular.cc" "src/ops/ormqr/kernels/ormqr_blocked.cc" "src/ops/syev/kernels/uplo_mirror.cc"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
+        // family: blocked "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }

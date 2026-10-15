@@ -9,10 +9,10 @@
 #include <batchlas/settings.hh>
 #include <batchlas/tuning_params.hh>
 
-#include "choice.hh"
-#include "vendor.hh"
-#include "../../select/select.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/ormqr/choice.hh>
+#include <src/ops/ormqr/vendor.hh>
+#include <src/select/select.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

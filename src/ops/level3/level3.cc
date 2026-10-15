@@ -12,10 +12,10 @@
 
 #include <batchlas/error.hh>
 #include <batchlas/no_route.hh>
-#include "../../backends/level3_shape.hh"
-#include "../../select/vendor.hh"
+#include <src/backends/level3_shape.hh>
+#include <src/select/vendor.hh>
 
-#include "../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 

@@ -8,9 +8,9 @@
 #include <batchlas/settings.hh>
 #include <batchlas/util/env.hh>
 
-#include "../src/select/coverage.hh"
-#include "../src/select/select.hh"
-#include "test_utils.hh"
+#include <src/select/coverage.hh>
+#include <src/select/select.hh>
+#include <tests/test_utils.hh>
 
 #include <algorithm>
 #include <complex>

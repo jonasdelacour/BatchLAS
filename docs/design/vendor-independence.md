@@ -116,7 +116,7 @@ include `<cublas_v2.h>` in it.
 * The CUDA handle types (`cublasComputeType_t`, the cuBLAS, cuSPARSE and cuSOLVER handle triple) sit under
   the library flags. Naming them under `BATCHLAS_HAS_CUDA_BACKEND` alone does not compile when a library is absent.
 * A CUDA device with some libraries absent still gets a `LinalgHandle<Backend::CUDA>` specialisation with
-  no vendor handles. The type must be complete, because native TUs declare one (`src/extensions/ortho.cc`).
+  no vendor handles. The type must be complete, because native TUs declare one (`src/ops/ortho/ortho.cc`).
 
 Symbols follow the same split. Public instantiations are keyed on the device family, and the vendor TUs
 instantiate only their `backend::*_vendor` symbols. See
@@ -180,7 +180,7 @@ Five routines (`syev`, `syevx`, `gesvd`, `steqr`, `stedc`) and every tier below 
   unambiguous.
 * **`backend::syev_vendor` and `backend::gesvd_vendor`**: a defaulted `info_out`. A default is a property
   of the declaration, so the `sig::` aliases and the vendor TUs still match. The default keeps the internal
-  six-argument callers compiling (`src/extra/norm.cc`, `src/extra/cond.cc`, `src/extensions/syevx_lobpcg.cc`,
+  six-argument callers compiling (`src/util/norm.cc`, `src/util/cond.cc`, `src/ops/syevx/kernels/syevx_lobpcg.cc`,
   through `syev_vendor_or_throw`).
 * **`steqr`, `steqr_cta`, `stedc`, `syevx*`, the `syev_*` tiers and the SVD tiers** (`extensions.hh`): a
   defaulted trailing parameter. They are instantiated from macros, not `sig::` aliases, and they already
@@ -243,8 +243,8 @@ Per-op performance debts are on the `docs/perf/` pages. These belong to the vend
 2. `Backend::INTEL` is hard-wired false, and oneMKL cannot be tested here. ROCm is reachable only through
    `rocm_syntax_check.sh`, so statements about it are unverified.
 3. The runtime `BATCHLAS_NO_VENDOR=1` enforcement knob was never built. Call sites that reach
-   `backend::*_vendor` or a `*_vendor_or_throw` shim directly (`src/extra/cond.cc`, `src/extra/norm.cc`,
-   `src/extensions/syevx_lobpcg.cc`) bypass public selection and throw vendor-free by construction. The
+   `backend::*_vendor` or a `*_vendor_or_throw` shim directly (`src/util/cond.cc`, `src/util/norm.cc`,
+   `src/ops/syevx/kernels/syevx_lobpcg.cc`) bypass public selection and throw vendor-free by construction. The
    build switch `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the enforcement today.
 4. `factorization_vendor_available` covers six ops over two NVIDIA libraries. A per-op split would move every call site.
 5. Ops without `choice.hh` still select by hand and keep their windows in code. See

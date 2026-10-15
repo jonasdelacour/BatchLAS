@@ -1,4 +1,4 @@
-#include "spec.hh"
+#include <tools/tune/spec.hh>
 
 #include <algorithm>
 #include <stdexcept>

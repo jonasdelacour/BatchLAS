@@ -10,6 +10,7 @@ tier bracketing); docs/design/flat-kernel-selection.md section 5.4 (table format
     scripts/sweep_to_table.py --check              # CI: re-derive every table byte for byte
     scripts/sweep_to_table.py --self-test
     scripts/sweep_to_table.py --emit-sample OUT --op potrf --device sm_120 [--cells N]
+    scripts/sweep_to_table.py --rehash-moved BASE [--op OP] [--device DEV]
 
 The one input is benchmarks/results/tuning/ledger/<op>.<device>.jsonl (--ledger DIR names another
 root). Every line carries "dtype" except `rehash`. Keys and candidates come from each dtype's newest
@@ -142,16 +143,22 @@ def normalize_source(data):
     return re.sub(rb"[ \t\n\r\f\v]+", b"", data)
 
 
+def manifest_hash(files):
+    """Hash v2 of [(path, bytes)]: first 8 hex of sha256 over '<sha256(normalized file)>  path' lines."""
+    manifest = "".join(hashlib.sha256(normalize_source(data)).hexdigest() + "  " + p + "\n" for p, data in files)
+    return hashlib.sha256(manifest.encode()).hexdigest()[:8]
+
+
 def kernel_hash(paths, repo=REPO):
-    """Hash v2: first 8 hex of sha256 over '<sha256(normalized file)>  path' lines."""
-    manifest = ""
+    """Hash v2 of the working-tree files."""
+    files = []
     for p in paths:
         try:
             with open(os.path.join(repo, p), "rb") as f:
-                manifest += hashlib.sha256(normalize_source(f.read())).hexdigest() + "  " + p + "\n"
+                files.append((p, f.read()))
         except OSError:
             raise SystemExit(f"kernel source missing: {p}")
-    return hashlib.sha256(manifest.encode()).hexdigest()[:8]
+    return manifest_hash(files)
 
 
 def family_paths(block, family):
@@ -181,6 +188,7 @@ class Ledger:
     runs: list = field(default_factory=list)   # newest line per (run id, dtype); dirty runs left out
     cells: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    rehash: dict = field(default_factory=dict)  # family -> {from: to}
 
 
 def read_cell(rec):
@@ -197,10 +205,10 @@ def read_cell(rec):
             "ranked": [r for r in rec.get("ranked", "").split("|") if r], "cands": cands}
 
 
-def read_ledger(path, dtype=None):
+def read_ledger(path, dtype=None, raw=False):
     """One <op>.<device>.jsonl, lines in file order (only `dtype`'s when given). A malformed last
-    line is a warning, an earlier one fatal. rehash lines rewrite stored hashes; a -dirty run is
-    dropped with its cells."""
+    line is a warning, an earlier one fatal. rehash lines rewrite stored hashes (not when raw); a
+    -dirty run is dropped with its cells."""
     led = Ledger()
     with open(path) as f:
         lines = [(i, ln) for i, ln in enumerate(f.read().split("\n"), start=1) if ln.strip()]
@@ -232,7 +240,8 @@ def read_ledger(path, dtype=None):
         led.warnings.append(f"{path}: run {ident[0]} ({ident[1]}) is {runs[ident]['batchlas']}: excluded from the table")
     led.runs = [r for ident, r in runs.items() if ident not in dirty]
     led.cells = [c for c in led.cells if (c["run_id"], c["dtype"]) not in dirty]
-    for c in led.cells:
+    led.rehash = dict(rehash)
+    for c in [] if raw else led.cells:
         for r in c["cands"]:
             r["hash"] = follow_rehash(rehash.get(spelling_family(r["cand"]), {}), r["hash"])
     return led
@@ -803,12 +812,234 @@ def emit_sample(ledger_path, op, cells=SAMPLE_MIN_CELLS):
     return [f"{op} {d} {','.join(f'{n}={v}' for n, v in k)}" for d, k in chosen]
 
 
+def git_out(repo, *args):
+    p = subprocess.run(["git", "-C", repo, *args], capture_output=True)
+    if p.returncode:
+        raise SystemExit(f"git {' '.join(args)}: {p.stderr.decode().strip()}")
+    return p.stdout
+
+
+class GitTree:
+    """One commit's files, read from git."""
+
+    def __init__(self, repo, rev):
+        self.repo, self.rev, self.blobs = repo, rev, {}
+        self.paths = set(git_out(repo, "ls-tree", "-r", "-z", "--name-only", rev).decode().split("\0")) - {""}
+
+    def read(self, path):
+        if path not in self.paths:
+            return None
+        if path not in self.blobs:
+            self.blobs[path] = git_out(self.repo, "show", f"{self.rev}:{path}")
+        return self.blobs[path]
+
+
+def git_renames(repo, base, head):
+    """{base path: head path} for every rename git finds between the two commits."""
+    tok, out, i = git_out(repo, "diff", "-M", "--name-status", "-z", base, head).decode().split("\0"), {}, 0
+    while i < len(tok) and tok[i]:
+        if tok[i][0] in "RC":
+            if tok[i][0] == "R":
+                out[tok[i + 1]] = tok[i + 2]
+            i += 3
+        else:
+            i += 2
+    return out
+
+
+INCLUDE = re.compile(rb'^([ \t]*#[ \t]*include[ \t]*)(?:"([^"\n]*)"|<([^>\n]*)>)', re.M)
+ANY_INCLUDE = re.compile(rb'^[ \t]*(?:#|%:)[ \t]*include', re.M)
+# A file a move can retarget without the include text changing: refused, never modelled.
+UNMODELLED = re.compile(rb'__has_include|include_next|R"[^(\s"]{0,16}\([^)]*?#[ \t]*include')
+
+
+def unmodelled_include(data, path):
+    """Why `data`'s includes are outside the moved proof's model, or None."""
+    if UNMODELLED.search(data):
+        return f"{path}: __has_include, #include_next or an include inside a raw string"
+    if len(ANY_INCLUDE.findall(data)) != len(INCLUDE.findall(data)):
+        return f"{path}: an #include that is neither \"x\" nor <x> (macro, comment or digraph)"
+    return None
+
+
+def canonical_includes(data, path, tree, rename=None):
+    """Every include -> the repo path it resolves to, mapped through rename: "x" against its own
+    directory, then the repo root, then include/; <x> against the repo root, then include/ (the
+    build's -I order). An unresolved one (a system header) is kept verbatim, marked."""
+    def sub(m):
+        quoted = m.group(2) is not None
+        target = (m.group(2) if quoted else m.group(3)).decode()
+        roots = ([os.path.dirname(path)] if quoted else []) + ["", "include"]
+        for cand in (os.path.normpath(os.path.join(r, target)) for r in roots):
+            if cand in tree.paths:
+                return m.group(1) + b'"@' + (rename or {}).get(cand, cand).encode() + b'"'
+        return m.group(0) + b' ?'
+    return INCLUDE.sub(sub, data)
+
+
+def moved_difference(base_paths, head_paths, base, head, rename):
+    """Why base_paths at commit `base` is not head_paths at `head` up to a pure move, or None."""
+    if len(base_paths) != len(head_paths):
+        return f"source list length {len(base_paths)} -> {len(head_paths)}"
+    for b, h in zip(base_paths, head_paths):
+        if rename.get(b, b) != h or os.path.basename(b) != os.path.basename(h):
+            return f"{b} -> {h} is not a rename"
+        old, new = base.read(b), head.read(h)
+        if old is None or new is None:
+            return f"{b if old is None else h} is missing"
+        why = unmodelled_include(old, b) or unmodelled_include(new, h)
+        if why:
+            return why
+        if normalize_source(canonical_includes(old, b, base, rename)) != \
+                normalize_source(canonical_includes(new, h, head)):
+            return f"{b} -> {h} differs beyond comments, whitespace and include paths"
+    return None
+
+
+def rehash_moved(ledger_path, op, base, at=None, repo=REPO, write=True):
+    """The moved proof of a rehash (docs/design/tuning-data.md#tuning-data-kernel-hash): per family
+    of the measured records, its source list at `base` maps file by file onto HEAD's under git
+    renames, equal modulo comments, whitespace and include paths (each resolved, then renamed). One
+    line per stored hash whose effective hash is the family's hash at `base`. Returns (report, records)."""
+    led = read_ledger(ledger_path, raw=True)
+    stored = defaultdict(set)
+    for c in led.cells:
+        for r in c["cands"] if c["tier"] not in UNHASHED else []:
+            if r["hash"]:
+                stored[spelling_family(r["cand"])].add(r["hash"])
+    if not stored:
+        return ["no measured records"], []
+    bt, ht = GitTree(repo, base), GitTree(repo, "HEAD")
+    rename = git_renames(repo, base, "HEAD")
+    spec = f"tools/tune/{op}_spec.cc"
+    if bt.read(spec) is None:
+        return [f"{f}: no proof: {spec} is missing at {base}" for f in sorted(stored)], []
+    bb, hb = parse_kernel_block(bt.read(spec).decode()), parse_kernel_block(read_spec_source(op, repo))
+    hashed = sorted({spec} | {p for f in stored for p in family_paths(hb, f)})
+    if git_out(repo, "status", "--porcelain", "--", *hashed).strip():
+        raise SystemExit(f"{op}: uncommitted changes to its hashed sources: commit them first")
+    short = [git_out(repo, "rev-parse", "--short=8", r).decode().strip() for r in (base, "HEAD")]
+    report, lines = [], []
+    for f in sorted(stored):
+        bp, hp = family_paths(bb, f), family_paths(hb, f)
+        if any(bt.read(p) is None for p in bp):
+            report.append(f"{f}: no proof: a source is missing at {base}")
+            continue
+        h_base, h_now = manifest_hash([(p, bt.read(p)) for p in bp]), kernel_hash(hp, repo)
+        eff = {h: follow_rehash(led.rehash.get(f, {}), h) for h in stored[f]}
+        todo = sorted(h for h, e in eff.items() if e == h_base != h_now)
+        if not todo:
+            report.append(f"{f}: nothing to rehash (records at {','.join(sorted(set(eff.values())))}, "
+                          f"{base} {h_base}, now {h_now})")
+            continue
+        why = moved_difference(bp, hp, bt, ht, rename)
+        if why:
+            report.append(f"{f}: no proof: {why}")
+            continue
+        moved = sum(b != h for b, h in zip(bp, hp))
+        lines += [{"kind": "rehash", "family": f, "from": h, "to": h_now, "at": at or short[1],
+                   "proof": f"moved:{short[0]}",
+                   "why": f"{moved} files moved, equal modulo comments, whitespace and include paths"} for h in todo]
+        report.append(f"{f}: rehashed {','.join(todo)} -> {h_now}")
+    if write and lines:
+        with open(ledger_path, "a") as fh:
+            fh.write("".join(json.dumps(x) + "\n" for x in lines))
+    return report, lines
+
+
 def hash_vector_problem(repo=REPO):
     """The shared hash v2 vector (also checked by tune_tests and check_tuned_tables.py)."""
     with open(os.path.join(repo, HASH_VECTOR, "expected.txt")) as f:
         want, path = f.read().split()
     got = kernel_hash([path], repo)
     return None if got == want else f"kernel hash v2 of {path}: {got} != {want}"
+
+
+def moved_self_test(d, run_line, cell, cands):
+    """--rehash-moved on throwaway git repos: a pure move, an include that now names another file,
+    a content edit, a longer source list, an uncommitted change and the unmodelled include forms."""
+    bad = []
+    filler = "".join(f"int f{i}(int);\n" for i in range(24)).encode()
+    spec = '// kernel-sources-begin\n"{k}",{extra}\n// family: tiny\n"{t}",\n// kernel-sources-end\n'
+
+    def git(repo, *args):
+        subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                        *args], check=True, capture_output=True)
+
+    def put(repo, path, data):
+        os.makedirs(os.path.dirname(os.path.join(repo, path)), exist_ok=True)
+        with open(os.path.join(repo, path), "wb") as f:
+            f.write(data)
+
+    def case(name, variant):
+        repo = os.path.join(d, "moved-" + name)
+        git(d, "init", "-q", repo)
+        put(repo, "tools/tune/posv_spec.cc", spec.format(k="src/a/k.cc", t="src/a/t.cc", extra="").encode())
+        odd = {"macro": b'#define HDR "util.hh"\n#include HDR\n', "has": b'#if __has_include("util.hh")\n#endif\n'}
+        odd = odd.get(variant, b"")
+        put(repo, "src/a/k.cc", b'#include "util.hh"\n#include "batchlas/p.hh"\n' + odd + filler + b"int k; // kernel\n")
+        put(repo, "src/a/t.cc", b'#include "util.hh"\n' + filler + b"int t;\n")
+        put(repo, "src/a/util.hh", filler + b"int u;\n")
+        put(repo, "include/batchlas/p.hh", b"int p;\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        base = {f: kernel_hash(family_paths(parse_kernel_block(read_spec_source("posv", repo)), f), repo) for f in cands}
+        os.makedirs(os.path.join(repo, "src", "ops", "k"))
+        git(repo, "mv", "src/a/k.cc", "src/ops/k/k.cc")
+        git(repo, "mv", "src/a/t.cc", "src/ops/k/t.cc")
+        inc = b'#include "../../a/util.hh"\n'
+        if variant != "other":
+            os.makedirs(os.path.join(repo, "src", "common"))
+            git(repo, "mv", "src/a/util.hh", "src/common/util.hh")
+            inc = b'#include <src/common/util.hh>\n' if variant == "root" else b'#include "../../common/util.hh"\n'
+        else:
+            put(repo, "src/ops/k/util.hh", filler + b"int u;\n")
+            inc = b'#include "util.hh"\n'
+        body = b"int k2;\n" if variant == "edit" else b"int k; /* moved */\n"
+        put(repo, "src/ops/k/k.cc", inc + b'  #include "batchlas/p.hh"\n' + odd + filler + body)
+        put(repo, "src/ops/k/t.cc", inc + filler + b"int t;\n")
+        extra = '\n"src/common/util.hh",' if variant == "length" else ""
+        put(repo, "tools/tune/posv_spec.cc", spec.format(k="src/ops/k/k.cc", t="src/ops/k/t.cc", extra=extra).encode())
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "move")
+        old = cell("20261001T000000-h-1", "deep", 128, hashes=dict(base, tiny="v1tiny"))
+        lines = [run_line("20261001T000000-h-1", "2026-10-01"), cell("20261001T000000-h-1", "deep", 64, hashes=base), old,
+                 {"kind": "rehash", "family": "tiny", "from": "v1tiny", "to": base["tiny"], "at": "x", "proof": "normalized"}]
+        path = os.path.join(d, f"moved-{name}.jsonl")
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(x) + "\n" for x in lines))
+        return repo, path, base
+
+    def expect(cond, what):
+        if not cond:
+            bad.append(f"self-test: --rehash-moved: {what}")
+
+    repo, path, base = case("ok", "ok")
+    report, recs = rehash_moved(path, "posv", "HEAD~1", repo=repo)
+    now = family_hashes(parse_kernel_block(read_spec_source("posv", repo)), cands, repo)
+    short = git_out(repo, "rev-parse", "--short=8", "HEAD~1").decode().strip()
+    expect(sorted((r["family"], r["from"]) for r in recs) == sorted(
+        [("tiny", base["tiny"]), ("tiny", "v1tiny"), ("cta", base["cta"]), ("blocked", base["blocked"])])
+        and all(r["to"] == now[r["family"]] != base[r["family"]] and r["proof"] == f"moved:{short}" for r in recs)
+        and "2 files moved" in recs[-1]["why"], f"a pure move with rewritten includes -> {report} {recs}")
+    cells = read_ledger(path).cells
+    expect(all(freshness(c, now) == "current" for c in cells), "the moved records are current")
+    expect(rehash_moved(path, "posv", "HEAD~1", repo=repo)[1] == [], "a second run writes nothing")
+    with open(os.path.join(repo, "src", "ops", "k", "k.cc"), "ab") as f:
+        f.write(b"int dirty;\n")
+    try:
+        rehash_moved(path, "posv", "HEAD~1", repo=repo, write=False)
+        expect(False, "an uncommitted change to a hashed file was accepted")
+    except SystemExit as e:
+        expect("uncommitted" in str(e), f"uncommitted change message {e}")
+    repo, path, _ = case("root", "root")
+    expect(len(rehash_moved(path, "posv", "HEAD~1", repo=repo)[1]) == 4, "a move to root-based <src/...> includes")
+    for name, want in (("other", "differs"), ("edit", "differs"), ("length", "source list length"),
+                       ("macro", "neither"), ("has", "__has_include")):
+        repo, path, _ = case(name, name)
+        report, recs = rehash_moved(path, "posv", "HEAD~1", repo=repo)
+        expect(not recs and any("no proof" in r and want in r for r in report), f"{name} -> {report}")
+    return bad
 
 
 def self_test():
@@ -1078,6 +1309,7 @@ def self_test():
         ok, msg, _ = rehash_sample(build(pl, os.path.join(repo, "ledger"), "potrf.sm_s.jsonl"), "potrf", "S",
                                    repo=repo, write=False)
         expect(ok, f"--rehash-sample accepts the emitted sample -> {msg}")
+        bad += moved_self_test(d, run_line, cell, cands)
         # row kinds
         expect(row_kind_problems({"source": "ledger:x"}, [(("L",), [("a", None), ("b", 1.0)])]) != [], "mixed row")
         expect(row_kind_problems({"source": "x"}, [(("L",), [("a", None)])]) != [], "untimed row needs ledger:")
@@ -1094,8 +1326,10 @@ def main():
     ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="table directory (default tuned/)")
     ap.add_argument("--rehash-sample", metavar="RUN_ID",
                     help="with --op and --device: rehash the stale families if this sample run agrees with the old records")
+    ap.add_argument("--rehash-moved", metavar="BASE",
+                    help="rehash every family whose sources only moved since commit BASE (all ledgers, or --op/--device)")
     ap.add_argument("--family", nargs="+", help="--rehash-sample: only these families")
-    ap.add_argument("--at", help="--rehash-sample: the commit to record (default HEAD)")
+    ap.add_argument("--at", help="--rehash-sample, --rehash-moved: the commit to record (default HEAD)")
     ap.add_argument("--emit-sample", metavar="OUT",
                     help="with --op and --device: write a stratified --remeasure-keys file for a --rehash-sample run")
     ap.add_argument("--cells", type=int, default=SAMPLE_MIN_CELLS,
@@ -1119,6 +1353,13 @@ def main():
         ok, msg, _ = rehash_sample(path, args.op, args.rehash_sample, args.family, args.at)
         print("\n".join(msg))
         return 0 if ok else 1
+    if args.rehash_moved:
+        refused = 0
+        for (o, d), path in ledger_files(args.ledger, args.op, args.device):
+            report, lines = rehash_moved(path, o, args.rehash_moved, args.at)
+            refused += sum("no proof" in r for r in report)
+            print(f"{o}.{d}: {len(lines)} rehash lines\n" + "".join(f"  {r}\n" for r in report), end="")
+        return 1 if refused else 0
     if args.self_test:
         bad = self_test()
         print("\n".join(bad + [f"--self-test: {'FAILED' if bad else 'OK'}"]))

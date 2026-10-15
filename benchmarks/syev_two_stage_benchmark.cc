@@ -8,7 +8,7 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <cstdlib>
 #include <string>

@@ -5,7 +5,7 @@
 // SYCL-free: the driver sees only this interface; each tools/tune/<op>_spec.cc implements it
 // with the op's choice.hh and registers itself with BATCHLAS_TUNE_REGISTER.
 
-#include "tune_core.hh"
+#include <tools/tune/tune_core.hh>
 
 #include <cstdint>
 #include <map>

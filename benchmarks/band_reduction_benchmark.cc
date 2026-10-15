@@ -3,7 +3,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 #include <batchlas/backend_config.h>
 

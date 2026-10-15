@@ -3,9 +3,9 @@
 // Offline replay of the tiered tuner against an exhaustive raw sweep (docs/design/tiered-tuning.md,
 // "Engine: replay results on the trsm data"). Host-only: no SYCL, no GPU.
 
-#include "grid.hh"
-#include "tier.hh"
-#include "tune_core.hh"
+#include <tools/tune/grid.hh>
+#include <tools/tune/tier.hh>
+#include <tools/tune/tune_core.hh>
 
 #include <cstddef>
 #include <map>

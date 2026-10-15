@@ -1,0 +1,561 @@
+#include <src/linalg-impl.hh>
+#include <src/math-helpers.hh>
+#include <src/select/vendor.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <batchlas/util/group-collectives.hh>
+#include <src/queue.hh>
+#include <batchlas/util/mempool.hh>
+#include <sycl/sycl.hpp>
+#include <complex>
+#include <numeric>
+#include <cstdlib>
+#include <string>
+#include <algorithm>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/backend_config.h>
+
+#include <src/util/template-instantiations.hh>
+#include <batchlas/settings.hh>
+
+
+// High-level orthogonalization functions built on top of primitive BLAS operations
+// Implementation using the new MatrixView structure
+namespace batchlas {
+
+    template <Backend B, typename T>
+    struct OrthoNormalizeVector {};
+    
+    template <Backend B, typename T>
+    struct StridedCopyKernel {};
+
+    template <Backend B, typename T>
+    struct OrthoTransposeCopyKernel {};
+
+    // dst := src^T, unconjugated: the columns of the copy span the rows of src, and back again.
+    template <Backend B, typename T>
+    void ortho_transpose_copy(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& src,
+                              const MatrixView<T, MatrixFormat::Dense>& dst) {
+        const int64_t r = src.rows(), c = src.cols();
+        const int64_t lds = src.ld(), ldd = dst.ld(), ss = src.stride(), sd = dst.stride();
+        const T* s = src.data_ptr();
+        T* d = dst.data_ptr();
+        const size_t total = size_t(r * c * src.batch_size());
+        ctx->parallel_for<OrthoTransposeCopyKernel<B, T>>(sycl::range<1>(total), [=](sycl::id<1> id) {
+            const int64_t lin = int64_t(id[0]);
+            const int64_t b = lin / (r * c), e = lin % (r * c);
+            const int64_t i = e % c, j = e / c;
+            d[b * sd + j * ldd + i] = s[b * ss + i * lds + j];
+        });
+    }
+
+    template <typename T>
+    struct OrthoWorkspace {
+        MatrixView<T, MatrixFormat::Dense> C;   // k x k Gram matrix A^H A
+        Span<std::byte> potrf_ws;
+        Span<typename base_type<T>::type> diags;
+        Span<typename base_type<T>::type> lambdas;
+        Span<std::byte> syev_ws;
+        Span<T> output_basis;
+        Span<T> Ymem;                           // CGS2 only
+        Span<T> tau;                            // Householder only
+        MatrixView<T, MatrixFormat::Dense> H;   // Householder's operand: A, or A^T for rows
+        Span<std::byte> geqrf_ws;
+        Span<std::byte> orgqr_ws;
+    };
+
+    // ONE rule, asked by the op AND by every size query (a mismatch overruns the
+    // workspace). It asks about the DEVICE, not the backend enum.
+    // evidence: docs/perf/ortho.md#ortho-host-devices-force-householder
+    inline bool ortho_force_householder(const Queue& ctx) {
+        return ctx.device().type != DeviceType::GPU;
+    }
+
+    // Single description of ortho's workspace; see workspace_bytes() in
+    // util/mempool.hh.
+    //
+    // Every branch is allocated with a zero size when its algorithm was not
+    // selected, which is how the mutually exclusive tails (CGS2's Ymem versus
+    // Householder's tau/geqrf/orgqr) stay in one linear description.
+    //
+    // The nested size queries are asked about C, `lambdas` and `tau`, all of
+    // which live in this workspace. That is sound only because none of those
+    // queries dereferences the pointer it is given -- the previous sizing code
+    // passed literal nullptrs to exactly these calls.
+    template <Backend B, typename T>
+    OrthoWorkspace<T> ortho_layout(Queue& ctx,
+                                   BumpAllocator& pool,
+                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                   int64_t m,
+                                   int64_t k,
+                                   OrthoAlgorithm algo,
+                                   bool row_arm) {
+        using float_t = typename base_type<T>::type;
+        constexpr auto fmt = MatrixFormat::Dense;
+        const auto batch_size = A.batch_size();
+
+        const bool is_cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 ||
+                                 algo == OrthoAlgorithm::ShiftChol3;
+        const bool is_svqb = algo == OrthoAlgorithm::SVQB || algo == OrthoAlgorithm::SVQB2;
+        const bool is_cgs = algo == OrthoAlgorithm::CGS2;
+        const bool is_householder = algo == OrthoAlgorithm::Householder;
+
+        auto ATA = pool.allocate<T>(ctx, k * k * batch_size);
+        auto matAmem = pool.allocate<T*>(ctx, batch_size);
+        auto matATAmem = pool.allocate<T*>(ctx, batch_size);
+        static_cast<void>(matAmem);
+
+        auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data());
+        auto potrf_ws = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
+
+        auto diags = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
+        auto lambdas = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
+        auto syev_ws = pool.allocate<std::byte>(
+            ctx, is_svqb ? syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower) : 0);
+        auto output_basis = pool.allocate<T>(ctx, is_svqb ? batch_size * m * k : 0);
+
+        auto Ymem = pool.allocate<T>(ctx, is_cgs ? batch_size * m : 0);
+
+        // geqrf/orgqr work on columns, so the row arm QRs an m x k transposed copy.
+        const bool transposed_copy = is_householder && row_arm;
+        auto At = pool.allocate<T>(ctx, transposed_copy ? m * k * batch_size : 0);
+        auto Atptrs = pool.allocate<T*>(ctx, transposed_copy ? batch_size : 0);
+        auto H = transposed_copy ? MatrixView<T, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()) : A;
+        auto tau = pool.allocate<T>(ctx, is_householder ? k * batch_size : 0);
+        auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, H, tau) : 0);
+        auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, H, tau) : 0);
+
+        return {C, potrf_ws, diags, lambdas, syev_ws, output_basis, Ymem, tau, H, geqrf_ws, orgqr_ws};
+    }
+
+    template <Backend B, typename T>
+    Event ortho(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                Transpose transA,
+                Span<std::byte> workspace,
+                OrthoAlgorithm algo) {
+        //If transA == NoTrans we find the orthonormal basis of the column space
+        //Else we find the orthonormal basis of the row space
+        using float_t = typename base_type<T>::type;
+        constexpr auto fmt = MatrixFormat::Dense;
+        static LinalgHandle<B> handle;
+        auto batch_size = A.batch_size();
+        handle.setStream(ctx);
+        BumpAllocator pool(workspace);
+        auto [m, k] = get_effective_dims(A, transA);
+        if (ortho_force_householder(ctx)) {
+            algo = OrthoAlgorithm::Householder;
+        }
+        bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
+        Transpose inv_trans = is_A_trans ? Transpose::NoTrans : 
+                            std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
+        assert(k <= m);
+        //If k > m && transA == NoTrans the columns of A are linearly dependent
+        //Else if k > m && transA == Trans the rows of A are linearly dependent
+        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans);
+        auto C = wsl.C;
+        auto potrf_workspace = wsl.potrf_ws;
+        auto ATA_stride = k * k;
+
+        // Gram C = A^H A via syrk (real T, k <= 64 float / 128 double), else GEMM.
+        // evidence: docs/perf/ortho.md#ortho-the-gram-matrix-through-syrk-per-precision
+        // syrk writes only the lower triangle; potrf/trsm/shift read only that.
+        // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
+        // BATCHLAS_ORTHO_GRAM=gemm.
+        constexpr bool gram_is_real = !internal::is_complex<T>::value;
+        const bool gram_pinned_to_gemm = [] {
+            const char* raw = batchlas::settings().selection.ortho_gram.get();
+            return raw != nullptr && std::string(raw) == "gemm";
+        }();
+        constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
+        // "syrk reaches the gram tile kernel on this route", not "this is NVIDIA".
+        const bool gram_via_syrk =
+            select::level3_tile_substitution_enabled<B, T> && gram_is_real &&
+            k <= gram_max_k && !gram_pinned_to_gemm;
+        auto gram_into_C = [&](const auto& in_mat) {
+            if constexpr (select::level3_tile_substitution_enabled<B, T> && gram_is_real) {
+                if (gram_via_syrk) {
+                    return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
+                }
+            }
+            return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
+        };
+
+
+        auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
+        auto square = [](T value) { if constexpr (internal::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
+        
+        auto chol_alg = [&](){
+            constexpr T alpha = 1.0;
+            constexpr T beta = 0.0;
+            //Compute StS = S^T * S or StS = S * S^T (depending on transA)
+            (void)gram_into_C(A);
+            //Compute the Cholesky Factorization of StS
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
+            //Solve X * Chol(StS) = S
+            (void)trsm<B>(ctx,
+                    C,
+                    A,
+                    {.alpha = alpha, .side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
+        };
+
+        auto conj_vector = [&](const VectorView<T>& v) {
+            if constexpr (internal::is_complex<T>::value) {
+                auto x = v;
+                ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
+                    auto& e = x(int(id[1]), int(id[0]));
+                    e = std::conj(e);
+                });
+            }
+            return ctx.get_event();
+        };
+
+        auto cgs_alg = [&](){
+            //Implemented as an iterative process:
+            //1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
+            //2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
+            //3. Normalize A[:,0 .. k-1]
+            //Repeat until all vectors are orthogonal
+            auto Ymem = wsl.Ymem;
+            auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
+            for (int i = 0; i < k; i++){
+                // The first i vectors and vector i, in stored orientation: columns, or rows of A.
+                auto A_i = is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
+                                      : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size);
+                auto C = VectorView(Ymem.data(), i, batch_size);
+                auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
+                if (i > 0){ //If it's the first vector we just need to normalize it
+                    // Rows: the gemv pair below projects conj(row i) against the rows, so for
+                    // complex the row is conjugated around it.
+                    if (is_A_trans) (void)conj_vector(A_next);
+                    for (int j = 0; j < 2; j++){
+                        (void)gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
+                        (void)gemv<B>(ctx,
+                                A_i,
+                                C,
+                                A_next,
+                                {.alpha = T(-1.0), .beta = T(1.0), .transA = transA});
+                    }
+                    if (is_A_trans) (void)conj_vector(A_next);
+                }
+                //Normalize A_i
+                ctx -> submit([&](sycl::handler& h){
+                    auto Anext_squared = sycl::local_accessor<float_t, 1>(m, h);
+                    auto A_stride = A.stride();
+                    auto Aptr = A.data_ptr();
+                    const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
+                    const int64_t vstep = is_A_trans ? A.ld() : 1;
+
+                    batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
+                        sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
+                        [=](sycl::nd_item<1> item){
+                            auto tid = item.get_local_linear_id();
+                            auto bid = item.get_group_linear_id();
+                            auto cta = item.get_group();
+                            T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
+                            auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
+                            
+                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
+                                Anext_squared_span[j] = square(A_local_vector[j * vstep]);
+                            }
+                            
+                            sycl::group_barrier(cta);
+                            auto squared_norm = batchlas::portable::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
+                            auto norm = std::sqrt(squared_norm);
+
+                            for (int j = tid; j < m; j+= cta.get_local_linear_range()){
+                                A_local_vector[j * vstep] /= norm;
+                            }
+                        }); 
+                });
+            }
+        };
+
+        auto shift_chol_alg = [&](){
+            (void)gram_into_C(A);
+
+            auto ATA_ptr = C.data_ptr();
+            ctx -> submit([&](sycl::handler& h){
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                    auto tid = item.get_local_linear_id();
+                    auto bid = item.get_group_linear_id();
+                    auto cta = item.get_group();
+                    auto ATA_acc = ATA_ptr + bid * ATA_stride;
+                    // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
+                    // matrix, so with the square of the norm, in the real type's epsilon.
+                    const float_t fro2 = batchlas::portable::reduce_over_group(cta, real_part(ATA_acc[tid * k + tid]), sycl::plus<float_t>());
+                    const float_t eps = std::numeric_limits<float_t>::epsilon();
+                    const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
+                    ATA_acc[tid * k + tid] += T(shift);
+                });
+            });
+            //Compute the Cholesky Factorization of StS
+            (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
+            (void)trsm<B>(ctx, C, A, {.side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
+            chol_alg();
+            chol_alg();
+        };
+        
+        auto diags = wsl.diags;
+        auto lambdas = wsl.lambdas;
+        auto syev_workspace = wsl.syev_ws;
+        auto output_basis = wsl.output_basis;
+
+        auto svqb_alg = [&](auto in_mat, auto out_mat) {
+            //Compute A^H * A
+            (void)gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
+            //Compute D = diag(A^H * A) ^-1/2
+            ctx -> submit([&](sycl::handler& h) {
+                auto ATA_ptr = C.data_ptr();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                auto tid = item.get_local_linear_id();
+                auto bid = item.get_group_linear_id();
+                auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
+                auto diags_acc = diags.subspan(bid * k, k);
+
+                // D = diag(A^H A)^(-1/2)
+                // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
+                // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
+                const float_t diag = sycl::fmax(float_t(0), real_part(ATA_acc[tid * k + tid]));
+                const float_t tau = std::numeric_limits<float_t>::min();
+                diags_acc[tid] = (diag <= tau) ? float_t(0) : sycl::rsqrt(diag);
+                });
+            });
+            //Compute StS = D * StS * D
+            ctx -> submit([&](sycl::handler& h){
+                auto D_local = sycl::local_accessor<float_t, 1>(k, h);
+                auto ATA_ptr = C.data_ptr();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                auto tid = item.get_local_linear_id();
+                auto bid = item.get_group_linear_id();
+                auto cta = item.get_group();
+                auto D_acc = diags.subspan(bid * k, k);
+                D_local[tid] = D_acc[tid];
+                sycl::group_barrier(cta);
+                auto AtA_acc = Span(ATA_ptr + bid * k * k, k * k);
+                auto D_tid = D_local[tid];
+                for(int i = 0; i < k; i++){
+                    auto D_i = D_local[i];
+                    AtA_acc[i * k + tid] *= D_tid * D_i;
+                }
+                });
+            });
+
+            (void)syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
+
+            //First Compute D * EigenVectors * Lambda^-1/2
+            ctx -> submit([&](sycl::handler& h){
+                auto D_local = sycl::local_accessor<float_t, 1>(k, h);
+                auto C_ptr = C.data_ptr();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
+                auto tid = item.get_local_linear_id();
+                auto bid = item.get_group_linear_id();
+                auto cta = item.get_group();
+                auto D_acc = diags.subspan(bid * k, k);
+                D_local[tid] = D_acc[tid];
+                sycl::group_barrier(cta);
+                auto C_acc = Span(C_ptr + bid * k * k, k * k);
+                auto D_tid = D_local[tid];
+                auto tau = std::numeric_limits<float_t>::epsilon() * std::abs(lambdas[bid * k + k - 1]);
+                for(int i = 0; i < k; i++){
+                    auto lambda_i = lambdas[bid * k + i] < tau ? tau : lambdas[bid * k + i];
+                    C_acc[i * k + tid] *= D_tid * sycl::rsqrt(std::abs(real_part(lambda_i)));
+                }
+                });
+            });
+            //Compute Q = S * D * EigenVectors * Lambda^-1/2
+            (void)gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
+            //Memcpy
+        };
+        // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
+        auto svqb_into_A = [&]() {
+            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+            svqb_alg(A, output_view);
+            auto A_stride = A.stride();
+            auto A_ld = A.ld();
+            auto Adata = A.data();
+            auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
+            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
+                auto batch_idx = item.get_group().get_group_id()[0];
+                for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
+                    auto i = linear_ix % m;
+                    auto j = linear_ix / m;
+                    const T v = output_basis[batch_idx * m * k + j*m + i];
+                    if (is_A_trans) {
+                        if constexpr (internal::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
+                        else Adata[batch_idx * A_stride + i * A_ld + j] = v;
+                    } else {
+                        Adata[batch_idx * A_stride + j * A_ld + i] = v;
+                    }
+                }
+            });
+        };
+
+        switch (algo) {
+            case OrthoAlgorithm::Cholesky:
+                chol_alg();
+                break;
+            case OrthoAlgorithm::Chol2:
+                chol_alg();
+                chol_alg();
+                break;
+            case OrthoAlgorithm::ShiftChol3:
+                shift_chol_alg();
+                break;
+            case OrthoAlgorithm::Householder: {
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, A, wsl.H);
+                (void)geqrf<B>(ctx, wsl.H, wsl.tau, wsl.geqrf_ws);
+                (void)orgqr<B>(ctx, wsl.H, wsl.tau, wsl.orgqr_ws);
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, wsl.H, A);
+                break;
+            }
+            case OrthoAlgorithm::CGS2:
+                cgs_alg();
+                break;
+            case OrthoAlgorithm::SVQB:
+                svqb_into_A();
+                break;
+            case OrthoAlgorithm::SVQB2: {
+                if (is_A_trans) {
+                    svqb_into_A();
+                    svqb_into_A();
+                    break;
+                }
+                auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+                svqb_alg(A, output_view);
+                svqb_alg(output_view, A);
+                break;
+            }
+            default:
+                throw batchlas::invalid_argument("Unknown orthogonalization algorithm");
+        }
+        
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t ortho_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             Transpose transA,
+                             OrthoAlgorithm algo) {
+        auto [m, k] = get_effective_dims(A, transA);
+        if (ortho_force_householder(ctx)) {
+            algo = OrthoAlgorithm::Householder;
+        }
+        const bool row_arm = transA != Transpose::NoTrans;
+        return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
+            return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm);
+        });
+    }
+
+    template <Backend B, typename T>
+    Event ortho(Queue& ctx,
+                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& M,
+                Transpose transA,
+                Transpose transM,
+                Span<std::byte> workspace,
+                OrthoAlgorithm algo,
+                size_t iterations) {
+        if (ortho_force_householder(ctx)) {
+            algo = OrthoAlgorithm::Householder;
+        }
+        BumpAllocator pool(workspace);
+        constexpr auto fmt = MatrixFormat::Dense;
+        //When orthogonalizing against an external basis M,
+        //M must be an orthonormal basis
+        //Both A and M must be either tall-and-skinny or short-and-fat
+        //Furthermore the number of vectors in A and M must sum to at most the dimension of these vectors 
+        auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
+        auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
+        auto k = transA == Transpose::NoTrans ? A.rows_ : A.cols_;
+        
+        // Initialize the matrices if not already done
+        if(nA + nM > k){
+            throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
+        }
+        assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
+        auto trans = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto no_trans = Transpose::NoTrans;
+        auto inv_transA = transA == trans ? no_trans : trans;
+        auto inv_transM = transM == trans ? no_trans : trans;
+        auto batch_size = A.batch_size();
+        auto MAmem = pool.allocate<T>(ctx, nM*nA * batch_size);
+        auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo));
+        auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size);
+        auto isAtrans = transA == trans;
+        // ConjTrans for complex: a bool cast to Transpose is Trans, which projects onto conj(M).
+        auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
+        auto is_second_transposed = ((transA == trans) && (transM == no_trans)) ? trans : no_trans;
+        
+        for (size_t i = 0; i < iterations; i++){
+            (void)gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
+            (void)gemm<B>(ctx,
+                    isAtrans ? descrMA : M,
+                    isAtrans ? M : descrMA,
+                    A,
+                    {.alpha = T(-1.0), .beta = T(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
+
+            (void)ortho<B>(ctx, A, transA, orthoworkspace, algo);
+        }
+        return ctx.get_event();
+    }
+
+    template <Backend B, typename T>
+    size_t ortho_buffer_size(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& M,
+                             Transpose transA,
+                             Transpose transM,
+                             OrthoAlgorithm algo,
+                             size_t iterations) {
+        auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
+        auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
+        auto batch_size = A.batch_size();
+        if (ortho_force_householder(ctx)) {
+            algo = OrthoAlgorithm::Householder;
+        }
+        
+        return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo)) +
+                BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
+    }  
+
+    #define ORTHO_INSTANTIATE(back, fp) \
+    template Event ortho<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Transpose, \
+        Span<std::byte>, \
+        OrthoAlgorithm); \
+    template Event ortho<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Transpose, \
+        Transpose, \
+        Span<std::byte>, \
+        OrthoAlgorithm, \
+        size_t); \
+    template size_t ortho_buffer_size<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Transpose, \
+        OrthoAlgorithm); \
+    template size_t ortho_buffer_size<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        Transpose, \
+        Transpose, \
+        OrthoAlgorithm, \
+        size_t);
+
+    // Instantiate for the floating-point types of interest
+    BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORTHO_INSTANTIATE)
+
+    #undef ORTHO_INSTANTIATE
+}

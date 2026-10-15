@@ -11,7 +11,7 @@
 #include <complex>
 #include <string>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 using namespace batchlas;
 

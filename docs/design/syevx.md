@@ -18,7 +18,7 @@ enforces. Measured crossovers are on @ref perf_syevx. Range semantics are on @re
 
 On dense input with eigenvectors, Auto picks `DirectSubset` when \f$n \ge 1024\f$ and
 \f$n \cdot \mathrm{batch} \ge 128 \cdot 1024\f$, and `Direct` otherwise. The gates are
-`kSyevxSubsetMinN` and `kSyevxSubsetMinWork` in `src/extensions/syevx.cc`. The rule has no
+`kSyevxSubsetMinN` and `kSyevxSubsetMinWork` in `src/ops/syevx/syevx.cc`. The rule has no
 \f$k/n\f$ term: the `DirectSubset` advantage is flat in \f$k\f$ from 0.8 % to 25 % of the spectrum.
 
 Routing gave most of the practical gain (3.0x to 3.7x geometric mean). `DirectSubset` adds up to

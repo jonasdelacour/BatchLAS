@@ -1,6 +1,6 @@
-#include "replay_core.hh"
+#include <tools/tune/replay_core.hh>
 
-#include "race.hh"
+#include <tools/tune/race.hh>
 
 #include <algorithm>
 #include <cmath>

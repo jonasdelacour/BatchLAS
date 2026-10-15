@@ -3,7 +3,7 @@
 > **Status:** current · RTX 4090 (sm_89), CUDA backend, saturating batches unless a section says
 > otherwise.
 
-`ortho` (`src/extensions/ortho.cc`) orthogonalizes blocks of vectors for `syevx_lobpcg`,
+`ortho` (`src/ops/ortho/ortho.cc`) orthogonalizes blocks of vectors for `syevx_lobpcg`,
 `syevx_filtered` and `lanczos`, with `k` in the tens. The Cholesky family (`Cholesky`, `Chol2`,
 `ShiftChol3`) forms the Gram matrix \f$C = A^H A\f$ with `syrk` for real types at small `k`, and
 with GEMM otherwise. The level-3 side of this decision is on

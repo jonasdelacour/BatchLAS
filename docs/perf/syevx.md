@@ -16,7 +16,7 @@ LOBPCG iteration counts in the hardening sections are CPU (NETLIB) builds with
 
 ## syevx: routing thresholds as they stand
 
-The dense `Auto` rule, from `syevx_select_algorithm` (`src/extensions/syevx.cc:302-320`):
+The dense `Auto` rule, from `syevx_select_algorithm` (`src/ops/syevx/syevx.cc:302-320`):
 
 | condition | route |
 |---|---|
@@ -123,7 +123,7 @@ is a mesh/stencil family.
 
 ### syevx: automatic Chebyshev filter degree
 
-`syevx_filtered` uses `kDefaultFilterDegree = 10` (`src/extensions/syevx_filtered.cc:56`) unless the degree
+`syevx_filtered` uses `kDefaultFilterDegree = 10` (`src/ops/syevx/kernels/syevx_filtered.cc:56`) unless the degree
 is pinned (`BATCHLAS_SYEVX_FILTER_DEGREE` or `params.filter_degree`). The per-matrix derived degree behind
 `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1` **must not ship**.
 
@@ -149,15 +149,15 @@ Every tier except Tier 5 exists (plan: @ref design_syevx).
   `BATCHLAS_SYEVX_ALGORITHM` overrides it. Tests that pin an algorithm skip under a conflicting override.
 - `syevx_select_algorithm` is deterministic, so `syevx` and `syevx_buffer_size` agree. An unimplemented
   choice degrades to its nearest neighbour (DirectSubset on complex input becomes Direct).
-- `syevx_direct` (`src/extensions/syevx_direct.cc`) runs `syev` on a private copy of `A`. `syevx.cc` is
-  only the dispatcher; LOBPCG is in `src/extensions/syevx_lobpcg.cc`.
+- `syevx_direct` (`src/ops/syevx/kernels/syevx_direct.cc`) runs `syev` on a private copy of `A`. `syevx.cc` is
+  only the dispatcher; LOBPCG is in `src/ops/syevx/kernels/syevx_lobpcg.cc`.
 
 ### syevx Tier 1: stebz and stein
 
-- `stebz` (`src/extensions/stebz.cc`): batched tridiagonal bisection, All/Index/Value ranges, one
+- `stebz` (`src/ops/syev/tridiag/stebz.cc`): batched tridiagonal bisection, All/Index/Value ranges, one
   work-group per batch item. The Sturm recurrence clamps \f$|q|\f$ below `pivmin`, as LAPACK `dlaebz`
   does; without it the count is not monotone in \f$x\f$.
-- `stein` (`src/extensions/stein.cc`): batched inverse iteration with tridiagonal LU (`dgttrf`/`dgttrs`),
+- `stein` (`src/ops/syev/tridiag/stein.cc`): batched inverse iteration with tridiagonal LU (`dgttrf`/`dgttrs`),
   then modified Gram-Schmidt within clusters closer than `ortho_threshold * ||T||`.
 - Testing trap: a block-diagonal matrix with doubled eigenvalues does not test reorthogonalization (the
   pairs are orthogonal for free). Use the Wilkinson matrix \f$W^+_{2m+1}\f$; with `ortho_threshold = 0`,
@@ -166,7 +166,7 @@ Every tier except Tier 5 exists (plan: @ref design_syevx).
 
 ### syevx Tier 2: DirectSubset
 
-`syevx_direct_subset` (`src/extensions/syevx_direct_subset.cc`): `sytrd_sy2sb` → band-to-tridiagonal →
+`syevx_direct_subset` (`src/ops/syevx/kernels/syevx_direct_subset.cc`): `sytrd_sy2sb` → band-to-tridiagonal →
 `stebz` → `stein` → back-transforms on the `k` selected columns. Real types, dense input only.
 
 - Eigenvector mode reduces at the tuned band width. Q2 is applied to the `k` columns (`unmqr_hb2st`)
@@ -177,7 +177,7 @@ Every tier except Tier 5 exists (plan: @ref design_syevx).
 
 ### syevx Tier 3: Filtered
 
-`syevx_filtered` (`src/extensions/syevx_filtered.cc`): spectral bounds → Chebyshev filter → `ortho` →
+`syevx_filtered` (`src/ops/syevx/kernels/syevx_filtered.cc`): spectral bounds → Chebyshev filter → `ortho` →
 Rayleigh-Ritz, looping until the wanted residuals converge. Dense and CSR, real and complex, no
 preconditioner, not limited to the smallest eigenpairs. Reachable only explicitly (`params.method` or
 `BATCHLAS_SYEVX_ALGORITHM=filtered`).
@@ -370,7 +370,7 @@ solver. With the projected solves on `vendor` or `jacobi`,
 `ILUKTests.SyevxInstrumentationAndPreconditioner` (`iluk_k3`, case `d0.06_b0.5`) stalls at
 a residual of 5.2e-6 against its 4.2e-6 target. It passes on CTA.
 
-`projected_syev_pin` (`src/extensions/syevx_lobpcg.cc`) therefore pins every projected solve
+`projected_syev_pin` (`src/ops/syevx/kernels/syevx_lobpcg.cc`) therefore pins every projected solve
 (XtAX, StAS and its restart size) to `cta_fused` when the CTA solvers can take the shape
 (n <= 32, a GPU with 32-wide sub-groups). The buffer-size query uses the same pin, so the
 workspace and the run branch identically. `cta` has the same `can_run` as `cta_fused`, so it is

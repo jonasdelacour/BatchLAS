@@ -2,7 +2,7 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/backend_config.h>
-#include "../benchmarks/bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
 static int last_arg = 0;
 static void dummy_bench(minibench::State& state) { last_arg = state.range(0); }

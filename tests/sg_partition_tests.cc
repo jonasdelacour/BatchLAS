@@ -1,5 +1,5 @@
 // Correctness suite for the chunked sub-group partition layer
-// (src/extensions/sg_partition/): SubGroupPartition<P, Masked> and every
+// (src/kernels/common/sg_partition/): SubGroupPartition<P, Masked> and every
 // collective of its front end, on whatever backend the device pass selects.
 //
 // Every kernel launches kNumWg work-groups of kSgPerWg sub-groups, so a
@@ -28,9 +28,9 @@
 
 #include <batchlas/util/group-invoke.hh>
 
-#include "../src/extensions/sg_partition/sg_partition.hh"
-#include "../src/sycl/impl.hh"
-#include "../src/sycl/kernel_attrs.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/sycl/impl.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <algorithm>
 #include <complex>

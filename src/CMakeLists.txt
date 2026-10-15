@@ -28,7 +28,7 @@ add_library(batchlas_extensions_stedc_obj OBJECT)
 add_library(batchlas_extensions_cta_obj OBJECT)
 add_library(batchlas_util_obj OBJECT)
 add_library(batchlas_extra_obj OBJECT)
-# src/sycl/CMakeLists.txt target_sources()s gemm_kernels.cc into this, so the
+# src/ops/CMakeLists.txt target_sources()s the native BLAS kernels into this, so the
 # generated dummy TU it used to carry was a second object compiled for nothing.
 add_library(batchlas_sycl_obj OBJECT)
 
@@ -66,10 +66,10 @@ set_target_properties(
 # DPC++ only: the acpp JIT never sees stage-1 -mllvm options (BATCHLAS_UNROLL_FULL covers it).
 if(NOT BATCHLAS_SYCL_IMPL_ACPP)
     set_source_files_properties(
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/getrf_tiny.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/gesv_tiny.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/posv_tiny.cc
-        ${CMAKE_CURRENT_SOURCE_DIR}/sycl/trsm_sg_left.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/getrf/kernels/getrf_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/gesv/kernels/gesv_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/posv/kernels/posv_tiny.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/trsm/kernels/trsm_sg_left.cc
         PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
 endif()
 
@@ -150,8 +150,8 @@ add_custom_command(
     VERBATIM
 )
 target_sources(batchlas_selection_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
-# src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
-# src/select. ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
+# src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are root-based
+# (<src/...>). ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
 target_sources(batchlas_selection_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -169,11 +169,8 @@ target_sources(batchlas_selection_obj PRIVATE ops/level3/level3.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
-add_subdirectory(extensions)
+add_subdirectory(ops)
 add_subdirectory(util)
-add_subdirectory(extra)
-
-add_subdirectory(sycl)
 
 function(batchlas_configure_component target)
     set(options NO_CPU_TARGETS)

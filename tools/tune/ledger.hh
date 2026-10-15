@@ -3,8 +3,8 @@
 // The tuning ledger, one JSONL file per (op, device), host-only.
 // evidence: docs/design/tuning-data.md#tuning-data-ledger-file
 
-#include "tier.hh"
-#include "tune_core.hh"
+#include <tools/tune/tier.hh>
+#include <tools/tune/tune_core.hh>
 
 #include <cmath>
 #include <map>

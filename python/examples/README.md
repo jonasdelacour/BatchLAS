@@ -92,7 +92,7 @@ These are library defects. The notebooks call them out where they come up.
 
 - **`ortho(algorithm="householder")` on CUDA.** After any earlier `geqrf` workspace use in the same
   process, returns a non-orthonormal result. `ortho_buffer_size` sizes its sub-workspaces from a
-  placeholder view (`src/extensions/ortho.cc`), so blocks can overlap. Other algorithms are
+  placeholder view (`src/ops/ortho/ortho.cc`), so blocks can overlap. Other algorithms are
   unaffected; notebook 04 uses those.
 - **`stedc` with `JobType::NoEigenVectors`.** Returns wrong eigenvalues. The bindings always request
   vectors internally and discard them.

@@ -32,7 +32,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 
 // The reader of BATCHLAS_<OP>_ROUTE: select's pin text.
-#include "../src/select/select.hh"
+#include <src/select/select.hh>
 
 #include <optional>
 #include <stdexcept>

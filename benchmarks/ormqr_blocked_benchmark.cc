@@ -2,7 +2,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 #include <batchlas/backend_config.h>
 
 #include <algorithm>

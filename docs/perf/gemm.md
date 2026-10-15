@@ -23,7 +23,7 @@ Auto on sm_89:
 ### Choices (flat selection, P3.4)
 
 The vocabulary is `src/ops/gemm/choice.hh`, listed in tie-break order. `src/ops/gemm/gemm.cc` validates the
-views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `src/sycl/gemm_kernels.cc`.
+views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
 
 | spelling | launcher | scalars | `can_run` beyond the common term (`gemm.cc`) |
 |---|---|---|---|
@@ -236,7 +236,7 @@ A timed complex table is what would reopen the question.
 
 ### The 128x128 float kernel
 
-`src/sycl/gemm/register_128x128.hh`: 128×128×8 macro tile, 8×8 accumulators per thread, 256 threads. Its SASS
+`src/ops/gemm/kernels/register_128x128.hh`: 128×128×8 macro tile, 8×8 accumulators per thread, 256 threads. Its SASS
 inner loop matches nvcc's for the same SGEMM body (512 FFMA, 32 `LDS.128`, 2 `BAR.SYNC`, zero spill), and SYCL
 runs at 98.7–100.1% of the CUDA build (512³b512, 1024³b64, 256³b1024).
 
@@ -313,7 +313,7 @@ half now measures 47.3. A ratio against a vendor is only as durable as that vend
 
 ### The wide scalar kernel
 
-`src/sycl/gemm/register_64x64_k16_wide.hh`: 64×64×16 macro tile, 4×4 thread tile, the only register-tiled
+`src/ops/gemm/kernels/register_64x64_k16_wide.hh`: 64×64×16 macro tile, 4×4 thread tile, the only register-tiled
 variant serving a non-float scalar. Ratios at 256³b512, 512³b128, 1024³b32, both betas:
 
 | scalar | vs `Tiled16` | vs cuBLAS |
@@ -374,7 +374,7 @@ The old `min_dim >= 256` arm is still checked first, so nothing that routed to t
 
 ### Wide-scalar transposed tiles
 
-`src/sycl/gemm/register_wide_transposed.hh`: four variants, four types, 16 kernels. They are the
+`src/ops/gemm/kernels/register_wide_transposed.hh`: four variants, four types, 16 kernels. They are the
 `wide:m=64:n=64:k=16` CN/NC instances, `wide:m=128:n=32:k=16` (NC) and `wide:m=32:n=128:k=16` (CN). Work-group
 256 for all four.
 
@@ -641,15 +641,15 @@ reciprocal, and unifying them would move one off its LAPACK rounding.
 
 ## GEMM: the register-tiled launcher table
 
-`src/sycl/gemm/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
+`src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
 structural type, so one launcher `launch_reg<T, RegTile{...}>` serves every row of `reg_configs`
-(`src/ops/gemm/choice.hh`, turned into a `RegTile` by `launch_reg_cfg` in `src/sycl/gemm_kernels.cc`).
+(`src/ops/gemm/choice.hh`, turned into a `RegTile` by `launch_reg_cfg` in `src/ops/gemm/kernels/gemm_kernels.cc`).
 **Trap:** the defaults differ from `launch_register_tiled<>`. There `ThreadTileCols` defaults to `ThreadTileRows`;
 here `TR` and `TC` default independently to 4, so every row states both.
 
 ## The small batched kernel
 
-`src/sycl/gemm/small_batched.hh` (`small`). Float NN at max(m,n,k) ≤ 48 previously ran `Direct`, whose adjacent
+`src/ops/gemm/kernels/small_batched.hh` (`small`). Float NN at max(m,n,k) ≤ 48 previously ran `Direct`, whose adjacent
 lanes read B and write C `ld` apart. The kernel gives a 128-lane group 128 / (2·NB) matrices, with NB in {8, 16,
 32, 64} from max(m,n,k). op(B) is staged in local memory (odd `ld`, so either transpose is coalesced), each lane
 holds one row of op(A) and NB/2 columns of C, and β = 0 skips the C read. Real scalars only: `std::complex` is the

@@ -52,7 +52,7 @@ The `ld < rows` check catches an argument-order trap. The batch is the third arg
 
 Unchecked on purpose: null data and zero extents (shape-only views are passed to about 37
 `*_buffer_size` queries), and `stride >= ld * cols`. Two in-repo sites violate the last one, the
-transposed CGS view in `src/extensions/ortho.cc` (see [known defects](known-defects.md)) and a sizing
+transposed CGS view in `src/ops/ortho/ortho.cc` (see [known defects](known-defects.md)) and a sizing
 dummy in `syevx_lobpcg`. A throw would break both.
 
 `rows_`, `cols_` and `batch_size_` must default-initialise to zero. The USM check reads them to decide

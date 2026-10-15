@@ -4,9 +4,9 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 
-#include "../src/extensions/sytrd_sb2st_hh.hh"
+#include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 
 #include <algorithm>
 #include <vector>

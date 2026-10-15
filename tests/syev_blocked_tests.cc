@@ -9,8 +9,8 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -299,7 +299,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 // Upper had NO coverage anywhere in the syev tests before this. It also had no
 // implementation: sytrd_blocked threw on it, so every Upper call fell through to the vendor.
 // syev_blocked/syev_two_stage now mirror the upper triangle into the lower one and run the
-// ordinary Lower pipeline (src/extensions/uplo_mirror.hh), which is what lets Auto route
+// ordinary Lower pipeline (src/ops/syev/uplo_mirror.hh), which is what lets Auto route
 // Upper input to our own providers.
 //
 // The test that has teeth: build a matrix whose two triangles DISAGREE, so that reading the

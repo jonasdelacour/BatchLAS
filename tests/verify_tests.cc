@@ -9,7 +9,7 @@
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <cmath>
 #include <cstdio>

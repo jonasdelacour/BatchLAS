@@ -10,7 +10,7 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/settings.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/reference.hh>
 #include <optional>
 #include <tuple>
@@ -19,9 +19,9 @@
 #include <limits>
 #include <algorithm>
 #include <type_traits>
-#include "../src/ops/syev/vendor.hh"
-#include "../src/select/select.hh"
-#include "shipped_table_pick.hh"
+#include <src/ops/syev/vendor.hh>
+#include <src/select/select.hh>
+#include <tests/shipped_table_pick.hh>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1461,7 +1461,7 @@ TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
     }
 }
 
-// Argument validation lives in the dispatcher (src/extensions/syevx.cc), because
+// Argument validation lives in the dispatcher (src/ops/syevx/syevx.cc), because
 // dense input does not reach syevx_lobpcg.
 TEST(SyevxJacobiValidation, RejectsInconsistentPreconditionerRequests) {
     constexpr int n = 96, batch = 1, neig = 3;

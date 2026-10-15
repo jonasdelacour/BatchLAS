@@ -10,7 +10,7 @@
 #include <limits>
 #include <vector>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 using namespace batchlas;
 

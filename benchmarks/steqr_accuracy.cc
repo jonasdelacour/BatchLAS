@@ -1,10 +1,10 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
-#include "accuracy_utils.hh"
+#include <benchmarks/accuracy_utils.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -23,7 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "../src/ops/syev/vendor.hh"
+#include <src/ops/syev/vendor.hh>
 
 using namespace batchlas;
 

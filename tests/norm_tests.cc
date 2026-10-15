@@ -8,7 +8,7 @@
 #include <vector>
 #include <chrono>
 #include <batchlas/blas/extra.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <batchlas/no_route.hh>
 

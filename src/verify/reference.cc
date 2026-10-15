@@ -5,7 +5,7 @@
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
 #include <cblas.h>
 
-#include "../backends/host_blas_health.hh"
+#include <src/backends/host_blas_health.hh>
 
 namespace batchlas::verify::detail {
 

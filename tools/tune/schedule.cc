@@ -1,6 +1,6 @@
-#include "schedule.hh"
+#include <tools/tune/schedule.hh>
 
-#include "grid.hh"
+#include <tools/tune/grid.hh>
 
 #include <algorithm>
 #include <cmath>

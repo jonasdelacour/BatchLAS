@@ -13,8 +13,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/spmm/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/spmm/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <complex>
@@ -132,8 +132,8 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             // family: direct
-            "src/sycl/spmm_native.cc",
-            "src/sycl/spmm_native.hh",
+            "src/ops/spmm/kernels/spmm_native.cc",
+            "src/ops/spmm/spmm_native.hh",
             // common
             "src/ops/spmm/choice.hh",
         };

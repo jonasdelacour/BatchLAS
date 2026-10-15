@@ -91,7 +91,7 @@ int run_one(const std::string& dump_dir,
             bool in_order,
             bool dump_step,
             bool abw_only) {
-    // Drive dumping via env vars used by src/extensions/band_reduction.cc, which
+    // Drive dumping via env vars used by src/ops/syev/sytrd/band_reduction.cc, which
     // re-reads settings().diagnostics.dump_bandr1 on every step; set_env above
     // reloads that snapshot, so these take effect before the Queue is built.
     set_env("BATCHLAS_DUMP_BANDR1_DIR", dump_dir);

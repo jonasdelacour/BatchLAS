@@ -9,7 +9,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <algorithm>
 #include <complex>
 #include <string>
@@ -27,7 +27,7 @@ struct SyevConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
@@ -170,7 +170,7 @@ TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
     // -1, NOT 0: a span left at zero cannot tell "the solver wrote 0" from
     // "nothing wrote it at all", and the second is the failure this whole
     // mechanism exists to rule out. The entry point clears the span once (the
-    // accumulator rule in src/extensions/info_span.hh), so a surviving -1 says
+    // accumulator rule in src/kernels/common/info_span.hh), so a surviving -1 says
     // the clear never ran and the zeros would have been an accident.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 

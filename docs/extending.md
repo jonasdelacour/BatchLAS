@@ -33,8 +33,30 @@ which validates arguments, chooses a kernel and launches it
   `src/util/template-instantiations.hh` (`BATCHLAS_INSTANTIATE_OP` inside
   `BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS`, as `src/ops/potrf/potrf.cc` does). The vendor arm
   compiles to a throw where the library is absent.
-- Kernel bodies stay in `src/extensions/`, `src/sycl/`, ... and keep their own argument checks and
+- Kernel bodies stay in their own TUs (table below) and keep their own argument checks and
   launch-parameter functions; the op file only decides which one runs.
+
+| Code | Goes in |
+| --- | --- |
+| Entry point, `choice.hh`, headers shared by several of the op's kernels | `src/ops/<op>/` |
+| The op's kernel `.cc` files and their single-consumer device headers | `src/ops/<op>/kernels/` |
+| An internal sub-op of one parent (flat inside) | `src/ops/<parent>/<sub>/`, e.g. `syev/stedc/`, `gesvd/bdsqr/` |
+| A public standalone routine without kernel selection | its own `src/ops/<routine>/`, e.g. `ortho/`, `iluk/` |
+| Device code used by several ops (`tiny_device.hh`, `sg_partition/`, ...) | `src/kernels/common/` |
+| SYCL-implementation portability helpers (DPC++ vs AdaptiveCpp) | `src/sycl/` |
+| Vendor wrappers and routing-shape helpers | `src/backends/` |
+| Queue, settings, matrix utilities (norms, cond, transpose) | `src/util/` |
+| Kernel selection and tuned-table lookup | `src/select/` |
+| Verification checks (`batchlas::verify`) | `src/verify/` |
+| Library-wide internals (`queue.hh`, `linalg-impl.hh`, `sort.hh`, `matrix.cc`) | `src/` |
+
+Includes are root-based from the repository root: `#include <src/ops/potrf/potrf_native.hh>`,
+`<src/kernels/common/info_span.hh>`, public headers `<batchlas/...>`. A quoted or relative include
+fails CI.
+
+A new kernel TU also goes into one of the OBJECT-library lists in `src/ops/CMakeLists.txt`, chosen by
+which sources' device symbols it calls, not by folder
+([build-time structure](design/runtime-internals.md#runtime-internals-build-time-structure)).
 
 `src/ops/potrf/` is the model: read its `choice.hh` and `potrf.cc` first.
 

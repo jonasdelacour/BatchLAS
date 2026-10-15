@@ -9,7 +9,7 @@
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/gemm.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -17,14 +17,14 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/settings.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/geqrf_native.hh"
-#include "../src/extensions/orgqr_native.hh"
-#include "../src/ops/geqrf/choice.hh"
-#include "../src/ops/orgqr/choice.hh"
+#include <src/ops/geqrf/geqrf_native.hh>
+#include <src/ops/orgqr/orgqr_native.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/orgqr/choice.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -1854,7 +1854,7 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
            "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
            "is warp-uniform here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is backend-specific (src/extensions/sg_partition/; "
+        << path << ": group_barrier(part) is backend-specific (src/kernels/common/sg_partition/; "
            "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
            "correct on this box and not ordered everywhere: " << part_barrier;
 }

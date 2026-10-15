@@ -1,7 +1,7 @@
 #pragma once
 
 #include <batchlas/blas/matrix.hh>
-#include "../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
     #include <cuda_runtime.h>

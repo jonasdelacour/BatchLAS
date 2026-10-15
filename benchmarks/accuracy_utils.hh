@@ -3,7 +3,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <cctype>

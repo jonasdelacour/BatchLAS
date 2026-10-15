@@ -1,9 +1,9 @@
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
 //#include <batchlas/blas/linalg.hh>
-#include "../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/internal/ormqr_blocked.hh>
 
@@ -15,15 +15,15 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <complex>
 
-#include "batch_launch.hh"
-#include "level3_shape.hh"
-#include "gemm_heterogeneous.hh"
-#include "syrk_gram_tiles.hh"
-#include "../ops/syrk/choice.hh"
-#include "triangular_expand.hh"
+#include <src/backends/batch_launch.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/backends/gemm_heterogeneous.hh>
+#include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
+#include <src/ops/syrk/choice.hh>
+#include <src/kernels/common/triangular_expand.hh>
 
 // This file contains cuBLAS primitives implementation using MatrixView
-#include "../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
     namespace backend {

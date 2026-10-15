@@ -305,7 +305,7 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   They honour `BATCHLAS_EXPAND_ROUTE=expand|loop`, and herk's gram opt-in is `BATCHLAS_SYRK_ROUTE=gram`.
   They have no `BATCHLAS_<OP>_ROUTE` and throw `NoRouteError` in a vendor-free build. The planned families are hemm
   `{expand, vendor}`, herk `{gram, fold, vendor}` and her2k `{fold, vendor}`.
-- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/extensions/potrf_blocked.cc:309`). `Blocked`
+- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/ops/potrf/kernels/potrf_blocked.cc:309`). `Blocked`
   has no fields: `nb` and `W` come from `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`.
   `lpanel:panel=16` is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large

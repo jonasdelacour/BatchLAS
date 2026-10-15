@@ -5,8 +5,8 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/miniacc.hh>
 #include <batchlas/backend_config.h>
-#include "../src/queue.hh"
-#include "accuracy_utils.hh"
+#include <src/queue.hh>
+#include <benchmarks/accuracy_utils.hh>
 
 #include <batchlas/verify/reference.hh>
 

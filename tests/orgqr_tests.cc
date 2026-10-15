@@ -19,7 +19,7 @@ struct OrgqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 using OrgqrTestTypes = typename test_utils::backend_types<OrgqrConfig>::type;
 

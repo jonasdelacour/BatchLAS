@@ -35,16 +35,16 @@
 
 #include <batchlas/settings.hh>
 
-#include "../src/extensions/getrf_native.hh"
-#include "../src/extensions/potrf_native.hh"
-#include "../src/sycl/trsm_native.hh"
-#include "../src/ops/geqrf/choice.hh"
-#include "../src/ops/orgqr/choice.hh"
-#include "../src/ops/getrf/choice.hh"
-#include "../src/ops/getrs/choice.hh"
-#include "../src/ops/gesv/choice.hh"
-#include "../src/ops/posv/choice.hh"
-#include "../src/ops/potrf/choice.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/trsm/trsm_native.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/orgqr/choice.hh>
+#include <src/ops/getrf/choice.hh>
+#include <src/ops/getrs/choice.hh>
+#include <src/ops/gesv/choice.hh>
+#include <src/ops/posv/choice.hh>
+#include <src/ops/potrf/choice.hh>
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -345,7 +345,7 @@ static int run(const Cfg& c) {
     UnifiedVector<int32_t> info(nbatch, 0);
     UnifiedVector<int64_t> piv(size_t(n) * nbatch, 0);
     // getrf packs 1-based int32 pivots in the FIRST HALF of the int64 span
-    // (src/extensions/getrf_native.hh), n per item.
+    // (src/ops/getrf/getrf_native.hh), n per item.
     const int* pivi = reinterpret_cast<const int*>(piv.data());
     const int pstride = n;
     UnifiedVector<T> tau(size_t(kmin) * nbatch);

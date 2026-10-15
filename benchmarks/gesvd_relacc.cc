@@ -20,7 +20,7 @@
 //
 // The reference is exact, not another solve: random_with_log10_cond_metric
 // builds A = U * S * V^H from an explicitly constructed geometric spectrum
-// (src/extra/random_cond.cc:46), so the true singular values are known in closed
+// (src/util/random_cond.cc:46), so the true singular values are known in closed
 // form. Comparing against a second floating-point solve would put the reference
 // at the same error floor as the thing being measured.
 
@@ -29,8 +29,8 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/util/miniacc.hh>
 
-#include "acc_utils.hh"
-#include "miniacc_accuracy_common.hh"
+#include <benchmarks/acc_utils.hh>
+#include <benchmarks/miniacc_accuracy_common.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -52,7 +52,7 @@ void GesvdRelAccSizes(Benchmark* b) {
 
 // The spectrum random_with_log10_cond_metric actually builds, in closed form:
 //   s_i = exp((i - (n-1)/2) * ln(10) * log10_kappa2 / (n-1)),  i ascending.
-// (src/extra/random_cond.cc:46). Returned DESCENDING to match the BatchLAS gesvd
+// (src/util/random_cond.cc:46). Returned DESCENDING to match the BatchLAS gesvd
 // output convention -- which is descending, produced by an index reversal in
 // finalize_values_only, not by a sort flag.
 std::vector<double> reference_spectrum_descending(int n, double log10_kappa2) {

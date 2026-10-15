@@ -70,7 +70,7 @@ Before reading PTX, verify that both runs are hitting the intended variant.
 For GEMM in BatchLAS:
 
 - Kernel selection lives in `src/ops/gemm/{choice.hh,gemm.cc}` (flat selection: the tuned table's first runnable choice).
-- SYCL register-tiled kernel instantiations live in `src/sycl/gemm/register_tiled_common.hh` and `src/sycl/gemm/register_launchers.hh`.
+- SYCL register-tiled kernel instantiations live in `src/ops/gemm/kernels/register_tiled_common.hh` and `src/ops/gemm/kernels/register_launchers.hh`.
 
 Pin the gemm kernel with `BATCHLAS_GEMM_ROUTE=<choice>` (e.g. `reg:m=128:n=32:k=32:u=1`, `wide:m=64:n=64:k=16`, `tiled`, `vendor`) and confirm it with `BATCHLAS_SELECT_TRACE=1`.
 

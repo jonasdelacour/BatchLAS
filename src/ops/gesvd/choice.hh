@@ -3,7 +3,7 @@
 /// @file
 /// @brief gesvd: jacobi, cta, blocked, vendor. evidence: docs/perf/gesvd.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

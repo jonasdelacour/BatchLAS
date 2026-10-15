@@ -1,0 +1,197 @@
+#include <src/linalg-impl.hh>
+#include <src/math-helpers.hh>
+#include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/sycl-span.hh>
+#include <batchlas/util/group-collectives.hh>
+#include <src/queue.hh>
+#include <batchlas/util/mempool.hh>
+#include <sycl/sycl.hpp>
+#include <complex>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/backend_config.h>
+#include <batchlas/util/kernel-heuristics.hh>
+
+#include <src/util/template-instantiations.hh>
+
+namespace batchlas {
+    
+    template <Backend B, typename T, MatrixFormat MFormat>
+    struct RitzValuesKernel {};
+
+    // ritz_vals[j] = (v_j^H A v_j) / (v_j^H v_j); contract in blas/extensions.hh.
+    template <Backend B, typename T, MatrixFormat MFormat>
+    Event ritz_values(Queue& ctx,
+                      const MatrixView<T, MFormat>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& V,
+                      const VectorView<typename base_type<T>::type>& ritz_vals,
+                      Span<std::byte> workspace) {
+        using real_t = typename base_type<T>::type;
+        
+        auto pool = BumpAllocator(workspace);
+        auto batch_size = A.batch_size();
+        auto n = A.rows();
+        auto k = V.cols(); // Number of trial vectors
+        
+        assert(A.cols() == n && "Matrix A must be square");
+        assert(V.rows() == n && "V must have same number of rows as A");
+        assert(V.batch_size() == batch_size && "V must have same batch size as A");
+        assert(ritz_vals.size() >= k && "ritz_vals must have at least k elements");
+        assert(ritz_vals.batch_size() == batch_size && "ritz_vals must have same batch size as A");
+        
+        // Allocate workspace for A*V computation
+        auto AV_mem = pool.allocate<T>(ctx, n * k * batch_size);
+        auto AV = MatrixView<T, MatrixFormat::Dense>(AV_mem.data(), n, k, n, n * k, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        
+        Event last_event;
+        
+        // Compute AV = A * V using spmm for sparse or gemm for dense
+        if constexpr (MFormat == MatrixFormat::Dense) {
+            last_event = gemm<B>(ctx, A, V, AV, GemmOptions<T>{});
+        } else {
+            auto spmm_ws = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
+            last_event = spmm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
+        }
+        
+        // Compute Ritz values as (v_j^T * (A*v_j)) / (v_j^T * v_j) for each column j
+        // using work-group parallelism with SYCL reductions for better performance
+        auto real_part = [](T value) { 
+            if constexpr (internal::is_complex<T>::value) return value.real(); 
+            else return value; 
+        };
+        
+        // Determine work-group size for dot product reductions
+        size_t wg_size = std::min(size_t(256), ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+        wg_size = std::min(wg_size, size_t(n)); // Don't use more threads than vector length
+        
+        auto [global_size, local_size, use_grid_stride] = compute_batched_nd_range_sizes(
+            batch_size * k * n, ctx.device(), KernelType::ELEMENTWISE, batch_size, n);
+
+        last_event = ctx -> submit([&](sycl::handler& h) {
+            h.depends_on(*last_event);
+            
+            // Create VectorViews for accessing columns with proper stride/increment handling
+            auto V_data = V.data();
+            auto AV_data = AV.data();
+            
+            // Allocate local memory for partial sums
+            auto dot_mem = sycl::local_accessor<T>(wg_size, h);
+            auto AV_view = AV.kernel_view();
+            auto V_view = V.kernel_view();
+            
+            batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
+                sycl::nd_range<1>(global_size, local_size),
+                [=](sycl::nd_item<1> item) {
+                    auto bid = item.get_group(0); // Which batch*k combination
+                    auto tid = item.get_local_id(0);    // Thread within work-group
+                    auto wg = item.get_local_range(0);  // Work-group size
+                    auto cta = item.get_group();        // Work-group for reductions
+                    
+                    //Grid stride loop:
+                    for (size_t group_id = bid; group_id < batch_size * k; group_id += item.get_group_range(0)) {
+                    // Decompose group_id into batch and trial vector indices
+                    int b = group_id / k;
+                    int j = group_id % k;
+                    
+                    // Compute v_j^T * (A*v_j) using work-group reduction
+                    // Each thread computes partial sum for its assigned elements
+                    T numerator_partial = T(0);
+                    for (int i = tid; i < n; i += wg) {
+                        T v_i = V_view(i, j, b);
+                        T av_i = AV_view(i, j, b);
+                        if constexpr (internal::is_complex<T>::value) {
+                            numerator_partial += std::conj(v_i) * av_i;
+                        } else {
+                            numerator_partial += v_i * av_i;
+                        }
+                    }
+                    dot_mem[tid] = numerator_partial;
+                    sycl::group_barrier(cta);
+                    
+                    // Reduce across work-group
+                    T numerator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
+                    // dot_mem is reused below; no work-item may overwrite it until every
+                    // work-item has finished reading it in the reduction above.
+                    sycl::group_barrier(cta);
+
+                    // Compute v_j^T * v_j using work-group reduction
+                    T denominator_partial = T(0);
+                    for (int i = tid; i < n; i += wg) {
+                        T v_i = V_view(i, j, b);
+                        if constexpr (internal::is_complex<T>::value) {
+                            denominator_partial += std::conj(v_i) * v_i;
+                        } else {
+                            denominator_partial += v_i * v_i;
+                        }
+                    }
+                    dot_mem[tid] = denominator_partial;
+                    sycl::group_barrier(cta);
+                    
+                    // Reduce across work-group
+                    T denominator = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + wg, T(0), sycl::plus<T>());
+                    // Likewise before the next grid-stride iteration overwrites dot_mem.
+                    sycl::group_barrier(cta);
+
+                    // Only the first thread in the work-group writes the result
+                    if (tid == 0) {
+                        ritz_vals(j, b) = real_part(numerator / denominator);
+                    }
+                }
+                }
+            );
+        });
+        
+        return last_event;
+    }
+
+    template <Backend B, typename T, MatrixFormat MFormat>
+    size_t ritz_values_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MFormat>& A,
+                                 const MatrixView<T, MatrixFormat::Dense>& V,
+                                 const VectorView<typename base_type<T>::type>& ritz_vals) {
+        const auto batch_size = A.batch_size();
+        const auto n = A.rows();
+        const auto k = V.cols();
+        // The run path's allocation sequence, measured: the spmm bytes go through allocate<std::byte>,
+        // which rounds, so a hand sum of raw sizes is short.
+        return workspace_bytes([&](BumpAllocator& pool) {
+            auto av = pool.allocate<T>(ctx, n * k * batch_size);
+            (void)pool.allocate<T*>(ctx, batch_size);
+            if constexpr (MFormat != MatrixFormat::Dense) {
+                auto AV = MatrixView<T, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr);
+                (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
+            }
+            return 0;
+        });
+    }
+
+    // Explicit template instantiations for common types
+    #define RITZ_VALUES_INSTANTIATE(back, fp, fmt) \
+        template Event ritz_values<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, Span<std::byte>); \
+        template size_t ritz_values_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&);
+
+    #define RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
+        BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(RITZ_VALUES_INSTANTIATE, back, fp)
+
+    #define RITZ_VALUES_INSTANTIATE_FOR_BACKEND(back) \
+        BATCHLAS_FOR_EACH_SCALAR_TYPE_1(RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE, back)
+
+    #if BATCHLAS_HAS_HOST_BACKEND
+        RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
+    #endif
+
+    #if BATCHLAS_HAS_CUDA_BACKEND
+        RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
+    #endif
+
+    #if BATCHLAS_HAS_ROCM_BACKEND
+        RITZ_VALUES_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
+    #endif
+
+    #if BATCHLAS_HAS_SYCL_BACKEND
+        BATCHLAS_FOR_EACH_DEVICE_SCALAR_TYPE_1(RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE, Backend::SYCL)
+    #endif
+
+    #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND
+    #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE
+    #undef RITZ_VALUES_INSTANTIATE
+}

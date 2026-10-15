@@ -13,16 +13,16 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/solve_native.hh"
-#include "../src/extensions/potrf_native.hh"
-#include "../src/ops/posv/choice.hh"
-#include "../src/ops/potrf/choice.hh"
+#include <src/kernels/common/solve_native.hh>
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/posv/choice.hh>
+#include <src/ops/potrf/choice.hh>
 
 #include <batchlas/no_route.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 
 #include <algorithm>
 #include <cmath>

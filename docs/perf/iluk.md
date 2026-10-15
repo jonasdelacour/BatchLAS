@@ -3,7 +3,7 @@
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda. The figures below have no
 > recorded date, harness or raw file.
 
-Batched ILU(k) in `src/extensions/iluk.cc` runs its numeric phase on the host or the device. The
+Batched ILU(k) in `src/ops/iluk/iluk.cc` runs its numeric phase on the host or the device. The
 choice depends on batch size alone. All items share one sparsity pattern: pattern-only work runs
 once on the host, and only the per-item arithmetic scales with the batch. ILU(k) has no flat
 selection op, no tuned table and no `BATCHLAS_ILUK_ROUTE` (see

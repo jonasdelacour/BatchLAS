@@ -3,7 +3,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/backend_config.h>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 using namespace batchlas;
 

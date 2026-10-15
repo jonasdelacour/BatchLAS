@@ -199,7 +199,7 @@ x batch 1..512, and complex64 `cublas?hemm` over n 16..512 x batch 1..16. The ex
 everywhere except `batch <= 2 && n <= 128`, where the call is launch-bound and the expansion loses by up to **2.5x**.
 
 The shipped edge is more conservative than that loss region: `kExpandMinBatch = 4` and `kExpandMinDim = 256`
-(`src/backends/triangular_expand.hh:28-29`), used by the float `symm` rows and by `hemm_vendor`. Batch 3 at every
+(`src/kernels/common/triangular_expand.hh:28-29`), used by the float `symm` rows and by `hemm_vendor`. Batch 3 at every
 n, and batch <= 2 with `129 <= n <= 255`, take the loop although they lie outside the loss region. That slack
 is deliberate; the exploration numbers would support 2 and 128. `symm` ranks `vendor` first on every `tall` and
 `wide` row (no bracketing cell exists). Double `symm` ranks `vendor` first everywhere, and `expand` for double is unmeasured.
@@ -232,7 +232,7 @@ The reasons behind the tile kernels' shapes. The headers keep the invariants and
 
 ### syrk gram tiles: kernel design
 
-`src/backends/syrk_gram_tiles.hh`: a single-tile batched SYRK for the tall skinny A and small square C that
+`src/ops/syrk/kernels/syrk_gram_tiles.hh`: a single-tile batched SYRK for the tall skinny A and small square C that
 `ortho` supplies.
 
 - **Why a second kernel.** The 128x128 triangular kernel cannot serve n <= 128. A 128-wide tile spends
@@ -253,7 +253,7 @@ The reasons behind the tile kernels' shapes. The headers keep the invariants and
 
 ### syrk and syr2k triangular tiles: kernel design
 
-`src/backends/syrk_triangular_tiles.hh` and `src/backends/syr2k_triangular_tiles.hh`, sharing the grid in
+`src/ops/syrk/kernels/syrk_triangular_tiles.hh` and `src/ops/syr2k/kernels/syr2k_triangular_tiles.hh`, sharing the grid in
 `triangular_tiles.hh`.
 
 - **The saving.** A GEMM-based batched SYRK computes every tile outside the triangle and discards it. The
@@ -268,7 +268,7 @@ The reasons behind the tile kernels' shapes. The headers keep the invariants and
 
 ### trmm triangular tiles: kernel design
 
-`src/backends/trmm_triangular_tiles.hh`.
+`src/ops/trmm/kernels/trmm_triangular_tiles.hh`.
 
 - **The triangle was never exploited before.** The generic `src/extensions/trmm.cc` (deleted) recursed to a 256-wide block and then
   called the GEMM it was meant to replace. On CUDA the `expand` family (now second on every Left row) ran a full GEMM.
@@ -307,7 +307,7 @@ so the runtime rejects the launch. `BATCHLAS_TRMM_TILE_M` pins the tile for swee
 
 ### Level-3: the complex MAC and return-by-value rules
 
-`src/backends/triangular_tiles.hh`, shared by every tile kernel.
+`src/kernels/common/triangular_tiles.hh`, shared by every tile kernel.
 
 - **`accumulate` writes the complex MAC out by hand.** `std::complex<float>::operator*` lowers to the
   `__mulsc3` libcall (C99 Annex G), with a branch on Inf and NaN around every multiply. The first complex Gram
@@ -326,11 +326,11 @@ up. Check which family ran with `BATCHLAS_SELECT_TRACE=1`.
 
 ### syrk for the ortho gram matrix
 
-`src/extensions/ortho.cc` builds `C = A^H A` three times. Plain syrk was a **70–100x regression** at these
+`src/ops/ortho/ortho.cc` builds `C = A^H A` three times. Plain syrk was a **70–100x regression** at these
 shapes, because a skinny Gram matrix failed both routers and dropped to one `cublasSsyrk` per batch member
 (m=256 k=32 batch 2048: GEMM 0.350 ms, syrk 33.73 ms). That motivated `syrk_gram_tiles`. Once it existed the
 substitution was taken: at k = 32 float 1.450 -> **0.895** ms (1.62x), and ShiftChol3 1.998 -> **1.298** ms
-(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/extensions/ortho.cc:144`):
+(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/ops/ortho/ortho.cc:144`):
 float k=128 is 0.96x, double k=128 is 1.34x. `svqb_alg` keeps its GEMM, since a one-triangle result would
 multiply uninitialised workspace. The precision table is at
 [the Gram matrix through syrk, per precision](ortho.md#ortho-the-gram-matrix-through-syrk-per-precision).
@@ -355,7 +355,7 @@ Before the tile kernel, trmm for `W2 = T^H W1` lost at every shape. Re-measured 
 | `complex<double>` | 0.958x–1.010x | loses at ib = 16; excluded |
 | `netlib float` / `netlib double` | 0.336x–1.199x / 0.379x–1.064x | excluded (per-batch cblas loops both ways) |
 
-`wy_trmm_applicable` (`src/extensions/ormqr_blocked.cc:52`) is therefore per type, plus `ib <= 64`. The effect
+`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:52`) is therefore per type, plus `ib <= 64`. The effect
 on syev is small (1.036x at n=64 batch 2048, 1.003x at n=512). The 16-row tile moved `double` to 1.013x–1.036x
 and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 
@@ -402,7 +402,7 @@ n2=256 batch 1024 (**7.7x slower**), because double syr2k has only the per-batch
 
 The generic fallbacks in `src/extensions/syrk.cc` and `syr2k.cc` once wrote **both** triangles and overwrote the
 half the caller owns. Both files are deleted: no backend instantiated them, and they redefined the public templates.
-`fold_symmetric_product_into_triangle` (`src/extensions/symmetric_product_fold.hh`, still used by `potrf_blocked`)
+`fold_symmetric_product_into_triangle` (`src/ops/potrf/kernels/symmetric_product_fold.hh`, still used by `potrf_blocked`)
 folds only the named triangle:
 `C(i,j) := product(i,j) + beta*C(i,j)`. With beta == 0, C is not read, so a poisoned C cannot produce NaN.
 
@@ -433,7 +433,7 @@ netlib's host tasks throw `std::runtime_error`.
 
 ### Level-3: scratch expansions and their ceilings
 
-`src/backends/triangular_expand.hh` and `src/expansion_budget.hh`. Consumers are symm's and trmm's `expand` families
+`src/kernels/common/triangular_expand.hh` and `src/expansion_budget.hh`. Consumers are symm's and trmm's `expand` families
 (`expansion_fits` in `can_run`) and the fixed rules of `hemm_vendor`, `herk_vendor` and `her2k_vendor`.
 
 - **Why an expansion.** SYMM, HEMM and TRMM must not touch the unreferenced triangle (TRMM under `Diag::Unit` must not
@@ -447,7 +447,7 @@ netlib's host tasks throw `std::runtime_error`.
   elements (a thrown `sycl::exception` at n = 2048 batch 512). The scratch also shares the device with A, B and C,
   so the budget is a quarter of global memory. `BATCHLAS_EXPAND_MAX_BYTES` lowers the memory ceiling. A shape past
   any ceiling fails `can_run` (hemm, herk, her2k: takes the per-item loop), and the row's next entry runs.
-- **Why `expansion_budget.hh` is outside `src/backends/`.** `src/extensions/sytrd_blocked.cc` must know whether her2k
+- **Why `expansion_budget.hh` is outside `src/backends/`.** `src/ops/syev/sytrd/sytrd_blocked.cc` must know whether her2k
   takes its GEMM route, and it is also built for ROCm and the host. There is one definition, because a reimplemented
   ceiling drifts silently.
 - **A guard must model the whole predicate.** The her2k guard in `sytrd_blocked` once replicated only the size ceiling,

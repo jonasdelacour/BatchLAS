@@ -285,7 +285,7 @@ reproduce on any instrument, card or pin.
 Ruled out:
 
 - **The harness.** The archived instrument, rebuilt from `git show perf-evidence/vendor-independence:experiments/wp4_potrf/phase2_ab/realpotrf.cpp`, reproduces the §4 controls, and `factor_bench` agrees with it to 0.3%.
-- **The route, kernel, card and vendor library.** Coverage shows `cta` and `vendor` on every row. `src/extensions/potrf_cta_device.hh` matches the tag. GPU 0 gives 2.18. `libcusolver.so.12.2.0.11` predates both campaigns.
+- **The route, kernel, card and vendor library.** Coverage shows `cta` and `vendor` on every row. `src/ops/potrf/kernels/potrf_cta_device.hh` matches the tag. GPU 0 gives 2.18. `libcusolver.so.12.2.0.11` predates both campaigns.
 - **Saturation.** The ratio is flat at 2.07-2.10 over batch 8192-32768. No batch reads 2.75.
 
 The cell is dispatch-bound: at n = 8, batch 4096, more than 80% of both arms is per-call launch

@@ -9,10 +9,10 @@
 #include <batchlas/blas/functions/gesvd.hh>
 #include <batchlas/settings.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "../../extensions/gesvd_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/gesvd/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/gesvd/gesvd_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

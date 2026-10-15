@@ -9,13 +9,13 @@
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/util/mempool.hh>
 
-#include "choice.hh"
-#include "../../backends/level3_shape.hh"
-#include "../../backends/triangular_expand.hh"
-#include "../../expansion_budget.hh"
-#include "../../select/select.hh"
-#include "../../util/kernel-trace.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/symm/choice.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/kernels/common/triangular_expand.hh>
+#include <src/expansion_budget.hh>
+#include <src/select/select.hh>
+#include <src/util/kernel-trace.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <cstddef>
 #include <cstdint>

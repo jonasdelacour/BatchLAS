@@ -29,6 +29,10 @@ QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
 # Generated headers live in <build>/include and are installed alongside; they
 # are never reachable from the source tree, so do not try to resolve them.
 GENERATED = re.compile(r"^batchlas/(backend_config\.h|device_limits\.hh)$")
+# The build puts the repository root on -I for in-tree code (<src/...>), so a public header that
+# spells one compiles in-tree and fails for every consumer, like the quoted form above.
+SOURCE_TREE_INCLUDE = re.compile(
+    r'^\s*#\s*include\s*<((?:src|tests|tools|benchmarks|python|examples|include)/[^>]+)>', re.MULTILINE)
 
 
 def main(argv):
@@ -65,6 +69,10 @@ def main(argv):
                     findings.append((rel, line,
                                      '#include "%s" does not exist under %s'
                                      % (target, os.path.relpath(root, REPO))))
+            for m in SOURCE_TREE_INCLUDE.finditer(text):
+                line = text.count("\n", 0, m.start()) + 1
+                findings.append((rel, line, "#include <%s> reaches into the source tree, which is "
+                                 "not installed; only <batchlas/...> is" % m.group(1)))
 
     for rel, line, message in findings:
         print("%s:%d: error: %s" % (rel, line, message))

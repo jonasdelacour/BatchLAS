@@ -8,11 +8,11 @@
 #include <type_traits>
 #include <limits>
 #include <algorithm>
-#include "test_utils.hh"
-#include "../src/sycl/gemv_native.hh"
-#include "../src/select/select.hh"
-#include "../src/select/vendor.hh"
-#include "../src/ops/gemv/choice.hh"
+#include <tests/test_utils.hh>
+#include <src/ops/gemv/gemv_native.hh>
+#include <src/select/select.hh>
+#include <src/select/vendor.hh>
+#include <src/ops/gemv/choice.hh>
 #include <complex>
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment
@@ -778,7 +778,7 @@ TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
     if (!this->ctx) return;
     const bool sg32 = this->ctx->device().supports_sub_group_size(32);
 
-    // (red_len, expected W) transcribed from the tables in src/sycl/gemv_native.cc,
+    // (red_len, expected W) transcribed from the tables in src/ops/gemv/kernels/gemv_native.cc,
     // including the cell one past each edge. kItems clears gate 3's parallelism floor.
     const int64_t kItems = 1 << 20;
     std::vector<std::pair<int, int>> want;
@@ -994,7 +994,7 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     // and destructor reload that snapshot: with raw setenv calls all five arms
     // would read the SAME mode, the assertions would still pass, and the knob
     // whose no-latching prohibition this test exists to enforce
-    // (src/sycl/gemv_native.cc) would go untested.
+    // (src/ops/gemv/kernels/gemv_native.cc) would go untested.
     //
     // The outer guard pins the automatic mode for the whole body whatever the
     // surrounding environment said, and RESTORES that value on the way out --

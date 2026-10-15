@@ -14,13 +14,13 @@
 // synchronously), void clear_info(), void run(Span<std::byte>) (the public op, then wait), and
 // std::pair<double, int> verify() (residual on items 0 and batch-1, nonzero info count).
 
-#include "race.hh"
-#include "spec.hh"
+#include <tools/tune/race.hh>
+#include <tools/tune/spec.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "../../src/select/select.hh"
+#include <src/select/select.hh>
 
 #include <algorithm>
 #include <array>

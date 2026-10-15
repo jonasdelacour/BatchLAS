@@ -15,8 +15,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/geqrf/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/geqrf/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <memory>
@@ -144,35 +144,35 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: tiny
-            "src/extensions/geqrf_tiny.cc",
-            "src/extensions/geqrf_tiny_device.hh",
+            "src/ops/geqrf/kernels/geqrf_tiny.cc",
+            "src/ops/geqrf/kernels/geqrf_tiny_device.hh",
             // family: cta
-            "src/extensions/geqrf_cta.cc",
+            "src/ops/geqrf/kernels/geqrf_cta.cc",
             // family: blocked
-            "src/extensions/geqrf_blocked.cc",
-            "src/extensions/larft_wy.hh",
+            "src/ops/geqrf/kernels/geqrf_blocked.cc",
+            "src/kernels/common/larft_wy.hh",
             // common
-            "src/extensions/geqrf_native.hh",
-            "src/extensions/geqrf_cta_device.hh",
-            "src/extensions/geqrf_panel_reg_device.hh",
+            "src/ops/geqrf/geqrf_native.hh",
+            "src/ops/geqrf/geqrf_cta_device.hh",
+            "src/ops/geqrf/geqrf_panel_reg_device.hh",
             "src/ops/geqrf/can_run.hh",
             "src/ops/geqrf/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/geqrf/geqrf.cc" "src/util/resident_capacity.hh"
-        // family: tiny "src/extensions/tiny_device.hh"
+        // family: tiny "src/kernels/common/tiny_device.hh"
         // geqrf blocked's trailing updates call the public gemm: its kernels and selection count too.
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh"
-        // family: blocked "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }

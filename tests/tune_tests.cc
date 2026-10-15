@@ -2,15 +2,15 @@
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, kernel hash v2, the
 // ledger, and the round trip through scripts/sweep_to_table.py. No GPU.
 
-#include "../tools/tune/grid.hh"
-#include "../tools/tune/ledger.hh"
-#include "../tools/tune/race.hh"
-#include "../tools/tune/replay_core.hh"
-#include "../tools/tune/schedule.hh"
-#include "../tools/tune/tiered_driver.hh"
-#include "../tools/tune/tier.hh"
-#include "../tools/tune/tune_core.hh"
-#include "../tools/tune/worker.hh"
+#include <tools/tune/grid.hh>
+#include <tools/tune/ledger.hh>
+#include <tools/tune/race.hh>
+#include <tools/tune/replay_core.hh>
+#include <tools/tune/schedule.hh>
+#include <tools/tune/tiered_driver.hh>
+#include <tools/tune/tier.hh>
+#include <tools/tune/tune_core.hh>
+#include <tools/tune/worker.hh>
 
 #include <gtest/gtest.h>
 #include <fcntl.h>
@@ -331,7 +331,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "867ba81f"}, {"potrf", "f4dcbfce"}, {"posv", "5067b861"}, {"trsm", "3b31cae0"}};
+        {"gemm", "d13d3605"}, {"potrf", "e25b90cb"}, {"posv", "e589ffae"}, {"trsm", "707034a6"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -351,7 +351,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
         return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
-               p.rfind("src/extensions/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+               p.rfind("src/kernels/common/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
     int specs = 0;
@@ -400,8 +400,8 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     for (const char* f : {"cta", "blocked"}) {
         ASSERT_TRUE(posv.deps.count(f)) << f;
         const auto& d = posv.deps.at(f);
-        EXPECT_NE(std::find(d.begin(), d.end(), "src/extensions/potrf_cta.cc"), d.end()) << f;
-        EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/trsm_native.cc"), d.end()) << f;
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/ops/potrf/kernels/potrf_cta.cc"), d.end()) << f;
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/ops/trsm/kernels/trsm_native.cc"), d.end()) << f;
     }
     // LU: getrf_cta.cc holds cta's kernel and blocked's panel leaf, so it is common, not a family.
     for (const char* op : {"getrf", "getrs", "getri", "gesv"}) {
@@ -414,7 +414,7 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     }
     for (const char* f : {"tiny", "blocked"}) EXPECT_TRUE(block("getrf").family.count(f)) << f;
     const auto& getrf_common = block("getrf").common;
-    EXPECT_NE(std::find(getrf_common.begin(), getrf_common.end(), "src/extensions/getrf_cta.cc"), getrf_common.end());
+    EXPECT_NE(std::find(getrf_common.begin(), getrf_common.end(), "src/ops/getrf/kernels/getrf_cta.cc"), getrf_common.end());
     for (const char* f : {"cta", "blocked"}) EXPECT_TRUE(block("getrs").family.count(f)) << f;
     EXPECT_TRUE(block("getri").family.count("blocked"));
     EXPECT_TRUE(block("gesv").family.count("tiny"));
@@ -423,12 +423,12 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         const auto& d = b.deps.at(fam);
         return std::find(d.begin(), d.end(), file) != d.end();
     };
-    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/trsm_native.cc"));
-    EXPECT_TRUE(has(block("getrf"), "blocked", "src/sycl/gemm_kernels.cc"));
-    EXPECT_TRUE(has(block("getrs"), "blocked", "src/sycl/trsm_native.cc"));
-    EXPECT_TRUE(has(block("getri"), "blocked", "src/sycl/trsm_native.cc"));
-    for (const char* file : {"src/extensions/getrf_tiny.cc", "src/extensions/getrf_cta.cc", "src/extensions/getrs_fused.cc",
-                             "src/extensions/getrs_native.cc", "src/sycl/trsm_native.cc", "src/sycl/gemm_kernels.cc"})
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/ops/trsm/kernels/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getrf"), "blocked", "src/ops/gemm/kernels/gemm_kernels.cc"));
+    EXPECT_TRUE(has(block("getrs"), "blocked", "src/ops/trsm/kernels/trsm_native.cc"));
+    EXPECT_TRUE(has(block("getri"), "blocked", "src/ops/trsm/kernels/trsm_native.cc"));
+    for (const char* file : {"src/ops/getrf/kernels/getrf_tiny.cc", "src/ops/getrf/kernels/getrf_cta.cc", "src/ops/getrs/kernels/getrs_fused.cc",
+                             "src/ops/getrs/kernels/getrs_native.cc", "src/ops/trsm/kernels/trsm_native.cc", "src/ops/gemm/kernels/gemm_kernels.cc"})
         EXPECT_TRUE(has(block("gesv"), "blocked", file)) << file;
     // gemv cta and direct share gemv_native.cc: common only, like gemm direct.
     for (const char* op : {"gemv", "trmm", "symm", "syrk", "syr2k"}) {
@@ -441,12 +441,12 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     EXPECT_TRUE(block("syr2k").family.count("triangular"));
     // syrk's two tile kernels share triangular_tiles.hh: common, never one family's.
     const auto syrk_common = block("syrk").common;
-    EXPECT_NE(std::find(syrk_common.begin(), syrk_common.end(), "src/backends/triangular_tiles.hh"), syrk_common.end());
+    EXPECT_NE(std::find(syrk_common.begin(), syrk_common.end(), "src/kernels/common/triangular_tiles.hh"), syrk_common.end());
     for (const char* op : {"trmm", "symm"}) {  // expand calls the public gemm: gemm's kernels and can_run count
         const KernelBlock b = block(op);
         ASSERT_TRUE(b.deps.count("expand")) << op;
         const auto& d = b.deps.at("expand");
-        for (const char* g : {"src/sycl/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
+        for (const char* g : {"src/ops/gemm/kernels/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
             EXPECT_NE(std::find(d.begin(), d.end(), g), d.end()) << op << " " << g;
     }
     for (const char* f : {"cta", "cta_fused", "jacobi", "blocked", "two_stage"}) EXPECT_TRUE(block("syev").family.count(f)) << f;
@@ -464,11 +464,11 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         }
     }
     const KernelBlock syev = block("syev");
-    EXPECT_NE(std::find(syev.common.begin(), syev.common.end(), "src/extensions/stedc.cc"), syev.common.end());
+    EXPECT_NE(std::find(syev.common.begin(), syev.common.end(), "src/ops/syev/stedc/stedc.cc"), syev.common.end());
     for (const char* f : {"blocked", "two_stage"}) {  // both call the public gemm: its kernels count too
         ASSERT_TRUE(syev.deps.count(f)) << f;
         const auto& d = syev.deps.at(f);
-        EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/gemm_kernels.cc"), d.end()) << f;
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/ops/gemm/kernels/gemm_kernels.cc"), d.end()) << f;
     }
 }
 
@@ -480,10 +480,10 @@ TEST(TuneHash, QrSpecsDeclareTheirFamiliesAndCompositions) {
     const std::map<std::string, std::vector<std::string>> families{
         {"geqrf", {"tiny", "cta", "blocked", "vendor"}}, {"orgqr", {"blocked", "vendor"}}, {"ormqr", {"blocked", "vendor"}}};
     const std::map<std::string, std::vector<std::string>> blocked_deps{
-        {"geqrf", {"src/ops/gemm/gemm.cc", "src/sycl/gemm_kernels.cc"}},
-        {"orgqr", {"src/ops/ormqr/ormqr.cc", "src/extensions/ormqr_blocked.cc", "src/sycl/gemm_kernels.cc",
+        {"geqrf", {"src/ops/gemm/gemm.cc", "src/ops/gemm/kernels/gemm_kernels.cc"}},
+        {"orgqr", {"src/ops/ormqr/ormqr.cc", "src/ops/ormqr/kernels/ormqr_blocked.cc", "src/ops/gemm/kernels/gemm_kernels.cc",
                    "src/ops/trmm/trmm.cc"}},
-        {"ormqr", {"src/sycl/gemm_kernels.cc", "src/ops/trmm/trmm.cc", "include/batchlas/tuning_params.hh"}}};
+        {"ormqr", {"src/ops/gemm/kernels/gemm_kernels.cc", "src/ops/trmm/trmm.cc", "include/batchlas/tuning_params.hh"}}};
     for (const auto& [op, fams] : families) {
         const std::string spec = "tools/tune/" + op + "_spec.cc";
         const KernelBlock b = kernel_block_from_file(repo, spec);

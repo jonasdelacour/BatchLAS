@@ -5,7 +5,7 @@
 #include <cmath>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <batchlas/util/mempool.hh>
 

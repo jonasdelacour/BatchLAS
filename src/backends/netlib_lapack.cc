@@ -1,9 +1,9 @@
 #include <batchlas/blas/linalg.hh>
-#include "../linalg-impl.hh"
-#include "level3_shape.hh"
+#include <src/linalg-impl.hh>
+#include <src/backends/level3_shape.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
 #include <complex>
@@ -22,9 +22,9 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
 
-#include "gemm_heterogeneous.hh"
-#include "host_blas_health.hh"
-#include "../util/template-instantiations.hh"
+#include <src/backends/gemm_heterogeneous.hh>
+#include <src/backends/host_blas_health.hh>
+#include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas{
@@ -134,7 +134,7 @@ namespace batchlas{
                 // A-adjacent BumpAllocator allocation that is not zeroed
                 // (mempool.hh), and 0 * NaN is NaN, so multiplying an unread A
                 // by a zero alpha poisons the result instead of dropping it.
-                // The native bodies in src/sycl/spmm_native.cc make the same
+                // The native bodies in src/ops/spmm/kernels/spmm_native.cc make the same
                 // guarantee (gather skips the nonzero loop, scatter skips the
                 // launch outright); this is the host arm agreeing. Note this is
                 // a skip of the alpha TERM only: C is still written below, so
@@ -161,7 +161,7 @@ namespace batchlas{
                             // allocation, which is not zeroed (mempool.hh), so
                             // reading C here propagates whatever was in that
                             // memory -- NaN included -- into the result. The
-                            // native bodies in src/sycl/spmm_native.cc make the
+                            // native bodies in src/ops/spmm/kernels/spmm_native.cc make the
                             // same guarantee; this is the host arm agreeing.
                             T sum = (beta == T(0)) ? T(0)
                                                    : beta * C_b.at(row, col);

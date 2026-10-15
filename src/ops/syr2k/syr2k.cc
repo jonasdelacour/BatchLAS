@@ -6,11 +6,11 @@
 
 #include <batchlas/blas/functions/syr2k.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "../../backends/level3_shape.hh"
-#include "../../backends/syr2k_triangular_tiles.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/syr2k/choice.hh>
+#include <src/select/select.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/ops/syr2k/kernels/syr2k_triangular_tiles.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <cstdint>
 #include <stdexcept>

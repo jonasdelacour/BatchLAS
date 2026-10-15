@@ -6,7 +6,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <batchlas/blas/extra.hh>
 
@@ -230,7 +230,7 @@ struct SytrdCtaConfig {
 
 } // namespace
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::CUDA>, SytrdCtaConfig<double, Backend::CUDA>>;

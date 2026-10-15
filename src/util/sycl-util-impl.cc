@@ -7,7 +7,7 @@
 #include <complex>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/backend_config.h>
 
 // SYCL 2020 leaves mem_advise's advice values implementation-defined; the

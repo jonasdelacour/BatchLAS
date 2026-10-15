@@ -592,7 +592,7 @@ boxes.
   latency; double-buffering and packing B were both measured as no gain.
 - DPC++ `chunked_partition` masks cost ~4-5 instructions per collective. Full-warp or maskless
   rewrites lost in real kernels even where microbenchmarks won. Judge partition-primitive changes
-  (`src/extensions/sg_partition/`) by real-kernel A/B (steqr/syev_cta benchmarks, n=5..16, batch
+  (`src/kernels/common/sg_partition/`) by real-kernel A/B (steqr/syev_cta benchmarks, n=5..16, batch
   16384), never by microbenchmark.
 - CTA kernels are capped at n <= 32 (the sub-group width). `STEDC_RECURSION_THRESHOLD = 32` is that
   invariant, not a tuning constant: a leaf of 33+ falls from `steqr_cta` to `steqr_wg` (14x cliff).
@@ -629,6 +629,15 @@ is the open 2.7x.
   `.claude/CLAUDE.md` (it only imports this page) and `.github/`, which holds the project README
   (`check_markdown_locations.py`). No root Markdown at all, so no root plan files: put conclusions in
   the area page.
+- **Source layout** (table: `docs/extending.md`): `src/ops/<op>/` holds `<op>.cc`, `choice.hh` and
+  headers shared by the op's kernels; `kernels/` holds its kernel TUs and single-consumer headers.
+  Internal sub-ops nest under the parent (`syev/{stedc,steqr,sytrd,tridiag}/`,
+  `gesvd/{gebrd,bdsqr,bdsdc,ormbr}/`). Shared device code: `src/kernels/common/`. `src/sycl/` is
+  only DPC++/AdaptiveCpp portability; `src/backends/` only vendor wrappers; `src/util/` also holds
+  the `batchlas_extra` sources. CMake lists (`src/ops/CMakeLists.txt`) group by device-link
+  cluster, not folder, and keep the old `batchlas_extensions_*` names. In-tree includes are
+  root-based, `#include <src/ops/potrf/potrf_native.hh>`, `<tests/test_utils.hh>`; never quoted or
+  relative (`check_no_unprefixed_includes.py` fails on `#include "..."`).
 - **Comment density <=18% per file** (`.github/ci/check_comment_density.py`). A code line with a
   trailing comment counts as code. The repo-wide average hides per-file violations: check per file.
   - A comment is for invariants, "looks wrong but is deliberate" notes and traps, plus an
