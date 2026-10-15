@@ -71,7 +71,7 @@ class LanczosOptions:
 @dataclass(slots=True)
 class SteqrOptions:
     block_size: int = 32
-    max_sweeps: int = 10
+    max_sweeps: int = 50
     back_transform: bool = False
     block_rotations: bool = False
     sort: bool = True

@@ -1,6 +1,6 @@
 # Known defects, located and not fixed {#design_known_defects}
 
-> **Status:** current · checked 2026-10-11
+> **Status:** current · checked 2026-10-15
 
 Each entry is a defect located to a line and left in the tree. Entries give the symptom, the
 cause with its location, any workaround, and the status. Performance debt is listed per op under
@@ -484,9 +484,6 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/ops/syev/tridiag/tridiag_solver.cc:30` addresses
-  `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
-  also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
 - **Kernel selection throws outside the error hierarchy.** `src/select/` throws `std::invalid_argument`
   and `std::runtime_error`, which `catch (const batchlas::exception&)` misses (`batchlas::NoRouteError`
   is a `batchlas::unsupported`). `gesv` and `posv` throw
@@ -512,6 +509,12 @@ TU but calls cuSOLVER. Re-checked, the claim does not hold. `getrs_vendor` calls
 `cublas?getrsBatched` (`src/backends/cublas.cc:1090`), and the gate matches the definition. The
 stated mismatch did not reproduce.
 
+An earlier candidate said `tridiagonal_solver` assumed `Q.ld() == n` and capped QR steps at six
+with no report. It no longer holds: `src/ops/syev/tridiag/tridiag_solver.cc` addresses `Q` through
+`Q.ld()` everywhere, allows `kTridiagMaxIterations = 30` steps per eigenvalue and throws
+`convergence_error` past that. `SteqrTest.TridiagSolverGradedAndSaturatingBatch` runs it with
+`ld = n + 3`.
+
 ## Guards that cannot fail
 
 Several test suites looked thorough but could not fail for the property they named. Each was
@@ -525,6 +528,8 @@ shown to be blind by applying a deliberate break, rebuilding, and running.
 | `gemv` tail sub-group | out-of-range writes went unseen | a guard band, poisoned before the call and checked after |
 | `geqrf` tau/beta convention | the only check skipped in a vendor-free build | an independent host `xGEQR2` reference (`ConventionMatchesReferenceLapackWithoutAVendor`) |
 | `potrf` no-fold residual | computed over the lower triangle only | poison the upper triangle and assert it is unchanged |
+| Python suite, any device fault | `_skip_if_unavailable` turned every `RuntimeError` into a skip (31 sites) | skip only on `NotImplementedError`, `NoRouteError` and the sub-group-32 message (`python/tests/test_batchlas.py`) |
+| Python 1-D results (values, pivots, `m`, `info`, CSR arrays) | under pybind11 < 2.12 and NumPy 2 every one had stride 0; the count checks compared against a constant array, which a stride-0 array matches | build arrays from a shape container; `test_coverage.py` checks per-item values and strides |
 
 Checklist before trusting a guard:
 

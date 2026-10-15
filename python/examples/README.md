@@ -18,7 +18,7 @@ with `BATCHLAS_BUILD_PYTHON=ON`:
 
 ```bash
 cmake -B build -S . -DBATCHLAS_BUILD_PYTHON=ON
-cmake --build build -j
+cmake --build build --target _batchlas -j8
 
 cd python/examples
 PYTHONPATH=../../build/python jupyter lab
@@ -59,8 +59,9 @@ picks, but some routines are GPU-only (see Device requirements below).
 | 11 | `11_generators_and_utilities.ipynb` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
 | 12 | `12_choosing_a_variant.ipynb` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
 
-Together they exercise 77 of the 78 names exported by `batchlas`. The 78th is `ILUKPreconditioner`,
-the handle type returned by `iluk_factorize`.
+Together they exercise most of `batchlas.__all__`; `ILUKPreconditioner` appears only as the handle
+type `iluk_factorize` returns. Routines a notebook does not cover are checked against NumPy in
+`python/tests/`.
 
 `_common.py` holds shared helpers (device selection, reporting, reference constructions). It is not
 part of the library API.
@@ -88,19 +89,22 @@ Timings and device names in notebook 12 come from an RTX 4090 and will differ on
 
 ## Known issues
 
-These are library defects. The notebooks call them out where they come up.
+These are library defects; the authoritative list, with causes, is
+@ref design_known_defects. The notebooks call them out where they come up.
 
-- **`ortho(algorithm="householder")` on CUDA.** After any earlier `geqrf` workspace use in the same
-  process, returns a non-orthonormal result. `ortho_buffer_size` sizes its sub-workspaces from a
-  placeholder view (`src/ops/ortho/ortho.cc`), so blocks can overlap. Other algorithms are
-  unaffected; notebook 04 uses those.
-- **`stedc` with `JobType::NoEigenVectors`.** Returns wrong eigenvalues. The bindings always request
-  vectors internally and discard them.
-- **`tridiagonal_solver` accuracy.** The QR iteration does not converge reliably. Prefer `steqr` or
-  `stedc`.
-- **`uplo="upper"` with a half-filled matrix on CUDA.** `syev` and `syev_cta` are wrong for this
-  case. `syev_jacobi_cta` and the CPU path are correct.
+- **The Hermitian drivers read the unreferenced triangle** (known defect 14). With only one
+  triangle filled, `syev_cta` with `uplo="upper"`, `syev_blocked`/`syev_two_stage` with `"lower"` at
+  some sizes, and `gesvd` with a Hermitian `uplo` can return wrong values. Pass the full symmetric
+  matrix, or use `syev_jacobi_cta`.
+- **`lanczos` returns a spectrum about three times too wide** (open, cause not located). Use
+  `syevx` or the dense solvers for the values.
+- **`stedc` without eigenvectors.** The recursive driver may merge from unset leaf vectors under
+  `NoEigenVectors` (unverified candidate). The bindings always request vectors internally and
+  discard them.
 - **Unpreconditioned `syevx` on hard problems.** Can stagnate. Notebook 09 shows the fix.
+
+No longer issues: `ortho`'s Householder workspace overlap and transposed arm (defect 1), and
+`tridiagonal_solver` convergence; earlier versions of this list flagged them.
 
 ## Device requirements
 
