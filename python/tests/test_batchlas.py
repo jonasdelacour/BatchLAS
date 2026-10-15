@@ -5,11 +5,34 @@ import pytest
 
 import batchlas as bl
 
-sp = pytest.importorskip("scipy.sparse")
+try:
+    import scipy.sparse as sp
+except ImportError:  # pragma: no cover - only the sparse tests need SciPy
+    sp = None
+
+requires_scipy = pytest.mark.skipif(sp is None, reason="SciPy is required for the sparse wrappers")
+
+# What the library raises when a routine is genuinely absent from this build or device. Anything
+# else (a wrong answer, a device fault, a bad argument) must fail the test, not skip it.
+#   NotImplementedError       a backend not compiled in, or a dtype a binding does not instantiate
+#   "no route for"            batchlas::NoRouteError (vendor-free build, nothing runnable)
+#   "subgroup size 32" etc.   a CTA kernel on a device without 32-wide sub-groups
+_UNAVAILABLE_MARKERS = (
+    "not available in this build",
+    "no route for",
+    "does not support subgroup size 32",
+    "does not offer sub-group size 32",
+)
+
+
+def _is_unavailable(exc: Exception) -> bool:
+    if isinstance(exc, NotImplementedError) or type(exc).__name__ == "NoRouteError":
+        return True
+    return isinstance(exc, RuntimeError) and any(marker in str(exc) for marker in _UNAVAILABLE_MARKERS)
 
 
 def _skip_if_unavailable(exc: Exception) -> None:
-    if isinstance(exc, (NotImplementedError, RuntimeError)):
+    if _is_unavailable(exc):
         pytest.skip(str(exc))
     raise exc
 
@@ -80,6 +103,7 @@ def test_gemm_heterogeneous_returns_python_list():
     np.testing.assert_allclose(result[1], a[1] @ b[1])
 
 
+@requires_scipy
 def test_sparse_spmm_and_transpose():
     a = sp.csr_matrix(np.array([[2.0, 0.0], [1.0, 3.0]], dtype=np.float64))
     b = np.array([[1.0], [2.0]], dtype=np.float64)
@@ -116,6 +140,7 @@ def test_syevx_history_contract():
     assert history["iterations_done"].shape == (1,)
 
 
+@requires_scipy
 def test_iluk_identity_apply():
     a = sp.csr_matrix(np.eye(3, dtype=np.float64))
     rhs = np.array([[1.0], [2.0], [3.0]], dtype=np.float64)
@@ -129,6 +154,7 @@ def test_iluk_identity_apply():
     np.testing.assert_allclose(out, rhs, rtol=1e-10, atol=1e-10)
 
 
+@requires_scipy
 def test_sparse_syevx_accepts_iluk_preconditioner():
     if "cuda" not in {name.lower() for name in bl.available_backends()}:
         pytest.skip("CUDA backend unavailable")
@@ -871,6 +897,7 @@ def test_syevx_return_info_sits_after_the_count_array():
     assert np.asarray(got_values).shape == np.asarray(values).shape
 
 
+@requires_scipy
 def test_syevx_return_info_flags_an_exhausted_iteration_budget():
     # The direction that matters. A test that only ever sees info == 0 cannot
     # tell a working implementation from one that fills the array with zeros --

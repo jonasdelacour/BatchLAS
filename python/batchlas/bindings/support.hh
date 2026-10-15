@@ -1053,11 +1053,14 @@ inline py::object dense_matrix_to_python(const DenseMatrix& matrix) {
     });
 }
 
+// TRAP: every array is built from a shape container, never `array_t<T>(n)` or `out({n})`. The
+// count constructor takes its strides from dtype.itemsize(), which pybind11 < 2.12 misreads under
+// NumPy 2 (0), so every 1-D result had stride 0 and showed its last element n times.
 template <typename T>
 py::array_t<T> dense_vector_to_numpy_t(const Vector<T>& vector) {
     const auto data = vector.data();
     if (vector.batch_size() == 1) {
-        py::array_t<T> out({vector.size()});
+        py::array_t<T> out(std::vector<py::ssize_t>{vector.size()});
         auto view = out.template mutable_unchecked<1>();
         for (int index = 0; index < vector.size(); ++index) {
             view(index) = data[static_cast<std::size_t>(index * vector.inc())];
@@ -1098,7 +1101,7 @@ py::object sparse_matrix_to_python_t(const SparseMatrixT<T>& matrix) {
         // and this batch is heterogeneous by construction. nnz(batch) is the same row
         // offset read this line used to spell by hand.
         const int nnz = matrix.nnz(batch);
-        py::array_t<T> data({nnz});
+        py::array_t<T> data(std::vector<py::ssize_t>{nnz});
         py::array_t<int> indices = int32_array(nnz);
         py::array_t<int> indptr = int32_array(matrix.rows() + 1);
         auto data_view = data.template mutable_unchecked<1>();

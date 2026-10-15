@@ -5,12 +5,22 @@ namespace batchlas::python {
 
 namespace {
 
-py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, int pivots_per_batch, int batch_size) {
+// getrf's pivot span is int64-typed, but every queue except NETLIB packs 1-based int32 into it
+// (include/batchlas/blas/functions/getrf.hh). Python sees plain 1-based int64 per item, and the
+// packing is redone on the way back into getrs/getri on the same backend.
+bool pivots_packed_int32(const Queue& queue) {
+    return queue.backend() != Backend::NETLIB;
+}
+
+py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, bool packed, int pivots_per_batch,
+                                     int batch_size) {
+    const auto* packed_data = reinterpret_cast<const int32_t*>(pivots.data());
+    auto read = [&](std::size_t index) -> int64_t { return packed ? packed_data[index] : pivots[index]; };
     if (batch_size == 1) {
-        py::array_t<int64_t> out({pivots_per_batch});
+        py::array_t<int64_t> out(std::vector<py::ssize_t>{pivots_per_batch});
         auto view = out.mutable_unchecked<1>();
         for (int index = 0; index < pivots_per_batch; ++index) {
-            view(index) = pivots[static_cast<std::size_t>(index)];
+            view(index) = read(static_cast<std::size_t>(index));
         }
         return out;
     }
@@ -19,7 +29,7 @@ py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, int p
     auto view = out.mutable_unchecked<2>();
     for (int batch = 0; batch < batch_size; ++batch) {
         for (int index = 0; index < pivots_per_batch; ++index) {
-            view(batch, index) = pivots[static_cast<std::size_t>(batch * pivots_per_batch + index)];
+            view(batch, index) = read(static_cast<std::size_t>(batch * pivots_per_batch + index));
         }
     }
     return out;
@@ -46,28 +56,36 @@ py::object with_info(py::object result, const UnifiedVector<int32_t>& info, int 
     return py::tuple(parts);
 }
 
-UnifiedVector<int64_t> pivots_from_numpy(const py::array_t<int64_t, py::array::forcecast>& pivots_array,
-                                         int pivots_per_batch,
-                                         int batch_size) {
-    const py::buffer_info pivots_info = pivots_array.request();
-    if (pivots_info.ndim < 1 || pivots_info.ndim > 2 ||
-        (pivots_info.ndim == 1 && batch_size != 1) ||
-        (pivots_info.ndim == 1 && static_cast<int>(pivots_info.shape[0]) != pivots_per_batch) ||
-        (pivots_info.ndim == 2 && (static_cast<int>(pivots_info.shape[0]) != batch_size ||
-                                   static_cast<int>(pivots_info.shape[1]) != pivots_per_batch))) {
+UnifiedVector<int64_t> pivots_from_numpy(const py::array_t<int64_t, py::array::forcecast>& pivots_array, bool packed,
+                                         int pivots_per_batch, int batch_size) {
+    const py::buffer_info info = pivots_array.request();
+    if ((info.ndim == 1 && batch_size != 1) ||
+        (info.ndim == 1 && static_cast<int>(info.shape[0]) != pivots_per_batch) ||
+        (info.ndim == 2 && (static_cast<int>(info.shape[0]) != batch_size ||
+                            static_cast<int>(info.shape[1]) != pivots_per_batch)) ||
+        (info.ndim != 1 && info.ndim != 2)) {
         throw py::value_error("pivots shape does not match LU factors");
     }
-    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
-    if (pivots_info.ndim == 1) {
+
+    UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size), int64_t(0));
+    auto* packed_data = reinterpret_cast<int32_t*>(pivots.data());
+    auto write = [&](std::size_t index, int64_t value) {
+        if (packed) {
+            packed_data[index] = static_cast<int32_t>(value);
+        } else {
+            pivots[index] = value;
+        }
+    };
+    if (info.ndim == 1) {
         auto view = pivots_array.unchecked<1>();
         for (int index = 0; index < pivots_per_batch; ++index) {
-            pivots[static_cast<std::size_t>(index)] = view(index);
+            write(static_cast<std::size_t>(index), view(index));
         }
     } else {
         auto view = pivots_array.unchecked<2>();
         for (int batch = 0; batch < batch_size; ++batch) {
             for (int index = 0; index < pivots_per_batch; ++index) {
-                pivots[static_cast<std::size_t>(batch * pivots_per_batch + index)] = view(batch, index);
+                write(static_cast<std::size_t>(batch * pivots_per_batch + index), view(batch, index));
             }
         }
     }
@@ -117,7 +135,8 @@ py::object dense_gesv_impl(const DenseMatrix& a_wrapper,
     queue.wait();
     py::object result = return_factors
         ? py::object(py::make_tuple(wrap_dense(std::move(x)), wrap_dense(std::move(lu)),
-                                    pivots_to_numpy(pivots, pivots_per_batch, batch_size)))
+                                    pivots_to_numpy(pivots, pivots_packed_int32(queue), pivots_per_batch,
+                                                    batch_size)))
         : py::cast(wrap_dense(std::move(x)));
     return with_info(std::move(result), info, batch_size, return_info);
 }
@@ -163,8 +182,9 @@ py::tuple dense_getrf_impl(const DenseMatrix& a_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     batchlas::getrf(queue, out.view(), pivots.to_span());
     queue.wait();
-    return py::make_tuple(wrap_dense(std::move(out)),
-                          pivots_to_numpy(pivots, pivots_per_batch, std::get<DenseMatrixT<T>>(a_wrapper.storage).batch_size()));
+    py::array_t<int64_t> pivots_out =
+        pivots_to_numpy(pivots, pivots_packed_int32(queue), pivots_per_batch, out.batch_size());
+    return py::make_tuple(wrap_dense(std::move(out)), std::move(pivots_out));
 }
 
 template <typename T>
@@ -177,9 +197,11 @@ DenseMatrix dense_getrs_impl(const DenseMatrix& lu_wrapper,
     ensure_same_dtype(lu_wrapper, b_wrapper, "matrix dtypes must match");
     const auto& lu = std::get<DenseMatrixT<T>>(lu_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
-
-    UnifiedVector<int64_t> pivots = pivots_from_numpy(pivots_array, lu.rows(), lu.batch_size());
+    const int batch_size = lu.batch_size();
+    const int pivots_per_batch = lu.rows();
     Queue& queue = acquire_queue(device_name, backend);
+    UnifiedVector<int64_t> pivots =
+        pivots_from_numpy(pivots_array, pivots_packed_int32(queue), pivots_per_batch, batch_size);
     batchlas::getrs(queue, lu.view(), out.view(), pivots.to_span(), {.trans = trans_a});
     queue.wait();
     return wrap_dense(std::move(out));
@@ -193,10 +215,12 @@ py::object dense_getri_impl(const DenseMatrix& lu_wrapper,
                             bool return_info) {
     const auto& lu = std::get<DenseMatrixT<T>>(lu_wrapper.storage);
     DenseMatrixT<T> out(lu.rows(), lu.cols(), lu.batch_size());
+    const int pivots_per_batch = lu.rows();
     const int batch_size = lu.batch_size();
-    UnifiedVector<int64_t> pivots = pivots_from_numpy(pivots_array, lu.rows(), batch_size);
     UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
     Queue& queue = acquire_queue(device_name, backend);
+    UnifiedVector<int64_t> pivots =
+        pivots_from_numpy(pivots_array, pivots_packed_int32(queue), pivots_per_batch, batch_size);
     batchlas::getri(queue, lu.view(), out.view(), pivots.to_span(), info.to_span());
     queue.wait();
     return with_info(py::cast(wrap_dense(std::move(out))), info, batch_size, return_info);
@@ -398,11 +422,13 @@ py::tuple dense_gebrd_impl(const DenseMatrix& a_wrapper,
                            Backend backend,
                            const std::optional<std::string>& device_name) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
-    const int n = out.rows();
-    Vector<typename base_type<T>::type> d(n, out.batch_size());
-    Vector<typename base_type<T>::type> e(std::max(0, n - 1), out.batch_size());
-    Vector<T> tauq(std::max(0, n - 1), out.batch_size());
-    Vector<T> taup(std::max(0, n - 1), out.batch_size());
+    // LAPACK ?gebrd sizes: the kernel writes k = min(m, n) entries of tauq and taup per item; an
+    // n - 1 buffer let item b's last scalar land in item b+1's first (and past the end for the last).
+    const int k = std::min(out.rows(), out.cols());
+    Vector<typename base_type<T>::type> d(k, out.batch_size());
+    Vector<typename base_type<T>::type> e(std::max(0, k - 1), out.batch_size());
+    Vector<T> tauq(k, out.batch_size());
+    Vector<T> taup(k, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
     visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
