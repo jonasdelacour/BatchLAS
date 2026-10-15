@@ -70,8 +70,7 @@
     BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(INVOKE, arg1) \
     BATCHLAS_FOR_EACH_DEVICE_COMPLEX_TYPE_1(INVOKE, arg1)
 
-// INVOKE gets the Backend enumerator LAST, matching the type loops above. Type-free: an
-// INVOKE that loops over types itself must use the DEVICE loops for Backend::SYCL.
+// INVOKE gets the Backend enumerator LAST, matching the type loops above.
 #define BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(INVOKE, arg1) \
     BATCHLAS_IF_CUDA(INVOKE(arg1, Backend::CUDA)) \
     BATCHLAS_IF_ROCM(INVOKE(arg1, Backend::ROCM)) \

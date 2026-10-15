@@ -195,8 +195,9 @@ ctest --preset acpp-metal-tests -R '^gemm_tests$'
 ```
 
 The presets set `ACPP_VISIBILITY_MASK=omp;metal` (configure and ctest), `BATCHLAS_ENABLE_METAL=ON`,
-`BATCHLAS_DEVICE_FP64=OFF`, `BATCHLAS_ENABLE_VENDOR_BLAS=OFF`, LAPACKE and CBLAS on against
-`/opt/homebrew/opt/openblas`, `BATCHLAS_MONOLITHIC_LIBRARY=ON` with `BATCHLAS_HIDDEN_VISIBILITY=OFF`,
+`BATCHLAS_DEVICE_FP64=OFF`, `BATCHLAS_ENABLE_VENDOR_BLAS=ON` (on macOS the only vendor library is
+netlib: LAPACKE and CBLAS from `/opt/homebrew/opt/openblas` for the CPU `Queue`; the Apple GPU has
+no vendor family either way), `BATCHLAS_MONOLITHIC_LIBRARY=ON` with `BATCHLAS_HIDDEN_VISIBILITY=OFF`,
 and `BATCHLAS_TEST_GPUS=0`. `acpp-metal-tests` also sets `CMAKE_DISABLE_FIND_PACKAGE_GTest=ON`, so
 GoogleTest is fetched and built by `acpp` against Homebrew LLVM's libc++, never a system GoogleTest
 built by another compiler. Configure prints
