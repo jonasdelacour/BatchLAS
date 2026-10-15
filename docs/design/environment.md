@@ -266,7 +266,7 @@ The reload is not thread-safe against concurrent `settings()` readers.
 `<batchlas/util/env.hh>` holds the shared readers: `env_truthy`, `env_falsy`, `env_int_or` and
 `env_positive_int_or`. The accepted spellings are the contract, so do not widen them. A knob that
 wants `Off` or `No` must case-fold its own value. `env_positive_int_or` is the reader for
-kernel-geometry knobs in `src/extensions`; zero and negative values fall back to the default.
+kernel-geometry knobs under `src/ops`; zero and negative values fall back to the default.
 
 ## ScopedEnvVar {#environment-scopedenvvar}
 

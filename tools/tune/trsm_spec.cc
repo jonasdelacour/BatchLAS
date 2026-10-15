@@ -156,12 +156,12 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
-            "src/sycl/trsm_native.cc",
-            "src/sycl/trsm_native.hh",
+            "src/ops/trsm/kernels/trsm_native.cc",
+            "src/ops/trsm/trsm_native.hh",
             // family: sg_left
-            "src/sycl/trsm_sg_left.cc",
+            "src/ops/trsm/kernels/trsm_sg_left.cc",
             // common
-            "src/sycl/trsm_canonical.hh",
+            "src/ops/trsm/trsm_canonical.hh",
             "src/ops/trsm/choice.hh",
         };
         // kernel-sources-end

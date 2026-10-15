@@ -120,7 +120,7 @@ saturating batch (batch 1 is not a design target).
 ### Expansion crossover
 
 The old rule: expand when `batch >= 4 || max_dim >= 256` (`kExpandMinBatch`/`kExpandMinDim` in
-`src/backends/triangular_expand.hh`). In code it survives only in `expansion_preferred`, which decides **hemm** and
+`src/kernels/common/triangular_expand.hh`). In code it survives only in `expansion_preferred`, which decides **hemm** and
 reads `BATCHLAS_EXPAND_ROUTE` first. For **symm** the rule is the float `form=sq` rows of `tuned/symm.sm_89.txt`.
 
 Measured against a per-batch loop over the vendor's triangular primitive (float symm n 16..2048 x batch 1..512;
@@ -155,11 +155,11 @@ The old triangular gate (`syrk_prefer_triangular_tiles` at `ff340fc6`, `kTriangu
 > **Warning:** `n >= 257` is the edge the rows carry, but the supporting measurement says "from n = 384 up every
 > saturated shape won" (`experiments/GEMM_TO_LEVEL3_SURVEY.md`). The band **257 <= n <= 383** ranks `triangular`
 > first with no bracketing cell. Every shape there takes the predicated path: the unpredicated fast path needs
-> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/backends/syrk_triangular_tiles.hh:37-45`),
+> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:37-45`),
 > and the sweep never sampled the predicated path. On `tall`/`wide` rows, n = 256 (`tiles_per_side == 2`) ranks
 > `vendor` first, a recorded 0.89x pre-existing loss on the tile route.
 
-The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/backends/syrk_gram_tiles.hh:29`). It is now a `can_run`
+The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/ops/syrk/kernels/syrk_gram_tiles.hh:29`). It is now a `can_run`
 term and the row edge: every row with `n <= 128` ranks `gram` first, float and double. Float, against the GEMM
 spelling (`experiments/TRMM_SYRK_BATCHED_KERNELS.md`):
 
@@ -237,7 +237,7 @@ her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` 
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
 > (`k = ib = nb` in {16, 24, 32}, n2 up to 480), where the fold adds an `n2^2 x batch` write and read that the two
 > direct GEMMs never pay. Those cells are unmeasured. `complex<double>` is excluded from this route for the same
-> reason: its scratch is 16 bytes per element and unmeasured (`src/extensions/sytrd_blocked.cc:778-783`; the her2k
+> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:778-783`; the her2k
 > call and its fit check are at `:830-845`).
 
 ## Negative results {#dispatch-negative-results}
@@ -292,7 +292,7 @@ Wrong answers found, how they hid, and what guards them now.
   error, so the load-bearing check is the relative one.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard copied only the size ceiling. Both
   halves now live in `her2k_takes_gemm_route` (`src/expansion_budget.hh`), which the call site asks
-  (`src/extensions/sytrd_blocked.cc:839`).
+  (`src/ops/syev/sytrd/sytrd_blocked.cc:839`).
 
 ### The ormqr chooser's forced pin {#dispatch-the-ormqr-chooser-that-forced-past-supports}
 
@@ -362,10 +362,10 @@ Later, the level-3 wave added vendor-free routes for float syr2k at batch 1, dou
 every trmm dtype on both sides (flat-kernel-selection.md §12).
 
 The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are compiled into `batchlas_selection_obj`
-whatever vendor library is present (`src/CMakeLists.txt:171-175`); `BACKEND_COMMON_SOURCES`
+whatever vendor library is present (`src/CMakeLists.txt:167-171`); `BACKEND_COMMON_SOURCES`
 (`src/backends/CMakeLists.txt:1-3`) holds only `backend_handle_instantiations.cc`. The vendor TUs keep their library
-gates (`src/backends/CMakeLists.txt:49-63`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not
-created when no CUDA math library is present (`src/CMakeLists.txt:18-20`).
+gates (`src/backends/CMakeLists.txt:13-35`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not
+created when no CUDA math library is present (`src/CMakeLists.txt:16-18`).
 
 ## Open debts
 
@@ -390,7 +390,7 @@ Raw data is kept at the git tag `perf-evidence/vendor-independence`: `git show <
 | topic | path |
 |---|---|
 | Gram/tile kernel design, all dtype tables, the trmm routing mistake, the 16-row tile | `experiments/TRMM_SYRK_BATCHED_KERNELS.md` |
-| Which level-3 op can replace a GEMM in `src/extensions`, and the three rejections | `experiments/GEMM_TO_LEVEL3_SURVEY.md` |
+| Which level-3 op can replace a GEMM in the former `src/extensions`, and the three rejections | `experiments/GEMM_TO_LEVEL3_SURVEY.md` |
 | SYRK triangular-route crossover sweep (n x batch) | `experiments/syrk_sweep.sh` |
 | SYRK crossover with k free | `experiments/syrk_kskew.sh` |
 | SYR2K triangular-route crossover sweep (n x k x batch) | `experiments/syr2k_sweep.sh` |

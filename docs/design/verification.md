@@ -34,7 +34,7 @@ available" was decided under three macro names; `BATCHLAS_VERIFY_HAVE_LAPACKE` (
 
 | Question | Decision |
 | --- | --- |
-| Where the checks live | static functions of `MatrixView<T, MatrixFormat::Dense>` (`include/batchlas/blas/matrix.hh`, implementation `src/extra/matrix_checks.cc`); every utility a check needs is a `Matrix`/`MatrixView` member or static, or an existing library function. `batchlas::verify` keeps only the tolerance policy and the LAPACKE references |
+| Where the checks live | static functions of `MatrixView<T, MatrixFormat::Dense>` (`include/batchlas/blas/matrix.hh`, implementation `src/util/matrix_checks.cc`); every utility a check needs is a `Matrix`/`MatrixView` member or static, or an existing library function. `batchlas::verify` keeps only the tolerance policy and the LAPACKE references |
 | Data | the library's own `MatrixView` and `VectorView`; no other matrix, batch, operand or item type. A site holding raw buffers builds a view over them |
 | Memory | host-readable views (unified or host allocations); the caller waits on its queue first. A check promotes its items with `MatrixView::astype<promoted_type>(items)` |
 | Queue | the caller's: every check that launches kernels takes `Queue& ctx` first and waits before it returns (at least once per item group); on an out-of-order Queue it runs on an in-order sibling that first waits on ctx's pending work (`select::on_in_order_queue`), which costs one Queue construction per call, so pass item spans rather than loop per item. `product` takes `const Queue&` and returns its Event without waiting; `values_error`, `pivot_ratio` and `pivots_valid` are host loops and take no Queue. On a device without fp64 (an Apple GPU, see [no-fp64 devices](#verification-no-fp64-device)) the check waits on `ctx` and runs on a per-thread CPU queue instead |
@@ -68,7 +68,7 @@ with `bound`. Items are processed in groups that keep each promoted operand unde
 ## Checks on a device without fp64 {#verification-no-fp64-device}
 
 The checks promote to `double`, and a Metal build has no double kernels for the GPU
-(`BATCHLAS_HAS_DEVICE_FP64=0`). `check_queue()` in `src/extra/matrix_checks.cc` therefore waits on
+(`BATCHLAS_HAS_DEVICE_FP64=0`). `check_queue()` in `src/util/matrix_checks.cc` therefore waits on
 the caller's queue and returns a leaked, per-thread CPU `Queue` (the AdaptiveCpp OpenMP device) when
 `ctx.device().supports_fp64()` is false. Every promoted allocation, kernel and Frobenius norm of the
 check runs there. The operands stay where they are: library matrices are USM shared, which the host

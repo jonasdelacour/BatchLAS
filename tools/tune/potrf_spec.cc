@@ -82,33 +82,33 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: tiny
-            "src/extensions/potrf_tiny.cc",
+            "src/ops/potrf/kernels/potrf_tiny.cc",
             // family: cta
-            "src/extensions/potrf_cta.cc",
-            "src/extensions/potrf_cta_device.hh",
+            "src/ops/potrf/kernels/potrf_cta.cc",
+            "src/ops/potrf/kernels/potrf_cta_device.hh",
             // family: lpanel
-            "src/extensions/potrf_lpanel.cc",
-            "src/extensions/potrf_lpanel_device.hh",
+            "src/ops/potrf/kernels/potrf_lpanel.cc",
+            "src/ops/potrf/kernels/potrf_lpanel_device.hh",
             // family: blocked
-            "src/extensions/potrf_blocked.cc",
+            "src/ops/potrf/kernels/potrf_blocked.cc",
             // common
-            "src/extensions/potrf_native.hh",
-            "src/extensions/potrf_slm_hole.hh",
+            "src/ops/potrf/potrf_native.hh",
+            "src/ops/potrf/potrf_slm_hole.hh",
             "src/ops/potrf/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/potrf/potrf.cc"
-        // family: tiny "src/extensions/tiny_device.hh"
-        // family: blocked "src/extensions/symmetric_product_fold.hh" "src/sycl/trsm_native.hh"
+        // family: tiny "src/kernels/common/tiny_device.hh"
+        // family: blocked "src/ops/potrf/kernels/symmetric_product_fold.hh" "src/ops/trsm/trsm_native.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potrf_spec.cc"; }

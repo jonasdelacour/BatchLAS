@@ -20,7 +20,7 @@
 #include "shipped_table_pick.hh"
 
 #include "../src/ops/gemv/choice.hh"
-#include "../src/sycl/gemv_native.hh"
+#include "../src/ops/gemv/gemv_native.hh"
 
 #include <algorithm>
 #include <cmath>

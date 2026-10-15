@@ -9,3 +9,15 @@ set(UTIL_SOURCES
 )
 
 target_sources(batchlas_util_obj PRIVATE ${UTIL_SOURCES})
+
+# Matrix utilities (norm, cond, transpose, ...): their own component library, batchlas_extra.
+set(EXTRA_SOURCES
+    norm.cc
+    cond.cc
+    random_cond.cc
+    transpose.cc
+    elementwise.cc
+    matrix_checks.cc
+)
+
+target_sources(batchlas_extra_obj PRIVATE ${EXTRA_SOURCES})

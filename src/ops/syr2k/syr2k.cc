@@ -9,7 +9,7 @@
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../backends/level3_shape.hh"
-#include "../../backends/syr2k_triangular_tiles.hh"
+#include "kernels/syr2k_triangular_tiles.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <cstdint>

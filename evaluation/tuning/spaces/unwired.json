@@ -58,7 +58,7 @@
         "The executable also emits BM_SYEV_BLOCKED_BASELINE, which kd does not",
         "affect at all; 'row' selects the two-stage path.",
         "Blocked on: the band width is chosen by choose_two_stage_kd() in",
-        "src/extensions/two_stage_common.hh, a hand-written table justified by a",
+        "src/kernels/common/two_stage_common.hh, a hand-written table justified by a",
         "comment block, overridable only via BATCHLAS_SYEV_TWO_STAGE_KD.",
         "Worth measuring: that comment records 425.8 vs 500.1 ms between kd=32",
         "and kd=16 at n=1024, i.e. ~18%. Note kd also sets the ceiling for",

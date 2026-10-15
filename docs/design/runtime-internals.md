@@ -249,7 +249,7 @@ capability 5892"). That fails any `spir64_x86_64` link.
 
 ## Per-item info span contract {#runtime-internals-the-per-item-info-span-contract}
 
-`src/extensions/info_span.hh` implements the per-item status span. The public declarations in
+`src/kernels/common/info_span.hh` implements the per-item status span. The public declarations in
 `blas/extensions.hh` point to it. The caller-facing convention is in
 [the API conventions](api-conventions.md#api-conventions-per-item-info-spans).
 
@@ -297,7 +297,7 @@ result is used, so the two stay separate.
   `batch < n` and names the intended spelling. Deliberately not checked:
   - null `data`, or zero `rows` or `cols`. About 37 in-repo sites build shape-only stand-ins for
     workspace queries, such as `(nullptr, 0, 0, 1, 1, batch)`.
-  - `stride >= ld*cols`. Two live sites violate it: the transposed CGS view in `src/extensions/ortho.cc`
+  - `stride >= ld*cols`. Two live sites violate it: the transposed CGS view in `src/ops/ortho/ortho.cc`
     ([known defect 1](known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
     and the `syevx_lobpcg` sizing dummy. A throw would break `ortho` and `syevx_lobpcg_buffer_size`.
 - **Row-major pitch is a parameter.** `to_column_major` takes the row pitch explicitly. It is not
@@ -349,9 +349,9 @@ that area's objects.
 | `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; the target `generate_export_header()` is keyed on (@ref design_symbol_visibility) |
 | `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU |
 | `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | vendor wrapper TUs; the CUDA and ROCm libraries exist only when a vendor library of that family is enabled |
-| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers under `src/extensions/` |
-| `batchlas_sycl_obj` | native SYCL kernels under `src/sycl/` |
-| `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/` (queue, settings, SYCL utilities) and `src/extra/` (norms, cond, transpose, random matrices) |
+| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
+| `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,trsm,gemv,spmm}/kernels/` |
+| `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities) and `EXTRA_SOURCES` (norms, cond, transpose, random matrices) |
 
 - **Selection is compiled unconditionally.** `batchlas_selection_obj` has no vendor condition. Its
   vendor calls are `if constexpr`-gated on the `BATCHLAS_HAS_*` macros. This makes
@@ -366,7 +366,7 @@ that area's objects.
   device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body`, so they must be in
   the same object library. Splitting them links today only because the helpers are inline templates.
   Once one is marked `SYCL_EXTERNAL`, the split fails with `ptxas fatal: Unresolved extern function`.
-  The rationale for each placement is in the comments of `src/extensions/CMakeLists.txt`.
+  The rationale for each placement is in the comments of `src/ops/CMakeLists.txt`.
 - **Tiny-kernel TUs** (`getrf_tiny.cc`, `gesv_tiny.cc`, `posv_tiny.cc`, `trsm_sg_left.cc`) build with
   `-mllvm -pragma-unroll-threshold=262144`. Without it LLVM silently declines `#pragma unroll`, and
   the register arrays go to the stack.

@@ -19,7 +19,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/solve_native.hh"
+#include "../src/kernels/common/solve_native.hh"
 #include "../src/ops/gesv/choice.hh"
 
 #include <algorithm>

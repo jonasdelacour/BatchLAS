@@ -6,7 +6,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include "eigen_verify.hh"
 #include "../src/queue.hh"
-#include "../src/extensions/stedc_levels_plan.hh"
+#include "../src/ops/syev/stedc/stedc_levels_plan.hh"
 #include <batchlas/util/group-collectives.hh>
 
 // Named rather than inherited transitively: the `info` cases below use M_PI,
@@ -510,12 +510,12 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 //
 //   * `leaf_steqr_params.max_sweeps` is real. It caps the leaf steqr, and the
 //     level-synchronous driver -- the default -- folds each leaf's status back
-//     into the caller's span (src/extensions/stedc.cc:921-936; the fold is
+//     into the caller's span (src/ops/syev/stedc/stedc.cc:921-936; the fold is
 //     needed because that one steqr call solves leaves*batch problems, so its
 //     batch axis is LONGER than `info`). This is what the forced case below
 //     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
 //   * `max_sec_iter` is NOT reachable on the arms that run by default:
-//     src/extensions/stedc_secular.cc:297 and :521 hardcode `i < 50` and :700
+//     src/ops/syev/stedc/stedc_secular.cc:297 and :521 hardcode `i < 50` and :700
 //     hardcodes `iter >= 100`, so the parameter never reaches the loop. Only
 //     Fused/FusedCta honour it (stedc_merge_cta.cc:1005). A test that set
 //     max_sec_iter, ran the default arm and watched nothing fail would look
@@ -540,7 +540,7 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
 
     // -1, NOT 0: a span left at zero cannot tell "the solver wrote 0" from
     // "nothing wrote it at all". The entry point is required to clear the span
-    // once (the accumulator rule in src/extensions/info_span.hh), so a surviving
+    // once (the accumulator rule in src/kernels/common/info_span.hh), so a surviving
     // -1 means that clear never ran and every zero in this array would have been
     // an accident of initialisation.
     UnifiedVector<int32_t> info(batch, int32_t(-1));

@@ -13,7 +13,7 @@
 #include "choice.hh"
 #include "geqrf.hh"
 #include "../../select/select.hh"
-#include "../../extensions/geqrf_native.hh"
+#include "geqrf_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <algorithm>

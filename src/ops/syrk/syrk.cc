@@ -8,8 +8,8 @@
 
 #include "choice.hh"
 #include "../../backends/level3_shape.hh"
-#include "../../backends/syrk_gram_tiles.hh"
-#include "../../backends/syrk_triangular_tiles.hh"
+#include "kernels/syrk_gram_tiles.hh"
+#include "kernels/syrk_triangular_tiles.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 

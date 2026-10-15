@@ -192,7 +192,7 @@ TEST(QueueTest, WaitAndThrow) {
     }
 }
 
-// Pins the contract that every kernel-geometry knob in src/extensions now
+// Pins the contract that every kernel-geometry knob in src/ops now
 // depends on. These call sites each used to carry their own atoi-plus-`> 0`
 // parser; the shared helper only preserves them if it agrees on the whole input
 // space, and the interesting half of that space (unset, empty, non-positive,

@@ -18,7 +18,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include "shipped_table_pick.hh"
 
-#include "../src/extensions/geqrf_native.hh"
+#include "../src/ops/geqrf/geqrf_native.hh"
 #include "../src/ops/geqrf/can_run.hh"
 #include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/geqrf/geqrf.hh"

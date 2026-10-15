@@ -11,7 +11,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../extensions/solve_native.hh"
+#include "../../kernels/common/solve_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <complex>

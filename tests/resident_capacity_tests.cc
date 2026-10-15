@@ -19,9 +19,9 @@
 #include "../src/queue.hh"
 #include "../src/select/select.hh"
 #include "../src/sycl/local_mem.hh"
-#include "../src/extensions/potrf_native.hh"
-#include "../src/extensions/getrf_native.hh"
-#include "../src/extensions/geqrf_native.hh"
+#include "../src/ops/potrf/potrf_native.hh"
+#include "../src/ops/getrf/getrf_native.hh"
+#include "../src/ops/geqrf/geqrf_native.hh"
 
 #include <algorithm>
 #include <complex>

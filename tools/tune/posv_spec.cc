@@ -89,31 +89,31 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: tiny
-            "src/extensions/posv_tiny.cc",
-            "src/extensions/solve_native.hh",
+            "src/ops/posv/kernels/posv_tiny.cc",
+            "src/kernels/common/solve_native.hh",
             // family: cta
-            "src/extensions/getrs_fused.cc",
-            "src/extensions/getrs_native.hh",
+            "src/ops/getrs/kernels/getrs_fused.cc",
+            "src/ops/getrs/getrs_native.hh",
             // common
             "src/ops/posv/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/posv/posv.cc"
-        // family: tiny "src/extensions/tiny_device.hh" "src/extensions/potrf_native.hh"
+        // family: tiny "src/kernels/common/tiny_device.hh" "src/ops/potrf/potrf_native.hh"
         // posv cta and blocked call the public potrf and trsm: their native kernels count too.
-        // family: cta "src/extensions/potrf_tiny.cc" "src/extensions/potrf_cta.cc" "src/extensions/potrf_cta_device.hh" "src/extensions/potrf_lpanel.cc" "src/extensions/potrf_lpanel_device.hh" "src/extensions/potrf_blocked.cc" "src/extensions/potrf_native.hh" "src/extensions/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
-        // family: cta "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // family: blocked "src/extensions/potrf_tiny.cc" "src/extensions/potrf_cta.cc" "src/extensions/potrf_cta_device.hh" "src/extensions/potrf_lpanel.cc" "src/extensions/potrf_lpanel_device.hh" "src/extensions/potrf_blocked.cc" "src/extensions/potrf_native.hh" "src/extensions/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
-        // family: blocked "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: cta "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: cta "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: blocked "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }

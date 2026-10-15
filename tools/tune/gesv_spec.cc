@@ -101,28 +101,28 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: tiny
-            "src/extensions/gesv_tiny.cc",
+            "src/ops/gesv/kernels/gesv_tiny.cc",
             // common
-            "src/extensions/solve_native.hh",
+            "src/kernels/common/solve_native.hh",
             "src/ops/gesv/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/gesv/gesv.cc"
-        // family: tiny "src/extensions/getrf_native.hh" "src/extensions/getrf_cta_device.hh" "src/extensions/tiny_device.hh"
+        // family: tiny "src/ops/getrf/getrf_native.hh" "src/ops/getrf/getrf_cta_device.hh" "src/kernels/common/tiny_device.hh"
         // blocked calls the public getrf and getrs (and through them trsm and gemm): their kernels and can_run count too.
-        // family: blocked "src/extensions/getrf_tiny.cc" "src/extensions/getrf_blocked.cc" "src/extensions/getrf_panel_reg.cc" "src/extensions/getrf_panel_reg_device.hh" "src/extensions/getrf_cta.cc" "src/extensions/getrf_cta_device.hh" "src/extensions/getrf_native.hh" "src/extensions/tiny_device.hh" "src/ops/getrf/choice.hh" "src/ops/getrf/getrf.cc"
-        // family: blocked "src/extensions/getrs_fused.cc" "src/extensions/getrs_native.cc" "src/extensions/getrs_native.hh" "src/extensions/lu_laswp.hh" "src/ops/getrs/choice.hh" "src/ops/getrs/getrs.cc"
-        // family: blocked "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh" "src/ops/gemm/choice.hh"
+        // family: blocked "src/ops/getrf/kernels/getrf_tiny.cc" "src/ops/getrf/kernels/getrf_blocked.cc" "src/ops/getrf/kernels/getrf_panel_reg.cc" "src/ops/getrf/kernels/getrf_panel_reg_device.hh" "src/ops/getrf/kernels/getrf_cta.cc" "src/ops/getrf/getrf_cta_device.hh" "src/ops/getrf/getrf_native.hh" "src/kernels/common/tiny_device.hh" "src/ops/getrf/choice.hh" "src/ops/getrf/getrf.cc"
+        // family: blocked "src/ops/getrs/kernels/getrs_fused.cc" "src/ops/getrs/kernels/getrs_native.cc" "src/ops/getrs/getrs_native.hh" "src/kernels/common/lu_laswp.hh" "src/ops/getrs/choice.hh" "src/ops/getrs/getrs.cc"
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesv_spec.cc"; }

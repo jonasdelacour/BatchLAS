@@ -87,10 +87,10 @@ float up to 35) and LPanel above that. The tables above replace them.
 
 | family | source | orders | Uplo |
 |---|---|---|---|
-| `tiny` | `src/extensions/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32; 16 for cdouble | both |
-| `cta` | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | advertised **77 / 54 / 54 / 38** (float / double / cfloat / cdouble, 4 blocks/SM); resident 155 / 109 / 109 / 77 | both |
-| `lpanel:panel=8`, `lpanel:panel=16` (float) | `src/extensions/potrf_lpanel.cc`, `potrf_lpanel_device.hh` | advertised **744 / 368 / 368 / 180** | Lower only |
-| `blocked` | `src/extensions/potrf_blocked.cc` | any | Lower only |
+| `tiny` | `src/ops/potrf/kernels/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32; 16 for cdouble | both |
+| `cta` | `src/ops/potrf/kernels/potrf_cta.cc`, `potrf_cta_device.hh` | advertised **77 / 54 / 54 / 38** (float / double / cfloat / cdouble, 4 blocks/SM); resident 155 / 109 / 109 / 77 | both |
+| `lpanel:panel=8`, `lpanel:panel=16` (float) | `src/ops/potrf/kernels/potrf_lpanel.cc`, `potrf_lpanel_device.hh` | advertised **744 / 368 / 368 / 180** | Lower only |
+| `blocked` | `src/ops/potrf/kernels/potrf_blocked.cc` | any | Lower only |
 | `vendor` | cuSOLVER | any | both |
 
 | | float | double | cfloat | cdouble |
@@ -142,7 +142,7 @@ hole (ceiling 101,376).
 > **Warning:** the attribute is sticky per CUfunction. potrf's kernel takes `n` at runtime, so one CUfunction serves every
 > `n`. A 49,064 B launch fails cold and passes after a 65,536 B launch of the same function. The outcome depends on order.
 
-* The pad (`src/extensions/potrf_slm_hole.hh:10-16`, applied at `potrf_cta.cc:123`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
+* The pad (`src/ops/potrf/potrf_slm_hole.hh:10-16`, applied at `potrf_cta.cc:123`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
   `smem` for any of the eight potrf instantiations) but stays, because one `reduce_over_group` reintroduces the hole.
 * No automated test can cover the hole: any earlier launch above 48 KB masks it.
 * The geqr2 panel shipped without the pad and hit the hole; it now uses potrf's band ([qr.md](qr.md)).
@@ -182,7 +182,7 @@ blocks per SM, so it binds before registers. Vendor-free, float `n = 128` pays a
 
 ### The L ladder {#the-l-ladder}
 
-`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`src/extensions/potrf_cta.cc:51-52`, `:93-107`): the elements the
+`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`src/ops/potrf/kernels/potrf_cta.cc:51-52`, `:93-107`): the elements the
 first trailing update touches, at 24 per work-item. A tile count would be the wrong unit, because `TS` varies by type.
 
 | cell (native µs, batch 4096) | L32 | L64 | L128 | L256 |
@@ -209,7 +209,7 @@ Right-looking, `Uplo::Lower`, `j = 0, nb, 2nb, ...`:
   block into scratch with a triangular fold, then a direct rectangle gemm).
 
 The seams are required `std::function` injections (`PotrfTrailingGemm`, `PotrfPanelSolve`,
-`src/extensions/potrf_native.hh:107-118`); an empty seam throws. The launch passes the public `gemm` and `trsm`
+`src/ops/potrf/potrf_native.hh:107-118`); an empty seam throws. The launch passes the public `gemm` and `trsm`
 (`src/ops/potrf/potrf.cc:70-78`), so each child takes its own table's choice. The trailing update is 65-95% of a
 vendor-free blocked factorisation. The fold exists because `herk` has no native family and a square gemm would write the
 upper triangle, which `potrf(Lower)` must not touch.
@@ -293,8 +293,8 @@ The panel solve is only 5-22% of a vendor-free blocked potrf, so a 2x faster pan
 **1. The panel trsm returned wrong answers on the default vendor-free path.** float and double, `n = 1024`, `batch = 256`:
 69-75 of 256 items bad (float), 15/256 (double), non-deterministic; every failing column is `== 1 (mod nb)`.
 
-* **Mechanism** (`src/sycl/trsm_native.cc`): the CTA kernel staged its triangle with a lane-strided loop, then read the
-  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`src/sycl/trsm_native.cc:206`).
+* **Mechanism** (`src/ops/trsm/kernels/trsm_native.cc`): the CTA kernel staged its triangle with a lane-strided loop, then read the
+  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`src/ops/trsm/kernels/trsm_native.cc:206`).
   Max rel diff against vendor goes from 6.05e+16 to 4.27e-07.
 * **How it hid:** trsm's work-group width comes from `{256,128,64,32}`, and every earlier test ran at `wg = 32`, one
   sub-group, where the race cannot show. Guard: `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
@@ -360,7 +360,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
-    (`src/extensions/potrf_lpanel_device.hh:159-168`) measured green at batch 1024 to 16384, because the eight dependent
+    (`src/ops/potrf/kernels/potrf_lpanel_device.hh:159-168`) measured green at batch 1024 to 16384, because the eight dependent
     prefetch loads cover the window on this card. Record it as *unfalsifiable*, never *covered*. Closing it needs a probe
     that widens the hazard window on purpose. See [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel).
 
@@ -480,7 +480,7 @@ everything (97,280 → 101,376 raises all three).
 
 ## potrf: the tiny tier {#potrf-the-tiny-tier}
 
-`src/extensions/potrf_tiny.cc`: one matrix per `SubGroupPartition<N>`, `N` in {8, 16, 32}. Lane `r` owns row `r` in a
+`src/ops/potrf/kernels/potrf_tiny.cc`: one matrix per `SubGroupPartition<N>`, `N` in {8, 16, 32}. Lane `r` owns row `r` in a
 compile-time `D rA[N]`, and every cross-lane value is an indexed sub-group shuffle. It uses **zero local memory, zero
 barriers and zero static shared**, so the 48 KB hole is unreachable.
 
@@ -567,7 +567,7 @@ see [lu.md](lu.md#r7-the-device-link-all-three-tiny-tiers-landed).
 
 ### The shared tiny-tier invariants {#the-shared-tiny-tier-invariants}
 
-`src/extensions/tiny_device.hh` is shared by the potrf, getrf and geqrf tiny tiers. Each invariant breaks silently, as a
+`src/kernels/common/tiny_device.hh` is shared by the potrf, getrf and geqrf tiny tiers. Each invariant breaks silently, as a
 wrong answer or a lost residency, never as a compiler diagnostic.
 
 1. **`rA[]` is never dynamically indexed or passed by reference.** Helpers take a plain pointer and touch it only under
@@ -597,7 +597,7 @@ holds `n` and is the tightest of 8/16/32. It cannot check a pinned `S`.
 
 ## The LPanel tier {#the-lpanel-tier}
 
-`src/extensions/potrf_lpanel.cc` and `potrf_lpanel_device.hh`: a left-looking, thread-per-row panel kernel. One work-group
+`src/ops/potrf/kernels/potrf_lpanel.cc` and `potrf_lpanel_device.hh`: a left-looking, thread-per-row panel kernel. One work-group
 holds one `n x NB` panel in local memory, factors it in place, and re-reads the already-factored columns from global
 memory. `NB = 8` for every type; `NB = 16` is float only. `Uplo::Upper` is refused by `can_run` (`potrf.cc:46`) because the
 left-looking update reads the lower triangle; no in-tree caller asks for Upper.
@@ -824,7 +824,7 @@ shuffles, 496 at N = 32). The transpose now goes through local memory
 
 ## The fused posv tier {#the-fused-posv-tier}
 
-`src/extensions/posv_tiny.cc`: one launch for `A X = B` with Hermitian positive-definite `A`, `n <= 32`, `nrhs <= 4`. It
+`src/ops/posv/kernels/posv_tiny.cc`: one launch for `A X = B` with Hermitian positive-definite `A`, `n <= 32`, `nrhs <= 4`. It
 runs `potrf_tiny`'s Cholesky recurrence, then both triangular solves with `L` still in registers, with zero local memory
 and zero barriers. This is posv's `tiny` family, and on sm_89 every row inside the window ranks it first. `can_run` drops
 it at `nrhs > 4`; those rows run `cta`.

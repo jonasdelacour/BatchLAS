@@ -12,7 +12,7 @@
 # stay exactly what the real build uses.
 #
 # WHICH LIBRARY. This defaults to batchlas_sycl, and for a long time it could probe
-# NOTHING ELSE -- which made it silently blind to every kernel in src/extensions/.
+# NOTHING ELSE -- which made it silently blind to every kernel in the former src/extensions/.
 # Found during WP4: potrf_cta.cc links into libbatchlas_extensions_cta.so, so the
 # default probe reported "424 entry functions, 0 with spill" over a set that did not
 # contain PotrfCtaKernel at all. A clean report from the wrong library reads exactly
@@ -44,7 +44,7 @@
 #     `Reg` arm of `can_run` in src/ops/gemm/gemm.cc (register tiles, the 128x128x8 one
 #     among them, are float only, because wider scalars overrun the 64-accumulator tile:
 #     a launch failure, not spilling) and the header of
-#     src/sycl/gemm/register_64x64_k16_wide.hh.
+#     src/ops/gemm/kernels/register_64x64_k16_wide.hh.
 # Here stack frame is the WRONG gate: a large fraction of perfectly healthy entry
 # functions carry a non-zero stack frame with zero spills, so gating on it rejects them
 # -- and a grep for "spill" that finds nothing reads as "no spill" whether or not the
@@ -60,7 +60,7 @@
 # Compare any new run against the DISTINCT column -- that is the one printed below.
 #
 # (2) A RESIDENCY CLAIM -- "is this array actually IN registers?", which is what the
-# register-resident tiny tiers (src/extensions/*_tiny.cc) assert. Here the gate is
+# register-resident tiny tiers (src/ops/<op>/kernels/*_tiny.cc) assert. Here the gate is
 # STACK FRAME == 0, and the spill columns are the ones that mislead: an unroll the
 # compiler declined makes the array dynamically indexed, ptxas relocates the WHOLE
 # array to local memory, and because nothing was ever in a register to evict there is

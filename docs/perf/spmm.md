@@ -19,7 +19,7 @@ Selection is the first runnable entry of the nearest row of `tuned/spmm.<device>
 last resort is `vendor`, then `direct`. `BATCHLAS_SPMM_ROUTE` takes `auto`, `native`, `vendor` or `direct`. Any
 other spelling, or one `can_run` refuses for the call, throws.
 
-`direct` has three bodies in `src/sycl/spmm_native.cc`: the `NoTrans` gather (body 1), and a scale plus atomic
+`direct` has three bodies in `src/ops/spmm/kernels/spmm_native.cc`: the `NoTrans` gather (body 1), and a scale plus atomic
 scatter pair (bodies 0 and 2) for `Trans` and `ConjTrans`. The body is chosen in the launcher on `transA`. `transA`
 is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gather and scatter stay separable in
 `scripts/route_diff.sh`. Scale and scatter do not.

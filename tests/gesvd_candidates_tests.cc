@@ -18,7 +18,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/gesvd_native.hh"
+#include "../src/ops/gesvd/gesvd_native.hh"
 #include "../src/util/resident_capacity.hh"
 #include "../src/ops/gesvd/choice.hh"
 

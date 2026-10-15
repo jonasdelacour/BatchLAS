@@ -715,7 +715,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
 // returned, and the caller read eigenvalues that were simply wrong for it.
 //
 // TWO TIERS, ONE SPAN. `steqr` picks steqr_cta when n <= the device sub-group
-// width and steqr_wg otherwise (src/extensions/steqr.cc:43), so at n = 32 these
+// width and steqr_wg otherwise (src/ops/syev/steqr/steqr.cc:43), so at n = 32 these
 // cases exercise the CTA arm on CUDA and the work-group arm on the host -- which
 // is deliberate: the two tiers derive the status by completely different means
 // (a bool out of steqr_cta_solve vs. a post-hoc scan of `e`), and a test that
@@ -798,7 +798,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
     // "nothing wrote it at all", and "nothing wrote it" is the exact failure this
     // mechanism exists to make impossible: a status channel that is never filled
     // reports universal success. steqr clears the span itself
-    // (src/extensions/steqr.cc:66), so a surviving -1 means that clear never ran.
+    // (src/ops/syev/steqr/steqr.cc:66), so a surviving -1 means that clear never ran.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     auto ws = UnifiedVector<std::byte>(

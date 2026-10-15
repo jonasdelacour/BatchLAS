@@ -21,7 +21,7 @@ with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
   `BATCHLAS_<OP>_ROUTE` pins it. See [flat kernel selection](flat-kernel-selection.md) and
   @ref selection_tables. The level-3 ops hemm, herk and her2k still choose by hand.
 - Two spellings: `gemm(ctx, ...)` takes the backend from the queue, `gemm<B>(ctx, ...)` fixes it.
-  Library code in `src/extensions/` must use `<B>`, because the runtime spelling reads
+  Library code under `src/ops/` must use `<B>`, because the runtime spelling reads
   `ctx.backend()` instead of the `B` the algorithm was instantiated for.
 
 ## api conventions: the variadic dispatch overload and its requires-clause
@@ -48,7 +48,7 @@ with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
   shorter `tau` is read out of bounds.
 - `gesvd` checks only `A`. A default-constructed `U` or `Vh` means `SvdVectors::None`.
 - Positional primaries in `blas/functions/*.hh` that take an explicit workspace are unchecked.
-  `src/extensions/` calls them per iteration.
+  Native drivers under `src/ops/` call them per iteration.
 
 ## api conventions: a Matrix is a MatrixView
 

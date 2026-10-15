@@ -901,7 +901,7 @@ namespace batchlas {
 
     // `info` on steqr/stedc/syev/syevx/gesvd and their tiers: per-item convergence status,
     // an ACCUMULATOR zeroed once by the entry point the caller invoked and only raised
-    // below (contract and helpers: src/extensions/info_span.hh).
+    // below (contract and helpers: src/kernels/common/info_span.hh).
     // evidence: docs/cpp-api.md#convergence-status-syev-syevx-gesvd-steqr-stedc
     // A DEFAULTED trailing parameter, not an old-arity forwarder as in potrf: these are
     // instantiated from macros that spell the list out, and with `jobz`, `params` and

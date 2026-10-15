@@ -18,7 +18,7 @@
 #include "test_utils.hh"
 
 #include "../src/ops/trsm/choice.hh"
-#include "../src/sycl/trsm_native.hh"
+#include "../src/ops/trsm/trsm_native.hh"
 #include "shipped_table_pick.hh"
 
 #include <algorithm>

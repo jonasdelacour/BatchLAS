@@ -9,7 +9,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../extensions/orgqr_native.hh"
+#include "orgqr_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <algorithm>

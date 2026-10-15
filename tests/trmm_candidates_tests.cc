@@ -20,8 +20,8 @@
 #include <batchlas/verify/tolerance.hh>
 #include "shipped_table_pick.hh"
 
-#include "../src/backends/triangular_expand.hh"
-#include "../src/backends/trmm_triangular_tiles.hh"
+#include "../src/kernels/common/triangular_expand.hh"
+#include "../src/ops/trmm/kernels/trmm_triangular_tiles.hh"
 #include "../src/expansion_budget.hh"
 #include "../src/ops/trmm/choice.hh"
 

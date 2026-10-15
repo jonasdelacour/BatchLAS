@@ -27,7 +27,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "../src/extensions/sytrd_sb2st_hh.hh"
+#include "../src/ops/syev/sytrd/sytrd_sb2st_hh.hh"
 #include "test_utils.hh"
 
 #include <batchlas/verify/tolerance.hh>

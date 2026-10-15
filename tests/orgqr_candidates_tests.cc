@@ -19,7 +19,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include "shipped_table_pick.hh"
 
-#include "../src/extensions/orgqr_native.hh"
+#include "../src/ops/orgqr/orgqr_native.hh"
 #include "../src/ops/orgqr/choice.hh"
 
 #include <algorithm>

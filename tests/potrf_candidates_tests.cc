@@ -17,7 +17,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include "shipped_table_pick.hh"
 
-#include "../src/extensions/potrf_native.hh"
+#include "../src/ops/potrf/potrf_native.hh"
 #include "../src/ops/potrf/choice.hh"
 
 #include <algorithm>

@@ -17,8 +17,8 @@
 
 #include "test_utils.hh"
 
-#include "../src/backends/syrk_gram_tiles.hh"
-#include "../src/backends/syrk_triangular_tiles.hh"
+#include "../src/ops/syrk/kernels/syrk_gram_tiles.hh"
+#include "../src/ops/syrk/kernels/syrk_triangular_tiles.hh"
 #include "../src/ops/syrk/choice.hh"
 #include "shipped_table_pick.hh"
 

@@ -23,7 +23,7 @@ T = Q \Lambda Q^T,
 where \f$\Lambda = \operatorname{diag}(\lambda_1, \dots, \lambda_n)\f$ and, if requested,
 \f$Q\f$ is the orthogonal eigenvector matrix.
 
-Which path runs (`steqr_dispatch`, `src/extensions/steqr.cc`): `steqr_cta` when
+Which path runs (`steqr_dispatch`, `src/ops/syev/steqr/steqr.cc`): `steqr_cta` when
 \f$0 < n \le\f$ the device's largest sub-group size, otherwise `steqr_wg`.
 
 > **Note:** On ROCm the CTA path is disabled (`should_use_cta`). Its chunked sub-group operations

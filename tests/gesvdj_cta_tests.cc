@@ -16,7 +16,7 @@
 
 #include "test_utils.hh"
 #include "eigen_verify.hh"
-#include "../src/extensions/gesvd_native.hh"
+#include "../src/ops/gesvd/gesvd_native.hh"
 #include "../src/util/resident_capacity.hh"
 
 #include <batchlas/verify/reference.hh>

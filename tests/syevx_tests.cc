@@ -1461,7 +1461,7 @@ TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
     }
 }
 
-// Argument validation lives in the dispatcher (src/extensions/syevx.cc), because
+// Argument validation lives in the dispatcher (src/ops/syevx/syevx.cc), because
 // dense input does not reach syevx_lobpcg.
 TEST(SyevxJacobiValidation, RejectsInconsistentPreconditionerRequests) {
     constexpr int n = 96, batch = 1, neig = 3;

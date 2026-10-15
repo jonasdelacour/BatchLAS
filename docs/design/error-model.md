@@ -20,7 +20,7 @@ requirements: @ref design_symbol_visibility.
 Not wrapped, so `catch (const batchlas::exception&)` does not see them:
 
 - `std::bad_alloc` from null `sycl::malloc_*` returns (`src/util/sycl-util-impl.cc`, `src/queue.hh`,
-  `src/extensions/sytrd_sy2sb.cc`). Wrapping it would lose pybind11's `MemoryError`.
+  `src/ops/syev/sytrd/sytrd_sy2sb.cc`). Wrapping it would lose pybind11's `MemoryError`.
 - `sycl::exception`, from the SYCL runtime.
 
 ## error model: kernel selection throws outside the hierarchy

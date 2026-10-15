@@ -21,8 +21,8 @@
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/geqrf_native.hh"
-#include "../src/extensions/orgqr_native.hh"
+#include "../src/ops/geqrf/geqrf_native.hh"
+#include "../src/ops/orgqr/orgqr_native.hh"
 #include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/orgqr/choice.hh"
 
@@ -1854,7 +1854,7 @@ TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
            "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
            "is warp-uniform here; more is a barrier per chunk nobody needs.";
     EXPECT_TRUE(part_barrier.empty())
-        << path << ": group_barrier(part) is backend-specific (src/extensions/sg_partition/; "
+        << path << ": group_barrier(part) is backend-specific (src/kernels/common/sg_partition/; "
            "only a memory fence on masked SPIR-V), so ordering a publish/read pair with it is "
            "correct on this box and not ordered everywhere: " << part_barrier;
 }

@@ -27,9 +27,9 @@
 // TinyPivotsMatchLapackeOnUnstructuredData sees a defect in the pivot METRIC itself.
 #include <batchlas/verify/reference.hh>
 
-#include "../src/extensions/getrf_native.hh"
-#include "../src/extensions/getrs_native.hh"
-#include "../src/extensions/getri_native.hh"
+#include "../src/ops/getrf/getrf_native.hh"
+#include "../src/ops/getrs/getrs_native.hh"
+#include "../src/ops/getri/getri_native.hh"
 #include "../src/ops/getrs/choice.hh"
 #include "../src/ops/getri/choice.hh"
 
@@ -329,7 +329,7 @@ protected:
     }
 
     // Run one tier DIRECTLY. `pass_info` false exercises the info_target
-    // fallback, of which src/extensions/inv.cc:48 is a real instance.
+    // fallback, of which src/ops/inv/inv.cc:48 is a real instance.
     void run_cta(Lu<T>& p, bool pass_info = true) {
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -2417,7 +2417,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
 
 // L15. THE WORKSPACE QUERY COVERS EVERY SUPPORTED ROUTE, AND DEREFERENCES
 // NOTHING: getrf_buffer_size and getri_buffer_size are reached from inside a
-// layout function under BumpAllocator::measuring() (src/extensions/inv.cc), where
+// layout function under BumpAllocator::measuring() (src/ops/inv/inv.cc), where
 // A arrives with a NULL data pointer. getrf's figure is exactly the chosen tier's (R5).
 TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
@@ -2984,7 +2984,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // ===========================================================================
-// THE REGISTER-RESIDENT TIER (the `tiny` choice, src/extensions/getrf_tiny.cc).
+// THE REGISTER-RESIDENT TIER (the `tiny` choice, src/ops/getrf/kernels/getrf_tiny.cc).
 // One matrix per SubGroupPartition<N>, N in {8, 16, 32}, row r in lane r's
 // registers, no local memory and no barriers. These cases guard the three
 // properties a functional test otherwise stays green through: a padded row must

@@ -80,7 +80,7 @@ STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}`.
 
 `BATCHLAS_SY2SB_ORMQR_NB` is not a `BATCHLAS_TUNE_*` variable. It is three-valued: `0` or `off`
 means never hint, and values above 1024 are ignored (`sy2sb_ormqr_nb_env` in
-`src/extensions/sytrd_sy2sb.cc`). `BATCHLAS_SYEV_TWO_STAGE_KD` goes through `env_positive_int_or`
+`src/ops/syev/sytrd/sytrd_sy2sb.cc`). `BATCHLAS_SYEV_TWO_STAGE_KD` goes through `env_positive_int_or`
 in `src/util/settings.cc`, which accepts `"16x"`.
 
 - **Parser.** `strtol` with an explicit reject: unset, empty, unparseable, trailing garbage,

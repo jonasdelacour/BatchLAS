@@ -31,7 +31,7 @@
 #include "eigen_verify.hh"
 
 #include "../src/ops/gesvd/choice.hh"
-#include "../src/extensions/gesvd_native.hh"
+#include "../src/ops/gesvd/gesvd_native.hh"
 #include "../src/util/resident_capacity.hh"
 
 using namespace batchlas;

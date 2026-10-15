@@ -92,7 +92,7 @@ namespace detail {
 // Shape preconditions; invalid_argument (caller error), never runtime_error. They
 // are repeated on BOTH the deducing and the <Backend> overloads on purpose: the
 // variadic dispatch overload binds prvalues better and skips the deducing one.
-// Positional primaries stay unchecked (src/extensions/ calls them per iteration).
+// Positional primaries stay unchecked (library code under src/ops/ calls them per iteration).
 // evidence: docs/design/api-conventions.md#api-conventions-shape-checks-live-on-both-option-overloads
 template <typename MV>
 inline void require_square(const char* fn, const char* name, const MV& A) {
@@ -237,7 +237,7 @@ struct TrsmOptions {
 
 /// @}
 
-// src/extensions/ is templated on Backend and must call the `f<B>(ctx, ...)`
+// Library code under src/ops/ is templated on Backend and must call the `f<B>(ctx, ...)`
 // spelling: `f(ctx, ...)` would silently use ctx.backend() instead of B.
 
 namespace detail {

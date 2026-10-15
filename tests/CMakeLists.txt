@@ -235,7 +235,7 @@ endfunction()
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
     if(test_name STREQUAL "sg_partition_tests")
-        # Header-only: compiles src/extensions/sg_partition/ directly and links
+        # Header-only: compiles src/kernels/common/sg_partition/ directly and links
         # no batchlas library, only the SYCL compiler and include paths.
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
@@ -356,7 +356,7 @@ function(batchlas_add_test_target test_name)
     # that can fail.
     if(test_name STREQUAL "potrf_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_POTRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/potrf_tiny.cc")
+            BATCHLAS_POTRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/potrf/kernels/potrf_tiny.cc")
     endif()
     # geqrf's tiny kernel DOES carry a local_accessor -- its reflector apply needs the
     # product tile -- so its source check is the narrower one: no WORK-GROUP barrier and
@@ -365,7 +365,7 @@ function(batchlas_add_test_target test_name)
     # kernel), which is why this is a source check and not a behavioural one.
     if(test_name STREQUAL "geqrf_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_GEQRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/geqrf_tiny.cc")
+            BATCHLAS_GEQRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/geqrf/kernels/geqrf_tiny.cc")
     endif()
     # getrf_tests reads getrf_tiny.cc back for the same reason potrf_tests reads
     # potrf_tiny.cc: the register-resident tier declares no local memory and no
@@ -374,7 +374,7 @@ function(batchlas_add_test_target test_name)
     # re-opens the 48 KB hole for a NEIGHBOURING kernel.
     if(test_name STREQUAL "getrf_tests")
         target_compile_definitions(${test_name} PRIVATE
-            BATCHLAS_GETRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/getrf_tiny.cc")
+            BATCHLAS_GETRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/getrf/kernels/getrf_tiny.cc")
     endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE

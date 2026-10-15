@@ -32,8 +32,8 @@ Name the benchmark used, the exact profiler command, the hottest kernels or trac
 
 ## Quick Commands
 
-- Find likely targets for `src/extensions/ormqr_blocked.cc`:
-  `python3 .github/skills/batchlas-function-profiling/scripts/find_batchlas_profile_targets.py src/extensions/ormqr_blocked.cc`
+- Find likely targets for `src/ops/ormqr/kernels/ormqr_blocked.cc`:
+  `python3 .github/skills/batchlas-function-profiling/scripts/find_batchlas_profile_targets.py src/ops/ormqr/kernels/ormqr_blocked.cc`
 - Emit a kernel trace command for a specific benchmark case:
   `python3 .github/skills/batchlas-function-profiling/scripts/emit_profile_commands.py --benchmark gemm_steady_benchmark --tool trace --output-stem gemm_steady_512 -- 512 512 512 512`
 - Emit `nsys` and `ncu` commands for a known hotspot kernel:

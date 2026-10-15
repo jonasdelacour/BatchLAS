@@ -18,7 +18,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/gemm/choice.hh"
-#include "../src/sycl/gemm_kernels.hh"
+#include "../src/ops/gemm/gemm_kernels.hh"
 #include "../src/util/resident_capacity.hh"
 #include "shipped_table_pick.hh"
 

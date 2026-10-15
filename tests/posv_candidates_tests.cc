@@ -17,8 +17,8 @@
 #include "test_utils.hh"
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/getrs_native.hh"
-#include "../src/extensions/solve_native.hh"
+#include "../src/ops/getrs/getrs_native.hh"
+#include "../src/kernels/common/solve_native.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/util/resident_capacity.hh"

@@ -9,7 +9,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../sycl/gemv_native.hh"
+#include "gemv_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <complex>

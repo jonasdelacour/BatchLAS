@@ -17,7 +17,7 @@
 #include "shipped_table_pick.hh"
 
 #include "../src/ops/spmm/choice.hh"
-#include "../src/sycl/spmm_native.hh"
+#include "../src/ops/spmm/spmm_native.hh"
 
 #include <algorithm>
 #include <cmath>

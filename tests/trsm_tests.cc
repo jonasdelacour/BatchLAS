@@ -15,7 +15,7 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 #include "../src/select/vendor.hh"
-#include "../src/sycl/trsm_native.hh"
+#include "../src/ops/trsm/trsm_native.hh"
 
 using namespace batchlas;
 

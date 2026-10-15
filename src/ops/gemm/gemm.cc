@@ -11,7 +11,7 @@
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../backends/gemm_heterogeneous.hh"
-#include "../../sycl/gemm_kernels.hh"
+#include "gemm_kernels.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <algorithm>

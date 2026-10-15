@@ -231,7 +231,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     // Ensure this test actually exercises the CTA/sub-group implementation in
-    // src/extensions/sytrd_sb2st_cta.cc. If the runtime/device doesn't support
+    // src/ops/syev/sytrd/sytrd_sb2st_cta.cc. If the runtime/device doesn't support
     // sub_group_size=32, SB2ST will throw when forced on; in that case, skip.
     ScopedEnvVar force_subgroup("BATCHLAS_SB2ST_SUBGROUP", "1");
 

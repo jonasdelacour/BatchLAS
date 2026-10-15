@@ -19,7 +19,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/getrf_native.hh"
+#include "../src/ops/getrf/getrf_native.hh"
 #include "../src/ops/getrf/choice.hh"
 #include "../src/util/resident_capacity.hh"
 

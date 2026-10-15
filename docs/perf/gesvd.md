@@ -16,8 +16,8 @@ keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kern
 
 | family | kernel | `can_run` (correctness only) |
 |---|---|---|
-| `jacobi` | `gesvdj_cta` (`src/extensions/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) |
-| `cta` | `gesvd_cta` (`src/extensions/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
+| `jacobi` | `gesvdj_cta` (`src/ops/gesvd/kernels/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) |
+| `cta` | `gesvd_cta` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
 | `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
 | `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked, and a homogeneous batch (`gesvd.cc:79`) |
 
@@ -117,7 +117,7 @@ is a throw.
 
 ## gesvd defect A: the normal equations square kappa {#gesvd-defect-a-the-normal-equations-square-kappa}
 
-`form_right_tridiagonal` (`src/extensions/gesvd_blocked.cc`) builds the tridiagonal of \f$B^T B\f$ from the bidiagonal,
+`form_right_tridiagonal` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) builds the tridiagonal of \f$B^T B\f$ from the bidiagonal,
 so the singular values come from eigenvalues with absolute error \f$\sim \varepsilon\sigma_{\max}^2\f$:
 
 \f[ \frac{|\delta\sigma_i|}{\sigma_i} \sim \frac{\varepsilon}{2}\left(\frac{\sigma_{\max}}{\sigma_i}\right)^2 . \f]
@@ -180,7 +180,7 @@ What it did produce: QR preconditioning improves relative accuracy about 2x at h
 
 ## gesvd Tier 3: bdsdc as the bidiagonal solver {#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver}
 
-Above 32 the blocked path runs `gebrd`, a bidiagonal SVD, then `ormbr`. `bdsdc` (`src/extensions/bdsdc.cc`) is the
+Above 32 the blocked path runs `gebrd`, a bidiagonal SVD, then `ormbr`. `bdsdc` (`src/ops/gesvd/bdsdc/bdsdc.cc`) is the
 default bidiagonal solver: an order-\f$2n\f$ tridiagonal eigenproblem solved by `stedc` (derivation in @ref design_gesvd).
 
 | n (batch 512, float) | `stedc` at 2n | `bdsqr` |
@@ -255,7 +255,7 @@ is needed in both directions (right inside the block, left at the bottom). Handl
 
 ## gesvd: the unblocked-gebrd cliff {#gesvd-the-unblocked-gebrd-cliff}
 
-The blocked gebrd threshold is 1 (`gesvd_use_blocked_gebrd`, `src/extensions/gesvd_blocked.cc`). Blocked wins at every
+The blocked gebrd threshold is 1 (`gesvd_use_blocked_gebrd`, `src/ops/gesvd/kernels/gesvd_blocked.cc`). Blocked wins at every
 n from 33 in both types. Float, batch 256, full vectors, ms (unblocked → blocked):
 
 | n | 33 | 48 | 64 | 127 |

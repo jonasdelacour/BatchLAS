@@ -18,9 +18,9 @@
 #include "batch_launch.hh"
 #include "level3_shape.hh"
 #include "gemm_heterogeneous.hh"
-#include "syrk_gram_tiles.hh"
+#include "../ops/syrk/kernels/syrk_gram_tiles.hh"
 #include "../ops/syrk/choice.hh"
-#include "triangular_expand.hh"
+#include "../kernels/common/triangular_expand.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include "../util/template-instantiations.hh"

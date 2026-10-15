@@ -17,8 +17,8 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/solve_native.hh"
-#include "../src/extensions/getrf_native.hh"
+#include "../src/kernels/common/solve_native.hh"
+#include "../src/ops/getrf/getrf_native.hh"
 #include "../src/ops/gesv/choice.hh"
 
 #include <algorithm>

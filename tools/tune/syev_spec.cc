@@ -124,64 +124,64 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/extensions/sg_partition/backend_amdgcn.hh",
-            "src/extensions/sg_partition/backend_amdgcn_core.hh",
-            "src/extensions/sg_partition/backend_generic.hh",
-            "src/extensions/sg_partition/backend_nvptx.hh",
-            "src/extensions/sg_partition/backend_spirv.hh",
-            "src/extensions/sg_partition/backend_sscp.hh",
-            "src/extensions/sg_partition/sg_partition.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn.hh",
+            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
+            "src/kernels/common/sg_partition/backend_generic.hh",
+            "src/kernels/common/sg_partition/backend_nvptx.hh",
+            "src/kernels/common/sg_partition/backend_spirv.hh",
+            "src/kernels/common/sg_partition/backend_sscp.hh",
+            "src/kernels/common/sg_partition/sg_partition.hh",
             // family: cta
-            "src/extensions/syev_cta.cc",
-            "src/extensions/ormqr_cta.cc",
+            "src/ops/syev/kernels/syev_cta.cc",
+            "src/ops/ormqr/kernels/ormqr_cta.cc",
             // family: cta_fused
-            "src/extensions/syev_cta_fused.cc",
+            "src/ops/syev/kernels/syev_cta_fused.cc",
             // family: jacobi
-            "src/extensions/syev_jacobi_cta.cc",
+            "src/ops/syev/kernels/syev_jacobi_cta.cc",
             // family: blocked
-            "src/extensions/syev_blocked.cc",
-            "src/extensions/sytrd_blocked.cc",
-            "src/extensions/latrd_lower_panel.cc",
+            "src/ops/syev/kernels/syev_blocked.cc",
+            "src/ops/syev/sytrd/sytrd_blocked.cc",
+            "src/ops/syev/sytrd/latrd_lower_panel.cc",
             // family: two_stage
-            "src/extensions/syev_two_stage.cc",
-            "src/extensions/two_stage_common.hh",
-            "src/extensions/sytrd_sy2sb.cc",
-            "src/extensions/sytrd_sb2st.cc",
-            "src/extensions/sytrd_sb2st_cta.cc",
-            "src/extensions/sytrd_sb2st_cta.hh",
-            "src/extensions/sytrd_sb2st_hh.cc",
-            "src/extensions/sytrd_sb2st_hh.hh",
+            "src/ops/syev/kernels/syev_two_stage.cc",
+            "src/kernels/common/two_stage_common.hh",
+            "src/ops/syev/sytrd/sytrd_sy2sb.cc",
+            "src/ops/syev/sytrd/sytrd_sb2st.cc",
+            "src/ops/syev/sytrd/sytrd_sb2st_cta.cc",
+            "src/ops/syev/sytrd/sytrd_sb2st_cta.hh",
+            "src/ops/syev/sytrd/sytrd_sb2st_hh.cc",
+            "src/ops/syev/sytrd/sytrd_sb2st_hh.hh",
             // common
-            "src/extensions/sytrd_cta.cc",
-            "src/extensions/sytrd_cta_device.hh",
-            "src/extensions/steqr.cc",
-            "src/extensions/steqr_cta.cc",
-            "src/extensions/steqr_cta_device.hh",
-            "src/extensions/steqr_wg.cc",
-            "src/extensions/steqr_internal.hh",
-            "src/extensions/stedc.cc",
-            "src/extensions/stedc_internal.hh",
-            "src/extensions/stedc_levels_plan.hh",
-            "src/extensions/stedc_merge_cta.cc",
-            "src/extensions/stedc_merge_kernels.cc",
-            "src/extensions/stedc_merge_kernels.hh",
-            "src/extensions/stedc_secular.cc",
-            "src/extensions/stedc_secular.hh",
-            "src/extensions/ormqr_blocked.cc",
-            "src/extensions/larft_wy.hh",
-            "src/extensions/uplo_mirror.cc",
-            "src/extensions/uplo_mirror.hh",
+            "src/ops/syev/sytrd/sytrd_cta.cc",
+            "src/ops/syev/sytrd/sytrd_cta_device.hh",
+            "src/ops/syev/steqr/steqr.cc",
+            "src/ops/syev/steqr/steqr_cta.cc",
+            "src/ops/syev/steqr/steqr_cta_device.hh",
+            "src/ops/syev/steqr/steqr_wg.cc",
+            "src/ops/syev/steqr/steqr_internal.hh",
+            "src/ops/syev/stedc/stedc.cc",
+            "src/ops/syev/stedc/stedc_internal.hh",
+            "src/ops/syev/stedc/stedc_levels_plan.hh",
+            "src/ops/syev/stedc/stedc_merge_cta.cc",
+            "src/ops/syev/stedc/stedc_merge_kernels.cc",
+            "src/ops/syev/stedc/stedc_merge_kernels.hh",
+            "src/ops/syev/stedc/stedc_secular.cc",
+            "src/ops/syev/stedc/stedc_secular.hh",
+            "src/ops/ormqr/kernels/ormqr_blocked.cc",
+            "src/kernels/common/larft_wy.hh",
+            "src/ops/syev/kernels/uplo_mirror.cc",
+            "src/ops/syev/uplo_mirror.hh",
             "src/ops/syev/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/syev/syev.cc"
         // blocked and two_stage call the public gemm and trmm (stedc, ormqr_blocked); blocked syr2k, two_stage geqrf.
-        // family: blocked "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
-        // family: blocked "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
-        // family: two_stage "src/sycl/gemm_kernels.cc" "src/sycl/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc"
-        // family: two_stage "src/sycl/gemm/accessors.hh" "src/sycl/gemm/epilogue_linear.hh" "src/sycl/gemm/load_policies.hh" "src/sycl/gemm/register_128x128.hh" "src/sycl/gemm/register_64x64_k16_wide.hh" "src/sycl/gemm/register_launchers.hh" "src/sycl/gemm/register_tiled_common.hh" "src/sycl/gemm/register_wide_transposed.hh" "src/sycl/gemm/small_batched.hh" "src/sycl/gemm/tiled_general.hh"
-        // family: two_stage "src/extensions/geqrf_blocked.cc" "src/extensions/geqrf_cta.cc" "src/extensions/geqrf_tiny.cc" "src/ops/geqrf/choice.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
+        // family: blocked "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: two_stage "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc"
+        // family: two_stage "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: two_stage "src/ops/geqrf/kernels/geqrf_blocked.cc" "src/ops/geqrf/kernels/geqrf_cta.cc" "src/ops/geqrf/kernels/geqrf_tiny.cc" "src/ops/geqrf/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/syev_spec.cc"; }

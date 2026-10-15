@@ -12,7 +12,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../sycl/spmm_native.hh"
+#include "spmm_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <complex>

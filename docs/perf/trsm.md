@@ -82,7 +82,7 @@ calls lie below the table's smallest batch. See [the batch floor](#the-batch-flo
 **V1** (`cta`): one work-group per matrix and rhs slice, one work-item per independent solve. The
 solution vector lives in registers as `T x[N]`. The canonical triangle is staged once into SLM and
 broadcast. The 24 canonical `(side, uplo, transA, diag)` cases fold into one recurrence through
-`canonicalise()` (`src/sycl/trsm_canonical.hh:19`, shared with `sg_left`). The index map is
+`canonicalise()` (`src/ops/trsm/trsm_canonical.hh:19`, shared with `sg_left`). The index map is
 `rho(s) = fwd ? s : order-1-s`.
 
 **V2** (`blocked`): a host-side two-level driver. The outer level blocks at `OUTER_NB` and issues a
@@ -90,7 +90,7 @@ trailing GEMM. Each outer panel is solved by the inner `nb = cta_max_n = 32` loo
 its own shorter prefix. The crossover is a capacity limit, not a tuned choice.
 
 The grid is `batch * ceil(q/WG)`, never batch alone. The work-group ladder walks `{256,128,64,32}` and
-takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/sycl/trsm_native.hh:36-46`).
+takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/ops/trsm/trsm_native.hh:36-46`).
 On sm_120 it also skips a rung that leaves over half its lanes without an rhs column
 ([ladder cap](blackwell.md#trsm-v1-ladder-cap)).
 
@@ -289,7 +289,7 @@ All 8 step-13 losers satisfy `q*batch >= 524288`, and no cell below that loses. 
 work threshold and not an order cap. Neither side is DRAM-bound there (11-26% of peak), so the cause was
 re-read amplification escaping L2. The cause was not in trsm. V2 called `sycl_gemm::gemm_custom`, the
 native entry point, which bypassed gemm's routing. Step 16 injects the **routed** gemm instead.
-`trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/sycl/trsm_native.hh:64-70`), and the
+`trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/ops/trsm/trsm_native.hh:64-70`), and the
 `blocked` arm of `launch` (`src/ops/trsm/trsm.cc:69-79`) passes the public `gemm`. At n=512, q=1024,
 batch=512, float, the solve went from 18.8 ms to 11.19 ms, against the vendor's 14.28 ms. The injected
 GEMM has no per-call cost: cuBLAS uses `cublasGemmStridedBatchedEx`, and the solve issues 15 GEMM calls.
@@ -386,7 +386,7 @@ The lesson, twice over: confirm which kernel runs before explaining why it is sl
 
 V1 staged the canonical triangle into SLM with a loop strided by `lane`. Lane `s` then read
 `sLc[tri_idx(s,s)]`, a value written by a different lane, with no barrier in between. `sDiv[0]` had the same
-problem. The fix is one `sycl::group_barrier` (`src/sycl/trsm_native.cc:185`), commit `c7d6d91`, 2026-08-21.
+problem. The fix is one `sycl::group_barrier` (`src/ops/trsm/kernels/trsm_native.cc:185`), commit `c7d6d91`, 2026-08-21.
 
 | | max relative diff vs vendor | items wrong | native residual |
 |---|---|---|---|

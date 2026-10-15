@@ -11,7 +11,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../extensions/gesvd_native.hh"
+#include "gesvd_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <algorithm>

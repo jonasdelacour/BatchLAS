@@ -96,19 +96,19 @@ public:
             "src/sycl/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
             // family: cta
-            "src/extensions/getrs_fused.cc",
+            "src/ops/getrs/kernels/getrs_fused.cc",
             // family: blocked
-            "src/extensions/getrs_native.cc",
+            "src/ops/getrs/kernels/getrs_native.cc",
             // common
-            "src/extensions/getrs_native.hh",
+            "src/ops/getrs/getrs_native.hh",
             "src/ops/getrs/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/getrs/getrs.cc"
         // blocked calls the public trsm: its native kernels count too.
-        // family: blocked "src/extensions/lu_laswp.hh"
-        // family: blocked "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // family: blocked "src/kernels/common/lu_laswp.hh"
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getrs_spec.cc"; }

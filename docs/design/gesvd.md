@@ -123,7 +123,7 @@ Bytes per problem with V resident, plus the work-group pair table:
 | complex\<double\> | 34,624 (+992) | 134,784 + 4,032 = 138,816 |
 
 The device reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
-launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim` (`src/extensions/gesvd_native.hh`) sets
+launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim` (`src/ops/gesvd/gesvd_native.hh`) sets
 the cap, and both the kernel guard `gesvdj_cta_max_dim` and `can_run` read it. Other types drop to
 1-2 work-groups per SM, against 10 at C=32. Occupancy, not the cap, is the binding limit.
 
@@ -232,7 +232,7 @@ column is still repaired.
 ## gesvdj_cta: traps and dead ends
 
 - **Build group.** `gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES`
-  (`src/extensions/CMakeLists.txt`). Moving it gives the 32-lane kernel a CPU AOT image with no error.
+  (`src/ops/CMakeLists.txt`). Moving it gives the 32-lane kernel a CPU AOT image with no error.
 - **`GesvdjParams` is its own struct.** Reusing `JacobiParams` would bring its ascending
   `sort_order` default, which invites a silent reversal.
 - **Explicit instantiations** each need a `template ...;` line spelled with `BATCHLAS_UNPAREN fp`.

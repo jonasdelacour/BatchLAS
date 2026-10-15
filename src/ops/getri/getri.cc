@@ -13,7 +13,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../extensions/getri_native.hh"
+#include "getri_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <complex>

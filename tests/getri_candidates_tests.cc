@@ -21,7 +21,7 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include "../src/ops/getri/choice.hh"
-#include "../src/extensions/getri_native.hh"
+#include "../src/ops/getri/getri_native.hh"
 
 #include <algorithm>
 #include <cmath>

@@ -10,7 +10,7 @@ path is limited by the chase and the \f$Q_2\f$ back-transform, both occupancy pr
 
 ## sytrd: the latrd implementation selector
 
-`BATCHLAS_LATRD_IMPL` selects the panel kernel in `src/extensions/latrd_lower_panel.cc`. It is read
+`BATCHLAS_LATRD_IMPL` selects the panel kernel in `src/ops/syev/sytrd/latrd_lower_panel.cc`. It is read
 on every call, so one process can A/B the kernels.
 
 | Value | Kernel |

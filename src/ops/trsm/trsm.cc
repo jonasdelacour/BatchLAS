@@ -10,7 +10,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../sycl/trsm_native.hh"
+#include "trsm_native.hh"
 #include "../../util/template-instantiations.hh"
 
 #include <complex>

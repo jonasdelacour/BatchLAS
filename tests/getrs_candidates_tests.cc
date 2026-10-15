@@ -20,7 +20,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/extensions/getrs_native.hh"
+#include "../src/ops/getrs/getrs_native.hh"
 #include "../src/ops/getrs/choice.hh"
 
 #include <algorithm>

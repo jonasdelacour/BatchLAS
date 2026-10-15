@@ -8,7 +8,7 @@
 
 #include "choice.hh"
 #include "../../select/select.hh"
-#include "../../extensions/geqrf_native.hh"
+#include "geqrf_native.hh"
 
 #include <cstddef>
 #include <cstdint>

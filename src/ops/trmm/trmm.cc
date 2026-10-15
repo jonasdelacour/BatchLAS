@@ -11,8 +11,8 @@
 
 #include "choice.hh"
 #include "../../backends/level3_shape.hh"
-#include "../../backends/triangular_expand.hh"
-#include "../../backends/trmm_triangular_tiles.hh"
+#include "../../kernels/common/triangular_expand.hh"
+#include "kernels/trmm_triangular_tiles.hh"
 #include "../../expansion_budget.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
