@@ -1,0 +1,32 @@
+From 50dbd07bb0df52fd9fd080cae74e9b10e7b76613 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 23:07:57 +0200
+Subject: [PATCH 7/7] [Metal] Provide __acpp_sscp_get_num_subgroups
+
+sub_group::get_group_range() lowers to __acpp_sscp_get_num_subgroups, which
+the Metal libkernel did not define, so the MSL referenced an undeclared
+identifier. Compute it from the work-group size like the PTX libkernel.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/libkernel/sscp/metal/subgroup.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/libkernel/sscp/metal/subgroup.cpp b/src/libkernel/sscp/metal/subgroup.cpp
+index 129eeabd..54d4fe8a 100644
+--- a/src/libkernel/sscp/metal/subgroup.cpp
++++ b/src/libkernel/sscp/metal/subgroup.cpp
+@@ -49,3 +49,10 @@ HIPSYCL_SSCP_BUILTIN __acpp_uint32 __acpp_sscp_get_subgroup_max_size() {
+ HIPSYCL_SSCP_BUILTIN __acpp_uint32 __acpp_sscp_get_subgroup_id() {
+   return __acpp_sscp_metal_symbol_simd_id("__simd_group_id");
+ }
++
++HIPSYCL_SSCP_BUILTIN __acpp_uint32 __acpp_sscp_get_num_subgroups() {
++  const uint wg = __acpp_sscp_get_local_size_x() * __acpp_sscp_get_local_size_y() *
++                  __acpp_sscp_get_local_size_z();
++  const uint sg = __acpp_sscp_get_subgroup_max_size();
++  return (wg + sg - 1) / sg;
++}
+-- 
+2.54.0 (Apple Git-157)
+

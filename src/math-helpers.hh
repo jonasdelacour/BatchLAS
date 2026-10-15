@@ -10,6 +10,7 @@
 #include <complex>
 
 #include "queue.hh"
+#include "sycl/sscp_target.hh"
 
 
 namespace batchlas {
@@ -301,6 +302,33 @@ namespace batchlas {
             }
         }
 
+        // CLARTG/ZLARTG-style with f, g != 0: incorporate scaling to avoid overflow/underflow,
+        // with the scalar math in W.
+        template <typename W, typename T>
+        __attribute__((always_inline)) inline lartg_result<T> lartg_complex_scaled(const T& f, const T& g)
+        {
+            using R = base_float_t<T>;
+            const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
+            const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
+
+            const W u = sycl::fmin(safmax<W>(), sycl::fmax(safmin<W>(), sycl::fmax(f_abs_w, g_abs_w)));
+            const W fs = f_abs_w / u;
+            const W gs = g_abs_w / u;
+            const W norm = u * sycl::sqrt(fs * fs + gs * gs);
+
+            const std::complex<W> f_w{static_cast<W>(f.real()), static_cast<W>(f.imag())};
+            const std::complex<W> g_w{static_cast<W>(g.real()), static_cast<W>(g.imag())};
+            const std::complex<W> alpha = f_w / f_abs_w; // sgn(F)
+            const W c_w = f_abs_w / norm;
+            const std::complex<W> conjg_w{g_w.real(), -g_w.imag()};
+            const std::complex<W> s_w = alpha * conjg_w / norm;
+            const std::complex<W> r_w = alpha * norm;
+
+            const T s{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())};
+            const T r{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())};
+            return {static_cast<R>(c_w), s, r};
+        }
+
         template <typename T>
         inline constexpr lartg_result<T> lartg(const T& f, const T& g)
         {
@@ -329,30 +357,15 @@ namespace batchlas {
             }
 
             if constexpr (is_complex<T>::value) {
-                // CLARTG/ZLARTG-style: incorporate scaling to avoid overflow/underflow.
                 // For complex<float>, do the scalar math in double to reduce accumulated
-                // rounding noise in downstream bulge-chasing.
-                using W = std::conditional_t<std::is_same_v<R, float>, double, R>;
-
-                const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
-                const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
-
-                const W u = sycl::fmin(safmax<W>(), sycl::fmax(safmin<W>(), sycl::fmax(f_abs_w, g_abs_w)));
-                const W fs = f_abs_w / u;
-                const W gs = g_abs_w / u;
-                const W norm = u * sycl::sqrt(fs * fs + gs * gs);
-
-                const std::complex<W> f_w{static_cast<W>(f.real()), static_cast<W>(f.imag())};
-                const std::complex<W> g_w{static_cast<W>(g.real()), static_cast<W>(g.imag())};
-                const std::complex<W> alpha = f_w / f_abs_w; // sgn(F)
-                const W c_w = f_abs_w / norm;
-                const std::complex<W> conjg_w{g_w.real(), -g_w.imag()};
-                const std::complex<W> s_w = alpha * conjg_w / norm;
-                const std::complex<W> r_w = alpha * norm;
-
-                const T s{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())};
-                const T r{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())};
-                return {static_cast<R>(c_w), s, r};
+                // rounding noise in downstream bulge-chasing. Metal has no double: chosen at JIT
+                // time, so only the Metal device path rounds in float.
+                if constexpr (std::is_same_v<R, float>) {
+                    if (sycl_impl::on_metal()) return lartg_complex_scaled<float>(f, g);
+                    return lartg_complex_scaled<double>(f, g);
+                } else {
+                    return lartg_complex_scaled<R>(f, g);
+                }
             } else {
                 // SLARTG/DLARTG-style fast path improves accuracy for floats by avoiding
                 // extra scaling ops when values are safely in range.

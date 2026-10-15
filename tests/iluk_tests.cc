@@ -718,7 +718,8 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
 
     const float tol = 1e-6f;
 
-    const std::filesystem::path csv_path = "/home/jonaslacour/BatchLAS/output/iluk_convergence_trace.csv";
+    const std::filesystem::path csv_path =
+        std::filesystem::temp_directory_path() / "batchlas_iluk" / "iluk_convergence_trace.csv";
     std::filesystem::create_directories(csv_path.parent_path());
     std::ofstream csv(csv_path);
     ASSERT_TRUE(csv.good());

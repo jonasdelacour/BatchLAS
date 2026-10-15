@@ -131,6 +131,18 @@ LEVEL3_INSTANTIATE(Backend::ROCM)
 LEVEL3_INSTANTIATE(Backend::NETLIB)
 #endif
 
+// No vendor library, so these throw NoRouteError; complex<double> only with device fp64.
+#if BATCHLAS_HAS_SYCL_BACKEND
+OP_INSTANTIATE(hemm,  Backend::SYCL, std::complex<float>)
+OP_INSTANTIATE(herk,  Backend::SYCL, std::complex<float>)
+OP_INSTANTIATE(her2k, Backend::SYCL, std::complex<float>)
+#if BATCHLAS_HAS_DEVICE_FP64
+OP_INSTANTIATE(hemm,  Backend::SYCL, std::complex<double>)
+OP_INSTANTIATE(herk,  Backend::SYCL, std::complex<double>)
+OP_INSTANTIATE(her2k, Backend::SYCL, std::complex<double>)
+#endif
+#endif
+
 #undef LEVEL3_INSTANTIATE
 #undef OP_INSTANTIATE
 

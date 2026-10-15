@@ -35,7 +35,9 @@ namespace batchlas
     /// @throws batchlas::unsupported for Spectral on a non-dense format or when no
     ///         backend with a vendor `syev` is compiled in
     /// @throws batchlas::NoRouteError for Spectral when the chosen backend's solver
-    ///         library is not compiled in (the vendor `syev` is called directly)
+    ///         library is not compiled in (the vendor `syev` is called directly;
+    ///         Backend::SYCL calls the native `syev` instead)
+    /// @throws batchlas::unsupported for double or complex<double> on a GPU without fp64
     template <typename T, MatrixFormat MF>
     BATCHLAS_API Event norm(Queue &ctx,
                            const MatrixView<T, MF> &A,
@@ -73,6 +75,7 @@ namespace batchlas
     /// @note The Spectral path calls the vendor `syev` directly, bypassing syev's
     ///       kernel selection, and throws batchlas::NoRouteError in a vendor-free
     ///       build; see @ref md_docs_2design_2known-defects (defect 2).
+    ///       Backend::SYCL calls the native `syev` instead.
     template <Backend B, typename T, MatrixFormat MF>
         requires RealScalar<T>
     BATCHLAS_API Event cond(Queue &ctx,

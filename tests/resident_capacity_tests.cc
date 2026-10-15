@@ -11,7 +11,14 @@
 
 #include "test_utils.hh"
 
+#include <batchlas/blas/functions/gemm.hh>
+#include <batchlas/sycl_interop.hh>
+#include <batchlas/util/env.hh>
+
 #include "../src/util/resident_capacity.hh"
+#include "../src/queue.hh"
+#include "../src/select/select.hh"
+#include "../src/sycl/local_mem.hh"
 #include "../src/extensions/potrf_native.hh"
 #include "../src/extensions/getrf_native.hh"
 #include "../src/extensions/geqrf_native.hh"
@@ -20,6 +27,8 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 using namespace batchlas;
@@ -400,5 +409,201 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
         << "no order in the sweep packed more than one matrix per work-group for this "
            "type; this test proved nothing";
 }
+
+// 5. THE LAUNCH CEILINGS THE BUDGETS ADVERTISE -- local memory per work-group size, the
+// selector's copy of it, and the grid. Rule 9: a launch AT each ceiling, not a re-derivation.
+
+class LocalMemCeilingKernel;
+class GroupCountKernel;
+class GlobalRangeKernel;
+
+std::optional<Queue> gpu_queue() {
+    for (const Device& d : Device::get_devices(DeviceType::GPU)) return Queue(d);
+    return std::nullopt;
+}
+
+bool on_metal(Queue& q) { return impl::is_metal(impl::backend_of(sycl_queue(q))); }
+
+// Every lane writes a strided share of `words` local words, then reads the mirror-image share,
+// which other lanes wrote: the whole request is touched and the barrier is load-bearing.
+std::uint32_t slm_word(std::size_t i, std::size_t g) { return static_cast<std::uint32_t>(i * 2654435761u ^ g); }
+
+void launch_touching_slm(Queue& q, std::size_t wg, std::size_t words, std::uint32_t* out, int groups) {
+    q->submit([&](sycl::handler& h) {
+        sycl::local_accessor<std::uint32_t, 1> slm(sycl::range<1>(words), h);
+        h.parallel_for<LocalMemCeilingKernel>(
+            sycl::nd_range<1>(wg * groups, wg), [=](sycl::nd_item<1> it) {
+                const std::size_t l = it.get_local_id(0), g = it.get_group(0);
+                for (std::size_t i = l; i < words; i += wg) slm[i] = slm_word(i, g);
+                sycl::group_barrier(it.get_group());
+                std::uint32_t acc = 0;
+                for (std::size_t i = l; i < words; i += wg) acc += slm[words - 1 - i];
+                out[g * wg + l] = acc;
+            });
+    });
+    q.wait();
+}
+
+TEST(LaunchCeiling, LocalMemoryAtTheAdvertisedBudgetLaunches) {
+    auto q = gpu_queue();
+    if (!q) GTEST_SKIP() << "no GPU";
+    const sycl::device dev = sycl_queue(*q).get_device();
+    const std::size_t max_wg = dev.get_info<sycl::info::device::max_work_group_size>();
+    constexpr int kGroups = 3;
+    for (const std::size_t wg : {std::size_t{32}, std::size_t{256}, max_wg}) {
+        // What callers launch: the budget at this width. On Metal also the raw per-width
+        // figure, where the runtime's scratch leaves no slack at all.
+        std::vector<std::size_t> sizes{resident::device_slm_budget(impl::local_mem_bytes(dev, wg))};
+        if (on_metal(*q)) sizes.push_back(impl::local_mem_bytes(dev, wg));
+        for (const std::size_t bytes : sizes) {
+            const std::size_t words = bytes / sizeof(std::uint32_t);
+            ASSERT_GT(words, wg) << "wg=" << wg;
+            UnifiedVector<std::uint32_t> out(wg * kGroups, 0xdeadbeefu);
+            ASSERT_NO_THROW(launch_touching_slm(*q, wg, words, out.data(), kGroups))
+                << "wg=" << wg << ": " << bytes << " B is advertised but does not launch";
+            for (int g = 0; g < kGroups; ++g)
+                for (std::size_t l = 0; l < wg; ++l) {
+                    std::uint32_t want = 0;
+                    for (std::size_t i = l; i < words; i += wg) want += slm_word(words - 1 - i, g);
+                    ASSERT_EQ(out[g * wg + l], want) << "wg=" << wg << " bytes=" << bytes << " g=" << g << " l=" << l;
+                }
+        }
+    }
+}
+
+// The other half of the tight pair: one 16-byte granule past the per-width figure is refused
+// (acpp patch 0003's check), so local_mem_bytes(dev, wg) is the boundary, not merely below it.
+TEST(LaunchCeiling, MetalRefusesOneGranulePastThePerWidthFigure) {
+    auto q = gpu_queue();
+    if (!q || !on_metal(*q)) GTEST_SKIP() << "the per-work-item scratch is acpp Metal's";
+    const sycl::device dev = sycl_queue(*q).get_device();
+    const std::size_t max_wg = dev.get_info<sycl::info::device::max_work_group_size>();
+    for (const std::size_t wg : {std::size_t{32}, max_wg}) {
+        const std::size_t words = impl::local_mem_bytes(dev, wg) / sizeof(std::uint32_t) + 4;
+        UnifiedVector<std::uint32_t> out(wg, 0u);
+        EXPECT_ANY_THROW(launch_touching_slm(*q, wg, words, out.data(), 1)) << "wg=" << wg;
+        UnifiedVector<std::uint32_t> ok(wg, 0u);
+        EXPECT_NO_THROW(launch_touching_slm(*q, wg, words - 4, ok.data(), 1)) << "the queue did not survive";
+    }
+}
+
+// select::Device restates the launch budget without SYCL (select.cc hard-codes Metal's 8 B and
+// 32-bit grid); a drift there lets can_run admit what the launcher refuses.
+TEST(LaunchCeiling, SelectorBudgetIsTheLaunchBudget) {
+    auto q = gpu_queue();
+    if (!q) GTEST_SKIP() << "no GPU";
+    const sycl::device dev = sycl_queue(*q).get_device();
+    const select::Device& d = select::describe(q->device(), q->backend(), false);
+    const int max_wg = static_cast<int>(dev.get_info<sycl::info::device::max_work_group_size>());
+    EXPECT_EQ(d.slm_budget, std::int64_t(resident::device_slm_budget(impl::local_mem_bytes(dev))));
+    for (const int wg : {1, 32, 256, 512, max_wg})
+        EXPECT_EQ(d.slm_budget_for(wg), std::int64_t(resident::device_slm_budget(impl::local_mem_bytes(dev, wg))))
+            << "wg=" << wg;
+    if (on_metal(*q)) {
+        EXPECT_EQ(d.max_groups_yz, std::int64_t(impl::kMetalMaxGlobalRange));
+        EXPECT_LT(d.slm_budget, d.slm_budget_for(256)) << "Metal's budget does not depend on the width";
+    } else {
+        EXPECT_EQ(d.max_groups_yz, 65535);
+    }
+}
+
+// Metal has no 65535 cap on the work-group count in any dimension (CUDA has, in y and z); its
+// limit is a 32-bit work-item count per dimension, past which ids are silently wrong.
+TEST(LaunchCeiling, MetalGridRunsPastTheCudaGroupCapAndStopsAt32Bits) {
+    auto q = gpu_queue();
+    if (!q || !on_metal(*q)) GTEST_SKIP() << "CUDA's caps are util_device_queue_tests'";
+    constexpr std::size_t kGroups = 65537;
+    for (int dim = 0; dim < 3; ++dim) {
+        UnifiedVector<std::uint32_t> cnt(kGroups, 0u);
+        std::uint32_t* c = cnt.data();
+        sycl::range<3> global(1, 1, 1);
+        global[dim] = kGroups;
+        (*q)->parallel_for<GroupCountKernel>(sycl::nd_range<3>(global, sycl::range<3>(1, 1, 1)),
+                                             [=](sycl::nd_item<3> it) {
+                                                 const std::size_t g = it.get_group(0) + it.get_group(1) + it.get_group(2);
+                                                 sycl::atomic_ref<std::uint32_t, sycl::memory_order::relaxed,
+                                                                  sycl::memory_scope::device> r(c[g]);
+                                                 r.fetch_add(1u);
+                                             });
+        q->wait();
+        for (std::size_t g = 0; g < kGroups; ++g) ASSERT_EQ(cnt[g], 1u) << "dim=" << dim << " group " << g;
+    }
+    // At the 32-bit ceiling every group runs once; one work-group more is refused before launch.
+    constexpr std::size_t kWg = 1024;
+    const std::size_t at = (std::size_t{1} << 22) - 1;
+    UnifiedVector<std::uint32_t> cnt(at + 1, 0u);
+    std::uint32_t* c = cnt.data();
+    auto launch = [&](std::size_t groups) {
+        (*q)->parallel_for<GlobalRangeKernel>(sycl::nd_range<1>(groups * kWg, kWg), [=](sycl::nd_item<1> it) {
+            if (it.get_local_id(0) != 0) return;
+            sycl::atomic_ref<std::uint32_t, sycl::memory_order::relaxed, sycl::memory_scope::device> r(c[it.get_group(0)]);
+            r.fetch_add(1u);
+        });
+        q->wait();
+    };
+    ASSERT_LE(at * kWg, impl::kMetalMaxGlobalRange);
+    launch(at);
+    for (std::size_t g = 0; g < at; ++g) ASSERT_EQ(cnt[g], 1u) << "group " << g;
+    try {
+        launch(at + 1);
+        ADD_FAILURE() << "a 2^32 work-item dimension launched";
+    } catch (const sycl::exception& e) {
+        EXPECT_EQ(e.code(), sycl::errc::nd_range) << e.what();
+    }
+    q->wait();
+    for (std::size_t g = 0; g < at; ++g) ASSERT_EQ(cnt[g], 1u) << "the refused launch ran: group " << g;
+}
+
+#if BATCHLAS_HAS_SYCL_BACKEND
+// A saturating batch past 65535 on the grid gemms (batch in SYCL dim 0). Items differ only in
+// A(0,0), small integers keep every product exact, so a wrapped or clamped batch index shows as
+// a wrong row 0; ld/stride padding and beta = 1 catch a derived accessor.
+TEST(LaunchCeiling, MetalGemmPinsServeABatchPastTheCudaGrid) {
+    auto q = gpu_queue();
+    if (!q || !on_metal(*q)) GTEST_SKIP() << "CUDA refuses this batch (gemm_candidates_tests)";
+    constexpr int n = 16, ld = n + 3, stride = ld * n + 5, batch = 65537;
+    auto a0 = [](int i, int l) { return float((i * 7 + l * 3) % 9 - 4); };
+    auto bv = [](int l, int j) { return float((l * 5 + j * 11) % 7 - 3); };
+    auto v = [](int b) { return float(b % 13 - 6 + ((b >> 16) & 1) * 3); };  // item 0 != item 65536
+    auto cin = [](int b) { return float(b % 3); };
+    std::vector<float> base(n * n, 0.0f);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            for (int l = 0; l < n; ++l) base[i + j * n] += a0(i, l) * bv(l, j);
+    const std::size_t total = std::size_t(stride) * batch;
+    UnifiedVector<float> A(total, 777.0f), Bm(total, 777.0f), C(total, 777.0f);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                const std::size_t o = std::size_t(b) * stride + std::size_t(j) * ld + i;
+                A[o] = (i == 0 && j == 0) ? v(b) : a0(i, j);
+                Bm[o] = bv(i, j);
+            }
+    const MatrixView<float> Av(A.data(), n, n, ld, stride, batch), Bv(Bm.data(), n, n, ld, stride, batch),
+        Cv(C.data(), n, n, ld, stride, batch);
+    for (const char* pin : {"direct", "tiled", "reg:m=32:n=32:k=8:u=1", "reg:m=128:n=128:k=8:u=1", "wide:m=16:n=16:k=16"}) {
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) C[std::size_t(b) * stride + std::size_t(j) * ld + i] = cin(b);
+        const ScopedEnvVar route("BATCHLAS_GEMM_ROUTE", pin);
+        auto run = [&] {
+            (void)gemm<Backend::SYCL, float>(*q, Av, Bv, Cv, 1.0f, 1.0f, Transpose::NoTrans, Transpose::NoTrans);
+        };
+        ASSERT_NO_THROW(run()) << pin << " refused a batch of " << batch;
+        q->wait();
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < ld * n + (b + 1 < batch ? 5 : 0); ++j) {
+                const std::size_t o = std::size_t(b) * stride + j;
+                const int col = j / ld, row = j % ld;
+                if (col >= n || row >= n) {
+                    ASSERT_EQ(C[o], 777.0f) << pin << ": padding written at item " << b << " offset " << j;
+                    continue;
+                }
+                const float want = base[row + col * n] + (row == 0 ? (v(b) - a0(0, 0)) * bv(0, col) : 0.0f) + cin(b);
+                ASSERT_EQ(C[o], want) << pin << " item " << b << " (" << row << "," << col << ")";
+            }
+    }
+}
+#endif
 
 }  // namespace

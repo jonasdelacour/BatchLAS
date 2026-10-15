@@ -13,6 +13,8 @@
 #include "../sycl/device_scalar.hh"
 #include "../sycl/kernel_attrs.hh"
 
+#include <batchlas/backend_config.h>
+
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
@@ -154,8 +156,15 @@ constexpr int tiny_col_bucket(int n, int step) {
 
 // A row broadcast through local memory as 16-byte vectors, packed by value and never by a
 // `?:` over the complex aggregate. evidence: docs/perf/lu.md#the-local-memory-broadcast
+#if BATCHLAS_DEVICE_NO_VECTOR_TYPES
+template <typename R>
+struct alignas(4 * sizeof(R)) tiny_r4 {  // Metal: no vector types (src/sycl/gemm/vec4.hh)
+    R x, y, z, w;
+};
+#else
 template <typename R>
 using tiny_r4 = R __attribute__((ext_vector_type(4)));
+#endif
 
 template <typename D>
 inline constexpr int tiny_r4_width() {  // D elements per 16-byte vector

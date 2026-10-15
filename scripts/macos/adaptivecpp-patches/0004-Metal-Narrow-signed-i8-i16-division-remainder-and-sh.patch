@@ -1,0 +1,62 @@
+From 0bd460b30ec223fba13c71db5316c9d05bfc6f3c Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 23:04:06 +0200
+Subject: [PATCH 4/7] [Metal] Narrow signed i8/i16 division, remainder and
+ shift results by value
+
+MSL promotes char and short operands to int, so the emitted
+as_type<uchar>(int) of an sdiv/srem/ashr on i8 or i16 is a size-mismatched
+bit cast that the Metal compiler rejects. LLVM narrows small-range integer
+arithmetic to i8 on its own (e.g. lane % 16 / 8), so ordinary kernels hit it.
+Narrow those widths with a value conversion; 32 and 64 bits keep as_type.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/compiler/llvm-to-backend/metal/Emitter.cpp | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+index 78e0d86c..c791819c 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+@@ -1016,6 +1016,15 @@ void MetalEmitter::emitBinaryOperator(const BinaryOperator* BO, const std::strin
+     return;
+   }
+ 
++  // MSL promotes char and short operands to int, so a signed i8/i16 result is an int
++  // expression; as_type<> needs equal sizes, so narrow those with a value conversion.
++  auto signedResult = [&](const std::string& expr) {
++    const unsigned bits = BO->getType()->isIntegerTy() ? BO->getType()->getIntegerBitWidth() : 32;
++    if (bits < 32)
++      return resultType + "(" + expr + ")";
++    return "as_type<" + resultType + ">(" + expr + ")";
++  };
++
+   switch (BO->getOpcode()) {
+     case Instruction::FAdd:
+     case Instruction::Add:
+@@ -1041,10 +1050,10 @@ void MetalEmitter::emitBinaryOperator(const BinaryOperator* BO, const std::strin
+       break;
+ 
+     case Instruction::SDiv:
+-      os << indent(level) << name << " = as_type<" << resultType << ">((__as_signed(" << lhs << ")) / (__as_signed(" << rhs << ")));\n";
++      os << indent(level) << name << " = " << signedResult("(__as_signed(" + lhs + ")) / (__as_signed(" + rhs + "))") << ";\n";
+       break;
+     case Instruction::SRem:
+-      os << indent(level) << name << " = as_type<" << resultType << ">((__as_signed(" << lhs << ")) % (__as_signed(" << rhs << ")));\n";
++      os << indent(level) << name << " = " << signedResult("(__as_signed(" + lhs + ")) % (__as_signed(" + rhs + "))") << ";\n";
+       break;
+     case Instruction::FRem:
+       os << indent(level) << name << " = fmod(" << lhs << ", " << rhs << ");\n";
+@@ -1085,7 +1094,7 @@ void MetalEmitter::emitBinaryOperator(const BinaryOperator* BO, const std::strin
+           errorMsg = "ERROR: Unsupported uint4 arithmetic right shift amount: " + rhs;
+         }
+       } else {
+-        os << indent(level) << name << " = as_type<" << resultType << ">((__as_signed(" << lhs << ")) >> (__as_signed(" << rhs << ")));\n";
++        os << indent(level) << name << " = " << signedResult("(__as_signed(" + lhs + ")) >> (__as_signed(" + rhs + "))") << ";\n";
+       }
+       break;
+ 
+-- 
+2.54.0 (Apple Git-157)
+

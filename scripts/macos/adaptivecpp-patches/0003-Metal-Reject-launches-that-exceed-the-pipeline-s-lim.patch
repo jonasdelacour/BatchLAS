@@ -1,0 +1,107 @@
+From c72d46da3c95f064e0858580c36a2270895b7107 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 22:37:10 +0200
+Subject: [PATCH 3/7] [Metal] Reject launches that exceed the pipeline's limits
+
+Metal runs a dispatch whose threadgroup is larger than the compute
+pipeline's maxTotalThreadsPerThreadgroup, or whose threadgroup memory
+exceeds the device's maxThreadgroupMemoryLength, without an error and with
+undefined results. The latter is easy to hit because the runtime adds
+work-group-size * 8 bytes of scratch to every launch: 30000 bytes of
+local memory at a work-group of 1024 needs 38208 bytes on a 32 KiB device.
+
+Check both limits after the pipeline is created and before anything is
+encoded, and return an error naming the kernel, the request and the limit.
+The pipeline's thread limit is also printed at debug level info.
+---
+ src/runtime/metal/metal_queue.cpp | 60 +++++++++++++++++++++++--------
+ 1 file changed, 45 insertions(+), 15 deletions(-)
+
+diff --git a/src/runtime/metal/metal_queue.cpp b/src/runtime/metal/metal_queue.cpp
+index 1bbdb771..ed0779eb 100644
+--- a/src/runtime/metal/metal_queue.cpp
++++ b/src/runtime/metal/metal_queue.cpp
+@@ -18,6 +18,7 @@
+ #include "hipSYCL/common/debug.hpp"
+ 
+ #include <Metal/Metal.hpp>
++#include <string>
+ #include <utility>
+ 
+ #undef nil
+@@ -149,6 +150,49 @@ result launch_kernel_from_library(
+     return make_error(__acpp_here(), error_info{error_msg});
+   }
+ 
++  // Metal does not reject an oversized dispatch: it runs it with undefined
++  // results. Check the pipeline's limits here, before anything is encoded.
++  const std::size_t threads_per_group =
++      group_size[0] * group_size[1] * group_size[2];
++  const std::size_t max_threads = pipeline_state->maxTotalThreadsPerThreadgroup();
++  HIPSYCL_DEBUG_INFO << "metal: kernel '" << kernel_name
++                     << "' pipeline maxTotalThreadsPerThreadgroup = "
++                     << max_threads << std::endl;
++  if (threads_per_group > max_threads) {
++    return make_error(
++        __acpp_here(),
++        error_info{"metal: work-group size " + std::to_string(threads_per_group) +
++                   " exceeds the maximum of " + std::to_string(max_threads) +
++                   " threads per threadgroup of the compute pipeline for kernel " +
++                   std::string(kernel_name)});
++  }
++  // Allocate scratch for workgroup algorithms (reduction, scan, shuffle).
++  // Different algorithms have different scratch requirements:
++  //   - reduction/scan: need (ngroups) elements, where ngroups = ceil(local_size / simd_size)
++  //   - shuffle: need local_size elements (one slot per thread)
++  // The shuffle case dominates, so we conservatively allocate local_size * sizeof(uint64_t) bytes
++  // to cover all element types (max 8 bytes for i64/f64).
++  // TODO: inspect kernel_info to determine which algorithms are actually used and only allocate
++  // as much scratch as needed (e.g. reduction-only kernels need far less than local_size * 8 bytes).
++  const uint32_t user_local_mem_size = local_mem_size;
++  const std::size_t additional_local_mem = threads_per_group * sizeof(uint64_t);
++  const std::size_t total_local_mem =
++      align_up(user_local_mem_size + additional_local_mem, 16);
++  const std::size_t max_local_mem = device->maxThreadgroupMemoryLength();
++  if (total_local_mem > max_local_mem) {
++    return make_error(
++        __acpp_here(),
++        error_info{"metal: kernel " + std::string(kernel_name) + " needs " +
++                   std::to_string(total_local_mem) +
++                   " bytes of threadgroup memory (" +
++                   std::to_string(user_local_mem_size) + " requested + " +
++                   std::to_string(additional_local_mem) +
++                   " runtime scratch for a work-group of " +
++                   std::to_string(threads_per_group) +
++                   "), more than the device maximum of " +
++                   std::to_string(max_local_mem)});
++  }
++
+   std::vector<int> is_pointer_arg(num_args, 0);
+   for (std::size_t i = 0; i < num_args; ++i) {
+     std::size_t ki = retained_indices.has_value() ? retained_indices.value()[i] : i;
+@@ -174,21 +218,7 @@ result launch_kernel_from_library(
+   }
+ 
+   encoder->setComputePipelineState(pipeline_state.get());
+-  uint32_t user_local_mem_size = local_mem_size;
+-
+-  auto threads_per_group = group_size[0] * group_size[1] * group_size[2];
+-  // Allocate scratch for workgroup algorithms (reduction, scan, shuffle).
+-  // Different algorithms have different scratch requirements:
+-  //   - reduction/scan: need (ngroups) elements, where ngroups = ceil(local_size / simd_size)
+-  //   - shuffle: need local_size elements (one slot per thread)
+-  // The shuffle case dominates, so we conservatively allocate local_size * sizeof(uint64_t) bytes
+-  // to cover all element types (max 8 bytes for i64/f64).
+-  // TODO: inspect kernel_info to determine which algorithms are actually used and only allocate
+-  // as much scratch as needed (e.g. reduction-only kernels need far less than local_size * 8 bytes).
+-  auto additional_local_mem = threads_per_group * sizeof(uint64_t);
+-  local_mem_size = user_local_mem_size + additional_local_mem;
+-
+-  encoder->setThreadgroupMemoryLength(align_up(local_mem_size, 16), 0);
++  encoder->setThreadgroupMemoryLength(total_local_mem, 0);
+ 
+   // Runtime buffers: 0 = local size, 1 = address delta, 2 = atomic64 locks.
+   const NS::UInteger buf_offset = 3;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -9,6 +9,13 @@
 // GPU backends determined at configure time
 #cmakedefine01 BATCHLAS_HAS_CUDA_BACKEND
 #cmakedefine01 BATCHLAS_HAS_ROCM_BACKEND
+// Backend::SYCL: native SYCL kernels on a GPU with no vendor library (AdaptiveCpp Metal)
+#cmakedefine01 BATCHLAS_HAS_SYCL_BACKEND
+// Whether Backend::SYCL instantiates double and complex<double> (cmake BATCHLAS_DEVICE_FP64).
+// CUDA, ROCm and the host always do.
+#cmakedefine01 BATCHLAS_HAS_DEVICE_FP64
+// Device code avoids sycl::vec/ext_vector registers (Metal build only; CUDA keeps them).
+#cmakedefine01 BATCHLAS_DEVICE_NO_VECTOR_TYPES
 
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
@@ -72,8 +79,20 @@
   #define BATCHLAS_IF_ROCM(x)
 #endif
 
+#if BATCHLAS_HAS_SYCL_BACKEND
+  #define BATCHLAS_IF_SYCL(x) x
+#else
+  #define BATCHLAS_IF_SYCL(x)
+#endif
+
+#if BATCHLAS_HAS_DEVICE_FP64
+  #define BATCHLAS_IF_DEVICE_FP64(x) x
+#else
+  #define BATCHLAS_IF_DEVICE_FP64(x)
+#endif
+
 // For convenience - define if any GPU backend is available
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
   #define BATCHLAS_HAS_GPU_BACKEND 1
 #else
   #define BATCHLAS_HAS_GPU_BACKEND 0

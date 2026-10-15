@@ -56,6 +56,12 @@ work-groups (one per SM), schedulable for any work-group size ≤ 256. G = 1 run
 The grid path is GPU-only. Its scratch is process-lifetime and not taken from the caller's
 `BumpAllocator`, so no `*_buffer_size` query changes meaning.
 
+It is also off on Metal (Apple GPU), even when forced with `BATCHLAS_LATRD_IMPL=grid`: Metal
+promises no co-residency of work-groups and its atomics are relaxed only, so the barrier's
+acquire/release handshake is not what runs. A hang there also stalls the display. Checked on the
+M5 Max: a forced grid `sytrd_blocked<SYCL, float>` (n = 256) dispatched only legacy latrd kernels
+([AdaptiveCpp Metal](../design/sycl-implementations.md#sycl-impl-metal-launch-limits)).
+
 Proposed, unbuilt: a cap of `SMs × achievable blocks per SM` from the kernel's real footprint
 ([syev: remaining unmeasured items](syev.md#syev-remaining-unmeasured-items)).
 

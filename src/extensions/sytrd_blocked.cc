@@ -667,7 +667,7 @@ Event sytrd_blocked_impl(Queue& ctx,
             }
         }
 
-        constexpr bool allow_local_small = (B != Backend::CUDA);
+        constexpr bool allow_local_small = !select::native_gpu_backend<B>;
         const bool auto_local = allow_local_small && std::is_same_v<T, float>;
         if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {
@@ -701,7 +701,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const bool fuse_override_on  = fuse_env.has_value() && *fuse_env;
     const bool fuse_override_off = fuse_env.has_value() && !*fuse_env;
     const bool fuse_default = is_legacy
-        ? ((B == Backend::CUDA) && (n == 256))
+        ? (select::native_gpu_backend<B> && (n == 256))
         : tuning::sytrd_fuse_panel_update_for_n(n);
     const bool enable_fused_panel_update = fuse_override_on || (!fuse_override_off && fuse_default);
     // A22 -= V W^H + W V^H as one triangle-only syr2k (float) or her2k (complex<float>),

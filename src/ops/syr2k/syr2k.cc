@@ -50,9 +50,9 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
         [&](Triangular) {
-            return B == Backend::CUDA && std::is_same_v<T, float> && d.is_gpu && d.max_wg >= 256 &&
+            return select::native_gpu_backend<B> && std::is_same_v<T, float> && d.is_gpu && d.max_wg >= 256 &&
                    homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
-                   batch <= kMaxGridBatch && side * (side + 1) / 2 <= kMaxGridTiles;
+                   batch <= d.max_groups_yz && side * (side + 1) / 2 <= d.max_groups_yz;
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
@@ -64,7 +64,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
     return std::visit(overloaded{
         [&](Triangular) -> Event {
             // Instantiated only where can_run can admit it, so no other (B, T) compiles the kernel.
-            if constexpr (B == Backend::CUDA && std::is_same_v<T, float>) {
+            if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>) {
                 const Transpose t = transA == Transpose::ConjTrans ? Transpose::Trans : transA;  // real T
                 return backend::detail::syr2k_triangular_tiles<float>(q, A, Bm, C, alpha, beta, uplo, t);
             }

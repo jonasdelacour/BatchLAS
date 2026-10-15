@@ -108,6 +108,7 @@ Fields are in the `diagnostics` group. Truthy values are `1`, `true`, `TRUE`, `o
 | --- | --- | --- | --- |
 | `BATCHLAS_QUEUE_PROFILING`, `BATCHLAS_BENCH_PROFILING` | truthy | off | ORed. Kernel trace implies profiling. |
 | `BATCHLAS_KERNEL_TRACE`, `BATCHLAS_TRACE_KERNELS` | truthy | off | ORed. |
+| `BATCHLAS_METAL_FLUSH_EACH_OP` | truthy | off | Metal queues created afterwards commit each operation on its own command buffer, to attribute a GPU fault. By default they batch operations (AdaptiveCpp coarse-grained events): 1.3-1.7x faster for back-to-back launch-bound calls, the same results bit for bit. Profiling implies it. |
 | `BATCHLAS_KERNEL_TRACE_PATH`, `BATCHLAS_TRACE_PATH` | path | `batchlas_kernels.trace.json` | First non-empty value wins. Written at exit. |
 | `BATCHLAS_COVERAGE_OUT` | path prefix | off | Written at exit as `<value>.<pid>`. |
 | `BATCHLAS_SELECT_TRACE` | truthy | off | One stderr line per selection decision. |

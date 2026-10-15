@@ -48,6 +48,9 @@ function(batchlas_architecture_table_local_mem_bytes architecture device_type ou
             set(_table_bytes 65536)
         elseif("${architecture}" MATCHES "^intel")
             set(_table_bytes 65536)
+        elseif("${architecture}" MATCHES "^apple_gpu_")
+            # Hypothesis (Metal maxThreadgroupMemoryLength on M5 Max), not a measured budget.
+            set(_table_bytes 32768)
         endif()
     endif()
 

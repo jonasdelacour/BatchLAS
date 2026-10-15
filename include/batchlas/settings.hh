@@ -380,6 +380,11 @@ struct DiagnosticsSettings {
     /// `BATCHLAS_KERNEL_TRACE` or `BATCHLAS_TRACE_KERNELS` (env_truthy, ORed).
     bool kernel_trace = false;
 
+    /// `BATCHLAS_METAL_FLUSH_EACH_OP` (env_truthy): Metal queues created afterwards commit one
+    /// command buffer per operation instead of batching them (AdaptiveCpp coarse-grained
+    /// events), so a GPU fault names the operation that raised it. Profiling implies it.
+    bool metal_flush_each_op = false;
+
     /// The first non-empty of `BATCHLAS_KERNEL_TRACE_PATH` and `BATCHLAS_TRACE_PATH`. Written
     /// from an `atexit` handler.
     std::string kernel_trace_path = "batchlas_kernels.trace.json";

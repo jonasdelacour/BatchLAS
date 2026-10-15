@@ -144,18 +144,22 @@ static_assert(potrs_row_covers_getrs<float>() && potrs_row_covers_getrs<double>(
               potrs_row_covers_getrs<std::complex<double>>());
 
 // The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
+// `register_gate` is false only on Metal: the rows are NVIDIA ptxas counts, and every Metal
+// pipeline measured reports 1024 threads (the compiler spills rather than lowering the cap).
 template <typename T>
-inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_cc) {
+inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_cc, bool register_gate = true) {
     int wg = 32;
     while (wg < n / 2 && wg < 1024) wg *= 2;
     if (wg < 64) wg = 64;
 
     // Per SUB-PARTITION, never `65536 / regs`: that spelling leaves zero margin at some
     // widths. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
-    const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
-    int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
-    if (cap < 32) cap = 32;
-    if (wg > cap) wg = cap;
+    if (register_gate) {
+        const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
+        int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
+        if (cap < 32) cap = 32;
+        if (wg > cap) wg = cap;
+    }
 
     if (wg > max_wg) wg = max_wg;
     if (wg < 32) wg = 32;
@@ -944,7 +948,7 @@ Event getrs_fused_dispatch(Queue& ctx,
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int wg = getrs_fused_wg<T>(n, nrhs, max_wg,
                                      trans ? FusedBody::kTrans : FusedBody::kNoTrans,
-                                     dev.cuda_compute_capability());
+                                     dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
     return fused_dispatch_nr<T>(
         ctx,
@@ -996,7 +1000,7 @@ Event potrs_fused_dispatch(Queue& ctx,
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     // One body holds BOTH getrs forms, so it is charged the wider of their register rows.
     const int wg = getrs_fused_wg<T>(n, nrhs, max_wg, FusedBody::kPotrs,
-                                     dev.cuda_compute_capability());
+                                     dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
     #define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
         if (uplo == Uplo::Lower)                                                           \

@@ -40,7 +40,8 @@ vendor-free build.
 | CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
 | CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** (see the warning above). Not built by CI |
 | AMD / ROCm | — | — | — | — | Code paths exist; not built or run |
-| macOS / Windows | — | — | — | — | Untested |
+| Apple GPU (macOS) | AdaptiveCpp `develop` at `9ec394ef` plus local patches 0001-0013 ([below](#macos-apple-gpu-through-adaptivecpp-metal)), Homebrew `llvm@21` 21.1.8 / `lld@21`, Command Line Tools only (no Xcode) | — | Apple M5 Max (`applegpu_g17s`), Metal | macOS 27.0.1 | Library and full test suite built and run (`acpp-metal-tests`); float and complex<float> on the GPU, double on the host through Homebrew OpenBLAS 0.3.34. Not built by CI |
+| Windows | — | — | — | — | Untested |
 
 Other NVIDIA architectures should work: the build detects the local GPU, and
 `-DBATCHLAS_NVIDIA_ARCH=sm_XX` overrides it.
@@ -67,6 +68,7 @@ cmake --build --preset dev
 | `dev-gpu` / `dev-gpu-tests` | drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`) |
 | `release` | `Release`, no tests or benchmarks, one shared library |
 | `acpp` / `acpp-tests` | `dev` / `dev-tests` built with the AdaptiveCpp 25.10 driver (`--acpp-targets=generic`) into `build-acpp` / `build-acpp-tests` ([SYCL implementations](../design/sycl-implementations.md)) |
+| `acpp-metal` / `acpp-metal-tests` | macOS only: Apple GPU through AdaptiveCpp Metal into `build-acpp-metal` / `build-acpp-metal-tests` ([macOS](#macos-apple-gpu-through-adaptivecpp-metal)); the test preset runs `ctest` serially |
 
 `BATCHLAS_ALLOW_UNSAFE_ENV` is `ON` in every preset that inherits `dev` (`dev`, `dev-tests`,
 `fast-dev`, `benchmarks`, `dev-gpu*`, `acpp*`), which exist to measure and debug, and `OFF` in `cuda`
@@ -118,6 +120,11 @@ cmake --build build -j8
 | `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link (default `4`, `1` disables) |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted; `ACPP` without an `acpp` compiler takes `acpp` from `PATH`, else `/opt/adaptivecpp/bin`, also replacing a cached compiler (`ccmake`); CMake then resets the cache and the value reads `AUTO` |
 | `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
+| `BATCHLAS_ENABLE_METAL` | AdaptiveCpp only: `AUTO` (default; dispatch an Apple GPU as `Backend::SYCL` when `acpp-info` lists a Metal device), `ON` (require it; configure fails without one) or `OFF` (needs the GPU hidden with `ACPP_VISIBILITY_MASK=omp`; configure fails while `acpp-info` lists it) |
+| `BATCHLAS_DEVICE_FP64` | `AUTO` (default), `ON` or `OFF`: instantiate double and complex<double> for `Backend::SYCL`. `AUTO` resolves to `OFF` when Metal is enabled, and `ON` with Metal is a configure error. CUDA, ROCm and the host always keep all four types |
+| `BATCHLAS_OPENBLAS_ROOT` | OpenBLAS prefix whose `libopenblas` provides LAPACKE and CBLAS. On macOS it is probed at `/opt/homebrew/opt/openblas` and `/usr/local/opt/openblas`; set it, the headers go on the library's include path. Empty on Linux by default, which keeps the system LAPACKE |
+| `BATCHLAS_MONOLITHIC_LIBRARY` | one shared library instead of the component libraries (the `release` shape). Required on macOS: ld64 rejects the components' cyclic undefined symbols |
+| `BATCHLAS_HIDDEN_VISIBILITY` | `-fvisibility=hidden` on the monolithic library (default `ON`; only with `BATCHLAS_MONOLITHIC_LIBRARY`). `OFF` lets the in-tree tests link against it, since they reach about 1,000 unexported internal symbols |
 | `BATCHLAS_ACPP_SLM_OPTIN` | AdaptiveCpp + CUDA: a launch interposer that opts kernels into more than 48 KiB of local memory (default `OFF`; [SYCL implementations](../design/sycl-implementations.md#sycl-impl-slm-budget)) |
 
 ### Device and toolkit detection {#guide_build_detection}
@@ -136,6 +143,75 @@ Configure needs only the compiler (`-DCMAKE_CXX_COMPILER=<dpcpp>/bin/clang++`, `
   vendor libraries they link and `$ORIGIN`, so they run without `LD_LIBRARY_PATH`.
 - A self-built `intel/llvm --cuda` has no CPU adapter: outside a oneAPI environment there is no CPU
   device, and the tree is GPU-only (`No SYCL CPU device detected`).
+
+## macOS: Apple GPU through AdaptiveCpp Metal
+
+The Apple GPU runs through AdaptiveCpp's Metal backend. Kernels are compiled once to generic SSCP IR
+and JIT-translated to Metal Shading Language at their first launch. Design, limits and patches:
+[AdaptiveCpp Metal](../design/sycl-implementations.md#sycl-impl-metal).
+
+| | On an Apple GPU `Queue` | On a CPU `Queue` |
+| --- | --- | --- |
+| Backend | `Backend::SYCL`: native kernels only, no vendor GPU library (no MPS) | `Backend::NETLIB`: Homebrew OpenBLAS (LAPACKE, CBLAS) plus native kernels on the AdaptiveCpp OpenMP device |
+| Types | float and complex<float>. A double or complex<double> call throws `batchlas::unsupported` before any launch | all four |
+| Not available | hemm, herk, her2k (`NoRouteError`: they have no native family yet); any shape whose every family needs more local memory than Apple's 32 KiB, or than a `can_run` occupancy slice of it (cfloat Upper potrf/posv at n=24 to about 50) | — |
+
+`batchlas::verify` and the queue-less `Matrix` helpers run their double arithmetic on the CPU device
+([verification](../design/verification.md#verification-no-fp64-device)).
+
+**Toolchain.** Needs the Command Line Tools and Homebrew; Xcode is not needed. The script installs
+`cmake llvm@21 lld@21 libomp boost openblas python` with brew, fetches metal-cpp, checks out AdaptiveCpp
+`develop` at `9ec394ef` on the local branch `batchlas-metal`, applies
+`scripts/macos/adaptivecpp-patches/*.patch` with `git am`, then builds and installs:
+
+```bash
+scripts/macos/build_adaptivecpp_metal.sh   # -> ~/opt/adaptivecpp
+~/opt/adaptivecpp/bin/acpp-info -l         # must list the OpenMP host device and the Apple GPU (Metal)
+rm -rf ~/.acpp/apps                        # after every reinstall: the JIT cache outlives the toolchain
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACPP_SRC` | `~/opt/src/AdaptiveCpp` | source checkout |
+| `ACPP_PREFIX` | `~/opt/adaptivecpp` | install prefix; the presets read `$HOME/opt/adaptivecpp/bin/acpp` |
+| `METAL_CPP_DIR` | `~/opt/src/metal-cpp` | metal-cpp headers (downloaded when missing) |
+| `ACPP_BASE` / `ACPP_BRANCH` | `9ec394ef` / `batchlas-metal` | upstream commit and the local patch branch |
+| `ACPP_REAPPLY=1` | off | recreate the branch from the patch files. An existing branch is otherwise reused, and the script stops if its commit count differs from the number of patches |
+| `SKIP_BREW=1` | off | skip `brew install` |
+
+The script configures AdaptiveCpp as its upstream macOS CI does (`ACPP_COMPILER_FEATURE_PROFILE=full`,
+Metal on, CUDA/ROCm/OpenCL/Level Zero off), with Homebrew `opt/` paths so a patch-level `brew
+upgrade` does not leave stale `Cellar/` paths in `etc/AdaptiveCpp/acpp-core.json`; it warns if any
+remain. It then pins the `acpp`, `syclcc` and `syclcc-clang` shebangs to Homebrew's `python3`. The
+patches are local only and not sent upstream; what each fixes, with its evidence, is in
+`scripts/macos/adaptivecpp-patches/README.md`.
+
+**Build and test.**
+
+```bash
+cmake --preset acpp-metal-tests
+cmake --build build-acpp-metal-tests --target gemm_tests -j8   # an explicit cap: every SYCL TU takes ~300 MB under acpp
+ctest --preset acpp-metal-tests -R '^gemm_tests$'
+```
+
+The presets set `ACPP_VISIBILITY_MASK=omp;metal` (configure and ctest), `BATCHLAS_ENABLE_METAL=ON`,
+`BATCHLAS_DEVICE_FP64=OFF`, `BATCHLAS_ENABLE_VENDOR_BLAS=ON` (on macOS the only vendor library is
+netlib: LAPACKE and CBLAS from `/opt/homebrew/opt/openblas` for the CPU `Queue`; the Apple GPU has
+no vendor family either way), `BATCHLAS_MONOLITHIC_LIBRARY=ON` with `BATCHLAS_HIDDEN_VISIBILITY=OFF`,
+and `BATCHLAS_TEST_GPUS=0`. `acpp-metal-tests` also sets `CMAKE_DISABLE_FIND_PACKAGE_GTest=ON`, so
+GoogleTest is fetched and built by `acpp` against Homebrew LLVM's libc++, never a system GoogleTest
+built by another compiler. Configure prints
+`Native SYCL GPU backend (Metal): TRUE; device fp64: OFF`.
+
+A full serial `ctest` takes about an hour; the first launch of each kernel pays the MSL translation
+and the Metal compile. The failure ledger of this tree is `tests/known-failures-acpp-metal.txt`,
+which `.github/ci/compare_failures.py --build-dir build-acpp-metal-tests` picks from the cached
+`BATCHLAS_GPU_FAMILY_RESOLVED=METAL`. The macOS traps (adaptivity level, the JIT cache, `DYLD_` paths,
+the `CPATH` leak) are in @ref dev_agent_guide, "Known Pitfalls".
+
+> **Warning:** every tuning table and constant was measured on NVIDIA GPUs. An Apple GPU has no
+> table of its own: it is keyed `apple_m5_max`, borrows the nearest table and warns once per op.
+> Its routes are hypotheses until the device is tuned.
 
 ## Tests
 

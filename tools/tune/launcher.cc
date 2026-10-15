@@ -14,6 +14,10 @@
 #include <string>
 
 #include <unistd.h>
+#ifdef __APPLE__
+#include <cstdint>
+#include <mach-o/dyld.h>
+#endif
 
 #ifndef BATCHLAS_TUNE_OPENBLAS_CORETYPE
 #define BATCHLAS_TUNE_OPENBLAS_CORETYPE ""
@@ -22,12 +26,20 @@
 int main(int argc, char** argv) {
     if (BATCHLAS_TUNE_OPENBLAS_CORETYPE[0] != '\0') ::setenv("OPENBLAS_CORETYPE", BATCHLAS_TUNE_OPENBLAS_CORETYPE, 0);
     char self[PATH_MAX];
+#ifdef __APPLE__
+    std::uint32_t size = sizeof(self);
+    if (::_NSGetExecutablePath(self, &size) != 0) {
+        std::fprintf(stderr, "batchlas_tune: cannot resolve the executable path\n");
+        return 2;
+    }
+#else
     const ssize_t len = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
     if (len <= 0) {
         std::perror("batchlas_tune: /proc/self/exe");
         return 2;
     }
     self[len] = '\0';
+#endif
     std::string impl(self);
     impl = impl.substr(0, impl.rfind('/') + 1) + "batchlas_tune_impl";
     const bool child = argc > 1 && (!std::strcmp(argv[1], "--cell") || !std::strcmp(argv[1], "--worker") ||

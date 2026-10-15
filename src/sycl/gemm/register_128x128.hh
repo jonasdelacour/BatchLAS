@@ -19,6 +19,7 @@
 
 #include "accessors.hh"
 #include "epilogue_linear.hh"
+#include "vec4.hh"
 
 #include "../gemm_kernels.hh"
 
@@ -31,9 +32,6 @@ namespace batchlas::sycl_gemm {
 
 template <typename T, bool AlignedFastPath, bool StagedEpilogue>
 class GemmRegister128x128Kernel;
-
-template <typename T>
-using Vec4 = T __attribute__((ext_vector_type(4)));
 
 template <typename T>
 inline const Vec4<T>& vec4_ref(const T* p) {
@@ -57,8 +55,9 @@ inline Vec4<T> load4_l2_line(const T* p) {
             : "l"(p));
         return r;
     }
-#elif BATCHLAS_SYCL_IMPL_ACPP
+#elif BATCHLAS_SYCL_IMPL_ACPP && defined(__x86_64__)
     // SSCP: the asm passes x86 Sema (no "=f"; `{` is a dialect brace, hence %{ %}).
+    // An arm64 host (macOS) rejects "l" and has no CUDA device: it takes the plain load.
     if constexpr (std::is_same_v<T, float>) {
         if (sycl_impl::on_ptx()) {
             unsigned x = 0, y = 0, z = 0, w = 0;
@@ -84,7 +83,7 @@ inline T load1_l2_line(const T* p) {
         asm("ld.global.L2::128B.f32 %0, [%1];" : "=f"(r) : "l"(p));
         return r;
     }
-#elif BATCHLAS_SYCL_IMPL_ACPP
+#elif BATCHLAS_SYCL_IMPL_ACPP && defined(__x86_64__)
     if constexpr (std::is_same_v<T, float>) {
         if (sycl_impl::on_ptx()) {
             unsigned r = 0;

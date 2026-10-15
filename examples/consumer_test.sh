@@ -68,6 +68,7 @@ fi
 # The install step copies build products; if nothing was built, that is a
 # missing prerequisite rather than a packaging bug.
 if ! compgen -G "${build_dir}/src/libbatchlas*.so" >/dev/null && \
+   ! compgen -G "${build_dir}/src/libbatchlas*.dylib" >/dev/null && \
    ! compgen -G "${build_dir}/src/libbatchlas*.a" >/dev/null; then
     skip "BatchLAS is not built in ${build_dir} (run the build first)"
 fi
@@ -177,7 +178,12 @@ if ! "${cmake_bin}" --build "${consumer_build}" --parallel >"${log_dir}/build.lo
 fi
 say "consumer configured and built"
 
-export LD_LIBRARY_PATH="${sycl_lib_dir}:${prefix}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+# macOS dyld reads DYLD_LIBRARY_PATH, never LD_LIBRARY_PATH.
+if [[ "$(uname -s)" == Darwin ]]; then
+    export DYLD_LIBRARY_PATH="${sycl_lib_dir}:${prefix}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+else
+    export LD_LIBRARY_PATH="${sycl_lib_dir}:${prefix}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
 run_log="${log_dir}/run.log"
 "${consumer_build}/hello_batched_gemm" >"${run_log}" 2>&1
 run_rc=$?

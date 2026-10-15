@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <type_traits>
 #include "../kernel_attrs.hh"
+#include "vec4.hh"
 
 namespace batchlas::sycl_gemm_small {
 
@@ -139,7 +140,7 @@ Event launch_small_tiled(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          T alpha, T beta, int m, int n, int k) {
-    using V4 = T __attribute__((ext_vector_type(4)));
+    using V4 = sycl_gemm::Vec4<T>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned

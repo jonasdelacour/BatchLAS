@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if NVPTX device code calls SPIR-V builtins out of line.
 
-    scripts/check_device_calls.py build/                  # scan build/src/libbatchlas*.so (split or monolithic)
+    scripts/check_device_calls.py build/                  # scan build/src/libbatchlas*.so or *.dylib (split or monolithic)
     scripts/check_device_calls.py --lib a.so --lib b.so   # scan named libraries
     scripts/check_device_calls.py --self-test
 
@@ -155,7 +155,8 @@ def ptx_of(blob, cuobjdump):
 
 def libraries(build_dir):
     found = {}
-    for p in sorted(glob.glob(os.path.join(build_dir, "src", "libbatchlas*.so*"))):
+    pats = ("libbatchlas*.so*", "libbatchlas*.dylib")
+    for p in sorted(q for pat in pats for q in glob.glob(os.path.join(build_dir, "src", pat))):
         real = os.path.realpath(p)
         if os.path.isfile(real):
             found.setdefault(real, p)
@@ -290,6 +291,11 @@ def main():
         libs += libraries(a.build_dir)
     if not libs:
         print("check_device_calls: no libraries to scan (pass a build dir or --lib)")
+        return 77
+    # No NVPTX image means nothing to check (CPU-only, AdaptiveCpp generic or Metal build):
+    # skip before asking for cuobjdump, which such a machine (macOS) does not have.
+    if not any(True for lib in libs for _ in fatbins(lib)):
+        print("check_device_calls: no NVPTX image in", ", ".join(libs), "(no CUDA device code: skip)")
         return 77
     tool = find_cuobjdump(a.cuobjdump)
     if not tool:

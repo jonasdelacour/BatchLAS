@@ -1,0 +1,32 @@
+From 06e05888db2aabb9e20e9862e2db33f14076601c Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Tue, 13 Oct 2026 00:10:40 +0200
+Subject: [PATCH] [Metal] Truncate to i1 by the low bit
+
+A C cast to bool tests the whole value, so trunc i64 2 to i1 came out
+true instead of false. LLVM forms such truncs from 'x & 1' parity tests,
+for example a double-buffered loop's stage index, and the kernel then
+read the wrong buffer on every third iteration.
+---
+ src/compiler/llvm-to-backend/metal/Emitter.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+index c791819c..28bf92bc 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+@@ -992,6 +992,11 @@ bool MetalEmitter::emitCastInstruction(const CastInst* CI, const std::string& na
+   } else if (CI->getOpcode() == Instruction::FPToSI) {
+     auto destSigned = getSignedType(CI->getDestTy());
+     os << indent(level) << name << " = (" << destSigned << ") " << src << "; // " << instToString(*CI) << "\n";
++  } else if (isa<TruncInst>(CI) && CI->getDestTy()->isIntegerTy(1)) {
++    // trunc to i1 keeps bit 0, while a C cast to bool tests the whole value:
++    // trunc i64 2 is false, (bool)2 is true.
++    const std::string low = srcType == "uint4" ? "(" + src + ").x" : src;
++    os << indent(level) << name << " = ((" << low << ") & 1) != 0; // " << instToString(*CI) << "\n";
+   } else if (srcType == "uint4" || destType == "uint4") {
+     return emitUint4Cast();
+   } else {
+-- 
+2.54.0 (Apple Git-157)
+

@@ -13,6 +13,8 @@
 #include "../../linalg-impl.hh"
 #include "../kernel_attrs.hh"
 
+#include <batchlas/backend_config.h>
+
 #include <sycl/sycl.hpp>
 
 #include <complex>
@@ -64,9 +66,14 @@ inline Vec16<D>& vec_ref(D* p) {
 
 // A raw 16-byte move for staging. It must be a native vector type, not a
 // `struct { T v[N]; }`: SROA splits a struct copy back into element loads and
-// stores and the 16-byte form is lost.
+// stores and the 16-byte form is lost. Metal has neither vectors nor double; its emitter
+// maps an i128 to a uint4, so there the move is one 16-byte integer.
+#if BATCHLAS_DEVICE_NO_VECTOR_TYPES
+typedef unsigned __int128 Raw16 __attribute__((may_alias));
+#else
 typedef double Raw16Base __attribute__((ext_vector_type(2)));
 typedef Raw16Base Raw16 __attribute__((may_alias));
+#endif
 
 inline Raw16 raw16_load(const void* p) { return *reinterpret_cast<const Raw16*>(p); }
 inline void raw16_store(void* p, Raw16 v) { *reinterpret_cast<Raw16*>(p) = v; }

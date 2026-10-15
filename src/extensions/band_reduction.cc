@@ -583,7 +583,20 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
     const int k = std::min(m, r);
     Span<T> tau_span(tau_buf.data(), static_cast<size_t>(k) * static_cast<size_t>(ABw.batch_size()));
-    geqrf<B, T>(ctx, Bsub, tau_span, ws_backend).wait();
+    if (B != Backend::SYCL || m >= r) {
+        geqrf<B, T>(ctx, Bsub, tau_span, ws_backend).wait();
+    } else {
+        // Wide panel: the chase's last steps clamp i2 at n-1. No native geqrf takes m < r (other backends
+        // keep the one call; their vendor does), but reflector j depends only on columns <= j, so QR of
+        // the square head plus Q^H on the tail is the same R and V.
+        auto Bhead = Bsub({0, m}, {0, m});
+        auto Btail = Bsub({0, m}, {m, r});
+        geqrf<B, T>(ctx, Bhead, tau_span, ws_backend).wait();
+        ormqr<B, T>(ctx, Bhead, Btail, Side::Left, trans_left, tau_span, ws_backend).wait();
+        // Btail shares Bmat's pointer array and may have refilled it with offset bases: restore Bsub's.
+        // evidence: docs/design/matrix-model.md#matrix-model-the-pointer-array-and-sliced-views
+        (void)Bsub.data_ptrs(ctx);
+    }
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {

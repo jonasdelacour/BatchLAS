@@ -1,0 +1,49 @@
+From 24eb4ac9a3c37283c4fd1716fd15cca1035a61c1 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Tue, 13 Oct 2026 04:30:53 +0200
+Subject: [PATCH] [Metal] Do not re-advise the free pieces split off in
+ alloc_at
+
+metal_mmap_region keeps every free block MADV_FREE_REUSABLE: the
+constructor advises the whole reserved range and free() advises each
+freed range. alloc_at() nevertheless advised both pieces it split off a
+free block as REUSABLE again. madvise costs time linear in the length of
+the range, and the tail piece spans most of the region (10x physical RAM
+of address space), so every shared or host USM allocation paid ~70 us
+per call, several calls per allocation.
+
+The pieces are already in that state; only the allocated range changes
+state (MADV_FREE_REUSE, unchanged).
+
+On an M5 Max: malloc_shared+free of 1 KiB, 74 us -> 6 us per pair. A
+BatchLAS test making ~1.3M small shared allocations spent 88 of its first
+100 s in madvise; it now runs to completion in 75 s with 2.3 s in madvise.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/runtime/metal/metal_allocator.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/runtime/metal/metal_allocator.cpp b/src/runtime/metal/metal_allocator.cpp
+index d96cd54c..66562eaf 100644
+--- a/src/runtime/metal/metal_allocator.cpp
++++ b/src/runtime/metal/metal_allocator.cpp
+@@ -133,12 +133,13 @@ struct metal_mmap_region {
+     }
+     size_t remaining = (ptr + it->second) - (static_cast<char*>(addr) + size);
+     _free_blocks.erase(it);
++    // Every free block is already MADV_FREE_REUSABLE (constructor, free()), so
++    // the split-off pieces need no madvise. Re-advising them cost time linear in
++    // their size, and the tail piece spans most of the reserved region.
+     if (remaining > 0) {
+-      madvise(static_cast<char*>(addr) + size, remaining, MADV_FREE_REUSABLE);
+       _free_blocks.emplace(static_cast<char*>(addr) + size, remaining);
+     }
+     if (ptr < static_cast<char*>(addr)) {
+-      madvise(ptr, static_cast<char*>(addr) - ptr, MADV_FREE_REUSABLE);
+       _free_blocks.emplace(ptr, static_cast<char*>(addr) - ptr);
+     }
+     madvise(addr, size, MADV_FREE_REUSE);
+-- 
+2.54.0 (Apple Git-157)
+

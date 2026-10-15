@@ -51,8 +51,8 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
-    const bool native = B == Backend::CUDA && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
-                        batch <= kMaxGridBatch;
+    const bool native = select::native_gpu_backend<B> && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
+                        batch <= d.max_groups_yz;
     return std::visit(overloaded{
         [&](Gram) {
             return native && backend::detail::syrk_gram_supported<T>(A, C, real_trans, false) &&
@@ -60,29 +60,29 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
         },
         [&](Triangular) {
             return native && std::is_same_v<T, float> && d.max_wg >= kTriangularWg &&
-                   triangular_groups(n, backend::detail::kTriangularTile) <= kMaxGridTiles;
+                   triangular_groups(n, backend::detail::kTriangularTile) <= d.max_groups_yz;
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
 
-// The native arms compile only for CUDA (the kernels are not instantiated anywhere else), and
+// The native arms compile only for CUDA and SYCL (native_gpu_backend), and
 // Triangular only for float; can_run never admits the other instantiations.
 template <Backend B, class T>
 Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{
         [&](Gram) -> Event {
-            if constexpr (B == Backend::CUDA)
+            if constexpr (select::native_gpu_backend<B>)
                 return backend::detail::syrk_gram_tiles<T, false>(q, A, C, alpha, beta, uplo, transA);
             else
-                throw std::logic_error("syrk: gram is wired for CUDA only");
+                throw std::logic_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
-            if constexpr (B == Backend::CUDA && std::is_same_v<T, float>)
+            if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>)
                 return backend::detail::syrk_triangular_tiles<float>(q, A, C, alpha, beta, uplo, transA);
             else
-                throw std::logic_error("syrk: triangular is a float CUDA kernel");
+                throw std::logic_error("syrk: triangular is a float native-GPU kernel");
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))

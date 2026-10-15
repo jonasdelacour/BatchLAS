@@ -217,6 +217,7 @@ void load_diagnostics(DiagnosticsSettings& d) {
 
     if (any_present("BATCHLAS_KERNEL_TRACE", "BATCHLAS_TRACE_KERNELS"))
         d.kernel_trace = truthy("BATCHLAS_KERNEL_TRACE") || truthy("BATCHLAS_TRACE_KERNELS");
+    set_if_present(d.metal_flush_each_op, "BATCHLAS_METAL_FLUSH_EACH_OP", truthy);
 
     // First NON-EMPTY wins: a set-but-empty variable falls through, never an empty filename.
     if (any_present("BATCHLAS_KERNEL_TRACE_PATH", "BATCHLAS_TRACE_PATH"))

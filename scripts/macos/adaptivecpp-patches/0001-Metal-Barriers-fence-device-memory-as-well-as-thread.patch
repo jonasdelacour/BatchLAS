@@ -1,0 +1,81 @@
+From ba120d92fdbe911078445ee289853c65a7b66f52 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 22:35:50 +0200
+Subject: [PATCH 1/7] [Metal] Barriers fence device memory as well as
+ threadgroup memory
+
+A SYCL group barrier fences all address spaces at its fence scope, but a
+Metal barrier orders only the address spaces named in its mem_flags. The
+work-group and sub-group barriers named mem_threadgroup only, so global
+memory written before the barrier was not ordered for other work-items of
+the group. Name mem_threadgroup | mem_device for every non-trivial scope.
+
+A work-group barrier with sub_group fence scope also emitted a
+simdgroup_barrier, which does not synchronize the work-group; it is now a
+threadgroup_barrier.
+---
+ src/libkernel/sscp/metal/barrier.cpp | 25 +++++++++++--------------
+ 1 file changed, 11 insertions(+), 14 deletions(-)
+
+diff --git a/src/libkernel/sscp/metal/barrier.cpp b/src/libkernel/sscp/metal/barrier.cpp
+index 20320cf0..ff3e0b59 100644
+--- a/src/libkernel/sscp/metal/barrier.cpp
++++ b/src/libkernel/sscp/metal/barrier.cpp
+@@ -34,21 +34,21 @@ __acpp_sscp_work_group_barrier(__acpp_sscp_memory_scope fence_scope,
+       break;
+   }
+ 
+-  // A Metal barrier already fences its address space (MSL spec 6.9), so no
+-  // separate atomic_thread_fence is needed around it.
++  // SYCL fences every address space at the given scope, but a Metal barrier
++  // only orders the address spaces named in its mem_flags (MSL spec 6.9). So
++  // name both: global-memory data exchanged across a group barrier must be
++  // ordered too. The execution barrier is always work-group wide; the fence
++  // scope never narrows it to a simdgroup barrier.
+   switch (fence_scope) {
+     case __acpp_sscp_memory_scope::work_item:
+       __acpp_sscp_metal_symbol_barrier("threadgroup_barrier(mem_flags::mem_none)");
+       break;
+     case __acpp_sscp_memory_scope::sub_group:
+-      __acpp_sscp_metal_symbol_barrier("simdgroup_barrier(mem_flags::mem_threadgroup)");
+-      break;
+     case __acpp_sscp_memory_scope::work_group:
+-      __acpp_sscp_metal_symbol_barrier("threadgroup_barrier(mem_flags::mem_threadgroup)");
+-      break;
+     case __acpp_sscp_memory_scope::device:
+     case __acpp_sscp_memory_scope::system:
+-      __acpp_sscp_metal_symbol_barrier("threadgroup_barrier(mem_flags::mem_device)");
++      __acpp_sscp_metal_symbol_barrier(
++          "threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)");
+       break;
+     default:
+       __acpp_sscp_metal_symbol_barrier("__builtin_trap()");
+@@ -73,21 +73,18 @@ __acpp_sscp_sub_group_barrier(__acpp_sscp_memory_scope fence_scope,
+       break;
+   }
+ 
+-  // A Metal barrier already fences its address space (MSL spec 6.9), so no
+-  // separate atomic_thread_fence is needed around it.
++  // As for the work-group barrier: name both address spaces so that
++  // global-memory data exchanged across the barrier is ordered too.
+   switch (fence_scope) {
+     case __acpp_sscp_memory_scope::work_item:
+       __acpp_sscp_metal_symbol_barrier("simdgroup_barrier(mem_flags::mem_none)");
+       break;
+     case __acpp_sscp_memory_scope::sub_group:
+-      __acpp_sscp_metal_symbol_barrier("simdgroup_barrier(mem_flags::mem_threadgroup)");
+-      break;
+     case __acpp_sscp_memory_scope::work_group:
+-      __acpp_sscp_metal_symbol_barrier("simdgroup_barrier(mem_flags::mem_threadgroup)");
+-      break;
+     case __acpp_sscp_memory_scope::device:
+     case __acpp_sscp_memory_scope::system:
+-      __acpp_sscp_metal_symbol_barrier("simdgroup_barrier(mem_flags::mem_device)");
++      __acpp_sscp_metal_symbol_barrier(
++          "simdgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device)");
+       break;
+     default:
+       __acpp_sscp_metal_symbol_barrier("__builtin_trap()");
+-- 
+2.54.0 (Apple Git-157)
+

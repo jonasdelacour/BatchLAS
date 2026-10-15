@@ -4,16 +4,26 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "../sycl/local_mem.hh"
+#include "../sycl/sscp_target.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
+#include <array>
 #include <complex>
 #include <string>
+#include <tuple>
 #include <batchlas/error.hh>
 #include <batchlas/blas/linalg.hh>
 
 #include "../util/template-instantiations.hh"
 
 namespace batchlas {
+
+#if BATCHLAS_SYCL_IMPL_ACPP
+inline constexpr bool kAcpp = true;
+#else
+inline constexpr bool kAcpp = false;
+#endif
 
 // QR steps allowed per eigenvalue before the item is reported unconverged (LAPACK ?steqr's MAXIT).
 inline constexpr int kTridiagMaxIterations = 30;
@@ -131,6 +141,12 @@ void T_QTQ(sycl::group<1>& cta, const int n, const Span<T> D, const Span<T> L, c
     sycl::group_barrier(cta);
 }
 
+// Whether the four work arrays fit the local memory a 32-lane work-group may request (on Metal
+// the runtime's per-lane scratch comes off the top).
+inline bool tridiag_smem_fits(Queue& ctx, size_t bytes) {
+    return impl::local_mem_bytes(ctx->get_device(), 32) >= bytes;
+}
+
 template <Backend B, typename T>
 Event tridiagonal_solver(Queue& ctx,
                          Span<T> alphas,
@@ -145,7 +161,7 @@ Event tridiagonal_solver(Queue& ctx,
     auto pool = BumpAllocator(workspace);
 
     auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
-    bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= smem_required;
+    bool smem_possible = tridiag_smem_fits(ctx, smem_required);
 
     auto V_reflectors = pool.allocate<T>(ctx, !smem_possible ? 2 * n * batch_size : 0);
     auto D_global = pool.allocate<T>(ctx, !smem_possible ? (n+1) * batch_size : 0);
@@ -170,57 +186,80 @@ Event tridiagonal_solver(Queue& ctx,
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
 
-            auto D = Span(smem_possible ? &D_smem[0] : D_global.data() + bid*(n+1), n+1);
-            auto L = Span(smem_possible ? &L_smem[0] : L_global.data() + bid*n, n);
-            auto U = Span(smem_possible ? &U_smem[0] : U_global.data() + bid*2*(n+1), 2 * (n + 1));
-            auto Vlocal = Span(smem_possible ? &V_smem[0] : V_reflectors.data() + bid*2*n, 2 * n);
-
-            auto batch_alphas = Span(alphas.data() + bid * n, n);
-            auto batch_betas = Span(betas.data() + bid * n, n);
-            T* batch_Q = Vdata + bid * Vstride;
-            real_t* batch_W = W.data() + bid * n;
-
-            if (jobz == JobType::EigenVectors) {
-                for (int i = tid; i < n*n; i += bdim) {
-                    batch_Q[(i / n) * Vld + i % n] = T(0);
-                }
-                sycl::group_barrier(cta);
-                for (int i = tid; i < n; i += bdim) {
-                    batch_Q[i * (Vld + 1)] = T(1);
-                }
-            }
-
-            for( int i = tid; i < n; i += bdim) {
-                D[i] = batch_alphas[i];
-                L[i] = batch_betas[i];
-            }
-
-            sycl::group_barrier(cta);
-
-            // Every work-item reads the same local values after T_QTQ's closing barrier, so the
-            // loop decisions agree across the group. Relative deflation as LAPACK ?steqr.
-            const real_t eps = std::numeric_limits<real_t>::epsilon();
             bool failed = false;
-            for (int k = int(n) - 1; k > 0; k--) {
-                int it = 0;
-                while (std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k]))) {
-                    if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                    const auto [l0, l1] = internal::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
-                    const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
-                    T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
-                    if (jobz == JobType::EigenVectors) {
-                        apply_all_reflections(cta, Vlocal, k, int(n), int(Vld), batch_Q);
+            auto solve = [&](Span<T> D, Span<T> L, Span<T> U, Span<T> Vlocal) __attribute__((always_inline)) {
+                auto batch_alphas = Span(alphas.data() + bid * n, n);
+                auto batch_betas = Span(betas.data() + bid * n, n);
+                T* batch_Q = Vdata + bid * Vstride;
+                real_t* batch_W = W.data() + bid * n;
+
+                if (jobz == JobType::EigenVectors) {
+                    for (int i = tid; i < n*n; i += bdim) {
+                        batch_Q[(i / n) * Vld + i % n] = T(0);
+                    }
+                    sycl::group_barrier(cta);
+                    for (int i = tid; i < n; i += bdim) {
+                        batch_Q[i * (Vld + 1)] = T(1);
                     }
                 }
-            }
-            if (tid == 0) status_ptr[bid] = failed ? 1 : 0;
 
-            for (int i = tid; i < n; i += bdim) {
-                if constexpr (internal::is_complex<T>::value) {
-                    batch_W[i] = D[i].real();
-                } else {
-                    batch_W[i] = D[i];
+                for( int i = tid; i < n; i += bdim) {
+                    D[i] = batch_alphas[i];
+                    L[i] = batch_betas[i];
                 }
+
+                sycl::group_barrier(cta);
+
+                // Every work-item reads the same local values after T_QTQ's closing barrier, so the
+                // loop decisions agree across the group. Relative deflation as LAPACK ?steqr.
+                const real_t eps = std::numeric_limits<real_t>::epsilon();
+                // TRAP (AdaptiveCpp OpenMP device): a data-dependent loop around barriers never ends
+                // there, even at batch 1, unless its condition is a group collective. Host only.
+                auto uniform = [&](bool c) {
+                    if constexpr (kAcpp && B == Backend::NETLIB) return sycl::group_broadcast(cta, c);
+                    else return c;
+                };
+                for (int k = int(n) - 1; k > 0; k--) {
+                    int it = 0;
+                    while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
+                        if (it++ == kTridiagMaxIterations) { failed = true; break; }
+                        const auto [l0, l1] = internal::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
+                        const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
+                        T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
+                        if (jobz == JobType::EigenVectors) {
+                            apply_all_reflections(cta, Vlocal, k, int(n), int(Vld), batch_Q);
+                        }
+                    }
+                }
+                if (tid == 0) status_ptr[bid] = failed ? 1 : 0;
+
+                for (int i = tid; i < n; i += bdim) {
+                    if constexpr (internal::is_complex<T>::value) {
+                        batch_W[i] = D[i].real();
+                    } else {
+                        batch_W[i] = D[i];
+                    }
+                }
+            };
+
+            // TRAP (Metal): no generic address space, so a pointer chosen between local and global
+            // memory at run time is rejected ("Conflicting address space information in PHI node").
+            // There the solve is emitted once per storage; elsewhere once, on selected pointers.
+            auto smem = [&]() {
+                return std::array<Span<T>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
+                                               Span(&U_smem[0], 2 * (n + 1)), Span(&V_smem[0], 2 * n)};
+            };
+            auto gmem = [&]() {
+                return std::array<Span<T>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
+                                               Span(L_global.data() + bid * n, n),
+                                               Span(U_global.data() + bid * 2 * (n + 1), 2 * (n + 1)),
+                                               Span(V_reflectors.data() + bid * 2 * n, 2 * n)};
+            };
+            if (sycl_impl::on_metal()) {
+                if (smem_possible) std::apply(solve, smem());
+                else std::apply(solve, gmem());
+            } else {
+                std::apply(solve, smem_possible ? smem() : gmem());
             }
         });
     });
@@ -238,7 +277,7 @@ Event tridiagonal_solver(Queue& ctx,
 template <Backend B, typename T>
 size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType /*jobz*/){
     auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
-    bool smem_possible = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE) >= smem_required;
+    bool smem_possible = tridiag_smem_fits(ctx, smem_required);
     size_t size = 0;
     size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? 2*n*batch_size : 0);
     size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? (n+1)*batch_size : 0);

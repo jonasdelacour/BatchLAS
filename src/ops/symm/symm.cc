@@ -43,16 +43,16 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    constexpr bool kWired = B == Backend::CUDA || B == Backend::ROCM;
+    constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
     const std::int64_t k = A.rows(), batch = A.batch_size();
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && batch >= 1 && batch <= kMaxGridBatch;
+                        C.cols() >= 1 && batch >= 1 && batch <= d.max_groups_yz;
     return std::visit(overloaded{
         [&](Expand) {
             return native && backend::detail::expansion_fits<T>(
                                  q, int(k), int(batch),
-                                 backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
+                                 backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)), d.max_groups_yz);
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
@@ -139,6 +139,7 @@ Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
 
 #define SYMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, symm)
 BATCHLAS_IF_CUDA(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::CUDA))
+BATCHLAS_IF_SYCL(BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::SYCL))
 BATCHLAS_IF_ROCM(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::ROCM))
 BATCHLAS_IF_HOST(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::NETLIB))
 #undef SYMM_INSTANTIATE

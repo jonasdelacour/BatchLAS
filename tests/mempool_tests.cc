@@ -435,10 +435,12 @@ TEST_F(BumpAllocatorTest, EdgeCasesAndErrors) {
     
     // Test with properly aligned small buffer
     const size_t small_size = 128; // Should work if aligned
-    void* aligned_ptr = std::aligned_alloc(device_align, small_size + device_align);
+    // aligned_alloc needs a size that is a multiple of the alignment (macOS returns null otherwise).
+    const size_t small_bytes = (small_size + 2 * device_align - 1) / device_align * device_align;
+    void* aligned_ptr = std::aligned_alloc(device_align, small_bytes);
     ASSERT_NE(aligned_ptr, nullptr);
     
-    BumpAllocator aligned_pool(reinterpret_cast<std::byte*>(aligned_ptr), small_size + device_align);
+    BumpAllocator aligned_pool(reinterpret_cast<std::byte*>(aligned_ptr), small_bytes);
     
     // Should work with aligned buffer
     auto aligned_span = aligned_pool.allocate<double>(device, 1);

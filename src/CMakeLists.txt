@@ -120,7 +120,7 @@ generate_export_header(batchlas_core_obj
 # The properties emit exactly -fvisibility=hidden and
 # -fvisibility-inlines-hidden for this compiler; they are used instead of raw
 # flags so the same declaration also covers a future non-Clang host build.
-if(BATCHLAS_MONOLITHIC_LIBRARY)
+if(BATCHLAS_MONOLITHIC_LIBRARY AND BATCHLAS_HIDDEN_VISIBILITY)
     set_target_properties(${BATCHLAS_OBJECT_LIBS} PROPERTIES
         CXX_VISIBILITY_PRESET hidden
         VISIBILITY_INLINES_HIDDEN ON

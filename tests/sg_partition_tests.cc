@@ -174,9 +174,10 @@ template <typename T> const char* tname() {
 // Device plumbing
 // ---------------------------------------------------------------------------
 
+// Leaked: destroying it after AdaptiveCpp's runtime has gone aborts the process at exit.
 sycl::queue& queue() {
-    static sycl::queue q{sycl::default_selector_v};
-    return q;
+    static auto* q = new sycl::queue{sycl::default_selector_v};
+    return *q;
 }
 
 bool supports_sg(size_t sg) {

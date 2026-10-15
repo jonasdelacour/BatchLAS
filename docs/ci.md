@@ -276,7 +276,9 @@ python3 .github/ci/compare_failures.py \
 - `--known` defaults to `tests/known-failures.txt`. An AdaptiveCpp tree has its own self-contained
   ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
   (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
-  `BATCHLAS_BUILD_DIR` is set.
+  `BATCHLAS_BUILD_DIR` is set. An AdaptiveCpp Metal tree uses a third,
+  `tests/known-failures-acpp-metal.txt`, chosen when the cache (or `--gpu-family`, or the
+  environment) has `BATCHLAS_GPU_FAMILY_RESOLVED=METAL`.
 - `--expected-tests-from <tree>` compares the junit count with what `ctest --test-dir <tree> -N`
   registers. After `ctest -LE slow`, pass `--label-exclude slow` so the count is filtered the same way.
   It catches a run that stopped early, not a configure that registered fewer tests: the count shrinks

@@ -165,6 +165,15 @@ using SyevJacobiCtaTestTypes = ::testing::Types<
 	SyevJacobiCtaConfig<double, Backend::ROCM>,
 	SyevJacobiCtaConfig<std::complex<float>, Backend::ROCM>,
 	SyevJacobiCtaConfig<std::complex<double>, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+// AdaptiveCpp Metal: the native kernels in float and complex<float>; double needs device fp64.
+using SyevJacobiCtaTestTypes = ::testing::Types<
+    SyevJacobiCtaConfig<float, Backend::SYCL>,
+#if BATCHLAS_HAS_DEVICE_FP64
+    SyevJacobiCtaConfig<double, Backend::SYCL>,
+    SyevJacobiCtaConfig<std::complex<double>, Backend::SYCL>,
+#endif
+    SyevJacobiCtaConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using SyevJacobiCtaTestTypes = ::testing::Types<SyevJacobiCtaConfig<float, Backend::NETLIB>>;
 #endif
@@ -174,7 +183,7 @@ class SyevJacobiCtaTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevJacobiCtaTest, SyevJacobiCtaTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 
 TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 	using Scalar = typename TestFixture::ScalarType;
@@ -390,6 +399,8 @@ TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
 TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 #if BATCHLAS_HAS_CUDA_BACKEND
 	constexpr Backend B = Backend::CUDA;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+	constexpr Backend B = Backend::SYCL;
 #else
 	constexpr Backend B = Backend::ROCM;
 #endif
@@ -462,6 +473,8 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 #if BATCHLAS_HAS_CUDA_BACKEND
 	constexpr Backend B = Backend::CUDA;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+	constexpr Backend B = Backend::SYCL;
 #else
 	constexpr Backend B = Backend::ROCM;
 #endif
